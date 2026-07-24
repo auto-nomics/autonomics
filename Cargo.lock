@@ -4573,6 +4573,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mixer"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mockall"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
