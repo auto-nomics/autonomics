@@ -13,18 +13,19 @@ use std::path::Path;
 
 use flate2::read::GzDecoder;
 use mixer::data::ChromData;
-use mixer::fit::{fit1, FitConfig};
+use mixer::fit::{FitConfig, fit1};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 /// 金标准参考值（trait1.fit1.json，原版 univariate fit1）。
-/// ⚠️ 原版用了 randprune 权重 + extract 子集(11200 tags) + downsample=50，
-/// 我们用 weights=1 + 全 SNP，所以 pi/sig2_beta/h2 会有系统偏差；
-/// 但 sig2_zero（null 方差膨胀，对权重相对稳健）应接近 REF_SIG2_ZERO。
+/// 现已对齐原版预处理：extract 子集(11200 tags) + randprune 权重(n=64,r2=0.1,seed=123)，
+/// 均由 libbgmg dump（hm3_weights.tsv.gz），sum_weights=2839.72 与原版一致。
+/// 因此参数与 cost 都应高度一致（残余差异来自 sig2_zeroL=0 简化 + DE 实现差异）。
 const REF_PI: f64 = 0.0013072336834414333;
 const REF_SIG2_BETA: f64 = 0.040229480662896805;
 const REF_SIG2_ZERO: f64 = 0.9981262704964816;
 const REF_H2: f64 = 0.5880186818033747;
+const REF_COST: f64 = 4107.199188007042;
 
 /// 读 trait1.sumstats.gz → rsid → (z, n)。列：A1 A2 BETA BP CHR N P SE SNP Z
 fn read_sumstats(path: &Path) -> HashMap<String, (f64, f64)> {
@@ -86,14 +87,32 @@ fn read_ld(path: &Path) -> Vec<(String, String, f64)> {
     out
 }
 
+/// 读 hm3_weights.tsv.gz → rsid → randprune 权重（仅 tag 子集，11200 个）。
+fn read_weights(path: &Path) -> HashMap<String, f64> {
+    let f = File::open(path).unwrap();
+    let dec = GzDecoder::new(f);
+    let lines = BufReader::new(dec).lines();
+    let mut m = HashMap::new();
+    for line in lines.skip(1) {
+        let line = line.unwrap();
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 2 {
+            continue;
+        }
+        m.insert(f[0].to_string(), f[1].parse().unwrap());
+    }
+    m
+}
+
 #[test]
 #[ignore]
 fn cross_validate_vs_reference() {
     let sumstats = read_sumstats(&Path::new(FIXTURES).join("trait1.sumstats.gz"));
     let af = read_af(&Path::new(FIXTURES).join("hm3_af.tsv.gz"));
     let ld = read_ld(&Path::new(FIXTURES).join("hm3_ld.tsv.gz"));
+    let tag_weights = read_weights(&Path::new(FIXTURES).join("hm3_weights.tsv.gz"));
 
-    // universe = sumstats ∩ af（同时有 z 和 h 的 SNP），分配连续 index
+    // universe = sumstats ∩ af（全部 SNP 作 LD 邻居 + h 来源），分配连续 index
     let mut rsid_to_idx: HashMap<String, u32> = HashMap::new();
     let mut z_vec = Vec::new();
     let mut n_vec = Vec::new();
@@ -110,7 +129,7 @@ fn cross_validate_vs_reference() {
     let n_snp = z_vec.len();
     assert!(n_snp > 1000, "universe too small: {n_snp}");
 
-    // LD 三元组 → index 空间（两端点必须在 universe 内）
+    // LD 三元组 → index 空间（两端点在 universe 内；LD 覆盖全部 SNP 作邻居）
     let mut triples: Vec<(u32, u32, f64)> = Vec::new();
     for (a, b, r2) in &ld {
         if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
@@ -119,46 +138,57 @@ fn cross_validate_vs_reference() {
     }
     assert!(!triples.is_empty());
 
-    let data = ChromData::new(z_vec, n_vec, h_vec, &triples);
+    // tag 子集 + 权重（原版 extract + randprune，精确对齐）
+    let mut tags: Vec<u32> = Vec::new();
+    let mut weights = vec![0.0_f64; n_snp];
+    for (rsid, w) in &tag_weights {
+        if let Some(&idx) = rsid_to_idx.get(rsid) {
+            tags.push(idx);
+            weights[idx as usize] = *w;
+        }
+    }
+    assert!(
+        !tags.is_empty(),
+        "tag 子集为空，weights fixture 与 universe 不匹配"
+    );
 
-    // 拟合：diffevo_repeats=1 + 适度 DE 规模（平衡速度与全局搜索）
+    let mut data = ChromData::new(z_vec, n_vec, h_vec, &triples);
+    data.tags = tags;
+    data.weights = weights;
+
+    // 拟合：diffevo_repeats=2（对齐原版 diffevo_fast_repeats=2）
     let cfg = FitConfig {
-        diffevo_repeats: 1,
-        diffevo_popsize: 10,
-        diffevo_max_gen: 40,
-        nm_max_iter: 1200,
+        diffevo_repeats: 2,
         ..Default::default()
     };
     let result = fit1(&data, &cfg);
 
-    println!("=== 交叉验证（Rust 移植 vs 原版金标准）===");
-    println!("SNP 数: {}  LD 对: {}", n_snp, triples.len());
+    println!("=== 交叉验证（Rust 移植 vs 原版金标准，已对齐 extract+randprune）===");
     println!(
-        "{:<12} {:>12} {:>12}   (参考)",
-        "参数", "Rust拟合", "原版"
+        "SNP 数: {}  LD 对: {}  tag 数: {}  sum_weights: {:.2}",
+        n_snp,
+        triples.len(),
+        data.tags.len(),
+        data.weights.iter().sum::<f64>()
     );
-    println!(
-        "{:<12} {:>12.6} {:>12.6}",
-        "pi", result.params.pi, REF_PI
-    );
+    println!("{:<12} {:>12} {:>12}   (参考)", "参数", "Rust拟合", "原版");
+    println!("{:<12} {:>12.6} {:>12.6}", "pi", result.params.pi, REF_PI);
     println!(
         "{:<12} {:>12.6} {:>12.6}",
         "sig2_beta", result.params.sig2_beta, REF_SIG2_BETA
     );
     println!(
-        "{:<12} {:>12.6} {:>12.6}   ← 首要校验量（对权重稳健）",
+        "{:<12} {:>12.6} {:>12.6}",
         "sig2_zero", result.params.sig2_zero, REF_SIG2_ZERO
     );
     println!("{:<12} {:>12.6} {:>12.6}", "h2", result.h2, REF_H2);
+    println!("{:<12} {:>12.4} {:>12.4}", "cost", result.loglike, REF_COST);
 
-    // sig2_zero 是对权重/子集最稳健的量，应接近 0.998（容差宽松，因 weights=1）
+    // 对齐预处理后，所有量都应接近（残余差异来自 sig2_zeroL=0 + DE 实现细节）
     let sig2_zero_err = (result.params.sig2_zero - REF_SIG2_ZERO).abs();
-    assert!(
-        sig2_zero_err < 0.3,
-        "sig2_zero 偏差过大: Rust={} vs 参考={}, |err|={}",
-        result.params.sig2_zero, REF_SIG2_ZERO, sig2_zero_err
-    );
-    // 参数合法
+    assert!(sig2_zero_err < 0.05, "sig2_zero 偏差: {}", sig2_zero_err);
+    let cost_err = (result.loglike - REF_COST).abs() / REF_COST;
+    assert!(cost_err < 0.02, "cost 相对偏差: {:.2}%", cost_err * 100.0);
     assert!(result.params.pi > 0.0 && result.params.pi < 1.0);
     assert!(result.params.sig2_beta > 0.0);
 }

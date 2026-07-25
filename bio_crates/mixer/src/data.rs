@@ -11,16 +11,19 @@ use crate::ld_matrix::LdBlock;
 /// 单条染色体的 cost function 输入。
 #[derive(Debug, Clone)]
 pub struct ChromData {
-    /// per-snp z-score（GWAS 检验统计量）
+    /// per-snp z-score（GWAS 检验统计量）。仅 tag 的 z 被读取。
     pub z: Vec<f64>,
     /// per-snp 样本量 N
     pub n: Vec<f64>,
     /// per-snp heterozygosity = 2·maf·(1−maf)，来自 af.eur_af.alt_freq
     pub h: Vec<f64>,
-    /// per-snp 权重（随机剪枝 / 逆 LD-score）。首版默认全 1.0。
+    /// per-snp 权重（随机剪枝 / 逆 LD-score）。非 tag 处应为 0。
     pub weights: Vec<f64>,
     /// 稀疏 LD，col_idx 索引进上面的 z/n/h 向量。
     pub ld: LdBlock,
+    /// tag 子集（snp index）。cost 只遍历这些 snp。
+    /// 原版 MiXeR 里 tag = 有有效 z 且通过 extract 筛选的 snp，是 snp 的子集。
+    pub tags: Vec<u32>,
 }
 
 impl ChromData {
@@ -29,9 +32,11 @@ impl ChromData {
         self.z.len()
     }
 
-    /// 从原始向量 + COO LD 三元组构建，权重默认全 1.0。
+    /// 从原始向量 + COO LD 三元组构建，权重默认全 1.0，**所有 snp 都是 tag**。
     ///
     /// 要求 z/n/h 长度相同；`triples` 里的 tag/snp index 都必须 < 该长度。
+    /// 需要指定 tag 子集（extract）+ 非均匀权重（randprune）时，构建后覆盖
+    /// `tags` 和 `weights` 字段即可。
     pub fn new(z: Vec<f64>, n: Vec<f64>, h: Vec<f64>, triples: &[(u32, u32, f64)]) -> Self {
         assert_eq!(z.len(), n.len(), "z/n 长度不一致");
         assert_eq!(z.len(), h.len(), "z/h 长度不一致");
@@ -42,6 +47,7 @@ impl ChromData {
             h,
             weights: vec![1.0; n_snp],
             ld: LdBlock::from_coo(triples, n_snp),
+            tags: (0..n_snp as u32).collect(),
         }
     }
 }

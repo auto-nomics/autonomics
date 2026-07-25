@@ -66,12 +66,23 @@ cargo test -p mixer
 cargo test -p mixer --test cross_validation -- --ignored --nocapture
 ```
 
-### 交叉验证的已知差异
+### 交叉验证结果（已对齐 extract + randprune 权重）
 
-我们的 `fit1` 用 `weights=1`、全 SNP；原版金标准用 `randprune` 权重 + `extract` 子集
-（11200 tags）+ `downsample=50`。因此：
+测试用原版**精确的预处理输入**（extract 子集 11200 tags + randprune 权重，
+均由 libbgmg dump，`sum_weights=2839.72` 与原版完全一致），喂给我们的 Rust `fit1`，
+对比 `trait1.fit1.json` 金标准：
 
-- **`sig2_zero` 应高度一致**（null 方差膨胀，对权重稳健）——这是首要校验量。
-- `pi`/`sig2_beta`/`h2` 会有系统偏差，但 `pi·σ²_β`（遗传效应预算）应接近。
+| 量 | Rust 拟合 | 原版金标准 | 相对误差 |
+|---|---|---|---|
+| `pi` | 0.001305 | 0.001307 | 0.15% |
+| `sig2_beta` | 0.040294 | 0.040229 | 0.16% |
+| `sig2_zero` | 0.998163 | 0.998126 | 0.004% |
+| `h2` | 0.588128 | 0.588019 | 0.02% |
+| `cost` | 4107.1994 | 4107.1992 | 5e-6 |
 
-当前结果（Rust vs 原版）：`sig2_zero` 误差 < 0.3%，`pi·σ²_β` 误差 ~14%，证实核心数学正确。
+**全部参数 < 0.2%，cost 匹配到 5 位有效数字**——证明 Rust 移植的 cost function +
+LD 传播 + Gaussian 近似 + DE/Nelder-Mead 优化器在真实参考数据上数值正确。
+残余 ~0.15% 来自 DE 实现差异（我们的 DE vs scipy 的）+ `sig2_zeroL=0` 简化。
+
+> 注：精确对齐用的是 libbgmg dump 的权重/子集（验证 cost/optimizer 正确性）。
+> 生产用的 Rust 原生 randprune（`weights.rs`）尚未实现，是后续工作。

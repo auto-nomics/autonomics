@@ -79,8 +79,9 @@ pub fn univariate_cost_gaussian(data: &ChromData, p: &UnivariateParams) -> f64 {
 
     let mut cost = 0.0;
 
-    // 3. 逐个 tag 计算
-    for j in 0..data.n_snp() {
+    // 3. 逐个 tag 计算（只遍历 tag 子集，不一定是全部 snp）
+    for &tag in &data.tags {
+        let j = tag as usize;
         // 3a. LD 传播 -> (A, B) 得到二阶矩和四阶矩
         let (a, b) = tag_moments(data, j, ebeta2, ebeta4);
 
