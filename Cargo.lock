@@ -4581,6 +4581,7 @@ dependencies = [
  "flate2",
  "rand 0.8.6",
  "rand_distr 0.4.3",
+ "rayon",
  "serde_json",
  "thiserror 2.0.18",
 ]

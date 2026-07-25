@@ -1,3 +1,4 @@
+pub mod bivariate;
 pub mod cost;
 pub mod data;
 pub mod error;

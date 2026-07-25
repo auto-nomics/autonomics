@@ -10,6 +10,7 @@ use super::error::{Error, Result};
 use crate::data_engine::{
     dag::DagNode,
     nodes::{
+        bivariate_mixer::BivariateMixerNodeFactory,
         ldsc_hsq::LdscHsqNodeFactory,
         linear_regression::LinearRegressionNodeFactory,
         mock_node::MockNodeFactory,
@@ -71,6 +72,7 @@ impl NodeRegistry {
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(MockNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
+        registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry
     }
 
