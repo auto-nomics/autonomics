@@ -25,6 +25,24 @@ use crate::params::UnivariateParams;
 /// - `pi` ∈ [5e-5, 5e-1]：causal SNP 比例。
 pub const DE_BOUNDS: &[(f64, f64); 3] = &[(0.9, 2.5), (5e-6, 5e-2), (5e-5, 5e-1)];
 
+/// logit 变换：(0,1) → (−∞,+∞)。
+fn logit(p: f64) -> f64 {
+    (p / (1.0 - p)).ln()
+}
+
+/// 把原始参数空间的 DE 边界转换到无约束空间（DE 实际搜索的边界）。
+///
+/// 顺序与 `DE_BOUNDS` 一致：`[sig2_zero, sig2_beta, pi]`，对应
+/// `[log(·), log(·), logit(·)]`。原版 `cli.py` 就是把原始边界经
+/// `params_to_vec` 变换后交给 scipy DE。
+pub fn de_bounds_unconstrained() -> [(f64, f64); 3] {
+    [
+        (DE_BOUNDS[0].0.ln(), DE_BOUNDS[0].1.ln()),
+        (DE_BOUNDS[1].0.ln(), DE_BOUNDS[1].1.ln()),
+        (logit(DE_BOUNDS[2].0), logit(DE_BOUNDS[2].1)),
+    ]
+}
+
 /// 模型参数 → 无约束空间向量 `[log(sig2_zero), log(sig2_beta), logit(pi)]`。
 ///
 /// 返回固定长度 3 的数组，顺序为 `[sig2_zero, sig2_beta, pi]`（与 `DE_BOUNDS` 对齐）。

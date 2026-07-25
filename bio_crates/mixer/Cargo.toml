@@ -8,6 +8,8 @@ rust-version.workspace = true
 [dependencies]
 faer.workspace = true
 thiserror.workspace = true
+rand = { version = "0.8", features = ["small_rng"] }
+rand_distr = "0.4"
 
 [lints]
 workspace = true

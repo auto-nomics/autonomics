@@ -7,3 +7,4 @@ pub mod optimizer;
 pub mod parametrize;
 pub mod params;
 pub mod result;
+pub mod simulate;

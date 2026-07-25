@@ -89,10 +89,29 @@ pub fn univariate_cost_gaussian(data: &ChromData, p: &UnivariateParams) -> f64 {
             continue;
         }
 
-        // 3c. 2 分量混合参数（用 A, B 矩匹配出两个分量）
+        // 3c. 矩匹配：用 tag 的遗传效应矩 (A, B) 确定一个 2 分量高斯混合。
+        //
+        // 每个 tag 有两种状态：
+        //   - "null"   (概率 tag_pi0)：没踩中 causal 信号，z 只是噪声，分布窄 N(0, s1²)
+        //   - "signal" (概率 tag_pi1)：踩中了 causal 信号，z 带遗传效应，分布宽 N(0, s2²)
+        //
+        // A = E[δ²]（信号强度，2 阶矩），B = κ₄(δ)（信号集中度，4 阶累积量）。
+        // 下面三个公式是"让 2 分量混合的 2/4 阶矩 = (A, B)"解出来的闭式解
+        // （2 个矩恰好唯一确定一个 2 分量混合，这是 Gaussian 近似的数学基础）。
+
+        // tag_pi0: null 分量的权重 = 这个 tag "是空的"的概率。
+        //          B 相对 A² 越大（信号越集中）→ tag_pi0 越大（越多 tag 是空的）。
         let tag_pi0 = b / (b + 3.0 * a * a);
+
+        // tag_pi1: signal 分量的权重 = 这个 tag "踩中信号"的概率。两者互补。
         let tag_pi1 = 1.0 - tag_pi0;
+
+        // sig2_tag: signal 分量"额外"的方差（在 null 方差 sig2_zero 之上叠加的遗传信号）。
+        //           A 越大（信号越强）→ sig2_tag 越大（宽分布越宽）。
         let sig2_tag = (b + 3.0 * a * a) / (3.0 * a);
+
+        // s2: signal 分量的标准差 = √(null 方差 + 遗传信号方差)。
+        //     对应那条"宽钟形曲线"的宽度，用于第 3d 步算 pdf1。
         let s2 = (p.sig2_zero + sig2_tag).sqrt();
 
         // 3d. 混合密度：null 分量 + signal 分量，按各自权重加权

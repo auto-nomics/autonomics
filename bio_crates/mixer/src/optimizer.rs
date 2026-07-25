@@ -3,6 +3,8 @@
 //! 在无约束空间最小化 cost_of_vec。原版 univariate fit1 用它做局部精修。
 
 use crate::{cost::univariate_cost_gaussian, data::ChromData};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 /// 无约束向量 → 真实参数 → cost。
 ///
@@ -14,7 +16,7 @@ use crate::{cost::univariate_cost_gaussian, data::ChromData};
 /// 这个函数是优化器与 cost 之间的"翻译官"：优化器递来一个无约束 `x`，
 /// 经 `from_unconstrained` 还原成有物理约束的 `UnivariateParams`，
 /// 再喂给 cost function。这就是 parametrize 模块存在的全部意义。
-fn cost_of_vec(data: &ChromData, x: [f64; 3]) -> f64 {
+pub(crate) fn cost_of_vec(data: &ChromData, x: [f64; 3]) -> f64 {
     let params = crate::parametrize::from_unconstrained(x);
     univariate_cost_gaussian(data, &params)
 }
@@ -119,6 +121,95 @@ pub fn nelder_mead(
     }
     simplex.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     simplex[0].0
+}
+
+/// 从种群中选 3 个互不相同且 != exclude 的索引（Fisher-Yates 抽前 3）。
+fn pick_three(rng: &mut SmallRng, exclude: usize, popsize: usize) -> (usize, usize, usize) {
+    let mut idxs: Vec<usize> = (0..popsize).filter(|&x| x != exclude).collect();
+    for k in 0..3 {
+        let j = rng.gen_range(k..idxs.len());
+        idxs.swap(k, j);
+    }
+    (idxs[0], idxs[1], idxs[2])
+}
+
+/// 差分进化（DE/rand/1/bin），对齐原版 scipy `differential_evolution` 默认行为。
+///
+/// 原版 `diffevo-fast` 参数：`mutation=(0.5,1)`（F 在 [0.5,1] 每代抖动）、
+/// `recombination=0.7`（交叉率 CR）、`tol=0.01`、`polish=False`。
+/// 在无约束空间搜索，`bounds` 为每维 (low, high)。
+pub fn differential_evolution(
+    data: &ChromData,
+    bounds: &[(f64, f64)],
+    popsize_mult: usize,
+    max_gen: usize,
+    tol: f64,
+    seed: u64,
+) -> [f64; 3] {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let n = bounds.len();
+    let popsize = popsize_mult * n;
+    const CR: f64 = 0.7; // 交叉率
+
+    // 1. 初始化种群：每维在边界内随机
+    let mut pop: Vec<[f64; 3]> = (0..popsize)
+        .map(|_| {
+            let mut ind = [0.0f64; 3];
+            for d in 0..n {
+                ind[d] = rng.gen_range(bounds[d].0..bounds[d].1);
+            }
+            ind
+        })
+        .collect();
+
+    let mut costs: Vec<f64> = pop.iter().map(|x| cost_of_vec(data, *x)).collect();
+
+    for _ in 0..max_gen {
+        // 每代抖动一个突变因子 F ∈ [0.5, 1.0]
+        let f = rng.gen_range(0.5..1.0);
+
+        for i in 0..popsize {
+            let (a, b, c) = pick_three(&mut rng, i, popsize);
+
+            // 变异：mutant = a + F·(b − c)，裁剪到边界
+            let mut mutant = [0.0f64; 3];
+            for d in 0..n {
+                mutant[d] = (pop[a][d] + f * (pop[b][d] - pop[c][d])).clamp(bounds[d].0, bounds[d].1);
+            }
+
+            // 交叉（二项式）：保证至少一维来自 mutant
+            let j_rand = rng.gen_range(0..n);
+            let mut trial = [0.0f64; 3];
+            for d in 0..n {
+                trial[d] = if d == j_rand || rng.gen_range(0.0..1.0) < CR {
+                    mutant[d]
+                } else {
+                    pop[i][d]
+                };
+            }
+
+            // 选择：trial 更好则替换
+            let cost_trial = cost_of_vec(data, trial);
+            if cost_trial <= costs[i] {
+                pop[i] = trial;
+                costs[i] = cost_trial;
+            }
+        }
+
+        // 收敛判定：种群 cost 极差 < tol
+        let cmin = costs.iter().cloned().fold(f64::INFINITY, f64::min);
+        let cmax = costs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if cmax - cmin < tol {
+            break;
+        }
+    }
+
+    let (best_idx, _) = costs
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .unwrap();
+    pop[best_idx]
 }
 
 #[cfg(test)]
