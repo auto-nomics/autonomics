@@ -4578,8 +4578,10 @@ name = "mixer"
 version = "0.1.0"
 dependencies = [
  "faer",
+ "flate2",
  "rand 0.8.6",
  "rand_distr 0.4.3",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

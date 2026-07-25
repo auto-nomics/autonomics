@@ -80,29 +80,8 @@ pub fn fit1(data: &ChromData, cfg: &FitConfig) -> FitResult {
 mod tests {
     use super::*;
     use crate::data::ChromData;
-
-    #[test]
-    fn fit1_runs_and_returns_valid_params() {
-        let triples = vec![(0, 1, 0.5), (1, 0, 0.3), (2, 1, 0.4)];
-        let data = ChromData::new(
-            vec![1.2, 0.8, 1.5],
-            vec![100.0, 100.0, 100.0],
-            vec![0.5, 0.4, 0.45],
-            &triples,
-        );
-        let result = fit1(&data, &FitConfig::default());
-
-        // 参数在物理约束内
-        assert!(result.params.pi > 0.0 && result.params.pi < 1.0);
-        assert!(result.params.sig2_beta > 0.0);
-        assert!(result.params.sig2_zero > 0.0);
-        // loglike 有限
-        assert!(result.loglike.is_finite());
-        println!(
-            "拟合: pi={}, sig2_beta={}, sig2_zero={}, cost={}",
-            result.params.pi, result.params.sig2_beta, result.params.sig2_zero, result.loglike
-        );
-    }
+    // 注意：fit1 的端到端验证由 `fit1_recovers_synthetic_params`（合成数据参数回收）
+    // 和 tests/cross_validation.rs（真实 HM3 数据 vs 原版金标准）覆盖。
 
     #[test]
     fn fit1_recovers_synthetic_params() {

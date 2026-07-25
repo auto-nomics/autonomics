@@ -9,9 +9,10 @@
 //! 当前为骨架：DAG 接口（端口/工厂/DagNode trait）已就位，数据湖读取与
 //! ChromData 组装逻辑用 `TODO` 插桩占位，待后续阶段填充。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Float64Array, RecordBatch};
+use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datalake::Datalake;
@@ -124,15 +125,9 @@ fn build_result_batch(r: &mixer::result::FitResult) -> Result<RecordBatch, Univa
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct UnivariateMixerNodeSpec {
     /// 参与拟合的染色体列表，如 `[21, 22]`。每个染色体对应一张
-    /// `ld_matrix.{ld_table_prefix}{chrom}` 表。
+    /// `iceberg.ld_matrix.eur_chr{chrom}` 表（当前固定 EUR 人群）。
     pub chromosomes: Vec<u32>,
-    /// LD 矩阵表前缀（命名空间固定为 `ld_matrix`，表名 = 前缀+染色体号）。
-    /// 默认 `"eur_chr"` → `iceberg.ld_matrix.eur_chr21`。
-    #[serde(default = "default_ld_prefix")]
-    pub ld_table_prefix: String,
-    /// allele frequency 表名（命名空间固定为 `af`）。默认 `"eur_af"`。
-    #[serde(default = "default_af_table")]
-    pub af_table: String,
+
     /// 差分进化重复次数（原版 `--diffevo-fast-repeats`，默认 20）。
     #[serde(default = "default_diffevo_repeats")]
     pub diffevo_repeats: usize,
@@ -141,12 +136,6 @@ pub struct UnivariateMixerNodeSpec {
     pub r2_min: f64,
 }
 
-fn default_ld_prefix() -> String {
-    "eur_chr".to_string()
-}
-fn default_af_table() -> String {
-    "eur_af".to_string()
-}
 fn default_diffevo_repeats() -> usize {
     20
 }
@@ -239,52 +228,133 @@ impl DagNode for UnivariateMixerNode {
         // 2. 把上游 sumstats 注册为临时表。
         ctx.register_table("sumstats", input.data.clone().into_view())?;
 
-        // ============================================================
-        // TODO[phase-2]: 数据湖读取 + ChromData 组装
-        // ============================================================
-        // for chrom in &self.spec.chromosomes {
-        //     // (a) 读 LD 矩阵（COO）: id_a, id_b, unphased_r2
-        //     let ld_sql = format!(
-        //         "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.{}{}",
-        //         self.spec.ld_table_prefix, chrom
-        //     );
-        //     // (b) 读 allele frequency: id, alt_freq
-        //     let af_sql = format!(
-        //         "SELECT id, alt_freq FROM iceberg.af.{} WHERE chrom = {}",
-        //         self.spec.af_table, chrom
-        //     );
-        //     // (c) 建立 rsid → u32 index 映射（tag/snp 共用 index 空间）
-        //     // (d) COO 三元组 (rsid_a, rsid_b, r2) → (tag_idx, snp_idx, r2)
-        //     // (e) alt_freq → h = 2·f·(1−f)
-        //     // (f) sumstats join rsid → z, n
-        //     // (g) 组装 ChromData，收集进 Vec<ChromData>
-        // }
-        //
-        // 当前用桩占位：数据湖读取与多染色体拟合尚未实现。
-        let _ = (&ctx, &self.spec); // 暂时引用，避免未使用告警
-        return Err(UnivariateMixerError::NotImplemented(
-            "数据湖 LD/AF 读取与 ChromData 组装待实现（见 TODO[phase-2]）".into(),
-        )
-        .into());
+        // 3. 逐染色体读 AF + sumstats（join 出每个 tag 的 z/n/h），再读 LD。
+        //    所有染色体合并进一个全局 index 空间——因为 LD 不跨染色体，
+        //    合并后的 LdBlock 自然呈块对角，cost 与逐染色体求和等价。
+        //    universe = sumstats ∩ AF（同时有 z 和 h 的 SNP）。
+        let mut rsid_to_idx: HashMap<String, u32> = HashMap::new();
+        let mut z_vec: Vec<f64> = Vec::new();
+        let mut n_vec: Vec<f64> = Vec::new();
+        let mut h_vec: Vec<f64> = Vec::new();
+        let mut ld_triples: Vec<(u32, u32, f64)> = Vec::new();
 
-        // ============================================================
-        // 以下为拟合 + 结果打包的预期流程（占位，等 ChromData 就绪后启用）
-        // ============================================================
-        //
-        // // 3. 跑 fit1（多染色体需扩展为聚合 cost；首版单染色体）。
-        // let cfg = mixer::fit::FitConfig {
-        //     diffevo_repeats: self.spec.diffevo_repeats,
-        //     ..Default::default()
-        // };
-        // let result = mixer::fit::fit1(&chrom_data, &cfg);
-        //
-        // // 4. 打包单行结果 RecordBatch 并返回。
-        // let batch = build_result_batch(&result)?;
-        // let df = ctx.read_batch(batch)?;
-        // let mut res: PortOutputs = PortOutputs::new();
-        // res.insert(0, df);
-        // Ok(res)
+        for chrom in &self.spec.chromosomes {
+            // (a) AF ∩ sumstats → 每个 tag 的 alt_freq / Z / N
+            let universe_sql = format!(
+                r#"SELECT a.id AS rsid, a.alt_freq AS af, s."{z}" AS zc, s."{n}" AS nc
+                   FROM iceberg.af.eur_af AS a
+                   INNER JOIN sumstats AS s ON a.id = s."{rsid}"
+                   WHERE a.chrom = {chrom}"#,
+                z = INPUT_Z_COL,
+                n = INPUT_N_COL,
+                rsid = INPUT_RSID_COL,
+                chrom = chrom,
+            );
+            let universe_batches = ctx.sql(&universe_sql).await?.collect().await?;
+            for batch in &universe_batches {
+                let rsids = col_as_string(batch, "rsid")?;
+                let afs = col_as_f64(batch, "af")?;
+                let zs = col_as_f64(batch, "zc")?;
+                let ns = col_as_f64(batch, "nc")?;
+                for row in 0..batch.num_rows() {
+                    // 重复 rsid 跳过（保持首次出现的 index）
+                    let rsid = rsids.value(row);
+                    if rsid_to_idx.contains_key(rsid) {
+                        continue;
+                    }
+                    let idx = rsid_to_idx.len() as u32;
+                    rsid_to_idx.insert(rsid.to_string(), idx);
+                    let f = afs.value(row);
+                    z_vec.push(zs.value(row));
+                    n_vec.push(ns.value(row));
+                    h_vec.push(2.0 * f * (1.0 - f)); // 杂合度
+                }
+            }
+
+            // (b) LD 矩阵（COO），两端点必须在 universe 内，且 r² ≥ r2_min
+            let ld_sql = format!(
+                "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom}",
+                chrom = chrom,
+            );
+            let ld_batches = ctx.sql(&ld_sql).await?.collect().await?;
+            for batch in &ld_batches {
+                let a_ids = col_as_string(batch, "id_a")?;
+                let b_ids = col_as_string(batch, "id_b")?;
+                let r2s = col_as_f64(batch, "unphased_r2")?;
+                for row in 0..batch.num_rows() {
+                    let a = a_ids.value(row);
+                    let b = b_ids.value(row);
+                    let r2 = r2s.value(row);
+                    if r2 < self.spec.r2_min {
+                        continue;
+                    }
+                    if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
+                        ld_triples.push((ta, tb, r2));
+                    }
+                }
+            }
+        }
+
+        // 4. 组装 ChromData（权重全 1，LD 由 from_coo 构建）。
+        let n_snp = z_vec.len();
+        if n_snp == 0 {
+            return Err(UnivariateMixerError::InvalidInput(format!(
+                "no SNPs overlap between sumstats and af.eur_af for chromosomes {:?}",
+                self.spec.chromosomes
+            ))
+            .into());
+        }
+        let data = mixer::data::ChromData::new(z_vec, n_vec, h_vec, &ld_triples);
+
+        // 5. 跑 fit1（DE×repeats → Nelder-Mead 精修）。
+        let cfg = mixer::fit::FitConfig {
+            diffevo_repeats: self.spec.diffevo_repeats,
+            ..Default::default()
+        };
+        let result = mixer::fit::fit1(&data, &cfg);
+
+        // 6. 打包单行结果 RecordBatch 并返回。
+        let batch = build_result_batch(&result)?;
+        let df = ctx.read_batch(batch)?;
+        let mut res: PortOutputs = PortOutputs::new();
+        res.insert(0, df);
+        Ok(res)
     }
+}
+
+// =====================================================================
+// Arrow 列提取 helpers
+// =====================================================================
+
+/// 按列名取 `StringArray`（rsid 等 Utf8 列）。
+fn col_as_string<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a StringArray, UnivariateMixerError> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' not found")))?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' is not Utf8")))
+}
+
+/// 按列名取 `Float64Array`（Z/N/alt_freq/unphased_r2 等）。
+///
+/// 要求上游 schema 为 Float64（AF/LD 表与输入端口 schema 均为 Float64）。
+fn col_as_f64<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a Float64Array, UnivariateMixerError> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
+    col.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
+        UnivariateMixerError::InvalidInput(format!(
+            "column '{name}' is not Float64 (got {})",
+            col.data_type()
+        ))
+    })
 }
 
 // =====================================================================
@@ -305,15 +375,29 @@ mod tests {
         // 仅验证节点能按 spec 构造、端口 schema 正确。
         let spec = UnivariateMixerNodeSpec {
             chromosomes: vec![21, 22],
-            ld_table_prefix: default_ld_prefix(),
-            af_table: default_af_table(),
+            // ld_table_prefix: default_ld_prefix(),
+            // af_table: default_af_table(),
             diffevo_repeats: 5,
             r2_min: 0.05,
         };
         let node = UnivariateMixerNode::new(Arc::new(Datalake::new()), spec);
         assert_eq!(node.node_type(), "univariate_mixer");
-        // 一个输入端口、一个输出端口
+        // 一个输入端口（sumstats）、一个输出端口（fit1 结果）
         assert_eq!(node.meta().input_ports().len(), 1);
         assert_eq!(node.meta().output_ports().len(), 1);
     }
+    //
+    // #[tokio::test]
+    // async fn load_iceberg_ld_matrix_panel() {
+    //     let dk = Datalake::default();
+    //     let ctx = dk.get_ctx().await.unwrap();
+    //     let ld_df_chr22 = ctx.sql("SELECT * FROM iceberg.af.eur_af").await.unwrap();
+    //     ld_df_chr22
+    //         .limit(0, Some(10))
+    //         .unwrap()
+    //         .show()
+    //         .await
+    //         .unwrap();
+    //     panic!()
+    // }
 }
