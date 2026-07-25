@@ -16,6 +16,7 @@ use crate::data_engine::{
         sink::SinkNodeFactory,
         source::SourceNodeFactory,
         sql_node::SqlNodeFactory,
+        univariate_mixer::UnivariateMixerNodeFactory,
     },
 };
 
@@ -69,6 +70,7 @@ impl NodeRegistry {
         registry.register(Box::new(LdscHsqNodeFactory {}));
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(MockNodeFactory {}));
+        registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry
     }
 

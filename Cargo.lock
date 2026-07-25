@@ -1675,6 +1675,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "ldsc",
+ "mixer",
  "nanoid",
  "parquet",
  "petgraph",
