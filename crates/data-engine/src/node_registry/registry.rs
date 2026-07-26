@@ -14,11 +14,12 @@ use super::error::{Error, Result};
 use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
-    echo_node::EchoNodeFactory, ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory,
-    liability::LiabilityNodeFactory, linear_regression::LinearRegressionNodeFactory,
-    mr::MrNodeFactory, sink_file::FileSinkNodeFactory, sink_iceberg::IcebergSinkNodeFactory,
+    bivariate_mixer::BivariateMixerNodeFactory, echo_node::EchoNodeFactory,
+    ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory, liability::LiabilityNodeFactory,
+    linear_regression::LinearRegressionNodeFactory, mr::MrNodeFactory,
+    sink_file::FileSinkNodeFactory, sink_iceberg::IcebergSinkNodeFactory,
     source::SourceNodeFactory, sql_node::SqlNodeFactory, test_source::TestSourceFactory,
-    viz::VizNodeFactory,
+    univariate_mixer::UnivariateMixerNodeFactory, viz::VizNodeFactory,
 };
 
 /// Build a fresh, isolated [`SessionContext`].
@@ -132,6 +133,8 @@ impl NodeRegistry {
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(TestSourceFactory {}));
         registry.register(Box::new(MrNodeFactory {}));
+        registry.register(Box::new(UnivariateMixerNodeFactory {}));
+        registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
         registry
     }

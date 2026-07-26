@@ -1,5 +1,4 @@
 [workspace]
-resolver = "3"
 members = [
   "crates/agentik-sdk",
   "crates/agentik-types",
@@ -21,11 +20,13 @@ members = [
 
   "crates/biofusion-cache",
   "bio_crates/ldsc",
+  "bio_crates/mixer",
   "bio_crates/mr",
   "infra/sink_ld_matrix",
   "crates/visualization",
-   "infra/sink_af",
+  "infra/sink_af",
 ]
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
