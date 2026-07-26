@@ -43,7 +43,7 @@ pub fn simulate(data: &ChromData, params: &UnivariateParams, seed: u64) -> Vec<f
         let n_j = data.n[j];
         let (cols, r2s) = data.ld.row(j);
         for (k, s) in cols.iter().enumerate() {
-            let a2ij = n_j * data.h[*s as usize] * r2s[k];
+            let a2ij = n_j * data.h[*s as usize] * r2s[k] as f64;
             delta += a2ij.sqrt() * beta[*s as usize];
         }
         z[j] = delta + noise_dist.sample(&mut rng);

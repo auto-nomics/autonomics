@@ -70,8 +70,8 @@ pub fn bivariate_cost_gaussian(data: &BivariateData, p: &BivariateParams) -> f64
         let (cols, r2s) = data.ld.row(j);
         for (k, &s) in cols.iter().enumerate() {
             let hi = data.h[s as usize];
-            let a1 = n1j * hi * r2s[k];
-            let a2 = n2j * hi * r2s[k];
+            let a1 = n1j * hi * r2s[k] as f64;
+            let a2 = n2j * hi * r2s[k] as f64;
             ed20 += a1 * eb20;
             ed02 += a2 * eb02;
             // Edelta11 用 √(a1·a2)·Eb11（原版的 √(a2ij1·a2ij2) 技巧）

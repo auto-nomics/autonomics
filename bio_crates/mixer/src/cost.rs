@@ -61,7 +61,7 @@ pub fn tag_moments(data: &ChromData, j: usize, ebeta2: f64, ebeta4: f64) -> (f64
         // data.h[*s as usize] 获取当前行第s个SNP的遗传异质性
         //
         // 意义：计算当前行内（当前索引的连锁SNP邻居）对z值方差的贡献, 本质上是邻居贡献的传输系数
-        let a2ij = n_j * data.h[*s as usize] * r2s[k];
+        let a2ij = n_j * data.h[*s as usize] * r2s[k] as f64;
         a += a2ij * ebeta2;
         b += a2ij * a2ij * ebeta4;
     }

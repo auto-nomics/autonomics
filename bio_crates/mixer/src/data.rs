@@ -134,7 +134,7 @@ impl UnivariateSufficient {
             let mut s1 = 0.0;
             let mut s2 = 0.0;
             for (k, &s) in cols.iter().enumerate() {
-                let a2ij = n_j * h[s as usize] * r2s[k];
+                let a2ij = n_j * h[s as usize] * r2s[k] as f64;
                 s1 += a2ij;
                 s2 += a2ij * a2ij;
             }

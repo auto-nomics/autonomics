@@ -398,7 +398,7 @@ impl DagNode for UnivariateMixerNode {
                 }
                 let nnz_k = row_ptr[n_k] as usize;
                 let mut column_index = vec![0u32; nnz_k];
-                let mut r2_store = vec![0.0f64; nnz_k];
+                let mut r2_store = vec![0.0f32; nnz_k];
                 let mut cursor = row_ptr.clone();
                 for batch in &ld_batches {
                     for_each_ld_entry(
@@ -409,7 +409,7 @@ impl DagNode for UnivariateMixerNode {
                         |local_tag, global_snp, r2| {
                             let p = cursor[local_tag as usize] as usize;
                             column_index[p] = global_snp;
-                            r2_store[p] = r2;
+                            r2_store[p] = r2 as f32; // 对齐源端 f32 精度
                             cursor[local_tag as usize] += 1;
                         },
                     )?;

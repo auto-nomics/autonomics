@@ -12,7 +12,10 @@ pub struct LdBlock {
     /// tag `i` 的邻居 = col_indx[row_ptr[i]...row_ptr[i+1]]，对应 r2 同区间.
     pub row_ptr: Vec<u32>,
     pub column_index: Vec<u32>,
-    pub r2: Vec<f64>,
+    /// r² 值。存 **f32**——与原版 libbgmg 的 LD 存储精度一致
+    /// （`bgmg_retrieve_ld_r_chr(... float* r)`，源端即 f32），f64 只是虚假精度。
+    /// 算术在各用点 `as f64` 提升后在 f64 下做，避免 f32 累积误差。
+    pub r2: Vec<f32>,
 }
 
 impl LdBlock {
@@ -35,13 +38,13 @@ impl LdBlock {
         // 第3步：按行填值。pos 是写入游标，追踪每行当前该写到哪个位置
         let nnz = triples.len();
         let mut col_idx = vec![0u32; nnz];
-        let mut r2 = vec![0.0f64; nnz];
+        let mut r2 = vec![0.0f32; nnz];
         let mut pos = row_ptr.clone(); // pos[i] = tag i 下一个该写入的位置
 
         for (tag_idx, snp_idx, r2_val) in triples {
             let p = pos[*tag_idx as usize] as usize;
             col_idx[p] = *snp_idx;
-            r2[p] = *r2_val;
+            r2[p] = *r2_val as f32; // 截断到源端 f32 精度
             pos[*tag_idx as usize] += 1;
         }
 
@@ -53,8 +56,8 @@ impl LdBlock {
         }
     }
 
-    /// 遍历 tag `i` 的所有邻居，返回 (snp_idx, r2) 的切片。
-    pub fn row(&self, i: usize) -> (&[u32], &[f64]) {
+    /// 遍历 tag `i` 的所有邻居，返回 (snp_idx, r2) 的切片。r2 为 f32（见字段注释）。
+    pub fn row(&self, i: usize) -> (&[u32], &[f32]) {
         let start = self.row_ptr[i] as usize;
         let end = self.row_ptr[i + 1] as usize;
         (&self.column_index[start..end], &self.r2[start..end])
@@ -70,15 +73,15 @@ impl LdBlock {
 pub trait LdRandomAccess {
     /// 全局行数（= 全局 SNP 数）。
     fn n_tag(&self) -> usize;
-    /// 取 tag `i` 的全部邻居 `(snp_idx, r2)` 切片。`i` 必须在 `[0, n_tag)`。
-    fn row(&self, i: usize) -> (&[u32], &[f64]);
+    /// 取 tag `i` 的全部邻居 `(snp_idx, r2)` 切片。r2 为 f32（对齐原版 libbgmg 源精度）。
+    fn row(&self, i: usize) -> (&[u32], &[f32]);
 }
 
 impl LdRandomAccess for LdBlock {
     fn n_tag(&self) -> usize {
         self.n_tag
     }
-    fn row(&self, i: usize) -> (&[u32], &[f64]) {
+    fn row(&self, i: usize) -> (&[u32], &[f32]) {
         LdBlock::row(self, i)
     }
 }
@@ -120,7 +123,7 @@ impl LdRandomAccess for BlockDiagonal {
         self.n_total
     }
 
-    fn row(&self, i: usize) -> (&[u32], &[f64]) {
+    fn row(&self, i: usize) -> (&[u32], &[f32]) {
         // 找最大的 offset <= i（i 所属块）。
         let k = match self.offsets.binary_search_by(|o| o.cmp(&i)) {
             // i 恰为某块起点
@@ -205,12 +208,12 @@ mod tests {
         assert_eq!(r.len(), 2);
         // 行内顺序是输入遇到顺序, 这里输入恰好有序
         assert_eq!(c, &[7, 9]);
-        assert_eq!(r, &[0.8, 0.3]);
+        assert_eq!(r, &[0.8_f32, 0.3_f32]);
 
         // tag2 的一个邻居
         let (c, r) = blk.row(2);
         assert_eq!(c, &[2]);
-        assert_eq!(r, &[0.6]);
+        assert_eq!(r, &[0.6_f32]);
     }
 
     #[test]
@@ -268,8 +271,8 @@ mod tests {
             let (r_c, r_r) = reference.row(i);
             assert_eq!(m_c.len(), r_c.len(), "row {i} 邻居数不一致");
             // 配对后按 col 排序比较 (col, r2)
-            let mut m: Vec<(u32, f64)> = m_c.iter().copied().zip(m_r.iter().copied()).collect();
-            let mut r: Vec<(u32, f64)> = r_c.iter().copied().zip(r_r.iter().copied()).collect();
+            let mut m: Vec<(u32, f32)> = m_c.iter().copied().zip(m_r.iter().copied()).collect();
+            let mut r: Vec<(u32, f32)> = r_c.iter().copied().zip(r_r.iter().copied()).collect();
             m.sort_by_key(|a| a.0);
             r.sort_by_key(|a| a.0);
             assert_eq!(m, r, "row {i} 邻居集合不一致");
@@ -285,7 +288,7 @@ mod tests {
         assert_eq!(merged.row_ptr, vec![0, 0, 0, 1, 1]);
         let (c, r) = merged.row(2);
         assert_eq!(c, &[1]);
-        assert_eq!(r, &[0.7]);
+        assert_eq!(r, &[0.7_f32]);
     }
 
     #[test]

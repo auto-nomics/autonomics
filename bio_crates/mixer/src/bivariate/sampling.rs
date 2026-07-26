@@ -103,7 +103,7 @@ fn tag_pdf_sampling(
     let (cols, r2s) = data.ld.row(tag_j);
     for (k_nb, &s) in cols.iter().enumerate() {
         let hi = data.h[s as usize];
-        let r2 = r2s[k_nb];
+        let r2 = r2s[k_nb] as f64; // f32 存储 → f64 算术
         let a1 = r2 * hi * n1j; // sig2_zeroC = 1
         let a2 = r2 * hi * n2j;
 

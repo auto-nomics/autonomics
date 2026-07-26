@@ -144,7 +144,7 @@ pub fn randprune_weights<L: LdRandomAccess + ?Sized>(
                 if nb_tag < 0 {
                     continue;
                 }
-                if r2s[k] < cfg.r2_threshold {
+                if (r2s[k] as f64) < cfg.r2_threshold {
                     continue;
                 }
                 let nb = nb_tag as usize;
@@ -177,7 +177,7 @@ pub fn randprune_weights<L: LdRandomAccess + ?Sized>(
                     if !passed[nb_tag as usize] {
                         continue;
                     }
-                    w_ld += r2s[k];
+                    w_ld += r2s[k] as f64;
                 }
                 weight[tag_i] += 1.0 / w_ld;
             } else {
@@ -218,7 +218,7 @@ pub fn ldscore_weights<L: LdRandomAccess + ?Sized>(ld: &L, n_snp: usize) -> Vec<
     let mut w = vec![0.0; n_snp];
     for (j, weight) in w.iter_mut().enumerate() {
         let (_, r2s) = ld.row(j);
-        let sum_r2: f64 = r2s.iter().copied().sum();
+        let sum_r2: f64 = r2s.iter().map(|&r| r as f64).sum();
         *weight = ldscore_weight(sum_r2);
     }
     w
@@ -281,9 +281,10 @@ mod tests {
         let triples = vec![(0u32, 1u32, 0.5), (0, 2, 0.3), (1, 2, 0.4)];
         let ld = LdBlock::from_coo(&triples, 3);
         let w = ldscore_weights(&ld, 3);
-        assert!((w[0] - 1.0 / 1.8).abs() < 1e-12);
-        assert!((w[1] - 1.0 / 1.4).abs() < 1e-12);
-        assert!((w[2] - 1.0).abs() < 1e-12);
+        // r2 存 f32（源端精度），0.3/0.4 等非精确表示 → 权重与 f64 理论值差 ~1e-7，故放宽到 1e-6。
+        assert!((w[0] - 1.0 / 1.8).abs() < 1e-6);
+        assert!((w[1] - 1.0 / 1.4).abs() < 1e-6);
+        assert!((w[2] - 1.0).abs() < 1e-6);
         // 全正、有限
         for wi in &w {
             assert!(*wi > 0.0 && wi.is_finite());

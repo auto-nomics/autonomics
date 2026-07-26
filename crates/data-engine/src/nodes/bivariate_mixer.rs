@@ -12,8 +12,15 @@
 //! [`mixer::bivariate::BivariateData`]，固定两个 univariate 约束，调用
 //! [`mixer::bivariate::fit2`] 拟合，输出单行 bivariate 结果。
 //!
-//! 注：当前用权重全 1（无 Rust 原生 randprune）。生产级精度需接入 randprune 权重
-//! （见 `mixer` crate 的 README/记忆 `mixer-ld-dump-workflow`）。cost/optimizer 已交叉验证。
+//! 加权：节点用 Rust 原生 randprune（`mixer::weights::randprune_weights`，与原版
+//! `set_weights_randprune` bit-exact，见记忆 `mixer-ld-dump-workflow`）。tag 集 = 全部 SNP。
+//! cost/optimizer 已交叉验证。
+//!
+//! 内存注记：与 univariate 不同，bivariate 的 CSR **无法**经充分统计量压缩消除——
+//! 生产用的 sampling cost 逐邻居做 Monte Carlo 多项采样，内在需要 per-neighbor 的
+//! `h·r²` 全表（识别 pi12/rho_beta 的高阶信息在其中），不可折叠成标量。故 CSR 是
+//! sampling cost 钉死的常驻对象，换 ldscore 加权也消不掉它；bivariate 的内存优化
+//! 走 Tier 1（`BlockDiagonal` 视图，消全局 COO 缓冲 + merge 复制），而非加权替换。
 
 use std::collections::HashMap;
 use std::sync::Arc;
