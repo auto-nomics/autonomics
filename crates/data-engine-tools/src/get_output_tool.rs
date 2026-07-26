@@ -29,16 +29,29 @@ use data_engine::runtime::DataEngineClient;
                   COUNT(*)), `returned_rows` (rows actually materialized in \
                   this page), and `data` (JSON rows). If materializing the page \
                   fails (e.g. a column cast/decode error), the entry carries a \
-                  `collect_error` string instead of silently reporting 0 rows."
+                  `collect_error` string instead of silently reporting 0 rows. \
+                  The row count is hard-clamped to at most `max_limit` rows \
+                  regardless of the requested `limit`; use `offset` to page."
 )]
 pub struct GetOutputInput {
     /// The node id to query output for.
     pub id: String,
     /// Number of rows to skip from the beginning. Defaults to 0.
     pub offset: Option<usize>,
-    /// Maximum number of rows to return. Defaults to 100. Set to 0 for unlimited.
+    /// Maximum number of rows to return. Defaults to 100 (`DEFAULT_LIMIT`). \
+    /// Any request above `MAX_LIMIT` (or `0`, formerly "unlimited") is \
+    /// hard-clamped to `MAX_LIMIT` — the full table is never materialized. \
+    /// Page with `offset` instead.
     pub limit: Option<usize>,
 }
+
+/// Default page size when the caller omits `limit`.
+const DEFAULT_LIMIT: usize = 100;
+
+/// Hard ceiling on rows materialized per `get_output` call, regardless of what
+/// the agent requests. Prevents a pathologically large (or `0` = "unlimited")
+/// request from dragging the whole table into the tool result.
+const MAX_LIMIT: usize = 1000;
 
 pub struct GetOutputTool {
     client: Arc<DataEngineClient>,
@@ -232,9 +245,20 @@ impl ToolFunction for GetOutputTool {
         };
 
         let offset = input.offset.unwrap_or(0);
-        let default_limit: usize = 100;
-        let limit = input.limit.unwrap_or(default_limit);
-        let unlimited = limit == 0;
+
+        // Resolve the requested page size, then hard-clamp it. Previously a
+        // caller could pass `limit: 0` for "unlimited" or any arbitrarily large
+        // number, materializing the entire table into one tool result. Now:
+        //   - missing / `0` → DEFAULT_LIMIT (the `0` = "unlimited" mode is gone)
+        //   - anything above MAX_LIMIT → MAX_LIMIT
+        // so the row count returned to the agent is always bounded.
+        let requested_limit = input.limit.unwrap_or(DEFAULT_LIMIT);
+        let limit = if requested_limit == 0 {
+            DEFAULT_LIMIT
+        } else {
+            requested_limit.min(MAX_LIMIT)
+        };
+        let limit_clamped = requested_limit == 0 || requested_limit > MAX_LIMIT;
 
         let mut outputs_info = Vec::with_capacity(dfs.len());
         for (name, df) in dfs.iter() {
@@ -266,13 +290,20 @@ impl ToolFunction for GetOutputTool {
             // turned a decode/cast failure into an empty batch vector, yielding
             // the misleading `returned_rows: 0, total_rows: N` (obstacle #2).
             // Now we capture the error and report it in-band per output.
-            let fetch = if unlimited { None } else { Some(limit) };
+            let fetch = Some(limit);
             let queried =
                 df.clone()
                     .limit(offset, fetch)
                     .map_err(|e| ToolError::ExecutionFailed {
                         source: Box::new(e),
                     })?;
+
+            let limit_field = serde_json::json!({
+                "requested": requested_limit,
+                "effective": limit,
+                "clamped": limit_clamped,
+                "max": MAX_LIMIT,
+            });
 
             let entry = match queried.collect().await {
                 Ok(batches) => {
@@ -285,11 +316,7 @@ impl ToolFunction for GetOutputTool {
                         "count_error": count_error,
                         "returned_rows": returned_rows,
                         "offset": offset,
-                        "limit": if unlimited {
-                            serde_json::Value::String("unlimited".into())
-                        } else {
-                            serde_json::json!(limit)
-                        },
+                        "limit": limit_field,
                         "fields": fields,
                         "data": data,
                     })
@@ -307,11 +334,7 @@ impl ToolFunction for GetOutputTool {
                         "count_error": count_error,
                         "returned_rows": null,
                         "offset": offset,
-                        "limit": if unlimited {
-                            serde_json::Value::String("unlimited".into())
-                        } else {
-                            serde_json::json!(limit)
-                        },
+                        "limit": limit_field,
                         "fields": fields,
                         "data": null,
                         "collect_error": format!("{e}"),

@@ -30,16 +30,49 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum UnivariateMixerError {
-    #[error("univariate MiXeR computation not yet implemented: {0}")]
-    NotImplemented(String),
-    #[error("failed to read upstream sumstats: {0}")]
-    ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("failed to build result batch: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
-    #[error("invalid input: {0}")]
+    /// 查询/执行失败，带"步骤 + 染色体 + SQL"上下文，便于定位。
+    /// `context` 形如 `"universe (af ∩ sumstats) chr21"`；`detail` 是底层错误信息。
+    #[error("univariate_mixer @ {context}: {detail}")]
+    Step { context: String, detail: String },
+
+    #[error("univariate_mixer invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("univariate_mixer arrow error: {0}")]
+    Arrow(#[from] arrow_schema::ArrowError),
+
+    #[error("univariate_mixer datalake error: {0}")]
+    Datalake(String),
+}
+
+impl UnivariateMixerError {
+    /// 把一个 DataFusion Result 包上步骤上下文。
+    fn df_ctx<T>(
+        r: Result<T, datafusion::error::DataFusionError>,
+        step: &str,
+        chrom: Option<u32>,
+        sql: Option<&str>,
+    ) -> Result<T, Self> {
+        r.map_err(|e| {
+            let mut context = match chrom {
+                Some(c) => format!("{step} (chr{c})"),
+                None => step.to_string(),
+            };
+            if let Some(sql) = sql {
+                // 截断长 SQL，只保留便于诊断的前缀
+                let snip = if sql.len() > 400 {
+                    format!("{}…", &sql[..400])
+                } else {
+                    sql.to_string()
+                };
+                context.push_str(&format!("\n  SQL: {snip}"));
+            }
+            Self::Step {
+                context,
+                detail: e.to_string(),
+            }
+        })
+    }
 }
 
 impl From<UnivariateMixerError> for DagError {
@@ -304,8 +337,28 @@ impl DagNode for UnivariateMixerNode {
         // 1. Build a fresh, isolated context per execution — no shared CatalogList,
         let ctx = &self.ctx;
 
-        // 2. 把上游 sumstats 注册为临时表。
-        ctx.register_table("sumstats", input.data.clone().into_view())?;
+        // 2. 把上游 sumstats 注册为临时表，并**提前校验必需列**（Z/N/rsid）——
+        //    缺列时给清晰提示，而不是让后面的 SQL 抛出晦涩错误。
+        let in_schema = input.data.schema();
+        let avail: Vec<&str> = in_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        for needed in [INPUT_Z_COL, INPUT_N_COL, INPUT_RSID_COL] {
+            if !in_schema.fields().iter().any(|f| f.name() == needed) {
+                return Err(UnivariateMixerError::InvalidInput(format!(
+                    "上游 sumstats 缺少必需列 '{needed}'；现有列: {avail:?}。\
+                     MiXeR 需要 Z(浮点)、N(样本量)、rsid(SNP标识) 三列。"
+                ))
+                .into());
+            }
+        }
+        ctx.register_table("sumstats", input.data.clone().into_view())
+            .map_err(|e| UnivariateMixerError::Step {
+                context: "register sumstats view".into(),
+                detail: e.to_string(),
+            })?;
 
         // 3. 读 universe（sumstats ∩ AF）→ 每个 SNP 的 z/n/h/maf。
         //    所有 SNP 合并进一个连续全局 index 空间；LD 不跨染色体，块对角。
@@ -322,9 +375,23 @@ impl DagNode for UnivariateMixerNode {
                    FROM iceberg.af.eur_af AS a
                    INNER JOIN sumstats AS s ON a.id = s."{rsid}"
                    WHERE a.chrom = {chrom}"#,
-                z = INPUT_Z_COL, n = INPUT_N_COL, rsid = INPUT_RSID_COL, chrom = chrom,
+                z = INPUT_Z_COL,
+                n = INPUT_N_COL,
+                rsid = INPUT_RSID_COL,
+                chrom = chrom,
             );
-            let universe_batches = ctx.sql(&universe_sql).await?.collect().await?;
+            let df = UnivariateMixerError::df_ctx(
+                ctx.sql(&universe_sql).await,
+                "universe (af ∩ sumstats)",
+                Some(*chrom),
+                Some(&universe_sql),
+            )?;
+            let universe_batches = UnivariateMixerError::df_ctx(
+                df.collect().await,
+                "collect universe batches",
+                Some(*chrom),
+                None,
+            )?;
             for batch in &universe_batches {
                 let rsids = col_as_string(batch, "rsid")?;
                 let afs = col_as_f64(batch, "af")?;
@@ -371,11 +438,28 @@ impl DagNode for UnivariateMixerNode {
                 }
                 let adj_sql = format!(
                     "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
-                    chrom = chrom, r2 = self.spec.extract_r2,
+                    chrom = chrom,
+                    r2 = self.spec.extract_r2,
                 );
                 let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
-                let mut stream = ctx.sql(&adj_sql).await?.execute_stream().await?;
-                while let Some(batch) = stream.try_next().await? {
+                let df = UnivariateMixerError::df_ctx(
+                    ctx.sql(&adj_sql).await,
+                    "extract adjacency (ld r²>thr)",
+                    Some(*chrom),
+                    Some(&adj_sql),
+                )?;
+                let mut stream = UnivariateMixerError::df_ctx(
+                    df.execute_stream().await,
+                    "extract adjacency stream",
+                    Some(*chrom),
+                    None,
+                )?;
+                while let Some(batch) = UnivariateMixerError::df_ctx(
+                    stream.try_next().await,
+                    "extract adjacency batch",
+                    Some(*chrom),
+                    None,
+                )? {
                     for_each_ld_pair(&batch, &rsid_to_idx, |a, b, _r2| {
                         // 对称化：row(a) 加 b，row(b) 加 a，保证 select_tags 的 ld.row(idx) 完整
                         adj_triples.push(((a as usize - base) as u32, b, 1.0));
@@ -409,10 +493,27 @@ impl DagNode for UnivariateMixerNode {
             for chrom in &self.spec.chromosomes {
                 let ld_sql = format!(
                     "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 >= {r2}",
-                    chrom = chrom, r2 = self.spec.r2_min,
+                    chrom = chrom,
+                    r2 = self.spec.r2_min,
                 );
-                let mut stream = ctx.sql(&ld_sql).await?.execute_stream().await?;
-                while let Some(batch) = stream.try_next().await? {
+                let df = UnivariateMixerError::df_ctx(
+                    ctx.sql(&ld_sql).await,
+                    "LdScore fold (ld r²≥r2min)",
+                    Some(*chrom),
+                    Some(&ld_sql),
+                )?;
+                let mut stream = UnivariateMixerError::df_ctx(
+                    df.execute_stream().await,
+                    "LdScore fold stream",
+                    Some(*chrom),
+                    None,
+                )?;
+                while let Some(batch) = UnivariateMixerError::df_ctx(
+                    stream.try_next().await,
+                    "LdScore fold batch",
+                    Some(*chrom),
+                    None,
+                )? {
                     for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
                         if r2 < 0.0 {
                             return;
@@ -434,16 +535,31 @@ impl DagNode for UnivariateMixerNode {
                     })?;
                 }
             }
-            let weights: Vec<f64> = sum_r2.iter().map(|&s| mixer::weights::ldscore_weight(s)).collect();
+            let weights: Vec<f64> = sum_r2
+                .iter()
+                .map(|&s| mixer::weights::ldscore_weight(s))
+                .collect();
             drop(n_vec);
             drop(h_vec);
-            mixer::data::UnivariateSufficient { z: z_vec, weights, m1, m2, tags, totalhet, n_snp }
+            mixer::data::UnivariateSufficient {
+                z: z_vec,
+                weights,
+                m1,
+                m2,
+                tags,
+                totalhet,
+                n_snp,
+            }
         } else {
             // Randprune：collect 全量 LD 建 CSR（适合对称 LD；非对称数据建议用 LdScore）。
             let mut chrom_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
             for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
                 let base = chrom_base[ci];
-                let n_k = ((if ci + 1 < chrom_base.len() { chrom_base[ci + 1] } else { n_snp as u32 }) - base) as usize;
+                let n_k = ((if ci + 1 < chrom_base.len() {
+                    chrom_base[ci + 1]
+                } else {
+                    n_snp as u32
+                }) - base) as usize;
                 if n_k == 0 {
                     continue;
                 }
@@ -451,7 +567,18 @@ impl DagNode for UnivariateMixerNode {
                     "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom}",
                     chrom = chrom,
                 );
-                let ld_batches = ctx.sql(&ld_sql).await?.collect().await?;
+                let df = UnivariateMixerError::df_ctx(
+                    ctx.sql(&ld_sql).await,
+                    "randprune LD (full)",
+                    Some(*chrom),
+                    Some(&ld_sql),
+                )?;
+                let ld_batches = UnivariateMixerError::df_ctx(
+                    df.collect().await,
+                    "collect randprune LD batches",
+                    Some(*chrom),
+                    None,
+                )?;
                 let mut row_counts = vec![0u32; n_k];
                 for batch in &ld_batches {
                     for_each_ld_entry(batch, base, self.spec.r2_min, &rsid_to_idx, |lt, _, _| {
@@ -467,16 +594,27 @@ impl DagNode for UnivariateMixerNode {
                 let mut r2_store = vec![0.0f32; nnz_k];
                 let mut cursor = row_ptr.clone();
                 for batch in &ld_batches {
-                    for_each_ld_entry(batch, base, self.spec.r2_min, &rsid_to_idx, |lt, gs, r2| {
-                        let p = cursor[lt as usize] as usize;
-                        column_index[p] = gs;
-                        r2_store[p] = r2 as f32;
-                        cursor[lt as usize] += 1;
-                    })?;
+                    for_each_ld_entry(
+                        batch,
+                        base,
+                        self.spec.r2_min,
+                        &rsid_to_idx,
+                        |lt, gs, r2| {
+                            let p = cursor[lt as usize] as usize;
+                            column_index[p] = gs;
+                            r2_store[p] = r2 as f32;
+                            cursor[lt as usize] += 1;
+                        },
+                    )?;
                 }
                 chrom_blocks.push((
                     base as usize,
-                    mixer::ld_matrix::LdBlock { n_tag: n_k, row_ptr, column_index, r2: r2_store },
+                    mixer::ld_matrix::LdBlock {
+                        n_tag: n_k,
+                        row_ptr,
+                        column_index,
+                        r2: r2_store,
+                    },
                 ));
             }
             let view = mixer::ld_matrix::BlockDiagonal::new(std::mem::take(&mut chrom_blocks));
@@ -487,7 +625,9 @@ impl DagNode for UnivariateMixerNode {
                 seed: self.spec.seed,
             };
             let weights = mixer::weights::randprune_weights(&view, n_snp, &tags, None, &rp_cfg);
-            let suff = mixer::data::UnivariateSufficient::from_ld(&view, &n_vec, &h_vec, z_vec, weights, tags);
+            let suff = mixer::data::UnivariateSufficient::from_ld(
+                &view, &n_vec, &h_vec, z_vec, weights, tags,
+            );
             drop(view);
             drop(n_vec);
             drop(h_vec);
@@ -504,7 +644,12 @@ impl DagNode for UnivariateMixerNode {
 
         // 7. 打包单行结果 RecordBatch 并返回。
         let batch = build_result_batch(&result)?;
-        let df = ctx.read_batch(batch)?;
+        let df = UnivariateMixerError::df_ctx(
+            ctx.read_batch(batch),
+            "read result batch into DataFrame",
+            None,
+            None,
+        )?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

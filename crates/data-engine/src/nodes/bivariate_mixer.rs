@@ -46,14 +46,47 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum BivariateMixerError {
-    #[error("failed to read upstream batch: {0}")]
-    ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("failed to build result batch: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
-    #[error("invalid input: {0}")]
+    /// 查询/执行失败，带"步骤 + 染色体 + SQL"上下文，便于定位。
+    #[error("bivariate_mixer @ {context}: {detail}")]
+    Step { context: String, detail: String },
+
+    #[error("bivariate_mixer invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("bivariate_mixer arrow error: {0}")]
+    Arrow(#[from] arrow_schema::ArrowError),
+
+    #[error("bivariate_mixer datalake error: {0}")]
+    Datalake(String),
+}
+
+impl BivariateMixerError {
+    /// 把一个 DataFusion Result 包上步骤上下文。
+    fn df_ctx<T>(
+        r: Result<T, datafusion::error::DataFusionError>,
+        step: &str,
+        chrom: Option<u32>,
+        sql: Option<&str>,
+    ) -> Result<T, Self> {
+        r.map_err(|e| {
+            let mut context = match chrom {
+                Some(c) => format!("{step} (chr{c})"),
+                None => step.to_string(),
+            };
+            if let Some(sql) = sql {
+                let snip = if sql.len() > 400 {
+                    format!("{}…", &sql[..400])
+                } else {
+                    sql.to_string()
+                };
+                context.push_str(&format!("\n  SQL: {snip}"));
+            }
+            Self::Step {
+                context,
+                detail: e.to_string(),
+            }
+        })
+    }
 }
 
 impl From<BivariateMixerError> for DagError {
@@ -319,9 +352,30 @@ impl DagNode for BivariateMixerNode {
 
         let ctx = &self.ctx;
 
-        // 1. 注册两个 sumstats 为临时表
-        ctx.register_table("sumstats1", inputs[0].data.clone().into_view())?;
-        ctx.register_table("sumstats2", inputs[1].data.clone().into_view())?;
+        // 1. 校验两个上游 sumstats 的必需列 + 注册为临时表
+        for (i, inp) in inputs[..2].iter().enumerate() {
+            let sch = inp.data.schema();
+            let avail: Vec<&str> = sch.fields().iter().map(|f| f.name().as_str()).collect();
+            for needed in [INPUT_Z_COL, INPUT_N_COL, INPUT_RSID_COL] {
+                if !sch.fields().iter().any(|f| f.name() == needed) {
+                    return Err(BivariateMixerError::InvalidInput(format!(
+                        "trait{} sumstats 缺少必需列 '{needed}'；现有列: {avail:?}",
+                        i + 1
+                    ))
+                    .into());
+                }
+            }
+        }
+        ctx.register_table("sumstats1", inputs[0].data.clone().into_view())
+            .map_err(|e| BivariateMixerError::Step {
+                context: "register sumstats1".into(),
+                detail: e.to_string(),
+            })?;
+        ctx.register_table("sumstats2", inputs[1].data.clone().into_view())
+            .map_err(|e| BivariateMixerError::Step {
+                context: "register sumstats2".into(),
+                detail: e.to_string(),
+            })?;
 
         // 2. 从 fit1 结果端口取 univariate 约束（pi, sig2_beta, sig2_zero）
         let c1 = read_constraint(&inputs[2].data).await?;
@@ -346,9 +400,23 @@ impl DagNode for BivariateMixerNode {
                    INNER JOIN sumstats1 AS s1 ON a.id = s1."{rsid}"
                    INNER JOIN sumstats2 AS s2 ON a.id = s2."{rsid}"
                    WHERE a.chrom = {chrom}"#,
-                z = INPUT_Z_COL, n = INPUT_N_COL, rsid = INPUT_RSID_COL, chrom = chrom,
+                z = INPUT_Z_COL,
+                n = INPUT_N_COL,
+                rsid = INPUT_RSID_COL,
+                chrom = chrom,
             );
-            let batches = ctx.sql(&universe_sql).await?.collect().await?;
+            let df = BivariateMixerError::df_ctx(
+                ctx.sql(&universe_sql).await,
+                "universe (af ∩ trait1 ∩ trait2)",
+                Some(*chrom),
+                Some(&universe_sql),
+            )?;
+            let batches = BivariateMixerError::df_ctx(
+                df.collect().await,
+                "collect universe batches",
+                Some(*chrom),
+                None,
+            )?;
             for batch in &batches {
                 let rsids = col_as_string(batch, "rsid")?;
                 let afs = col_as_f64(batch, "af")?;
@@ -387,17 +455,38 @@ impl DagNode for BivariateMixerNode {
             let mut adj_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
             for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
                 let base = chrom_base[ci] as usize;
-                let n_k = (if ci + 1 < chrom_base.len() { chrom_base[ci + 1] as usize } else { n_snp }) - base;
+                let n_k = (if ci + 1 < chrom_base.len() {
+                    chrom_base[ci + 1] as usize
+                } else {
+                    n_snp
+                }) - base;
                 if n_k == 0 {
                     continue;
                 }
                 let adj_sql = format!(
                     "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
-                    chrom = chrom, r2 = self.spec.extract_r2,
+                    chrom = chrom,
+                    r2 = self.spec.extract_r2,
                 );
                 let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
-                let mut stream = ctx.sql(&adj_sql).await?.execute_stream().await?;
-                while let Some(batch) = stream.try_next().await? {
+                let df = BivariateMixerError::df_ctx(
+                    ctx.sql(&adj_sql).await,
+                    "extract adjacency (ld r²>thr)",
+                    Some(*chrom),
+                    Some(&adj_sql),
+                )?;
+                let mut stream = BivariateMixerError::df_ctx(
+                    df.execute_stream().await,
+                    "extract adjacency stream",
+                    Some(*chrom),
+                    None,
+                )?;
+                while let Some(batch) = BivariateMixerError::df_ctx(
+                    stream.try_next().await,
+                    "extract adjacency batch",
+                    Some(*chrom),
+                    None,
+                )? {
                     for_each_ld_pair(&batch, &rsid_to_idx, |a, b, _r2| {
                         adj_triples.push(((a as usize - base) as u32, b, 1.0));
                         adj_triples.push(((b as usize - base) as u32, a, 1.0));
@@ -425,10 +514,27 @@ impl DagNode for BivariateMixerNode {
         for chrom in &self.spec.chromosomes {
             let ld_sql = format!(
                 "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 >= {r2}",
-                chrom = chrom, r2 = self.spec.r2_min,
+                chrom = chrom,
+                r2 = self.spec.r2_min,
             );
-            let mut stream = ctx.sql(&ld_sql).await?.execute_stream().await?;
-            while let Some(batch) = stream.try_next().await? {
+            let df = BivariateMixerError::df_ctx(
+                ctx.sql(&ld_sql).await,
+                "LD fold (ld r²≥r2min, tag-row)",
+                Some(*chrom),
+                Some(&ld_sql),
+            )?;
+            let mut stream = BivariateMixerError::df_ctx(
+                df.execute_stream().await,
+                "LD fold stream",
+                Some(*chrom),
+                None,
+            )?;
+            while let Some(batch) = BivariateMixerError::df_ctx(
+                stream.try_next().await,
+                "LD fold batch",
+                Some(*chrom),
+                None,
+            )? {
                 for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
                     if tag_set.contains(&a) {
                         ld_triples.push((a, b, r2));
@@ -462,7 +568,8 @@ impl DagNode for BivariateMixerNode {
 
         // 7. 打包结果
         let batch = build_result_batch(&result)?;
-        let df = ctx.read_batch(batch)?;
+        let df =
+            BivariateMixerError::df_ctx(ctx.read_batch(batch), "read result batch", None, None)?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
@@ -473,11 +580,18 @@ impl DagNode for BivariateMixerNode {
 async fn read_constraint(
     df: &DataFrame,
 ) -> Result<mixer::bivariate::UnivariateConstraint, BivariateMixerError> {
-    let batches = df.clone().collect().await?;
-    let batch = batches
-        .into_iter()
-        .next()
-        .ok_or_else(|| BivariateMixerError::InvalidInput("fit1 结果为空".into()))?;
+    let batches = BivariateMixerError::df_ctx(
+        df.clone().collect().await,
+        "read fit1 constraint result",
+        None,
+        None,
+    )?;
+    let batch = batches.into_iter().next().ok_or_else(|| {
+        BivariateMixerError::InvalidInput(
+            "fit1 约束结果为空——上游 univariate_mixer 是否产出了单行 (pi, sig2_beta, sig2_zero)？"
+                .into(),
+        )
+    })?;
     let pi = single_f64(&batch, PARAM_PI)?;
     let sig2_beta = single_f64(&batch, PARAM_SB)?;
     let sig2_zero = single_f64(&batch, PARAM_SZ)?;

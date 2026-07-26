@@ -52,6 +52,10 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
         randprune_n: 64,
         randprune_r2: 0.1,
         seed: 123,
+        extract_enabled: true,
+        extract_maf: 0.05,
+        extract_subset: 2_000_000,
+        extract_r2: 0.8,
     };
     let mut node = UnivariateMixerNode::new(ctx.clone(), spec);
 

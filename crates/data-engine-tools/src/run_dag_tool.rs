@@ -32,6 +32,13 @@ impl RunDagTool {
 impl ToolFunction for RunDagTool {
     type Input = RunDagInput;
 
+    // DAG execution can run long (full pipelines: LD scoring, fitting,
+    // heavy joins). Override the default 300s phase-2 timeout so that a
+    // genuinely long run is not killed prematurely.
+    fn timeout_seconds(&self) -> u64 {
+        3600
+    }
+
     async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
         let report = self.client.run_dag().await.map_err(ExecError::from)?;
 

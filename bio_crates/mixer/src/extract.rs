@@ -32,7 +32,12 @@ pub struct ExtractConfig {
 
 impl Default for ExtractConfig {
     fn default() -> Self {
-        Self { maf_min: 0.05, r2_threshold: 0.8, subset: 2_000_000, seed: 123 }
+        Self {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 2_000_000,
+            seed: 123,
+        }
     }
 }
 
@@ -41,7 +46,11 @@ impl Default for ExtractConfig {
 /// - `maf`：per-SNP 的 `min(af, 1-af)`，长度 = n_snp。
 /// - `ld`：LD 邻接（只需含 `r² > r2_threshold` 的对即可；传更大 CSR 也正确但更慢），
 ///   用于贪心剪枝时查每个 SNP 的高 LD 邻居。`row(i)` 返回 snp-index 邻居。
-pub fn select_tags<L: LdRandomAccess + ?Sized>(maf: &[f64], ld: &L, cfg: &ExtractConfig) -> Vec<u32> {
+pub fn select_tags<L: LdRandomAccess + ?Sized>(
+    maf: &[f64],
+    ld: &L,
+    cfg: &ExtractConfig,
+) -> Vec<u32> {
     let n_snp = maf.len();
     let mut rng = SmallRng::seed_from_u64(cfg.seed);
 
@@ -110,7 +119,12 @@ mod tests {
         // 4 SNP：maf = [0.06, 0.02, 0.05, 0.1]，阈值 0.05 → 候选 {0,2,3}
         let maf = vec![0.06, 0.02, 0.05, 0.1];
         let ld = ld_from(&[], 4); // 无 LD → 不剪枝
-        let cfg = ExtractConfig { maf_min: 0.05, r2_threshold: 0.8, subset: 100, seed: 1 };
+        let cfg = ExtractConfig {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 100,
+            seed: 1,
+        };
         let tags = select_tags(&maf, &ld, &cfg);
         let mut t = tags.clone();
         t.sort();
@@ -121,7 +135,12 @@ mod tests {
     fn subset_caps_count() {
         let maf = vec![0.1; 100];
         let ld = ld_from(&[], 100);
-        let cfg = ExtractConfig { maf_min: 0.05, r2_threshold: 0.8, subset: 10, seed: 1 };
+        let cfg = ExtractConfig {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 10,
+            seed: 1,
+        };
         let tags = select_tags(&maf, &ld, &cfg);
         assert!(tags.len() <= 10, "subset 上限 10，got {}", tags.len());
     }
@@ -131,7 +150,12 @@ mod tests {
         // 3 SNP：0-1 r²=0.9（应互斥），0-2 r²=0.3（可共存）
         let maf = vec![0.1, 0.1, 0.1];
         let ld = ld_from(&[(0, 1, 0.9), (0, 2, 0.3)], 3);
-        let cfg = ExtractConfig { maf_min: 0.05, r2_threshold: 0.8, subset: 100, seed: 1 };
+        let cfg = ExtractConfig {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 100,
+            seed: 1,
+        };
         let tags = select_tags(&maf, &ld, &cfg);
         // 0 和 1 不能同时入选（r²=0.9>0.8）
         let has0 = tags.contains(&0);
@@ -149,7 +173,12 @@ mod tests {
             }
         }
         let ld = ld_from(&triples, 50);
-        let cfg = ExtractConfig { maf_min: 0.05, r2_threshold: 0.8, subset: 20, seed: 42 };
+        let cfg = ExtractConfig {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 20,
+            seed: 42,
+        };
         let t1 = select_tags(&maf, &ld, &cfg);
         let t2 = select_tags(&maf, &ld, &cfg);
         assert_eq!(t1, t2, "同 seed 应可复现");
@@ -160,7 +189,12 @@ mod tests {
         // r²==0.8（阈值边界）应保留两端（严格 > 才剪）
         let maf = vec![0.1, 0.1];
         let ld = ld_from(&[(0, 1, 0.8)], 2);
-        let cfg = ExtractConfig { maf_min: 0.05, r2_threshold: 0.8, subset: 100, seed: 1 };
+        let cfg = ExtractConfig {
+            maf_min: 0.05,
+            r2_threshold: 0.8,
+            subset: 100,
+            seed: 1,
+        };
         let tags = select_tags(&maf, &ld, &cfg);
         assert_eq!(tags.len(), 2, "r²==0.8 不应剪（严格>），got {:?}", tags);
     }
