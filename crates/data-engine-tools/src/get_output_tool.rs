@@ -27,8 +27,11 @@ use data_engine::runtime::DataEngineClient;
                   \
                   Each output entry reports `total_rows` (full row count, from \
                   COUNT(*)), `returned_rows` (rows actually materialized in \
-                  this page), and `data` (JSON rows). If materializing the page \
-                  fails (e.g. a column cast/decode error), the entry carries a \
+                  this page), and `data`. The `data` body is a compact 2D \
+                  matrix: `{ columns: [...names], rows: [[...values], ...] }` — \
+                  each inner array is one record's values positionally aligned \
+                  with `columns`. If materializing the page fails (e.g. a \
+                  column cast/decode error), the entry carries a \
                   `collect_error` string instead of silently reporting 0 rows. \
                   The row count is hard-clamped to at most `max_limit` rows \
                   regardless of the requested `limit`; use `offset` to page."
@@ -46,12 +49,12 @@ pub struct GetOutputInput {
 }
 
 /// Default page size when the caller omits `limit`.
-const DEFAULT_LIMIT: usize = 100;
+const DEFAULT_LIMIT: usize = 25;
 
 /// Hard ceiling on rows materialized per `get_output` call, regardless of what
 /// the agent requests. Prevents a pathologically large (or `0` = "unlimited")
 /// request from dragging the whole table into the tool result.
-const MAX_LIMIT: usize = 1000;
+const MAX_LIMIT: usize = 50;
 
 pub struct GetOutputTool {
     client: Arc<DataEngineClient>,
@@ -209,22 +212,41 @@ fn dict_cell(array: &dyn Array, row: usize) -> serde_json::Value {
     }
 }
 
-/// Convert collected `RecordBatch`es into a JSON array of row objects.
-fn batches_to_rows(batches: &[RecordBatch]) -> serde_json::Value {
+/// Convert collected `RecordBatch`es into a compact 2D matrix.
+///
+/// Rather than repeating every column name per row (an array of objects,
+/// which balloons token cost on wide frames), the body is rendered as:
+///
+/// ```json
+/// { "columns": ["c0", "c1"], "rows": [[v00, v01], [v10, v11]] }
+/// ```
+///
+/// `columns` states the field names once, in order; each entry of `rows` is
+/// one record's values, positionally aligned with `columns`. All batches of a
+/// DataFrame share one schema, so the column order is taken from the first
+/// batch and every batch is read positionally.
+fn batches_to_matrix(batches: &[RecordBatch]) -> serde_json::Value {
+    if batches.is_empty() {
+        return serde_json::json!({ "columns": [], "rows": [] });
+    }
+
+    let schema = batches[0].schema();
+    let fields = schema.fields();
+    let columns: Vec<serde_json::Value> =
+        fields.iter().map(|f| serde_json::json!(f.name())).collect();
+
     let mut rows = Vec::new();
     for batch in batches {
-        let schema = batch.schema();
-        let fields = schema.fields();
+        let ncols = batch.num_columns();
         for row_idx in 0..batch.num_rows() {
-            let mut row = serde_json::Map::new();
-            for (col_idx, field) in fields.iter().enumerate() {
-                let val = cell_to_json(batch.column(col_idx).as_ref(), row_idx);
-                row.insert(field.name().clone(), val);
-            }
-            rows.push(serde_json::Value::Object(row));
+            let row: Vec<serde_json::Value> = (0..ncols)
+                .map(|col_idx| cell_to_json(batch.column(col_idx).as_ref(), row_idx))
+                .collect();
+            rows.push(serde_json::Value::Array(row));
         }
     }
-    serde_json::Value::Array(rows)
+
+    serde_json::json!({ "columns": columns, "rows": rows })
 }
 
 #[async_trait]
@@ -308,7 +330,7 @@ impl ToolFunction for GetOutputTool {
             let entry = match queried.collect().await {
                 Ok(batches) => {
                     let returned_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-                    let data = batches_to_rows(&batches);
+                    let data = batches_to_matrix(&batches);
                     serde_json::json!({
                         "name": name,
                         "columns": fields.len(),
@@ -439,23 +461,35 @@ mod tests {
     fn cell_to_json_renders_dictionary_list_and_struct() {
         let batch = nested_batch();
         // One row, three columns.
-        let rendered = batches_to_rows(std::slice::from_ref(&batch));
-        let row = rendered
-            .as_array()
-            .expect("batches_to_rows yields an array")
-            .first()
-            .expect("one row")
+        let rendered = batches_to_matrix(std::slice::from_ref(&batch));
+        let obj = rendered
             .as_object()
-            .expect("row is an object");
+            .expect("batches_to_matrix yields an object");
+
+        // Column names stated once, in schema order.
+        assert_eq!(
+            obj["columns"],
+            serde_json::json!(["chrom", "alt", "info"]),
+            "columns must be the schema field names in order"
+        );
+
+        // One row, positionally aligned with `columns`.
+        let rows = obj["rows"]
+            .as_array()
+            .expect("rows is an array");
+        assert_eq!(rows.len(), 1, "expected exactly one row");
+        let row = rows[0]
+            .as_array()
+            .expect("each row is an array of positional values");
 
         // Dictionary(Int32, Utf8) decodes to the underlying string.
-        assert_eq!(row["chrom"], serde_json::json!("chr1"));
+        assert_eq!(row[0], serde_json::json!("chr1"));
 
         // List(Utf8) → JSON array of strings.
-        assert_eq!(row["alt"], serde_json::json!(["A", "T"]));
+        assert_eq!(row[1], serde_json::json!(["A", "T"]));
 
         // Struct { AF: List(Float32) } → nested object with array.
-        assert_eq!(row["info"], serde_json::json!({"AF": [0.25, 0.75]}));
+        assert_eq!(row[2], serde_json::json!({"AF": [0.25, 0.75]}));
     }
 
     #[test]

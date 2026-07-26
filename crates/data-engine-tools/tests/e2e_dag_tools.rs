@@ -91,7 +91,7 @@ async fn test_add_source_sql_run_dag() {
             &[build_tooluse(
                 "tc3",
                 "add_edge",
-                json!({"from": "src", "to": "sql"}),
+                json!({"from": "src", "from_port": 0, "to": "sql", "to_port": 0}),
             )],
             None,
             None,
@@ -127,7 +127,7 @@ async fn test_add_source_sql_run_dag() {
             &[build_tooluse(
                 "tc5",
                 "add_edge",
-                json!({"from": "sql", "to": "sink"}),
+                json!({"from": "sql", "from_port": 0, "to": "sink", "to_port": 0}),
             )],
             None,
             None,
@@ -239,7 +239,7 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
             &[build_tooluse(
                 "v3",
                 "add_edge",
-                json!({"from": "vcf_src", "to": "preview"}),
+                json!({"from": "vcf_src", "from_port": 0, "to": "preview", "to_port": 0}),
             )],
             None,
             None,
@@ -260,7 +260,7 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
             &[build_tooluse(
                 "v5",
                 "get_output",
-                json!({"id": "preview", "limit": 100}),
+                json!({"id": "preview", "limit": 50}),
             )],
             None,
             None,
@@ -377,7 +377,7 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
             &[build_tooluse(
                 "e3",
                 "add_edge",
-                json!({"from": "src", "to": "badcast"}),
+                json!({"from": "src", "from_port": 0, "to": "badcast", "to_port": 0}),
             )],
             None,
             None,
@@ -397,7 +397,7 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
             &[build_tooluse(
                 "e5",
                 "get_output",
-                json!({"id": "badcast", "limit": 100}),
+                json!({"id": "badcast", "limit": 50}),
             )],
             None,
             None,
@@ -499,7 +499,7 @@ async fn test_get_output_synthetic_struct_column_baseline() {
             &[build_tooluse(
                 "b3",
                 "add_edge",
-                json!({"from": "src", "to": "struct_node"}),
+                json!({"from": "src", "from_port": 0, "to": "struct_node", "to_port": 0}),
             )],
             None,
             None,
@@ -519,7 +519,7 @@ async fn test_get_output_synthetic_struct_column_baseline() {
             &[build_tooluse(
                 "b5",
                 "get_output",
-                json!({"id": "struct_node", "limit": 100}),
+                json!({"id": "struct_node", "limit": 50}),
             )],
             None,
             None,

@@ -51,7 +51,9 @@ proactively rather than answering from memory alone.
 ### Data Pipeline (DAG Engine)
 - Build and execute data processing pipelines: add data sources, apply SQL transforms, \
   connect nodes into a DAG, run the pipeline, and retrieve output.
+  
 - Use this when a task requires multi-step data processing or transformation.
+
 - **Build incrementally, layer by layer — never construct the full DAG in one shot.** \
   Start with just the data source node, run_dag, and inspect the output columns to \
   understand what you have. Then add the next processing node (a SQL transform, a filter, \
@@ -59,6 +61,7 @@ proactively rather than answering from memory alone.
   extending further. Repeat until the pipeline reaches the final analysis. \
   This feedback loop catches schema mismatches, wrong column names, and type errors \
   early — a single-shot full-DAG construction fails silently and wastes time debugging.
+
 - **Inspect ports before wiring**: every node kind declares typed input/output ports. \
   `list_node_factories` returns lightweight metadata (kind + short description) only. \
   To see the full port layout (port count, variadic flag, per-port column schema), \
@@ -67,6 +70,7 @@ proactively rather than answering from memory alone.
   required columns and types are a contract, not a suggestion. \
   Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
   configuration parameters, and `get_node_doc` for detailed usage documentation.
+
 - **Transform to match the consuming port**: data flowing along an edge MUST conform to the \
   downstream node's input port schema. If the upstream output does not already match, insert \
   a dedicated SQL transform node between them that projects, casts, renames, or extracts \
@@ -95,6 +99,16 @@ or any other tool that accepts SQL.
   table is `port_0`. Never use the upstream node's id — always use `port_N`. \
   Example: a filter node receiving one input → `SELECT * FROM port_0 WHERE x > 1`. \
   A two-input join node → `SELECT * FROM port_0 JOIN port_1 ON port_0.id = port_1.id`.
+
+- **Cast to double precision with `DOUBLE`, never `FLOAT64`**: DataFusion's SQL parser \
+  uses SQL-standard type names. The 64-bit floating type is `DOUBLE`; `FLOAT64` is an \
+  Arrow/Rust type name and is NOT valid SQL — `CAST(x AS FLOAT64)` will error with a \
+  parse/type failure. Always write `CAST(x AS DOUBLE)` (or `TRY_CAST(x AS DOUBLE)` to \
+  coerce non-numeric strings to NULL instead of failing). \
+  Wrong: `CAST("Z" AS FLOAT64)`  —  parser error. \
+  Right: `CAST("Z" AS DOUBLE)`. \
+  The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, \
+  `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).
 
 ### General
 - Read, write, and manage files on the local filesystem.
