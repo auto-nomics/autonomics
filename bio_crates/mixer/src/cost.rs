@@ -5,7 +5,10 @@
 
 use std::f64::consts::PI;
 
-use crate::{data::ChromData, params::UnivariateParams};
+use crate::{
+    data::{ChromData, UnivariateSufficient},
+    params::UnivariateParams,
+};
 
 /// 防止 pdf 下溢成0导致log(−∞) 的最小值
 const K_MIN_PDF: f64 = 1e-300;
@@ -128,6 +131,54 @@ pub fn univariate_cost_gaussian(data: &ChromData, p: &UnivariateParams) -> f64 {
     cost
 }
 
+/// Univariate MiXeR 负对数似然（Gaussian 近似），压缩版。
+///
+/// 与 [`univariate_cost_gaussian`] 数学等价，但读 [`UnivariateSufficient`] 的
+/// `m1/m2`（每 tag O(1)）而非遍历 LD 邻居表（每 tag O(邻居数)）。推导见
+/// [`UnivariateSufficient`]：`A_j = ebeta2·m1_j`、`B_j = ebeta4·m2_j`。
+///
+/// 优化器（DE×repeats → Nelder-Mead）数万次调用本函数；压缩版让这些评估
+/// 完全不碰 LD，CSR 预算完即可释放。
+pub fn univariate_cost_sufficient(data: &UnivariateSufficient, p: &UnivariateParams) -> f64 {
+    // 1. 先验矩（univariate 下处处常数，循环外算一次）
+    let ebeta2 = prior_ebeta2(p);
+    let ebeta4 = prior_ebeta4(p);
+
+    // 2. null 分量标准差（sig2_zeroL=0，所以 sig2_zero 就是参数本身）
+    let s1 = p.sig2_zero.sqrt();
+
+    let mut cost = 0.0;
+
+    // 3. 逐个 tag 计算（只遍历 tag 子集）
+    for &tag in &data.tags {
+        let j = tag as usize;
+        // 3a. A = ebeta2·m1_j，B = ebeta4·m2_j（LD 已折进 m1/m2）
+        let a = ebeta2 * data.m1[j];
+
+        // 3b. 无 LD 信号的 tag 跳过（A=0 时 sig2_tag 公式会除零）。
+        //     与 univariate_cost_gaussian 完全一致：a==0 当且仅当 ebeta2==0 或 m1_j==0。
+        if a == 0.0 {
+            continue;
+        }
+        let b = ebeta4 * data.m2[j];
+
+        // 3c. 矩匹配：闭式解 2 分量高斯混合（公式同 univariate_cost_gaussian）。
+        let tag_pi0 = b / (b + 3.0 * a * a);
+        let tag_pi1 = 1.0 - tag_pi0;
+        let sig2_tag = (b + 3.0 * a * a) / (3.0 * a);
+        let s2 = (p.sig2_zero + sig2_tag).sqrt();
+
+        // 3d. 混合密度 + 负对数似然累加
+        let pdf0 = gaussian_pdf(data.z[j], s1);
+        let pdf1 = gaussian_pdf(data.z[j], s2);
+        let pdf = tag_pi0 * pdf0 + tag_pi1 * pdf1;
+        let pdf = pdf.max(K_MIN_PDF);
+        cost += -pdf.ln() * data.weights[j];
+    }
+
+    cost
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +225,39 @@ mod tests {
         let cost = univariate_cost_gaussian(&data, &p);
         assert!(cost.is_finite());
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn sufficient_cost_matches_gaussian() {
+        // 压缩版 cost 与逐邻居版应在 ULP 级重结合误差内一致。
+        use crate::data::{ChromData, UnivariateSufficient};
+        use crate::params::UnivariateParams;
+        let triples = vec![(0, 1, 0.8), (1, 0, 0.3), (1, 2, 0.5), (2, 0, 0.2)];
+        let data = ChromData::new(
+            vec![1.0, 2.0, 0.5],
+            vec![100.0, 120.0, 80.0],
+            vec![0.5, 0.4, 0.3],
+            &triples,
+        );
+        let suff = UnivariateSufficient::from_chrom_data(&data);
+
+        // 多组参数（含使 ebeta2 很小、很大的极端值）都应一致。
+        for (pi, sig2_beta, sig2_zero) in [
+            (0.1, 0.01, 1.0),
+            (0.5, 1e-3, 0.9),
+            (1e-4, 1e-2, 2.5),
+            (0.9, 1e-5, 1.1),
+        ] {
+            let p = UnivariateParams::new(pi, sig2_beta, sig2_zero);
+            let c_ref = univariate_cost_gaussian(&data, &p);
+            let c_suf = univariate_cost_sufficient(&suff, &p);
+            let abs_err = (c_ref - c_suf).abs();
+            // 相对误差应远低于优化器 tol（1e-2）；用 1e-9 留足余量。
+            let rel_err = abs_err / c_ref.max(1e-12);
+            assert!(
+                rel_err < 1e-9,
+                "参数 ({pi},{sig2_beta},{sig2_zero}): cost 不一致 ref={c_ref} suf={c_suf} rel_err={rel_err}"
+            );
+        }
     }
 }

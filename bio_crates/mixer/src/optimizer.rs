@@ -2,7 +2,7 @@
 //!
 //! 在无约束空间最小化 cost_of_vec。原版 univariate fit1 用它做局部精修。
 
-use crate::{cost::univariate_cost_gaussian, data::ChromData};
+use crate::{cost::univariate_cost_sufficient, data::UnivariateSufficient};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -16,9 +16,9 @@ use rand::{Rng, SeedableRng};
 /// 这个函数是优化器与 cost 之间的"翻译官"：优化器递来一个无约束 `x`，
 /// 经 `from_unconstrained` 还原成有物理约束的 `UnivariateParams`，
 /// 再喂给 cost function。这就是 parametrize 模块存在的全部意义。
-pub(crate) fn cost_of_vec(data: &ChromData, x: [f64; 3]) -> f64 {
+pub(crate) fn cost_of_vec(data: &UnivariateSufficient, x: [f64; 3]) -> f64 {
     let params = crate::parametrize::from_unconstrained(x);
-    univariate_cost_gaussian(data, &params)
+    univariate_cost_sufficient(data, &params)
 }
 
 const ALPHA: f64 = 1.0; // 反射
@@ -30,7 +30,7 @@ const SIGMA: f64 = 0.5; // 缩边
 ///
 /// 对于univariate MiXeR，需要调节的参数有3个，需要定点数为4个
 pub fn nelder_mead(
-    data: &ChromData,
+    data: &UnivariateSufficient,
     x0: [f64; 3],
     step: f64,
     tol: f64,
@@ -139,7 +139,7 @@ fn pick_three(rng: &mut SmallRng, exclude: usize, popsize: usize) -> (usize, usi
 /// `recombination=0.7`（交叉率 CR）、`tol=0.01`、`polish=False`。
 /// 在无约束空间搜索，`bounds` 为每维 (low, high)。
 pub fn differential_evolution(
-    data: &ChromData,
+    data: &UnivariateSufficient,
     bounds: &[(f64, f64)],
     popsize_mult: usize,
     max_gen: usize,
@@ -221,13 +221,15 @@ mod tests {
     #[test]
     fn nelder_mead_finds_minimum() {
         // 简单验证:优化后 cost 不比起始点差
+        use crate::data::{ChromData, UnivariateSufficient};
         let triples = vec![(0, 1, 0.5), (1, 0, 0.3)];
         let data = ChromData::new(vec![1.0, 0.8], vec![100.0, 100.0], vec![0.5, 0.4], &triples);
+        let suff = UnivariateSufficient::from_chrom_data(&data);
 
         let x0 = [0.0, -7.0, -5.0]; // 某个起始点
-        let cost_before = cost_of_vec(&data, x0);
-        let x_best = nelder_mead(&data, x0, 0.5, 1e-7, 2000);
-        let cost_after = cost_of_vec(&data, x_best);
+        let cost_before = cost_of_vec(&suff, x0);
+        let x_best = nelder_mead(&suff, x0, 0.5, 1e-7, 2000);
+        let cost_after = cost_of_vec(&suff, x_best);
 
         assert!(cost_after <= cost_before, "优化后 cost 应不大于起始");
         let params = crate::parametrize::from_unconstrained(x_best);

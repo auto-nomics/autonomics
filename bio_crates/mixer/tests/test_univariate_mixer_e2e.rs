@@ -32,7 +32,7 @@ use arrow_array::{Array, Float64Array, StringArray};
 use datafusion::prelude::SessionContext;
 use datalake::Datalake;
 
-use mixer::data::ChromData;
+use mixer::data::{ChromData, UnivariateSufficient};
 use mixer::fit::{FitConfig, fit1};
 use mixer::weights::{RandpruneConfig, randprune_weights};
 
@@ -237,7 +237,9 @@ async fn e2e_fit1_on_iceberg_gwas() {
         diffevo_repeats,
         ..Default::default()
     };
-    let result = fit1(&data, &cfg);
+    // 压缩成充分统计量：单趟扫 LD 折成 m1/m2，之后拟合不再触碰 CSR。
+    let suff = UnivariateSufficient::from_chrom_data(&data);
+    let result = fit1(&suff, &cfg);
 
     println!("=== MiXeR fit1 e2e（Iceberg GWAS = {gwas}）===", gwas = GWAS_TABLE);
     println!(

@@ -412,12 +412,20 @@ impl DagNode for UnivariateMixerNode {
         };
         data.weights = mixer::weights::randprune_weights(&data.ld, n_snp, &tags, None, &rp_cfg);
 
-        // 5. 跑 fit1（DE×repeats → Nelder-Mead 精修）。
+        // 4c. 压缩成充分统计量（m1/m2）：单趟扫全局块对角 CSR，把每个 SNP 的
+        //     LD 邻居求和折进两个标量。此后 cost 求值 O(1)/tag，不再需要 LD。
+        //     randprune 已完成（它需要 CSR + 全局 tag 空间，无法流式），故此处
+        //     可把整份 ChromData（含 ld/n/h，O(nnz)）释放，只留 O(n_snp) 的
+        //     充分统计量进入漫长的拟合阶段（DE×repeats → NM 的数万次评估）。
+        let suff = mixer::data::UnivariateSufficient::from_chrom_data(&data);
+        drop(data);
+
+        // 5. 跑 fit1（DE×repeats → Nelder-Mead 精修），只读充分统计量。
         let cfg = mixer::fit::FitConfig {
             diffevo_repeats: self.spec.diffevo_repeats,
             ..Default::default()
         };
-        let result = mixer::fit::fit1(&data, &cfg);
+        let result = mixer::fit::fit1(&suff, &cfg);
 
         // 6. 打包单行结果 RecordBatch 并返回。
         let batch = build_result_batch(&result)?;

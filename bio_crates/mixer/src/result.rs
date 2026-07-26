@@ -1,6 +1,6 @@
 //! fit1 的输出结果。
 
-use crate::data::ChromData;
+use crate::data::UnivariateSufficient;
 use crate::params::UnivariateParams;
 
 /// 捕获 90% 遗传力所需的 causal 变异比例（原版 NCKoef，针对单高斯+MAF 模型标定）。
@@ -30,11 +30,11 @@ pub struct FitResult {
 }
 
 impl FitResult {
-    /// 从拟合参数 + 数据 + loglike 派生完整结果。
-    pub fn derive(data: &ChromData, params: UnivariateParams, loglike: f64) -> Self {
-        // totalhet = Σ_s h_s（杂合度之和）
-        let totalhet: f64 = data.h.iter().sum();
-        let num_snps = data.n_snp() as f64;
+    /// 从拟合参数 + 充分统计量 + loglike 派生完整结果。
+    pub fn derive(data: &UnivariateSufficient, params: UnivariateParams, loglike: f64) -> Self {
+        // totalhet 已在预算阶段折进充分统计量（Σ_s h_s）。
+        let totalhet = data.totalhet;
+        let num_snps = data.n_snp as f64;
         let sum_weights: f64 = data.weights.iter().sum();
 
         let h2 = params.sig2_beta * params.pi * totalhet;

@@ -1,6 +1,6 @@
 //! Univariate MiXeR 的 fit1 入口：对齐原版流水线（diffevo-fast ×20 → neldermead）。
 
-use crate::data::ChromData;
+use crate::data::UnivariateSufficient;
 use crate::optimizer::{cost_of_vec, differential_evolution, nelder_mead};
 use crate::parametrize;
 use crate::result::FitResult;
@@ -46,7 +46,7 @@ impl Default for FitConfig {
 /// 对齐原版 `apply_univariate_fit_sequence(['diffevo-fast', 'neldermead'])`：
 /// 1. DE 重复 `diffevo_repeats` 次（每次种子不同），取 cost 最低者
 /// 2. 从 DE 最优点出发，Nelder-Mead 精细收敛
-pub fn fit1(data: &ChromData, cfg: &FitConfig) -> FitResult {
+pub fn fit1(data: &UnivariateSufficient, cfg: &FitConfig) -> FitResult {
     let bounds = parametrize::de_bounds_unconstrained();
 
     // 1. 差分进化 × repeats，取最优
@@ -72,7 +72,7 @@ pub fn fit1(data: &ChromData, cfg: &FitConfig) -> FitResult {
     let x0 = best_x.unwrap_or([0.0, -7.0, -4.6]);
     let x_best = nelder_mead(data, x0, cfg.nm_step, cfg.nm_tol, cfg.nm_max_iter);
     let params = parametrize::from_unconstrained(x_best);
-    let loglike = crate::cost::univariate_cost_gaussian(data, &params);
+    let loglike = crate::cost::univariate_cost_sufficient(data, &params);
     FitResult::derive(data, params, loglike)
 }
 
@@ -106,8 +106,10 @@ mod tests {
         // 用真实参数采样 z
         data.z = simulate(&data, &true_params, 42);
 
-        // 拟合
-        let result = fit1(&data, &FitConfig::default());
+        // 压缩成充分统计量后拟合（fit1 不再直接吃 ChromData）。
+        let suff = crate::data::UnivariateSufficient::from_chrom_data(&data);
+        let result = fit1(&suff, &FitConfig::default());
+        // cost_at_true 仍用逐邻居参考实现做独立交叉校验（ChromData 版 cost 保留）。
         let cost_at_true = crate::cost::univariate_cost_gaussian(&data, &true_params);
 
         println!(

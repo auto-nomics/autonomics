@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use flate2::read::GzDecoder;
-use mixer::data::ChromData;
+use mixer::data::{ChromData, UnivariateSufficient};
 use mixer::fit::{FitConfig, fit1};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -161,7 +161,9 @@ fn cross_validate_vs_reference() {
         diffevo_repeats: 2,
         ..Default::default()
     };
-    let result = fit1(&data, &cfg);
+    // 压缩成充分统计量：单趟扫 LD 折成 m1/m2，之后拟合不再触碰 CSR。
+    let suff = UnivariateSufficient::from_chrom_data(&data);
+    let result = fit1(&suff, &cfg);
 
     println!("=== 交叉验证（Rust 移植 vs 原版金标准，已对齐 extract+randprune）===");
     println!(
