@@ -126,7 +126,8 @@ LD 传播 + Gaussian 近似 + DE/Nelder-Mead 优化器在真实参考数据上�
 残余 ~0.15% 来自 DE 实现差异（我们的 DE vs scipy 的）+ `sig2_zeroL=0` 简化。
 
 > 注：精确对齐用的是 libbgmg dump 的权重/子集（验证 cost/optimizer 正确性）。
-> 生产用的 Rust 原生 randprune（`weights.rs`）尚未实现，是后续工作。
+> Rust 原生 randprune（`weights.rs`）已实现并 **bit-exact** 对齐 libbgmg
+> （`sum_weights=2839.7188`，11200 tags 逐 tag 精确匹配，见下"随机剪枝权重"）。
 
 ### Bivariate 交叉验证结果
 
@@ -193,6 +194,26 @@ Fisher-Yates 部分洗牌，rayon 并行），与 C++ **统计一致**（非逐 
 `univariate_mixer`（fit1）与 `bivariate_mixer`（fit2）已注册为 data-engine DAG 节点
 （`crates/data-engine/.../nodes/`）。`bivariate_mixer` 4 输入：trait1/trait2 sumstats +
 trait1/trait2 fit1 结果；从 Iceberg 数据湖读 LD/AF，调 `mixer::bivariate::fit2`，默认
-`sampling=true`。注：节点当前用权重全 1（Rust 原生 randprune 待实现），生产级精度需接入权重。
+`sampling=true`，并计算 **bit-exact 随机剪枝权重**（`weights.rs`，与原版 `set_weights_randprune` 逐位一致）。
+
+## 随机剪枝权重（`weights.rs`）
+
+clean-room 复刻原版 `set_weights_randprune(n, r2, maf, use_w_ld)`。64 轮随机贪心选取 LD 独立集，
+`weight[tag] = 选中次数 / n`。**纯 Rust，bit-exact**：
+
+- `Mt19937_64`：参考实现，与 `std::mt19937_64` 位兼容（实测前 3 个输出逐位一致）。
+- `uniform_int`：libstdc++ GCC 的 Lemire 无偏法（`_S_nd` + `u128`）。
+- 贪心剪枝算法逐字镜像（碰撞重建 candidate、`num_changes==0` 取消、per-tag `max(0,·)` 钳制等）。
+
+### 权重交叉验证（`tests/cross_validation_weights.rs`）
+
+| 量 | Rust | 原版 libbgmg |
+|---|---|---|
+| `sum_weights` | 2839.718750 | 2839.718750 |
+| 逐 tag 精确匹配 | **11200/11200** | — |
+| max_abs / max_rel | 0 / 0 | — |
+
+**逐 tag bit-exact 一致**——给定相同 LD 顺序与 deftag 集合，Rust 权重与原版完全相同。
+两节点（`univariate_mixer`、`bivariate_mixer`）已接入，默认 `n=64, r2=0.1, seed=123`。
 
 

@@ -134,6 +134,15 @@ pub struct UnivariateMixerNodeSpec {
     /// r² 阈值：低于此值的 LD 对忽略（首版固定 sig2_zeroL=0，此字段预留）。
     #[serde(default = "default_r2_min")]
     pub r2_min: f64,
+    /// 随机剪枝轮数（原版 `--randprune-n`，默认 64）。
+    #[serde(default = "default_randprune_n")]
+    pub randprune_n: u32,
+    /// 随机剪枝 r² 阈值（原版 `--randprune-r2`，默认 0.1）。
+    #[serde(default = "default_randprune_r2")]
+    pub randprune_r2: f64,
+    /// 随机种子（原版 `--seed`，默认 123）。
+    #[serde(default = "default_seed")]
+    pub seed: u64,
 }
 
 fn default_diffevo_repeats() -> usize {
@@ -141,6 +150,15 @@ fn default_diffevo_repeats() -> usize {
 }
 fn default_r2_min() -> f64 {
     0.05
+}
+fn default_randprune_n() -> u32 {
+    64
+}
+fn default_randprune_r2() -> f64 {
+    0.1
+}
+fn default_seed() -> u64 {
+    123
 }
 
 // =====================================================================
@@ -304,7 +322,18 @@ impl DagNode for UnivariateMixerNode {
             ))
             .into());
         }
-        let data = mixer::data::ChromData::new(z_vec, n_vec, h_vec, &ld_triples);
+        let mut data = mixer::data::ChromData::new(z_vec, n_vec, h_vec, &ld_triples);
+
+        // 4b. 随机剪枝权重（生产级精度，与原版 `set_weights_randprune` bit-exact）。
+        //     tag 集 = 全部 SNP（节点不做 extract）；权重覆盖到 data.weights。
+        let tags: Vec<u32> = (0..n_snp as u32).collect();
+        let rp_cfg = mixer::weights::RandpruneConfig {
+            n: self.spec.randprune_n,
+            r2_threshold: self.spec.randprune_r2,
+            use_w_ld: false,
+            seed: self.spec.seed,
+        };
+        data.weights = mixer::weights::randprune_weights(&data.ld, n_snp, &tags, None, &rp_cfg);
 
         // 5. 跑 fit1（DE×repeats → Nelder-Mead 精修）。
         let cfg = mixer::fit::FitConfig {
@@ -375,10 +404,11 @@ mod tests {
         // 仅验证节点能按 spec 构造、端口 schema 正确。
         let spec = UnivariateMixerNodeSpec {
             chromosomes: vec![21, 22],
-            // ld_table_prefix: default_ld_prefix(),
-            // af_table: default_af_table(),
             diffevo_repeats: 5,
             r2_min: 0.05,
+            randprune_n: 64,
+            randprune_r2: 0.1,
+            seed: 123,
         };
         let node = UnivariateMixerNode::new(Arc::new(Datalake::new()), spec);
         assert_eq!(node.node_type(), "univariate_mixer");

@@ -4581,6 +4581,7 @@ dependencies = [
  "flate2",
  "rand 0.8.6",
  "rand_distr 0.4.3",
+ "rand_mt",
  "rayon",
  "serde_json",
  "thiserror 2.0.18",
@@ -6095,6 +6096,15 @@ checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
  "rand 0.9.4",
+]
+
+[[package]]
+name = "rand_mt"
+version = "4.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e018c6ded60e5252609887c12eb3ca2592e9248c5894a7db3975c8a7a1e2df"
+dependencies = [
+ "rand_core 0.6.4",
 ]
 
 [[package]]

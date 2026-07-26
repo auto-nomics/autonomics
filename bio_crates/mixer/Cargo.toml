@@ -10,6 +10,7 @@ faer.workspace = true
 thiserror.workspace = true
 rand = { version = "0.8", features = ["small_rng"] }
 rand_distr = "0.4"
+rand_mt = "4.2"
 flate2 = "1.0"
 rayon = "1.10"
 

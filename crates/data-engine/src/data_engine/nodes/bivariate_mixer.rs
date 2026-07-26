@@ -149,6 +149,15 @@ pub struct BivariateMixerNodeSpec {
     /// sampling cost 的 MC 配置数（原版 `--kmax`，默认 20000）。
     #[serde(default = "default_k_max")]
     pub k_max: usize,
+    /// 随机剪枝轮数（原版 `--randprune-n`，默认 64）。
+    #[serde(default = "default_randprune_n")]
+    pub randprune_n: u32,
+    /// 随机剪枝 r² 阈值（原版 `--randprune-r2`，默认 0.1）。
+    #[serde(default = "default_randprune_r2")]
+    pub randprune_r2: f64,
+    /// 随机种子（原版 `--seed`，默认 123）。
+    #[serde(default = "default_seed")]
+    pub seed: u64,
 }
 
 fn default_diffevo_repeats() -> usize {
@@ -162,6 +171,15 @@ fn default_sampling() -> bool {
 }
 fn default_k_max() -> usize {
     20000
+}
+fn default_randprune_n() -> u32 {
+    64
+}
+fn default_randprune_r2() -> f64 {
+    0.1
+}
+fn default_seed() -> u64 {
+    123
 }
 
 // =====================================================================
@@ -325,9 +343,17 @@ impl DagNode for BivariateMixerNode {
             .into());
         }
 
-        // 4. 组装 BivariateData（权重全 1，全 tag）。
-        //    TODO: 接入 Rust 原生 randprune 权重后，覆盖 data.tags 与 data.weights。
-        let data = mixer::bivariate::BivariateData::new(z1, z2, n1, n2, h, &ld_triples);
+        // 4. 组装 BivariateData，并计算随机剪枝权重（生产级精度，与原版 bit-exact）。
+        //    tag 集 = 全部 SNP（节点不做 extract）。
+        let mut data = mixer::bivariate::BivariateData::new(z1, z2, n1, n2, h, &ld_triples);
+        let tags: Vec<u32> = (0..n_snp as u32).collect();
+        let rp_cfg = mixer::weights::RandpruneConfig {
+            n: self.spec.randprune_n,
+            r2_threshold: self.spec.randprune_r2,
+            use_w_ld: false,
+            seed: self.spec.seed,
+        };
+        data.weights = mixer::weights::randprune_weights(&data.ld, n_snp, &tags, None, &rp_cfg);
 
         // 5. 跑 fit2
         let cfg = mixer::bivariate::Fit2Config {
@@ -416,6 +442,9 @@ mod tests {
             r2_min: 0.05,
             sampling: true,
             k_max: 20000,
+            randprune_n: 64,
+            randprune_r2: 0.1,
+            seed: 123,
         };
         let node = BivariateMixerNode::new(Arc::new(Datalake::new()), spec);
         assert_eq!(node.node_type(), "bivariate_mixer");
