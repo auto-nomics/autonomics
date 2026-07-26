@@ -2,6 +2,7 @@ pub mod bivariate;
 pub mod cost;
 pub mod data;
 pub mod error;
+pub mod extract;
 pub mod fit;
 pub mod ld_matrix;
 pub mod optimizer;
