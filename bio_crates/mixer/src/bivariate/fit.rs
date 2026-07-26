@@ -76,7 +76,7 @@ pub fn fit2(
     let mut best_cost = f64::INFINITY;
     for rep in 0..cfg.diffevo_repeats {
         let x = differential_evolution(
-            &cost_na,
+            cost_na,
             &bounds,
             cfg.diffevo_popsize,
             cfg.diffevo_max_gen,
@@ -92,7 +92,14 @@ pub fn fit2(
 
     // 2. neldermead-fast（从 DE 最优点出发）
     let x0 = best_x.unwrap_or_else(|| vec![0.0, 0.0, 0.0]);
-    let x_nm = nelder_mead(&cost_na, &x0, cfg.nm_step, cfg.nm_xatol, cfg.nm_fatol, cfg.nm_max_iter);
+    let x_nm = nelder_mead(
+        cost_na,
+        &x0,
+        cfg.nm_step,
+        cfg.nm_xatol,
+        cfg.nm_fatol,
+        cfg.nm_max_iter,
+    );
     let params_nm = na.vec_to_params(&x_nm);
 
     // 3. brute1-fast：固定 rg、rho_zero，"忘记" pi12，在 [min_pi12, max_pi12] 全程扫描。

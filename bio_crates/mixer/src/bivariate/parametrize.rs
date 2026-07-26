@@ -58,20 +58,32 @@ impl NaturalAxis {
     /// 右端：pi12=0.95·max_pi12、rho_beta=0.95、rho_zero=0.95。
     pub fn de_bounds(&self) -> [(f64, f64); 3] {
         let left = self.params_to_vec(&BivariateParams {
-            pi: [self.c1.pi - 0.05 * self.max_pi12, self.c2.pi - 0.05 * self.max_pi12, 0.05 * self.max_pi12],
+            pi: [
+                self.c1.pi - 0.05 * self.max_pi12,
+                self.c2.pi - 0.05 * self.max_pi12,
+                0.05 * self.max_pi12,
+            ],
             sig2_beta: [self.c1.sig2_beta, self.c2.sig2_beta],
             sig2_zero: [self.c1.sig2_zero, self.c2.sig2_zero],
             rho_beta: -0.95,
             rho_zero: -0.95,
         });
         let right = self.params_to_vec(&BivariateParams {
-            pi: [self.c1.pi - 0.95 * self.max_pi12, self.c2.pi - 0.95 * self.max_pi12, 0.95 * self.max_pi12],
+            pi: [
+                self.c1.pi - 0.95 * self.max_pi12,
+                self.c2.pi - 0.95 * self.max_pi12,
+                0.95 * self.max_pi12,
+            ],
             sig2_beta: [self.c1.sig2_beta, self.c2.sig2_beta],
             sig2_zero: [self.c1.sig2_zero, self.c2.sig2_zero],
             rho_beta: 0.95,
             rho_zero: 0.95,
         });
-        [(left[0], right[0]), (left[1], right[1]), (left[2], right[2])]
+        [
+            (left[0], right[0]),
+            (left[1], right[1]),
+            (left[2], right[2]),
+        ]
     }
 }
 
@@ -131,8 +143,16 @@ mod tests {
 
     fn ctr() -> (UnivariateConstraint, UnivariateConstraint) {
         (
-            UnivariateConstraint { pi: 0.0015, sig2_beta: 0.04, sig2_zero: 1.0 },
-            UnivariateConstraint { pi: 0.0025, sig2_beta: 0.05, sig2_zero: 0.99 },
+            UnivariateConstraint {
+                pi: 0.0015,
+                sig2_beta: 0.04,
+                sig2_zero: 1.0,
+            },
+            UnivariateConstraint {
+                pi: 0.0025,
+                sig2_beta: 0.05,
+                sig2_zero: 0.99,
+            },
         )
     }
 

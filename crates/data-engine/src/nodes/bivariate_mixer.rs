@@ -27,9 +27,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodeMeta};
+use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
-    data_engine::dag::{DagError, graph::PortOutputs},
+    dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory},
 };
 
@@ -109,7 +109,9 @@ fn output_schema() -> SchemaRef {
     ]))
 }
 
-fn build_result_batch(r: &mixer::bivariate::BivariateFitResult) -> Result<RecordBatch, BivariateMixerError> {
+fn build_result_batch(
+    r: &mixer::bivariate::BivariateFitResult,
+) -> Result<RecordBatch, BivariateMixerError> {
     let schema = output_schema();
     let batch = RecordBatch::try_new(
         schema,
@@ -190,21 +192,27 @@ const BIVARIATE_MIXER_NODE_KIND: &str = "bivariate_mixer";
 
 #[derive(Clone)]
 pub struct BivariateMixerNode {
-    meta: NodeMeta,
+    meta: NodePorts,
     datalake: Arc<Datalake>,
     spec: BivariateMixerNodeSpec,
 }
 
+fn port_layout() -> NodePorts {
+    NodePorts::new()
+        .add_input_port(Some(sumstats_schema()))
+        .add_input_port(Some(sumstats_schema()))
+        .add_input_port(Some(fit1_schema()))
+        .add_input_port(Some(fit1_schema()))
+        .add_output_port(Some(output_schema()))
+}
+
 impl BivariateMixerNode {
     pub fn new(datalake: Arc<Datalake>, spec: BivariateMixerNodeSpec) -> Self {
-        // 4 输入：trait1 sumstats, trait2 sumstats, trait1 fit1, trait2 fit1
-        let meta = NodeMeta::new()
-            .add_input_port(Some(sumstats_schema()))
-            .add_input_port(Some(sumstats_schema()))
-            .add_input_port(Some(fit1_schema()))
-            .add_input_port(Some(fit1_schema()))
-            .add_output_port(Some(output_schema()));
-        Self { meta, datalake, spec }
+        Self {
+            meta: port_layout(),
+            datalake,
+            spec,
+        }
     }
 }
 
@@ -215,8 +223,27 @@ impl NodeFactory for BivariateMixerNodeFactory {
         BIVARIATE_MIXER_NODE_KIND
     }
 
+    fn desc(&self) -> &'static str {
+        "Fits bivariate MiXeR (fit2) on two GWAS traits, conditioned on each trait's univariate fit1."
+    }
+
+    fn doc(&self) -> &'static str {
+        "Bivariate MiXeR (fit2) transform node. Takes four inputs: trait1 \
+        sumstats (Z, N, rsid), trait2 sumstats (Z, N, rsid), trait1's fit1 \
+        result (pi, sig2_beta, sig2_zero), and trait2's fit1 result. Queries \
+        the Iceberg data lake for the LD matrix (`ld_matrix.eur_chr{N}`) and \
+        allele frequency (`af.eur_af`), assembles a `BivariateData`, runs \
+        `mixer::bivariate::fit2`, and outputs a single-row result DataFrame \
+        with the bivariate parameters (pi1, pi2, pi12, rho_beta, rho_zero) and \
+        derived quantities (rg, dice, h2_t1, h2_t2, loglike)."
+    }
+
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(BivariateMixerNodeSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        port_layout()
     }
 
     fn build(
@@ -232,7 +259,7 @@ impl NodeFactory for BivariateMixerNodeFactory {
 
 #[async_trait]
 impl DagNode for BivariateMixerNode {
-    fn meta(&self) -> &NodeMeta {
+    fn ports(&self) -> &NodePorts {
         &self.meta
     }
 
@@ -240,7 +267,7 @@ impl DagNode for BivariateMixerNode {
         Box::new((*self).clone())
     }
 
-    fn node_type(&self) -> &str {
+    fn kind(&self) -> &'static str {
         BIVARIATE_MIXER_NODE_KIND
     }
 
@@ -257,7 +284,11 @@ impl DagNode for BivariateMixerNode {
             .into());
         }
 
-        let ctx = self.datalake.get_ctx().await.map_err(BivariateMixerError::from)?;
+        let ctx = self
+            .datalake
+            .get_ctx()
+            .await
+            .map_err(BivariateMixerError::from)?;
 
         // 1. 注册两个 sumstats 为临时表
         ctx.register_table("sumstats1", inputs[0].data.clone().into_view())?;
@@ -285,7 +316,10 @@ impl DagNode for BivariateMixerNode {
                    INNER JOIN sumstats1 AS s1 ON a.id = s1."{rsid}"
                    INNER JOIN sumstats2 AS s2 ON a.id = s2."{rsid}"
                    WHERE a.chrom = {chrom}"#,
-                z = INPUT_Z_COL, n = INPUT_N_COL, rsid = INPUT_RSID_COL, chrom = chrom,
+                z = INPUT_Z_COL,
+                n = INPUT_N_COL,
+                rsid = INPUT_RSID_COL,
+                chrom = chrom,
             );
             let batches = ctx.sql(&universe_sql).await?.collect().await?;
             for batch in &batches {
@@ -385,7 +419,11 @@ async fn read_constraint(
     let pi = single_f64(&batch, PARAM_PI)?;
     let sig2_beta = single_f64(&batch, PARAM_SB)?;
     let sig2_zero = single_f64(&batch, PARAM_SZ)?;
-    Ok(mixer::bivariate::UnivariateConstraint { pi, sig2_beta, sig2_zero })
+    Ok(mixer::bivariate::UnivariateConstraint {
+        pi,
+        sig2_beta,
+        sig2_zero,
+    })
 }
 
 // =====================================================================
@@ -403,7 +441,10 @@ fn single_f64(batch: &RecordBatch, name: &str) -> Result<f64, BivariateMixerErro
     Ok(arr.value(0))
 }
 
-fn col_as_string<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray, BivariateMixerError> {
+fn col_as_string<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a StringArray, BivariateMixerError> {
     batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?
@@ -412,12 +453,18 @@ fn col_as_string<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArr
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' is not Utf8")))
 }
 
-fn col_as_f64<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Float64Array, BivariateMixerError> {
+fn col_as_f64<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<&'a Float64Array, BivariateMixerError> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
     col.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
-        BivariateMixerError::InvalidInput(format!("column '{name}' is not Float64 (got {})", col.data_type()))
+        BivariateMixerError::InvalidInput(format!(
+            "column '{name}' is not Float64 (got {})",
+            col.data_type()
+        ))
     })
 }
 
@@ -447,9 +494,9 @@ mod tests {
             seed: 123,
         };
         let node = BivariateMixerNode::new(Arc::new(Datalake::new()), spec);
-        assert_eq!(node.node_type(), "bivariate_mixer");
+        assert_eq!(node.kind(), "bivariate_mixer");
         // 4 输入端口、1 输出端口
-        assert_eq!(node.meta().input_ports().len(), 4);
-        assert_eq!(node.meta().output_ports().len(), 1);
+        assert_eq!(node.ports().input_ports().len(), 4);
+        assert_eq!(node.ports().output_ports().len(), 1);
     }
 }

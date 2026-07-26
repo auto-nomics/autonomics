@@ -232,6 +232,8 @@ mod tests {
             }),
             "echo" => serde_json::json!({}),
             "test_source" => serde_json::json!({"dataset": "iris"}),
+            "univariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
+            "bivariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
             other => panic!("no fixture spec for kind '{other}'"),
         }
     }

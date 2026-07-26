@@ -8,12 +8,10 @@ use datafusion::{
 use fs::OpendalFileStorage;
 
 use crate::dag::{DAG, DagError, RunReport, SchedulerConfig};
-use crate::data_engine::error::{Error, Result};
+use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
 use datalake::Datalake;
-
-pub mod error;
 
 pub use crate::nodes::{
     FileFormat, FileSinkNode, IcebergSinkNode, LdscHsqConfig, LdscHsqNode, LinearRegressionNode,
@@ -306,7 +304,7 @@ mod tests {
     use super::DataEngine;
     use crate::dag::graph::PortOutputs;
     use crate::dag::{DagError, RuntimeStatus, SchedulerConfig};
-    use crate::data_engine::error::Error;
+    use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::common::HashMap;
     use datafusion::prelude::CsvReadOptions;

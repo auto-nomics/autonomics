@@ -21,7 +21,7 @@ pub enum RuntimeError {
     AgentBuild(#[from] AgentError),
 
     #[error("{0}")]
-    Engine(#[from] data_engine::data_engine::error::Error),
+    Engine(#[from] data_engine::error::Error),
 
     #[error("OpenGWAS setup failed: {0}")]
     Opengwas(#[from] opengwas::OpengwasError),

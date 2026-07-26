@@ -26,8 +26,13 @@ fn read_sumstats(path: &Path) -> HashMap<String, (f64, f64)> {
     for line in lines {
         let line = line.unwrap();
         let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() <= i_z.max(i_n) { continue; }
-        m.insert(f[i_snp].to_string(), (f[i_z].parse().unwrap(), f[i_n].parse().unwrap()));
+        if f.len() <= i_z.max(i_n) {
+            continue;
+        }
+        m.insert(
+            f[i_snp].to_string(),
+            (f[i_z].parse().unwrap(), f[i_n].parse().unwrap()),
+        );
     }
     m
 }
@@ -37,7 +42,9 @@ fn read_af(path: &Path) -> HashMap<String, f64> {
     for line in lines.skip(1) {
         let line = line.unwrap();
         let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() >= 3 { m.insert(f[1].to_string(), f[2].parse().unwrap()); }
+        if f.len() >= 3 {
+            m.insert(f[1].to_string(), f[2].parse().unwrap());
+        }
     }
     m
 }
@@ -47,7 +54,9 @@ fn read_ld(path: &Path) -> Vec<(String, String, f64)> {
     for line in lines.skip(1) {
         let line = line.unwrap();
         let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() >= 5 { out.push((f[1].to_string(), f[2].to_string(), f[4].parse().unwrap())); }
+        if f.len() >= 5 {
+            out.push((f[1].to_string(), f[2].to_string(), f[4].parse().unwrap()));
+        }
     }
     out
 }
@@ -58,13 +67,21 @@ fn read_bivar_weights(path: &Path) -> HashMap<String, (f64, f64, f64)> {
         let line = line.unwrap();
         let f: Vec<&str> = line.split_whitespace().collect();
         if f.len() >= 4 {
-            m.insert(f[0].to_string(), (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap()));
+            m.insert(
+                f[0].to_string(),
+                (
+                    f[1].parse().unwrap(),
+                    f[2].parse().unwrap(),
+                    f[3].parse().unwrap(),
+                ),
+            );
         }
     }
     m
 }
 fn read_constraint(path: &Path) -> UnivariateConstraint {
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let p = &v["params"];
     UnivariateConstraint {
         pi: p["pi"].as_f64().unwrap(),
@@ -76,8 +93,10 @@ fn read_constraint(path: &Path) -> UnivariateConstraint {
 #[test]
 #[ignore]
 fn cross_validate_bivariate_sampling() {
-    let (t1, t2) = (read_sumstats(&Path::new(FIXTURES).join("trait1.sumstats.gz")),
-                    read_sumstats(&Path::new(FIXTURES).join("trait2.sumstats.gz")));
+    let (t1, t2) = (
+        read_sumstats(&Path::new(FIXTURES).join("trait1.sumstats.gz")),
+        read_sumstats(&Path::new(FIXTURES).join("trait2.sumstats.gz")),
+    );
     let af = read_af(&Path::new(FIXTURES).join("hm3_af.tsv.gz"));
     let ld = read_ld(&Path::new(FIXTURES).join("hm3_ld.tsv.gz"));
     let tag_w = read_bivar_weights(&Path::new(FIXTURES).join("hm3_bivar_weights.tsv.gz"));
@@ -85,22 +104,32 @@ fn cross_validate_bivariate_sampling() {
     let c2 = read_constraint(&Path::new(FIXTURES).join("trait2.fit1.json"));
 
     let mut idx: HashMap<String, u32> = HashMap::new();
-    let (mut z1, mut z2, mut n1, mut n2, mut h) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut z1, mut z2, mut n1, mut n2, mut h) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (rsid, &(z1v, n1v)) in &t1 {
         if let (Some(&freq), Some(&(z2v, n2v))) = (af.get(rsid), t2.get(rsid)) {
             idx.insert(rsid.clone(), idx.len() as u32);
-            z1.push(z1v); z2.push(z2v); n1.push(n1v); n2.push(n2v); h.push(2.0 * freq * (1.0 - freq));
+            z1.push(z1v);
+            z2.push(z2v);
+            n1.push(n1v);
+            n2.push(n2v);
+            h.push(2.0 * freq * (1.0 - freq));
         }
     }
     let n_snp = z1.len();
     let mut triples = Vec::new();
     for (a, b, r2) in &ld {
-        if let (Some(&ta), Some(&tb)) = (idx.get(a), idx.get(b)) { triples.push((ta, tb, *r2)); }
+        if let (Some(&ta), Some(&tb)) = (idx.get(a), idx.get(b)) {
+            triples.push((ta, tb, *r2));
+        }
     }
     let mut tags = Vec::new();
     let mut weights = vec![0.0; n_snp];
     for (rsid, &(w, _, _)) in &tag_w {
-        if let Some(&i) = idx.get(rsid) { tags.push(i); weights[i as usize] = w; }
+        if let Some(&i) = idx.get(rsid) {
+            tags.push(i);
+            weights[i as usize] = w;
+        }
     }
     let mut data = BivariateData::new(z1, z2, n1, n2, h, &triples);
     data.tags = tags;
@@ -126,19 +155,31 @@ fn cross_validate_bivariate_sampling() {
     println!("=== Bivariate SAMPLING 交叉验证（Rust vs 原版 fit2_sampling.json）===");
     println!(
         "SNP:{} LD:{} tag:{} sum_w:{:.2}  kmax={}",
-        n_snp, triples.len(), data.tags.len(),
-        data.weights.iter().sum::<f64>(), cfg.k_max
+        n_snp,
+        triples.len(),
+        data.tags.len(),
+        data.weights.iter().sum::<f64>(),
+        cfg.k_max
     );
     let row = |name: &str, got: f64, refv: f64| {
         let rel = (got - refv).abs() / refv.abs().max(1e-12);
-        println!("{:<10} {:>14.6} {:>14.6}   {:>7.2}%", name, got, refv, rel * 100.0);
+        println!(
+            "{:<10} {:>14.6} {:>14.6}   {:>7.2}%",
+            name,
+            got,
+            refv,
+            rel * 100.0
+        );
     };
     row("pi12", r.pi12, ref_pi12);
     row("rho_beta", r.rho_beta, ref_rho_beta);
     row("rho_zero", r.rho_zero, ref_rho_zero);
     row("rg", r.rg, ref_rg);
     row("dice", r.dice, ref_dice);
-    println!("{:<10} {:>14.4} {:>14.4}", "cost(samp)", r.loglike, ref_cost);
+    println!(
+        "{:<10} {:>14.4} {:>14.4}",
+        "cost(samp)", r.loglike, ref_cost
+    );
 
     // 可识别量（rg、rho_zero 由 gaussian NM 决定，应紧密一致）
     let rg_err = (r.rg - ref_rg).abs() / ref_rg.abs();
@@ -147,9 +188,17 @@ fn cross_validate_bivariate_sampling() {
     assert!(rz_err < 0.01, "rho_zero 偏差 {} > 0.01", rz_err);
     // sampling cost：两独立 MC 估计应高度一致（<0.5%）
     let cost_err = (r.loglike - ref_cost).abs() / ref_cost;
-    assert!(cost_err < 0.005, "sampling cost 相对偏差 {:.2}% > 0.5%", cost_err * 100.0);
+    assert!(
+        cost_err < 0.005,
+        "sampling cost 相对偏差 {:.2}% > 0.5%",
+        cost_err * 100.0
+    );
     // pi12/rho_beta：sampling 打破退化后应落在同一区域（rho_beta 接近 −1 边界）
-    assert!(r.rho_beta < -0.5, "rho_beta 应在负边界附近，got {}", r.rho_beta);
+    assert!(
+        r.rho_beta < -0.5,
+        "rho_beta 应在负边界附近，got {}",
+        r.rho_beta
+    );
     assert!(r.pi12 > 0.0 && r.pi12 <= c1.pi.min(c2.pi));
     assert!(r.dice > 0.0 && r.dice < 1.0);
 }

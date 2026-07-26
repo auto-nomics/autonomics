@@ -1,4 +1,4 @@
-use crate::data_engine::error::Error as EngineError;
+use crate::error::Error as EngineError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {

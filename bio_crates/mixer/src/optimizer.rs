@@ -174,7 +174,8 @@ pub fn differential_evolution(
             // 变异：mutant = a + F·(b − c)，裁剪到边界
             let mut mutant = [0.0f64; 3];
             for d in 0..n {
-                mutant[d] = (pop[a][d] + f * (pop[b][d] - pop[c][d])).clamp(bounds[d].0, bounds[d].1);
+                mutant[d] =
+                    (pop[a][d] + f * (pop[b][d] - pop[c][d])).clamp(bounds[d].0, bounds[d].1);
             }
 
             // 交叉（二项式）：保证至少一维来自 mutant

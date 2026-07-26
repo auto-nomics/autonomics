@@ -116,10 +116,16 @@ fn randprune_matches_libbgmg_dump() {
             max_rel = rel;
         }
     }
-    println!("逐 tag: 精确匹配 {exact_count}/{num_tag}，max_abs={max_abs:.3e}，max_rel={max_rel:.3e}");
+    println!(
+        "逐 tag: 精确匹配 {exact_count}/{num_tag}，max_abs={max_abs:.3e}，max_rel={max_rel:.3e}"
+    );
 
     // bit-exact 断言（f32 精度内）
-    assert!((rust_sum - ref_sum).abs() < 1e-3, "sum 偏差 {}", (rust_sum - ref_sum).abs());
+    assert!(
+        (rust_sum - ref_sum).abs() < 1e-3,
+        "sum 偏差 {}",
+        (rust_sum - ref_sum).abs()
+    );
     assert!(max_abs < 1e-4, "max_abs={max_abs} 应近 0（bit-exact）");
     assert!(
         (rust_sum - 2839.7188).abs() < 1.0,

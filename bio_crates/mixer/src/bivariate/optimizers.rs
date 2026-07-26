@@ -50,7 +50,8 @@ where
             let j_rand = rng.gen_range(0..dim);
             let mut trial = vec![0.0; dim];
             for d in 0..dim {
-                let mutant = (pop[a][d] + f * (pop[b][d] - pop[c][d])).clamp(bounds[d].0, bounds[d].1);
+                let mutant =
+                    (pop[a][d] + f * (pop[b][d] - pop[c][d])).clamp(bounds[d].0, bounds[d].1);
                 trial[d] = if d == j_rand || rng.gen_range(0.0..1.0) < CR {
                     mutant
                 } else {
@@ -69,7 +70,11 @@ where
             break;
         }
     }
-    let (bi, _) = costs.iter().enumerate().min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap();
+    let (bi, _) = costs
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .unwrap();
     pop[bi].clone()
 }
 
@@ -87,7 +92,14 @@ fn pick_three(rng: &mut SmallRng, exclude: usize, popsize: usize) -> (usize, usi
 /// Adaptive Nelder-Mead（Gao & Han 2012），对齐 scipy `adaptive=True`。
 ///
 /// 收敛：x 边长 < xatol 且 f 极差 < fatol（scipy 风格）。返回最优点。
-pub fn nelder_mead<F>(cost: F, x0: &[f64], step: f64, xatol: f64, fatol: f64, max_iter: usize) -> Vec<f64>
+pub fn nelder_mead<F>(
+    cost: F,
+    x0: &[f64],
+    step: f64,
+    xatol: f64,
+    fatol: f64,
+    max_iter: usize,
+) -> Vec<f64>
 where
     F: Fn(&[f64]) -> f64,
 {
@@ -116,8 +128,15 @@ where
         let worst = &simplex[dim];
 
         // 收敛：所有顶点到 best 的距离 < xatol，且 f 极差 < fatol
-        let max_dx = simplex.iter().skip(1).map(|(x, _)| dist(x, &best.0)).fold(0.0_f64, f64::max);
-        let max_df = simplex.iter().map(|(_, f)| (f - best.1).abs()).fold(0.0_f64, f64::max);
+        let max_dx = simplex
+            .iter()
+            .skip(1)
+            .map(|(x, _)| dist(x, &best.0))
+            .fold(0.0_f64, f64::max);
+        let max_df = simplex
+            .iter()
+            .map(|(_, f)| (f - best.1).abs())
+            .fold(0.0_f64, f64::max);
         if max_dx < xatol && max_df < fatol {
             break;
         }
@@ -131,7 +150,11 @@ where
 
         let new_point = if fr < best.1 {
             // 扩张：xe = centroid + gamma·(xr − centroid)
-            let xe: Vec<f64> = centroid.iter().zip(xr.iter()).map(|(c, r)| c + gamma * (r - c)).collect();
+            let xe: Vec<f64> = centroid
+                .iter()
+                .zip(xr.iter())
+                .map(|(c, r)| c + gamma * (r - c))
+                .collect();
             let fe = cost(&xe);
             if fe < fr { (xe, fe) } else { (xr, fr) }
         } else if fr < second_worst_f {
@@ -139,7 +162,11 @@ where
         } else {
             // 收缩
             let dir = if fr < worst.1 { xr } else { worst.0.clone() };
-            let xc: Vec<f64> = centroid.iter().zip(dir.iter()).map(|(c, d)| c + rho * (d - c)).collect();
+            let xc: Vec<f64> = centroid
+                .iter()
+                .zip(dir.iter())
+                .map(|(c, d)| c + rho * (d - c))
+                .collect();
             let fc = cost(&xc);
             if fc < worst.1 {
                 (xc, fc)
@@ -147,7 +174,11 @@ where
                 // 缩边
                 let bv = best.0.clone();
                 for v in simplex.iter_mut().take(dim + 1).skip(1) {
-                    let xs: Vec<f64> = bv.iter().zip(v.0.iter()).map(|(b, x)| b + sigma * (x - b)).collect();
+                    let xs: Vec<f64> = bv
+                        .iter()
+                        .zip(v.0.iter())
+                        .map(|(b, x)| b + sigma * (x - b))
+                        .collect();
                     *v = (xs.clone(), cost(&xs));
                 }
                 continue;
@@ -160,7 +191,11 @@ where
 }
 
 fn dist(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum::<f64>().sqrt()
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f64>()
+        .sqrt()
 }
 
 fn centroid_of(verts: &[(Vec<f64>, f64)]) -> Vec<f64> {
@@ -172,14 +207,18 @@ fn centroid_of(verts: &[(Vec<f64>, f64)]) -> Vec<f64> {
             c[d] += x[d];
         }
     }
-    for d in 0..dim {
-        c[d] /= n;
+    for value in c.iter_mut().take(dim) {
+        *value /= n;
     }
     c
 }
 
 fn reflect(centroid: &[f64], worst: &[f64], alpha: f64) -> Vec<f64> {
-    centroid.iter().zip(worst.iter()).map(|(c, w)| c + alpha * (c - w)).collect()
+    centroid
+        .iter()
+        .zip(worst.iter())
+        .map(|(c, w)| c + alpha * (c - w))
+        .collect()
 }
 
 // ───────────────────────── brute1（1D 网格） ─────────────────────────
@@ -211,7 +250,14 @@ where
 /// 复刻 Numerical Recipes 的 `brent`（scipy `optimize.brent` 同源算法）。
 /// 输入括号 `(ax, bx, cx)`，要求 bx 在 ax、cx 之间且 f(bx) 同时 < f(ax)、f(cx)。
 /// 若不满足（scipy 会抛 ValueError），返回 `None`，由调用方回退到 bx。
-pub fn brent1<F>(cost: F, ax: f64, bx: f64, cx: f64, xtol: f64, max_iter: usize) -> Option<(f64, f64)>
+pub fn brent1<F>(
+    cost: F,
+    ax: f64,
+    bx: f64,
+    cx: f64,
+    xtol: f64,
+    max_iter: usize,
+) -> Option<(f64, f64)>
 where
     F: Fn(f64) -> f64,
 {
@@ -260,10 +306,7 @@ where
             }
             let etemp = e;
             e = d;
-            if p.abs() < (0.5 * q * etemp).abs()
-                && p > q * (a - x)
-                && p < q * (c - x)
-            {
+            if p.abs() < (0.5 * q * etemp).abs() && p > q * (a - x) && p < q * (c - x) {
                 d = p / q;
                 let u = x + d;
                 if (u - a) < tol2 || (c - u) < tol2 {

@@ -4,8 +4,8 @@
 //!   - 仅 trait1 causal（比例 pi[0]）
 //!   - 仅 trait2 causal（比例 pi[1]）
 //!   - 两个 trait 共有 causal（比例 pi[2]）
-//! 共有成分内，两个 trait 的效应相关系数为 `rho_beta`。
-//! 两个 trait 的残差（null）相关系数为 `rho_zero`。
+//!     共有成分内，两个 trait 的效应相关系数为 `rho_beta`。
+//!     两个 trait 的残差（null）相关系数为 `rho_zero`。
 
 /// 双变量模型的 9 个参数（fit2 输出）。
 #[derive(Debug, Clone)]

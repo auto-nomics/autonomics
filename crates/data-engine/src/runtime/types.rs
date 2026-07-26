@@ -2,7 +2,7 @@ use tokio::sync::oneshot;
 
 use crate::dag::RunReport;
 use crate::dag::graph::PortOutputs;
-use crate::data_engine::error::Result as EngineResult;
+use crate::error::Result as EngineResult;
 use schemars;
 
 pub enum DataEngineCmd {

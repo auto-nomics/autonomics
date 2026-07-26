@@ -15,7 +15,7 @@ use crate::bivariate::params::BivariateParams;
 /// pdf 下溢兜底（原版 kMinTagPdf = 1e-100）。
 const K_MIN_TAG_PDF: f64 = 1e-100;
 /// f32 最小正次正规数，原版 `gaussian2_pdf` 末尾 `+ numeric_limits<float>::min()`。
-const F32_MIN_POS: f64 = 1.4012984643248171e-45;
+const F32_MIN_POS: f64 = 1.401_298_464_324_817e-45;
 
 /// 零均值 2D 高斯密度，显式 2×2 求逆。
 ///
@@ -27,7 +27,7 @@ const F32_MIN_POS: f64 = 1.4012984643248171e-45;
 /// 与原版一致）。
 fn gaussian2_pdf(z1: f64, z2: f64, a11: f64, a12: f64, a22: f64) -> f64 {
     let dt = a11 * a22 - a12 * a12;
-    if !(dt > 0.0) {
+    if dt <= 0.0 || dt.is_nan() {
         // 非正定协方差（参数退化）：交给调用方的下溢兜底。
         return 0.0;
     }
@@ -89,7 +89,7 @@ pub fn bivariate_cost_gaussian(data: &BivariateData, p: &BivariateParams) -> f64
         let a12 = ed11 + sz12;
 
         let mut pdf = gaussian2_pdf(data.z1[j], data.z2[j], a11, a12, a22);
-        if !(pdf > 0.0) {
+        if pdf <= 0.0 || pdf.is_nan() {
             pdf = K_MIN_TAG_PDF;
         }
         let mut inc = -pdf.ln() * data.weights[j];

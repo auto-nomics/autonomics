@@ -41,7 +41,7 @@ impl DataEngineServer {
                 let res = match (from_port, to_port) {
                     (Some(fp), Some(tp)) => self.engine.add_edge(from, to, fp, tp).map(|_| ()),
                     (None, None) => self.engine.add_edge(from, to, 0, 0).map(|_| ()),
-                    _ => Err(crate::data_engine::error::Error::Custom(
+                    _ => Err(crate::error::Error::Custom(
                         "add_edge: from_port and to_port must both be Some or both None"
                             .to_string(),
                     )),
@@ -99,9 +99,7 @@ impl DataEngineClient {
     async fn request<T>(
         &self,
         cmd: DataEngineCmd,
-        reply_rx: tokio::sync::oneshot::Receiver<
-            std::result::Result<T, crate::data_engine::error::Error>,
-        >,
+        reply_rx: tokio::sync::oneshot::Receiver<std::result::Result<T, crate::error::Error>>,
     ) -> Result<T> {
         use crate::runtime::error::ClientError;
 

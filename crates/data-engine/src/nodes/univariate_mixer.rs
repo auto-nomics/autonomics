@@ -20,9 +20,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodeMeta};
+use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
-    data_engine::dag::{DagError, graph::PortOutputs},
+    dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory},
 };
 
@@ -95,7 +95,6 @@ fn output_schema() -> SchemaRef {
 }
 
 /// 把 [`mixer::result::FitResult`] 打包成单行 `RecordBatch`。
-#[allow(dead_code)] // execute() 待实现后启用
 fn build_result_batch(r: &mixer::result::FitResult) -> Result<RecordBatch, UnivariateMixerError> {
     let schema = output_schema();
     let batch = RecordBatch::try_new(
@@ -173,18 +172,21 @@ const UNIVARIATE_MIXER_NODE_KIND: &str = "univariate_mixer";
 /// [`mixer::data::ChromData`]，调用 [`mixer::fit::fit1`]，输出单行结果。
 #[derive(Clone)]
 pub struct UnivariateMixerNode {
-    meta: NodeMeta,
+    meta: NodePorts,
     datalake: Arc<Datalake>,
     spec: UnivariateMixerNodeSpec,
 }
 
+fn port_layout() -> NodePorts {
+    NodePorts::new()
+        .add_input_port(Some(input_schema()))
+        .add_output_port(Some(output_schema()))
+}
+
 impl UnivariateMixerNode {
     pub fn new(datalake: Arc<Datalake>, spec: UnivariateMixerNodeSpec) -> Self {
-        let meta = NodeMeta::new()
-            .add_input_port(Some(input_schema()))
-            .add_output_port(Some(output_schema()));
         Self {
-            meta,
+            meta: port_layout(),
             datalake,
             spec,
         }
@@ -198,8 +200,27 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         UNIVARIATE_MIXER_NODE_KIND
     }
 
+    fn desc(&self) -> &'static str {
+        "Fits univariate MiXeR spike-and-slab (fit1) on a single GWAS trait."
+    }
+
+    fn doc(&self) -> &'static str {
+        "Univariate MiXeR (fit1) transform node. Takes a single upstream GWAS \
+        summary statistics DataFrame (with Z, N, rsid columns), queries the \
+        Iceberg data lake for the LD matrix (`ld_matrix.eur_chr{N}`) and \
+        allele frequency (`af.eur_af`), assembles a `ChromData` and fits \
+        `mixer::fit::fit1`. Outputs a single-row result DataFrame with the \
+        fitted parameters (pi, sig2_beta, sig2_zero) and derived quantities \
+        (h2, nc, nc_p9, aic, bic, loglike). One typed input port; one typed \
+        output port."
+    }
+
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(UnivariateMixerNodeSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        port_layout()
     }
 
     fn build(
@@ -215,7 +236,7 @@ impl NodeFactory for UnivariateMixerNodeFactory {
 
 #[async_trait]
 impl DagNode for UnivariateMixerNode {
-    fn meta(&self) -> &NodeMeta {
+    fn ports(&self) -> &NodePorts {
         &self.meta
     }
 
@@ -223,7 +244,7 @@ impl DagNode for UnivariateMixerNode {
         Box::new((*self).clone())
     }
 
-    fn node_type(&self) -> &str {
+    fn kind(&self) -> &'static str {
         UNIVARIATE_MIXER_NODE_KIND
     }
 
@@ -411,10 +432,10 @@ mod tests {
             seed: 123,
         };
         let node = UnivariateMixerNode::new(Arc::new(Datalake::new()), spec);
-        assert_eq!(node.node_type(), "univariate_mixer");
+        assert_eq!(node.kind(), "univariate_mixer");
         // 一个输入端口（sumstats）、一个输出端口（fit1 结果）
-        assert_eq!(node.meta().input_ports().len(), 1);
-        assert_eq!(node.meta().output_ports().len(), 1);
+        assert_eq!(node.ports().input_ports().len(), 1);
+        assert_eq!(node.ports().output_ports().len(), 1);
     }
     //
     // #[tokio::test]

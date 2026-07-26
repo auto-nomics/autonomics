@@ -82,7 +82,11 @@ fn read_bivar_weights(path: &Path) -> HashMap<String, (f64, f64, f64)> {
         }
         m.insert(
             f[0].to_string(),
-            (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap()),
+            (
+                f[1].parse().unwrap(),
+                f[2].parse().unwrap(),
+                f[3].parse().unwrap(),
+            ),
         );
     }
     m
@@ -186,10 +190,19 @@ fn cross_validate_bivariate_vs_reference() {
         data.tags.len(),
         data.weights.iter().sum::<f64>()
     );
-    println!("{:<10} {:>12} {:>12}   {:>8}", "量", "Rust", "原版", "相对误差");
+    println!(
+        "{:<10} {:>12} {:>12}   {:>8}",
+        "量", "Rust", "原版", "相对误差"
+    );
     let row = |name: &str, got: f64, refv: f64| {
         let rel = (got - refv).abs() / refv.abs().max(1e-12);
-        println!("{:<10} {:>12.6} {:>12.6}   {:>7.2}%", name, got, refv, rel * 100.0);
+        println!(
+            "{:<10} {:>12.6} {:>12.6}   {:>7.2}%",
+            name,
+            got,
+            refv,
+            rel * 100.0
+        );
     };
     row("pi12", r.pi12, ref_pi12);
     row("rho_beta", r.rho_beta, ref_rho_beta);
@@ -210,7 +223,11 @@ fn cross_validate_bivariate_vs_reference() {
 
     // 断言可识别量（核心校验）
     let cost_err = (r.loglike - ref_cost).abs() / ref_cost;
-    assert!(cost_err < 1e-3, "cost 相对偏差 {:.4}% > 0.1%", cost_err * 100.0);
+    assert!(
+        cost_err < 1e-3,
+        "cost 相对偏差 {:.4}% > 0.1%",
+        cost_err * 100.0
+    );
     let rg_err = (r.rg - ref_rg).abs() / ref_rg.abs();
     assert!(rg_err < 0.01, "rg 相对偏差 {:.2}% > 1%", rg_err * 100.0);
     let rz_err = (r.rho_zero - ref_rho_zero).abs();

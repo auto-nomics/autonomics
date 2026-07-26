@@ -23,13 +23,13 @@ use crate::bivariate::data::BivariateData;
 use crate::bivariate::params::BivariateParams;
 
 const K_MIN_TAG_PDF: f64 = 1e-100;
-const F32_MIN_POS: f64 = 1.4012984643248171e-45;
+const F32_MIN_POS: f64 = 1.401_298_464_324_817e-45;
 const NUM_COMPONENTS: usize = 3;
 
 /// 零均值 2D 高斯密度（与 `cost::gaussian2_pdf` 同实现；此处复制以保持采样热路径独立）。
 fn gaussian2_pdf(z1: f64, z2: f64, a11: f64, a12: f64, a22: f64) -> f64 {
     let dt = a11 * a22 - a12 * a12;
-    if !(dt > 0.0) {
+    if dt <= 0.0 || dt.is_nan() {
         return 0.0;
     }
     let log_exp = -0.5 * (a22 * z1 * z1 + a11 * z2 * z2 - 2.0 * a12 * z1 * z2) / dt;
@@ -45,6 +45,13 @@ fn tag_seed(seed: u64, snp_index: u32) -> u64 {
     k1 ^ k2
 }
 
+struct SamplingBuffers<'a> {
+    delta20: &'a mut [f64],
+    delta02: &'a mut [f64],
+    delta11: &'a mut [f64],
+    slots: &'a mut [u32],
+}
+
 /// 单个 tag 的采样 pdf（实现 `find_unified_bivariate_tag_delta_sampling` + 内层 pdf 循环）。
 ///
 /// 返回该 tag 的混合 pdf（未取对数）。`buf_*` 是长度 `k_max` 的工作缓冲（复用，避免反复分配）。
@@ -54,11 +61,14 @@ fn tag_pdf_sampling(
     tag_j: usize,
     k_max: usize,
     seed: u64,
-    delta20: &mut [f64],
-    delta02: &mut [f64],
-    delta11: &mut [f64],
-    slots: &mut [u32],
+    buffers: SamplingBuffers<'_>,
 ) -> f64 {
+    let SamplingBuffers {
+        delta20,
+        delta02,
+        delta11,
+        slots,
+    } = buffers;
     // 先验矩分量（常数，跨 snp）
     let sb1 = p.sig2_beta[0];
     let sb2 = p.sig2_beta[1];
@@ -130,8 +140,8 @@ fn tag_pdf_sampling(
             // 条件重归一化：剩余概率乘以 1/(1-p_c)
             if pc < 1.0 {
                 let factor = 1.0 / (1.0 - pc);
-                for j in (c + 1)..NUM_COMPONENTS {
-                    pp[j] *= factor;
+                for value in pp.iter_mut().take(NUM_COMPONENTS).skip(c + 1) {
+                    *value *= factor;
                 }
             }
         }
@@ -196,21 +206,36 @@ fn tag_pdf_sampling(
 ///
 /// 对齐 `calc_unified_bivariate_cost_sampling`：rayon 并行遍历 deftag，各 tag 独立采样，
 /// 末尾 `cost = Σ_tag −log(pdf_tag)·weight`。`seed` 对应原版 `seed_`（默认 123）。
-pub fn bivariate_cost_sampling(data: &BivariateData, p: &BivariateParams, k_max: usize, seed: u64) -> f64 {
-    let tags: Vec<u32> = data.tags.iter().copied().filter(|&t| data.weights[t as usize] > 0.0).collect();
+pub fn bivariate_cost_sampling(
+    data: &BivariateData,
+    p: &BivariateParams,
+    k_max: usize,
+    seed: u64,
+) -> f64 {
+    let tags: Vec<u32> = data
+        .tags
+        .iter()
+        .copied()
+        .filter(|&t| data.weights[t as usize] > 0.0)
+        .collect();
 
     // 并行：每个 tag 一组工作缓冲（thread-local 复用，避免反复分配）
-    let total = total_pdf_worker(&tags, data, p, k_max, seed);
-    total
+    total_pdf_worker(&tags, data, p, k_max, seed)
 }
 
-fn total_pdf_worker(tags: &[u32], data: &BivariateData, p: &BivariateParams, k_max: usize, seed: u64) -> f64 {
+fn total_pdf_worker(
+    tags: &[u32],
+    data: &BivariateData,
+    p: &BivariateParams,
+    k_max: usize,
+    seed: u64,
+) -> f64 {
     // 线程局部缓冲：用 thread_local 复用 k_max 长度的 buffer
     thread_local! {
-        static BUF20: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
-        static BUF02: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
-        static BUF11: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
-        static SLOTS: std::cell::RefCell<Vec<u32>> = std::cell::RefCell::new(Vec::new());
+        static BUF20: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+        static BUF02: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+        static BUF11: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+        static SLOTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     tags.par_iter()
         .map(|&tag| {
@@ -228,7 +253,19 @@ fn total_pdf_worker(tags: &[u32], data: &BivariateData, p: &BivariateParams, k_m
                             bn.resize(k_max, 0.0);
                             be.resize(k_max, 0.0);
                             bs.resize(k_max, 0);
-                            let pdf = tag_pdf_sampling(data, p, j, k_max, seed, &mut bm, &mut bn, &mut be, &mut bs);
+                            let pdf = tag_pdf_sampling(
+                                data,
+                                p,
+                                j,
+                                k_max,
+                                seed,
+                                SamplingBuffers {
+                                    delta20: &mut bm,
+                                    delta02: &mut bn,
+                                    delta11: &mut be,
+                                    slots: &mut bs,
+                                },
+                            );
                             let pdf = if pdf > 0.0 { pdf } else { K_MIN_TAG_PDF };
                             let mut inc = -pdf.ln() * w;
                             if !inc.is_finite() {
@@ -311,6 +348,9 @@ mod tests {
         let sz12: f64 = 0.1 * (1.0_f64 * 1.05).sqrt();
         let pdf = gaussian2_pdf(1.0, 0.8, 1.0, sz12, 1.05);
         let expected = -pdf.ln();
-        assert!((c - expected).abs() / expected.abs() < 0.05, "c={c} expected={expected}");
+        assert!(
+            (c - expected).abs() / expected.abs() < 0.05,
+            "c={c} expected={expected}"
+        );
     }
 }

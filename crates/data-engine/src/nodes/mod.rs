@@ -4,6 +4,7 @@
 //! the contract every node fulfils. Concrete implementations live in
 //! [`source`], [`sql_node`], [`sink_file`], and [`sink_iceberg`].
 
+pub mod bivariate_mixer;
 pub mod echo_node;
 pub mod ldsc_hsq;
 pub mod ldsc_rg;
@@ -17,8 +18,10 @@ pub mod sink_iceberg;
 pub mod source;
 pub mod sql_node;
 pub mod test_source;
+pub mod univariate_mixer;
 pub mod viz;
 
+pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use ldsc_hsq::{LdscHsqConfig, LdscHsqNode, LdscHsqNodeFactory};
 pub use ldsc_rg::{LdscRgConfig, LdscRgNode, LdscRgNodeFactory};
@@ -34,4 +37,7 @@ pub use sink_iceberg::{IcebergSinkNode, IcebergSinkNodeFactory, IcebergSinkNodeS
 pub use source::{FileFormat, Source, SourceNode, SourceNodeFactory, SourceNodeSpec};
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
+pub use univariate_mixer::{
+    UnivariateMixerNode, UnivariateMixerNodeFactory, UnivariateMixerNodeSpec,
+};
 pub use viz::{VizNode, VizNodeFactory, VizNodeSpec};
