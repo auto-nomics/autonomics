@@ -4674,6 +4674,9 @@ dependencies = [
 name = "mixer"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "datafusion",
+ "datalake",
  "faer",
  "flate2",
  "rand 0.8.7",
@@ -4682,6 +4685,7 @@ dependencies = [
  "rayon",
  "serde_json",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

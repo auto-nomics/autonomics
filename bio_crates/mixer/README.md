@@ -1,7 +1,7 @@
 # mixer — Univariate + Bivariate MiXeR（Rust 移植）
 
 MiXeR 混合模型的纯 Rust 实现（单变量 + 双变量），从论文数学（Holland et al. 2020,
-*PLoS Genetics*）clean-room 重新实现，不复制原版 GPL C++/Python 源码。
+_PLoS Genetics_）clean-room 重新实现，不复制原版 GPL C++/Python 源码。
 详见 [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md)。
 
 ## 模型
@@ -33,34 +33,33 @@ Eb20=(π1+π12)·σ²β,1   Eb02=(π2+π12)·σ²β,2   Eb11=π12·ρβ·√(σ�
 `π12`（共有 causal 比例）。fit_sequence 对齐原版
 `diffevo-fast → neldermead-fast → brute1-fast → brent1-fast`（全程 gaussian cost）。
 
-
 ## 模块
 
-| 模块 | 职责 |
-|---|---|
-| `params` | `UnivariateParams { pi, sig2_beta, sig2_zero }` |
-| `parametrize` | 有约束参数 ↔ 无约束空间（log/logit）+ DE 边界 |
-| `ld_matrix` | 稀疏 LD，COO → CSR |
-| `data` | `ChromData`：z/n/h/weights/ld（tag 与 snp 共用 index 空间） |
-| `cost` | `univariate_cost_gaussian`（核心热循环） |
-| `optimizer` | `differential_evolution` + `nelder_mead` |
-| `fit` | `fit1` 入口（DE×repeats → NM 精修） |
-| `result` | `FitResult`：派生 h²/nc/nc@p9/AIC/BIC |
-| `simulate` | 前向模拟器（cost 的逆运算，用于参数回收验证） |
-| `bivariate/` | 双变量子模块（见下） |
+| 模块          | 职责                                                        |
+| ------------- | ----------------------------------------------------------- |
+| `params`      | `UnivariateParams { pi, sig2_beta, sig2_zero }`             |
+| `parametrize` | 有约束参数 ↔ 无约束空间（log/logit）+ DE 边界               |
+| `ld_matrix`   | 稀疏 LD，COO → CSR                                          |
+| `data`        | `ChromData`：z/n/h/weights/ld（tag 与 snp 共用 index 空间） |
+| `cost`        | `univariate_cost_gaussian`（核心热循环）                    |
+| `optimizer`   | `differential_evolution` + `nelder_mead`                    |
+| `fit`         | `fit1` 入口（DE×repeats → NM 精修）                         |
+| `result`      | `FitResult`：派生 h²/nc/nc@p9/AIC/BIC                       |
+| `simulate`    | 前向模拟器（cost 的逆运算，用于参数回收验证）               |
+| `bivariate/`  | 双变量子模块（见下）                                        |
 
 ### `bivariate/` 子模块
 
-| 子模块 | 职责 |
-|---|---|
-| `params` | `BivariateParams { pi[3], sig2_beta[2], sig2_zero[2], rho_beta, rho_zero }` + `rg()` |
-| `transforms` | 边界变换（log/exp、logit/logistic、arctanh/tanh，带 epsval 裁剪） |
-| `data` | `BivariateData`：z1/z2/n1/n2/h/weights/ld/tags |
-| `cost` | `bivariate_cost_gaussian`（3 分量矩 + LD 传播 + 2D 高斯密度） |
-| `parametrize` | `NaturalAxis`（3D）+ `ConstRgRhoZero`（1D，brute/brent） |
-| `optimizers` | 闭式泛型 DE / adaptive NM / brute1 / brent1 |
-| `fit` | `fit2` 入口（DE×N → NM → brute1 → brent1） |
-| `result` | `BivariateFitResult`：派生 rg/dice/h²_T1/T2/nc12/AIC/BIC |
+| 子模块        | 职责                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `params`      | `BivariateParams { pi[3], sig2_beta[2], sig2_zero[2], rho_beta, rho_zero }` + `rg()` |
+| `transforms`  | 边界变换（log/exp、logit/logistic、arctanh/tanh，带 epsval 裁剪）                    |
+| `data`        | `BivariateData`：z1/z2/n1/n2/h/weights/ld/tags                                       |
+| `cost`        | `bivariate_cost_gaussian`（3 分量矩 + LD 传播 + 2D 高斯密度）                        |
+| `parametrize` | `NaturalAxis`（3D）+ `ConstRgRhoZero`（1D，brute/brent）                             |
+| `optimizers`  | 闭式泛型 DE / adaptive NM / brute1 / brent1                                          |
+| `fit`         | `fit2` 入口（DE×N → NM → brute1 → brent1）                                           |
+| `result`      | `BivariateFitResult`：派生 rg/dice/h²_T1/T2/nc12/AIC/BIC                             |
 
 ## 测试数据基础设施（`tests/fixtures/`）
 
@@ -68,16 +67,16 @@ Eb20=(π1+π12)·σ²β,1   Eb02=(π2+π12)·σ²β,2   Eb11=π12·ρβ·√(σ�
 金标准对齐。**LD/AF 是原版同源**——由 `libbgmg.so` 从其自定义 TurboPFor 压缩的 `.ld` 二进制
 解压导出（Rust 自己解码不现实），完全忠实。
 
-| 文件 | 内容 | 来源 |
-|---|---|---|
-| `trait1.sumstats.gz` | GWAS sumstats（34958 SNP，列 SNP/Z/N） | 原版 `gsa-mixer/precimed/mixer-test/data` |
-| `hm3_af.tsv.gz` | allele frequency（`chrom, rsid, alt_freq`） | libbgmg `bgmg_retrieve_mafvec` dump |
-| `hm3_ld.tsv.gz` | LD 对（`chrom, tag_rsid, snp_rsid, r, r2`，194 万对） | libbgmg `bgmg_retrieve_ld_r_chr` dump |
-| `trait1.fit1.json` | 原版 fit1 参考输出（金标准） | 原版 `mixer.py fit1` |
-| `trait2.sumstats.gz` | 第二 trait 的 GWAS sumstats（bivariate 用） | 原版同上 |
-| `trait2.fit1.json` | trait2 的 fit1 输出（fit2 约束） | 原版 `mixer.py fit1` |
-| `hm3_bivar_weights.tsv.gz` | bivariate tag 子集 + randprune 权重 + 两 trait 的 n1/n2 | libbgmg `dump_bivar.py` |
-| `fit2.json` | 原版 fit2 参考输出（金标准） | 原版 `mixer.py fit2` |
+| 文件                       | 内容                                                    | 来源                                      |
+| -------------------------- | ------------------------------------------------------- | ----------------------------------------- |
+| `trait1.sumstats.gz`       | GWAS sumstats（34958 SNP，列 SNP/Z/N）                  | 原版 `gsa-mixer/precimed/mixer-test/data` |
+| `hm3_af.tsv.gz`            | allele frequency（`chrom, rsid, alt_freq`）             | libbgmg `bgmg_retrieve_mafvec` dump       |
+| `hm3_ld.tsv.gz`            | LD 对（`chrom, tag_rsid, snp_rsid, r, r2`，194 万对）   | libbgmg `bgmg_retrieve_ld_r_chr` dump     |
+| `trait1.fit1.json`         | 原版 fit1 参考输出（金标准）                            | 原版 `mixer.py fit1`                      |
+| `trait2.sumstats.gz`       | 第二 trait 的 GWAS sumstats（bivariate 用）             | 原版同上                                  |
+| `trait2.fit1.json`         | trait2 的 fit1 输出（fit2 约束）                        | 原版 `mixer.py fit1`                      |
+| `hm3_bivar_weights.tsv.gz` | bivariate tag 子集 + randprune 权重 + 两 trait 的 n1/n2 | libbgmg `dump_bivar.py`                   |
+| `fit2.json`                | 原版 fit2 参考输出（金标准）                            | 原版 `mixer.py fit2`                      |
 
 ### 重新生成 fixtures（数据更新时）
 
@@ -113,13 +112,13 @@ cargo test -p mixer --test cross_validation_bivar -- --ignored --nocapture
 均由 libbgmg dump，`sum_weights=2839.72` 与原版完全一致），喂给我们的 Rust `fit1`，
 对比 `trait1.fit1.json` 金标准：
 
-| 量 | Rust 拟合 | 原版金标准 | 相对误差 |
-|---|---|---|---|
-| `pi` | 0.001305 | 0.001307 | 0.15% |
-| `sig2_beta` | 0.040294 | 0.040229 | 0.16% |
-| `sig2_zero` | 0.998163 | 0.998126 | 0.004% |
-| `h2` | 0.588128 | 0.588019 | 0.02% |
-| `cost` | 4107.1994 | 4107.1992 | 5e-6 |
+| 量          | Rust 拟合 | 原版金标准 | 相对误差 |
+| ----------- | --------- | ---------- | -------- |
+| `pi`        | 0.001305  | 0.001307   | 0.15%    |
+| `sig2_beta` | 0.040294  | 0.040229   | 0.16%    |
+| `sig2_zero` | 0.998163  | 0.998126   | 0.004%   |
+| `h2`        | 0.588128  | 0.588019   | 0.02%    |
+| `cost`      | 4107.1994 | 4107.1992  | 5e-6     |
 
 **全部参数 < 0.2%，cost 匹配到 5 位有效数字**——证明 Rust 移植的 cost function +
 LD 传播 + Gaussian 近似 + DE/Nelder-Mead 优化器在真实参考数据上数值正确。
@@ -136,16 +135,16 @@ LD 传播 + Gaussian 近似 + DE/Nelder-Mead 优化器在真实参考数据上�
 约束取自原版 fit1 输出，喂给 Rust `fit2`，对比 `fit2.json` 金标准（同样 `--fit-sequence
 ...-fast`，全程 gaussian cost）：
 
-| 量 | Rust fit2 | 原版金标准 | 相对误差 |
-|---|---|---|---|
-| `cost` | 8329.7159 | 8329.7158 | 1e-5 |
-| `rg` | −0.4733 | −0.4731 | 0.04% |
-| `rho_zero` | −0.0858 | −0.0858 | 0.01% |
-| `h2_T1` | 0.58801 | 0.58801 | <1e-6 |
-| `h2_T2` | 0.73402 | 0.73402 | <1e-6 |
-| `pi12` | 0.000482 | 0.000786 | ⚠ 见下 |
-| `rho_beta` | −0.994 | −0.609 | ⚠ 见下 |
-| `dice` | 0.462 | 0.753 | ⚠ 见下 |
+| 量         | Rust fit2 | 原版金标准 | 相对误差 |
+| ---------- | --------- | ---------- | -------- |
+| `cost`     | 8329.7159 | 8329.7158  | 1e-5     |
+| `rg`       | −0.4733   | −0.4731    | 0.04%    |
+| `rho_zero` | −0.0858   | −0.0858    | 0.01%    |
+| `h2_T1`    | 0.58801   | 0.58801    | <1e-6    |
+| `h2_T2`    | 0.73402   | 0.73402    | <1e-6    |
+| `pi12`     | 0.000482  | 0.000786   | ⚠ 见下   |
+| `rho_beta` | −0.994    | −0.609     | ⚠ 见下   |
+| `dice`     | 0.462     | 0.753      | ⚠ 见下   |
 
 **可识别量（cost、rg、rho_zero、h²）全部对齐到 4–5 位有效数字**，证明 Rust 的双变量
 cost function（3 分量矩 + LD 传播 + 2D 高斯密度）+ 3D 优化器（DE/NM）+ 1D 精修（brute/brent）
@@ -176,14 +175,14 @@ Fisher-Yates 部分洗牌，rayon 并行），与 C++ **统计一致**（非逐 
 
 对比原版 `fit2_sampling.json`（`--fit-sequence diffevo-fast neldermead-fast brute1 brent1 --kmax 20000`）：
 
-| 量 | Rust sampling | 原版金标准 | 相对误差 |
-|---|---|---|---|
-| `cost(samp)` | 8294.82 | 8294.91 | **1e-5** |
-| `rg` | −0.4734 | −0.4731 | 0.04% |
-| `rho_zero` | −0.0858 | −0.0858 | 0.01% |
-| `pi12` | 0.000497 | 0.000483 | 2.75% |
-| `rho_beta` | −0.964 | −0.990 | 2.63% |
-| `dice` | 0.476 | 0.463 | 2.75% |
+| 量           | Rust sampling | 原版金标准 | 相对误差 |
+| ------------ | ------------- | ---------- | -------- |
+| `cost(samp)` | 8294.82       | 8294.91    | **1e-5** |
+| `rg`         | −0.4734       | −0.4731    | 0.04%    |
+| `rho_zero`   | −0.0858       | −0.0858    | 0.01%    |
+| `pi12`       | 0.000497      | 0.000483   | 2.75%    |
+| `rho_beta`   | −0.964        | −0.990     | 2.63%    |
+| `dice`       | 0.476         | 0.463      | 2.75%    |
 
 **sampling 打破退化后 pi12/rho_beta/dice 也对齐**（~3%，残余为 MC 噪声 + 边界处 rho_beta≈−1
 的平坦性）。sampling cost 本身匹配到 5 位有效数字。模型把解钉在 `rho_beta→−1` 边界
@@ -207,13 +206,11 @@ clean-room 复刻原版 `set_weights_randprune(n, r2, maf, use_w_ld)`。64 轮�
 
 ### 权重交叉验证（`tests/cross_validation_weights.rs`）
 
-| 量 | Rust | 原版 libbgmg |
-|---|---|---|
-| `sum_weights` | 2839.718750 | 2839.718750 |
-| 逐 tag 精确匹配 | **11200/11200** | — |
-| max_abs / max_rel | 0 / 0 | — |
+| 量                | Rust            | 原版 libbgmg |
+| ----------------- | --------------- | ------------ |
+| `sum_weights`     | 2839.718750     | 2839.718750  |
+| 逐 tag 精确匹配   | **11200/11200** | —            |
+| max_abs / max_rel | 0 / 0           | —            |
 
 **逐 tag bit-exact 一致**——给定相同 LD 顺序与 deftag 集合，Rust 权重与原版完全相同。
 两节点（`univariate_mixer`、`bivariate_mixer`）已接入，默认 `n=64, r2=0.1, seed=123`。
-
-

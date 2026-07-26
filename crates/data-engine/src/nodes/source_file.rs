@@ -1,11 +1,12 @@
-//! Unified source node: brings external data into the DAG as a `DataFrame`.
+//! File source node: brings a file (local or registered object store) into the
+//! DAG as a `DataFrame`.
 //!
-//! A [`SourceNode`] has no inputs and produces exactly one output. The concrete
-//! origin is described by [`Source`]: a file on the local filesystem or a
-//! registered object store (with the format auto-detected from the extension,
-//! or explicitly given), or an Iceberg table by identifier. Bioinformatics
-//! formats (VCF, BAM, BED, …) are read through `biofusion`, which already
-//! exposes them as DataFusion tables.
+//! A [`FileSourceNode`] has no inputs and produces exactly one output. The
+//! format is auto-detected from the extension, or explicitly given. Tabular
+//! formats (CSV, Parquet) go through DataFusion natively; bioinformatics
+//! formats (VCF, BAM, BED, …) go through `biofusion`, which already exposes
+//! them as DataFusion tables. Symmetric to [`crate::nodes::FileSinkNode`] for
+//! the file case.
 
 use std::sync::Arc;
 
@@ -13,7 +14,6 @@ use async_trait::async_trait;
 use biofusion::datasource::BioReadOptions;
 use biofusion::ext::DataFusionReadExt;
 use datafusion::{
-    catalog::CatalogProvider,
     common::HashMap,
     execution::runtime_env::RuntimeEnv,
     prelude::{CsvReadOptions, DataFrame, ParquetReadOptions, SessionContext},
@@ -27,20 +27,6 @@ use crate::{
     dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
 };
-
-/// Where a [`SourceNode`] reads from.
-#[derive(Debug, Clone)]
-pub enum Source {
-    /// A file path or URL. When `format` is `None`, it is inferred from the
-    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
-    File {
-        path: String,
-        format: Option<FileFormat>,
-    },
-    /// An Iceberg table identifier (`namespace.table`), resolved through the
-    /// `iceberg` catalog registered on the engine context.
-    Iceberg { ident: String },
-}
 
 /// Supported file formats. Tabular formats go through DataFusion natively;
 /// bioinformatics formats go through `biofusion`.
@@ -109,9 +95,9 @@ impl FileFormat {
     }
 }
 
-/// Errors specific to [`SourceNode`].
+/// Errors specific to [`FileSourceNode`].
 #[derive(Debug, Error)]
-pub enum SourceError {
+pub enum FileSourceError {
     #[error("cannot infer file format from path: {0}")]
     UnknownFormat(String),
     #[error("read source '{path}' failed")]
@@ -122,77 +108,74 @@ pub enum SourceError {
     },
 }
 
-impl From<SourceError> for DagError {
-    fn from(e: SourceError) -> Self {
+impl From<FileSourceError> for DagError {
+    fn from(e: FileSourceError) -> Self {
         match e {
-            SourceError::Read { source, .. } => DagError::DataFusion(source),
-            SourceError::UnknownFormat(msg) => DagError::Schedule(msg),
+            FileSourceError::Read { source, .. } => DagError::DataFusion(source),
+            FileSourceError::UnknownFormat(msg) => DagError::Schedule(msg),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct SourceNode {
+pub struct FileSourceNode {
     meta: NodePorts,
-    source: Source,
+    path: String,
+    format: Option<FileFormat>,
     runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
 }
 
-impl SourceNode {
+impl FileSourceNode {
     pub fn new(
-        source: Source,
+        path: String,
+        format: Option<FileFormat>,
         runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     ) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
-            source,
+            path,
+            format,
             runtime_env,
-            iceberg_catalog,
         }
     }
 }
 
-#[derive(Debug, JsonSchema, Deserialize)]
-#[serde(tag = "type")]
-pub enum SourceNodeSpec {
-    #[serde(rename = "file")]
-    File {
-        path: String,
-        format: Option<FileFormat>,
-    },
-    #[serde(rename = "iceberg")]
-    Iceberg { ident: String },
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct FileSourceNodeSpec {
+    /// A file path or URL. When `format` is `None`, it is inferred from the
+    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
+    pub path: String,
+    pub format: Option<FileFormat>,
 }
 
-pub struct SourceNodeFactory {}
+pub struct FileSourceNodeFactory {}
 
-/// Static port layout for every [`SourceNode`]: no inputs, a single untyped
-/// output port (schema discovered from the source at runtime).
+/// Static port layout for every [`FileSourceNode`]: no inputs, a single
+/// untyped output port (schema discovered from the source at runtime).
 fn port_layout() -> NodePorts {
     NodePorts::new().add_output_port(None)
 }
 
-impl NodeFactory for SourceNodeFactory {
+impl NodeFactory for FileSourceNodeFactory {
     fn kind(&self) -> &'static str {
-        "source"
+        "source_file"
     }
 
     fn desc(&self) -> &'static str {
-        "Reads external data (files or Iceberg tables) into the DAG as a DataFrame."
+        "Reads a file (local or object store) into the DAG as a DataFrame."
     }
 
     fn doc(&self) -> &'static str {
-        "A data source node that reads external data into the DAG as a DataFrame. \
-        Supports local/remote files (CSV, Parquet) and bioinformatics formats \
-        (VCF, BAM, BED, GTF, FASTA, etc.) via biofusion, as well as Iceberg \
-        tables by identifier. No input ports; one untyped output port."
+        "A file data source node that reads external files into the DAG as a \
+        DataFrame. Supports local/remote files: tabular formats (CSV, Parquet) \
+        via DataFusion, and bioinformatics formats (VCF, BAM, BED, GTF, FASTA, \
+        etc.) via biofusion. Format is inferred from the extension when not \
+        given explicitly. No input ports; one untyped output port."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(SourceNodeSpec)
+        schema_for!(FileSourceNodeSpec)
     }
 
     fn ports(&self) -> NodePorts {
@@ -204,12 +187,12 @@ impl NodeFactory for SourceNodeFactory {
         spec: serde_json::Value,
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
-        let node_spec: SourceNodeSpec = serde_json::from_value(spec)?;
-        let source = match node_spec {
-            SourceNodeSpec::File { path, format } => Source::File { path, format },
-            SourceNodeSpec::Iceberg { ident } => Source::Iceberg { ident },
-        };
-        let node = SourceNode::new(source, node_ctx.runtime_env, node_ctx.iceberg_catalog);
+        let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
+        let node = FileSourceNode::new(
+            node_spec.path,
+            node_spec.format,
+            node_ctx.runtime_env,
+        );
         Ok(Box::new(node))
     }
 }
@@ -228,7 +211,7 @@ pub fn normalize_path(path: &str) -> String {
 }
 
 #[async_trait]
-impl DagNode for SourceNode {
+impl DagNode for FileSourceNode {
     fn ports(&self) -> &NodePorts {
         &self.meta
     }
@@ -238,7 +221,7 @@ impl DagNode for SourceNode {
     }
 
     fn kind(&self) -> &'static str {
-        "source"
+        "source_file"
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -246,21 +229,13 @@ impl DagNode for SourceNode {
     }
 
     async fn execute(&mut self, _inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
-        let df = match &self.source {
-            Source::File { path, format } => {
-                let path = normalize_path(path);
-                let fmt = format
-                    .or_else(|| FileFormat::from_path(&path))
-                    .ok_or_else(|| SourceError::UnknownFormat(path.clone()))?;
-                read_file(&ctx, &path, fmt).await?
-            }
-            Source::Iceberg { ident } => {
-                // The iceberg catalog is registered under "iceberg"; qualify
-                // the identifier so DataFusion resolves it through that catalog.
-                ctx.sql(&format!("SELECT * FROM iceberg.{ident}")).await?
-            }
-        };
+        let ctx = new_isolated_ctx(self.runtime_env.clone(), None);
+        let path = normalize_path(&self.path);
+        let fmt = self
+            .format
+            .or_else(|| FileFormat::from_path(&path))
+            .ok_or_else(|| FileSourceError::UnknownFormat(path.clone()))?;
+        let df = read_file(&ctx, &path, fmt).await?;
         let mut res: PortOutputs = HashMap::new();
         res.insert(0, df);
         Ok(res)
@@ -290,7 +265,7 @@ async fn read_file(
         BigBed => ctx.read_bigbed(path, BioReadOptions::default()).await,
     };
     df.map_err(|e| {
-        SourceError::Read {
+        FileSourceError::Read {
             path: path.to_string(),
             source: e,
         }
@@ -301,7 +276,6 @@ async fn read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalake::Datalake;
     use fs::OpendalFileStorage;
 
     #[tokio::test]
@@ -338,20 +312,6 @@ mod tests {
 
         // let schema = res.schema();
         // dbg!(schema);
-    }
-
-    #[tokio::test]
-    #[ignore = "e2e test"]
-    async fn test_load_from_iceberg() {
-        let ctx = Datalake::default().get_ctx().await.unwrap();
-        let provider = Datalake::default().get_provider().await.unwrap();
-        let source = Source::Iceberg {
-            ident: "gwas.gwas_study".to_string(),
-        };
-        let mut node = SourceNode::new(source, ctx.runtime_env(), Some(Arc::new(provider)));
-        let res = node.execute(&[]).await.unwrap();
-        let df = res.get(&0).unwrap().clone();
-        df.limit(0, Some(10)).unwrap().show().await.unwrap();
     }
 
     /// Regression: biofusion's VCF reader (backed by oxbow) ALWAYS names the

@@ -55,7 +55,7 @@ async fn test_add_source_sql_run_dag() {
             &[build_tooluse(
                 "tc1",
                 "add_node",
-                json!({"id": "src", "kind": "source", "spec": {"type": "file", "path": "/insurance.csv"}}),
+                json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
             None,
@@ -203,7 +203,7 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
             &[build_tooluse(
                 "v1",
                 "add_node",
-                json!({"id": "vcf_src", "kind": "source", "spec": {"type": "file", "path": "/sample.vcf.gz"}}),
+                json!({"id": "vcf_src", "kind": "source_file", "spec": {"path": "/sample.vcf.gz"}}),
             )],
             None,
             None,
@@ -342,7 +342,7 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
             &[build_tooluse(
                 "e1",
                 "add_node",
-                json!({"id": "src", "kind": "source", "spec": {"type": "file", "path": "/badcast.csv"}}),
+                json!({"id": "src", "kind": "source_file", "spec": {"path": "/badcast.csv"}}),
             )],
             None,
             None,
@@ -465,7 +465,7 @@ async fn test_get_output_synthetic_struct_column_baseline() {
             &[build_tooluse(
                 "b1",
                 "add_node",
-                json!({"id": "src", "kind": "source", "spec": {"type": "file", "path": "/insurance.csv"}}),
+                json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
             None,

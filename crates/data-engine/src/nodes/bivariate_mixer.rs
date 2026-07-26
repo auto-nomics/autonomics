@@ -21,8 +21,7 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::prelude::DataFrame;
-use datalake::Datalake;
+use datafusion::prelude::{DataFrame, SessionContext};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,7 +29,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
 };
 
 // =====================================================================
@@ -193,7 +192,7 @@ const BIVARIATE_MIXER_NODE_KIND: &str = "bivariate_mixer";
 #[derive(Clone)]
 pub struct BivariateMixerNode {
     meta: NodePorts,
-    datalake: Arc<Datalake>,
+    ctx: SessionContext,
     spec: BivariateMixerNodeSpec,
 }
 
@@ -207,10 +206,10 @@ fn port_layout() -> NodePorts {
 }
 
 impl BivariateMixerNode {
-    pub fn new(datalake: Arc<Datalake>, spec: BivariateMixerNodeSpec) -> Self {
+    pub fn new(ctx: SessionContext, spec: BivariateMixerNodeSpec) -> Self {
         Self {
             meta: port_layout(),
-            datalake,
+            ctx,
             spec,
         }
     }
@@ -252,7 +251,8 @@ impl NodeFactory for BivariateMixerNodeFactory {
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config: BivariateMixerNodeSpec = serde_json::from_value(spec)?;
-        let node = BivariateMixerNode::new(node_ctx.datalake, config);
+        let ctx = new_isolated_ctx(node_ctx.runtime_env, node_ctx.iceberg_catalog);
+        let node = BivariateMixerNode::new(ctx, config);
         Ok(Box::new(node))
     }
 }
@@ -284,11 +284,7 @@ impl DagNode for BivariateMixerNode {
             .into());
         }
 
-        let ctx = self
-            .datalake
-            .get_ctx()
-            .await
-            .map_err(BivariateMixerError::from)?;
+        let ctx = &self.ctx;
 
         // 1. 注册两个 sumstats 为临时表
         ctx.register_table("sumstats1", inputs[0].data.clone().into_view())?;
@@ -493,7 +489,7 @@ mod tests {
             randprune_r2: 0.1,
             seed: 123,
         };
-        let node = BivariateMixerNode::new(Arc::new(Datalake::new()), spec);
+        let node = BivariateMixerNode::new(SessionContext::new(), spec);
         assert_eq!(node.kind(), "bivariate_mixer");
         // 4 输入端口、1 输出端口
         assert_eq!(node.ports().input_ports().len(), 4);

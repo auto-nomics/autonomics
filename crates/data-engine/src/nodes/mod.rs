@@ -2,7 +2,8 @@
 //!
 //! [`meta`] defines the [`DagNode`] trait, [`NodePorts`], and [`NodeInput`] —
 //! the contract every node fulfils. Concrete implementations live in
-//! [`source`], [`sql_node`], [`sink_file`], and [`sink_iceberg`].
+//! [`source_file`], [`source_iceberg`], [`sql_node`], [`sink_file`], and
+//! [`sink_iceberg`].
 
 pub mod bivariate_mixer;
 pub mod echo_node;
@@ -15,7 +16,8 @@ pub mod mr;
 pub mod sink_common;
 pub mod sink_file;
 pub mod sink_iceberg;
-pub mod source;
+pub mod source_file;
+pub mod source_iceberg;
 pub mod sql_node;
 pub mod test_source;
 pub mod univariate_mixer;
@@ -34,7 +36,12 @@ pub use mr::{MrNode, MrNodeFactory, MrNodeSpec, MrParameters};
 pub use sink_common::SinkMode;
 pub use sink_file::{FileSinkNode, FileSinkNodeFactory, FileSinkNodeSpec, WriteFormat};
 pub use sink_iceberg::{IcebergSinkNode, IcebergSinkNodeFactory, IcebergSinkNodeSpec};
-pub use source::{FileFormat, Source, SourceNode, SourceNodeFactory, SourceNodeSpec};
+pub use source_file::{
+    FileFormat, FileSourceNode, FileSourceNodeFactory, FileSourceNodeSpec,
+};
+pub use source_iceberg::{
+    IcebergSourceNode, IcebergSourceNodeFactory, IcebergSourceNodeSpec,
+};
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
 pub use univariate_mixer::{

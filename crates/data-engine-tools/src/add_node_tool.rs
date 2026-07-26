@@ -24,8 +24,8 @@ use crate::ExecError;
                   Each node kind expects different spec fields — always call \
                   `get_node_spec` first. Common examples: \
                   - \"sql\":            {\"sql_query\": \"SELECT * FROM port_0\"} \
-                  - \"source\":         {\"type\": \"file\", \"path\": \"/data/sample.vcf.gz\", \"format\": null} \
-                  - \"source\":         {\"type\": \"iceberg\", \"ident\": \"gwas.study\"} \
+                  - \"source_file\":    {\"path\": \"/data/sample.vcf.gz\", \"format\": null} \
+                  - \"source_iceberg\": {\"ident\": \"gwas.study\"} \
                   - \"sink_file\":      {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
                   - \"sink_iceberg\":   {\"ident\": \"gwas.study\", \"mode\": \"overwrite\"} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
@@ -44,7 +44,7 @@ pub struct AddNodeInput {
     /// Unique identifier for this node in the DAG.
     pub id: String,
     /// The node kind — one of the kinds returned by `list_node_factories`
-    /// (e.g. "sql", "source", "sink_file", "sink_iceberg", "linear_regression", "ldsc", "mock").
+    /// (e.g. "sql", "source_file", "source_iceberg", "sink_file", "sink_iceberg", "linear_regression", "ldsc", "mock").
     pub kind: String,
     /// JSON object conforming to the node's JSON Schema. Can include extra
     /// fields — the node factory ignores unknown keys.

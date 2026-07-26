@@ -1,7 +1,7 @@
 //! File sink node: consumes an upstream `DataFrame` and writes it to a file
 //! (CSV or Parquet).
 //!
-//! One untyped input port; no output ports. Symmetric to [`crate::nodes::SourceNode`]
+//! One untyped input port; no output ports. Symmetric to [`crate::nodes::FileSourceNode`]
 //! for the file case.
 
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
 use super::sink_common::SinkMode;
-use super::source::normalize_path;
+use super::source_file::normalize_path;
 use crate::{
     dag::DagError,
     dag::graph::PortOutputs,

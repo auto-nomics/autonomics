@@ -18,7 +18,8 @@ use crate::nodes::{
     ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory, liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory, mr::MrNodeFactory,
     sink_file::FileSinkNodeFactory, sink_iceberg::IcebergSinkNodeFactory,
-    source::SourceNodeFactory, sql_node::SqlNodeFactory, test_source::TestSourceFactory,
+    source_file::FileSourceNodeFactory, source_iceberg::IcebergSourceNodeFactory,
+    sql_node::SqlNodeFactory, test_source::TestSourceFactory,
     univariate_mixer::UnivariateMixerNodeFactory, viz::VizNodeFactory,
 };
 
@@ -123,7 +124,8 @@ impl NodeRegistry {
             nodes: Default::default(),
         };
         registry.register(Box::new(SqlNodeFactory {}));
-        registry.register(Box::new(SourceNodeFactory {}));
+        registry.register(Box::new(FileSourceNodeFactory {}));
+        registry.register(Box::new(IcebergSourceNodeFactory {}));
         registry.register(Box::new(FileSinkNodeFactory {}));
         registry.register(Box::new(IcebergSinkNodeFactory {}));
         registry.register(Box::new(LdscHsqNodeFactory {}));
@@ -214,7 +216,8 @@ mod tests {
     fn fixture_spec(kind: &str) -> serde_json::Value {
         match kind {
             "sql" => serde_json::json!({"sql_query": "SELECT 1"}),
-            "source" => serde_json::json!({"type": "file", "path": "/tmp/dummy.csv"}),
+            "source_file" => serde_json::json!({"path": "/tmp/dummy.csv"}),
+            "source_iceberg" => serde_json::json!({"ident": "gwas.dummy"}),
             "sink_file" => {
                 serde_json::json!({"path": "/tmp/dummy_out.csv", "format": "csv"})
             }

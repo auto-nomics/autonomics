@@ -1,7 +1,7 @@
 //! Iceberg sink node: consumes an upstream `DataFrame` and writes it to an
 //! Iceberg table via the catalog's `INSERT INTO` path.
 //!
-//! One untyped input port; no output ports. Symmetric to [`crate::nodes::SourceNode`]
+//! One untyped input port; no output ports. Symmetric to [`crate::nodes::IcebergSourceNode`]
 //! for the Iceberg case.
 
 use std::collections::HashSet;

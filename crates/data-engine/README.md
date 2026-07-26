@@ -7,7 +7,7 @@ It is intentionally independent of the Agent loop. `data-engine-tools` adapts it
 ## Data flow
 
 ```text
-SourceNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> SinkNode
+FileSourceNode / IcebergSourceNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> FileSinkNode / IcebergSinkNode
        │                           │
        └──────────── fan-out ──────┴──> more transformations
 ```
@@ -18,35 +18,39 @@ Every edge connects one named output port to one named input port. The public co
 
 | Node | Inputs → outputs | Purpose |
 | --- | --- | --- |
-| `SourceNode` | 0 → 1 | Reads CSV, Parquet, an Iceberg table, or a biological file into a DataFusion `DataFrame`. |
+| `FileSourceNode` | 0 → 1 | Reads CSV, Parquet, or a biological file (VCF, BAM, BED, …) into a DataFusion `DataFrame`. |
+| `IcebergSourceNode` | 0 → 1 | Reads an Iceberg table by `namespace.table` identifier into a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
-| `SinkNode` | 1 → 0 | Writes CSV or Parquet. Iceberg output is represented in the API but is not implemented yet. |
-| `CacheSourceNode` | 0 → 1 | Restores a cached output through the Iceberg-backed cache integration. |
+| `FileSinkNode` | 1 → 0 | Writes CSV or Parquet. |
+| `IcebergSinkNode` | 1 → 0 | Writes a `DataFrame` to an Iceberg table via the catalog's `INSERT INTO` path. |
 
-`biofusion` supplies the biological readers used by `SourceNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
+`biofusion` supplies the biological readers used by `FileSourceNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
 
 ## Build and run a pipeline
 
+Nodes are created through the engine registry by `kind` and a JSON `spec`:
+
 ```rust,no_run
-use data_engine::{DataEngine, Sink, Source, WriteFormat};
+use data_engine::DataEngine;
+use serde_json::json;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let mut engine = DataEngine::builder().build();
 
-engine
-    .source_node(
-        "variants",
-        Source::File { path: "input.vcf.gz".into(), format: None },
-        "variants",
-    )?
-    .sql_node("filtered", "SELECT * FROM port_0", "filtered")?
-    .sink_node(
-        "write",
-        Sink::File { path: "output.parquet".into(), format: WriteFormat::Parquet },
-    )?
-    .add_edge("variants", "filtered", 0, 0)?
-    .add_edge("filtered", "write", 0, 0)?;
+engine.add_node_from_registry(
+    "variants",
+    "source_file",
+    json!({ "path": "input.vcf.gz", "format": null }),
+)?;
+engine.add_node_from_registry("filtered", "sql", json!({ "sql_query": "SELECT * FROM port_0" }))?;
+engine.add_node_from_registry(
+    "write",
+    "sink_file",
+    json!({ "path": "output.parquet", "format": "parquet", "mode": "overwrite" }),
+)?;
+engine.add_edge("variants", "filtered", 0, 0)?;
+engine.add_edge("filtered", "write", 0, 0)?;
 
 let report = engine.run().await?;
 assert!(report.ok, "pipeline errors: {:?}", report.errors);

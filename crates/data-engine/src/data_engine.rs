@@ -14,8 +14,8 @@ use crate::nodes::DagNode;
 use datalake::Datalake;
 
 pub use crate::nodes::{
-    FileFormat, FileSinkNode, IcebergSinkNode, LdscHsqConfig, LdscHsqNode, LinearRegressionNode,
-    SinkMode, Source, SourceNode, SqlNode, WriteFormat,
+    FileFormat, FileSinkNode, FileSourceNode, IcebergSinkNode, IcebergSourceNode, LdscHsqConfig,
+    LdscHsqNode, LinearRegressionNode, SinkMode, SqlNode, WriteFormat,
 };
 
 /// `DataEngine` is the core object that implements the data analysis engine.
@@ -106,8 +106,8 @@ impl DataEngine {
     ///
     /// The spec is validated against the kind's JSON Schema and deserialized
     /// by the corresponding factory. This is the primary path for node
-    /// creation — all standard node kinds (source, sql, sink, ldsc,
-    /// linear_regression, mock, mr) are available.
+    /// creation — all standard node kinds (source_file, source_iceberg, sql,
+    /// sink_file, sink_iceberg, ldsc, linear_regression, mock, mr) are available.
     pub fn add_node_from_registry(
         &mut self,
         node_id: impl Into<String>,
@@ -357,8 +357,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "load",
-                "source",
-                serde_json::json!({"type": "file", "path": csv_path.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv_path.to_str().unwrap()}),
             )
             .unwrap();
         engine
@@ -401,8 +401,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "load",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
         // Note: DataFusion lowercases unquoted identifiers, so quote the
@@ -448,8 +448,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "load",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
         engine
@@ -490,15 +490,15 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src_a",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
         engine
             .add_node_from_registry(
                 "src_b",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -553,8 +553,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "vcf",
-                "source",
-                serde_json::json!({"type": "file", "path": vcf.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": vcf.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -579,8 +579,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "vcf",
-                "source",
-                serde_json::json!({"type": "file", "path": vcf.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": vcf.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -617,8 +617,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "vcf",
-                "source",
-                serde_json::json!({"type": "file", "path": vcf.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": vcf.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -700,15 +700,15 @@ mod tests {
         engine
             .add_node_from_registry(
                 "s1",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
         engine
             .add_node_from_registry(
                 "s2",
-                "source",
-                serde_json::json!({"type": "file", "path": iris.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
             )
             .unwrap();
         engine
@@ -854,7 +854,8 @@ mod tests {
         let kinds: Vec<&str> = nodes.iter().map(|n| n.kind.as_str()).collect();
         for expected in [
             "sql",
-            "source",
+            "source_file",
+            "source_iceberg",
             "sink_file",
             "sink_iceberg",
             "ldsc",
@@ -876,7 +877,8 @@ mod tests {
         let engine = DataEngine::builder().build();
         for kind in [
             "sql",
-            "source",
+            "source_file",
+            "source_iceberg",
             "sink_file",
             "sink_iceberg",
             "ldsc",
@@ -925,14 +927,14 @@ mod tests {
             "sql with empty spec should fail deserialization; got: {msg}"
         );
 
-        // source requires { type: "file"|"iceberg" }; passing junk fails.
+        // source_file requires { path }; omitting it fails.
         let err = engine
-            .add_node_from_registry("n", "source", serde_json::json!({"type": "ftp"}))
+            .add_node_from_registry("n", "source_file", serde_json::json!({"type": "ftp"}))
             .unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.to_lowercase().contains("unknown variant"),
-            "source with unknown type should fail deserialization; got: {msg}"
+            msg.contains("path") || msg.contains("missing field"),
+            "source_file without a `path` should fail deserialization; got: {msg}"
         );
     }
 
@@ -947,8 +949,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -976,8 +978,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -997,8 +999,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -1027,8 +1029,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -1056,8 +1058,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -1102,8 +1104,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
 
@@ -1162,8 +1164,8 @@ mod tests {
         engine
             .add_node_from_registry(
                 "src",
-                "source",
-                serde_json::json!({"type": "file", "path": csv.to_str().unwrap()}),
+                "source_file",
+                serde_json::json!({"path": csv.to_str().unwrap()}),
             )
             .unwrap();
         engine

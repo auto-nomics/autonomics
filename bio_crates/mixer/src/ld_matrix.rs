@@ -59,6 +59,52 @@ impl LdBlock {
         let end = self.row_ptr[i + 1] as usize;
         (&self.column_index[start..end], &self.r2[start..end])
     }
+
+    /// 把若干块对角的 CSR 子块拼成一个全局 CSR。
+    ///
+    /// 用于多染色体 LD 流式装配：每条染色体独立建一个本地 CSR（行号为
+    /// `0..n_tag`，但 `column_index` 里存的是**全局** snp index），然后由本方法
+    /// 按 `row_offset` 把各块的 `row_ptr` 平移到全局行号空间、把 `column_index`
+    /// /`r2` 顺序拼接。LD 不跨染色体，因此全局矩阵呈块对角，拼接即完整还原。
+    ///
+    /// - `blocks[k] = (row_offset_k, block_k)`：第 k 块占据全局行
+    ///   `[row_offset_k, row_offset_k + block_k.n_tag)`。
+    /// - 各块的 `column_index` 必须已经是全局 snp index（调用方在 fill 阶段写入
+    ///   全局 col，本方法不再做偏移）。
+    /// - `n_total` 为全局行数（应等于各块 `n_tag` 之和且 `row_offset` 连续无缝）。
+    pub fn merge_blocks(blocks: &[(usize, LdBlock)], n_total: usize) -> Self {
+        let total_nnz: usize = blocks.iter().map(|(_, b)| b.r2.len()).sum();
+        let mut row_ptr = vec![0u32; n_total + 1];
+        let mut column_index = Vec::with_capacity(total_nnz);
+        let mut r2 = Vec::with_capacity(total_nnz);
+
+        // nnz_before：在全局 col_idx/r2 中，当前块之前已累计写入多少个元素。
+        let mut nnz_before: u32 = 0;
+        for (row_offset, block) in blocks {
+            // 列下标 / r2 直接拼接（列下标调用方已写成全局）。
+            column_index.extend_from_slice(&block.column_index);
+            r2.extend_from_slice(&block.r2);
+            // 把本地 row_ptr 平移到全局：global[row_offset + i] = nnz_before + local[i]。
+            for i in 0..=block.n_tag {
+                row_ptr[row_offset + i] = nnz_before + block.row_ptr[i];
+            }
+            nnz_before += block.row_ptr[block.n_tag];
+        }
+
+        // 连续无缝时 row_ptr[n_total] 应等于总 nnz——作为不变量校验。
+        assert_eq!(
+            row_ptr[n_total] as usize, total_nnz,
+            "merge_blocks: row_ptr 末尾 ({}) 与总 nnz ({}) 不一致，blocks 可能未连续覆盖 [0, n_total)",
+            row_ptr[n_total], total_nnz,
+        );
+
+        LdBlock {
+            n_tag: n_total,
+            row_ptr,
+            column_index,
+            r2,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +160,58 @@ mod tests {
         for i in 0..5 {
             assert!(blk.row(i).0.is_empty());
         }
+    }
+
+    #[test]
+    fn merge_blocks_matches_concatenated_from_coo() {
+        // 两个染色体，全局 index 空间连续：
+        //   chr A: rows 0..3 (base 0)，triples 用全局 col
+        //   chr B: rows 3..6 (base 3)
+        // merge_blocks 的结果必须与“把两块 triples 拼成一份再 from_coo”完全一致。
+        let chr_a = vec![(0u32, 1u32, 0.8), (0, 2, 0.3), (1, 2, 0.6)];
+        let chr_b = vec![(3u32, 4u32, 0.5), (4, 5, 0.9)];
+
+        // (a) 参考实现：全局 from_coo。
+        let mut all = chr_a.clone();
+        all.extend(chr_b.iter().copied());
+        let reference = LdBlock::from_coo(&all, 6);
+
+        // (b) 流式实现：每染色体本地 from_coo（行号本地化，列号保持全局），再 merge。
+        let local_a: Vec<(u32, u32, f64)> =
+            chr_a.iter().map(|(t, s, r)| (*t - 0, *s, *r)).collect();
+        let local_b: Vec<(u32, u32, f64)> =
+            chr_b.iter().map(|(t, s, r)| (*t - 3, *s, *r)).collect();
+        let block_a = LdBlock::from_coo(&local_a, 3);
+        let block_b = LdBlock::from_coo(&local_b, 3);
+        let merged = LdBlock::merge_blocks(&[(0, block_a), (3, block_b)], 6);
+
+        // row_ptr 必须逐字节一致。
+        assert_eq!(merged.row_ptr, reference.row_ptr);
+        assert_eq!(merged.n_tag, reference.n_tag);
+
+        // 每行的邻居集合必须一致（行内顺序 from_coo 不保证，故按集合比较）。
+        for i in 0..6 {
+            let (m_c, m_r) = merged.row(i);
+            let (r_c, r_r) = reference.row(i);
+            assert_eq!(m_c.len(), r_c.len(), "row {i} 邻居数不一致");
+            // 配对后按 col 排序比较 (col, r2)
+            let mut m: Vec<(u32, f64)> = m_c.iter().copied().zip(m_r.iter().copied()).collect();
+            let mut r: Vec<(u32, f64)> = r_c.iter().copied().zip(r_r.iter().copied()).collect();
+            m.sort_by(|a, b| a.0.cmp(&b.0));
+            r.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(m, r, "row {i} 邻居集合不一致");
+        }
+    }
+
+    #[test]
+    fn merge_blocks_handles_empty_block() {
+        // 中间一条染色体无 LD（nnz=0 但占 2 行）。
+        let empty = LdBlock::from_coo(&[], 2);
+        let full = LdBlock::from_coo(&[(0u32, 1u32, 0.7)], 2);
+        let merged = LdBlock::merge_blocks(&[(0, empty), (2, full)], 4);
+        assert_eq!(merged.row_ptr, vec![0, 0, 0, 1, 1]);
+        let (c, r) = merged.row(2);
+        assert_eq!(c, &[1]);
+        assert_eq!(r, &[0.7]);
     }
 }

@@ -5,9 +5,6 @@
 //! （`af.eur_af`），组装成 [`mixer::data::ChromData`]，调用
 //! [`mixer::fit::fit1`] 拟合 spike-and-slab 模型，输出单行结果
 //! `DataFrame`（pi, sig2_beta, sig2_zero, h2, nc, nc_p9, aic, bic, loglike）。
-//!
-//! 当前为骨架：DAG 接口（端口/工厂/DagNode trait）已就位，数据湖读取与
-//! ChromData 组装逻辑用 `TODO` 插桩占位，待后续阶段填充。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +12,7 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use datalake::Datalake;
+use datafusion::prelude::SessionContext;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -23,7 +20,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
 };
 
 // =====================================================================
@@ -173,7 +170,7 @@ const UNIVARIATE_MIXER_NODE_KIND: &str = "univariate_mixer";
 #[derive(Clone)]
 pub struct UnivariateMixerNode {
     meta: NodePorts,
-    datalake: Arc<Datalake>,
+    ctx: SessionContext,
     spec: UnivariateMixerNodeSpec,
 }
 
@@ -184,10 +181,10 @@ fn port_layout() -> NodePorts {
 }
 
 impl UnivariateMixerNode {
-    pub fn new(datalake: Arc<Datalake>, spec: UnivariateMixerNodeSpec) -> Self {
+    pub fn new(ctx: SessionContext, spec: UnivariateMixerNodeSpec) -> Self {
         Self {
             meta: port_layout(),
-            datalake,
+            ctx,
             spec,
         }
     }
@@ -229,7 +226,8 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config: UnivariateMixerNodeSpec = serde_json::from_value(spec)?;
-        let node = UnivariateMixerNode::new(node_ctx.datalake, config);
+        let ctx = new_isolated_ctx(node_ctx.runtime_env, node_ctx.iceberg_catalog);
+        let node = UnivariateMixerNode::new(ctx, config);
         Ok(Box::new(node))
     }
 }
@@ -257,12 +255,8 @@ impl DagNode for UnivariateMixerNode {
             "no input DataFrame".into(),
         ))?;
 
-        // 1. 拿到注册了 Iceberg catalog 的 DataFusion 上下文。
-        let ctx = self
-            .datalake
-            .get_ctx()
-            .await
-            .map_err(UnivariateMixerError::from)?;
+        // 1. Build a fresh, isolated context per execution — no shared CatalogList,
+        let ctx = &self.ctx;
 
         // 2. 把上游 sumstats 注册为临时表。
         ctx.register_table("sumstats", input.data.clone().into_view())?;
@@ -271,13 +265,21 @@ impl DagNode for UnivariateMixerNode {
         //    所有染色体合并进一个全局 index 空间——因为 LD 不跨染色体，
         //    合并后的 LdBlock 自然呈块对角，cost 与逐染色体求和等价。
         //    universe = sumstats ∩ AF（同时有 z 和 h 的 SNP）。
+        //
+        //    内存策略：LD **不再**累积进全局 `ld_triples`（那会让全基因组三元组
+        //    常驻至循环结束）。改为对每条染色体就地把 ld_batches 流式转成本地
+        //    CSR（行号本地化、列号保持全局），临时量随迭代释放；循环末尾用
+        //    [`mixer::ld_matrix::LdBlock::merge_blocks`] 拼成全局块对角 CSR。
         let mut rsid_to_idx: HashMap<String, u32> = HashMap::new();
         let mut z_vec: Vec<f64> = Vec::new();
         let mut n_vec: Vec<f64> = Vec::new();
         let mut h_vec: Vec<f64> = Vec::new();
-        let mut ld_triples: Vec<(u32, u32, f64)> = Vec::new();
+        let mut chrom_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
 
         for chrom in &self.spec.chromosomes {
+            // 本染色体在全局 index 空间的起点（读 universe 前确定）。
+            let base = rsid_to_idx.len() as u32;
+
             // (a) AF ∩ sumstats → 每个 tag 的 alt_freq / Z / N
             let universe_sql = format!(
                 r#"SELECT a.id AS rsid, a.alt_freq AS af, s."{z}" AS zc, s."{n}" AS nc
@@ -310,31 +312,73 @@ impl DagNode for UnivariateMixerNode {
                 }
             }
 
-            // (b) LD 矩阵（COO），两端点必须在 universe 内，且 r² ≥ r2_min
+            // 本染色体 SNP 数（universe 读完即确定，行区间 [base, base+n_k) 封口）。
+            let n_k = rsid_to_idx.len() - base as usize;
+            if n_k == 0 {
+                continue;
+            }
+
+            // (b) LD 矩阵（COO）。collect 一次物化本染色体的全部 batch，随后在
+            //     内存里做 count→fill 两遍扫描——无重复查 Iceberg、无全局 triples
+            //     缓冲。两端点必须在 universe 内，且 r² ≥ r2_min。
             let ld_sql = format!(
                 "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom}",
                 chrom = chrom,
             );
             let ld_batches = ctx.sql(&ld_sql).await?.collect().await?;
+
+            // Pass 1（计数）：每行邻居数 → row_counts。
+            let mut row_counts = vec![0u32; n_k];
             for batch in &ld_batches {
-                let a_ids = col_as_string(batch, "id_a")?;
-                let b_ids = col_as_string(batch, "id_b")?;
-                let r2s = col_as_f64(batch, "unphased_r2")?;
-                for row in 0..batch.num_rows() {
-                    let a = a_ids.value(row);
-                    let b = b_ids.value(row);
-                    let r2 = r2s.value(row);
-                    if r2 < self.spec.r2_min {
-                        continue;
-                    }
-                    if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
-                        ld_triples.push((ta, tb, r2));
-                    }
-                }
+                for_each_ld_entry(
+                    batch,
+                    base,
+                    self.spec.r2_min,
+                    &rsid_to_idx,
+                    |local_tag, _, _| {
+                        row_counts[local_tag as usize] += 1;
+                    },
+                )?;
             }
+            // 前缀和 → row_ptr（本地行号空间）。
+            let mut row_ptr = vec![0u32; n_k + 1];
+            for i in 0..n_k {
+                row_ptr[i + 1] = row_ptr[i] + row_counts[i];
+            }
+            // Pass 2（填值）：按 row_ptr 游标散布 (global_snp, r2)。col_idx 直接存
+            //               全局 snp index，merge 时无需再偏移。
+            let nnz_k = row_ptr[n_k] as usize;
+            let mut column_index = vec![0u32; nnz_k];
+            let mut r2_store = vec![0.0f64; nnz_k];
+            let mut cursor = row_ptr.clone();
+            for batch in &ld_batches {
+                for_each_ld_entry(
+                    batch,
+                    base,
+                    self.spec.r2_min,
+                    &rsid_to_idx,
+                    |local_tag, global_snp, r2| {
+                        let p = cursor[local_tag as usize] as usize;
+                        column_index[p] = global_snp;
+                        r2_store[p] = r2;
+                        cursor[local_tag as usize] += 1;
+                    },
+                )?;
+            }
+
+            chrom_blocks.push((
+                base as usize,
+                mixer::ld_matrix::LdBlock {
+                    n_tag: n_k,
+                    row_ptr,
+                    column_index,
+                    r2: r2_store,
+                },
+            ));
+            // ld_batches、row_counts、cursor 在此随迭代结束释放。
         }
 
-        // 4. 组装 ChromData（权重全 1，LD 由 from_coo 构建）。
+        // 4. 组装 ChromData：LD 为各染色体块拼成的全局块对角 CSR，权重全 1。
         let n_snp = z_vec.len();
         if n_snp == 0 {
             return Err(UnivariateMixerError::InvalidInput(format!(
@@ -343,7 +387,19 @@ impl DagNode for UnivariateMixerNode {
             ))
             .into());
         }
-        let mut data = mixer::data::ChromData::new(z_vec, n_vec, h_vec, &ld_triples);
+        let ld = mixer::ld_matrix::LdBlock::merge_blocks(&chrom_blocks, n_snp);
+        // merge_blocks 已把数据复制进全局 ld，各染色体块与 rsid 映射至此冗余，
+        // fit1 前释放，避免拟合期间多占一份内存。
+        drop(chrom_blocks);
+        drop(rsid_to_idx);
+        let mut data = mixer::data::ChromData {
+            z: z_vec,
+            n: n_vec,
+            h: h_vec,
+            weights: vec![1.0; n_snp],
+            ld,
+            tags: (0..n_snp as u32).collect(),
+        };
 
         // 4b. 随机剪枝权重（生产级精度，与原版 `set_weights_randprune` bit-exact）。
         //     tag 集 = 全部 SNP（节点不做 extract）；权重覆盖到 data.weights。
@@ -407,6 +463,39 @@ fn col_as_f64<'a>(
     })
 }
 
+/// 对一条 LD batch 施加与原版一致过滤（`r2 ≥ r2_min` 且两端点都在 universe
+/// 内），对每个存活项调用 `emit(local_tag, global_snp, r2)`。
+///
+/// 计数遍与填值遍共用这一份代码路径，保证两遍看到完全相同的条目集合——
+/// `local_tag = global_tag - base`（本染色体行区间内的本地行号），
+/// `global_snp` 保留全局 index（直接写入 CSR 的 `column_index`）。
+fn for_each_ld_entry(
+    batch: &RecordBatch,
+    base: u32,
+    r2_min: f64,
+    rsid_to_idx: &HashMap<String, u32>,
+    mut emit: impl FnMut(u32, u32, f64),
+) -> Result<(), UnivariateMixerError> {
+    let a_ids = col_as_string(batch, "id_a")?;
+    let b_ids = col_as_string(batch, "id_b")?;
+    let r2s = col_as_f64(batch, "unphased_r2")?;
+    for row in 0..batch.num_rows() {
+        let r2 = r2s.value(row);
+        if r2 < r2_min {
+            continue;
+        }
+        let a = a_ids.value(row);
+        let b = b_ids.value(row);
+        if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
+            // ta 应属于本染色体区间 [base, base+n_k)；checked_sub 防御下溢。
+            if let Some(local_tag) = ta.checked_sub(base) {
+                emit(local_tag, tb, r2);
+            }
+        }
+    }
+    Ok(())
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -431,7 +520,7 @@ mod tests {
             randprune_r2: 0.1,
             seed: 123,
         };
-        let node = UnivariateMixerNode::new(Arc::new(Datalake::new()), spec);
+        let node = UnivariateMixerNode::new(SessionContext::new(), spec);
         assert_eq!(node.kind(), "univariate_mixer");
         // 一个输入端口（sumstats）、一个输出端口（fit1 结果）
         assert_eq!(node.ports().input_ports().len(), 1);
