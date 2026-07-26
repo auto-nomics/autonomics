@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 
 use rand::RngCore;
 
-use crate::ld_matrix::LdBlock;
+use crate::ld_matrix::{LdBlock, LdRandomAccess};
 
 /// MT19937-64，bit-compatible with `std::mt19937_64`。
 /// 复用 `rand_mt` crate（`Mt19937GenRand64::new(seed)` 与 std 单值播种逐位一致）。
@@ -81,14 +81,18 @@ impl Default for RandpruneConfig {
 
 /// 计算随机剪枝权重。
 ///
-/// - `ld`：稀疏 LD（CSR，按 snp index 索引）
+/// - `ld`：稀疏 LD（任意 [`LdRandomAccess`]——单块 CSR 或块对角视图均可）
 /// - `n_snp`：SNP 总数（unified index 空间）
 /// - `tags`：tag 子集（snp index），即参与剪枝的 SNP
 /// - `tag_defined`：每个 tag 是否有效（z/n 有限），长度 == tags.len()；None 视为全有效
 ///
 /// 返回 per-tag 权重（长度 == tags.len()），与原版 `weights_[tag_index]` 逐位一致。
-pub fn randprune_weights(
-    ld: &LdBlock,
+///
+/// 泛型于 [`LdRandomAccess`]：调用方可直接传入逐染色体的块对角视图
+///（[`crate::ld_matrix::BlockDiagonal`]），无需 `merge_blocks` 出全局 CSR——
+/// 峰值内存从 ~2× nnz 降到 ~1× nnz，结果与吃 merged CSR 逐位相同。
+pub fn randprune_weights<L: LdRandomAccess + ?Sized>(
+    ld: &L,
     n_snp: usize,
     tags: &[u32],
     tag_defined: Option<&[bool]>,
@@ -189,6 +193,37 @@ pub fn randprune_weights(
     weight
 }
 
+// =====================================================================
+// 逆 LD-score 加权（单趟流式友好，无需随机访问）
+// =====================================================================
+
+/// 从一个 tag 的 Σ r² 算逆 LD-score 权重：`1 / (1 + Σ r²)`。
+///
+/// "+1" 容纳变异自身，避免无 LD 邻居的 tag 除零/权重过大。这是 LDSC 风格的加权：
+/// LD 冗余越高（邻居多、r² 大）权重越小，与 randprune"独立代表数"同向但更便宜。
+///
+/// 抽成独立函数，让节点的**流式 COO 扫描**（边读边累加 Σ r²）和基于
+/// [`LdRandomAccess`] 的 [`ldscore_weights`] 共用同一个变换。
+pub fn ldscore_weight(sum_r2: f64) -> f64 {
+    1.0 / (1.0 + sum_r2)
+}
+
+/// 对每个 SNP 算逆 LD-score 权重（`1 / (1 + 该 SNP 邻居的 Σ r²)`）。
+///
+/// 与 [`randprune_weights`] 不同的加权方案：单趟扫每行求 Σ r² 即可，**不需要**
+/// 多轮随机访问，因此可由节点在流式读取 LD 时顺手累加、根本不建 CSR。
+///
+/// 返回 per-SNP 权重（长度 == `n_snp`）。
+pub fn ldscore_weights<L: LdRandomAccess + ?Sized>(ld: &L, n_snp: usize) -> Vec<f64> {
+    let mut w = vec![0.0; n_snp];
+    for (j, weight) in w.iter_mut().enumerate() {
+        let (_, r2s) = ld.row(j);
+        let sum_r2: f64 = r2s.iter().copied().sum();
+        *weight = ldscore_weight(sum_r2);
+    }
+    w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +273,41 @@ mod tests {
         let w1 = randprune_weights(&ld, 3, &tags, None, &RandpruneConfig::default());
         let w2 = randprune_weights(&ld, 3, &tags, None, &RandpruneConfig::default());
         assert_eq!(w1, w2, "同种子应逐位一致");
+    }
+
+    #[test]
+    fn ldscore_weights_basic() {
+        // tag0 有两邻居 Σr²=0.5+0.3=0.8 → 1/1.8；tag1 一邻居 0.4 → 1/1.4；tag2 无邻居 → 1/1
+        let triples = vec![(0u32, 1u32, 0.5), (0, 2, 0.3), (1, 2, 0.4)];
+        let ld = LdBlock::from_coo(&triples, 3);
+        let w = ldscore_weights(&ld, 3);
+        assert!((w[0] - 1.0 / 1.8).abs() < 1e-12);
+        assert!((w[1] - 1.0 / 1.4).abs() < 1e-12);
+        assert!((w[2] - 1.0).abs() < 1e-12);
+        // 全正、有限
+        for wi in &w {
+            assert!(*wi > 0.0 && wi.is_finite());
+        }
+    }
+
+    #[test]
+    fn randprune_on_block_diagonal_matches_merged() {
+        // Tier 1 核心断言：randprune 直接吃 BlockDiagonal 与吃 merged CSR 逐位一致。
+        use crate::ld_matrix::{BlockDiagonal, LdRandomAccess};
+        let chr_a = vec![(0u32, 1u32, 0.8), (0, 2, 0.3), (1, 2, 0.6)];
+        let chr_b = vec![(0u32, 1u32, 0.5), (1, 2, 0.9)];
+        let block_a = LdBlock::from_coo(&chr_a, 3);
+        let block_b = LdBlock::from_coo(&chr_b, 3);
+        let merged = LdBlock::merge_blocks(&[(0, block_a.clone()), (3, block_b.clone())], 6);
+        let view = BlockDiagonal::new(vec![(0, block_a), (3, block_b)]);
+
+        let tags: Vec<u32> = (0..6).collect();
+        let cfg = RandpruneConfig::default();
+        let w_merged = randprune_weights(&merged, 6, &tags, None, &cfg);
+        let w_view = randprune_weights(&view, 6, &tags, None, &cfg);
+        assert_eq!(
+            w_merged, w_view,
+            "BlockDiagonal 与 merged CSR 权重应逐位一致"
+        );
     }
 }

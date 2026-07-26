@@ -126,11 +126,7 @@ pub struct FileSourceNode {
 }
 
 impl FileSourceNode {
-    pub fn new(
-        path: String,
-        format: Option<FileFormat>,
-        runtime_env: Arc<RuntimeEnv>,
-    ) -> Self {
+    pub fn new(path: String, format: Option<FileFormat>, runtime_env: Arc<RuntimeEnv>) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
@@ -188,11 +184,7 @@ impl NodeFactory for FileSourceNodeFactory {
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSourceNode::new(
-            node_spec.path,
-            node_spec.format,
-            node_ctx.runtime_env,
-        );
+        let node = FileSourceNode::new(node_spec.path, node_spec.format, node_ctx.runtime_env);
         Ok(Box::new(node))
     }
 }

@@ -36,12 +36,8 @@ pub use mr::{MrNode, MrNodeFactory, MrNodeSpec, MrParameters};
 pub use sink_common::SinkMode;
 pub use sink_file::{FileSinkNode, FileSinkNodeFactory, FileSinkNodeSpec, WriteFormat};
 pub use sink_iceberg::{IcebergSinkNode, IcebergSinkNodeFactory, IcebergSinkNodeSpec};
-pub use source_file::{
-    FileFormat, FileSourceNode, FileSourceNodeFactory, FileSourceNodeSpec,
-};
-pub use source_iceberg::{
-    IcebergSourceNode, IcebergSourceNodeFactory, IcebergSourceNodeSpec,
-};
+pub use source_file::{FileFormat, FileSourceNode, FileSourceNodeFactory, FileSourceNodeSpec};
+pub use source_iceberg::{IcebergSourceNode, IcebergSourceNodeFactory, IcebergSourceNodeSpec};
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
 pub use univariate_mixer::{

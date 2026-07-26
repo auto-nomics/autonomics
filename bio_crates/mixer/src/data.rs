@@ -100,30 +100,54 @@ impl UnivariateSufficient {
     /// `ChromData`（含 `ld`/`n`/`h`）即可由调用方 `drop` 释放——这正是把"扫 LD"
     /// 从优化器的数万次评估降到 1 次的关键。
     pub fn from_chrom_data(data: &ChromData) -> Self {
-        let n_snp = data.n_snp();
+        Self::from_ld(
+            &data.ld,
+            &data.n,
+            &data.h,
+            data.z.clone(),
+            data.weights.clone(),
+            data.tags.clone(),
+        )
+    }
+
+    /// 从任意 [`LdRandomAccess`]（单块 CSR 或块对角视图）+ 原始向量预算充分统计量。
+    ///
+    /// 与 [`from_chrom_data`] 等价，但解耦了 LD 访问方式：调用方可直接传入
+    /// [`crate::ld_matrix::BlockDiagonal`]（逐染色体块），无需 `merge_blocks`。
+    pub fn from_ld<L: crate::ld_matrix::LdRandomAccess + ?Sized>(
+        ld: &L,
+        n: &[f64],
+        h: &[f64],
+        z: Vec<f64>,
+        weights: Vec<f64>,
+        tags: Vec<u32>,
+    ) -> Self {
+        let n_snp = z.len();
+        debug_assert_eq!(n.len(), n_snp);
+        debug_assert_eq!(h.len(), n_snp);
         let mut m1 = vec![0.0; n_snp];
         let mut m2 = vec![0.0; n_snp];
         for j in 0..n_snp {
-            let n_j = data.n[j];
-            let (cols, r2s) = data.ld.row(j);
+            let n_j = n[j];
+            let (cols, r2s) = ld.row(j);
             // 与 tag_moments 完全相同的 a2ij 定义，仅去掉参数因子 ebeta2/ebeta4。
             let mut s1 = 0.0;
             let mut s2 = 0.0;
             for (k, &s) in cols.iter().enumerate() {
-                let a2ij = n_j * data.h[s as usize] * r2s[k];
+                let a2ij = n_j * h[s as usize] * r2s[k];
                 s1 += a2ij;
                 s2 += a2ij * a2ij;
             }
             m1[j] = s1;
             m2[j] = s2;
         }
-        let totalhet = data.h.iter().sum();
+        let totalhet = h.iter().sum();
         Self {
-            z: data.z.clone(),
-            weights: data.weights.clone(),
+            z,
+            weights,
             m1,
             m2,
-            tags: data.tags.clone(),
+            tags,
             totalhet,
             n_snp,
         }

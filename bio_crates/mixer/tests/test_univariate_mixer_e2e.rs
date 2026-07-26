@@ -95,10 +95,7 @@ async fn e2e_fit1_on_iceberg_gwas() {
     let diffevo_repeats = env_usize("MIXER_E2E_DIFFEVO_REPEATS", 2);
     let window = pos_window();
 
-    assert!(
-        !chroms.is_empty(),
-        "MIXER_E2E_CHROMS 至少指定一条染色体"
-    );
+    assert!(!chroms.is_empty(), "MIXER_E2E_CHROMS 至少指定一条染色体");
 
     let dk = Arc::new(Datalake::new());
     let ctx: SessionContext = dk
@@ -241,7 +238,10 @@ async fn e2e_fit1_on_iceberg_gwas() {
     let suff = UnivariateSufficient::from_chrom_data(&data);
     let result = fit1(&suff, &cfg);
 
-    println!("=== MiXeR fit1 e2e（Iceberg GWAS = {gwas}）===", gwas = GWAS_TABLE);
+    println!(
+        "=== MiXeR fit1 e2e（Iceberg GWAS = {gwas}）===",
+        gwas = GWAS_TABLE
+    );
     println!(
         "染色体 {chroms:?}  窗口 {win:?}  r2_min={r2_min}  diffevo_repeats={dr}",
         chroms = chroms,
@@ -274,6 +274,10 @@ async fn e2e_fit1_on_iceberg_gwas() {
     assert!(result.params.pi > 0.0 && result.params.pi < 1.0, "pi 越界");
     assert!(result.params.sig2_beta > 0.0, "sig2_beta 非正");
     assert!(result.params.sig2_zero > 0.0, "sig2_zero 非正");
-    assert!(result.h2.is_finite() && result.h2 >= 0.0, "h2 异常: {}", result.h2);
+    assert!(
+        result.h2.is_finite() && result.h2 >= 0.0,
+        "h2 异常: {}",
+        result.h2
+    );
     assert!(result.aic.is_finite(), "AIC 非有限");
 }

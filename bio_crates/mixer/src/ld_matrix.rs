@@ -59,7 +59,81 @@ impl LdBlock {
         let end = self.row_ptr[i + 1] as usize;
         (&self.column_index[start..end], &self.r2[start..end])
     }
+}
 
+/// 按 tag 行号随机访问 LD 邻居的统一接口。
+///
+/// `LdBlock`（单块 CSR）和 [`BlockDiagonal`]（多染色体块对角视图）都实现它，
+/// 让 `randprune_weights` / 充分统计量构建等"需要随机访问某个 tag 邻居"的逻辑
+/// 可以**不 merge 出全局 CSR**，直接在逐染色体块上工作——省掉 `merge_blocks`
+/// 那次整份复制（峰值 ~2× nnz → ~1× nnz）。
+pub trait LdRandomAccess {
+    /// 全局行数（= 全局 SNP 数）。
+    fn n_tag(&self) -> usize;
+    /// 取 tag `i` 的全部邻居 `(snp_idx, r2)` 切片。`i` 必须在 `[0, n_tag)`。
+    fn row(&self, i: usize) -> (&[u32], &[f64]);
+}
+
+impl LdRandomAccess for LdBlock {
+    fn n_tag(&self) -> usize {
+        self.n_tag
+    }
+    fn row(&self, i: usize) -> (&[u32], &[f64]) {
+        LdBlock::row(self, i)
+    }
+}
+
+/// 多染色体块对角 LD 视图：把若干**连续**的本地 CSR 块当成一个全局 CSR 来随机访问。
+///
+/// 各块占据全局行 `[offset_k, offset_k + block_k.n_tag)`，且必须首尾相接覆盖
+/// `[0, n_total)`。`row(i)` 用二分定位 i 所属块、转成本地行号后委托给该块。
+///
+/// 因为 LD 不跨染色体，块对角视图的 `row(i)` 与"把所有块 merge 成一张全局 CSR
+/// 后的 `row(i)`"逐字节一致——但**不需要那次整份复制**。用于让 randprune 直接吃
+/// `chrom_blocks`（`Vec<(offset, LdBlock)>`）而非 `merge_blocks` 的产物。
+#[derive(Default, Debug, Clone)]
+pub struct BlockDiagonal {
+    /// 各块起始全局行号（升序）。`offsets.len() == blocks.len()`。
+    offsets: Vec<usize>,
+    /// 各块的本地 CSR（行号 0..n_tag）。
+    blocks: Vec<LdBlock>,
+    /// 全局行数（= 末块 offset + 末块 n_tag）。
+    n_total: usize,
+}
+
+impl BlockDiagonal {
+    /// 从 `(offset, block)` 列表构建。要求块覆盖 `[0, n_total)` 无缝；本方法据此推断
+    /// `n_total`，不做严格校验（调用方负责连续性，与 `merge_blocks` 同前）。
+    pub fn new(blocks: Vec<(usize, LdBlock)>) -> Self {
+        let n_total = blocks.last().map(|(off, b)| off + b.n_tag).unwrap_or(0);
+        let offsets = blocks.iter().map(|(off, _)| *off).collect();
+        Self {
+            offsets,
+            blocks: blocks.into_iter().map(|(_, b)| b).collect(),
+            n_total,
+        }
+    }
+}
+
+impl LdRandomAccess for BlockDiagonal {
+    fn n_tag(&self) -> usize {
+        self.n_total
+    }
+
+    fn row(&self, i: usize) -> (&[u32], &[f64]) {
+        // 找最大的 offset <= i（i 所属块）。
+        let k = match self.offsets.binary_search_by(|o| o.cmp(&i)) {
+            // i 恰为某块起点
+            Ok(k) => k,
+            // i 落在 offsets[k-1] .. offsets[k] 之间 → 属于块 k-1
+            Err(k) => k.saturating_sub(1),
+        };
+        let local = i - self.offsets[k];
+        self.blocks[k].row(local)
+    }
+}
+
+impl LdBlock {
     /// 把若干块对角的 CSR 子块拼成一个全局 CSR。
     ///
     /// 用于多染色体 LD 流式装配：每条染色体独立建一个本地 CSR（行号为
@@ -169,7 +243,7 @@ mod tests {
         //   chr B: rows 3..6 (base 3)
         // merge_blocks 的结果必须与“把两块 triples 拼成一份再 from_coo”完全一致。
         let chr_a = vec![(0u32, 1u32, 0.8), (0, 2, 0.3), (1, 2, 0.6)];
-        let chr_b = vec![(3u32, 4u32, 0.5), (4, 5, 0.9)];
+        let chr_b = [(3u32, 4u32, 0.5), (4, 5, 0.9)];
 
         // (a) 参考实现：全局 from_coo。
         let mut all = chr_a.clone();
@@ -177,8 +251,7 @@ mod tests {
         let reference = LdBlock::from_coo(&all, 6);
 
         // (b) 流式实现：每染色体本地 from_coo（行号本地化，列号保持全局），再 merge。
-        let local_a: Vec<(u32, u32, f64)> =
-            chr_a.iter().map(|(t, s, r)| (*t - 0, *s, *r)).collect();
+        let local_a: Vec<(u32, u32, f64)> = chr_a.iter().map(|(t, s, r)| (*t, *s, *r)).collect();
         let local_b: Vec<(u32, u32, f64)> =
             chr_b.iter().map(|(t, s, r)| (*t - 3, *s, *r)).collect();
         let block_a = LdBlock::from_coo(&local_a, 3);
@@ -197,8 +270,8 @@ mod tests {
             // 配对后按 col 排序比较 (col, r2)
             let mut m: Vec<(u32, f64)> = m_c.iter().copied().zip(m_r.iter().copied()).collect();
             let mut r: Vec<(u32, f64)> = r_c.iter().copied().zip(r_r.iter().copied()).collect();
-            m.sort_by(|a, b| a.0.cmp(&b.0));
-            r.sort_by(|a, b| a.0.cmp(&b.0));
+            m.sort_by_key(|a| a.0);
+            r.sort_by_key(|a| a.0);
             assert_eq!(m, r, "row {i} 邻居集合不一致");
         }
     }
@@ -213,5 +286,29 @@ mod tests {
         let (c, r) = merged.row(2);
         assert_eq!(c, &[1]);
         assert_eq!(r, &[0.7]);
+    }
+
+    #[test]
+    fn block_diagonal_matches_merged_csr() {
+        // 块对角视图的 row(i) 必须与 merge_blocks 后的全局 CSR 逐项一致——
+        // 这保证 randprune 直接吃 BlockDiagonal 与吃 merged CSR 结果完全相同。
+        // 约定（与节点一致）：块的行号本地化（0..n_tag），列号保持全局。
+        use crate::ld_matrix::LdRandomAccess;
+        // chr A 占全局 snp 0..3，chr B 占 3..6。LD 不跨染色体。
+        //   chr A: (0,1,0.8) (0,2,0.3) (1,2,0.6)
+        //   chr B: (3,4,0.5) (4,5,0.9)   ← 全局；本地行号 = 全局 − offset
+        let block_a = LdBlock::from_coo(&[(0u32, 1u32, 0.8), (0, 2, 0.3), (1, 2, 0.6)], 3);
+        let block_b = LdBlock::from_coo(&[(0u32, 4u32, 0.5), (1, 5, 0.9)], 3);
+
+        let merged = LdBlock::merge_blocks(&[(0, block_a.clone()), (3, block_b.clone())], 6);
+        let view = crate::ld_matrix::BlockDiagonal::new(vec![(0, block_a), (3, block_b)]);
+        assert_eq!(view.n_tag(), 6);
+
+        for i in 0..6 {
+            let (mc, mr) = merged.row(i);
+            let (vc, vr) = view.row(i);
+            assert_eq!(mc, vc, "row {i} col 不一致");
+            assert_eq!(mr, vr, "row {i} r2 不一致");
+        }
     }
 }

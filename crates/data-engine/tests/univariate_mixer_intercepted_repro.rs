@@ -16,7 +16,9 @@ use std::time::Instant;
 use datalake::Datalake;
 
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
+use data_engine::nodes::univariate_mixer::{
+    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+};
 
 #[tokio::test]
 #[ignore]
@@ -30,19 +32,31 @@ async fn node_runs_on_intercepted_nochrom_input() {
         .await
         .expect("read intercepted table");
     let n_in = sumstats.clone().count().await.expect("count");
-    println!("intercepted input: {n_in} rows, schema = {:?}", sumstats.schema().fields().iter().map(|f| f.name().as_str()).collect::<Vec<_>>());
+    println!(
+        "intercepted input: {n_in} rows, schema = {:?}",
+        sumstats
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>()
+    );
 
     let spec = UnivariateMixerNodeSpec {
         chromosomes: vec![22],
         diffevo_repeats: 2,
         r2_min: 0.05,
+        weighting: WeightingMode::Randprune, // preserve prior randprune behavior
         randprune_n: 64,
         randprune_r2: 0.1,
         seed: 123,
     };
     let mut node = UnivariateMixerNode::new(ctx.clone(), spec);
 
-    let input = NodeInput { port: 0u8, data: sumstats };
+    let input = NodeInput {
+        port: 0u8,
+        data: sumstats,
+    };
     let started = Instant::now();
     let outputs = node.execute(&[input]).await;
     let elapsed = started.elapsed().as_secs_f64();

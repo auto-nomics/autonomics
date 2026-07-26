@@ -25,11 +25,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use datalake::Datalake;
 use datafusion::prelude::SessionContext;
+use datalake::Datalake;
 
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
+use data_engine::nodes::univariate_mixer::{
+    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+};
 
 /// Base SELECT computing Z = β/SE and N = sample_size from chr22 GWAS.
 /// `{chrom_proj}` is either `` (omit chrom) or `chrom,` (include it).
@@ -50,6 +52,7 @@ async fn run_node(
         chromosomes: vec![22],
         diffevo_repeats: 2, // speed: this is a repro, not a production fit
         r2_min: 0.05,
+        weighting: WeightingMode::Randprune, // preserve prior randprune behavior
         randprune_n: 64,
         randprune_r2: 0.1,
         seed: 123,
@@ -72,7 +75,10 @@ async fn run_node(
 
     let started = Instant::now();
     let outputs = node.execute(&[input]).await.map_err(|e| {
-        format!("execute failed after {:.1}s: {e}", started.elapsed().as_secs_f64())
+        format!(
+            "execute failed after {:.1}s: {e}",
+            started.elapsed().as_secs_f64()
+        )
     })?;
     let elapsed = started.elapsed().as_secs_f64();
 
@@ -80,7 +86,10 @@ async fn run_node(
         .get(&0u8)
         .cloned()
         .ok_or_else(|| "no output port 0".to_string())?;
-    let batches = out_df.collect().await.map_err(|e| format!("collect: {e}"))?;
+    let batches = out_df
+        .collect()
+        .await
+        .map_err(|e| format!("collect: {e}"))?;
 
     let mut rows = Vec::new();
     for b in &batches {

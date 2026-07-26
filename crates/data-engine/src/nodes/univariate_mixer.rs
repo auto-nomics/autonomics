@@ -115,6 +115,22 @@ fn build_result_batch(r: &mixer::result::FitResult) -> Result<RecordBatch, Univa
 // Config / Spec
 // =====================================================================
 
+/// cost 加权方案。
+///
+/// - `LdScore`：逆 LD-score 加权 `1/(1+Σr²)`。单趟顺序扫 LD 即可，**不需要 CSR**，
+///   节点按染色体流式装配（读一条、累加 m1/m2+Σr²、丢一条），峰值内存 = 单条
+///   染色体的一个 LD batch。与原版 randprune 统计同向但**不逐位一致**。
+/// - `Randprune`：原版随机剪枝（多轮贪心独立集）。需要按 tag 随机访问 LD，
+///   故仍建逐染色体 CSR，但通过块对角视图 [`mixer::ld_matrix::BlockDiagonal`]
+///   直接喂给 randprune，**不再 `merge_blocks`**（峰值 ~2× nnz → ~1× nnz）。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WeightingMode {
+    #[default]
+    LdScore,
+    Randprune,
+}
+
 /// Univariate MiXeR 节点配置（DAG spec）。
 ///
 /// 选择要参与拟合的染色体、数据湖表名，以及拟合超参数。
@@ -130,13 +146,16 @@ pub struct UnivariateMixerNodeSpec {
     /// r² 阈值：低于此值的 LD 对忽略（首版固定 sig2_zeroL=0，此字段预留）。
     #[serde(default = "default_r2_min")]
     pub r2_min: f64,
-    /// 随机剪枝轮数（原版 `--randprune-n`，默认 64）。
+    /// cost 加权方案（默认 `LdScore`，内存友好的流式路径）。
+    #[serde(default)]
+    pub weighting: WeightingMode,
+    /// 随机剪枝轮数（原版 `--randprune-n`，默认 64；仅 `Randprune` 模式使用）。
     #[serde(default = "default_randprune_n")]
     pub randprune_n: u32,
-    /// 随机剪枝 r² 阈值（原版 `--randprune-r2`，默认 0.1）。
+    /// 随机剪枝 r² 阈值（原版 `--randprune-r2`，默认 0.1；仅 `Randprune` 模式使用）。
     #[serde(default = "default_randprune_r2")]
     pub randprune_r2: f64,
-    /// 随机种子（原版 `--seed`，默认 123）。
+    /// 随机种子（原版 `--seed`，默认 123；仅 `Randprune` 模式使用）。
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
@@ -261,26 +280,33 @@ impl DagNode for UnivariateMixerNode {
         // 2. 把上游 sumstats 注册为临时表。
         ctx.register_table("sumstats", input.data.clone().into_view())?;
 
-        // 3. 逐染色体读 AF + sumstats（join 出每个 tag 的 z/n/h），再读 LD。
-        //    所有染色体合并进一个全局 index 空间——因为 LD 不跨染色体，
-        //    合并后的 LdBlock 自然呈块对角，cost 与逐染色体求和等价。
-        //    universe = sumstats ∩ AF（同时有 z 和 h 的 SNP）。
+        // 3. 逐染色体读 AF + sumstats（join 出每个 SNP 的 z/n/h），再读 LD。
+        //    所有 SNP 合并进一个连续全局 index 空间；因 LD 不跨染色体，块对角。
+        //    universe = sumstats ∩ AF。
         //
-        //    内存策略：LD **不再**累积进全局 `ld_triples`（那会让全基因组三元组
-        //    常驻至循环结束）。改为对每条染色体就地把 ld_batches 流式转成本地
-        //    CSR（行号本地化、列号保持全局），临时量随迭代释放；循环末尾用
-        //    [`mixer::ld_matrix::LdBlock::merge_blocks`] 拼成全局块对角 CSR。
+        //    两种加权方案走不同的 LD 处理路径：
+        //    - LdScore（默认，流式）：边读 COO 边把 m1/m2/Σr² 累加进 per-SNP 向量，
+        //      **完全不建 CSR**——单条染色体的 LD batch 用完即随迭代释放，峰值 = 单 batch。
+        //    - Randprune：每条染色体建本地 CSR，循环末尾包成 [`BlockDiagonal`] 视图
+        //      喂给 randprune，**不再 `merge_blocks`**（省掉 ~2× nnz 的整份复制）。
         let mut rsid_to_idx: HashMap<String, u32> = HashMap::new();
         let mut z_vec: Vec<f64> = Vec::new();
         let mut n_vec: Vec<f64> = Vec::new();
         let mut h_vec: Vec<f64> = Vec::new();
+        // LdScore 流式累加器（仅 LdScore 模式填充）。
+        let mut m1_vec: Vec<f64> = Vec::new();
+        let mut m2_vec: Vec<f64> = Vec::new();
+        let mut sum_r2_vec: Vec<f64> = Vec::new();
+        // Randprune 逐染色体 CSR 块（仅 Randprune 模式填充）。
         let mut chrom_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
+
+        let is_ldscore = self.spec.weighting == WeightingMode::LdScore;
 
         for chrom in &self.spec.chromosomes {
             // 本染色体在全局 index 空间的起点（读 universe 前确定）。
             let base = rsid_to_idx.len() as u32;
 
-            // (a) AF ∩ sumstats → 每个 tag 的 alt_freq / Z / N
+            // (a) AF ∩ sumstats → 每个 SNP 的 alt_freq / Z / N
             let universe_sql = format!(
                 r#"SELECT a.id AS rsid, a.alt_freq AS af, s."{z}" AS zc, s."{n}" AS nc
                    FROM iceberg.af.eur_af AS a
@@ -309,6 +335,12 @@ impl DagNode for UnivariateMixerNode {
                     z_vec.push(zs.value(row));
                     n_vec.push(ns.value(row));
                     h_vec.push(2.0 * f * (1.0 - f)); // 杂合度
+                    if is_ldscore {
+                        // 与 z/n/h 同步分配，保证下标对齐。
+                        m1_vec.push(0.0);
+                        m2_vec.push(0.0);
+                        sum_r2_vec.push(0.0);
+                    }
                 }
             }
 
@@ -318,67 +350,85 @@ impl DagNode for UnivariateMixerNode {
                 continue;
             }
 
-            // (b) LD 矩阵（COO）。collect 一次物化本染色体的全部 batch，随后在
-            //     内存里做 count→fill 两遍扫描——无重复查 Iceberg、无全局 triples
-            //     缓冲。两端点必须在 universe 内，且 r² ≥ r2_min。
+            // (b) LD 矩阵（COO）。collect 一次物化本染色体的全部 batch。
+            //     两端点必须在 universe 内，且 r² ≥ r2_min（由 for_each_ld_entry 过滤）。
             let ld_sql = format!(
                 "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom}",
                 chrom = chrom,
             );
             let ld_batches = ctx.sql(&ld_sql).await?.collect().await?;
 
-            // Pass 1（计数）：每行邻居数 → row_counts。
-            let mut row_counts = vec![0u32; n_k];
-            for batch in &ld_batches {
-                for_each_ld_entry(
-                    batch,
-                    base,
-                    self.spec.r2_min,
-                    &rsid_to_idx,
-                    |local_tag, _, _| {
-                        row_counts[local_tag as usize] += 1;
+            if is_ldscore {
+                // 流式：单趟散布。每个存活三元组 (tag=a, snp=b, r²) 折进：
+                //   m1[a] += n_a·h_b·r²， m2[a] += (n_a·h_b·r²)²， sum_r2[a] += r²
+                // 与 tag_moments / CSR 行扫描的求和顺序一致（同批同序遍历）→ m1/m2
+                // 与原"建 CSR 再 from_chrom_data"逐位等价；仅权重改用逆 LD-score。
+                for batch in &ld_batches {
+                    for_each_ld_entry(
+                        batch,
+                        base,
+                        self.spec.r2_min,
+                        &rsid_to_idx,
+                        |local_tag, global_snp, r2| {
+                            let gtag = base as usize + local_tag as usize;
+                            let a2ij = n_vec[gtag] * h_vec[global_snp as usize] * r2;
+                            m1_vec[gtag] += a2ij;
+                            m2_vec[gtag] += a2ij * a2ij;
+                            sum_r2_vec[gtag] += r2;
+                        },
+                    )?;
+                }
+            } else {
+                // Randprune：count→fill 两遍建本地 CSR（行号本地、列号保持全局）。
+                let mut row_counts = vec![0u32; n_k];
+                for batch in &ld_batches {
+                    for_each_ld_entry(
+                        batch,
+                        base,
+                        self.spec.r2_min,
+                        &rsid_to_idx,
+                        |local_tag, _, _| {
+                            row_counts[local_tag as usize] += 1;
+                        },
+                    )?;
+                }
+                let mut row_ptr = vec![0u32; n_k + 1];
+                for i in 0..n_k {
+                    row_ptr[i + 1] = row_ptr[i] + row_counts[i];
+                }
+                let nnz_k = row_ptr[n_k] as usize;
+                let mut column_index = vec![0u32; nnz_k];
+                let mut r2_store = vec![0.0f64; nnz_k];
+                let mut cursor = row_ptr.clone();
+                for batch in &ld_batches {
+                    for_each_ld_entry(
+                        batch,
+                        base,
+                        self.spec.r2_min,
+                        &rsid_to_idx,
+                        |local_tag, global_snp, r2| {
+                            let p = cursor[local_tag as usize] as usize;
+                            column_index[p] = global_snp;
+                            r2_store[p] = r2;
+                            cursor[local_tag as usize] += 1;
+                        },
+                    )?;
+                }
+                chrom_blocks.push((
+                    base as usize,
+                    mixer::ld_matrix::LdBlock {
+                        n_tag: n_k,
+                        row_ptr,
+                        column_index,
+                        r2: r2_store,
                     },
-                )?;
+                ));
             }
-            // 前缀和 → row_ptr（本地行号空间）。
-            let mut row_ptr = vec![0u32; n_k + 1];
-            for i in 0..n_k {
-                row_ptr[i + 1] = row_ptr[i] + row_counts[i];
-            }
-            // Pass 2（填值）：按 row_ptr 游标散布 (global_snp, r2)。col_idx 直接存
-            //               全局 snp index，merge 时无需再偏移。
-            let nnz_k = row_ptr[n_k] as usize;
-            let mut column_index = vec![0u32; nnz_k];
-            let mut r2_store = vec![0.0f64; nnz_k];
-            let mut cursor = row_ptr.clone();
-            for batch in &ld_batches {
-                for_each_ld_entry(
-                    batch,
-                    base,
-                    self.spec.r2_min,
-                    &rsid_to_idx,
-                    |local_tag, global_snp, r2| {
-                        let p = cursor[local_tag as usize] as usize;
-                        column_index[p] = global_snp;
-                        r2_store[p] = r2;
-                        cursor[local_tag as usize] += 1;
-                    },
-                )?;
-            }
-
-            chrom_blocks.push((
-                base as usize,
-                mixer::ld_matrix::LdBlock {
-                    n_tag: n_k,
-                    row_ptr,
-                    column_index,
-                    r2: r2_store,
-                },
-            ));
-            // ld_batches、row_counts、cursor 在此随迭代结束释放。
+            // ld_batches 及各本地临时量随迭代结束释放。
         }
 
-        // 4. 组装 ChromData：LD 为各染色体块拼成的全局块对角 CSR，权重全 1。
+        // 4. 按加权方案组装充分统计量。两条路径都把 LD（及 n/h）折进 O(n_snp) 的
+        //    UnivariateSufficient 后立即释放原始大对象，进入 fit1 时只剩充分统计量。
         let n_snp = z_vec.len();
         if n_snp == 0 {
             return Err(UnivariateMixerError::InvalidInput(format!(
@@ -387,38 +437,46 @@ impl DagNode for UnivariateMixerNode {
             ))
             .into());
         }
-        let ld = mixer::ld_matrix::LdBlock::merge_blocks(&chrom_blocks, n_snp);
-        // merge_blocks 已把数据复制进全局 ld，各染色体块与 rsid 映射至此冗余，
-        // fit1 前释放，避免拟合期间多占一份内存。
-        drop(chrom_blocks);
-        drop(rsid_to_idx);
-        let mut data = mixer::data::ChromData {
-            z: z_vec,
-            n: n_vec,
-            h: h_vec,
-            weights: vec![1.0; n_snp],
-            ld,
-            tags: (0..n_snp as u32).collect(),
-        };
-
-        // 4b. 随机剪枝权重（生产级精度，与原版 `set_weights_randprune` bit-exact）。
-        //     tag 集 = 全部 SNP（节点不做 extract）；权重覆盖到 data.weights。
         let tags: Vec<u32> = (0..n_snp as u32).collect();
-        let rp_cfg = mixer::weights::RandpruneConfig {
-            n: self.spec.randprune_n,
-            r2_threshold: self.spec.randprune_r2,
-            use_w_ld: false,
-            seed: self.spec.seed,
-        };
-        data.weights = mixer::weights::randprune_weights(&data.ld, n_snp, &tags, None, &rp_cfg);
+        let totalhet: f64 = h_vec.iter().sum();
 
-        // 4c. 压缩成充分统计量（m1/m2）：单趟扫全局块对角 CSR，把每个 SNP 的
-        //     LD 邻居求和折进两个标量。此后 cost 求值 O(1)/tag，不再需要 LD。
-        //     randprune 已完成（它需要 CSR + 全局 tag 空间，无法流式），故此处
-        //     可把整份 ChromData（含 ld/n/h，O(nnz)）释放，只留 O(n_snp) 的
-        //     充分统计量进入漫长的拟合阶段（DE×repeats → NM 的数万次评估）。
-        let suff = mixer::data::UnivariateSufficient::from_chrom_data(&data);
-        drop(data);
+        let suff = if is_ldscore {
+            // LdScore：LD 已流式折进 m1/m2，权重 = 1/(1+Σr²)。n/h 至此不再需要。
+            let weights: Vec<f64> = sum_r2_vec
+                .iter()
+                .map(|&s| mixer::weights::ldscore_weight(s))
+                .collect();
+            drop(n_vec);
+            drop(h_vec);
+            drop(sum_r2_vec);
+            mixer::data::UnivariateSufficient {
+                z: z_vec,
+                weights,
+                m1: m1_vec,
+                m2: m2_vec,
+                tags,
+                totalhet,
+                n_snp,
+            }
+        } else {
+            // Randprune：BlockDiagonal 视图直接喂 randprune（不 merge），再 from_ld 折 m1/m2。
+            let view = mixer::ld_matrix::BlockDiagonal::new(std::mem::take(&mut chrom_blocks));
+            let rp_cfg = mixer::weights::RandpruneConfig {
+                n: self.spec.randprune_n,
+                r2_threshold: self.spec.randprune_r2,
+                use_w_ld: false,
+                seed: self.spec.seed,
+            };
+            let weights = mixer::weights::randprune_weights(&view, n_snp, &tags, None, &rp_cfg);
+            let suff = mixer::data::UnivariateSufficient::from_ld(
+                &view, &n_vec, &h_vec, z_vec, weights, tags,
+            );
+            drop(view);
+            drop(n_vec);
+            drop(h_vec);
+            suff
+        };
+        drop(rsid_to_idx);
 
         // 5. 跑 fit1（DE×repeats → Nelder-Mead 精修），只读充分统计量。
         let cfg = mixer::fit::FitConfig {
@@ -524,6 +582,7 @@ mod tests {
             chromosomes: vec![21, 22],
             diffevo_repeats: 5,
             r2_min: 0.05,
+            weighting: WeightingMode::LdScore,
             randprune_n: 64,
             randprune_r2: 0.1,
             seed: 123,

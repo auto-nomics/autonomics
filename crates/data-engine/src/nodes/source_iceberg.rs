@@ -8,11 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::{
-    catalog::CatalogProvider,
-    common::HashMap,
-    execution::runtime_env::RuntimeEnv,
-};
+use datafusion::{catalog::CatalogProvider, common::HashMap, execution::runtime_env::RuntimeEnv};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -92,7 +88,11 @@ impl NodeFactory for IcebergSourceNodeFactory {
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: IcebergSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = IcebergSourceNode::new(node_spec.ident, node_ctx.runtime_env, node_ctx.iceberg_catalog);
+        let node = IcebergSourceNode::new(
+            node_spec.ident,
+            node_ctx.runtime_env,
+            node_ctx.iceberg_catalog,
+        );
         Ok(Box::new(node))
     }
 }
@@ -138,8 +138,11 @@ mod tests {
     async fn test_load_from_iceberg() {
         let ctx = Datalake::default().get_ctx().await.unwrap();
         let provider = Datalake::default().get_provider().await.unwrap();
-        let mut node =
-            IcebergSourceNode::new("gwas.gwas_study".to_string(), ctx.runtime_env(), Some(Arc::new(provider)));
+        let mut node = IcebergSourceNode::new(
+            "gwas.gwas_study".to_string(),
+            ctx.runtime_env(),
+            Some(Arc::new(provider)),
+        );
         let res = node.execute(&[]).await.unwrap();
         let df = res.get(&0).unwrap().clone();
         df.limit(0, Some(10)).unwrap().show().await.unwrap();

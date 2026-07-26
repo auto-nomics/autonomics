@@ -17,7 +17,9 @@ use std::sync::Arc;
 use datalake::Datalake;
 
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
+use data_engine::nodes::univariate_mixer::{
+    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+};
 
 #[tokio::test]
 #[ignore]
@@ -46,6 +48,7 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
         chromosomes: vec![22],
         diffevo_repeats: 2,
         r2_min: 0.05,
+        weighting: WeightingMode::LdScore,
         randprune_n: 64,
         randprune_r2: 0.1,
         seed: 123,
@@ -60,10 +63,7 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
     let outputs = node.execute(&[input]).await.expect("节点 execute 失败");
 
     // 4. 收集输出（单行 fit1 结果）。
-    let out_df = outputs
-        .get(&0u8)
-        .cloned()
-        .expect("无输出端口 0 数据");
+    let out_df = outputs.get(&0u8).cloned().expect("无输出端口 0 数据");
     let batches = out_df.collect().await.expect("collect 输出");
     let mut total_rows = 0usize;
     for b in &batches {
