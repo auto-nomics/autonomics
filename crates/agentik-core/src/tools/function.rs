@@ -1,41 +1,184 @@
+use std::sync::{Arc, Mutex};
+
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::watch;
 
 use super::error::ToolError;
 use agentik_sdk::types::{ToolDefinition, ToolInput, ToolResult};
+
+/// One structured progress entry a tool pushes to its task's live-output
+/// channel. Unlike a flat text line, this carries machine-readable fields so
+/// `view_task_status` can return JSON the agent parses directly (e.g. a node's
+/// `elapsed_ms` or a `current/total` progress pair).
+///
+/// `kind` is a free-form category chosen by the tool (e.g. `"status"`,
+/// `"progress"`, `"log"`, `"finished"`); every other field is optional and
+/// only serialized when set, so a record stays compact.
+#[derive(Clone, Debug, Serialize)]
+pub struct ProgressRecord {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+}
+
+impl ProgressRecord {
+    /// Start a record of `kind`; set further fields via the builders below.
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            label: None,
+            status: None,
+            message: None,
+            level: None,
+            current: None,
+            total: None,
+            elapsed_ms: None,
+        }
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+    pub fn status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+    pub fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+    pub fn level(mut self, level: impl Into<String>) -> Self {
+        self.level = Some(level.into());
+        self
+    }
+    pub fn current(mut self, current: u64) -> Self {
+        self.current = Some(current);
+        self
+    }
+    pub fn total(mut self, total: u64) -> Self {
+        self.total = Some(total);
+        self
+    }
+    pub fn elapsed_ms(mut self, elapsed_ms: u64) -> Self {
+        self.elapsed_ms = Some(elapsed_ms);
+        self
+    }
+}
+
+/// Hard ceiling on retained progress records per task. Pushes beyond this
+/// evict the oldest record, bounding memory and — combined with the `limit`
+/// parameter on `view_task_status` — the context cost of polling a
+/// long-running task.
+pub const MAX_PROGRESS_RECORDS: usize = 1000;
+
+/// Append-only, cap-bounded log of [`ProgressRecord`]s. Shared between the
+/// executing tool (writer, via [`ToolContext::emit`]) and the task entry
+/// (reader, via [`TaskEntry::output`](super::task_runtime::TaskEntry::output)).
+///
+/// When [`MAX_PROGRESS_RECORDS`] is reached the oldest record is evicted and
+/// `dropped` is incremented, so an observer can tell it is seeing a tail
+/// rather than the full history.
+pub struct ProgressLog {
+    records: Vec<ProgressRecord>,
+    dropped: usize,
+}
+
+impl ProgressLog {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            dropped: 0,
+        }
+    }
+
+    /// Append a record, evicting the oldest if at the cap.
+    pub fn push(&mut self, record: ProgressRecord) {
+        if self.records.len() >= MAX_PROGRESS_RECORDS {
+            // O(n) shift, but n ≤ MAX_PROGRESS_RECORDS (1000) — negligible,
+            // and only once the log is saturated.
+            self.records.remove(0);
+            self.dropped += 1;
+        }
+        self.records.push(record);
+    }
+
+    /// Clone of all retained records, oldest-first.
+    pub fn snapshot(&self) -> Vec<ProgressRecord> {
+        self.records.clone()
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Number of records evicted by the cap (oldest, lost).
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+}
+
+impl Default for ProgressLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Shared, cap-bounded log of [`ProgressRecord`]s backing a task's live output.
+/// Tools push via [`ToolContext::emit`]; observers read a snapshot via
+/// [`TaskEntry::output`](super::task_runtime::TaskEntry::output).
+pub type ProgressBuffer = Arc<Mutex<ProgressLog>>;
 
 /// Per-invocation context handed to a tool's [`ToolFunction::execute_with_context`].
 ///
 /// Carries optional handles a tool may use to interact with its surrounding
 /// task infrastructure while it runs. Today the only field is `output`: a
-/// `watch::Sender<String>` mirroring the background-task entry's accumulated
-/// "live output" channel, so a long-running tool can push human-readable
-/// progress that `view_task_status` surfaces. Tools that don't care about
-/// progress simply ignore the context (the default `execute_with_context`
-/// does so and delegates to [`ToolFunction::execute`]).
+/// shared append-only [`ProgressBuffer`] mirroring the background-task entry's
+/// live-output channel, so a long-running tool can push structured progress
+/// that `view_task_status` surfaces. Tools that don't care about progress
+/// simply ignore the context (the default `execute_with_context` does so and
+/// delegates to [`ToolFunction::execute`]).
 #[derive(Clone, Default)]
 pub struct ToolContext {
-    /// Live-output sink. `None` when the toolset did not wire one (e.g. in
+    /// Live-output buffer. `None` when the toolset did not wire one (e.g. in
     /// tests); the tool must treat it as optional.
-    pub output: Option<watch::Sender<String>>,
+    pub output: Option<ProgressBuffer>,
 }
 
 impl ToolContext {
-    /// Append `line` to the accumulated output and publish it. No-op when no
-    /// sink is wired. Convenient for tools that want fire-and-forget progress.
-    pub fn emit_line(&self, line: impl Into<String>) {
-        if let Some(tx) = &self.output {
-            // watch is latest-wins; maintain append semantics by reading the
-            // current value, appending, and republishing.
-            let mut acc = tx.borrow().clone();
-            if !acc.is_empty() {
-                acc.push('\n');
+    /// Push a structured [`ProgressRecord`] onto the live-output buffer.
+    /// No-op when no buffer is wired.
+    pub fn emit(&self, record: ProgressRecord) {
+        if let Some(buf) = &self.output {
+            // O(1) amortized push under a brief lock — no read-modify-write
+            // of the whole history (the old String approach was O(n²)).
+            if let Ok(mut v) = buf.lock() {
+                v.push(record);
             }
-            acc.push_str(&line.into());
-            let _ = tx.send(acc);
         }
+    }
+
+    /// Convenience: push a plain log line as a `kind = "log"` record. Useful
+    /// for tools that only need free-form text progress.
+    pub fn emit_line(&self, line: impl Into<String>) {
+        self.emit(ProgressRecord::new("log").message(line));
     }
 }
 

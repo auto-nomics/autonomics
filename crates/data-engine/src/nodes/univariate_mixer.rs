@@ -13,7 +13,7 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::prelude::SessionContext;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -242,6 +242,10 @@ fn default_extract_r2() -> f64 {
 
 const UNIVARIATE_MIXER_NODE_KIND: &str = "univariate_mixer";
 
+/// extract / LD-fold 阶段并发扫描的染色体数上限。这两步是 I/O 密集（扫 Iceberg
+/// LD 表），与 CPU 核数无关——并发的是 await，不是线程。
+const EXTRACT_CONCURRENCY: usize = 8;
+
 /// Univariate MiXeR 拟合节点。
 ///
 /// 输入：上游 sumstats（Z, N, rsid）。从数据湖取 LD 矩阵与 AF，组装
@@ -334,22 +338,25 @@ impl DagNode for UnivariateMixerNode {
         inputs: &[NodeInput],
         reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        // Surface phase-level progress to the scheduler's observers (the
-        // `run_dag` tool's live output). Per-chromosome granularity would
-        // require threading `reporter` deeper into the body — kept as a
-        // follow-up; the start/done logs here already bracket the long fit.
-        use crate::dag::node_event::EventLevel;
+        // Phase-level + per-chromosome observations flow to the scheduler's
+        // observers (the `run_dag` tool's live output) via `reporter`. Every
+        // emission is `try_send` (fire-and-forget): a saturated channel drops
+        // the line silently, so logging can never block or deadlock the node.
         use crate::dag::runtime::RuntimeStatus;
+        let t0 = std::time::Instant::now();
+        let n_chrom = self.spec.chromosomes.len();
         reporter.status(RuntimeStatus::Running);
-        reporter.log(
-            EventLevel::Info,
-            format!(
-                "fit1: start (chromosomes={}, diffevo_repeats={})",
-                self.spec.chromosomes.len(),
-                self.spec.diffevo_repeats,
-            ),
-        );
-        let __fit_start = std::time::Instant::now();
+        reporter.info(format!(
+            "fit1: start (chromosomes={n_chrom}, weighting={}, r2_min={}, \
+             extract={}, diffevo_repeats={})",
+            match self.spec.weighting {
+                WeightingMode::LdScore => "ldscore",
+                WeightingMode::Randprune => "randprune",
+            },
+            self.spec.r2_min,
+            self.spec.extract_enabled,
+            self.spec.diffevo_repeats,
+        ));
 
         let input = inputs.first().ok_or(UnivariateMixerError::InvalidInput(
             "no input DataFrame".into(),
@@ -368,11 +375,12 @@ impl DagNode for UnivariateMixerNode {
             .collect();
         for needed in [INPUT_Z_COL, INPUT_N_COL, INPUT_RSID_COL] {
             if !in_schema.fields().iter().any(|f| f.name() == needed) {
-                return Err(UnivariateMixerError::InvalidInput(format!(
+                let msg = format!(
                     "上游 sumstats 缺少必需列 '{needed}'；现有列: {avail:?}。\
                      MiXeR 需要 Z(浮点)、N(样本量)、rsid(SNP标识) 三列。"
-                ))
-                .into());
+                );
+                reporter.error(format!("fit1: abort — {msg}"));
+                return Err(UnivariateMixerError::InvalidInput(msg).into());
             }
         }
         ctx.register_table("sumstats", input.data.clone().into_view())
@@ -390,7 +398,10 @@ impl DagNode for UnivariateMixerNode {
         let mut maf_vec: Vec<f64> = Vec::new();
         let mut chrom_base: Vec<u32> = Vec::new(); // 每条染色体在全局空间的起点
         for chrom in &self.spec.chromosomes {
+            let ci = chrom_base.len();
             chrom_base.push(rsid_to_idx.len() as u32);
+            let chr_before = rsid_to_idx.len();
+            reporter.progress(ci as u64, n_chrom as u64);
             let universe_sql = format!(
                 r#"SELECT a.id AS rsid, a.alt_freq AS af, s."{z}" AS zc, s."{n}" AS nc
                    FROM iceberg.af.eur_af AS a
@@ -432,63 +443,133 @@ impl DagNode for UnivariateMixerNode {
                     maf_vec.push(maf);
                 }
             }
+            let added = rsid_to_idx.len() - chr_before;
+            if added == 0 {
+                reporter.warn(format!("universe chr{chrom}: 0 SNPs overlapped sumstats ∩ af"));
+            } else {
+                reporter.info(format!(
+                    "universe chr{chrom}: +{added} SNPs (running total {})",
+                    rsid_to_idx.len()
+                ));
+            }
         }
         let n_snp = z_vec.len();
         if n_snp == 0 {
-            return Err(UnivariateMixerError::InvalidInput(format!(
+            let msg = format!(
                 "no SNPs overlap between sumstats and af.eur_af for chromosomes {:?}",
                 self.spec.chromosomes
-            ))
-            .into());
+            );
+            reporter.error(format!("fit1: abort — {msg}"));
+            return Err(UnivariateMixerError::InvalidInput(msg).into());
         }
         let totalhet: f64 = h_vec.iter().sum();
+        reporter.progress(n_chrom as u64, n_chrom as u64);
+        reporter.info(format!(
+            "universe: {n_snp} SNPs across {n_chrom} chromosomes (totalhet={totalhet:.1})"
+        ));
+        if totalhet <= 0.0 {
+            reporter.warn(
+                "universe: total heterozygosity is 0 — all SNPs monomorphic; fit1 undefined",
+            );
+        }
 
         // 4. extract：选 tag 子集（MAF≥maf_min + 贪心 LD 剪枝 r²>r2_threshold + 随机 subset）。
         //    邻接只取 r²>extract_r2 的对（少），按染色体建**对称化** CSR（双向），喂 select_tags。
         let tags: Vec<u32> = if self.spec.extract_enabled {
+            reporter.info(format!(
+                "extract: building r²>{} adjacency per chromosome for tag selection",
+                self.spec.extract_r2,
+            ));
             let mut adj_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
-            for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
-                let base = chrom_base[ci] as usize;
-                let n_k = (if ci + 1 < chrom_base.len() {
-                    chrom_base[ci + 1] as usize
-                } else {
-                    n_snp
-                }) - base;
-                if n_k == 0 {
-                    continue;
-                }
-                let adj_sql = format!(
-                    "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
-                    chrom = chrom,
-                    r2 = self.spec.extract_r2,
-                );
-                let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
-                let df = UnivariateMixerError::df_ctx(
-                    ctx.sql(&adj_sql).await,
-                    "extract adjacency (ld r²>thr)",
-                    Some(*chrom),
-                    Some(&adj_sql),
-                )?;
-                let mut stream = UnivariateMixerError::df_ctx(
-                    df.execute_stream().await,
-                    "extract adjacency stream",
-                    Some(*chrom),
-                    None,
-                )?;
-                while let Some(batch) = UnivariateMixerError::df_ctx(
-                    stream.try_next().await,
-                    "extract adjacency batch",
-                    Some(*chrom),
-                    None,
-                )? {
-                    for_each_ld_pair(&batch, &rsid_to_idx, |a, b, _r2| {
-                        // 对称化：row(a) 加 b，row(b) 加 a，保证 select_tags 的 ld.row(idx) 完整
-                        adj_triples.push(((a as usize - base) as u32, b, 1.0));
-                        adj_triples.push(((b as usize - base) as u32, a, 1.0));
-                    })?;
-                }
-                adj_blocks.push((base, mixer::ld_matrix::LdBlock::from_coo(&adj_triples, n_k)));
+            let mut adj_total_pairs: u64 = 0;
+            // 各染色体的 r²>thr 邻接构建互相独立，用 `buffer_unordered` 并发扫描：
+            // 在当前 task 上 poll（无需 Send/'static），可直接借用 rsid_to_idx/ctx。
+            // 完成顺序不定 → 收集后按 ci（== base 非递减）排序再喂 BlockDiagonal——
+            // BlockDiagonal::new 依入参顺序取 last() 推断 n_total，必须升序无缝覆盖。
+            let extract_r2 = self.spec.extract_r2;
+            let rsid = &rsid_to_idx;
+            let chrom_base_ref = &chrom_base;
+            let done = std::sync::atomic::AtomicU64::new(0);
+            let done = &done;
+            // 预收集成 owned (ci, chrom) —— 闭包参数若为 `&u32` 被 async 块捕获，
+            // buffer_unordered 存储 future 时会触发 HRTB "FnOnce not general enough"。
+            let chroms: Vec<(usize, u32)> =
+                self.spec.chromosomes.iter().copied().enumerate().collect();
+            let collected: Result<
+                Vec<Option<(usize, usize, mixer::ld_matrix::LdBlock, u64)>>,
+                UnivariateMixerError,
+            > = futures::stream::iter(chroms)
+                .map(|(ci, chrom)| async move {
+                    let base = chrom_base_ref[ci] as usize;
+                    let n_k = (if ci + 1 < chrom_base_ref.len() {
+                        chrom_base_ref[ci + 1] as usize
+                    } else {
+                        n_snp
+                    }) - base;
+                    if n_k == 0 {
+                        let d = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        reporter.progress(d, n_chrom as u64);
+                        return Ok::<_, UnivariateMixerError>(None);
+                    }
+                    let adj_sql = format!(
+                        "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
+                        chrom = chrom,
+                        r2 = extract_r2,
+                    );
+                    let df = UnivariateMixerError::df_ctx(
+                        ctx.sql(&adj_sql).await,
+                        "extract adjacency (ld r²>thr)",
+                        Some(chrom),
+                        Some(&adj_sql),
+                    )?;
+                    let mut stream = UnivariateMixerError::df_ctx(
+                        df.execute_stream().await,
+                        "extract adjacency stream",
+                        Some(chrom),
+                        None,
+                    )?;
+                    reporter.info(format!(
+                        "extract chr{chrom}: streaming LD pairs r²>{} ...",
+                        extract_r2
+                    ));
+                    let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
+                    while let Some(batch) = UnivariateMixerError::df_ctx(
+                        stream.try_next().await,
+                        "extract adjacency batch",
+                        Some(chrom),
+                        None,
+                    )? {
+                        for_each_ld_pair(&batch, rsid, |a, b, _r2| {
+                            // 对称化：row(a) 加 b，row(b) 加 a，保证 select_tags 的 ld.row(idx) 完整
+                            adj_triples.push(((a as usize - base) as u32, b, 1.0));
+                            adj_triples.push(((b as usize - base) as u32, a, 1.0));
+                        })?;
+                    }
+                    let pairs = adj_triples.len() as u64 / 2;
+                    reporter.info(format!(
+                        "extract chr{chrom}: {pairs} adj pairs (n_k={n_k})"
+                    ));
+                    let block = mixer::ld_matrix::LdBlock::from_coo(&adj_triples, n_k);
+                    let d = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    reporter.progress(d, n_chrom as u64);
+                    Ok(Some((ci, base, block, pairs)))
+                })
+                .buffer_unordered(n_chrom.min(EXTRACT_CONCURRENCY))
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect();
+            let mut blocks: Vec<(usize, usize, mixer::ld_matrix::LdBlock, u64)> =
+                collected?.into_iter().flatten().collect();
+            blocks.sort_by_key(|(ci, _, _, _)| *ci);
+            for (_ci, base, block, pairs) in blocks {
+                adj_total_pairs += pairs;
+                adj_blocks.push((base, block));
             }
+            reporter.progress(n_chrom as u64, n_chrom as u64);
+            reporter.info(format!(
+                "extract: adjacency built ({adj_total_pairs} pairs total); selecting tags ..."
+            ));
             let adj = mixer::ld_matrix::BlockDiagonal::new(adj_blocks);
             let ec = mixer::extract::ExtractConfig {
                 maf_min: self.spec.extract_maf,
@@ -501,9 +582,27 @@ impl DagNode for UnivariateMixerNode {
             (0..n_snp as u32).collect()
         };
         let tag_set: std::collections::HashSet<u32> = tags.iter().copied().collect();
+        if self.spec.extract_enabled {
+            reporter.info(format!(
+                "extract: {}/{} SNPs selected as tags ({:.1}%)",
+                tags.len(),
+                n_snp,
+                100.0 * tags.len() as f64 / n_snp as f64
+            ));
+            if tags.is_empty() {
+                reporter.warn("extract: 0 tags selected — fit1 will be degenerate");
+            }
+        } else {
+            reporter.info(format!("tags: all {n_snp} SNPs (extract disabled)"));
+        }
 
         // 5. 折 LD（r²≥r2_min）进充分统计量。
         let is_ldscore = self.spec.weighting == WeightingMode::LdScore;
+        reporter.info(format!(
+            "LD fold: mode={}, folding per-chromosome r²≥{} into sufficient stats",
+            if is_ldscore { "ldscore" } else { "randprune" },
+            self.spec.r2_min,
+        ));
         let suff = if is_ldscore {
             // LdScore（默认，内存友好）：流式读 LD，**双向、tag 过滤**折 m1/m2。
             // 双向是为修正非对称 LD（plink2 每对存一份）下漏算 id_b 的 bug；
@@ -511,7 +610,8 @@ impl DagNode for UnivariateMixerNode {
             let mut m1 = vec![0.0f64; n_snp];
             let mut m2 = vec![0.0f64; n_snp];
             let mut sum_r2 = vec![0.0f64; n_snp];
-            for chrom in &self.spec.chromosomes {
+            for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
+                reporter.progress(ci as u64, n_chrom as u64);
                 let ld_sql = format!(
                     "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 >= {r2}",
                     chrom = chrom,
@@ -529,6 +629,7 @@ impl DagNode for UnivariateMixerNode {
                     Some(*chrom),
                     None,
                 )?;
+                let mut pairs: u64 = 0;
                 while let Some(batch) = UnivariateMixerError::df_ctx(
                     stream.try_next().await,
                     "LdScore fold batch",
@@ -539,6 +640,7 @@ impl DagNode for UnivariateMixerNode {
                         if r2 < 0.0 {
                             return;
                         }
+                        pairs += 1;
                         if tag_set.contains(&a) {
                             let ai = a as usize;
                             let a2 = n_vec[ai] * h_vec[b as usize] * r2;
@@ -555,6 +657,9 @@ impl DagNode for UnivariateMixerNode {
                         }
                     })?;
                 }
+                reporter.info(format!(
+                    "LD fold chr{chrom}: {pairs} pairs folded into sufficient stats"
+                ));
             }
             let weights: Vec<f64> = sum_r2
                 .iter()
@@ -576,6 +681,7 @@ impl DagNode for UnivariateMixerNode {
             let mut chrom_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
             for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
                 let base = chrom_base[ci];
+                reporter.progress(ci as u64, n_chrom as u64);
                 let n_k = ((if ci + 1 < chrom_base.len() {
                     chrom_base[ci + 1]
                 } else {
@@ -637,6 +743,9 @@ impl DagNode for UnivariateMixerNode {
                         r2: r2_store,
                     },
                 ));
+                reporter.info(format!(
+                    "LD fold chr{chrom}: built CSR (n_k={n_k}, nnz={nnz_k})"
+                ));
             }
             let view = mixer::ld_matrix::BlockDiagonal::new(std::mem::take(&mut chrom_blocks));
             let rp_cfg = mixer::weights::RandpruneConfig {
@@ -661,7 +770,59 @@ impl DagNode for UnivariateMixerNode {
             diffevo_repeats: self.spec.diffevo_repeats,
             ..Default::default()
         };
+        // fit1 is a synchronous CPU-bound optimizer (DE×repeats → Nelder-Mead)
+        // with no internal await/progress hooks — the channel will go quiet
+        // until it returns. Bracket it so observers know *why* it's silent and
+        // how long the dominant phase actually took.
+        let fit_t0 = std::time::Instant::now();
+        reporter.info(format!(
+            "fit1: entering optimization (diffevo_repeats={}); no mid-phase progress, \
+             this CPU-bound phase dominates runtime",
+            self.spec.diffevo_repeats
+        ));
         let result = mixer::fit::fit1(&suff, &cfg);
+        reporter.info(format!(
+            "fit1: optimization done in {:.2}s (total elapsed {:.2}s)",
+            fit_t0.elapsed().as_secs_f64(),
+            t0.elapsed().as_secs_f64()
+        ));
+        // Surface fitted params + flag degeneracies. In spike-and-slab only
+        // (π, σ²β) are jointly identifiable while h² stays identifiable, so a π
+        // pinned at 0/1 is the canonical instability signature — warn so the
+        // observer doesn't chase a non-bug (cf. chr22 π=0.19→0.999 across seeds).
+        reporter.info(format!(
+            "fit1 result: pi={:.4} sig2_beta={:.4} sig2_zero={:.4} h2={:.4} \
+             nc={:.0} nc_p9={:.0} loglike={:.2} aic={:.2} bic={:.2}",
+            result.params.pi,
+            result.params.sig2_beta,
+            result.params.sig2_zero,
+            result.h2,
+            result.nc,
+            result.nc_p9,
+            result.loglike,
+            result.aic,
+            result.bic,
+        ));
+        if !(0.0..=1.0).contains(&result.h2) {
+            reporter.warn(format!(
+                "fit1: h2={:.4} outside [0,1] — possible M mismatch or overfitting",
+                result.h2
+            ));
+        }
+        if result.params.pi > 0.999 || result.params.pi < 1e-4 {
+            reporter.warn(format!(
+                "fit1: pi={:.4} at boundary — spike-and-slab identifiability degeneracy \
+                 (π↔σ²β trade off; h² remains identifiable; reruns may differ)",
+                result.params.pi
+            ));
+        }
+        if !result.loglike.is_finite() || !result.aic.is_finite() || !result.bic.is_finite() {
+            reporter.warn(format!(
+                "fit1: non-finite goodness-of-fit (loglike={:?} aic={:?} bic={:?}) — \
+                 optimizer may have diverged",
+                result.loglike, result.aic, result.bic
+            ));
+        }
 
         // 7. 打包单行结果 RecordBatch 并返回。
         let batch = build_result_batch(&result)?;
@@ -673,10 +834,7 @@ impl DagNode for UnivariateMixerNode {
         )?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
-        reporter.info(format!(
-            "fit1: done in {:.2}s",
-            __fit_start.elapsed().as_secs_f64()
-        ));
+        reporter.info(format!("fit1: finished in {:.2}s", t0.elapsed().as_secs_f64()));
         Ok(res)
     }
 }

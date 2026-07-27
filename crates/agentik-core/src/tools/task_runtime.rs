@@ -1,11 +1,14 @@
 use crate::agent::InternalEvent;
+use crate::tools::function::ProgressRecord;
 use agentik_sdk::ToolResult;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::tools::error::ToolError;
+use crate::tools::function::ProgressBuffer;
 
 pub type TaskId = String;
 
@@ -83,11 +86,11 @@ pub struct TaskEntry {
     /// (Fg→Bg transition happens after sync timeout in [`wait`]).
     run_mode: watch::Receiver<RunMode>,
     run_mode_tx: watch::Sender<RunMode>,
-    /// Accumulated output from the tool execution, readable at any time.
-    /// NOTE: These two fields are used for agent to get real-time / intermediate output of
-    /// executing tool, rather than the final tool result.
-    output: watch::Receiver<String>,
-    output_tx: watch::Sender<String>,
+    /// Structured, append-only progress buffer shared with the executing tool
+    /// (via [`crate::tools::ToolContext`]). Readable at any time by observers
+    /// (`view_task_status`). NOTE: this carries real-time / intermediate
+    /// progress, distinct from the final tool result below.
+    output: ProgressBuffer,
     /// Final output of tool result, only readable when tool execution has done.
     tool_result: watch::Receiver<Option<ToolResult>>,
 }
@@ -103,16 +106,23 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         block_secs: u64,
     ) -> Self {
-        Self::with_notify(id, name, handle, cancel_token, block_secs, None, None)
+        Self::with_notify(
+            id,
+            name,
+            handle,
+            cancel_token,
+            block_secs,
+            None,
+            Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
+        )
     }
 
     /// Like [`new`](Self::new) but also notifies the agent via `notify_tx`
     /// when a background task completes.
     ///
-    /// `output_channel` lets the caller supply a pre-made `(sender, receiver)`
-    /// pair so the executing tool can push live output through the sender
-    /// before the monitor task is even constructed. When `None`, the channel
-    /// is created internally (no live output from the tool itself).
+    /// `output` is the shared progress buffer the executing tool pushes
+    /// structured [`ProgressRecord`]s onto (so it must be created before the
+    /// tool runs). When in doubt, pass a fresh `Arc::new(Mutex::new(Vec::new()))`.
     pub fn with_notify(
         id: TaskId,
         name: String,
@@ -120,16 +130,15 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         block_secs: u64,
         notify_tx: Option<BgTaskNotifyTx>,
-        output_channel: Option<(watch::Sender<String>, watch::Receiver<String>)>,
+        output: ProgressBuffer,
     ) -> Self {
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
-        let (output_tx, output) = output_channel.unwrap_or_else(|| watch::channel(String::new()));
         let (run_mode_tx, run_mode) = watch::channel(RunMode::Fg);
         let (tool_result_tx, tool_result) = watch::channel::<Option<ToolResult>>(None);
 
         let tx = status_tx.clone();
-        let out = output_tx.clone();
+        let out = output.clone();
         let mode_rx = run_mode.clone();
         let bg_notify = notify_tx.clone();
         let spwan_ts_tx = tool_result_tx.clone();
@@ -159,12 +168,16 @@ impl TaskEntry {
                     }
                 }
                 Ok(Err(e)) => {
-                    let _ = out.send(e.to_string());
+                    if let Ok(mut buf) = out.lock() {
+                        buf.push(ProgressRecord::new("error").message(e.to_string()));
+                    }
                     tx.send(TaskStatus::Failed(e)).ok();
                 }
                 Err(join_err) => {
                     let msg = format!("task panicked: {join_err}");
-                    let _ = out.send(msg.clone());
+                    if let Ok(mut buf) = out.lock() {
+                        buf.push(ProgressRecord::new("error").message(msg));
+                    }
                     tx.send(TaskStatus::Failed(ToolError::ExecutionFailed {
                         source: Box::new(join_err),
                     }))
@@ -194,7 +207,6 @@ impl TaskEntry {
             run_mode,
             run_mode_tx,
             output,
-            output_tx,
             tool_result,
         }
     }
@@ -276,15 +288,20 @@ impl TaskEntry {
         self.read_tx.send(true).ok();
     }
 
-    /// Non-blocking read of accumulated output so far.
-    pub fn output(&self) -> String {
-        self.output.borrow().clone()
+    /// Non-blocking snapshot of all retained progress records (oldest-first).
+    pub fn output(&self) -> Vec<ProgressRecord> {
+        self.output.lock().map(|v| v.snapshot()).unwrap_or_default()
     }
 
-    /// Return a clone of the output sender, so the spawned task can
-    /// write incremental output during execution.
-    pub fn output_tx(&self) -> watch::Sender<String> {
-        self.output_tx.clone()
+    /// Number of records evicted from the head by the [`ProgressLog`] cap.
+    pub fn dropped(&self) -> usize {
+        self.output.lock().map(|v| v.dropped()).unwrap_or_default()
+    }
+
+    /// Clone of the shared progress buffer, so an external subscriber can read
+    /// the same live-output stream the tool is pushing to.
+    pub fn output_buffer(&self) -> ProgressBuffer {
+        Arc::clone(&self.output)
     }
 
     /// Clone the internal status watch receiver.

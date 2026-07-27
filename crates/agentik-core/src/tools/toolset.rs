@@ -5,10 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::ToolContext;
+use crate::tools::{ProgressBuffer, ProgressLog, ToolContext};
 use crate::tools::task_runtime::{RunMode, TaskStatus, WaitResultKind};
 
 use super::DynToolFunction;
@@ -153,13 +152,14 @@ impl Toolset {
             let cancel_token = CancellationToken::new();
             let cancel = cancel_token.clone();
 
-            // Create the live-output channel BEFORE spawning so the tool can
-            // push progress through `ctx.output` while it runs. The matching
-            // receiver is handed to `TaskEntry` below; `view_task_status`
-            // surfaces it as the task's accumulated output.
-            let (output_tx, output_rx) = watch::channel(String::new());
+            // Create the shared progress buffer BEFORE spawning so the tool
+            // can push structured records through `ctx.output` while it runs.
+            // The same buffer is handed to `TaskEntry` below; `view_task_status`
+            // snapshots it as the task's accumulated output.
+            let output: ProgressBuffer =
+                Arc::new(std::sync::Mutex::new(ProgressLog::new()));
             let ctx = ToolContext {
-                output: Some(output_tx.clone()),
+                output: Some(output.clone()),
             };
 
             let task_handle = tokio::spawn(async move {
@@ -185,7 +185,7 @@ impl Toolset {
                 cancel_token,
                 sync_secs,
                 notify_tx.clone(),
-                Some((output_tx, output_rx)),
+                output,
             ));
             spawned_names.insert(tc.id.clone(), tc.name.clone());
         }
@@ -508,13 +508,21 @@ mod tests {
             .find(|t| t.id() == "tc1")
             .expect("background task should be retained while still running");
         let out = entry.output();
+        // emit_line pushes a structured `kind="log"` record carrying the text
+        // in `message` (not a flat concatenated string).
+        let messages: Vec<&str> = out
+            .iter()
+            .filter(|r| r.kind == "log")
+            .filter_map(|r| r.message.as_deref())
+            .collect();
         assert!(
-            out.contains("step 1") && out.contains("step 2"),
-            "TaskEntry.output should reflect emitted progress lines; got: {out:?}"
+            messages.contains(&"step 1") && messages.contains(&"step 2"),
+            "TaskEntry.output should carry both emitted records in order; got: {out:?}"
         );
-        assert!(
-            out.contains('\n'),
-            "emit_line should append on its own line; got: {out:?}"
+        assert_eq!(
+            out.len(),
+            2,
+            "expected exactly two progress records; got: {out:?}"
         );
     }
 }

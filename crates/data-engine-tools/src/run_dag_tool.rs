@@ -31,30 +31,39 @@ impl RunDagTool {
     }
 }
 
-/// Render a live [`NodeEvent`] as a single human-readable line for the task's
-/// accumulated output (what `view_task_status` surfaces while `run_dag` runs).
-/// Returns an empty string for events that should not be surfaced.
-fn format_node_event(ev: &NodeEvent) -> String {
-    let id = &ev.node_id;
+/// Map a live [`NodeEvent`] to a structured [`ProgressRecord`] pushed onto the
+/// task's live-output buffer (what `view_task_status` returns as JSON). Returns
+/// `None` for events that should not be surfaced (the heavy internal `Done`).
+fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressRecord> {
+    use agentik_core::tools::ProgressRecord;
+    let label = ev.node_id.as_str();
     match &ev.kind {
-        NodeEventKind::Status { status } => {
-            format!("node {id}: {}", format!("{status:?}").to_lowercase())
-        }
-        NodeEventKind::Progress { current, total } => {
-            format!("node {id}: progress {current}/{total}")
-        }
-        NodeEventKind::Log { level, message } => {
-            format!("node {id} [{level:?}]: {message}")
-        }
-        NodeEventKind::Finished { status, elapsed_ms } => {
-            format!(
-                "node {id}: {} ({elapsed_ms}ms)",
-                format!("{status:?}").to_lowercase()
-            )
-        }
+        NodeEventKind::Status { status } => Some(
+            ProgressRecord::new("status")
+                .label(label)
+                .status(format!("{status:?}").to_lowercase()),
+        ),
+        NodeEventKind::Progress { current, total } => Some(
+            ProgressRecord::new("progress")
+                .label(label)
+                .current(*current)
+                .total(*total),
+        ),
+        NodeEventKind::Log { level, message } => Some(
+            ProgressRecord::new("log")
+                .label(label)
+                .level(format!("{level:?}").to_lowercase())
+                .message(message),
+        ),
+        NodeEventKind::Finished { status, elapsed_ms } => Some(
+            ProgressRecord::new("finished")
+                .label(label)
+                .status(format!("{status:?}").to_lowercase())
+                .elapsed_ms(*elapsed_ms),
+        ),
         // Done carries the heavy output map and is never emitted on the
-        // external sink — nothing to render.
-        NodeEventKind::Done(_) => String::new(),
+        // external sink — nothing to record.
+        NodeEventKind::Done(_) => None,
     }
 }
 
@@ -163,9 +172,8 @@ impl ToolFunction for RunDagTool {
             tokio::select! {
                 ev = event_rx.recv() => {
                     if let Some(ev) = ev {
-                        let line = format_node_event(&ev);
-                        if !line.is_empty() {
-                            ctx.emit_line(line);
+                        if let Some(record) = node_event_to_record(&ev) {
+                            ctx.emit(record);
                         }
                     }
                 }
