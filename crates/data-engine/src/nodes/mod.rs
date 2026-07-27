@@ -28,7 +28,10 @@ pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, Bivaria
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use ldsc_hsq::{LdscHsqConfig, LdscHsqNode, LdscHsqNodeFactory};
 pub use ldsc_rg::{LdscRgConfig, LdscRgNode, LdscRgNodeFactory};
-pub use lava::{LavaNode, LavaNodeFactory, LavaNodeSpec};
+pub use lava::{
+    LavaBivarNode, LavaBivarNodeFactory, LavaLocusNode, LavaLocusNodeFactory, LavaMultiregNode,
+    LavaMultiregNodeFactory, LavaPcorNode, LavaPcorNodeFactory, LavaUnivNode, LavaUnivNodeFactory,
+};
 pub use liability::{LiabilityConfig, LiabilityNode, LiabilityNodeFactory};
 pub use linear_regression::{
     LinearRegressionNode, LinearRegressionNodeFactory, LinearRegressionNodeSpec,

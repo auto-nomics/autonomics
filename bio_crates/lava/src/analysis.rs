@@ -7,7 +7,7 @@ use faer::{Mat, MatRef, Side};
 use rand::Rng;
 
 use crate::ci::{ci_bivariate, ci_multivariate, ci_pcor};
-use crate::locus::Locus;
+use crate::locus::LocusParams;
 use crate::pcor::partial_cor;
 use crate::stats::{cov2cor, pchisq_sf, pf_sf};
 use crate::wishart::{bivariate_integral, integral_p, multivariate_integral};
@@ -174,17 +174,16 @@ fn combn(items: &[usize], k: usize) -> Vec<Vec<usize>> {
 // ----------------------------- run.univ -----------------------------
 
 /// `univariate.test`: per-phenotype p-value (F-test for continuous, χ² for binary).
-pub fn univariate_test(locus: &Locus, phenos: &[String]) -> Vec<f64> {
+pub fn univariate_test(locus: &LocusParams, phenos: &[String]) -> Vec<f64> {
     let k = locus.k;
     phenos
         .iter()
         .map(|ph| {
             let i = locus.phenos.iter().position(|p| p == ph).unwrap();
-            let mut stat = 0.0;
-            for r in 0..k {
-                stat += locus.delta[(r, i)].powi(2);
-            }
-            stat = stat / locus.sigma[(i, i)] * locus.nref_scale;
+            // Σδ² is recovered from omega/sigma (omega_ii = Σδ²/K − sigma_ii):
+            //   Σδ² = K·(omega_ii + sigma_ii)   [bit-identical to summing delta²]
+            let dtd = k as f64 * (locus.omega[(i, i)] + locus.sigma[(i, i)]);
+            let stat = dtd / locus.sigma[(i, i)] * locus.nref_scale;
             if locus.binary[i] {
                 pchisq_sf(stat, k as f64)
             } else {
@@ -195,7 +194,7 @@ pub fn univariate_test(locus: &Locus, phenos: &[String]) -> Vec<f64> {
 }
 
 /// `run.univ`.
-pub fn run_univ(locus: &Locus, phenos: Option<&[String]>, var: bool, cap_estimates: bool) -> Vec<UnivResult> {
+pub fn run_univ(locus: &LocusParams, phenos: Option<&[String]>, var: bool, cap_estimates: bool) -> Vec<UnivResult> {
     let phenos: Vec<String> = match phenos {
         Some(p) => p.to_vec(),
         None => locus.phenos.clone(),
@@ -237,7 +236,7 @@ pub fn run_univ(locus: &Locus, phenos: Option<&[String]>, var: bool, cap_estimat
 
 /// `run.bivar`.
 pub fn run_bivar<R: Rng>(
-    locus: &Locus,
+    locus: &LocusParams,
     phenos: Option<&[String]>,
     target: Option<&str>,
     adap_thresh: Option<&[f64]>,
@@ -325,7 +324,7 @@ pub struct UnivBivarResult {
 
 /// `run.univ.bivar`.
 pub fn run_univ_bivar<R: Rng>(
-    locus: &Locus,
+    locus: &LocusParams,
     phenos: Option<&[String]>,
     target: Option<&str>,
     univ_thresh: f64,
@@ -355,7 +354,7 @@ pub fn run_univ_bivar<R: Rng>(
 
 /// `run.multireg`: returns a flat list of all (predictor-subset, predictor) rows.
 pub fn run_multireg<R: Rng>(
-    locus: &Locus,
+    locus: &LocusParams,
     target: &str,
     phenos: Option<&[String]>,
     adap_thresh: Option<&[f64]>,
@@ -435,7 +434,7 @@ pub fn run_multireg<R: Rng>(
 
 /// `run.pcor`.
 pub fn run_pcor<R: Rng>(
-    locus: &Locus,
+    locus: &LocusParams,
     target: (&str, &str),
     phenos: Option<&[String]>,
     adap_thresh: Option<&[f64]>,
@@ -506,7 +505,7 @@ pub fn run_pcor<R: Rng>(
 }
 
 /// r2 of `target` on Z (bivariate if |Z|==1, else multireg full model r2[0]).
-fn r2_target_on_z<R: Rng>(locus: &Locus, target: usize, z: &[usize], _rng: &mut R) -> f64 {
+fn r2_target_on_z<R: Rng>(locus: &LocusParams, target: usize, z: &[usize], _rng: &mut R) -> f64 {
     if z.is_empty() {
         return f64::NAN;
     }

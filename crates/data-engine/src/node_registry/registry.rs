@@ -15,7 +15,8 @@ use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory, echo_node::EchoNodeFactory,
-    ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory, lava::LavaNodeFactory,
+    ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory,
+    lava::{LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory, LavaUnivNodeFactory},
     liability::LiabilityNodeFactory, linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
     sink_file::FileSinkNodeFactory, sink_iceberg::IcebergSinkNodeFactory,
@@ -136,7 +137,11 @@ impl NodeRegistry {
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(TestSourceFactory {}));
         registry.register(Box::new(MrNodeFactory {}));
-        registry.register(Box::new(LavaNodeFactory {}));
+        registry.register(Box::new(LavaLocusNodeFactory {}));
+        registry.register(Box::new(LavaUnivNodeFactory {}));
+        registry.register(Box::new(LavaBivarNodeFactory {}));
+        registry.register(Box::new(LavaPcorNodeFactory {}));
+        registry.register(Box::new(LavaMultiregNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
@@ -231,7 +236,11 @@ mod tests {
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
-            "lava" => serde_json::json!({"ref_prefix": "ref/g1000", "loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]}),
+            "lava_locus" => serde_json::json!({"ref_prefix": "ref/g1000", "loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]}),
+            "lava_univ" => serde_json::json!({}),
+            "lava_bivar" => serde_json::json!({}),
+            "lava_pcor" => serde_json::json!({"target": ["p1", "p2"]}),
+            "lava_multireg" => serde_json::json!({"target": "p1"}),
             "visualization" => serde_json::json!({
                 "output_path": "/tmp/dummy_viz.png",
                 "r_code": "p <- ggplot(df, aes(x = x, y = y)) + geom_point()"

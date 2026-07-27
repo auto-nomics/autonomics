@@ -100,7 +100,7 @@ fn locus_266_deterministic() {
     assert_eq!(loc.phenos, gphenos.iter().map(|s| s.to_string()).collect::<Vec<_>>());
 
     let phenos = ["depression", "neuro", "bmi"];
-    let univ = run_univ(&loc, None, false, true);
+    let univ = run_univ(&loc.params(), None, false, true);
     for (i, ph) in phenos.iter().enumerate() {
         let g = golden.iter().find(|r| r["phen"] == *ph).unwrap();
         let gi = loc.phenos.iter().position(|p| p == *ph).unwrap();
@@ -166,7 +166,7 @@ fn locus_266_bivar() {
     .unwrap();
 
     let mut rng = lava::rng(lava::DEFAULT_RNG_SEED);
-    let bivar = run_bivar(&loc, None, None, None, true, true, 1.25, true, &mut rng);
+    let bivar = run_bivar(&loc.params(), None, None, None, true, true, 1.25, true, &mut rng);
     let golden = read_tsv(&gold("locus_266_bivar.tsv"));
     for row in &bivar {
         let g = golden.iter().find(|r| r["phen1"] == row.phen1 && r["phen2"] == row.phen2).unwrap();
@@ -236,7 +236,7 @@ fn locus_964_multireg_pcor() {
     .unwrap();
 
     let mut rng = lava::rng(lava::DEFAULT_RNG_SEED);
-    let mr = run_multireg(&loc, "hypothyroidism", None, None, true, true, true, 1.5, &mut rng);
+    let mr = run_multireg(&loc.params(), "hypothyroidism", None, None, true, true, true, 1.5, &mut rng);
     let mr_golden = read_tsv(&gold("locus_964_multireg.tsv"));
     let mr_rows = mr.first().unwrap();
     for r in mr_rows {
@@ -247,7 +247,7 @@ fn locus_964_multireg_pcor() {
         assert!(close(r.r2, fval(g, "r2"), 1e-4, 1e-9), "r2 {}", r.predictors);
     }
 
-    let pc = run_pcor(&loc, ("hypothyroidism", "diabetes"), Some(&["asthma".to_string()]), None, true, true, 0.95, 1.25, &mut rng);
+    let pc = run_pcor(&loc.params(), ("hypothyroidism", "diabetes"), Some(&["asthma".to_string()]), None, true, true, 0.95, 1.25, &mut rng);
     let pcg = &read_tsv(&gold("locus_964_pcor.tsv"))[0];
     println!("pcor: rust={:.4} R={:.4}", pc.pcor, fval(pcg, "pcor"));
     assert!(close(pc.pcor, fval(pcg, "pcor"), 1e-4, 1e-9), "pcor point estimate");

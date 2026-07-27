@@ -67,10 +67,174 @@ pub struct Locus {
     pub ascertained_h2: Vec<bool>,
 }
 
-impl Locus {
+/// The analysis-relevant subset of a [`Locus`] — everything the four LAVA
+/// analyses (`run_univ`/`run_bivar`/`run_pcor`/`run_multireg`) need. Excludes
+/// `delta` (the univariate statistic is recoverable from `omega`/`sigma`/`k`:
+/// `Σδ² = K·(ω_ii + σ_ii)`), so a locus can be serialised to a table and
+/// reconstructed without the K-dim `delta`.
+#[derive(Debug, Clone)]
+pub struct LocusParams {
+    pub id: String,
+    pub chr: Option<i64>,
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+    pub n_snps: usize,
+    pub k: usize,
+    pub nref_scale: f64,
+    pub phenos: Vec<String>,
+    pub omega: Mat<f64>,
+    pub sigma: Mat<f64>,
+    pub n: Vec<f64>,
+    pub binary: Vec<bool>,
+    pub h2_obs: Vec<f64>,
+    pub h2_latent: Vec<f64>,
+    pub ascertained_h2: Vec<bool>,
+}
+
+impl LocusParams {
     pub fn p(&self) -> usize {
         self.phenos.len()
     }
+
+    /// Flatten this locus's parameters into upper-triangular (i ≤ j) rows for
+    /// serialisation to a table. Per-phenotype scalars (`n_i`, `binary_i`, h²)
+    /// are carried only on the diagonal rows (`i == j`); off-diagonal rows have
+    /// them set to `None`.
+    pub fn to_param_rows(&self) -> Vec<LocusParamRow> {
+        let p = self.phenos.len();
+        let mut rows = Vec::with_capacity(p * (p + 1) / 2);
+        for i in 0..p {
+            for j in i..p {
+                let diag = i == j;
+                rows.push(LocusParamRow {
+                    locus: self.id.clone(),
+                    chr: self.chr,
+                    start: self.start,
+                    stop: self.stop,
+                    n_snps: self.n_snps,
+                    k: self.k,
+                    nref_scale: self.nref_scale,
+                    i,
+                    j,
+                    pheno_i: self.phenos[i].clone(),
+                    pheno_j: self.phenos[j].clone(),
+                    omega: self.omega[(i, j)],
+                    sigma: self.sigma[(i, j)],
+                    n_i: diag.then(|| self.n[i]),
+                    binary_i: diag.then_some(self.binary[i]),
+                    h2_obs_i: diag.then(|| self.h2_obs[i]),
+                    h2_latent_i: diag.then(|| self.h2_latent[i]),
+                    ascertained_i: diag.then_some(self.ascertained_h2[i]),
+                });
+            }
+        }
+        rows
+    }
+}
+
+impl Locus {
+    /// A [`LocusParams`] view of this locus (clones the small P×P matrices).
+    pub fn params(&self) -> LocusParams {
+        LocusParams {
+            id: self.id.clone(),
+            chr: self.chr,
+            start: self.start,
+            stop: self.stop,
+            n_snps: self.n_snps,
+            k: self.k,
+            nref_scale: self.nref_scale,
+            phenos: self.phenos.clone(),
+            omega: self.omega.clone(),
+            sigma: self.sigma.clone(),
+            n: self.n.clone(),
+            binary: self.binary.clone(),
+            h2_obs: self.h2_obs.clone(),
+            h2_latent: self.h2_latent.clone(),
+            ascertained_h2: self.ascertained_h2.clone(),
+        }
+    }
+
+    pub fn p(&self) -> usize {
+        self.phenos.len()
+    }
+}
+
+/// One upper-triangular cell of a [`LocusParams`] matrix (the wire format
+/// between the `lava_locus` node and the analysis nodes).
+#[derive(Debug, Clone)]
+pub struct LocusParamRow {
+    pub locus: String,
+    pub chr: Option<i64>,
+    pub start: Option<i64>,
+    pub stop: Option<i64>,
+    pub n_snps: usize,
+    pub k: usize,
+    pub nref_scale: f64,
+    pub i: usize,
+    pub j: usize,
+    pub pheno_i: String,
+    pub pheno_j: String,
+    pub omega: f64,
+    pub sigma: f64,
+    pub n_i: Option<f64>,
+    pub binary_i: Option<bool>,
+    pub h2_obs_i: Option<f64>,
+    pub h2_latent_i: Option<f64>,
+    pub ascertained_i: Option<bool>,
+}
+
+/// Reconstruct [`LocusParams`] (one per locus, in first-seen order) from a flat
+/// list of [`LocusParamRow`] (any row order). The diagonal rows supply the
+/// per-phenotype scalars.
+pub fn locus_params_from_rows(rows: &[LocusParamRow]) -> Vec<LocusParams> {
+    use std::collections::HashMap;
+    // group row indices by locus id, preserving first-seen order
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<&LocusParamRow>> = HashMap::new();
+    for r in rows {
+        if !groups.contains_key(&r.locus) {
+            order.push(r.locus.clone());
+            groups.insert(r.locus.clone(), Vec::new());
+        }
+        groups.get_mut(&r.locus).unwrap().push(r);
+    }
+    order
+        .into_iter()
+        .map(|id| {
+            let gr = &groups[&id];
+            let p = gr.iter().map(|r| r.i).max().map(|m| m + 1).unwrap_or(0).max(gr.iter().map(|r| r.j).max().map(|m| m + 1).unwrap_or(0));
+            let k = gr[0].k;
+            let nref_scale = gr[0].nref_scale;
+            let mut omega = Mat::zeros(p, p);
+            let mut sigma = Mat::zeros(p, p);
+            let mut phenos = vec![String::new(); p];
+            let mut n = vec![f64::NAN; p];
+            let mut binary = vec![false; p];
+            let mut h2_obs = vec![f64::NAN; p];
+            let mut h2_latent = vec![f64::NAN; p];
+            let mut ascertained = vec![false; p];
+            for r in gr {
+                omega[(r.i, r.j)] = r.omega;
+                omega[(r.j, r.i)] = r.omega;
+                sigma[(r.i, r.j)] = r.sigma;
+                sigma[(r.j, r.i)] = r.sigma;
+                phenos[r.i] = r.pheno_i.clone();
+                phenos[r.j] = r.pheno_j.clone();
+                if r.i == r.j {
+                    if let Some(v) = r.n_i { n[r.i] = v; }
+                    if let Some(v) = r.binary_i { binary[r.i] = v; }
+                    if let Some(v) = r.h2_obs_i { h2_obs[r.i] = v; }
+                    if let Some(v) = r.h2_latent_i { h2_latent[r.i] = v; }
+                    if let Some(v) = r.ascertained_i { ascertained[r.i] = v; }
+                }
+            }
+            LocusParams {
+                id, chr: gr[0].chr, start: gr[0].start, stop: gr[0].stop,
+                n_snps: gr[0].n_snps, k, nref_scale, phenos, omega, sigma,
+                n, binary, h2_obs, h2_latent, ascertained_h2: ascertained,
+            }
+        })
+        .collect()
 }
 
 /// Subset a phenotype's sum-stats (aligned to `analysis_snps`) to `locus_snps`
