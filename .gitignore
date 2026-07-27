@@ -17,8 +17,15 @@ dendrite/
 notes/
 TwoSampleMR/
 MVMR/
+reference/
 
 # infra (Python venv, caches)
 infra/.venv/
 infra/**/__pycache__/
 infra/**/*.pyc
+
+# LAVA cross-validation fixtures (large, kept locally; not committed)
+bio_crates/lava/tests/fixtures/*.bed
+bio_crates/lava/tests/fixtures/*.bim
+bio_crates/lava/tests/fixtures/*.sumstats.txt
+bio_crates/lava/tests/fixtures/golden/

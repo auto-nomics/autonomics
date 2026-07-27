@@ -1694,6 +1694,7 @@ dependencies = [
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
+ "lava",
  "ldsc",
  "mixer",
  "mr",
@@ -4266,6 +4267,20 @@ name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
+
+[[package]]
+name = "lava"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_distr 0.5.1",
+ "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "lazy_static"
