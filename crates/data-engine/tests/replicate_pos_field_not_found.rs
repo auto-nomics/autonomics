@@ -119,7 +119,10 @@ async fn write_to_iceberg(
         datalake.clone(),
     );
     sink_node
-        .execute(&[NodeInput { port: 0, data: df }])
+        .execute(
+            &[NodeInput { port: 0, data: df }],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
         .await
         .unwrap();
 

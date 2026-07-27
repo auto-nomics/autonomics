@@ -526,7 +526,11 @@ impl DagNode for MrNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(MrNodeError::EmptyInput)?;
         if !matches!(self.spec.action, 1..=3) {
             return Err(MrNodeError::InvalidAction(self.spec.action).into());
@@ -725,7 +729,13 @@ mod tests {
         });
         assert_eq!(node.kind(), "mr");
 
-        let outs = node.execute(&[make_test_input()]).await.unwrap();
+        let outs = node
+            .execute(
+                &[make_test_input()],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
         let df = outs.get(&0).unwrap().clone();
         let batches = df.collect().await.unwrap();
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -760,7 +770,13 @@ mod tests {
             tolerance: default_tolerance(),
             parameters: MrParameters::default(),
         });
-        let outs = node.execute(&[make_test_input()]).await.unwrap();
+        let outs = node
+            .execute(
+                &[make_test_input()],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
         let batches = outs.get(&0).unwrap().clone().collect().await.unwrap();
         let methods: Vec<String> = batches
             .iter()
@@ -786,7 +802,13 @@ mod tests {
             tolerance: default_tolerance(),
             parameters: MrParameters::default(),
         });
-        let err = node.execute(&[make_test_input()]).await.unwrap_err();
+        let err = node
+            .execute(
+                &[make_test_input()],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("action"), "got: {err}");
     }
 }

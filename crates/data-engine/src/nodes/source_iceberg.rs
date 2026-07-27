@@ -115,7 +115,11 @@ impl DagNode for IcebergSourceNode {
         self
     }
 
-    async fn execute(&mut self, _inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        _inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
         // The iceberg catalog is registered under "iceberg"; qualify the
         // identifier so DataFusion resolves it through that catalog.
@@ -143,7 +147,10 @@ mod tests {
             ctx.runtime_env(),
             Some(Arc::new(provider)),
         );
-        let res = node.execute(&[]).await.unwrap();
+        let res = node
+            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         let df = res.get(&0).unwrap().clone();
         df.limit(0, Some(10)).unwrap().show().await.unwrap();
     }

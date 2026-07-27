@@ -153,7 +153,11 @@ impl DagNode for SqlNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         if inputs.is_empty() {
             return Err(SqlNodeError::InvalidInput {
                 message: "SqlNode requires at least one upstream input".to_string(),
@@ -223,7 +227,10 @@ mod tests {
         let input = NodeInput { port: 0, data: df };
 
         // Verify SQL node input mapping: it should use 'port_0' to reference data.
-        let output = node.execute(&[input]).await.unwrap();
+        let output = node
+            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         dbg!(output);
     }
 
@@ -317,7 +324,10 @@ mod tests {
                    ORDER BY id";
         let mut node = SqlNode::new(sql.into(), ctx.runtime_env(), None);
         let input = NodeInput { port: 0, data: df };
-        let outputs = node.execute(&[input]).await.unwrap();
+        let outputs = node
+            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
 
         assert_eq!(batches.len(), 1, "expected a single RecordBatch");
@@ -362,10 +372,13 @@ mod tests {
             None,
         );
         let a_out = node_a
-            .execute(&[NodeInput {
-                port: 0,
-                data: a_df,
-            }])
+            .execute(
+                &[NodeInput {
+                    port: 0,
+                    data: a_df,
+                }],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let a_result: DataFrame = a_out.get(&0).unwrap().clone();
@@ -391,10 +404,13 @@ mod tests {
             None,
         );
         let b_out = node_b
-            .execute(&[NodeInput {
-                port: 0,
-                data: b_df,
-            }])
+            .execute(
+                &[NodeInput {
+                    port: 0,
+                    data: b_df,
+                }],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let b_result: DataFrame = b_out.get(&0).unwrap().clone();
@@ -409,16 +425,19 @@ mod tests {
             None,
         );
         let c_out = node_c
-            .execute(&[
-                NodeInput {
-                    port: 0,
-                    data: a_result,
-                },
-                NodeInput {
-                    port: 1,
-                    data: b_result,
-                },
-            ])
+            .execute(
+                &[
+                    NodeInput {
+                        port: 0,
+                        data: a_result,
+                    },
+                    NodeInput {
+                        port: 1,
+                        data: b_result,
+                    },
+                ],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

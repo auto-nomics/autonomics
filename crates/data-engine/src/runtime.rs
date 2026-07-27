@@ -48,8 +48,12 @@ impl DataEngineServer {
                 };
                 let _ = reply.send(res);
             }
-            DataEngineCmd::RunDag { reply } => {
-                let _ = reply.send(self.engine.run().await);
+            DataEngineCmd::RunDag { event_tx, reply } => {
+                let res = match event_tx {
+                    Some(sink) => self.engine.run_with_events(sink).await,
+                    None => self.engine.run().await,
+                };
+                let _ = reply.send(res);
             }
             DataEngineCmd::GetOutput { id, reply } => {
                 let _ = reply.send(Ok(self.engine.get_output(id).await));
@@ -150,8 +154,35 @@ impl DataEngineClient {
 
     pub async fn run_dag(&self) -> Result<crate::dag::RunReport> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::RunDag { reply: reply_tx }, reply_rx)
-            .await
+        self.request(
+            DataEngineCmd::RunDag {
+                event_tx: None,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Kick off a DAG run with live per-node event streaming.
+    ///
+    /// Returns `(event_rx, reply_rx)`: the caller drains `event_rx`
+    /// concurrently with awaiting `reply_rx` (the final [`RunReport`]).
+    /// Events are lightweight observations (status/progress/log/finished) and
+    /// may be dropped on a full channel — they never affect the run's outcome.
+    pub fn run_dag_stream(
+        &self,
+    ) -> (
+        mpsc::Receiver<crate::dag::node_event::NodeEvent>,
+        tokio::sync::oneshot::Receiver<crate::error::Result<crate::dag::RunReport>>,
+    ) {
+        let (event_tx, event_rx) = mpsc::channel::<crate::dag::node_event::NodeEvent>(128);
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = self.tx.send(DataEngineCmd::RunDag {
+            event_tx: Some(event_tx),
+            reply: reply_tx,
+        });
+        (event_rx, reply_rx)
     }
 
     pub async fn get_output(&self, id: String) -> Result<Option<crate::dag::graph::PortOutputs>> {

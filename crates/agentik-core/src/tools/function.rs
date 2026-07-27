@@ -1,9 +1,43 @@
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::sync::watch;
 
 use super::error::ToolError;
 use agentik_sdk::types::{ToolDefinition, ToolInput, ToolResult};
+
+/// Per-invocation context handed to a tool's [`ToolFunction::execute_with_context`].
+///
+/// Carries optional handles a tool may use to interact with its surrounding
+/// task infrastructure while it runs. Today the only field is `output`: a
+/// `watch::Sender<String>` mirroring the background-task entry's accumulated
+/// "live output" channel, so a long-running tool can push human-readable
+/// progress that `view_task_status` surfaces. Tools that don't care about
+/// progress simply ignore the context (the default `execute_with_context`
+/// does so and delegates to [`ToolFunction::execute`]).
+#[derive(Clone, Default)]
+pub struct ToolContext {
+    /// Live-output sink. `None` when the toolset did not wire one (e.g. in
+    /// tests); the tool must treat it as optional.
+    pub output: Option<watch::Sender<String>>,
+}
+
+impl ToolContext {
+    /// Append `line` to the accumulated output and publish it. No-op when no
+    /// sink is wired. Convenient for tools that want fire-and-forget progress.
+    pub fn emit_line(&self, line: impl Into<String>) {
+        if let Some(tx) = &self.output {
+            // watch is latest-wins; maintain append semantics by reading the
+            // current value, appending, and republishing.
+            let mut acc = tx.borrow().clone();
+            if !acc.is_empty() {
+                acc.push('\n');
+            }
+            acc.push_str(&line.into());
+            let _ = tx.send(acc);
+        }
+    }
+}
 
 /// A tool that the agent can invoke.
 ///
@@ -69,6 +103,21 @@ pub trait ToolFunction: Send + Sync {
         self.run(typed).await
     }
 
+    /// Context-aware entry point. The toolset always calls this (never
+    /// [`execute`](Self::execute) directly). The default implementation
+    /// ignores `ctx` and delegates to `execute`, so existing tools that only
+    /// override `run` keep working unchanged. Override this when the tool
+    /// needs the per-invocation [`ToolContext`] — e.g. to stream progress to
+    /// its background-task entry via [`ToolContext::emit_line`]. An override
+    /// must deserialize `input` itself (it bypasses the default deserialize).
+    async fn execute_with_context(
+        &self,
+        input: Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        self.execute(input).await
+    }
+
     /// Business implementation. Override this for typed input.
     ///
     /// Default panics — every concrete tool must override either
@@ -111,6 +160,15 @@ pub trait ToolFunction: Send + Sync {
 pub trait DynToolFunction: Send + Sync {
     async fn execute(&self, input: Value) -> Result<ToolResult, ToolError>;
 
+    /// Context-aware entry; the toolset calls this in preference to
+    /// [`execute`](Self::execute) so tools that opt into [`ToolContext`] get
+    /// it. Default forwarders delegate to `execute` (ignoring the context).
+    async fn execute_with_context(
+        &self,
+        input: Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError>;
+
     fn validate_input(&self, input: &Value) -> Result<(), ToolError>;
 
     fn sync_seconds(&self) -> u64;
@@ -123,6 +181,14 @@ pub trait DynToolFunction: Send + Sync {
 impl<T: ToolFunction + ?Sized> DynToolFunction for T {
     async fn execute(&self, input: Value) -> Result<ToolResult, ToolError> {
         ToolFunction::execute(self, input).await
+    }
+
+    async fn execute_with_context(
+        &self,
+        input: Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        ToolFunction::execute_with_context(self, input, ctx).await
     }
 
     fn validate_input(&self, input: &Value) -> Result<(), ToolError> {

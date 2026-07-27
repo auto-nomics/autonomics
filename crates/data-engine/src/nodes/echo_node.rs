@@ -104,7 +104,11 @@ impl DagNode for EchoNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let mut out: PortOutputs = HashMap::new();
         for inp in inputs {
             out.insert(inp.port, inp.data.clone());
@@ -135,10 +139,13 @@ mod tests {
 
         let mut node = EchoNode::default();
         let outputs = node
-            .execute(&[NodeInput {
-                port: 0,
-                data: df.clone(),
-            }])
+            .execute(
+                &[NodeInput {
+                    port: 0,
+                    data: df.clone(),
+                }],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -167,10 +174,13 @@ mod tests {
 
         let mut node = EchoNode::default();
         let outputs = node
-            .execute(&[
-                NodeInput { port: 0, data: df1 },
-                NodeInput { port: 1, data: df2 },
-            ])
+            .execute(
+                &[
+                    NodeInput { port: 0, data: df1 },
+                    NodeInput { port: 1, data: df2 },
+                ],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

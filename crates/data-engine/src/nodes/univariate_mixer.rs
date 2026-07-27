@@ -329,7 +329,28 @@ impl DagNode for UnivariateMixerNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        // Surface phase-level progress to the scheduler's observers (the
+        // `run_dag` tool's live output). Per-chromosome granularity would
+        // require threading `reporter` deeper into the body — kept as a
+        // follow-up; the start/done logs here already bracket the long fit.
+        use crate::dag::node_event::EventLevel;
+        use crate::dag::runtime::RuntimeStatus;
+        reporter.status(RuntimeStatus::Running);
+        reporter.log(
+            EventLevel::Info,
+            format!(
+                "fit1: start (chromosomes={}, diffevo_repeats={})",
+                self.spec.chromosomes.len(),
+                self.spec.diffevo_repeats,
+            ),
+        );
+        let __fit_start = std::time::Instant::now();
+
         let input = inputs.first().ok_or(UnivariateMixerError::InvalidInput(
             "no input DataFrame".into(),
         ))?;
@@ -652,6 +673,10 @@ impl DagNode for UnivariateMixerNode {
         )?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
+        reporter.info(format!(
+            "fit1: done in {:.2}s",
+            __fit_start.elapsed().as_secs_f64()
+        ));
         Ok(res)
     }
 }

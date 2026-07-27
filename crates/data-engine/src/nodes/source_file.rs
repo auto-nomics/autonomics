@@ -220,7 +220,11 @@ impl DagNode for FileSourceNode {
         self
     }
 
-    async fn execute(&mut self, _inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        _inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let ctx = new_isolated_ctx(self.runtime_env.clone(), None);
         let path = normalize_path(&self.path);
         let fmt = self

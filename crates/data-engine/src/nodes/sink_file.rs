@@ -223,7 +223,11 @@ impl DagNode for FileSinkNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(FileSinkError::InvalidInput {
             message: "FileSinkNode requires exactly one upstream input".to_string(),
         })?;
@@ -367,7 +371,13 @@ mod tests {
         let sink = |df: DataFrame, mode| {
             let mut node =
                 FileSinkNode::new(path.clone(), WriteFormat::Csv, mode, runtime_env.clone());
-            async move { node.execute(&[NodeInput { port: 0, data: df }]).await }
+            async move {
+                node.execute(
+                    &[NodeInput { port: 0, data: df }],
+                    &crate::dag::node_event::NodeReporter::noop(),
+                )
+                .await
+            }
         };
 
         sink(sample_dataframe().1, SinkMode::Overwrite)
@@ -396,7 +406,13 @@ mod tests {
                 SinkMode::Append,
                 runtime_env.clone(),
             );
-            async move { node.execute(&[NodeInput { port: 0, data: df }]).await }
+            async move {
+                node.execute(
+                    &[NodeInput { port: 0, data: df }],
+                    &crate::dag::node_event::NodeReporter::noop(),
+                )
+                .await
+            }
         };
 
         write(sample_dataframe().1).await.unwrap();

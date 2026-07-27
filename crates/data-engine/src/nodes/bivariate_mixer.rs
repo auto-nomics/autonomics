@@ -341,7 +341,11 @@ impl DagNode for BivariateMixerNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         if inputs.len() != 4 {
             return Err(BivariateMixerError::InvalidInput(format!(
                 "bivariate_mixer 需要 4 个输入（trait1/trait2 sumstats + trait1/trait2 fit1），收到 {}",

@@ -62,7 +62,12 @@ async fn node_runs_on_intercepted_nochrom_input() {
         data: sumstats,
     };
     let started = Instant::now();
-    let outputs = node.execute(&[input]).await;
+    let outputs = node
+        .execute(
+            &[input],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
+        .await;
     let elapsed = started.elapsed().as_secs_f64();
 
     match outputs {

@@ -64,7 +64,13 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
         port: 0u8,
         data: sumstats,
     };
-    let outputs = node.execute(&[input]).await.expect("节点 execute 失败");
+    let outputs = node
+        .execute(
+            &[input],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .expect("节点 execute 失败");
 
     // 4. 收集输出（单行 fit1 结果）。
     let out_df = outputs.get(&0u8).cloned().expect("无输出端口 0 数据");

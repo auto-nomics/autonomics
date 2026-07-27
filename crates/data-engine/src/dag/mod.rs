@@ -10,6 +10,7 @@
 
 pub mod error;
 pub mod graph;
+pub mod node_event;
 pub mod runtime;
 pub mod utils;
 

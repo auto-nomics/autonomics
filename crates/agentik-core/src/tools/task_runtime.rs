@@ -103,11 +103,16 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         block_secs: u64,
     ) -> Self {
-        Self::with_notify(id, name, handle, cancel_token, block_secs, None)
+        Self::with_notify(id, name, handle, cancel_token, block_secs, None, None)
     }
 
     /// Like [`new`](Self::new) but also notifies the agent via `notify_tx`
     /// when a background task completes.
+    ///
+    /// `output_channel` lets the caller supply a pre-made `(sender, receiver)`
+    /// pair so the executing tool can push live output through the sender
+    /// before the monitor task is even constructed. When `None`, the channel
+    /// is created internally (no live output from the tool itself).
     pub fn with_notify(
         id: TaskId,
         name: String,
@@ -115,10 +120,11 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         block_secs: u64,
         notify_tx: Option<BgTaskNotifyTx>,
+        output_channel: Option<(watch::Sender<String>, watch::Receiver<String>)>,
     ) -> Self {
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
-        let (output_tx, output) = watch::channel(String::new());
+        let (output_tx, output) = output_channel.unwrap_or_else(|| watch::channel(String::new()));
         let (run_mode_tx, run_mode) = watch::channel(RunMode::Fg);
         let (tool_result_tx, tool_result) = watch::channel::<Option<ToolResult>>(None);
 

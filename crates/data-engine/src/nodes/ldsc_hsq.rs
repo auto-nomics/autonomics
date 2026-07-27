@@ -297,7 +297,11 @@ impl DagNode for LdscHsqNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
             .ok_or(LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
@@ -752,7 +756,9 @@ mod tests {
             None,
             LdscHsqConfig::new(5, None),
         );
-        let res = node.execute(&[]).await;
+        let res = node
+            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .await;
         assert!(res.is_err(), "missing input must error");
     }
 

@@ -1,7 +1,8 @@
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::dag::RunReport;
 use crate::dag::graph::PortOutputs;
+use crate::dag::node_event::NodeEvent;
 use crate::error::Result as EngineResult;
 use schemars;
 
@@ -20,6 +21,10 @@ pub enum DataEngineCmd {
         reply: oneshot::Sender<EngineResult<()>>,
     },
     RunDag {
+        /// Optional sink for streaming lightweight per-node events (status /
+        /// progress / log / finished) out of the actor as the run progresses.
+        /// `None` for the non-streaming path.
+        event_tx: Option<mpsc::Sender<NodeEvent>>,
         reply: oneshot::Sender<EngineResult<RunReport>>,
     },
     GetOutput {

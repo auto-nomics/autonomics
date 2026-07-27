@@ -18,7 +18,7 @@ pub mod truncation;
 
 pub use error::{ToolError, ToolOperationResult};
 pub use executor::{ToolExecutionConfig, ToolExecutionConfigBuilder, ToolExecutor};
-pub use function::{DynToolFunction, ToolFunction};
+pub use function::{DynToolFunction, ToolContext, ToolFunction};
 pub use registry::{SharedToolRegistry, ToolRegistry};
 pub use tool_provider::ToolProviderRegistry;
 pub use toolset::{ToolRegistration, Toolset};

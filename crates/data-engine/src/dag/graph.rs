@@ -18,6 +18,7 @@ use super::utils::{build_inputs, cascade_skip};
 use super::error::DagError;
 use super::runtime::{NodeReport, RunReport, RuntimeStatus, SchedulerConfig};
 use super::{DagNode, NodeId};
+use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::nodes::sink_file::FileSinkNode;
 
 /// Output DataFrames keyed by output port index.
@@ -66,20 +67,6 @@ pub struct DAG {
     errors: HashMap<NodeId, DagError>,
 }
 
-/// Messages a dispatched task sends back to the scheduler.
-enum JobResult {
-    Success {
-        id: NodeId,
-        outputs: PortOutputs,
-        duration: std::time::Duration,
-    },
-    Failed {
-        id: NodeId,
-        error: DagError,
-        duration: std::time::Duration,
-    },
-}
-
 impl DAG {
     /// Query the runtime status of a node. Returns `None` if the DAG has never
     /// been run.
@@ -113,7 +100,11 @@ impl DAG {
     ///
     /// Uses [`DagNode::clone_box`] to copy node payloads into spawned tasks so
     /// the original nodes stay in the DAG for re-runs / iterative optimisation.
-    pub async fn run(&mut self, cfg: &SchedulerConfig) -> Result<RunReport> {
+    pub async fn run(
+        &mut self,
+        cfg: &SchedulerConfig,
+        event_sink: Option<mpsc::Sender<NodeEvent>>,
+    ) -> Result<RunReport> {
         // Release output data to avoid memory leak
         self.outputs.clear();
         self.statuses.clear();
@@ -148,7 +139,7 @@ impl DAG {
         // let mut errors: HashMap<NodeId, DagError> = HashMap::new();
 
         let sem = Arc::new(Semaphore::new(cfg.max_concurrency.max(1)));
-        let (tx, mut rx) = mpsc::channel::<JobResult>(all_ids.len().max(1));
+        let (tx, mut rx) = mpsc::channel::<NodeEvent>(all_ids.len().max(1));
 
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
@@ -182,33 +173,35 @@ impl DAG {
                 let tx = tx.clone();
                 let sem = sem.clone();
                 let job_id = id.clone();
+                let reporter = NodeReporter::new(job_id.clone(), tx.clone());
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await.ok();
                     let mut node = node_box;
                     let start = std::time::Instant::now();
-                    let result = node.execute(&inputs).await;
+                    let result = node.execute(&inputs, &reporter).await;
                     let duration = start.elapsed();
-                    match result {
-                        Ok(outs) => {
-                            let _ = tx
-                                .send(JobResult::Success {
-                                    id: job_id,
-                                    outputs: outs,
-                                    duration,
-                                })
-                                .await;
-                        }
+                    let res = match result {
+                        Ok(outs) => JobResult::Success {
+                            id: job_id.clone(),
+                            outputs: outs,
+                            duration,
+                        },
                         Err(error) => {
                             warn!(node = %job_id, error = %error, "node failed");
-                            let _ = tx
-                                .send(JobResult::Failed {
-                                    id: job_id,
-                                    error,
-                                    duration,
-                                })
-                                .await;
+                            JobResult::Failed {
+                                id: job_id.clone(),
+                                error,
+                                duration,
+                            }
                         }
-                    }
+                    };
+                    // Authoritative terminal signal: use send().await so it is
+                    // never dropped (ephemeral reporter events use try_send and
+                    // may be lossy). Wrapping in NodeEvent keeps a single
+                    // channel element type for the whole run.
+                    let _ = tx
+                        .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
+                        .await;
                 });
             }
 
@@ -222,9 +215,31 @@ impl DAG {
                     "result channel closed unexpectedly".into(),
                 ));
             };
+
+            // Only the authoritative `Done` drives the scheduler (decrements
+            // in_flight, updates status, advances the ready queue). Ephemeral
+            // observations (Status/Progress/Log) emitted mid-`execute` are
+            // forwarded here but never affect scheduling correctness.
+            let res = match msg.kind {
+                NodeEventKind::Done(res) => res,
+                // Ephemeral lightweight observations (no DataFrames): forward to
+                // the external sink (if any), then continue without touching
+                // in_flight or the ready queue. `Finished` is never produced
+                // internally — it is emitted to the sink in the `Done` arm below.
+                lightweight @ (NodeEventKind::Status { .. }
+                | NodeEventKind::Progress { .. }
+                | NodeEventKind::Log { .. }) => {
+                    debug!(node = %msg.node_id, kind = ?lightweight, "node observation forwarded");
+                    if let Some(sink) = &event_sink {
+                        let _ = sink.try_send(NodeEvent::new(msg.node_id.clone(), lightweight));
+                    }
+                    continue;
+                }
+                NodeEventKind::Finished { .. } => continue,
+            };
             in_flight -= 1;
 
-            match msg {
+            match res {
                 JobResult::Success {
                     id,
                     outputs: outs,
@@ -234,6 +249,16 @@ impl DAG {
                     self.statuses.insert(id.clone(), RuntimeStatus::Success);
                     durations.insert(id.clone(), duration);
                     debug!(node = %id, "node succeeded");
+                    // External terminal observation (no DataFrame payload).
+                    if let Some(sink) = &event_sink {
+                        let _ = sink.try_send(NodeEvent::new(
+                            &id,
+                            NodeEventKind::Finished {
+                                status: RuntimeStatus::Success,
+                                elapsed_ms: duration.as_millis() as u64,
+                            },
+                        ));
+                    }
                     for succ in &successors[&id] {
                         let left = {
                             let c = pending.entry(succ.clone()).or_insert(0);
@@ -253,6 +278,16 @@ impl DAG {
                     self.statuses.insert(id.clone(), RuntimeStatus::Failed);
                     durations.insert(id.clone(), duration);
                     debug!(node = %id, error = %error, "node failed; cascading skip to descendants");
+                    // External terminal observation (no DataFrame payload).
+                    if let Some(sink) = &event_sink {
+                        let _ = sink.try_send(NodeEvent::new(
+                            &id,
+                            NodeEventKind::Finished {
+                                status: RuntimeStatus::Failed,
+                                elapsed_ms: duration.as_millis() as u64,
+                            },
+                        ));
+                    }
                     self.errors.insert(id.clone(), error);
                     cascade_skip(
                         &id,
@@ -1138,6 +1173,7 @@ mod tests {
         async fn execute(
             &mut self,
             _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, super::DagError> {
             Ok(HashMap::new())
         }
@@ -1499,8 +1535,73 @@ mod tests {
         assert_eq!(dag.successors("a").len(), 1);
         assert_eq!(dag.predecessors("c").len(), 2);
 
-        dag.run(&SchedulerConfig::default()).await.unwrap();
+        dag.run(&SchedulerConfig::default(), None).await.unwrap();
         let output = dag.output("c").unwrap();
         dbg!(output);
+    }
+
+    /// When `run` is given an external event sink, it must forward a
+    /// `Finished { status, elapsed_ms }` observation for every node that
+    /// completes — without DataFrame payloads — so an observer (the run_dag
+    /// tool) can report per-node timing while the run is in flight.
+    #[tokio::test]
+    async fn run_forwards_finished_events_to_sink() {
+        let mut dag = DAG::default();
+        // a (source) -> b (echo), two nodes.
+        dag.add_node(
+            "a".into(),
+            Box::new(EchoNode::from_ports(NodePorts::new().add_output_port(None))),
+        )
+        .unwrap();
+        dag.add_node(
+            "b".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new().add_input_port(None).add_output_port(None),
+            )),
+        )
+        .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.validate().unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<NodeEvent>(64);
+        let report = dag
+            .run(&SchedulerConfig::default(), Some(tx))
+            .await
+            .unwrap();
+        assert!(report.ok, "diamond run should succeed");
+
+        // Drain all forwarded events.
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        let finished: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.kind, NodeEventKind::Finished { .. }))
+            .collect();
+        assert_eq!(
+            finished.len(),
+            2,
+            "expected one Finished event per node (a, b); got: {events:?}"
+        );
+        for ev in &finished {
+            let NodeEventKind::Finished { status, elapsed_ms } = &ev.kind else {
+                unreachable!()
+            };
+            assert_eq!(
+                *status,
+                RuntimeStatus::Success,
+                "node should finish success"
+            );
+            // elapsed_ms may legitimately be 0 on trivially fast nodes; just
+            // assert the field is present and finite (it is, by type).
+            let _ = elapsed_ms;
+            assert!(
+                ev.node_id == "a" || ev.node_id == "b",
+                "Finished event should name a real node; got {}",
+                ev.node_id
+            );
+        }
     }
 }

@@ -182,7 +182,11 @@ impl DagNode for VizNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let storage = self.opendal.clone().ok_or(VizError::NoOpendalFs)?;
 
         let input = inputs.first().ok_or(VizError::InvalidInput {
@@ -277,7 +281,10 @@ mod tests {
 
         let df = sample_dataframe();
         let res = node
-            .execute(&[NodeInput { port: 0, data: df }])
+            .execute(
+                &[NodeInput { port: 0, data: df }],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("execute should succeed");
         assert!(res.is_empty(), "viz node has no output ports");

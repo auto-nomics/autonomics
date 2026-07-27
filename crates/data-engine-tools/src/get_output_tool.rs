@@ -474,9 +474,7 @@ mod tests {
         );
 
         // One row, positionally aligned with `columns`.
-        let rows = obj["rows"]
-            .as_array()
-            .expect("rows is an array");
+        let rows = obj["rows"].as_array().expect("rows is an array");
         assert_eq!(rows.len(), 1, "expected exactly one row");
         let row = rows[0]
             .as_array()

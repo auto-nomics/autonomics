@@ -53,11 +53,19 @@ impl ToolFunction for TaskStatusViewerTool {
 
         if let Some(task) = target_task {
             let status: &str = task.status().into();
-            let result = AgentToolResult::success_json(serde_json::json!({
+            // `output` is the tool's accumulated live/intermediate output
+            // (e.g. per-node progress from a backgrounded `run_dag`). Surface
+            // it only when non-empty so quick tasks stay noise-free.
+            let output = task.output();
+            let mut payload = serde_json::json!({
                 "task_id": task.id(),
                 "name": task.name(),
                 "status": status,
-            }));
+            });
+            if !output.is_empty() {
+                payload["output"] = serde_json::Value::String(output);
+            }
+            let result = AgentToolResult::success_json(payload);
 
             Ok(result)
         } else {

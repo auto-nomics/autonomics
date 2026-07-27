@@ -227,7 +227,17 @@ impl DataEngine {
 
     /// Validate and run every node of the DAG.
     pub async fn run(&mut self) -> Result<RunReport> {
-        Ok(self.dag.run(&self.config).await?)
+        Ok(self.dag.run(&self.config, None).await?)
+    }
+
+    /// Like [`run`](Self::run) but also streams lightweight per-node events
+    /// (status/progress/log/finished) to `event_sink` as the run progresses.
+    /// The returned [`RunReport`] is identical to [`run`].
+    pub async fn run_with_events(
+        &mut self,
+        event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
+    ) -> Result<RunReport> {
+        Ok(self.dag.run(&self.config, Some(event_sink)).await?)
     }
 
     pub async fn get_output(
@@ -760,7 +770,11 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
-        async fn execute(&mut self, _inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+        async fn execute(
+            &mut self,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
             Err(DagError::Schedule("kaboom".into()))
         }
     }
@@ -803,7 +817,11 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
-        async fn execute(&mut self, _inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+        async fn execute(
+            &mut self,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             Ok(HashMap::new())
         }

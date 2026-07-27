@@ -280,8 +280,17 @@ pub trait DagNode: Send + Sync {
     /// Run the node's computation.
     ///
     /// Receives one [`NodeInput`] per connected input port and must return a
-    /// [`PortOutputs`] map keyed by output port index.
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError>;
+    /// [`PortOutputs`] map keyed by output port index. The [`NodeReporter`] is
+    /// the node's channel for emitting mid-run observations — lifecycle status,
+    /// progress, and log lines — back to the scheduler, which forwards them to
+    /// external observers (e.g. the `run_dag` tool's live output). A node that
+    /// has nothing to report simply ignores it (bind it to `_reporter`); the
+    /// scheduler emits the authoritative terminal `Finished` event regardless.
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError>;
 
     /// Clone this node into a boxed trait object.
     ///

@@ -261,7 +261,11 @@ impl DagNode for IcebergSinkNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(IcebergSinkError::InvalidInput {
             message: "IcebergSinkNode requires exactly one upstream input".to_string(),
         })?;
@@ -546,7 +550,10 @@ mod tests {
 
         let (_, df) = sample_dataframe();
         let input = NodeInput { port: 0, data: df };
-        let _res = node.execute(&[input]).await.unwrap();
+        let _res = node
+            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         // let df = res.get(&0).unwrap();
         // df.clone().show().await.unwrap();
     }

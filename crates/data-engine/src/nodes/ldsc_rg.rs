@@ -329,7 +329,11 @@ impl DagNode for LdscRgNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         // Two inputs: trait 1 on port 0, trait 2 on port 1.
         let input1 = inputs
             .iter()
@@ -1034,7 +1038,9 @@ mod tests {
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
         let one_input = vec![super::super::meta::NodeInput { port: 0, data: df }];
-        let res = node.execute(&one_input).await;
+        let res = node
+            .execute(&one_input, &crate::dag::node_event::NodeReporter::noop())
+            .await;
         assert!(res.is_err(), "missing trait-2 input must error");
     }
 

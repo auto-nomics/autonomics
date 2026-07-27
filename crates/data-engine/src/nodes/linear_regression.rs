@@ -289,7 +289,11 @@ impl DagNode for LinearRegressionNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LinearRegressionError::EmptyInput)?;
         let batches = input
             .data
@@ -369,7 +373,10 @@ mod tests {
                 .read_batch(batch)
                 .unwrap(),
         };
-        let outs = node.execute(&[input]).await.unwrap();
+        let outs = node
+            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         assert_eq!(outs.len(), 1);
         let df = outs[&0].clone();
         let rows = df.collect().await.unwrap();
@@ -429,7 +436,10 @@ mod tests {
                 .read_batch(batch)
                 .unwrap(),
         };
-        let outs = node.execute(&[input]).await.unwrap();
+        let outs = node
+            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         let rows = outs[&0].clone().collect().await.unwrap();
         assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 1); // only slope
     }

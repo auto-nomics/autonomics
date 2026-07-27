@@ -5,8 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::tools::ToolContext;
 use crate::tools::task_runtime::{RunMode, TaskStatus, WaitResultKind};
 
 use super::DynToolFunction;
@@ -151,9 +153,18 @@ impl Toolset {
             let cancel_token = CancellationToken::new();
             let cancel = cancel_token.clone();
 
+            // Create the live-output channel BEFORE spawning so the tool can
+            // push progress through `ctx.output` while it runs. The matching
+            // receiver is handed to `TaskEntry` below; `view_task_status`
+            // surfaces it as the task's accumulated output.
+            let (output_tx, output_rx) = watch::channel(String::new());
+            let ctx = ToolContext {
+                output: Some(output_tx.clone()),
+            };
+
             let task_handle = tokio::spawn(async move {
                 let result = tokio::select! {
-                    r = implementation.execute(input) => r,
+                    r = implementation.execute_with_context(input, &ctx) => r,
                     _ = cancel.cancelled() => Err(ToolError::Cancel),
                     _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => Err(ToolError::Timeout { seconds: timeout_secs }),
                 };
@@ -174,6 +185,7 @@ impl Toolset {
                 cancel_token,
                 sync_secs,
                 notify_tx.clone(),
+                Some((output_tx, output_rx)),
             ));
             spawned_names.insert(tc.id.clone(), tc.name.clone());
         }
@@ -297,10 +309,12 @@ mod tests {
     use agentik_sdk::types::tools::ToolUse;
     use agentik_types::AgentEvent;
     use async_trait::async_trait;
+    use serde_json::Value;
     use serde_json::json;
     use tokio::sync::mpsc;
 
     use super::Toolset;
+    use crate::tools::ToolContext;
     use agentik_proc::tool;
 
     #[tool(name = "test_tool", description = "A test tool")]
@@ -434,5 +448,73 @@ mod tests {
 
         dbg!(&result);
         assert!(result.len() == 2)
+    }
+
+    // A tool that opts into the per-invocation context and pushes live output.
+    #[tool(name = "test_progress_tool", description = "emits progress")]
+    struct MockProgressInput {
+        reason: String,
+    }
+
+    struct MockProgressTool;
+
+    #[async_trait]
+    impl ToolFunction for MockProgressTool {
+        type Input = MockProgressInput;
+
+        // Tiny sync window so the tool flips to background while it sleeps,
+        // keeping its TaskEntry (and accumulated output) queryable.
+        fn sync_seconds(&self) -> u64 {
+            1
+        }
+
+        async fn execute_with_context(
+            &self,
+            input: Value,
+            ctx: &ToolContext,
+        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
+            let _typed: MockProgressInput = serde_json::from_value(input)?;
+            // Emit immediately so the output is populated before the sync
+            // window expires.
+            ctx.emit_line("step 1");
+            ctx.emit_line("step 2");
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok(crate::tools::ToolResult::success("done"))
+        }
+    }
+
+    /// A tool overriding `execute_with_context` must be able to push progress
+    /// into its TaskEntry's output channel, where `view_task_status` reads it.
+    #[tokio::test]
+    async fn test_execute_with_context_surfaces_output() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let mut toolset = Toolset::new(Some(tx));
+        toolset.register(MockProgressTool.into()).unwrap();
+
+        let tool_call = ToolUse {
+            id: "tc1".to_string(),
+            name: "test_progress_tool".to_string(),
+            input: json!({ "reason": "test" }),
+        };
+
+        // Returns once the sync window expires; the tool is now a background
+        // task still mid-sleep, with its output already emitted.
+        let _ = toolset.execute(&[tool_call], None, None).await.unwrap();
+
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        let entry = tasks
+            .iter()
+            .find(|t| t.id() == "tc1")
+            .expect("background task should be retained while still running");
+        let out = entry.output();
+        assert!(
+            out.contains("step 1") && out.contains("step 2"),
+            "TaskEntry.output should reflect emitted progress lines; got: {out:?}"
+        );
+        assert!(
+            out.contains('\n'),
+            "emit_line should append on its own line; got: {out:?}"
+        );
     }
 }

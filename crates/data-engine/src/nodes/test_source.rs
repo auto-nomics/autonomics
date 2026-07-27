@@ -117,6 +117,7 @@ impl DagNode for TestSourceNode {
     async fn execute(
         &mut self,
         _inputs: &[crate::dag::NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let builtin = match self.dataset_name.as_str() {
             "iris" => BuiltinDataset::Iris,
@@ -142,7 +143,10 @@ mod tests {
     #[tokio::test]
     async fn test_loads_iris_dataset() {
         let mut node = TestSourceNode::new("iris".into());
-        let outputs = node.execute(&[]).await.unwrap();
+        let outputs = node
+            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
         let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
         // Iris has 150 data rows.
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -152,7 +156,10 @@ mod tests {
     #[tokio::test]
     async fn test_unknown_dataset_errors() {
         let mut node = TestSourceNode::new("nonexistent".into());
-        let err = node.execute(&[]).await.unwrap_err();
+        let err = node
+            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Unknown test dataset"), "got: {msg}");
     }

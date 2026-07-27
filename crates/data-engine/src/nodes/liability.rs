@@ -285,7 +285,11 @@ impl DagNode for LiabilityNode {
         self
     }
 
-    async fn execute(&mut self, inputs: &[NodeInput]) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LiabilityNodeError::NoInput)?;
         let batches = input
             .data

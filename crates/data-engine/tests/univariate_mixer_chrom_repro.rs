@@ -78,12 +78,18 @@ async fn run_node(
     };
 
     let started = Instant::now();
-    let outputs = node.execute(&[input]).await.map_err(|e| {
-        format!(
-            "execute failed after {:.1}s: {e}",
-            started.elapsed().as_secs_f64()
+    let outputs = node
+        .execute(
+            &[input],
+            &data_engine::dag::node_event::NodeReporter::noop(),
         )
-    })?;
+        .await
+        .map_err(|e| {
+            format!(
+                "execute failed after {:.1}s: {e}",
+                started.elapsed().as_secs_f64()
+            )
+        })?;
     let elapsed = started.elapsed().as_secs_f64();
 
     let out_df = outputs
