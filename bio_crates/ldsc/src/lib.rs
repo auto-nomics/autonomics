@@ -22,6 +22,7 @@
 //! | [`bedio`]     | `ldscore/ldscore.py: PlinkBEDFile`      | PLINK `.bed` genotype reader + MAF filtering                   |
 //! | [`ldscore`]   | `ldscore/ldscore.py`                    | LD-score computation (`corSumVarBlocks`)                       |
 //! | [`regress`]   | `ldscore/regressions.py`                | `LD_Score_Regression`, `Gencov`, `RG`, liability conversions   |
+//! | [`sldsc`]     | (new)                                   | S-LDSC per-annotation result table + `.results` writer         |
 //! | [`sumstats`]  | `ldscore/sumstats.py`                   | h²/rg/cts pipeline drivers (read files → regress)              |
 //! | [`munge`]     | `munge_sumstats.py`                     | summary-statistic munging                                      |
 //! | [`bed`]       | (new)                                   | pure-Rust BED interval sort/merge/intersect                    |
@@ -48,6 +49,7 @@ pub mod linalg;
 pub mod make_annot;
 pub mod munge;
 pub mod regress;
+pub mod sldsc;
 pub mod stats;
 pub mod sumstats;
 
