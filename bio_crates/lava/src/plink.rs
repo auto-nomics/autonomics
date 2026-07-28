@@ -7,8 +7,9 @@
 //! for LAVA's PLINK reference: the LD is derived from the genotypes via SVD in
 //! [`crate::decompose`], not from a precomputed correlation matrix.
 
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use faer::Mat;
 
@@ -45,7 +46,11 @@ pub struct PlinkFilter {
 
 impl Default for PlinkFilter {
     fn default() -> Self {
-        Self { maf: 0.0, mac: 1.0, missing: 0.05 }
+        Self {
+            maf: 0.0,
+            mac: 1.0,
+            missing: 0.05,
+        }
     }
 }
 
@@ -62,7 +67,7 @@ pub fn load_plink(
     if snp_indices.is_empty() {
         return Err(LavaError::Input("SNP index is empty".into()));
     }
-    let line_size = (n_indiv + 3) / 4; // ceil(n_indiv/4)
+    let line_size = n_indiv.div_ceil(4); // ceil(n_indiv/4): bytes per SNP in SNP-major .bed
 
     let mut bed = std::fs::File::open(bed_path)?;
     // Validate magic: 0x6c 0x1e 0x01 (SNP-major).
@@ -72,7 +77,9 @@ pub fn load_plink(
         return Err(LavaError::Input("file is not a valid .bed file".into()));
     }
     if magic[2] != 1 {
-        return Err(LavaError::Input(".bed is not SNP-major (individual-major unsupported)".into()));
+        return Err(LavaError::Input(
+            ".bed is not SNP-major (individual-major unsupported)".into(),
+        ));
     }
 
     // Step indices (differences), as the C++ process_index(as_steps=true).
@@ -81,7 +88,9 @@ pub fn load_plink(
         if k > 0 {
             let prev = snp_indices[k - 1];
             if s <= prev {
-                return Err(LavaError::Input("SNP index is not ordered / duplicate".into()));
+                return Err(LavaError::Input(
+                    "SNP index is not ordered / duplicate".into(),
+                ));
             }
             step_index.push(s - prev);
         } else {
@@ -168,12 +177,20 @@ pub fn load_plink(
         snp_out.push(snp_indices[i]);
     }
 
-    Ok(PlinkLd { genotypes, snp_indices: snp_out, freq })
+    Ok(PlinkLd {
+        genotypes,
+        snp_indices: snp_out,
+        freq,
+    })
 }
 
 /// Load the `.bim` (SNP info) and `.fam` (sample size) for a PLINK prefix.
 /// Faithful port of `load.reference` (plink mode): snp.info = (SNP, CHR, POS, A1, A2),
 /// SNP lower-cased; sample.size = nrow(.fam).
+///
+/// Builds `chr_prefix`/`chr_offset` from the (merged) `.bim` so that
+/// [`crate::locus::process_locus`] resolves the right `.bed` per chromosome
+/// through the same code path used for per-chromosome references.
 pub fn load_reference(prefix: &Path) -> Result<PlinkRef> {
     let bim = prefix.with_extension("bim");
     let fam = prefix.with_extension("fam");
@@ -186,10 +203,93 @@ pub fn load_reference(prefix: &Path) -> Result<PlinkRef> {
     }
     let sample_size = count_lines(&fam)?;
     let snp_info = read_bim(&bim)?;
+    let prefix = prefix.to_path_buf();
+    // Single merged `.bed`: every chromosome lives in the same file, indexed by
+    // its global `.bim` row. So the per-`.bed` row offset for every chromosome is
+    // 0 (load_plink seeks by absolute global index), and every chromosome
+    // resolves to this one prefix.
+    let mut chr_prefix: HashMap<i64, PathBuf> = HashMap::new();
+    let mut chr_offset: HashMap<i64, usize> = HashMap::new();
+    for &c in snp_info.chr.iter() {
+        chr_offset.entry(c).or_insert(0);
+        chr_prefix.entry(c).or_insert_with(|| prefix.clone());
+    }
     Ok(PlinkRef {
-        prefix: prefix.to_path_buf(),
+        prefix,
         snp_info,
         sample_size,
+        chr_prefix,
+        chr_offset,
+    })
+}
+
+/// Load a **per-chromosome** PLINK reference from a prefix template containing
+/// the literal `{N}` (e.g. `/data/chr{N}/panel.chr{N}.qc`), resolved for each
+/// chromosome in `chroms`. Chromosomes whose files are absent are silently
+/// skipped (loci on them later yield no SNPs); present chromosomes are
+/// concatenated in `chroms` order into one merged `snp_info`. All loaded
+/// chromosomes must share the same `.fam` sample size.
+pub fn load_reference_template(template: &str, chroms: &[i64]) -> Result<PlinkRef> {
+    if !template.contains("{N}") {
+        return Err(LavaError::Input(format!(
+            "ref_prefix_template must contain '{{N}}' (chromosome placeholder): got {template:?}"
+        )));
+    }
+    let mut snp = Vec::new();
+    let mut chr = Vec::new();
+    let mut pos = Vec::new();
+    let mut a1 = Vec::new();
+    let mut a2 = Vec::new();
+    let mut chr_prefix: HashMap<i64, PathBuf> = HashMap::new();
+    let mut chr_offset: HashMap<i64, usize> = HashMap::new();
+    let mut sample_size: Option<usize> = None;
+    for c in chroms {
+        let resolved = PathBuf::from(template.replace("{N}", &c.to_string()));
+        let bim = resolved.with_extension("bim");
+        let fam = resolved.with_extension("fam");
+        let bed = resolved.with_extension("bed");
+        if !bed.exists() || !bim.exists() || !fam.exists() {
+            // graceful skip — locus on this chr will find no SNPs
+            continue;
+        }
+        let n = count_lines(&fam)?;
+        match sample_size {
+            Some(s) if s != n => {
+                return Err(LavaError::Input(format!(
+                    "sample-size mismatch for {prefix}: {s} vs {n} (per-locus n_indiv must be uniform)",
+                    prefix = resolved.display()
+                )));
+            }
+            None => sample_size = Some(n),
+            _ => {}
+        }
+        let info = read_bim(&bim)?;
+        chr_offset.insert(*c, snp.len());
+        chr_prefix.insert(*c, resolved);
+        snp.extend(info.snp);
+        chr.extend(info.chr);
+        pos.extend(info.pos);
+        a1.extend(info.a1);
+        a2.extend(info.a2);
+    }
+    let sample_size = sample_size.ok_or_else(|| {
+        LavaError::Input(format!(
+            "ref_prefix_template {template:?} matched no PLINK files for chromosomes {chroms:?}"
+        ))
+    })?;
+    let snp_info = SnpInfo {
+        snp,
+        chr,
+        pos,
+        a1,
+        a2,
+    };
+    Ok(PlinkRef {
+        prefix: PathBuf::from(template),
+        snp_info,
+        sample_size,
+        chr_prefix,
+        chr_offset,
     })
 }
 
@@ -223,5 +323,11 @@ fn read_bim(path: &Path) -> Result<SnpInfo> {
         a1.push(parts[4].to_string());
         a2.push(parts[5].to_string());
     }
-    Ok(SnpInfo { snp, chr, pos, a1, a2 })
+    Ok(SnpInfo {
+        snp,
+        chr,
+        pos,
+        a1,
+        a2,
+    })
 }

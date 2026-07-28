@@ -14,8 +14,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use lava::analysis::{run_bivar, run_multireg, run_pcor, run_univ};
-use lava::input::{process_input, read_loci};
-use lava::locus::{process_locus, LocusOptions};
+use lava::input::{
+    finish_input_with_ref, process_input, process_sample_overlap, read_input_info, read_loci,
+    read_sumstats_file,
+};
+use lava::locus::{LocusOptions, process_locus};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/golden");
@@ -29,7 +32,8 @@ fn gold(name: &str) -> PathBuf {
 
 /// Read a header-keyed TSV into a vector of row maps (string values).
 fn read_tsv(path: &Path) -> Vec<HashMap<String, String>> {
-    let s = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let s =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let mut lines = s.lines();
     let header: Vec<String> = lines
         .next()
@@ -51,7 +55,9 @@ fn read_tsv(path: &Path) -> Vec<HashMap<String, String>> {
 }
 
 fn fval(m: &HashMap<String, String>, k: &str) -> f64 {
-    m.get(k).map(|v| v.parse::<f64>().unwrap_or(f64::NAN)).unwrap_or(f64::NAN)
+    m.get(k)
+        .map(|v| v.parse::<f64>().unwrap_or(f64::NAN))
+        .unwrap_or(f64::NAN)
 }
 
 fn close(a: f64, b: f64, rel: f64, abs: f64) -> bool {
@@ -76,6 +82,91 @@ fn make_input() -> lava::input::Input {
     .expect("process_input failed")
 }
 
+/// Split a merged PLINK prefix into per-chromosome files `{out_dir}/chr{N}.{bed,bim,fam}`,
+/// SNP-major `.bed` and all. Returns the chromosomes present in ascending order
+/// (matching the merged file's chr-sorted row order, so concatenation reproduces
+/// the original global index space). Used to exercise the per-chromosome
+/// reference path against the same genotypes as the merged fixture.
+fn split_fixture_by_chrom(merged_prefix: &Path, out_dir: &Path) -> std::io::Result<Vec<i64>> {
+    use std::collections::BTreeMap;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let bim_txt = std::fs::read_to_string(merged_prefix.with_extension("bim"))?;
+    let fam_txt = std::fs::read_to_string(merged_prefix.with_extension("fam"))?;
+    // PLINK .fam is one row per individual; line_size = ceil(n_indiv/4) bytes per SNP.
+    let n_indiv = fam_txt.lines().filter(|l| !l.trim().is_empty()).count();
+    let line_size = (n_indiv + 3) / 4;
+
+    // group bim rows by chromosome, preserving intra-chr order
+    let mut by_chr: BTreeMap<i64, Vec<(usize, String)>> = BTreeMap::new();
+    for (row, line) in bim_txt.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        let chr = line
+            .split_whitespace()
+            .next()
+            .and_then(|c| c.parse::<i64>().ok())
+            .unwrap_or(0);
+        by_chr.entry(chr).or_default().push((row, line.to_string()));
+    }
+    let chroms: Vec<i64> = by_chr.keys().copied().collect();
+
+    let mut bed = std::fs::File::open(merged_prefix.with_extension("bed"))?;
+    let mut header = [0u8; 3];
+    bed.read_exact(&mut header)?;
+
+    for (&chr, rows) in &by_chr {
+        let prefix = out_dir.join(format!("chr{chr}"));
+        std::fs::write(format!("{}.fam", prefix.display()), &fam_txt)?;
+        let bim_out: String = rows.iter().map(|(_, l)| format!("{l}\n")).collect();
+        std::fs::write(format!("{}.bim", prefix.display()), bim_out)?;
+        let mut out = std::fs::File::create(format!("{}.bed", prefix.display()))?;
+        out.write_all(&header)?;
+        let mut buf = vec![0u8; line_size];
+        for &(row, _) in rows {
+            bed.seek(SeekFrom::Start(3 + (row as u64) * (line_size as u64)))?;
+            bed.read_exact(&mut buf)?;
+            out.write_all(&buf)?;
+        }
+    }
+    Ok(chroms)
+}
+
+/// Build a processed [`Input`] whose PLINK reference is the per-chromosome split
+/// of the `g1000_test` fixture (via `load_reference_template`), reading sumstats
+/// / info / overlap fresh so harmonise/align run exactly once — comparable
+/// apples-to-apples with [`make_input`] (merged prefix).
+fn make_input_per_chrom(dir: &Path) -> (lava::input::Input, Vec<i64>) {
+    let chroms = split_fixture_by_chrom(&fx("g1000_test"), dir).expect("split fixture");
+    let tpl = dir.join("chr{N}");
+    let info =
+        read_input_info(&fx("input.info.txt"), None, Some(FIXTURES)).expect("read_input_info");
+    let phenos: Vec<String> = info.iter().map(|p| p.phenotype.clone()).collect();
+    let sample_overlap = if phenos.len() > 1 {
+        Some(&fx("sample.overlap.txt"))
+            .map(|f| process_sample_overlap(f, &phenos))
+            .transpose()
+            .expect("sample overlap")
+    } else {
+        None
+    };
+    let mut sum_stats = Vec::with_capacity(phenos.len());
+    for pi in &info {
+        sum_stats.push(
+            read_sumstats_file(
+                std::path::Path::new(&pi.filename),
+                &pi.phenotype,
+                1e-300,
+                None,
+            )
+            .expect("read sumstats"),
+        );
+    }
+    let reference = lava::plink::load_reference_template(&tpl.to_string_lossy(), &chroms)
+        .expect("load_reference_template");
+    let input = finish_input_with_ref(info, phenos, sum_stats, sample_overlap, reference)
+        .expect("finish_input_with_ref");
+    (input, chroms)
+}
+
 #[test]
 #[ignore]
 fn locus_266_deterministic() {
@@ -85,7 +176,11 @@ fn locus_266_deterministic() {
     let loc = process_locus(
         l266,
         &input,
-        Some(&["depression".to_string(), "neuro".to_string(), "bmi".to_string()]),
+        Some(&[
+            "depression".to_string(),
+            "neuro".to_string(),
+            "bmi".to_string(),
+        ]),
         &LocusOptions::default(),
     )
     .expect("process_locus 266")
@@ -93,29 +188,61 @@ fn locus_266_deterministic() {
 
     let golden = read_tsv(&gold("locus_266_intermediate.tsv"));
     assert_eq!(loc.k, fval(&golden[0], "K") as usize, "K mismatch");
-    assert_eq!(loc.n_snps, fval(&golden[0], "n.snps") as usize, "n.snps mismatch");
+    assert_eq!(
+        loc.n_snps,
+        fval(&golden[0], "n.snps") as usize,
+        "n.snps mismatch"
+    );
 
     // phenos order
     let gphenos: Vec<&str> = golden.iter().map(|r| r["phen"].as_str()).collect();
-    assert_eq!(loc.phenos, gphenos.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert_eq!(
+        loc.phenos,
+        gphenos.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
 
     let phenos = ["depression", "neuro", "bmi"];
     let univ = run_univ(&loc.params(), None, false, true);
     for (i, ph) in phenos.iter().enumerate() {
         let g = golden.iter().find(|r| r["phen"] == *ph).unwrap();
         let gi = loc.phenos.iter().position(|p| p == *ph).unwrap();
-        println!("{ph}: h2.obs rust={} R={} | N rust={} R={} | sigma rust={} R={} | omega rust={} R={}",
-            loc.h2_obs[gi], fval(g, "h2.obs"),
-            loc.n[gi], fval(g, "N"),
-            loc.sigma[(gi,gi)], fval(g, "sigma_diag"),
-            loc.omega[(gi,gi)], fval(g, "omega_diag"));
-        assert!(close(loc.n[gi], fval(g, "N"), 1e-6, 1e-6), "N {} mismatch", ph);
-        assert!(close(loc.sigma[(gi, gi)], fval(g, "sigma_diag"), 1e-4, 1e-9), "sigma {} mismatch", ph);
-        assert!(close(loc.omega[(gi, gi)], fval(g, "omega_diag"), 1e-4, 1e-9), "omega {} mismatch", ph);
-        assert!(close(univ[i].p, fval(g, "univ_p"), 1e-4, 1e-9), "univ p {} mismatch", ph);
+        println!(
+            "{ph}: h2.obs rust={} R={} | N rust={} R={} | sigma rust={} R={} | omega rust={} R={}",
+            loc.h2_obs[gi],
+            fval(g, "h2.obs"),
+            loc.n[gi],
+            fval(g, "N"),
+            loc.sigma[(gi, gi)],
+            fval(g, "sigma_diag"),
+            loc.omega[(gi, gi)],
+            fval(g, "omega_diag")
+        );
+        assert!(
+            close(loc.n[gi], fval(g, "N"), 1e-6, 1e-6),
+            "N {} mismatch",
+            ph
+        );
+        assert!(
+            close(loc.sigma[(gi, gi)], fval(g, "sigma_diag"), 1e-4, 1e-9),
+            "sigma {} mismatch",
+            ph
+        );
+        assert!(
+            close(loc.omega[(gi, gi)], fval(g, "omega_diag"), 1e-4, 1e-9),
+            "omega {} mismatch",
+            ph
+        );
+        assert!(
+            close(univ[i].p, fval(g, "univ_p"), 1e-4, 1e-9),
+            "univ p {} mismatch",
+            ph
+        );
         let _ = i;
     }
-    println!("locus_266 deterministic OK (K={}, n.snps={})", loc.k, loc.n_snps);
+    println!(
+        "locus_266 deterministic OK (K={}, n.snps={})",
+        loc.k, loc.n_snps
+    );
 }
 
 #[test]
@@ -127,7 +254,11 @@ fn locus_266_omega_matrix() {
     let loc = process_locus(
         l266,
         &input,
-        Some(&["depression".to_string(), "neuro".to_string(), "bmi".to_string()]),
+        Some(&[
+            "depression".to_string(),
+            "neuro".to_string(),
+            "bmi".to_string(),
+        ]),
         &LocusOptions::default(),
     )
     .unwrap()
@@ -136,7 +267,11 @@ fn locus_266_omega_matrix() {
     let omega_rows: Vec<Vec<f64>> = std::fs::read_to_string(gold("locus_266_omega.tsv"))
         .unwrap()
         .lines()
-        .map(|l| l.split_whitespace().map(|x| x.parse::<f64>().unwrap()).collect())
+        .map(|l| {
+            l.split_whitespace()
+                .map(|x| x.parse::<f64>().unwrap())
+                .collect()
+        })
         .collect();
     let p = loc.p();
     let mut max_err = 0.0f64;
@@ -147,7 +282,10 @@ fn locus_266_omega_matrix() {
         }
     }
     println!("locus_266 omega max abs err = {:.3e}", max_err);
-    assert!(max_err < 1e-6, "omega matrix mismatch (max err {max_err:.3e})");
+    assert!(
+        max_err < 1e-6,
+        "omega matrix mismatch (max err {max_err:.3e})"
+    );
 }
 
 #[test]
@@ -159,22 +297,58 @@ fn locus_266_bivar() {
     let loc = process_locus(
         l266,
         &input,
-        Some(&["depression".to_string(), "neuro".to_string(), "bmi".to_string()]),
+        Some(&[
+            "depression".to_string(),
+            "neuro".to_string(),
+            "bmi".to_string(),
+        ]),
         &LocusOptions::default(),
     )
     .unwrap()
     .unwrap();
 
     let mut rng = lava::rng(lava::DEFAULT_RNG_SEED);
-    let bivar = run_bivar(&loc.params(), None, None, None, true, true, 1.25, true, &mut rng);
+    let bivar = run_bivar(
+        &loc.params(),
+        None,
+        None,
+        None,
+        true,
+        true,
+        1.25,
+        true,
+        &mut rng,
+    );
     let golden = read_tsv(&gold("locus_266_bivar.tsv"));
     for row in &bivar {
-        let g = golden.iter().find(|r| r["phen1"] == row.phen1 && r["phen2"] == row.phen2).unwrap();
-        println!("{} ~ {}: rho rust={:.4} R={:.4} | r2 rust={:.4} R={:.4} | p rust={:.4} R={:.4}",
-            row.phen1, row.phen2, row.rho, fval(g, "rho"), row.r2, fval(g, "r2"), row.p, fval(g, "p"));
+        let g = golden
+            .iter()
+            .find(|r| r["phen1"] == row.phen1 && r["phen2"] == row.phen2)
+            .unwrap();
+        println!(
+            "{} ~ {}: rho rust={:.4} R={:.4} | r2 rust={:.4} R={:.4} | p rust={:.4} R={:.4}",
+            row.phen1,
+            row.phen2,
+            row.rho,
+            fval(g, "rho"),
+            row.r2,
+            fval(g, "r2"),
+            row.p,
+            fval(g, "p")
+        );
         // deterministic point estimates (tight)
-        assert!(close(row.rho, fval(g, "rho"), 1e-4, 1e-9), "rho {}~{}", row.phen1, row.phen2);
-        assert!(close(row.r2, fval(g, "r2"), 1e-4, 1e-9), "r2 {}~{}", row.phen1, row.phen2);
+        assert!(
+            close(row.rho, fval(g, "rho"), 1e-4, 1e-9),
+            "rho {}~{}",
+            row.phen1,
+            row.phen2
+        );
+        assert!(
+            close(row.r2, fval(g, "r2"), 1e-4, 1e-9),
+            "r2 {}~{}",
+            row.phen1,
+            row.phen2
+        );
     }
     println!("locus_266 bivar point estimates OK");
 }
@@ -193,7 +367,10 @@ fn all_loci_deterministic_sweep() {
             _ => continue,
         };
         for (gi, ph) in loc.phenos.iter().enumerate() {
-            let g = match golden.iter().find(|r| r["locus"] == ld.loc && r["phen"] == *ph) {
+            let g = match golden
+                .iter()
+                .find(|r| r["locus"] == ld.loc && r["phen"] == *ph)
+            {
                 Some(r) => r,
                 None => continue,
             };
@@ -204,14 +381,27 @@ fn all_loci_deterministic_sweep() {
                 continue;
             }
             if !close(loc.omega[(gi, gi)], fval(g, "omega_diag"), 1e-3, 1e-9) {
-                println!("  omega diag locus {} ph {} rust={:.6e} R={:.6e}", ld.loc, ph, loc.omega[(gi,gi)], fval(g,"omega_diag"));
+                println!(
+                    "  omega diag locus {} ph {} rust={:.6e} R={:.6e}",
+                    ld.loc,
+                    ph,
+                    loc.omega[(gi, gi)],
+                    fval(g, "omega_diag")
+                );
             }
-            assert!(close(loc.sigma[(gi, gi)], fval(g, "sigma_diag"), 1e-3, 1e-9),
-                "sigma diag locus {} ph {}", ld.loc, ph);
+            assert!(
+                close(loc.sigma[(gi, gi)], fval(g, "sigma_diag"), 1e-3, 1e-9),
+                "sigma diag locus {} ph {}",
+                ld.loc,
+                ph
+            );
             checked += 1;
         }
     }
-    println!("all-loci sweep: checked {} (phenotype,locus) pairs; K mismatches: {}", checked, k_mismatch);
+    println!(
+        "all-loci sweep: checked {} (phenotype,locus) pairs; K mismatches: {}",
+        checked, k_mismatch
+    );
     assert!(checked > 100, "too few pairs checked ({checked})");
 }
 
@@ -236,20 +426,127 @@ fn locus_964_multireg_pcor() {
     .unwrap();
 
     let mut rng = lava::rng(lava::DEFAULT_RNG_SEED);
-    let mr = run_multireg(&loc.params(), "hypothyroidism", None, None, true, true, true, 1.5, &mut rng);
+    let mr = run_multireg(
+        &loc.params(),
+        "hypothyroidism",
+        None,
+        None,
+        true,
+        true,
+        true,
+        1.5,
+        &mut rng,
+    );
     let mr_golden = read_tsv(&gold("locus_964_multireg.tsv"));
     let mr_rows = mr.first().unwrap();
     for r in mr_rows {
-        let g = mr_golden.iter().find(|x| x["predictors"] == r.predictors).unwrap();
-        println!("multireg {}: gamma rust={:.4} R={:.4} | r2 rust={:.4} R={:.4}",
-            r.predictors, r.gamma, fval(g, "gamma"), r.r2, fval(g, "r2"));
-        assert!(close(r.gamma, fval(g, "gamma"), 1e-4, 1e-9), "gamma {}", r.predictors);
-        assert!(close(r.r2, fval(g, "r2"), 1e-4, 1e-9), "r2 {}", r.predictors);
+        let g = mr_golden
+            .iter()
+            .find(|x| x["predictors"] == r.predictors)
+            .unwrap();
+        println!(
+            "multireg {}: gamma rust={:.4} R={:.4} | r2 rust={:.4} R={:.4}",
+            r.predictors,
+            r.gamma,
+            fval(g, "gamma"),
+            r.r2,
+            fval(g, "r2")
+        );
+        assert!(
+            close(r.gamma, fval(g, "gamma"), 1e-4, 1e-9),
+            "gamma {}",
+            r.predictors
+        );
+        assert!(
+            close(r.r2, fval(g, "r2"), 1e-4, 1e-9),
+            "r2 {}",
+            r.predictors
+        );
     }
 
-    let pc = run_pcor(&loc.params(), ("hypothyroidism", "diabetes"), Some(&["asthma".to_string()]), None, true, true, 0.95, 1.25, &mut rng);
+    let pc = run_pcor(
+        &loc.params(),
+        ("hypothyroidism", "diabetes"),
+        Some(&["asthma".to_string()]),
+        None,
+        true,
+        true,
+        0.95,
+        1.25,
+        &mut rng,
+    );
     let pcg = &read_tsv(&gold("locus_964_pcor.tsv"))[0];
     println!("pcor: rust={:.4} R={:.4}", pc.pcor, fval(pcg, "pcor"));
-    assert!(close(pc.pcor, fval(pcg, "pcor"), 1e-4, 1e-9), "pcor point estimate");
+    assert!(
+        close(pc.pcor, fval(pcg, "pcor"), 1e-4, 1e-9),
+        "pcor point estimate"
+    );
     println!("locus_964 multireg + pcor point estimates OK");
+}
+
+/// End-to-end check that the **per-chromosome reference path** (`ref_prefix_template`
+/// → `load_reference_template` → per-chr `.bed` resolution + global↔local index
+/// translation in `process_locus`) produces results identical to the merged-prefix
+/// path on the SAME genotypes. Splits the `g1000_test` fixture by chromosome, then
+/// for every analysable locus compares K, n_snps, and every omega/sigma cell.
+#[test]
+#[ignore]
+fn per_chromosome_reference_matches_merged() {
+    let merged = make_input();
+    let dir = std::env::temp_dir().join(format!("lava_pere2e_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (per_chrom, chroms) = make_input_per_chrom(&dir);
+    assert!(chroms.len() > 1, "fixture should span multiple chromosomes");
+
+    let loci = read_loci(&fx("test.loci")).expect("read_loci");
+    let opts = LocusOptions::default();
+    let mut checked = 0usize;
+    let mut seen_chrs = std::collections::HashSet::new();
+    for ld in &loci {
+        let m = match process_locus(ld, &merged, None, &opts) {
+            Ok(Some(l)) => l,
+            _ => continue,
+        };
+        let p = match process_locus(ld, &per_chrom, None, &opts) {
+            Ok(Some(l)) => l,
+            _ => panic!("locus {} succeeded merged but failed per-chrom", ld.loc),
+        };
+        assert_eq!(
+            m.k, p.k,
+            "K mismatch at locus {} (chr {:?})",
+            ld.loc, ld.chr
+        );
+        assert_eq!(m.n_snps, p.n_snps, "n_snps mismatch at locus {}", ld.loc);
+        for i in 0..m.omega.nrows() {
+            for j in 0..m.omega.ncols() {
+                let d = (m.omega[(i, j)] - p.omega[(i, j)]).abs();
+                assert!(
+                    d < 1e-12,
+                    "omega[{i},{j}] differs at locus {} by {d:.3e}",
+                    ld.loc
+                );
+                let d = (m.sigma[(i, j)] - p.sigma[(i, j)]).abs();
+                assert!(
+                    d < 1e-12,
+                    "sigma[{i},{j}] differs at locus {} by {d:.3e}",
+                    ld.loc
+                );
+            }
+        }
+        if let Some(c) = ld.chr {
+            seen_chrs.insert(c);
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "no loci were analysed");
+    assert!(
+        seen_chrs.len() > 1,
+        "expected loci across >1 chromosome, got {seen_chrs:?}"
+    );
+    println!(
+        "per-chromosome vs merged: {checked} loci across {} chromosomes ({:?}); all K/n_snps/omega/sigma identical to 1e-12",
+        seen_chrs.len(),
+        seen_chrs
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

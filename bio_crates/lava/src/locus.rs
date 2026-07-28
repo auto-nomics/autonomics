@@ -13,7 +13,7 @@ use crate::binary::process_binary;
 use crate::decompose::decompose_plink;
 use crate::error::{LavaError, Result};
 use crate::input::{Input, LocusDef, SumStats};
-use crate::plink::{load_plink, PlinkFilter};
+use crate::plink::{PlinkFilter, load_plink};
 use crate::stats::{cov2cor, dnorm, qnorm};
 
 /// Options for [`process_locus`] (defaults match LAVA's `process.locus`).
@@ -202,7 +202,13 @@ pub fn locus_params_from_rows(rows: &[LocusParamRow]) -> Vec<LocusParams> {
         .into_iter()
         .map(|id| {
             let gr = &groups[&id];
-            let p = gr.iter().map(|r| r.i).max().map(|m| m + 1).unwrap_or(0).max(gr.iter().map(|r| r.j).max().map(|m| m + 1).unwrap_or(0));
+            let p = gr
+                .iter()
+                .map(|r| r.i)
+                .max()
+                .map(|m| m + 1)
+                .unwrap_or(0)
+                .max(gr.iter().map(|r| r.j).max().map(|m| m + 1).unwrap_or(0));
             let k = gr[0].k;
             let nref_scale = gr[0].nref_scale;
             let mut omega = Mat::zeros(p, p);
@@ -221,17 +227,39 @@ pub fn locus_params_from_rows(rows: &[LocusParamRow]) -> Vec<LocusParams> {
                 phenos[r.i] = r.pheno_i.clone();
                 phenos[r.j] = r.pheno_j.clone();
                 if r.i == r.j {
-                    if let Some(v) = r.n_i { n[r.i] = v; }
-                    if let Some(v) = r.binary_i { binary[r.i] = v; }
-                    if let Some(v) = r.h2_obs_i { h2_obs[r.i] = v; }
-                    if let Some(v) = r.h2_latent_i { h2_latent[r.i] = v; }
-                    if let Some(v) = r.ascertained_i { ascertained[r.i] = v; }
+                    if let Some(v) = r.n_i {
+                        n[r.i] = v;
+                    }
+                    if let Some(v) = r.binary_i {
+                        binary[r.i] = v;
+                    }
+                    if let Some(v) = r.h2_obs_i {
+                        h2_obs[r.i] = v;
+                    }
+                    if let Some(v) = r.h2_latent_i {
+                        h2_latent[r.i] = v;
+                    }
+                    if let Some(v) = r.ascertained_i {
+                        ascertained[r.i] = v;
+                    }
                 }
             }
             LocusParams {
-                id, chr: gr[0].chr, start: gr[0].start, stop: gr[0].stop,
-                n_snps: gr[0].n_snps, k, nref_scale, phenos, omega, sigma,
-                n, binary, h2_obs, h2_latent, ascertained_h2: ascertained,
+                id,
+                chr: gr[0].chr,
+                start: gr[0].start,
+                stop: gr[0].stop,
+                n_snps: gr[0].n_snps,
+                k,
+                nref_scale,
+                phenos,
+                omega,
+                sigma,
+                n,
+                binary,
+                h2_obs,
+                h2_latent,
+                ascertained_h2: ascertained,
             }
         })
         .collect()
@@ -239,11 +267,17 @@ pub fn locus_params_from_rows(rows: &[LocusParamRow]) -> Vec<LocusParams> {
 
 /// Subset a phenotype's sum-stats (aligned to `analysis_snps`) to `locus_snps`
 /// (a subsequence), returning aligned `(stat, n)` vectors.
-fn subset_to_locus(ss: &SumStats, locus_snps: &[String], analysis_index: &std::collections::HashMap<String, usize>) -> (Vec<f64>, Vec<f64>) {
+fn subset_to_locus(
+    ss: &SumStats,
+    locus_snps: &[String],
+    analysis_index: &std::collections::HashMap<String, usize>,
+) -> (Vec<f64>, Vec<f64>) {
     let mut stat = Vec::with_capacity(locus_snps.len());
     let mut n = Vec::with_capacity(locus_snps.len());
     for s in locus_snps {
-        let &pos = analysis_index.get(s).expect("locus snp missing from analysis set");
+        let &pos = analysis_index
+            .get(s)
+            .expect("locus snp missing from analysis set");
         stat.push(ss.stat[pos]);
         n.push(ss.n[pos]);
     }
@@ -279,9 +313,15 @@ pub fn process_locus(
 
     // locus SNPs
     let mut locus_snps: Vec<String> = if let Some(snps) = &locus_def.snps {
-        snps.iter().filter_map(|s| {
-            if input.analysis_snps.contains(s) { Some(s.clone()) } else { None }
-        }).collect()
+        snps.iter()
+            .filter_map(|s| {
+                if input.analysis_snps.contains(s) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     } else {
         // by coordinates from the reference bim
         let chr = locus_def.chr.unwrap_or(0);
@@ -322,17 +362,52 @@ pub fn process_locus(
             msg: "locus SNP indices not in ascending bim order".into(),
         });
     }
+    if bim_indices.is_empty() {
+        return Ok(None);
+    }
+
+    // Resolve this locus's chromosome and its per-chromosome `.bed` + the offset
+    // of that chromosome within the (merged) `snp_info`. Global bim indices are
+    // translated to local `.bed`-row offsets for `load_plink`; `load_plink`
+    // returns those locals verbatim, so we add the offset back when indexing the
+    // global `snp_info`. (A locus is single-chromosome by construction: the
+    // coordinate filter above restricts to one chr; for SNP-list mode we infer
+    // the chr from the first locus SNP.)
+    let chr = locus_def.chr.unwrap_or_else(|| {
+        bim_indices
+            .first()
+            .map(|&i| input.reference.snp_info.chr[i])
+            .unwrap_or(0)
+    });
+    let (bed, offset) = match (
+        input.reference.chr_prefix.get(&chr),
+        input.reference.chr_offset.get(&chr),
+    ) {
+        (Some(p), Some(o)) => (p.with_extension("bed"), *o),
+        _ => return Ok(None), // chromosome not present in the reference
+    };
 
     // load PLINK genotypes for these SNPs
     let require_freq = binary.iter().any(|&b| b);
-    let bed = input.reference.prefix.with_extension("bed");
-    let ld = load_plink(&bed, input.reference.sample_size, &bim_indices, PlinkFilter::default(), require_freq)?;
-    // the kept SNP ids (bim indices → snp ids)
-    let kept_ids: Vec<String> = ld.snp_indices.iter().map(|&bi| input.reference.snp_info.snp[bi].clone()).collect();
+    let local_bim: Vec<usize> = bim_indices.iter().map(|&g| g - offset).collect();
+    let ld = load_plink(
+        &bed,
+        input.reference.sample_size,
+        &local_bim,
+        PlinkFilter::default(),
+        require_freq,
+    )?;
+    // the kept SNP ids (local bim indices → global via +offset → snp ids)
+    let kept_ids: Vec<String> = ld
+        .snp_indices
+        .iter()
+        .map(|&bi| input.reference.snp_info.snp[bi + offset].clone())
+        .collect();
     let n_indiv = ld.n_indiv();
 
     // subset sumstats to kept SNPs. Build analysis snp→position map.
-    let mut analysis_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut analysis_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (i, s) in input.analysis_snps.iter().enumerate() {
         analysis_index.insert(s.clone(), i);
     }
@@ -359,16 +434,25 @@ pub fn process_locus(
     let mut locus_n: Vec<f64> = Vec::with_capacity(p);
     for pi in 0..p {
         let valid: Vec<f64> = n_per[pi].iter().copied().filter(|x| !x.is_nan()).collect();
-        let mut mean = if valid.is_empty() { f64::NAN } else { valid.iter().sum::<f64>() / valid.len() as f64 };
+        let mut mean = if valid.is_empty() {
+            f64::NAN
+        } else {
+            valid.iter().sum::<f64>() / valid.len() as f64
+        };
         if mean.is_nan() {
             // fallback: mean over all analysis snps for this pheno
-            let all: Vec<f64> = input.sum_stats[input.phenos.iter().position(|x| x == &phenos[pi]).unwrap()]
-                .n
-                .iter()
-                .copied()
-                .filter(|x| !x.is_nan())
-                .collect();
-            mean = if all.is_empty() { f64::NAN } else { all.iter().sum::<f64>() / all.len() as f64 };
+            let all: Vec<f64> = input.sum_stats
+                [input.phenos.iter().position(|x| x == &phenos[pi]).unwrap()]
+            .n
+            .iter()
+            .copied()
+            .filter(|x| !x.is_nan())
+            .collect();
+            mean = if all.is_empty() {
+                f64::NAN
+            } else {
+                all.iter().sum::<f64>() / all.len() as f64
+            };
         }
         for v in n_per[pi].iter_mut() {
             if v.is_nan() {
@@ -383,7 +467,10 @@ pub fn process_locus(
     let mut drop_set: HashSet<usize> = HashSet::new();
     for pi in 0..p {
         let corr = if binary[pi] {
-            let prop_cases = input.info_for(&phenos[pi]).map(|i| i.prop_cases).unwrap_or(f64::NAN);
+            let prop_cases = input
+                .info_for(&phenos[pi])
+                .map(|i| i.prop_cases)
+                .unwrap_or(f64::NAN);
             let c = process_binary(&stat_per[pi], &n_per[pi], &ld.freq, prop_cases);
             for (i, &v) in c.iter().enumerate() {
                 if v.is_nan() {
@@ -402,37 +489,52 @@ pub fn process_locus(
     }
 
     // drop SNPs in drop_set
-    let (final_ids, final_corr, _final_n): (Vec<String>, Vec<Vec<f64>>, Vec<f64>) = if drop_set.is_empty() {
-        (kept_ids.clone(), corr_per.clone(), locus_n.clone())
-    } else {
-        let keep_idx: Vec<usize> = (0..n_kept).filter(|i| !drop_set.contains(i)).collect();
-        let new_ids: Vec<String> = keep_idx.iter().map(|&i| kept_ids[i].clone()).collect();
-        let new_corr: Vec<Vec<f64>> = corr_per
-            .iter()
-            .map(|c| keep_idx.iter().map(|&i| c[i]).collect())
-            .collect();
-        (new_ids, new_corr, locus_n.clone())
-    };
+    let (final_ids, final_corr, _final_n): (Vec<String>, Vec<Vec<f64>>, Vec<f64>) =
+        if drop_set.is_empty() {
+            (kept_ids.clone(), corr_per.clone(), locus_n.clone())
+        } else {
+            let keep_idx: Vec<usize> = (0..n_kept).filter(|i| !drop_set.contains(i)).collect();
+            let new_ids: Vec<String> = keep_idx.iter().map(|&i| kept_ids[i].clone()).collect();
+            let new_corr: Vec<Vec<f64>> = corr_per
+                .iter()
+                .map(|c| keep_idx.iter().map(|&i| c[i]).collect())
+                .collect();
+            (new_ids, new_corr, locus_n.clone())
+        };
     if final_ids.len() < min_k {
         return Ok(None);
     }
 
     // reload genotypes restricted to the final SNP set (bim indices), since we
     // may have dropped SNPs with failed binary reconstruction.
-    let final_bim: Vec<usize> = final_ids
+    let final_local: Vec<usize> = final_ids
         .iter()
-        .map(|s| *input.bim_index.get(s).unwrap())
+        .map(|s| *input.bim_index.get(s).unwrap() - offset)
         .collect();
-    let ld_final = load_plink(&bed, input.reference.sample_size, &final_bim, PlinkFilter::default(), require_freq)?;
+    let ld_final = load_plink(
+        &bed,
+        input.reference.sample_size,
+        &final_local,
+        PlinkFilter::default(),
+        require_freq,
+    )?;
     // sanity: kept ids should equal final_ids (filter is deterministic)
     let n_snps = final_ids.len();
 
     // decompose
-    let mut r = decompose_plink(ld_final.genotypes.as_ref(), opts.prune_thresh, opts.max_block_size)?;
+    let mut r = decompose_plink(
+        ld_final.genotypes.as_ref(),
+        opts.prune_thresh,
+        opts.max_block_size,
+    )?;
     let mut k_raw = r.ncols();
     // cap K
     if let Some(max_prop) = opts.max_prop_k {
-        let min_n = locus_n.iter().copied().filter(|x| !x.is_nan()).fold(f64::INFINITY, f64::min);
+        let min_n = locus_n
+            .iter()
+            .copied()
+            .filter(|x| !x.is_nan())
+            .fold(f64::INFINITY, f64::min);
         let mut max_k = (max_prop * min_n).floor() as usize;
         if max_k < min_k {
             max_k = min_k;
@@ -458,7 +560,7 @@ pub fn process_locus(
     let corr_mat = Mat::from_fn(n_snps, p, |i, j| final_corr[j][i]);
     // delta = R^T · CORR_mat  (K × P)
     let rt = r.transpose();
-    let delta = &rt * &corr_mat;
+    let delta = rt * corr_mat;
 
     // per-pheno sigma, h2
     let nref_scale = 1.0;
@@ -486,7 +588,8 @@ pub fn process_locus(
             // Lee et al. 2011: h2.obs / dnorm(qnorm(prev))^2 * (prev*(1-prev))^2 / (case*(1-case))
             let q = qnorm(prevalence);
             let denom = dnorm(q).powi(2);
-            h2_latent[pi] = h2_obs[pi] / denom * (prevalence * (1.0 - prevalence)).powi(2) / (case_prop * (1.0 - case_prop));
+            h2_latent[pi] = h2_obs[pi] / denom * (prevalence * (1.0 - prevalence)).powi(2)
+                / (case_prop * (1.0 - case_prop));
         }
     }
 
@@ -515,7 +618,10 @@ pub fn process_locus(
     // cap negative h2
     if opts.cap_estimates {
         for v in h2_obs.iter_mut() {
-            if v.is_nan() { /* keep NA */ } else if *v < 0.0 { *v = 0.0; }
+            if v.is_nan() { /* keep NA */
+            } else if *v < 0.0 {
+                *v = 0.0;
+            }
         }
         for v in h2_latent.iter_mut() {
             if !v.is_nan() && *v < 0.0 {
@@ -596,7 +702,10 @@ fn build_sigma(sigma_diag: &[f64], input: &Input, phenos: &[String]) -> Mat<f64>
     if p > 1 {
         if let Some(overlap) = &input.sample_overlap {
             // subset overlap to phenos order
-            let idx: Vec<usize> = phenos.iter().map(|ph| input.phenos.iter().position(|x| x == ph).unwrap()).collect();
+            let idx: Vec<usize> = phenos
+                .iter()
+                .map(|ph| input.phenos.iter().position(|x| x == ph).unwrap())
+                .collect();
             let mut s = Mat::zeros(p, p);
             for i in 0..p {
                 for j in 0..p {

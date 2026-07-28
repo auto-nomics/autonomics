@@ -30,6 +30,9 @@ impl SumStats {
     pub fn len(&self) -> usize {
         self.snp.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.snp.is_empty()
+    }
 }
 
 /// One row of the input-info file (`phenotype, cases, controls, filename` plus
@@ -58,11 +61,30 @@ pub struct SnpInfo {
 
 /// PLINK reference data (prefix + `.bim`/`.fam` metadata). Genotypes are loaded
 /// per-locus by [`crate::plink::load_plink`].
+///
+/// `snp_info` is always a **global**, merged view (across all chromosomes, in
+/// `.bim` order). `chr_prefix` / `chr_offset` let [`crate::locus::process_locus`]
+/// resolve the per-chromosome `.bed` for a locus and translate global `.bim`
+/// indices into local `.bed`-row offsets — so a single merged prefix and a set
+/// of per-chromosome prefixes are handled by the same code path.
 #[derive(Debug, Clone)]
 pub struct PlinkRef {
+    /// Original / canonical prefix. For per-chromosome references this is the
+    /// unresolved template (diagnostics only); resolution goes through
+    /// `chr_prefix`.
     pub prefix: PathBuf,
     pub snp_info: SnpInfo,
     pub sample_size: usize,
+    /// Chromosome → resolved PLINK prefix for that chromosome's `.bed`/`.bim`.
+    /// For a single merged prefix, every chromosome present maps to `prefix`.
+    pub chr_prefix: HashMap<i64, PathBuf>,
+    /// Chromosome → global `.bim` index of the **first row of the `.bed` file
+    /// `chr_prefix[c]` points to**. `process_locus` translates a global `.bim`
+    /// index `g` (on chromosome `c`) to a row in that `.bed` via `g - chr_offset[c]`.
+    /// For a single merged `.bed` this is `0` for every chromosome (the merged
+    /// file is indexed by absolute global row); for per-chromosome files it is
+    /// that chromosome's start index within the merged `snp_info`.
+    pub chr_offset: HashMap<i64, usize>,
 }
 
 /// Processed input object — the result of `process.input`.
@@ -137,7 +159,15 @@ fn split_ws(s: &str) -> Vec<String> {
 // read.sumstats.file
 // ---------------------------------------------------------------------------
 
-const SNP_ALIASES: &[&str] = &["SNP", "ID", "SNPID_UKB", "SNPID", "MarkerName", "RSID", "RSID_UKB"];
+const SNP_ALIASES: &[&str] = &[
+    "SNP",
+    "ID",
+    "SNPID_UKB",
+    "SNPID",
+    "MarkerName",
+    "RSID",
+    "RSID_UKB",
+];
 const STAT_ALIASES: &[&str] = &["Z", "T", "STAT", "Zscore"];
 const B_ALIASES: &[&str] = &["B", "BETA"];
 const A1_ALIASES: &[&str] = &["A1", "ALT"];
@@ -226,7 +256,9 @@ pub fn read_sumstats_file(
 
     let n: Vec<f64> = match n_override {
         Some(nv) => vec![nv; nrows],
-        None => col_n.map(|c| cols[c].iter().map(|s| parse_f64_lossy(s)).collect()).unwrap_or_default(),
+        None => col_n
+            .map(|c| cols[c].iter().map(|s| parse_f64_lossy(s)).collect())
+            .unwrap_or_default(),
     };
 
     let mut snp: Vec<String> = cols[col_snp].iter().map(|s| s.to_lowercase()).collect();
@@ -274,11 +306,7 @@ fn format_pvalue(s: &str, min_pval: f64) -> f64 {
     if p.is_nan() {
         return min_pval;
     }
-    if p < min_pval {
-        min_pval
-    } else {
-        p
-    }
+    if p < min_pval { min_pval } else { p }
 }
 
 /// Parse a float the way R `as.numeric` does: empty / non-numeric → NaN.
@@ -330,7 +358,11 @@ pub fn read_input_info(
         } else {
             cases + controls
         };
-        let prop_cases = if n.is_nan() || n == 0.0 { f64::NAN } else { cases / n };
+        let prop_cases = if n.is_nan() || n == 0.0 {
+            f64::NAN
+        } else {
+            cases / n
+        };
         // binary = !is.na(prop_cases) & prop_cases != 1
         let binary = !prop_cases.is_nan() && prop_cases != 1.0;
         let prevalence = i_prev.and_then(|i| {
@@ -352,9 +384,13 @@ pub fn read_input_info(
     if let Some(want) = phenos {
         let mut out = Vec::with_capacity(want.len());
         for p in want {
-            let found = all.iter().find(|x| &x.phenotype == p).cloned().ok_or_else(|| {
-                LavaError::Input(format!("Phenotype(s) not listed in input info file: '{p}'"))
-            })?;
+            let found = all
+                .iter()
+                .find(|x| &x.phenotype == p)
+                .cloned()
+                .ok_or_else(|| {
+                    LavaError::Input(format!("Phenotype(s) not listed in input info file: '{p}'"))
+                })?;
             out.push(found);
         }
         Ok(out)
@@ -369,10 +405,13 @@ pub fn process_sample_overlap(file: &Path, phenos: &[String]) -> Result<Mat<f64>
     use std::io::{BufRead, BufReader};
     let f = std::fs::File::open(file)?;
     let mut lines = BufReader::new(f).lines();
-    let header_line = lines.next().ok_or_else(|| LavaError::Input("empty overlap file".into()))??;
+    let header_line = lines
+        .next()
+        .ok_or_else(|| LavaError::Input("empty overlap file".into()))??;
     let col_names: Vec<String> = split_ws(&header_line);
     // value-column index for phenotype pj = its position in col_names + 1 (offset for row-name col)
-    let mut raw: std::collections::HashMap<(String, String), f64> = std::collections::HashMap::new();
+    let mut raw: std::collections::HashMap<(String, String), f64> =
+        std::collections::HashMap::new();
     for line in lines {
         let line = line?;
         if line.trim().is_empty() {
@@ -386,16 +425,21 @@ pub fn process_sample_overlap(file: &Path, phenos: &[String]) -> Result<Mat<f64>
         }
         let row_name = parts[0].clone();
         for (j, pname) in col_names.iter().enumerate() {
-            raw.insert((row_name.clone(), pname.clone()), parse_f64_lossy(&parts[j + 1]));
+            raw.insert(
+                (row_name.clone(), pname.clone()),
+                parse_f64_lossy(&parts[j + 1]),
+            );
         }
     }
     let n = phenos.len();
     let mut m = Mat::zeros(n, n);
     for (i, pi) in phenos.iter().enumerate() {
         for (j, pj) in phenos.iter().enumerate() {
-            let v = *raw
-                .get(&(pi.clone(), pj.clone()))
-                .ok_or_else(|| LavaError::Input(format!("Phenotype not in sample overlap file: '{pi}'/'{pj}'")))?;
+            let v = *raw.get(&(pi.clone(), pj.clone())).ok_or_else(|| {
+                LavaError::Input(format!(
+                    "Phenotype not in sample overlap file: '{pi}'/'{pj}'"
+                ))
+            })?;
             m[(i, j)] = v;
         }
     }
@@ -408,7 +452,9 @@ pub fn read_loci(loc_file: &Path) -> Result<Vec<LocusDef>> {
     let has_coord = ["LOC", "CHR", "START", "STOP"]
         .iter()
         .all(|r| header.iter().any(|h| h == *r));
-    let has_snps = ["LOC", "SNPS"].iter().all(|r| header.iter().any(|h| h == *r));
+    let has_snps = ["LOC", "SNPS"]
+        .iter()
+        .all(|r| header.iter().any(|h| h == *r));
     if !has_coord && !has_snps {
         return Err(LavaError::Input(
             "Locus file missing required headers (LOC + CHR/START/STOP and/or SNPS)".into(),
@@ -434,7 +480,13 @@ pub fn read_loci(loc_file: &Path) -> Result<Vec<LocusDef>> {
                 .map(|s| s.trim().to_lowercase())
                 .collect::<Vec<_>>()
         });
-        out.push(LocusDef { loc, chr, start, stop, snps });
+        out.push(LocusDef {
+            loc,
+            chr,
+            start,
+            stop,
+            snps,
+        });
     }
     Ok(out)
 }
@@ -447,7 +499,10 @@ pub fn read_loci(loc_file: &Path) -> Result<Vec<LocusDef>> {
 /// phenotypes, in reference order. Returns the shared SNP list and reindexes
 /// each phenotype's sum-stats to it (rows matched by SNP; unmatched → dropped).
 /// Faithful port of `harmonize.snps`.
-pub fn harmonize_snps(reference_snps: &[String], sum_stats: &mut [SumStats]) -> Result<Vec<String>> {
+pub fn harmonize_snps(
+    reference_snps: &[String],
+    sum_stats: &mut [SumStats],
+) -> Result<Vec<String>> {
     // Start from the intersection of reference and the first phenotype.
     let ref_set: HashSet<&String> = reference_snps.iter().collect();
     let mut analysis: Vec<String> = sum_stats[0]
@@ -609,7 +664,12 @@ pub fn process_input(
     // read sumstats for each phenotype
     let mut sum_stats: Vec<SumStats> = Vec::with_capacity(p);
     for pi in &info {
-        sum_stats.push(read_sumstats_file(Path::new(&pi.filename), &pi.phenotype, 1e-300, None)?);
+        sum_stats.push(read_sumstats_file(
+            Path::new(&pi.filename),
+            &pi.phenotype,
+            1e-300,
+            None,
+        )?);
     }
 
     finish_input(info, phenos, sum_stats, sample_overlap, ref_prefix)
@@ -618,26 +678,55 @@ pub fn process_input(
 /// Build a processed [`Input`] from in-memory per-phenotype sum-stats + sample
 /// overlap + PLINK reference, performing the harmonise/align/index steps. Used by
 /// the DAG node (which receives sum-stats via its input port rather than files).
+///
+/// The PLINK reference is loaded from a single merged prefix here. For a
+/// per-chromosome reference (prefix template), build the [`PlinkRef`] with
+/// [`crate::plink::load_reference_template`] and call [`finish_input_with_ref`].
 pub fn finish_input(
+    info: Vec<PhenoInfo>,
+    phenos: Vec<String>,
+    sum_stats: Vec<SumStats>,
+    sample_overlap: Option<Mat<f64>>,
+    ref_prefix: &Path,
+) -> Result<Input> {
+    let reference = crate::plink::load_reference(ref_prefix)?;
+    finish_input_with_ref(info, phenos, sum_stats, sample_overlap, reference)
+}
+
+/// Like [`finish_input`] but takes a pre-built [`PlinkRef`] (single-prefix or
+/// per-chromosome template), so the harmonise/align/index steps run against any
+/// reference shape.
+pub fn finish_input_with_ref(
     info: Vec<PhenoInfo>,
     phenos: Vec<String>,
     mut sum_stats: Vec<SumStats>,
     sample_overlap: Option<Mat<f64>>,
-    ref_prefix: &Path,
+    reference: PlinkRef,
 ) -> Result<Input> {
     let p = phenos.len();
-    let reference = crate::plink::load_reference(ref_prefix)?;
     let ref_snps: Vec<String> = reference.snp_info.snp.clone();
     let mut analysis_snps = harmonize_snps(&ref_snps, &mut sum_stats)?;
     let ref_alleles: HashMap<String, (String, String)> = reference
         .snp_info
         .snp
         .iter()
-        .zip(reference.snp_info.a1.iter().zip(reference.snp_info.a2.iter()))
+        .zip(
+            reference
+                .snp_info
+                .a1
+                .iter()
+                .zip(reference.snp_info.a2.iter()),
+        )
         .map(|(s, (a1, a2))| (s.clone(), (a1.clone(), a2.clone())))
         .collect();
-    let ref_a1: Vec<String> = analysis_snps.iter().map(|s| ref_alleles.get(s).unwrap().0.clone()).collect();
-    let ref_a2: Vec<String> = analysis_snps.iter().map(|s| ref_alleles.get(s).unwrap().1.clone()).collect();
+    let ref_a1: Vec<String> = analysis_snps
+        .iter()
+        .map(|s| ref_alleles.get(s).unwrap().0.clone())
+        .collect();
+    let ref_a2: Vec<String> = analysis_snps
+        .iter()
+        .map(|s| ref_alleles.get(s).unwrap().1.clone())
+        .collect();
     let unalignable = align(&ref_a1, &ref_a2, &mut analysis_snps, &mut sum_stats);
     let mut bim_index: HashMap<String, usize> = HashMap::new();
     for (i, s) in reference.snp_info.snp.iter().enumerate() {
@@ -663,12 +752,107 @@ mod tests {
     #[test]
     fn allele_pair_coding() {
         // AC vs reference AC -> same direction
-        assert_eq!(com_pair(map_alleles("A", "C"), map_alleles("A", "C")), Some(1.0));
+        assert_eq!(
+            com_pair(map_alleles("A", "C"), map_alleles("A", "C")),
+            Some(1.0)
+        );
         // AC vs CA -> flipped
-        assert_eq!(com_pair(map_alleles("A", "C"), map_alleles("C", "A")), Some(-1.0));
+        assert_eq!(
+            com_pair(map_alleles("A", "C"), map_alleles("C", "A")),
+            Some(-1.0)
+        );
         // strand-ambiguous AT -> None
         assert_eq!(map_alleles("A", "T"), None);
         // mismatched
         assert_eq!(com_pair(map_alleles("A", "C"), map_alleles("A", "G")), None);
+    }
+
+    /// `load_reference_template` must merge per-chromosome `.bim`s into one
+    /// global `snp_info` with correct `chr_offset` (per-chr start index) and
+    /// `chr_prefix` (resolved per-chr prefix), skipping absent chromosomes and
+    /// enforcing a uniform sample size. (`.bed` content is not read here, only
+    /// its existence checked, so an empty file suffices.)
+    #[test]
+    fn load_reference_template_merges_per_chrom() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("lava_plink_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // write a fake prefix: .bim (CHR SNP cM BP A1 A2) + .fam (N lines) + empty .bed
+        let write_prefix = |prefix: &std::path::Path, chr: i64, snps: &[(i64, &str)]| {
+            let bim = prefix.with_extension("bim");
+            let fam = prefix.with_extension("fam");
+            let bed = prefix.with_extension("bed");
+            let bim_txt: String = snps
+                .iter()
+                .map(|(pos, id)| format!("{chr} {id} 0 {pos} A C\n"))
+                .collect();
+            fs::write(&bim, bim_txt).unwrap();
+            fs::write(&fam, "F1 I1 0 0 1 -9\nF2 I2 0 0 1 -9\nF3 I3 0 0 1 -9\n").unwrap();
+            fs::write(&bed, []).unwrap(); // exists, unread at load time
+        };
+        write_prefix(&dir.join("chr1"), 1, &[(100, "rs1a"), (200, "rs1b")]);
+        write_prefix(&dir.join("chr2"), 2, &[(50, "rs2a"), (60, "rs2b")]);
+
+        let template = dir.join("chr{N}");
+        let tpl = template.to_string_lossy().into_owned();
+        // include chr3 (absent) to confirm graceful skip
+        let r = crate::plink::load_reference_template(&tpl, &[1, 2, 3]).unwrap();
+
+        assert_eq!(r.sample_size, 3, "sample size from .fam line count");
+        assert_eq!(r.snp_info.snp, vec!["rs1a", "rs1b", "rs2a", "rs2b"]);
+        assert_eq!(r.snp_info.chr, vec![1, 1, 2, 2]);
+        assert_eq!(r.chr_offset.get(&1).copied(), Some(0), "chr1 offset");
+        assert_eq!(r.chr_offset.get(&2).copied(), Some(2), "chr2 offset");
+        assert!(!r.chr_offset.contains_key(&3), "chr3 skipped");
+        assert_eq!(
+            r.chr_prefix
+                .get(&1)
+                .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()),
+            Some("chr1".into())
+        );
+        assert_eq!(
+            r.chr_prefix
+                .get(&2)
+                .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()),
+            Some("chr2".into())
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A single merged prefix must produce `chr_offset[c] == 0` for every
+    /// chromosome (the merged `.bed` is indexed by absolute global row, so
+    /// `process_locus` passes global indices to `load_plink` unchanged).
+    /// Regression guard for the per-chromosome refactor.
+    #[test]
+    fn load_reference_merged_has_zero_offsets() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("lava_plink_merged_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // one merged .bim spanning chr1 + chr2
+        let bim = "1 rs1a 0 100 A C\n1 rs1b 0 200 A C\n2 rs2a 0 50 A C\n2 rs2b 0 60 A C\n";
+        fs::write(dir.join("merged.bim"), bim).unwrap();
+        fs::write(dir.join("merged.fam"), "F1 I1 0 0 1 -9\nF2 I2 0 0 1 -9\n").unwrap();
+        fs::write(dir.join("merged.bed"), []).unwrap();
+
+        let r = crate::plink::load_reference(&dir.join("merged")).unwrap();
+        assert_eq!(r.snp_info.chr, vec![1, 1, 2, 2]);
+        assert_eq!(
+            r.chr_offset.get(&1).copied(),
+            Some(0),
+            "merged chr1 offset must be 0"
+        );
+        assert_eq!(
+            r.chr_offset.get(&2).copied(),
+            Some(0),
+            "merged chr2 offset must be 0 (NOT its bim start)"
+        );
+        assert_eq!(
+            r.chr_prefix.get(&1),
+            r.chr_prefix.get(&2),
+            "merged: both chrs → same prefix"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

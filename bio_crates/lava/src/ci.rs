@@ -23,7 +23,13 @@ fn standardize_omega(omega: &Mat<f64>) -> Mat<f64> {
                 corrs[(i, j)] = 1.0;
             } else {
                 let c = omega[(i, j)] / (sdiag[i] * sdiag[j]);
-                let c = if c >= 1.0 { 0.99999 } else if c <= -1.0 { -0.99999 } else { c };
+                let c = if c >= 1.0 {
+                    0.99999
+                } else if c <= -1.0 {
+                    -0.99999
+                } else {
+                    c
+                };
                 corrs[(i, j)] = c;
             }
         }
@@ -144,11 +150,19 @@ pub fn ci_multivariate<R: Rng>(
     let mut gamma_lower = vec![f64::NAN; px];
     let mut gamma_upper = vec![f64::NAN; px];
     for j in 0..px {
-        let mut col: Vec<f64> = samples.iter().map(|(g, _)| g[j]).filter(|x| !x.is_nan()).collect();
+        let mut col: Vec<f64> = samples
+            .iter()
+            .map(|(g, _)| g[j])
+            .filter(|x| !x.is_nan())
+            .collect();
         gamma_lower[j] = quantile(&mut col.clone(), 0.025);
         gamma_upper[j] = quantile(&mut col, 0.975);
     }
-    let mut r2s: Vec<f64> = samples.iter().map(|(_, r)| *r).filter(|x| !x.is_nan()).collect();
+    let mut r2s: Vec<f64> = samples
+        .iter()
+        .map(|(_, r)| *r)
+        .filter(|x| !x.is_nan())
+        .collect();
     let r2_lower = quantile(&mut r2s.clone(), 0.025).clamp(0.0, 1.0);
     let r2_upper = quantile(&mut r2s, 0.975).clamp(0.0, 1.0);
     (gamma_lower, gamma_upper, r2_lower, r2_upper)
@@ -175,8 +189,8 @@ pub fn ci_pcor<R: Rng>(
     let p = omega_r.nrows(); // submatrix size = |z| + 2
 
     // point estimate (reference)
-    let pcov = omega_r[(p - 2, p - 1)]
-        - fit(&omega_r, p - 2, p - 1, &(0..p - 2).collect::<Vec<_>>());
+    let pcov =
+        omega_r[(p - 2, p - 1)] - fit(&omega_r, p - 2, p - 1, &(0..p - 2).collect::<Vec<_>>());
     let _ = pcov;
     let est = estimate_pcor_point(&omega_r, p);
 

@@ -31,7 +31,11 @@ fn stat_error(b0: f64, b1: f64, stat: f64, count_x: &[f64; 3]) -> f64 {
         sigmoid(b0 + b1 * 1.0),
         sigmoid(b0 + b1 * 2.0),
     ];
-    let w: [f64; 3] = [mu[0] * (1.0 - mu[0]) * count_x[0], mu[1] * (1.0 - mu[1]) * count_x[1], mu[2] * (1.0 - mu[2]) * count_x[2]];
+    let w: [f64; 3] = [
+        mu[0] * (1.0 - mu[0]) * count_x[0],
+        mu[1] * (1.0 - mu[1]) * count_x[1],
+        mu[2] * (1.0 - mu[2]) * count_x[2],
+    ];
     // xsx = [[sum w, sum w*x],[sum w*x, sum w*x^2]]  (x col0=1, col1=0/1/2)
     let xsx00 = w[0] + w[1] + w[2];
     let xsx01 = w[1] * 1.0 + w[2] * 2.0;
@@ -47,7 +51,17 @@ fn stat_error(b0: f64, b1: f64, stat: f64, count_x: &[f64; 3]) -> f64 {
 }
 
 /// `find.b0`: minimise `sum.error` by stepwise descent with reductions.
-fn find_b0(mut b0: f64, b1: f64, n1: f64, count_x: &[f64; 3], val_x: &[f64; 3], mut step: f64, reduction: f64, tolerance: f64) -> f64 {
+#[allow(clippy::too_many_arguments)]
+fn find_b0(
+    mut b0: f64,
+    b1: f64,
+    n1: f64,
+    count_x: &[f64; 3],
+    val_x: &[f64; 3],
+    mut step: f64,
+    reduction: f64,
+    tolerance: f64,
+) -> f64 {
     let mut err = sum_error(b0, b1, n1, count_x, val_x);
     while step != 0.0 && err.abs() > tolerance {
         let prop_b0 = b0 + -step * err.signum();
@@ -64,7 +78,14 @@ fn find_b0(mut b0: f64, b1: f64, n1: f64, count_x: &[f64; 3], val_x: &[f64; 3], 
 
 /// `find.beta`: search (b0, b1) so the Wald statistic matches `stat`.
 /// Returns `[b0, b1]`.
-fn find_beta(count_x: &[f64; 3], n1: f64, n_orig: f64, stat: f64, tolerance: f64, reduction: f64) -> [f64; 2] {
+fn find_beta(
+    count_x: &[f64; 3],
+    n1: f64,
+    n_orig: f64,
+    stat: f64,
+    tolerance: f64,
+    reduction: f64,
+) -> [f64; 2] {
     let val_x: [f64; 3] = [0.0, 1.0, 2.0];
     // initial b0 = log(N1/(N.orig-N1)); b1 = 0
     let mut b0 = (n1 / (n_orig - n1)).ln();
@@ -75,7 +96,16 @@ fn find_beta(count_x: &[f64; 3], n1: f64, n_orig: f64, stat: f64, tolerance: f64
     while step.abs() > tolerance / 10.0 && err > tolerance {
         // propose b1 += step
         let prop_b1 = b1 + step;
-        let prop_b0 = find_b0(b0, prop_b1, n1, count_x, &val_x, step.abs(), reduction, tolerance.max(step.abs()));
+        let prop_b0 = find_b0(
+            b0,
+            prop_b1,
+            n1,
+            count_x,
+            &val_x,
+            step.abs(),
+            reduction,
+            tolerance.max(step.abs()),
+        );
         let prop_err = stat_error(prop_b0, prop_b1, stat, count_x);
         if prop_err < err {
             b1 = prop_b1;
@@ -117,14 +147,19 @@ pub fn process_binary(stat: &[f64], n: &[f64], freq: &[f64], case_prop: f64) -> 
         let beta = find_beta(&count_x, n_case, ni, stat[i], 1e-5, 0.25);
         let b0 = beta[0];
         let b1 = beta[1];
-        let mu: [f64; 3] = [sigmoid(b0 + b1 * x[0]), sigmoid(b0 + b1 * x[1]), sigmoid(b0 + b1 * x[2])];
+        let mu: [f64; 3] = [
+            sigmoid(b0 + b1 * x[0]),
+            sigmoid(b0 + b1 * x[1]),
+            sigmoid(b0 + b1 * x[2]),
+        ];
         let mut xty = 0.0;
         for k in 0..3 {
             xty += x[k] * count_x[k] * mu[k];
         }
         if xty.is_finite() {
             let sx = count_x[0] * x[0] + count_x[1] * x[1] + count_x[2] * x[2];
-            let sx2 = count_x[0] * x[0].powi(2) + count_x[1] * x[1].powi(2) + count_x[2] * x[2].powi(2);
+            let sx2 =
+                count_x[0] * x[0].powi(2) + count_x[1] * x[1].powi(2) + count_x[2] * x[2].powi(2);
             let sy = n_case;
             let var_x = (sx2 - sx * sx / ni) / (ni - 1.0);
             let var_y = (sy - sy * sy / ni) / (ni - 1.0);

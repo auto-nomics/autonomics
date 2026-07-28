@@ -329,10 +329,13 @@ fn read_batch(batch: RecordBatch) -> Result<PortOutputs, LavaNodeError> {
 // ============================ lava_locus node ============================
 
 /// Spec for [`LavaLocusNode`]: shared locus construction.
+///
+/// The PLINK LD reference is **not** a spec parameter: it is hardcoded as
+/// [`REF_PREFIX_TEMPLATE`] (the EUR per-chromosome panel) for now. Only the
+/// loci, phenotype metadata, sample-overlap, and decomposition tuning are spec-
+/// configurable.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LavaLocusSpec {
-    #[serde(default)]
-    pub ref_prefix: String,
     #[serde(default)]
     pub loci: Vec<LavaLocus>,
     #[serde(default)]
@@ -351,6 +354,12 @@ fn d_max_prop_k() -> f64 { 0.75 }
 fn d_min_k() -> usize { 2 }
 
 const LOCUS_KIND: &str = "lava_locus";
+
+/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
+/// per chromosome). `{N}` is resolved to each locus's chromosome at execution time.
+/// Temporary: until the reference is parameterized again via the spec / a registry.
+const REF_PREFIX_TEMPLATE: &str =
+    "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
 
 #[derive(Clone)]
 pub struct LavaLocusNode { meta: NodePorts, spec: LavaLocusSpec }
@@ -427,7 +436,14 @@ impl DagNode for LavaLocusNode {
             lava::stats::cov2cor(&mat)
         });
 
-        let input_obj = lava::input::finish_input(info, order.clone(), sum_stats, sample_overlap, std::path::Path::new(&self.spec.ref_prefix))
+        // Build the PLINK reference from the hardcoded per-chromosome template,
+        // loading only the chromosomes that appear in `loci`.
+        let mut chroms: Vec<i64> = self.spec.loci.iter().map(|l| l.chr).collect();
+        chroms.sort_unstable();
+        chroms.dedup();
+        let reference = lava::plink::load_reference_template(REF_PREFIX_TEMPLATE, &chroms)
+            .map_err(|e| LavaNodeError::Lava(e.to_string()))?;
+        let input_obj = lava::input::finish_input_with_ref(info, order.clone(), sum_stats, sample_overlap, reference)
             .map_err(|e| LavaNodeError::Lava(e.to_string()))?;
         let opts = lava::locus::LocusOptions {
             min_k: self.spec.min_k.max(2), prune_thresh: self.spec.prune_thresh,

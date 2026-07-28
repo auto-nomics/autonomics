@@ -7,6 +7,7 @@
 //!   - `nu > 2p−1`:  `W = (Θʰ+ΣʰZ)(Θʰ+ΣʰZ)ᵀ + Σʰ·B·Bᵀ·Σʰ`
 //!   - `nu == p`:    `W = (Θʰ+ΣʰZ)(Θʰ+ΣʰZ)ᵀ`
 //!   - else:         `W = (Θʰ+ΣʰZ)(Θʰ+ΣʰZ)ᵀ + Σʰ·Y·Yᵀ·Σʰ`
+//!
 //! with `Σʰ, Θʰ` the symmetric matrix square roots (eigendecomposition),
 //! `Z` a p×p standard-normal matrix, `B` a lower-triangular Bartlett factor
 //! (`diagₖ = √χ²(nu−p−k+1)`, lower off-diagonal N(0,1)), and `Y` a
@@ -22,14 +23,14 @@ use crate::stats::{pnorm, pnorm_sf};
 /// matching `matrixsampling::matrixroot` (symmetric = TRUE).
 pub fn symroot(m: MatRef<f64>) -> Mat<f64> {
     let n = m.nrows();
-    let e = m.self_adjoint_eigen(Side::Lower).expect("symroot: eigen failed");
+    let e = m
+        .self_adjoint_eigen(Side::Lower)
+        .expect("symroot: eigen failed");
     let s = e.S();
     let u = e.U();
     let sv = s.column_vector();
-    // sqrtλ as diagonal scaling, then U·diag·Uᵀ
-    let mut d = Mat::zeros(n, n);
-    // first compute diag·Uᵀ  -> then U · (that)
-    // tmp[i][j] = sqrt(λ_i) * U[j][i]   (diag·Uᵀ)
+    // U · diag(√λ) · Uᵀ, computed as U · (diag·Uᵀ):
+    // tmp[i][j] = sqrt(λ_i) * U[j][i]
     let mut tmp = Mat::zeros(n, n);
     for i in 0..n {
         let sl = sv[i].max(0.0).sqrt();
@@ -37,8 +38,7 @@ pub fn symroot(m: MatRef<f64>) -> Mat<f64> {
             tmp[(i, j)] = sl * u[(j, i)];
         }
     }
-    d = &u.as_ref() * &tmp;
-    d
+    u.as_ref() * &tmp
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,16 +226,17 @@ pub fn conditional_norm<R: Rng, F: FnMut(&mut R) -> Option<(f64, f64)>>(
 
 /// Per-draw statistic for the bivariate integral: returns `(m, v)` or `None`
 /// when `v <= 0`. `draw` is the 3×3 Wishart draw (0-indexed).
-fn bivar_cond_stats(draw: &Mat<f64>, k: f64, sig_xy: f64, sig_xys: f64, var_y: f64) -> Option<(f64, f64)> {
+fn bivar_cond_stats(
+    draw: &Mat<f64>,
+    k: f64,
+    sig_xy: f64,
+    sig_xys: f64,
+    var_y: f64,
+) -> Option<(f64, f64)> {
     let m = draw[(1, 2)] + draw[(0, 2)] + sig_xys * (draw[(0, 1)] + draw[(0, 0)]);
     let m = m / k - sig_xy;
-    let mut v = var_y * (draw[(1, 1)] + 2.0 * draw[(0, 1)] + draw[(0, 0)]);
-    v = v / (k * k);
-    if v <= 0.0 {
-        None
-    } else {
-        Some((m, v.sqrt()))
-    }
+    let v = var_y * (draw[(1, 1)] + 2.0 * draw[(0, 1)] + draw[(0, 0)]) / (k * k);
+    if v <= 0.0 { None } else { Some((m, v.sqrt())) }
 }
 
 /// `bivariate.integral` (single direction, add.reverse = FALSE). `omega`,
@@ -269,10 +270,15 @@ pub fn bivariate_integral_one<R: Rng>(
     let ctx = WishartCtx::new(k, sig_use.as_ref(), theta.as_ref());
     let mut draw = Mat::zeros(3, 3);
     let obs = omega[(0, 1)];
-    conditional_norm(obs, n_iter, |rng| {
-        ctx.draw_into(rng, &mut draw);
-        bivar_cond_stats(&draw, kf, sig_xy, sig_xys, var_y)
-    }, rng)
+    conditional_norm(
+        obs,
+        n_iter,
+        |rng| {
+            ctx.draw_into(rng, &mut draw);
+            bivar_cond_stats(&draw, kf, sig_xy, sig_xys, var_y)
+        },
+        rng,
+    )
 }
 
 /// `bivariate.integral` with add.reverse (both directions averaged).
@@ -415,13 +421,16 @@ pub fn multivariate_integral<R: Rng>(
         let sub_inv = match solve_spd(sub.as_ref()) {
             Some(m) => m,
             None => {
-                nulls.push(NullModel { gamma_null: vec![f64::NAN; px], tau_null_sqrt: 0.0, index });
+                nulls.push(NullModel {
+                    gamma_null: vec![f64::NAN; px],
+                    tau_null_sqrt: 0.0,
+                    index,
+                });
                 continue;
             }
         };
         // gamma.null[-index] = sub_inv · xy_sub
         let mut gn = vec![0.0; px];
-        let mut tau = omega[(p - 1, p - 1)];
         for i in 0..(px - 1) {
             let mut s = 0.0;
             for j in 0..(px - 1) {
@@ -440,9 +449,13 @@ pub fn multivariate_integral<R: Rng>(
             }
             q += xy_sub[i] * s;
         }
-        tau = omega[(p - 1, p - 1)] - q;
+        let tau = omega[(p - 1, p - 1)] - q;
         let tau_sqrt = if tau > 0.0 { tau.sqrt() } else { 0.0 };
-        nulls.push(NullModel { gamma_null: gn, tau_null_sqrt: tau_sqrt, index });
+        nulls.push(NullModel {
+            gamma_null: gn,
+            tau_null_sqrt: tau_sqrt,
+            index,
+        });
     }
 
     // accumulators for conditional.norm per predictor
@@ -459,7 +472,8 @@ pub fn multivariate_integral<R: Rng>(
         let mut dtd_x = Mat::zeros(px, px);
         for i in 0..px {
             for j in 0..px {
-                dtd_x[(i, j)] = draw[(i, j)] + draw[(i, px + j)] + draw[(px + i, j)] + draw[(px + i, px + j)];
+                dtd_x[(i, j)] =
+                    draw[(i, j)] + draw[(i, px + j)] + draw[(px + i, j)] + draw[(px + i, px + j)];
             }
         }
         // omega.x.draw = dtd.x/K - sigma[0..Px,0..Px]
@@ -476,7 +490,11 @@ pub fn multivariate_integral<R: Rng>(
         // O.x = diag(sqrt(diag(ox))) · ox_inv
         let mut ox_diag = vec![0.0f64; px];
         for i in 0..px {
-            ox_diag[i] = if ox[(i, i)] > 0.0 { ox[(i, i)].sqrt() } else { 0.0 };
+            ox_diag[i] = if ox[(i, i)] > 0.0 {
+                ox[(i, i)].sqrt()
+            } else {
+                0.0
+            };
         }
         let mut o_x = Mat::zeros(px, px);
         for i in 0..px {
@@ -640,7 +658,7 @@ pub fn pcov_integral_one<R: Rng>(
     idx.push(xy.0);
     idx.push(xy.1);
     let mut omega = subm(omega, &idx);
-    let mut sigma = subm(sigma, &idx);
+    let sigma = subm(sigma, &idx);
     let p = idx.len(); // reordered dimension = |z| + 2
     let pw = p - 1;
     let pz = pw - 1;
@@ -684,20 +702,24 @@ pub fn pcov_integral_one<R: Rng>(
         Some(m) => m,
         None => return f64::NAN,
     };
-    let gamma_x: Vec<f64> = (0..pz).map(|i| {
-        let mut s = 0.0;
-        for j in 0..pz {
-            s += oz_inv[(i, j)] * omega[(zr[j], pw - 1)];
-        }
-        s
-    }).collect();
-    let gamma_y: Vec<f64> = (0..pz).map(|i| {
-        let mut s = 0.0;
-        for j in 0..pz {
-            s += oz_inv[(i, j)] * omega[(zr[j], p - 1)];
-        }
-        s
-    }).collect();
+    let gamma_x: Vec<f64> = (0..pz)
+        .map(|i| {
+            let mut s = 0.0;
+            for j in 0..pz {
+                s += oz_inv[(i, j)] * omega[(zr[j], pw - 1)];
+            }
+            s
+        })
+        .collect();
+    let gamma_y: Vec<f64> = (0..pz)
+        .map(|i| {
+            let mut s = 0.0;
+            for j in 0..pz {
+                s += oz_inv[(i, j)] * omega[(zr[j], p - 1)];
+            }
+            s
+        })
+        .collect();
     // dw.dz.gamma = c(omega[z,y], omega[z,x]·inv·omega[z,y]) * K   (length Pz+1)
     let mut dw_dz_gamma = vec![0.0; pz + 1];
     for i in 0..pz {
@@ -745,11 +767,30 @@ pub fn pcov_integral_one<R: Rng>(
     };
 
     let mut draw = Mat::zeros(dim, dim);
-    conditional_norm(pcov_obs, n_iter, |rng| {
-        pcov_cond_stats(&mut draw, rng, &ctx, k, &sigma, &gamma_x, &gamma_y, gamma_fit_x, &dw_dz_gamma, &sig_xys, var_y, p)
-    }, rng)
+    conditional_norm(
+        pcov_obs,
+        n_iter,
+        |rng| {
+            pcov_cond_stats(
+                &mut draw,
+                rng,
+                &ctx,
+                k,
+                &sigma,
+                &gamma_x,
+                &gamma_y,
+                gamma_fit_x,
+                &dw_dz_gamma,
+                &sig_xys,
+                var_y,
+                p,
+            )
+        },
+        rng,
+    )
 }
 
+#[allow(clippy::too_many_arguments)] // faithful port of R's pcov.integral per-draw stats
 fn pcov_cond_stats<R: Rng>(
     draw: &mut Mat<f64>,
     rng: &mut R,
@@ -770,9 +811,9 @@ fn pcov_cond_stats<R: Rng>(
     let dim = ctx.p; // = 2p-1
     ctx.draw_into(rng, draw);
     // index sets (0-indexed): eps=0..pw, eps.z=0..pz, eps.x=pw-1, delta=pw..2pw, delta.z=pw..pw+pz, x=2pw-1, y=2pw-2
-    let ieps = |a: usize| a;                 // 0..pw
-    let ide = |a: usize| pw + a;             // delta
-    let ide_z = |a: usize| pw + a;           // delta.z (a in 0..pz)
+    let ieps = |a: usize| a; // 0..pw
+    let ide = |a: usize| pw + a; // delta
+    let ide_z = |a: usize| pw + a; // delta.z (a in 0..pz)
     let ieps_x = pw - 1;
     let ix = 2 * pw - 1;
     let iy = 2 * pw - 2;
@@ -781,7 +822,10 @@ fn pcov_cond_stats<R: Rng>(
     let mut dtd_w = Mat::zeros(pw, pw);
     for a in 0..pw {
         for b in 0..pw {
-            dtd_w[(a, b)] = draw[(ieps(a), ieps(b))] + draw[(ieps(a), ide(b))] + draw[(ide(a), ieps(b))] + draw[(ide(a), ide(b))];
+            dtd_w[(a, b)] = draw[(ieps(a), ieps(b))]
+                + draw[(ieps(a), ide(b))]
+                + draw[(ide(a), ieps(b))]
+                + draw[(ide(a), ide(b))];
         }
     }
     // dtd_w[pw-1,pw-1] += 2·dot(gamma_x, draw[delta.z, ieps_x]) + gamma_fit_x
@@ -884,7 +928,6 @@ fn regress_fit(omega: &Mat<f64>, y: usize, x: &[usize]) -> f64 {
     // omega[x,y]·inv(omega[x,x])·omega[x,y]
     let nx = x.len();
     let sub = Mat::from_fn(nx, nx, |i, j| omega[(x[i], x[j])]);
-    let col = Mat::from_fn(nx, 1, |i, _| omega[(x[i], y)]);
     let inv = match solve_spd(sub.as_ref()) {
         Some(m) => m,
         None => return f64::NAN,
@@ -915,4 +958,3 @@ pub fn pcov_integral<R: Rng>(
     let p2 = pcov_integral_one(k, omega, sigma, (xy.1, xy.0), z, half, rng);
     (p1 + p2) / 2.0
 }
-

@@ -8,22 +8,22 @@
 /// (A=1, C=2, G=3, T=4). `None` = strand-ambiguous / homozygous (unalignable).
 /// Reproduces `pair.index$code` after `code[code > 10] = NA`.
 const PAIR_CODE: [Option<i8>; 16] = [
-    Some(0),    // (A,A) -> NA in R; we use a sentinel 0 = invalid here
-    Some(-1),   // (C,A)
-    Some(-2),   // (G,A)
-    Some(0),    // (T,A) NA (was 11)
-    Some(1),    // (A,C)
-    Some(0),    // (C,C) NA
-    Some(0),    // (G,C) NA (was 12)
-    Some(2),    // (T,C)
-    Some(2),    // (A,G)
-    Some(0),    // (C,G) NA (was 12)
-    Some(0),    // (G,G) NA
-    Some(1),    // (T,G)
-    Some(0),    // (A,T) NA (was 11)
-    Some(-2),   // (C,T)
-    Some(-1),   // (G,T)
-    Some(0),    // (T,T) NA
+    Some(0),  // (A,A) -> NA in R; we use a sentinel 0 = invalid here
+    Some(-1), // (C,A)
+    Some(-2), // (G,A)
+    Some(0),  // (T,A) NA (was 11)
+    Some(1),  // (A,C)
+    Some(0),  // (C,C) NA
+    Some(0),  // (G,C) NA (was 12)
+    Some(2),  // (T,C)
+    Some(2),  // (A,G)
+    Some(0),  // (C,G) NA (was 12)
+    Some(0),  // (G,G) NA
+    Some(1),  // (T,G)
+    Some(0),  // (A,T) NA (was 11)
+    Some(-2), // (C,T)
+    Some(-1), // (G,T)
+    Some(0),  // (T,T) NA
 ];
 
 /// Map a 1-letter allele to its numeric index (A=1,C=2,G=3,T=4), or 0 if not a
@@ -48,11 +48,7 @@ pub fn map_alleles(a1: &str, a2: &str) -> Option<i8> {
         return None;
     }
     let code = PAIR_CODE[(i - 1) + (j - 1) * 4];
-    if code == Some(0) {
-        None
-    } else {
-        code
-    }
+    if code == Some(0) { None } else { code }
 }
 
 /// `com.pair(pair1, pair2)`: compare two allele-pair codes.

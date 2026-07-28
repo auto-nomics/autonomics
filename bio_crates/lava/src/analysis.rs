@@ -194,7 +194,12 @@ pub fn univariate_test(locus: &LocusParams, phenos: &[String]) -> Vec<f64> {
 }
 
 /// `run.univ`.
-pub fn run_univ(locus: &LocusParams, phenos: Option<&[String]>, var: bool, cap_estimates: bool) -> Vec<UnivResult> {
+pub fn run_univ(
+    locus: &LocusParams,
+    phenos: Option<&[String]>,
+    var: bool,
+    cap_estimates: bool,
+) -> Vec<UnivResult> {
     let phenos: Vec<String> = match phenos {
         Some(p) => p.to_vec(),
         None => locus.phenos.clone(),
@@ -219,10 +224,18 @@ pub fn run_univ(locus: &LocusParams, phenos: Option<&[String]>, var: bool, cap_e
             } else {
                 None
             };
-            let ascertained = if any_binary { Some(locus.ascertained_h2[i]) } else { None };
+            let ascertained = if any_binary {
+                Some(locus.ascertained_h2[i])
+            } else {
+                None
+            };
             UnivResult {
                 phen: ph.clone(),
-                var: if var { Some(signif6(locus.omega[(i, i)])) } else { None },
+                var: if var {
+                    Some(signif6(locus.omega[(i, i)]))
+                } else {
+                    None
+                },
                 h2_obs,
                 h2_latent,
                 ascertained,
@@ -235,6 +248,7 @@ pub fn run_univ(locus: &LocusParams, phenos: Option<&[String]>, var: bool, cap_e
 // ----------------------------- run.bivar -----------------------------
 
 /// `run.bivar`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_bivar<R: Rng>(
     locus: &LocusParams,
     phenos: Option<&[String]>,
@@ -323,6 +337,7 @@ pub struct UnivBivarResult {
 }
 
 /// `run.univ.bivar`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_univ_bivar<R: Rng>(
     locus: &LocusParams,
     phenos: Option<&[String]>,
@@ -336,11 +351,32 @@ pub fn run_univ_bivar<R: Rng>(
     rng: &mut R,
 ) -> UnivBivarResult {
     let univ = run_univ(locus, phenos, false, cap_estimates);
-    let passing: Vec<String> = univ.iter().filter(|u| u.p < univ_thresh).map(|u| u.phen.clone()).collect();
+    let passing: Vec<String> = univ
+        .iter()
+        .filter(|u| u.p < univ_thresh)
+        .map(|u| u.phen.clone())
+        .collect();
     let bivar = if passing.len() > 1 {
-        let target_ok = target.map(|t| univ.iter().find(|u| u.phen == t).map(|u| u.p < univ_thresh).unwrap_or(false)).unwrap_or(true);
+        let target_ok = target
+            .map(|t| {
+                univ.iter()
+                    .find(|u| u.phen == t)
+                    .map(|u| u.p < univ_thresh)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(true);
         if target_ok {
-            Some(run_bivar(locus, Some(&passing), target, adap_thresh, p_values, cis, param_lim, cap_estimates, rng))
+            Some(run_bivar(
+                locus,
+                Some(&passing),
+                target,
+                adap_thresh,
+                p_values,
+                cis,
+                param_lim,
+                cap_estimates,
+                rng,
+            ))
         } else {
             None
         }
@@ -353,6 +389,7 @@ pub fn run_univ_bivar<R: Rng>(
 // ----------------------------- run.multireg -----------------------------
 
 /// `run.multireg`: returns a flat list of all (predictor-subset, predictor) rows.
+#[allow(clippy::too_many_arguments)]
 pub fn run_multireg<R: Rng>(
     locus: &LocusParams,
     target: &str,
@@ -372,12 +409,16 @@ pub fn run_multireg<R: Rng>(
     if !phenos.contains(&target.to_string()) {
         phenos.push(target.to_string());
     }
-    let x_phenos: Vec<String> = phenos.iter().filter(|p| p.as_str() != target).cloned().collect();
+    let x_phenos: Vec<String> = phenos
+        .iter()
+        .filter(|p| p.as_str() != target)
+        .cloned()
+        .collect();
     let x_idx: Vec<usize> = x_phenos
         .iter()
         .map(|p| locus.phenos.iter().position(|q| q == p).unwrap())
         .collect();
-    let at: &[f64] = adap_thresh.unwrap_or(&[1e-4, 1e-6]);
+    let _at: &[f64] = adap_thresh.unwrap_or(&[1e-4, 1e-6]);
 
     let sizes: Vec<usize> = if only_full_model {
         vec![x_phenos.len()]
@@ -433,6 +474,7 @@ pub fn run_multireg<R: Rng>(
 // ----------------------------- run.pcor -----------------------------
 
 /// `run.pcor`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_pcor<R: Rng>(
     locus: &LocusParams,
     target: (&str, &str),
@@ -456,8 +498,15 @@ pub fn run_pcor<R: Rng>(
     }
     let xi = locus.phenos.iter().position(|p| p == t1).unwrap();
     let yi = locus.phenos.iter().position(|p| p == t2).unwrap();
-    let z_phenos: Vec<String> = phenos.iter().filter(|p| p.as_str() != t1 && p.as_str() != t2).cloned().collect();
-    let z_idx: Vec<usize> = z_phenos.iter().map(|p| locus.phenos.iter().position(|q| q == p).unwrap()).collect();
+    let z_phenos: Vec<String> = phenos
+        .iter()
+        .filter(|p| p.as_str() != t1 && p.as_str() != t2)
+        .cloned()
+        .collect();
+    let z_idx: Vec<usize> = z_phenos
+        .iter()
+        .map(|p| locus.phenos.iter().position(|q| q == p).unwrap())
+        .collect();
 
     // r2 of x and y on Z (via bivar if |Z|==1, else multireg full model)
     let r2_xz = r2_target_on_z(locus, xi, &z_idx, rng);
@@ -479,7 +528,15 @@ pub fn run_pcor<R: Rng>(
         if let Some(pc) = pcor {
             out.pcor = signif6(pc);
             if cis {
-                let (_est, lo, hi) = ci_pcor(locus.k, (xi, yi), &z_idx, &locus.omega, &locus.sigma, 10000, rng);
+                let (_est, lo, hi) = ci_pcor(
+                    locus.k,
+                    (xi, yi),
+                    &z_idx,
+                    &locus.omega,
+                    &locus.sigma,
+                    10000,
+                    rng,
+                );
                 out.ci_lower = lo;
                 out.ci_upper = hi;
             }
@@ -487,7 +544,15 @@ pub fn run_pcor<R: Rng>(
                 // pcov integral p-value — wired via wishart::pcov_integral.
                 let at: &[f64] = adap_thresh.unwrap_or(&[1e-4, 1e-6]);
                 out.p = signif6(crate::wishart::integral_p(10000, at, rng, |rng, n| {
-                    crate::wishart::pcov_integral(locus.k, &locus.omega, &locus.sigma, (xi, yi), &z_idx, n, rng)
+                    crate::wishart::pcov_integral(
+                        locus.k,
+                        &locus.omega,
+                        &locus.sigma,
+                        (xi, yi),
+                        &z_idx,
+                        n,
+                        rng,
+                    )
                 }));
             }
         }

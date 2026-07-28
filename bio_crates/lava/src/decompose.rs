@@ -84,7 +84,9 @@ fn build_r_from_eigen(lambda: &[f64], q: MatRef<f64>, prune_thresh: f64) -> (Mat
 fn sym_eigen(a: MatRef<f64>) -> Result<(Vec<f64>, Mat<f64>)> {
     let n = a.nrows();
     // faer self-adjoint eigendecomposition (high-level API, Result-returning).
-    let e = a.self_adjoint_eigen(faer::Side::Lower).map_err(|e| LavaError::Numeric(format!("eigen failed: {e:?}")))?;
+    let e = a
+        .self_adjoint_eigen(faer::Side::Lower)
+        .map_err(|e| LavaError::Numeric(format!("eigen failed: {e:?}")))?;
     let s = e.S(); // DiagRef
     let u = e.U(); // MatRef
     // faer returns eigenvalues in nondecreasing order; R eigen returns
@@ -99,11 +101,15 @@ fn sym_eigen(a: MatRef<f64>) -> Result<(Vec<f64>, Mat<f64>)> {
 
 /// Decompose a precomputed LD (correlation) matrix. Faithful port of
 /// `decompose.ld` ld-mode (with the recursive block path).
-pub fn decompose_ld_matrix(ld: MatRef<f64>, prune_thresh: f64, max_block_size: usize) -> Result<Mat<f64>> {
+pub fn decompose_ld_matrix(
+    ld: MatRef<f64>,
+    prune_thresh: f64,
+    max_block_size: usize,
+) -> Result<Mat<f64>> {
     let n = ld.ncols();
     if n > max_block_size {
         // block path
-        let no_blocks = (n + max_block_size - 1) / max_block_size;
+        let no_blocks = n.div_ceil(max_block_size);
         let mut block_id = vec![0usize; n];
         for (i, b) in block_id.iter_mut().enumerate() {
             *b = i % no_blocks;
@@ -148,7 +154,7 @@ pub fn decompose_ld_matrix(ld: MatRef<f64>, prune_thresh: f64, max_block_size: u
         }
         // M = t(R_base) %*% ld %*% R_base
         let rt = r_base.transpose();
-        let tmp = &rt * &ld;
+        let tmp = rt * ld;
         let m_mat = &tmp * &r_base;
         let r_block = decompose_ld_matrix(m_mat.as_ref(), prune_thresh, 2 * max_block_size)?;
         let res = &r_base * &r_block;
@@ -162,7 +168,11 @@ pub fn decompose_ld_matrix(ld: MatRef<f64>, prune_thresh: f64, max_block_size: u
 
 /// Decompose PLINK genotypes (individuals × n_snps, NA for missing) via the
 /// double-scaled SVD. Faithful port of `decompose.ld` plink-mode.
-pub fn decompose_plink(genotypes: MatRef<f64>, prune_thresh: f64, max_block_size: usize) -> Result<Mat<f64>> {
+pub fn decompose_plink(
+    genotypes: MatRef<f64>,
+    prune_thresh: f64,
+    max_block_size: usize,
+) -> Result<Mat<f64>> {
     let n_ref = genotypes.nrows();
     let x1 = scale_columns(&genotypes.to_owned());
     // X[is.na(X)] = 0
@@ -176,11 +186,16 @@ pub fn decompose_plink(genotypes: MatRef<f64>, prune_thresh: f64, max_block_size
     }
     let x = scale_columns(&x1z);
     // svd(X): lambda = d^2/(N_ref-1), Q = V (right singular vectors)
-    let svd = x.as_ref().svd().map_err(|e| LavaError::Numeric(format!("svd failed: {e:?}")))?;
+    let svd = x
+        .as_ref()
+        .svd()
+        .map_err(|e| LavaError::Numeric(format!("svd failed: {e:?}")))?;
     let d = svd.S(); // singular values (DiagRef)
     let v = svd.V(); // right singular vectors (MatRef), n_snps × p
     let dv = d.column_vector();
-    let lambda: Vec<f64> = (0..d.dim()).map(|i| dv[i] * dv[i] / (n_ref - 1) as f64).collect();
+    let lambda: Vec<f64> = (0..d.dim())
+        .map(|i| dv[i] * dv[i] / (n_ref - 1) as f64)
+        .collect();
     // Q = v (n_snps × p). Use as eigenvectors.
     let (r, _k) = build_r_from_eigen(&lambda, v, prune_thresh);
     // Block path is not applicable to the genotype SVD; for very large loci we

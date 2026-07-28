@@ -236,7 +236,7 @@ mod tests {
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
-            "lava_locus" => serde_json::json!({"ref_prefix": "ref/g1000", "loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]}),
+            "lava_locus" => serde_json::json!({"loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]}),
             "lava_univ" => serde_json::json!({}),
             "lava_bivar" => serde_json::json!({}),
             "lava_pcor" => serde_json::json!({"target": ["p1", "p2"]}),

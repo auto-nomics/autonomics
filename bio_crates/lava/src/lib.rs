@@ -59,11 +59,11 @@ pub mod wishart;
 
 pub use error::{LavaError, Result};
 
-use rand_chacha::ChaCha8Rng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 /// Default seed for the Monte-Carlo inference RNG (reproducible p-values/CIs).
-pub const DEFAULT_RNG_SEED: u64 = 0x1A7A_4E7A_C0FFEE;
+pub const DEFAULT_RNG_SEED: u64 = 0x001A_7A4E_7AC0_FFEE;
 
 /// Build a seeded RNG (ChaCha8) for reproducible Wishart sampling.
 pub fn rng(seed: u64) -> ChaCha8Rng {

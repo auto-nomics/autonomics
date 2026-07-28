@@ -22,6 +22,7 @@ pub fn pnorm_sf(x: f64) -> f64 {
 /// Standard-normal quantile — R `qnorm(p)`. Acklam initial guess (accurate to
 /// ~1e-9) polished by Newton iterations against the accurate [`pnorm`], giving
 /// ~1e-13 across the full range (incl. p ≈ 1e-300).
+#[allow(clippy::excessive_precision)] // Acklam coefficients kept verbatim for auditability vs the reference.
 pub fn qnorm(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
@@ -29,10 +30,35 @@ pub fn qnorm(p: f64) -> f64 {
     if p >= 1.0 {
         return f64::INFINITY;
     }
-    const A: [f64; 6] = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
-    const B: [f64; 5] = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
-    const C: [f64; 6] = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
-    const D: [f64; 4] = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+    const A: [f64; 6] = [
+        -3.969683028665376e+01,
+        2.209460984245205e+02,
+        -2.759285104469687e+02,
+        1.383577518672690e+02,
+        -3.066479806614716e+01,
+        2.506628277459239e+00,
+    ];
+    const B: [f64; 5] = [
+        -5.447609879822406e+01,
+        1.615858368580409e+02,
+        -1.556989798598866e+02,
+        6.680131188771972e+01,
+        -1.328068155288572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e+00,
+        -2.549732539343734e+00,
+        4.374664141464968e+00,
+        2.938163982698783e+00,
+    ];
+    const D: [f64; 4] = [
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e+00,
+        3.754408661907416e+00,
+    ];
     const PLOW: f64 = 0.02425;
     const PHIGH: f64 = 1.0 - PLOW;
 
@@ -84,7 +110,9 @@ fn erfc(x: f64) -> f64 {
     if x < 1.5 {
         // A&S 7.1.26 (erfc not tiny here → absolute accuracy is fine).
         let t = 1.0 / (1.0 + 0.3275911 * x);
-        let poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+        let poly = t
+            * (0.254829592
+                + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
         return poly * (-x * x).exp();
     }
     // x >= 1.5: continued fraction for g = x + (1/2)/(x + 1/(x + (3/2)/(x + ...)))
@@ -128,7 +156,9 @@ pub fn pchisq_sf(x: f64, k: f64) -> f64 {
 /// F(d1, d2) survival `P(X > x)` — R `pf(x, d1, d2, lower.tail = FALSE)`.
 #[inline]
 pub fn pf_sf(x: f64, d1: f64, d2: f64) -> f64 {
-    FisherSnedecor::new(d1, d2).map(|d| d.sf(x)).unwrap_or(f64::NAN)
+    FisherSnedecor::new(d1, d2)
+        .map(|d| d.sf(x))
+        .unwrap_or(f64::NAN)
 }
 
 /// `cov2cor(V)`: rescale a (covariance) matrix to a correlation matrix,
