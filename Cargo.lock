@@ -1679,6 +1679,7 @@ dependencies = [
 name = "data-engine"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrow",
  "arrow-array",
  "arrow-buffer",

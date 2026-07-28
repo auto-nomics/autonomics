@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::{ProgressBuffer, ProgressLog, ToolContext};
 use crate::tools::task_runtime::{RunMode, TaskStatus, WaitResultKind};
+use crate::tools::{ProgressBuffer, ProgressLog, ToolContext};
 
 use super::DynToolFunction;
 use super::error::ToolError;
@@ -156,8 +156,7 @@ impl Toolset {
             // can push structured records through `ctx.output` while it runs.
             // The same buffer is handed to `TaskEntry` below; `view_task_status`
             // snapshots it as the task's accumulated output.
-            let output: ProgressBuffer =
-                Arc::new(std::sync::Mutex::new(ProgressLog::new()));
+            let output: ProgressBuffer = Arc::new(std::sync::Mutex::new(ProgressLog::new()));
             let ctx = ToolContext {
                 output: Some(output.clone()),
             };

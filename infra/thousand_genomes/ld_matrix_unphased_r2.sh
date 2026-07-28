@@ -23,7 +23,7 @@ set -euo pipefail
 
 # ──────────────── Configuration ────────────────
 VCF_ROOT="/mnt/disk2/dataset/1000g_genotype_data"
-OUT_ROOT="/mnt/disk2/dataset/1000g_plink"
+OUT_ROOT="/mnt/disk2/dataset/1000g_plink/unphased_r2"
 PANEL="${VCF_ROOT}/integrated_call_samples_v3.20130502.ALL.panel"
 
 # Default: all 5 super-populations + chr1-22; overridable via env vars / positional args

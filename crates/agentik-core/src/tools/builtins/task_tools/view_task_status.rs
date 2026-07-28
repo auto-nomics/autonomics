@@ -6,7 +6,7 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use crate::tools::task_runtime::{TaskEntry, TaskStatus};
-use crate::tools::{ToolError, ToolFunction, MAX_PROGRESS_RECORDS};
+use crate::tools::{MAX_PROGRESS_RECORDS, ToolError, ToolFunction};
 
 /// Default page size when `limit` is omitted.
 const DEFAULT_LIMIT: usize = 50;
@@ -138,8 +138,13 @@ impl ToolFunction for TaskStatusViewerTool {
         let tail = input.tail.unwrap_or(true);
 
         // Select the window over the filtered slice.
-        let (window, has_more) =
-            select_window(filtered_total, limit, input.offset.unwrap_or(0), tail, counts_only);
+        let (window, has_more) = select_window(
+            filtered_total,
+            limit,
+            input.offset.unwrap_or(0),
+            tail,
+            counts_only,
+        );
         let records: Vec<&crate::tools::ProgressRecord> = filtered[window.clone()].to_vec();
         let window_start = window.start;
 
@@ -160,8 +165,8 @@ impl ToolFunction for TaskStatusViewerTool {
             },
         });
         if !records.is_empty() {
-            payload["log"]["records"] = serde_json::to_value(&records)
-                .unwrap_or(serde_json::Value::Null);
+            payload["log"]["records"] =
+                serde_json::to_value(&records).unwrap_or(serde_json::Value::Null);
         }
 
         Ok(AgentToolResult::success_json(payload))
@@ -231,4 +236,3 @@ mod tests {
         assert_eq!(snap.last().unwrap().message.as_deref(), Some("overflow"));
     }
 }
-

@@ -23,6 +23,7 @@ async-trait.workspace = true
 petgraph = "0.8"
 tracing.workspace = true
 futures.workspace = true
+ahash = "0.8"
 blake3 = "1.8.5"
 derive_more.workspace = true
 stat-primitives = { path = "../stat-primitives" }

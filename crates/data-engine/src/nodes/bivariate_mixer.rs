@@ -213,6 +213,14 @@ pub struct BivariateMixerNodeSpec {
     /// extract 的 LD 剪枝阈值（原版 `--r2`，默认 0.8；严格 > 才剪）。
     #[serde(default = "default_extract_r2")]
     pub extract_r2: f64,
+    /// tag 面板的 Iceberg 表名（`iceberg.mixer` 命名空间下）。默认 `"eur_tag_panel"`。
+    /// 设了跳过 extract，直接从表读 tag rsid。设为 `None` 走内联 extract。
+    #[serde(default = "default_panel")]
+    pub panel: Option<String>,
+    /// tag 诱导 LD 子图的 Iceberg 表名。默认 `"eur_subgraph"`。
+    /// 设了跳过 fold 的 ld_matrix 扫描，直接查子图表建 CSR。
+    #[serde(default = "default_panel_ld")]
+    pub panel_ld: Option<String>,
 }
 
 fn default_diffevo_repeats() -> usize {
@@ -247,6 +255,12 @@ fn default_extract_subset() -> usize {
 }
 fn default_extract_r2() -> f64 {
     0.8
+}
+fn default_panel() -> Option<String> {
+    Some("eur_tag_panel".to_string())
+}
+fn default_panel_ld() -> Option<String> {
+    Some("eur_subgraph".to_string())
 }
 
 // =====================================================================
@@ -491,9 +505,10 @@ impl DagNode for BivariateMixerNode {
                     Some(*chrom),
                     None,
                 )? {
-                    for_each_ld_pair(&batch, &rsid_to_idx, |a, b, _r2| {
-                        adj_triples.push(((a as usize - base) as u32, b, 1.0));
-                        adj_triples.push(((b as usize - base) as u32, a, 1.0));
+                    for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
+                        // 存真实 r²（非写死 1.0），对齐原版 perform_ld_clump 的 f32 真实比较。
+                        adj_triples.push(((a as usize - base) as u32, b, r2));
+                        adj_triples.push(((b as usize - base) as u32, a, r2));
                     })?;
                 }
                 adj_blocks.push((base, mixer::ld_matrix::LdBlock::from_coo(&adj_triples, n_k)));
@@ -696,6 +711,8 @@ mod tests {
             extract_maf: 0.05,
             extract_subset: 2_000_000,
             extract_r2: 0.8,
+            panel: None,
+            panel_ld: None,
         };
         let node = BivariateMixerNode::new(SessionContext::new(), spec);
         assert_eq!(node.kind(), "bivariate_mixer");

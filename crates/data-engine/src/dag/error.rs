@@ -78,77 +78,86 @@ pub enum DagError {
     },
 }
 
+/// Maximum number of characters retained in an agent-facing error message.
+///
+/// Some error variants — chiefly [`DagError::DataFusion`] — can carry
+/// multi-kilobyte messages (full SQL text, optimized physical plans, deep
+/// cause chains). Stuffing those verbatim into a [`super::runtime::NodeReport`]
+/// bloats the run result the agent has to read. We keep a generous head (so
+/// the actionable cause stays visible) and drop the tail, marking the cut.
+const ERROR_MESSAGE_MAX_CHARS: usize = 1000;
+
+/// Truncate `msg` to [`ERROR_MESSAGE_MAX_CHARS`] characters, appending a
+/// marker when content was dropped so the reader knows the message is partial.
+fn truncate_message(msg: String) -> String {
+    if msg.chars().count() <= ERROR_MESSAGE_MAX_CHARS {
+        return msg;
+    }
+    let head: String = msg.chars().take(ERROR_MESSAGE_MAX_CHARS).collect();
+    format!("{head}…(truncated, {} total chars)", msg.chars().count())
+}
+
 impl DagError {
     /// Extract a serializable error summary for agent-facing reports.
+    ///
+    /// The `message` is truncated to [`ERROR_MESSAGE_MAX_CHARS`] characters so
+    /// a single bloated error (e.g. a DataFusion plan dump) cannot dominate
+    /// the run report.
     pub fn to_report(&self) -> super::runtime::DagErrorReport {
-        match self {
-            Self::DataFusion(e) => super::runtime::DagErrorReport {
-                kind: "datafusion".into(),
-                message: e.to_string(),
-            },
-            Self::Cycle(s) => super::runtime::DagErrorReport {
-                kind: "cycle".into(),
-                message: s.clone(),
-            },
-            Self::UnknownNode(s) => super::runtime::DagErrorReport {
-                kind: "unknown_node".into(),
-                message: s.clone(),
-            },
-            Self::CannotResolveNodeIdx { node_id } => super::runtime::DagErrorReport {
-                kind: "error_resolve_idx".into(),
-                message: format!(
+        let (kind, message) = match self {
+            Self::DataFusion(e) => ("datafusion", e.to_string()),
+            Self::Cycle(s) => ("cycle", s.clone()),
+            Self::UnknownNode(s) => ("unknown_node", s.clone()),
+            Self::CannotResolveNodeIdx { node_id } => (
+                "error_resolve_idx",
+                format!(
                     "Error occured when resolve node_id '{node_id}' into graph idx. This may caused by Node didn't registered in graph set properly."
                 ),
-            },
-            Self::DuplicateNode(s) => super::runtime::DagErrorReport {
-                kind: "duplicate_node".into(),
-                message: s.clone(),
-            },
+            ),
+            Self::DuplicateNode(s) => ("duplicate_node", s.clone()),
             Self::PortNotFound {
                 node,
                 port,
                 direction,
-            } => super::runtime::DagErrorReport {
-                kind: "port_not_found".into(),
-                message: format!("node `{node}` has no {direction} port `{port}`"),
-            },
-            Self::PortDisconnected { node, port } => super::runtime::DagErrorReport {
-                kind: "port_disconnected".into(),
-                message: format!("input port `{port}` on node `{node}` is not connected"),
-            },
-            Self::PortOverconnected { node, port } => super::runtime::DagErrorReport {
-                kind: "port_overconnected".into(),
-                message: format!(
-                    "input port `{port}` on node `{node}` has multiple incoming edges"
-                ),
-            },
+            } => (
+                "port_not_found",
+                format!("node `{node}` has no {direction} port `{port}`"),
+            ),
+            Self::PortDisconnected { node, port } => (
+                "port_disconnected",
+                format!("input port `{port}` on node `{node}` is not connected"),
+            ),
+            Self::PortOverconnected { node, port } => (
+                "port_overconnected",
+                format!("input port `{port}` on node `{node}` has multiple incoming edges"),
+            ),
             Self::SchemaMismatch {
                 from_node,
                 from_port,
                 to_node,
                 to_port,
                 reason,
-            } => super::runtime::DagErrorReport {
-                kind: "schema_mismatch".into(),
-                message: format!("edge {from_node}.{from_port} -> {to_node}.{to_port}: {reason}"),
-            },
-            Self::Schedule(s) => super::runtime::DagErrorReport {
-                kind: "schedule".into(),
-                message: s.clone(),
-            },
-            Self::NodeError { node_type, msg } => super::runtime::DagErrorReport {
-                kind: "node_error".into(),
-                message: format!("node `{node_type}` failed: {msg}"),
-            },
+            } => (
+                "schema_mismatch",
+                format!("edge {from_node}.{from_port} -> {to_node}.{to_port}: {reason}"),
+            ),
+            Self::Schedule(s) => ("schedule", s.clone()),
+            Self::NodeError { node_type, msg } => {
+                ("node_error", format!("node `{node_type}` failed: {msg}"))
+            }
             Self::EdgeNotFound {
                 from,
                 from_port,
                 to,
                 to_port,
-            } => super::runtime::DagErrorReport {
-                kind: "edge_not_found".into(),
-                message: format!("no edge from `{from}.{from_port}` to `{to}.{to_port}`"),
-            },
+            } => (
+                "edge_not_found",
+                format!("no edge from `{from}.{from_port}` to `{to}.{to_port}`"),
+            ),
+        };
+        super::runtime::DagErrorReport {
+            kind: kind.into(),
+            message: truncate_message(message),
         }
     }
 }

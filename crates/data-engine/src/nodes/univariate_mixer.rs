@@ -6,8 +6,10 @@
 //! [`mixer::fit::fit1`] 拟合 spike-and-slab 模型，输出单行结果
 //! `DataFrame`（pi, sig2_beta, sig2_zero, h2, nc, nc_p9, aic, bic, loglike）。
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use ahash::AHashMap;
 
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -93,6 +95,10 @@ impl From<datalake::error::Error> for UnivariateMixerError {
 // =====================================================================
 // Schemas
 // =====================================================================
+
+/// rsid→全局 index 映射。LD 表的 id_a/id_b 是字符串，每行都要哈希查找两次；
+/// 用 ahash（远快于 std 的 SipHash）替代 std HashMap。
+type RsidMap = AHashMap<String, u32>;
 
 /// 上游 GWAS sumstats 固定列名：Z-score、样本量、rsid 连接键。
 const INPUT_Z_COL: &str = "Z";
@@ -246,6 +252,11 @@ const UNIVARIATE_MIXER_NODE_KIND: &str = "univariate_mixer";
 /// LD 表），与 CPU 核数无关——并发的是 await，不是线程。
 const EXTRACT_CONCURRENCY: usize = 8;
 
+/// 预算面板的 Iceberg 表名（`iceberg.mixer` 命名空间下）。节点内部使用，
+/// 不暴露给 spec / agent。由 `precompute_tags` 离线产出。
+const TAG_PANEL_TABLE: &str = "eur_tag_panel";
+const SUBGRAPH_TABLE: &str = "eur_subgraph";
+
 /// Univariate MiXeR 拟合节点。
 ///
 /// 输入：上游 sumstats（Z, N, rsid）。从数据湖取 LD 矩阵与 AF，组装
@@ -391,7 +402,7 @@ impl DagNode for UnivariateMixerNode {
 
         // 3. 读 universe（sumstats ∩ AF）→ 每个 SNP 的 z/n/h/maf。
         //    所有 SNP 合并进一个连续全局 index 空间；LD 不跨染色体，块对角。
-        let mut rsid_to_idx: HashMap<String, u32> = HashMap::new();
+        let mut rsid_to_idx: RsidMap = RsidMap::new();
         let mut z_vec: Vec<f64> = Vec::new();
         let mut n_vec: Vec<f64> = Vec::new();
         let mut h_vec: Vec<f64> = Vec::new();
@@ -445,7 +456,9 @@ impl DagNode for UnivariateMixerNode {
             }
             let added = rsid_to_idx.len() - chr_before;
             if added == 0 {
-                reporter.warn(format!("universe chr{chrom}: 0 SNPs overlapped sumstats ∩ af"));
+                reporter.warn(format!(
+                    "universe chr{chrom}: 0 SNPs overlapped sumstats ∩ af"
+                ));
             } else {
                 reporter.info(format!(
                     "universe chr{chrom}: +{added} SNPs (running total {})",
@@ -462,139 +475,93 @@ impl DagNode for UnivariateMixerNode {
             reporter.error(format!("fit1: abort — {msg}"));
             return Err(UnivariateMixerError::InvalidInput(msg).into());
         }
-        let totalhet: f64 = h_vec.iter().sum();
+        // totalhet 和 n_snp 必须覆盖**全参考面板**（af.eur_af 全量），
+        // 不是 universe（sumstats∩AF）——否则 h² 和 nc 被低估。
+        // h² = sig2_beta · pi · totalhet，totalhet 少几倍 h² 就少几倍。
+        let chrom_list: Vec<String> = self
+            .spec
+            .chromosomes
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        let panel_sql = format!(
+            "SELECT SUM(2.0 * LEAST(alt_freq, 1.0 - alt_freq) * (1.0 - LEAST(alt_freq, 1.0 - alt_freq))) AS th, \
+             COUNT(*) AS n FROM iceberg.af.eur_af WHERE chrom IN ({})",
+            chrom_list.join(", ")
+        );
+        let panel_df = UnivariateMixerError::df_ctx(
+            ctx.sql(&panel_sql).await,
+            "panel totalhet query",
+            None,
+            Some(&panel_sql),
+        )?;
+        let panel_batches = UnivariateMixerError::df_ctx(
+            panel_df.collect().await,
+            "collect panel totalhet",
+            None,
+            None,
+        )?;
+        let totalhet: f64 = panel_batches
+            .first()
+            .and_then(|b| b.column_by_name("th"))
+            .and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<Float64Array>()
+                    .map(|a| a.value(0))
+            })
+            .unwrap_or(0.0);
+        let n_snp_ref: usize = panel_batches
+            .first()
+            .and_then(|b| b.column_by_name("n"))
+            .and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+                    .map(|a| a.value(0) as usize)
+            })
+            .unwrap_or(n_snp);
         reporter.progress(n_chrom as u64, n_chrom as u64);
         reporter.info(format!(
-            "universe: {n_snp} SNPs across {n_chrom} chromosomes (totalhet={totalhet:.1})"
+            "universe: {n_snp} SNPs (sumstats∩AF), reference panel: {n_snp_ref} SNPs, totalhet={totalhet:.1} (full panel)"
         ));
-        if totalhet <= 0.0 {
-            reporter.warn(
-                "universe: total heterozygosity is 0 — all SNPs monomorphic; fit1 undefined",
-            );
-        }
 
         // 4. extract：选 tag 子集（MAF≥maf_min + 贪心 LD 剪枝 r²>r2_threshold + 随机 subset）。
         //    邻接只取 r²>extract_r2 的对（少），按染色体建**对称化** CSR（双向），喂 select_tags。
-        let tags: Vec<u32> = if self.spec.extract_enabled {
-            reporter.info(format!(
-                "extract: building r²>{} adjacency per chromosome for tag selection",
-                self.spec.extract_r2,
-            ));
-            let mut adj_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
-            let mut adj_total_pairs: u64 = 0;
-            // 各染色体的 r²>thr 邻接构建互相独立，用 `buffer_unordered` 并发扫描：
-            // 在当前 task 上 poll（无需 Send/'static），可直接借用 rsid_to_idx/ctx。
-            // 完成顺序不定 → 收集后按 ci（== base 非递减）排序再喂 BlockDiagonal——
-            // BlockDiagonal::new 依入参顺序取 last() 推断 n_total，必须升序无缝覆盖。
-            let extract_r2 = self.spec.extract_r2;
-            let rsid = &rsid_to_idx;
-            let chrom_base_ref = &chrom_base;
-            let done = std::sync::atomic::AtomicU64::new(0);
-            let done = &done;
-            // 预收集成 owned (ci, chrom) —— 闭包参数若为 `&u32` 被 async 块捕获，
-            // buffer_unordered 存储 future 时会触发 HRTB "FnOnce not general enough"。
-            let chroms: Vec<(usize, u32)> =
-                self.spec.chromosomes.iter().copied().enumerate().collect();
-            let collected: Result<
-                Vec<Option<(usize, usize, mixer::ld_matrix::LdBlock, u64)>>,
-                UnivariateMixerError,
-            > = futures::stream::iter(chroms)
-                .map(|(ci, chrom)| async move {
-                    let base = chrom_base_ref[ci] as usize;
-                    let n_k = (if ci + 1 < chrom_base_ref.len() {
-                        chrom_base_ref[ci + 1] as usize
-                    } else {
-                        n_snp
-                    }) - base;
-                    if n_k == 0 {
-                        let d = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        reporter.progress(d, n_chrom as u64);
-                        return Ok::<_, UnivariateMixerError>(None);
+        let tags: Vec<u32> = {
+            // 从预算面板表加载 tag rsid（跳过 extract，不扫 ld_matrix）。
+            let sql = format!("SELECT rsid FROM iceberg.mixer.{TAG_PANEL_TABLE}");
+            let df = UnivariateMixerError::df_ctx(
+                ctx.sql(&sql).await,
+                "load tag panel",
+                None,
+                Some(&sql),
+            )?;
+            let panel_batches = UnivariateMixerError::df_ctx(
+                df.collect().await,
+                "collect tag panel",
+                None,
+                None,
+            )?;
+            let mut t: Vec<u32> = Vec::new();
+            let mut panel_count = 0u64;
+            for batch in &panel_batches {
+                let rsids = col_as_string(batch, "rsid")?;
+                for r in 0..batch.num_rows() {
+                    panel_count += 1;
+                    if let Some(&idx) = rsid_to_idx.get(rsids.value(r)) {
+                        t.push(idx);
                     }
-                    let adj_sql = format!(
-                        "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
-                        chrom = chrom,
-                        r2 = extract_r2,
-                    );
-                    let df = UnivariateMixerError::df_ctx(
-                        ctx.sql(&adj_sql).await,
-                        "extract adjacency (ld r²>thr)",
-                        Some(chrom),
-                        Some(&adj_sql),
-                    )?;
-                    let mut stream = UnivariateMixerError::df_ctx(
-                        df.execute_stream().await,
-                        "extract adjacency stream",
-                        Some(chrom),
-                        None,
-                    )?;
-                    reporter.info(format!(
-                        "extract chr{chrom}: streaming LD pairs r²>{} ...",
-                        extract_r2
-                    ));
-                    let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
-                    while let Some(batch) = UnivariateMixerError::df_ctx(
-                        stream.try_next().await,
-                        "extract adjacency batch",
-                        Some(chrom),
-                        None,
-                    )? {
-                        for_each_ld_pair(&batch, rsid, |a, b, _r2| {
-                            // 对称化：row(a) 加 b，row(b) 加 a，保证 select_tags 的 ld.row(idx) 完整
-                            adj_triples.push(((a as usize - base) as u32, b, 1.0));
-                            adj_triples.push(((b as usize - base) as u32, a, 1.0));
-                        })?;
-                    }
-                    let pairs = adj_triples.len() as u64 / 2;
-                    reporter.info(format!(
-                        "extract chr{chrom}: {pairs} adj pairs (n_k={n_k})"
-                    ));
-                    let block = mixer::ld_matrix::LdBlock::from_coo(&adj_triples, n_k);
-                    let d = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    reporter.progress(d, n_chrom as u64);
-                    Ok(Some((ci, base, block, pairs)))
-                })
-                .buffer_unordered(n_chrom.min(EXTRACT_CONCURRENCY))
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect();
-            let mut blocks: Vec<(usize, usize, mixer::ld_matrix::LdBlock, u64)> =
-                collected?.into_iter().flatten().collect();
-            blocks.sort_by_key(|(ci, _, _, _)| *ci);
-            for (_ci, base, block, pairs) in blocks {
-                adj_total_pairs += pairs;
-                adj_blocks.push((base, block));
+                }
             }
-            reporter.progress(n_chrom as u64, n_chrom as u64);
             reporter.info(format!(
-                "extract: adjacency built ({adj_total_pairs} pairs total); selecting tags ..."
+                "tags: loaded {panel_count} from iceberg.mixer.{TAG_PANEL_TABLE}, {} in universe (universe={n_snp})",
+                t.len()
             ));
-            let adj = mixer::ld_matrix::BlockDiagonal::new(adj_blocks);
-            let ec = mixer::extract::ExtractConfig {
-                maf_min: self.spec.extract_maf,
-                r2_threshold: self.spec.extract_r2,
-                subset: self.spec.extract_subset,
-                seed: self.spec.seed,
-            };
-            mixer::extract::select_tags(&maf_vec, &adj, &ec)
-        } else {
-            (0..n_snp as u32).collect()
+            if t.is_empty() {
+                reporter.warn("0 tags overlap universe — fit1 will be degenerate");
+            }
+            t
         };
         let tag_set: std::collections::HashSet<u32> = tags.iter().copied().collect();
-        if self.spec.extract_enabled {
-            reporter.info(format!(
-                "extract: {}/{} SNPs selected as tags ({:.1}%)",
-                tags.len(),
-                n_snp,
-                100.0 * tags.len() as f64 / n_snp as f64
-            ));
-            if tags.is_empty() {
-                reporter.warn("extract: 0 tags selected — fit1 will be degenerate");
-            }
-        } else {
-            reporter.info(format!("tags: all {n_snp} SNPs (extract disabled)"));
-        }
 
         // 5. 折 LD（r²≥r2_min）进充分统计量。
         let is_ldscore = self.spec.weighting == WeightingMode::LdScore;
@@ -604,63 +571,110 @@ impl DagNode for UnivariateMixerNode {
             self.spec.r2_min,
         ));
         let suff = if is_ldscore {
-            // LdScore（默认，内存友好）：流式读 LD，**双向、tag 过滤**折 m1/m2。
-            // 双向是为修正非对称 LD（plink2 每对存一份）下漏算 id_b 的 bug；
-            // tag 过滤只折 tag 端点（邻居仍可是非 tag 的 panel SNP，h[b] 照常查）。
+            // LdScore（默认）：查预算子图表，两端都折（查 tag_set）。
             let mut m1 = vec![0.0f64; n_snp];
             let mut m2 = vec![0.0f64; n_snp];
             let mut sum_r2 = vec![0.0f64; n_snp];
-            for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
-                reporter.progress(ci as u64, n_chrom as u64);
-                let ld_sql = format!(
-                    "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 >= {r2}",
-                    chrom = chrom,
-                    r2 = self.spec.r2_min,
-                );
-                let df = UnivariateMixerError::df_ctx(
-                    ctx.sql(&ld_sql).await,
-                    "LdScore fold (ld r²≥r2min)",
-                    Some(*chrom),
-                    Some(&ld_sql),
-                )?;
-                let mut stream = UnivariateMixerError::df_ctx(
-                    df.execute_stream().await,
-                    "LdScore fold stream",
-                    Some(*chrom),
-                    None,
-                )?;
-                let mut pairs: u64 = 0;
-                while let Some(batch) = UnivariateMixerError::df_ctx(
-                    stream.try_next().await,
-                    "LdScore fold batch",
-                    Some(*chrom),
-                    None,
-                )? {
-                    for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
-                        if r2 < 0.0 {
-                            return;
+
+            {
+                // ----- 查 Iceberg 子图表，两端都折（查 tag_set）-----
+                let mut total_edges: u64 = 0;
+                for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
+                    reporter.progress(ci as u64, n_chrom as u64);
+                    let sql = format!(
+                        "SELECT id_a, id_b, r2, h_a, h_b FROM iceberg.mixer.{SUBGRAPH_TABLE} WHERE chrom = {chrom}"
+                    );
+                    let df = UnivariateMixerError::df_ctx(
+                        ctx.sql(&sql).await,
+                        "subgraph fold query",
+                        Some(*chrom),
+                        Some(&sql),
+                    )?;
+                    let mut stream = UnivariateMixerError::df_ctx(
+                        df.execute_stream().await,
+                        "subgraph fold stream",
+                        Some(*chrom),
+                        None,
+                    )?;
+                    let mut chrom_edges: u64 = 0;
+                    while let Some(batch) = UnivariateMixerError::df_ctx(
+                        stream.try_next().await,
+                        "subgraph fold batch",
+                        Some(*chrom),
+                        None,
+                    )? {
+                        let a_col = batch
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<arrow_array::StringArray>()
+                            .ok_or_else(|| {
+                                UnivariateMixerError::InvalidInput("subgraph col 0 not Utf8".into())
+                            })?;
+                        let b_col = batch
+                            .column(1)
+                            .as_any()
+                            .downcast_ref::<arrow_array::StringArray>()
+                            .ok_or_else(|| {
+                                UnivariateMixerError::InvalidInput("subgraph col 1 not Utf8".into())
+                            })?;
+                        let r2_col = batch
+                            .column(2)
+                            .as_any()
+                            .downcast_ref::<arrow_array::Float32Array>()
+                            .ok_or_else(|| {
+                                UnivariateMixerError::InvalidInput("subgraph col 2 not Float32".into())
+                            })?;
+                        let ha_col = batch
+                            .column(3)
+                            .as_any()
+                            .downcast_ref::<arrow_array::Float32Array>()
+                            .ok_or_else(|| {
+                                UnivariateMixerError::InvalidInput("subgraph col 3 not Float32".into())
+                            })?;
+                        let hb_col = batch
+                            .column(4)
+                            .as_any()
+                            .downcast_ref::<arrow_array::Float32Array>()
+                            .ok_or_else(|| {
+                                UnivariateMixerError::InvalidInput("subgraph col 4 not Float32".into())
+                            })?;
+                        for r in 0..batch.num_rows() {
+                            let a_rsid = a_col.value(r);
+                            let b_rsid = b_col.value(r);
+                            let r2 = r2_col.value(r) as f64;
+                            let h_a = ha_col.value(r) as f64;
+                            let h_b = hb_col.value(r) as f64;
+                            chrom_edges += 1;
+                            if let Some(&idx_a) = rsid_to_idx.get(a_rsid) {
+                                if tag_set.contains(&idx_a) {
+                                    let a2 = n_vec[idx_a as usize] * h_b * r2;
+                                    m1[idx_a as usize] += a2;
+                                    m2[idx_a as usize] += a2 * a2;
+                                    sum_r2[idx_a as usize] += r2;
+                                }
+                            }
+                            if let Some(&idx_b) = rsid_to_idx.get(b_rsid) {
+                                if tag_set.contains(&idx_b) {
+                                    let a2 = n_vec[idx_b as usize] * h_a * r2;
+                                    m1[idx_b as usize] += a2;
+                                    m2[idx_b as usize] += a2 * a2;
+                                    sum_r2[idx_b as usize] += r2;
+                                }
+                            }
                         }
-                        pairs += 1;
-                        if tag_set.contains(&a) {
-                            let ai = a as usize;
-                            let a2 = n_vec[ai] * h_vec[b as usize] * r2;
-                            m1[ai] += a2;
-                            m2[ai] += a2 * a2;
-                            sum_r2[ai] += r2;
-                        }
-                        if tag_set.contains(&b) {
-                            let bi = b as usize;
-                            let a2 = n_vec[bi] * h_vec[a as usize] * r2;
-                            m1[bi] += a2;
-                            m2[bi] += a2 * a2;
-                            sum_r2[bi] += r2;
-                        }
-                    })?;
+                    }
+                    total_edges += chrom_edges;
+                    reporter.info(format!(
+                        "LD fold: chr{chrom} subgraph: {chrom_edges} edges (from iceberg.mixer.{SUBGRAPH_TABLE})"
+                    ));
                 }
+                reporter.progress(n_chrom as u64, n_chrom as u64);
                 reporter.info(format!(
-                    "LD fold chr{chrom}: {pairs} pairs folded into sufficient stats"
+                    "LD fold: done via subgraph table ({total_edges} edges, {} chroms)",
+                    n_chrom
                 ));
             }
+
             let weights: Vec<f64> = sum_r2
                 .iter()
                 .map(|&s| mixer::weights::ldscore_weight(s))
@@ -674,7 +688,7 @@ impl DagNode for UnivariateMixerNode {
                 m2,
                 tags,
                 totalhet,
-                n_snp,
+                n_snp: n_snp_ref,
             }
         } else {
             // Randprune：collect 全量 LD 建 CSR（适合对称 LD；非对称数据建议用 LdScore）。
@@ -834,7 +848,10 @@ impl DagNode for UnivariateMixerNode {
         )?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
-        reporter.info(format!("fit1: finished in {:.2}s", t0.elapsed().as_secs_f64()));
+        reporter.info(format!(
+            "fit1: finished in {:.2}s",
+            t0.elapsed().as_secs_f64()
+        ));
         Ok(res)
     }
 }
@@ -880,7 +897,7 @@ fn col_as_f64<'a>(
 /// 的双向折叠、extract 的对称邻接构建）。
 fn for_each_ld_pair(
     batch: &RecordBatch,
-    rsid_to_idx: &HashMap<String, u32>,
+    rsid_to_idx: &RsidMap,
     mut emit: impl FnMut(u32, u32, f64),
 ) -> Result<(), UnivariateMixerError> {
     let a_ids = col_as_string(batch, "id_a")?;
@@ -906,7 +923,7 @@ fn for_each_ld_entry(
     batch: &RecordBatch,
     base: u32,
     r2_min: f64,
-    rsid_to_idx: &HashMap<String, u32>,
+    rsid_to_idx: &RsidMap,
     mut emit: impl FnMut(u32, u32, f64),
 ) -> Result<(), UnivariateMixerError> {
     let a_ids = col_as_string(batch, "id_a")?;
