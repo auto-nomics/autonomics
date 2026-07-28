@@ -140,6 +140,8 @@ pub fn univariate_cost_gaussian(data: &ChromData, p: &UnivariateParams) -> f64 {
 /// 优化器（DE×repeats → Nelder-Mead）数万次调用本函数；压缩版让这些评估
 /// 完全不碰 LD，CSR 预算完即可释放。
 pub fn univariate_cost_sufficient(data: &UnivariateSufficient, p: &UnivariateParams) -> f64 {
+    use rayon::prelude::*;
+
     // 1. 先验矩（univariate 下处处常数，循环外算一次）
     let ebeta2 = prior_ebeta2(p);
     let ebeta4 = prior_ebeta4(p);
@@ -147,36 +149,28 @@ pub fn univariate_cost_sufficient(data: &UnivariateSufficient, p: &UnivariatePar
     // 2. null 分量标准差（sig2_zeroL=0，所以 sig2_zero 就是参数本身）
     let s1 = p.sig2_zero.sqrt();
 
-    let mut cost = 0.0;
-
-    // 3. 逐个 tag 计算（只遍历 tag 子集）
-    for &tag in &data.tags {
-        let j = tag as usize;
-        // 3a. A = ebeta2·m1_j，B = ebeta4·m2_j（LD 已折进 m1/m2）
-        let a = ebeta2 * data.m1[j];
-
-        // 3b. 无 LD 信号的 tag 跳过（A=0 时 sig2_tag 公式会除零）。
-        //     与 univariate_cost_gaussian 完全一致：a==0 当且仅当 ebeta2==0 或 m1_j==0。
-        if a == 0.0 {
-            continue;
-        }
-        let b = ebeta4 * data.m2[j];
-
-        // 3c. 矩匹配：闭式解 2 分量高斯混合（公式同 univariate_cost_gaussian）。
-        let tag_pi0 = b / (b + 3.0 * a * a);
-        let tag_pi1 = 1.0 - tag_pi0;
-        let sig2_tag = (b + 3.0 * a * a) / (3.0 * a);
-        let s2 = (p.sig2_zero + sig2_tag).sqrt();
-
-        // 3d. 混合密度 + 负对数似然累加
-        let pdf0 = gaussian_pdf(data.z[j], s1);
-        let pdf1 = gaussian_pdf(data.z[j], s2);
-        let pdf = tag_pi0 * pdf0 + tag_pi1 * pdf1;
-        let pdf = pdf.max(K_MIN_PDF);
-        cost += -pdf.ln() * data.weights[j];
-    }
-
-    cost
+    // 3. 并行遍历 tag 子集（662k tag × 数千次 cost 调用 → rayon 多核线性加速）
+    //    每个 tag 的计算互相独立（纯读 data.*，无共享可变状态），是经典 reduce。
+    data.tags
+        .par_iter()
+        .map(|&tag| {
+            let j = tag as usize;
+            let a = ebeta2 * data.m1[j];
+            if a == 0.0 {
+                return 0.0;
+            }
+            let b = ebeta4 * data.m2[j];
+            let tag_pi0 = b / (b + 3.0 * a * a);
+            let tag_pi1 = 1.0 - tag_pi0;
+            let sig2_tag = (b + 3.0 * a * a) / (3.0 * a);
+            let s2 = (p.sig2_zero + sig2_tag).sqrt();
+            let pdf0 = gaussian_pdf(data.z[j], s1);
+            let pdf1 = gaussian_pdf(data.z[j], s2);
+            let pdf = tag_pi0 * pdf0 + tag_pi1 * pdf1;
+            let pdf = pdf.max(K_MIN_PDF);
+            -pdf.ln() * data.weights[j]
+        })
+        .sum()
 }
 
 #[cfg(test)]

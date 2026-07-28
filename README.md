@@ -13,27 +13,109 @@ The Agent SDK originated as a hard fork of [dimichgh/anthropic-sdk-rust](https:/
 ## Architecture
 
 ```text
-tui
-  └── runtime + agentik-core
-        └── data-engine-tools + datalake-tools
-              └── data-engine (DataFusion DAG scheduler)
-                    ├── biofusion (genomics file readers)
-                    ├── datalake (Iceberg catalog and storage)
-                    ├── visualization (R/ggplot2 rendering)
-                    └── bio_crates (ldsc, mr — statistical genetics)
+┌──────────────────────────────────────────────────────────────────┐
+│                           tui (Ratatui)                          │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ MPSC events
+┌──────────────────────────────▼───────────────────────────────────┐
+│                    runtime + agentik-core                         │
+│  Agent loop → Tool dispatch → Memory compaction → Lifecycle       │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ ToolFunction calls
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+        ▼                      ▼                      ▼
+  agentik-tools          datalake-tools         data-engine-tools
+  (bash, lifecycle)      (list/query tables)    (add_node, run_dag)
+                                                        │
+                                               ┌────────▼────────┐
+                                               │  data-engine     │
+                                               │  ┌─────────────┐ │
+                                               │  │  DAG graph  │ │
+                                               │  │  + scheduler│ │
+                                               │  └──────┬──────┘ │
+                                               │         │        │
+                                               │  ┌──────▼──────┐ │
+                                               │  │   nodes     │ │
+                                               │  │ source_file │ │
+                                               │  │ sql_node    │ │
+                                               │  │ ldsc_hsq    │ │
+                                               │  │ univariate  │ │
+                                               │  │ _mixer      │ │
+                                               │  │ bivariate   │ │
+                                               │  │ _mixer      │ │
+                                               │  │ sink_file   │ │
+                                               │  │ viz         │ │
+                                               │  │ ...         │ │
+                                               │  └─────────────┘ │
+                                               └────────┬────────┘
+                                                        │ reads
+        ┌───────────────────────────────────────────────┼──────────┐
+        │                  Data Infrastructure           │          │
+        │                                               ▼          │
+        │  ┌──────────┐  ┌───────────┐  ┌─────────────┐           │
+        │  │ af.eur_af│  │ld_matrix. │  │ mixer.       │           │
+        │  │          │  │eur_chr{N} │  │ eur_tagsuff  │           │
+        │  └──────────┘  └───────────┘  └─────────────┘           │
+        │       ▲              ▲                ▲                   │
+        │       │              │                │                   │
+        │  ┌────┴──────────────┴────────────────┴──┐                │
+        │  │         Iceberg catalog                │                │
+        │  │    (datalake + biofusion readers)      │                │
+        │  └────────────────────────────────────────┘                │
+        │                                                           │
+        │  Offline:                                                  │
+        │    precompute_tags ──► eur_tagsuff (sufficient stats)      │
+        │    precompute_tags ──► eur_subgraph (tag-induced LD edges) │
+        └───────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                    bio_crates (pure algorithm ports)              │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐ │
+│  │    mixer     │  │    ldsc      │  │    mr    │  │   lava   │ │
+│  │ fit1 / fit2  │  │ h² / rg / cts│  │ IVW, etc │  │ bivariate│ │
+│  │ spike & slab │  │ LDSC regress │  │ MR tests │  │ local rg │ │
+│  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘ │
+│         │                 │               │              │       │
+│         └─────────────────┴───────────────┴──────────────┘       │
+│                              │                                    │
+│                         faer (linear algebra)                     │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                     External Data Sources                         │
+│                                                                  │
+│  GWAS Catalog  │  OpenGWAS  │  NCBI E-utilities  │  VCF / BGEN   │
+│  (gwascatalog) │ (opengwas) │     (eutils)       │  (biofusion)  │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                    Test Data (OSS archive)                        │
+│                                                                  │
+│  aliyun://autonomics-data/mixer/test-data/                        │
+│  ├── fixtures/          (cross_validation.rs)                     │
+│  └── scz-chr22-repro/   (scz_chr22_repro.rs)                      │
+│                                                                  │
+│  Restore: rclone copy aliyun://autonomics-data/<path>/ <local>/   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 An agent receives tools from `agentik-core`. The data-engine tools communicate with one serialized `DataEngineServer` through channels, so a conversation can create, inspect, run, and clear a data-processing DAG without sharing mutable engine state directly. The DAG reads data into DataFusion `DataFrame`s, transforms it, and can persist file outputs.
 
+Heavy statistical-genetics computation (MiXeR, LDSC) runs in pure Rust within DAG nodes. LD reference data and precomputed sufficient statistics are stored in an Iceberg data lake; the offline `precompute_tags` pipeline materializes per-tag summary scalars so that runtime fitting never scans the full LD matrix.
+
+API clients for GWAS Catalog, OpenGWAS, and NCBI E-utilities let agents fetch metadata and summary statistics without leaving the conversation. Large test fixtures (LD matrices, gold-standard outputs) are kept in a private OSS bucket and restored via `rclone`.
+
 ## Workspace
 
-| Area                         | Members                                                                                                                   | Responsibility                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                 |
+| Area                         | Members                                                                                                                                    | Responsibility                                                                                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                                 | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                                          |
 | Data analysis                | `data-engine`, `data-engine-tools`, `stat-primitives`, `fs`, `datalake`, `datalake-tools`, `biofusion`, `biofusion-cache`, `visualization` | DAG execution, Agent-exposed DAG operations, statistics, OpenDAL files, Iceberg storage and query tools, biological-format ingestion, and R/ggplot2 visualization. |
-| Statistical genetics         | `ldsc`, `mr`                                                                                                              | Pure-Rust ports of LD Score Regression (h²/rg/cts) and TwoSampleMR (Mendelian randomization), built on `faer`.                            |
-| Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`                                                                                   | Clients for NCBI E-utilities, OpenGWAS, and the GWAS Catalog.                                                                             |
-| User interface and rendering | `tui`                                                                                                                     | Terminal Agent UI.                                                                                                                        |
+| Statistical genetics         | `ldsc`, `mr`, `mixer`, `lava`                                                                                                              | Pure-Rust ports of LD Score Regression, TwoSampleMR, MiXeR (spike-and-slab causal mixture), and LAVA (local genetic correlation), built on `faer`.                 |
+| Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`                                                                                                    | Clients for NCBI E-utilities, OpenGWAS, and the GWAS Catalog.                                                                                                      |
+| User interface and rendering | `tui`                                                                                                                                      | Terminal Agent UI.                                                                                                                                                 |
 
 `fixtures/` contains representative and malformed genomics files used by reader and integration tests.
 
@@ -100,10 +182,24 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 - **`ldsc`** — A faithful, library-only pure-Rust port of [LD Score Regression](https://github.com/bulik/ldsc) (Bulik-Sullivan & Finucane): SNP-heritability (h²), genetic correlation (rg), cell-type-specific analysis, LD-score computation from PLINK genotypes, summary-statistic munging, and annotation building. Numerics run on [`faer`](https://github.com/sarah-ek/faer) (no LAPACK/MKL). Point estimates are cross-checked against the Python reference's own test suite and golden fixtures. The `estimate_h2` DataFrame entry point is wired into the data-engine (`data-engine/nodes/ldsc_hsq.rs`).
 - **`mr`** — A pure-Rust port of [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR)'s algorithm API (no IO/plotting) for the DAG engine: Wald ratio, the IVW family, MR-Egger, median and mode estimators, `harmonise_data`, Steiger filtering, and heterogeneity/pleiotropy tests. Built on `faer` + `statrs`, with point estimates validated bit-for-bit against R golden fixtures.
 
+### MiXeR — Causal Mixture Model (`mixer`)
+
+A pure-Rust reimplementation of the MiXeR model (Holland et al. 2020, _PLoS Genetics_): univariate (`fit1`) and bivariate (`fit2`) spike-and-slab causal mixture for GWAS summary statistics.
+
+- **Univariate (`fit1`)** — Fits three parameters (π polygenicity, σ²_β discoverability, σ²_zero intercept) via Gaussian moment-matching cost function. Optimization: differential evolution × N repeats → Nelder-Mead refinement. Cross-validated against the original C++ implementation's gold standard to < 0.2% across all parameters.
+- **Sufficient statistics compression** — The LD matrix is folded into two per-SNP scalars (`m1`/`m2`) pre-fit, collapsing O(nnz) CSR to O(n_snp). Cost evaluation is O(1) per tag thereafter, enabling ~10^4 cost evaluations during optimization without touching LD.
+- **Two weighting modes** — LdScore (single-pass, `1/(1+Σr²)`, no CSR needed) and Randprune (bit-exact with original C++ `std::mt19937_64`).
+- **DAG node** — Exposed as `univariate_mixer` and `bivariate_mixer` node kinds (`data-engine/nodes/univariate_mixer.rs`). Two-phase pipeline: offline `precompute_tags` produces an Iceberg table (`eur_tagsuff`) containing per-tag sufficient statistics; the runtime node loads sumstats, joins with tagsuff by rsid, and invokes `fit1`.
+- **Data infrastructure** — See [`docs/data_infra/univariate_mixer.md`](docs/data_infra/univariate_mixer.md) for the full algorithm derivation, pipeline diagram, and decision record.
+
+### LAVA — Local Genetic Correlation (`lava`)
+
+A pure-Rust port of LAVA (Werme et al. 2022) for estimating local genetic correlation from GWAS summary statistics and LD reference data. All 5 cross-validation tests pass against the R reference implementation.
+
 ### Visualization (`visualization`)
 
 - **R/ggplot2 rendering** — Render a DataFusion `DataFrame` to a PNG via R's ggplot2. Data crosses the Rust→R boundary as an **Arrow IPC stream** (`arrow::ipc::writer::StreamWriter` → `arrow::read_ipc_stream`), so column types are preserved exactly — no CSV re-inference, no row-wise JSON.
-- **Subprocess, not in-process R** — The renderer shells out to `Rscript` rather than linking `libR` in-process. R is therefore a *runtime-only, optional* dependency: the workspace compiles and the core pipeline (LDSC, MR, …) runs without R installed. A missing or misconfigured R surfaces as a typed `VizError::RscriptNotFound` / `RscriptFailed` at render time, never as a build failure.
+- **Subprocess, not in-process R** — The renderer shells out to `Rscript` rather than linking `libR` in-process. R is therefore a _runtime-only, optional_ dependency: the workspace compiles and the core pipeline (LDSC, MR, …) runs without R installed. A missing or misconfigured R surfaces as a typed `VizError::RscriptNotFound` / `RscriptFailed` at render time, never as a build failure.
 - **DAG node** — Exposed as the `visualization` node kind (`data-engine/nodes/viz.rs`), reached by the agent through the generic `add_node` / `run_dag` tools — no dedicated tool. It mirrors `SinkNode`: one untyped input port, no output ports. The rendered path is reported back via `NodeReport.artifact_path`.
 - **opendal output** — The PNG is written into the engine's **opendal-virtualized filesystem** (the same isolated space as source/sink data), not the host filesystem. `output_path` is a virtual path (e.g. `/plots/scatter.png`); the opendal handle is threaded from the builder through `NodeCtx.opendal`.
 - **Plot spec** — The `r_code` field is ggplot2 R code that runs with a `data.frame` named `df` already bound to the input; it must build a plot and assign it to a variable named `p`. Example: `p <- ggplot(df, aes(x = bp, y = pval)) + geom_point()`. Dimensions (`width`/`height`/`dpi`) are optional.
@@ -338,7 +434,9 @@ autonomics/
 │   ├── runtime/             # Synchronous host bridge for Agentik
 ├── bio_crates/
 │   ├── ldsc/                # Pure-Rust LD Score Regression (h²/rg/cts) port
-│   └── mr/                  # Pure-Rust TwoSampleMR (Mendelian randomization) port
+│   ├── mr/                  # Pure-Rust TwoSampleMR (Mendelian randomization) port
+│   ├── mixer/               # Pure-Rust MiXeR univariate + bivariate (spike-and-slab) port
+│   └── lava/                # Pure-Rust LAVA local genetic correlation port
 ├── fixtures/                # Valid and malformed genomics input fixtures
 ├── Cargo.toml               # Workspace manifest
 └── .cargo/config.toml       # Default Cargo target directory
@@ -357,6 +455,20 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p mr
 ```
 
 Some integration tests call external public APIs or require provider credentials. Treat those as opt-in when running in CI or offline environments.
+
+## Test data & reproducibility
+
+Large test data (LD matrices, GWAS sumstats, original-software gold-standard outputs) is **not committed to git**. It lives in a private OSS object storage bucket and is restored via `rclone`:
+
+```bash
+# Example: restore mixer cross-validation fixtures
+rclone copy aliyun://autonomics-data/mixer/test-data/fixtures/ \
+  bio_crates/mixer/tests/fixtures/
+```
+
+> **Note:** The bucket is currently private. Contact the repository owner for access credentials. Once provisioned, configure `rclone` with the provided endpoint, key, and secret — the `aliyun:` remote name in the examples above should point to that configuration.
+
+Every test file that depends on external data documents its archive path and restore command in a header comment. See [`docs/data_infra/univariate_mixer.md`](docs/data_infra/univariate_mixer.md) and the memory entry `test-data-archive-convention` for the full convention.
 
 ## Requirements
 

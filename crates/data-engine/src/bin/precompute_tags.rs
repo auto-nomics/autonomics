@@ -292,5 +292,75 @@ async fn main() -> Result<(), BoxErr> {
     }
     eprintln!("[6] tags: {} rsid → {tags_path}", tags.len());
 
+    // ───────────────────────────────────────────────────────────────
+    // Step 7: 按 tag 聚合充分统计量（N-free），输出 chr{N}_tagsuff.parquet。
+    //
+    // m1[tag] = N_tag × S1[tag],  S1 = Σ h_neighbor × r²
+    // m2[tag] = N_tag² × S2[tag], S2 = Σ (h_neighbor × r²)²
+    // sum_r2[tag] = SR[tag],       SR = Σ r²
+    // weight[tag] = 1/(1+SR)        （LdScore 模式）
+    //
+    // 运行时只需逐元素乘 N_tag（来自 sumstats），不再扫任何 LD 数据。
+    // ───────────────────────────────────────────────────────────────
+    let mut s1 = vec![0.0f64; n_snp];
+    let mut s2 = vec![0.0f64; n_snp];
+    let mut sr = vec![0.0f64; n_snp];
+    for &(a, b, r2) in &ld_pairs {
+        if tag_set.contains(&a) {
+            let hb = h_vec[b as usize];
+            let v = hb * r2;
+            s1[a as usize] += v;
+            s2[a as usize] += v * v;
+            sr[a as usize] += r2;
+        }
+        if tag_set.contains(&b) {
+            let ha = h_vec[a as usize];
+            let v = ha * r2;
+            s1[b as usize] += v;
+            s2[b as usize] += v * v;
+            sr[b as usize] += r2;
+        }
+    }
+    // 只输出 tag 行（非 tag 的 S1/S2/SR 无意义）
+    let mut tag_id_buf: Vec<String> = Vec::with_capacity(tags.len());
+    let mut s1_buf: Vec<f64> = Vec::with_capacity(tags.len());
+    let mut s2_buf: Vec<f64> = Vec::with_capacity(tags.len());
+    let mut sr_buf: Vec<f64> = Vec::with_capacity(tags.len());
+    let mut wt_buf: Vec<f64> = Vec::with_capacity(tags.len());
+    for &idx in &tags {
+        let i = idx as usize;
+        tag_id_buf.push(rsids[i].clone());
+        s1_buf.push(s1[i]);
+        s2_buf.push(s2[i]);
+        sr_buf.push(sr[i]);
+        wt_buf.push(1.0 / (1.0 + sr[i]));
+    }
+    let suff_schema = Arc::new(Schema::new(vec![
+        Field::new("id_tag", DataType::Utf8, false),
+        Field::new("s1", DataType::Float64, false),
+        Field::new("s2", DataType::Float64, false),
+        Field::new("sr", DataType::Float64, false),
+        Field::new("weight", DataType::Float64, false),
+    ]));
+    let suff_path = format!("chr{}_tagsuff.parquet", CHR);
+    {
+        use arrow_array::Float64Array;
+        let file = std::fs::File::create(&suff_path)?;
+        let mut writer = ArrowWriter::try_new(file, suff_schema.clone(), None)?;
+        let batch = RecordBatch::try_new(
+            suff_schema,
+            vec![
+                Arc::new(StringArray::from(tag_id_buf)),
+                Arc::new(Float64Array::from(s1_buf)),
+                Arc::new(Float64Array::from(s2_buf)),
+                Arc::new(Float64Array::from(sr_buf)),
+                Arc::new(Float64Array::from(wt_buf)),
+            ],
+        )?;
+        writer.write(&batch)?;
+        writer.close()?;
+    }
+    eprintln!("[7] tagsuff: {} tags → {suff_path}", tags.len());
+
     Ok(())
 }

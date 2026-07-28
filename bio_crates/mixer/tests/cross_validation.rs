@@ -1,10 +1,40 @@
 //! 交叉验证：用原版 MiXeR 的 HM3 chr21+22 测试数据 + 金标准参考输出，
 //! 验证 Rust 移植的 fit1 数值正确性。
 //!
-//! 数据来自 `tests/fixtures/`（见 README）。原版同源 LD/AF，由 libbgmg.so
-//! 从 `g1000_eur_hm3_chr{N}.ld` 解压导出，完全忠实。
+//! ## 测试数据
 //!
-//! 手动运行：`cargo test -p mixer --test cross_validation -- --ignored --nocapture`
+//! 数据归档于对象存储：
+//!   aliyun://autonomics-data/mixer/test-data/fixtures/
+//!
+//! 恢复：
+//!   rclone copy aliyun://autonomics-data/mixer/test-data/fixtures/ \
+//!     bio_crates/mixer/tests/fixtures/
+//!
+//! ## 数据来源
+//!
+//! - 参考面板：1000 Genomes Phase 3 EUR，HM3 子集（chr21+22，~35k SNPs）
+//! - LD：从原版 `g1000_eur_hm3_chr{21,22}.ld`（TurboPFor 压缩二进制）
+//!   经 libbgmg.so + `dump_ld.py` 解压导出为 TSV，仅保留 r² ≥ 0.05
+//! - 权重：`set_weights_randprune(n=64, r2=0.1, seed=123)` → 11200 tags,
+//!   sum_weights=2839.72
+//! - Sumstats：原版 MiXeR 测试数据，格式 A1/A2/BETA/BP/CHR/N/P/SE/SNP/Z
+//! - 金标准：`trait1.fit1.json` — 原版 `mixer.py fit1` 的输出
+//!
+//! ## 运行
+//!
+//! ```sh
+//! cargo test -p mixer --test cross_validation -- --ignored --nocapture
+//! ```
+//!
+//! ## 预期结果
+//!
+//! | 参数 | Rust | 金标准 | 差异 |
+//! |------|------|--------|------|
+//! | pi | 0.001305 | 0.001307 | 0.15% |
+//! | sig2_beta | 0.040294 | 0.040229 | 0.16% |
+//! | sig2_zero | 0.998163 | 0.998126 | 0.004% |
+//! | h2 | 0.588128 | 0.588019 | 0.02% |
+//! | cost | 4107.1994 | 4107.1992 | ~0% |
 
 use std::collections::HashMap;
 use std::fs::File;

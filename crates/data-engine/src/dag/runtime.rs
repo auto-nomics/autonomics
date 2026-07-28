@@ -13,6 +13,73 @@ use super::error::DagError;
 /// `datafusion::common::HashMap` is `hashbrown` and may not impl `Serialize`).
 type SchemaMap = std::collections::HashMap<String, String>;
 
+/// Above this column count an output schema is reported in *folded* form
+/// (leading columns + type distribution) rather than verbatim, so a single
+/// wide table cannot dominate the run report.
+const SCHEMA_FULL_THRESHOLD: usize = 50;
+/// Number of leading columns retained when a schema is folded. Deliberately
+/// small — the type distribution carries the shape, these are just a sample
+/// so the agent can see concrete column names / types.
+const SCHEMA_PREVIEW_COLS: usize = 20;
+
+/// Compact, agent-facing summary of a node's output schema.
+///
+/// Narrow schemas (≤ [`SCHEMA_FULL_THRESHOLD`] columns) are reported in full.
+/// Wider schemas are *folded*: only the leading [`SCHEMA_PREVIEW_COLS`] columns
+/// are listed and a type distribution is attached, so the agent can still gauge
+/// the table's shape (e.g. "1000 Utf8, 47 Float64") without a per-column dump
+/// flooding the report. [`Self::column_count`] is always the true total.
+#[derive(Debug, Serialize)]
+pub struct SchemaReport {
+    /// Total column count of the output (always the real number, even when
+    /// `columns` is folded).
+    pub column_count: usize,
+    /// `{column_name: data_type}` for the leading columns. Complete when
+    /// `column_count <= SCHEMA_FULL_THRESHOLD`; otherwise the first
+    /// [`SCHEMA_PREVIEW_COLS`] entries — a sample, not the full set.
+    pub columns: SchemaMap,
+    /// `{data_type: count}` tallied across **all** columns. `None` for narrow
+    /// schemas (where `columns` is already exhaustive); `Some` when the schema
+    /// was folded.
+    pub type_distribution: Option<std::collections::HashMap<String, usize>>,
+}
+
+impl SchemaReport {
+    /// Build a report from an Arrow field list, folding wide schemas per the
+    /// thresholds above.
+    pub fn from_fields(fields: &arrow_schema::Fields) -> Self {
+        let column_count = fields.len();
+        let folded = column_count > SCHEMA_FULL_THRESHOLD;
+        let take = if folded {
+            SCHEMA_PREVIEW_COLS
+        } else {
+            column_count
+        };
+
+        let mut columns = SchemaMap::with_capacity(take);
+        for f in fields.iter().take(take) {
+            columns.insert(f.name().clone(), f.data_type().to_string());
+        }
+
+        let type_distribution = if folded {
+            let mut dist: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for f in fields.iter() {
+                *dist.entry(f.data_type().to_string()).or_insert(0) += 1;
+            }
+            Some(dist)
+        } else {
+            None
+        };
+
+        SchemaReport {
+            column_count,
+            columns,
+            type_distribution,
+        }
+    }
+}
+
 /// Per-node runtime lifecycle state tracked by the scheduler.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,8 +148,10 @@ pub struct NodeReport {
     pub id: String,
     pub status: RuntimeStatus,
     pub node_type: String,
-    /// Output column schema: `{ column_name: data_type }`.
-    pub output_schema: Option<SchemaMap>,
+    /// Output column schema. Narrow schemas list every column; wide schemas
+    /// are folded to a leading-column sample + type distribution (see
+    /// [`SchemaReport`]).
+    pub output_schema: Option<SchemaReport>,
     /// Row count of the primary output DataFrame.
     pub output_rows: Option<usize>,
     /// Milliseconds spent in `execute()`.
@@ -128,4 +197,93 @@ impl RunReport {
 pub enum DagRunTarget {
     StartWith,
     EndWith,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Fields};
+
+    use super::*;
+
+    fn fields(n: usize, ty: DataType) -> Fields {
+        let vec: Vec<Arc<Field>> = (0..n)
+            .map(|i| Arc::new(Field::new(format!("c{i}"), ty.clone(), true)))
+            .collect();
+        vec.into()
+    }
+
+    #[test]
+    fn narrow_schema_reported_in_full() {
+        // 10 columns — under the threshold, so every column is listed and no
+        // type distribution is attached.
+        let report = SchemaReport::from_fields(&fields(10, DataType::Int32));
+        assert_eq!(report.column_count, 10);
+        assert_eq!(report.columns.len(), 10, "all columns retained");
+        assert!(
+            report.type_distribution.is_none(),
+            "narrow schemas must not carry a type distribution"
+        );
+    }
+
+    #[test]
+    fn wide_schema_folded_to_preview_plus_distribution() {
+        // 200 columns — well over the threshold. Alternate Utf8/Float64 so the
+        // type distribution is non-trivial, then overwrite the leading
+        // SCHEMA_PREVIEW_COLS with Int32 "c0".."c19" so we can assert exactly
+        // which columns survived the fold.
+        let mut all: Vec<Arc<Field>> = (0..200)
+            .map(|i| {
+                let ty = if i % 2 == 0 {
+                    DataType::Utf8
+                } else {
+                    DataType::Float64
+                };
+                Arc::new(Field::new(format!("x{i}"), ty, true))
+            })
+            .collect();
+        for (i, field) in fields(SCHEMA_PREVIEW_COLS, DataType::Int32)
+            .iter()
+            .cloned()
+            .take(SCHEMA_PREVIEW_COLS)
+            .enumerate()
+        {
+            all[i] = field;
+        }
+        let all_fields: Fields = all.into();
+
+        let report = SchemaReport::from_fields(&all_fields);
+        assert_eq!(report.column_count, 200, "true total preserved");
+        assert_eq!(
+            report.columns.len(),
+            SCHEMA_PREVIEW_COLS,
+            "wide schema must be truncated to the preview count"
+        );
+        // Every retained column must be one of the leading preview columns.
+        for name in report.columns.keys() {
+            assert!(
+                name.starts_with("c") && name.len() <= 4, // "c0".."c19"
+                "unexpected retained column {name}"
+            );
+        }
+        let dist = report
+            .type_distribution
+            .as_ref()
+            .expect("wide schema must carry a type distribution");
+        // 180 of the 200 columns alternate Utf8/Float64 → 90 each, plus 20
+        // Int32 leading columns.
+        assert_eq!(dist.get("Int32").copied(), Some(20));
+        assert_eq!(dist.get("Utf8").copied(), Some(90));
+        assert_eq!(dist.get("Float64").copied(), Some(90));
+    }
+
+    #[test]
+    fn threshold_boundary_is_full() {
+        // Exactly SCHEMA_FULL_THRESHOLD columns is still "narrow" (full).
+        let report =
+            SchemaReport::from_fields(&fields(SCHEMA_FULL_THRESHOLD, DataType::Int32));
+        assert_eq!(report.columns.len(), SCHEMA_FULL_THRESHOLD);
+        assert!(report.type_distribution.is_none());
+    }
 }

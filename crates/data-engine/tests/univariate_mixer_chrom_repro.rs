@@ -30,7 +30,7 @@ use datalake::Datalake;
 
 use data_engine::nodes::meta::{DagNode, NodeInput};
 use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+    UnivariateMixerNode, UnivariateMixerNodeSpec,
 };
 
 /// Base SELECT computing Z = β/SE and N = sample_size from chr22 GWAS.
@@ -52,9 +52,6 @@ async fn run_node(
         chromosomes: vec![22],
         diffevo_repeats: 2, // speed: this is a repro, not a production fit
         r2_min: 0.05,
-        weighting: WeightingMode::Randprune, // preserve prior randprune behavior
-        randprune_n: 64,
-        randprune_r2: 0.1,
         seed: 123,
         extract_enabled: true,
         extract_maf: 0.05,

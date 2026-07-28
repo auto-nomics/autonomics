@@ -18,7 +18,7 @@ use datalake::Datalake;
 
 use data_engine::nodes::meta::{DagNode, NodeInput};
 use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+    UnivariateMixerNode, UnivariateMixerNodeSpec,
 };
 
 #[tokio::test]
@@ -48,9 +48,6 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
         chromosomes: vec![22],
         diffevo_repeats: 2,
         r2_min: 0.05,
-        weighting: WeightingMode::LdScore,
-        randprune_n: 64,
-        randprune_r2: 0.1,
         seed: 123,
         extract_enabled: true,
         extract_maf: 0.05,

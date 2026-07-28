@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use data_engine::dag::node_event::{NodeEvent, NodeEventKind, NodeReporter};
 use data_engine::nodes::meta::{DagNode, NodeInput};
 use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec, WeightingMode,
+    UnivariateMixerNode, UnivariateMixerNodeSpec,
 };
 
 /// 输出端口 schema 字段名（顺序与 `output_schema()` 一致）。
@@ -68,9 +68,6 @@ async fn mixer_node_validated_e2e() {
         chromosomes: vec![22],
         diffevo_repeats: 2,
         r2_min: 0.05,
-        weighting: WeightingMode::LdScore,
-        randprune_n: 64,
-        randprune_r2: 0.1,
         seed: 123,
         extract_enabled: true,
         extract_maf: 0.05,

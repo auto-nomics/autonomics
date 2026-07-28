@@ -2,6 +2,7 @@
 .env
 target
 *.db
+.history
 
 # TUI logs and runtime artefacts
 apps/phloem-tui/logs/

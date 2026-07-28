@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 use super::utils::{build_inputs, cascade_skip};
 
 use super::error::DagError;
-use super::runtime::{NodeReport, RunReport, RuntimeStatus, SchedulerConfig};
+use super::runtime::{NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport};
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::nodes::sink_file::FileSinkNode;
@@ -368,15 +368,13 @@ impl DAG {
                 // Extract output schema from the first output port's DataFrame.
                 // `schema()` only inspects the LogicalPlan — it does NOT trigger
                 // execution, so it's safe (and free) to query unconditionally.
-                let output_schema = self.outputs.get(id).and_then(|dfs| {
-                    dfs.values().next().map(|df| {
-                        df.schema()
-                            .fields()
-                            .iter()
-                            .map(|f| (f.name().clone(), f.data_type().to_string()))
-                            .collect()
-                    })
-                });
+                // Wide schemas are folded to a leading-column sample + type
+                // distribution (see `SchemaReport`).
+                let output_schema = self
+                    .outputs
+                    .get(id)
+                    .and_then(|dfs| dfs.values().next())
+                    .map(|df| SchemaReport::from_fields(df.schema().fields()));
 
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
