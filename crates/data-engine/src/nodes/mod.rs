@@ -9,6 +9,7 @@ pub mod bivariate_mixer;
 pub mod echo_node;
 pub mod ldsc_hsq;
 pub mod ldsc_rg;
+pub mod lava;
 pub mod liability;
 pub mod linear_regression;
 pub mod meta;
@@ -27,6 +28,10 @@ pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, Bivaria
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use ldsc_hsq::{LdscHsqConfig, LdscHsqNode, LdscHsqNodeFactory};
 pub use ldsc_rg::{LdscRgConfig, LdscRgNode, LdscRgNodeFactory};
+pub use lava::{
+    LavaBivarNode, LavaBivarNodeFactory, LavaLocusNode, LavaLocusNodeFactory, LavaMultiregNode,
+    LavaMultiregNodeFactory, LavaPcorNode, LavaPcorNodeFactory, LavaUnivNode, LavaUnivNodeFactory,
+};
 pub use liability::{LiabilityConfig, LiabilityNode, LiabilityNodeFactory};
 pub use linear_regression::{
     LinearRegressionNode, LinearRegressionNodeFactory, LinearRegressionNodeSpec,

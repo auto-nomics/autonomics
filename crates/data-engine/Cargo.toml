@@ -28,6 +28,7 @@ blake3 = "1.8.5"
 derive_more.workspace = true
 stat-primitives = { path = "../stat-primitives" }
 ldsc = { path = "../../bio_crates/ldsc" }
+lava = { path = "../../bio_crates/lava" }
 mixer = { path = "../../bio_crates/mixer" }
 mr = { path = "../../bio_crates/mr" }
 faer.workspace = true

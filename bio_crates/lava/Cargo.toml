@@ -1,0 +1,29 @@
+[package]
+name = "lava"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "lava"
+path = "src/lib.rs"
+
+[dependencies]
+faer.workspace = true
+thiserror.workspace = true
+# Distribution functions (χ² / F survival) — reproduces R's pchisq/pf. Normal
+# (pnorm/qnorm) is hand-implemented below; statrs is the maintained stats crate
+# also used by the `mr` crate.
+statrs = "0.18"
+# Seeded RNG (ChaCha8) for reproducible Wishart sampling + Monte-Carlo p-values.
+rand = "0.9"
+rand_distr = "0.5"
+rand_chacha = "0.9"
+rayon = "1.10"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
