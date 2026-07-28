@@ -103,8 +103,17 @@ impl DAG {
     pub async fn run(
         &mut self,
         cfg: &SchedulerConfig,
+        engine_ctx: &crate::node_registry::registry::NodeCtx,
         event_sink: Option<mpsc::Sender<NodeEvent>>,
     ) -> Result<RunReport> {
+        // The immutable engine ingredients, wrapped in an Arc so each spawned
+        // task can hold a cheap reference for the lifetime of its `execute`
+        // call. `NodeCtx` is all-`Arc` fields, so this clone is just a few ref
+        // bumps. Every node receives `&engine_ctx` and builds its own fresh,
+        // isolated `SessionContext` via `NodeCtx::session()` — the graph never
+        // stores or shares a `SessionContext`.
+        let engine_ctx = Arc::new(engine_ctx.clone());
+
         // Release output data to avoid memory leak
         self.outputs.clear();
         self.statuses.clear();
@@ -174,11 +183,12 @@ impl DAG {
                 let sem = sem.clone();
                 let job_id = id.clone();
                 let reporter = NodeReporter::new(job_id.clone(), tx.clone());
+                let engine_ctx = Arc::clone(&engine_ctx);
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await.ok();
                     let mut node = node_box;
                     let start = std::time::Instant::now();
-                    let result = node.execute(&inputs, &reporter).await;
+                    let result = node.execute(&engine_ctx, &inputs, &reporter).await;
                     let duration = start.elapsed();
                     let res = match result {
                         Ok(outs) => JobResult::Success {
@@ -1040,6 +1050,19 @@ mod tests {
             .unwrap();
     }
 
+    /// A minimal `NodeCtx` for graph tests that only exercise scheduling with
+    /// ctx-ignoring nodes (EchoNode / PortedNode). The real engine ingredients
+    /// are wired by `DataEngine`; here a bare `RuntimeEnv` is sufficient.
+    fn test_ctx() -> crate::node_registry::registry::NodeCtx {
+        use datafusion::prelude::SessionContext;
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
+
     #[test]
     fn topo_order_diamond() {
         let dag = get_diamond_dag();
@@ -1170,6 +1193,7 @@ mod tests {
         }
         async fn execute(
             &mut self,
+            _ctx: &crate::node_registry::registry::NodeCtx,
             _inputs: &[NodeInput],
             _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, super::DagError> {
@@ -1533,7 +1557,9 @@ mod tests {
         assert_eq!(dag.successors("a").len(), 1);
         assert_eq!(dag.predecessors("c").len(), 2);
 
-        dag.run(&SchedulerConfig::default(), None).await.unwrap();
+        dag.run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
         let output = dag.output("c").unwrap();
         dbg!(output);
     }
@@ -1563,7 +1589,7 @@ mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<NodeEvent>(64);
         let report = dag
-            .run(&SchedulerConfig::default(), Some(tx))
+            .run(&SchedulerConfig::default(), &test_ctx(), Some(tx))
             .await
             .unwrap();
         assert!(report.ok, "diamond run should succeed");
@@ -1601,5 +1627,53 @@ mod tests {
                 ev.node_id
             );
         }
+    }
+
+    /// Regression for the cross-run `SessionContext` leak.
+    ///
+    /// Before the framework owned ctx lifecycle, nodes that stored a
+    /// `SessionContext` field (the mixers) polluted their catalog across
+    /// runs: the second `run` hit "table already exists" because
+    /// `register_table` had left entries behind from the first run. The fix
+    /// injects a fresh `&NodeCtx` per execution and every node builds an
+    /// ephemeral `SessionContext` via `NodeCtx::session()`, so re-running the
+    /// same DAG must always succeed. This pins that property at the scheduler
+    /// level.
+    #[tokio::test]
+    async fn dag_can_be_rerun_without_state_leak() {
+        let mut dag = DAG::default();
+        // a (source) -> b (echo).
+        dag.add_node(
+            "a".into(),
+            Box::new(EchoNode::from_ports(NodePorts::new().add_output_port(None))),
+        )
+        .unwrap();
+        dag.add_node(
+            "b".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new().add_input_port(None).add_output_port(None),
+            )),
+        )
+        .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.validate().unwrap();
+
+        let ctx = test_ctx();
+
+        // First run.
+        let r1 = dag
+            .run(&SchedulerConfig::default(), &ctx, None)
+            .await
+            .unwrap();
+        assert!(r1.ok, "first run should succeed");
+        assert_eq!(dag.status("b"), Some(RuntimeStatus::Success));
+
+        // Second run on the SAME DAG instance — must not see leftover state.
+        let r2 = dag
+            .run(&SchedulerConfig::default(), &ctx, None)
+            .await
+            .unwrap();
+        assert!(r2.ok, "re-run should succeed (no cross-run ctx leak)");
+        assert_eq!(dag.status("b"), Some(RuntimeStatus::Success));
     }
 }

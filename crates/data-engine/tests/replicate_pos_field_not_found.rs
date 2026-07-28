@@ -111,15 +111,17 @@ async fn write_to_iceberg(
     df: datafusion::prelude::DataFrame,
 ) {
     let provider = datalake.get_provider().await.unwrap();
-    let mut sink_node = IcebergSinkNode::new(
-        ident.to_string(),
-        SinkMode::Overwrite,
-        ctx.runtime_env(),
-        Some(std::sync::Arc::new(provider)),
-        datalake.clone(),
-    );
+    let node_ctx = data_engine::node_registry::registry::NodeCtx {
+        runtime_env: ctx.runtime_env(),
+        iceberg_catalog: Some(Arc::new(provider)),
+        datalake: datalake.clone(),
+        opendal: None,
+    };
+    let mut sink_node =
+        IcebergSinkNode::new(ident.to_string(), SinkMode::Overwrite, datalake.clone());
     sink_node
         .execute(
+            &node_ctx,
             &[NodeInput { port: 0, data: df }],
             &data_engine::dag::node_event::NodeReporter::noop(),
         )

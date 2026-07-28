@@ -32,6 +32,11 @@ pub struct DataEngine {
     datalake: Option<Arc<Datalake>>,
     #[allow(dead_code)]
     opendal: Option<Arc<OpendalFileStorage>>,
+    /// The immutable engine ingredients, handed to the DAG scheduler on every
+    /// `run` so each node `execute` can build a fresh isolated `SessionContext`
+    /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
+    /// mutable `SessionContext` state can never accumulate across runs.
+    engine_ctx: crate::node_registry::registry::NodeCtx,
     dag: DAG,
     node_registry: NodeRegistry,
     config: SchedulerConfig,
@@ -45,6 +50,14 @@ impl DataEngine {
         datalake: Option<Arc<Datalake>>,
         opendal: Option<Arc<OpendalFileStorage>>,
     ) -> Self {
+        let engine_ctx = crate::node_registry::registry::NodeCtx {
+            runtime_env: runtime_env.clone(),
+            iceberg_catalog: iceberg_catalog.clone(),
+            datalake: datalake
+                .clone()
+                .unwrap_or_else(|| Arc::new(Datalake::default())),
+            opendal: opendal.clone(),
+        };
         let node_registry = NodeRegistry::new(
             runtime_env.clone(),
             iceberg_catalog.clone(),
@@ -59,6 +72,7 @@ impl DataEngine {
             iceberg_catalog,
             datalake,
             opendal,
+            engine_ctx,
             dag: DAG::default(),
             node_registry,
             config: SchedulerConfig::default(),
@@ -227,7 +241,7 @@ impl DataEngine {
 
     /// Validate and run every node of the DAG.
     pub async fn run(&mut self) -> Result<RunReport> {
-        Ok(self.dag.run(&self.config, None).await?)
+        Ok(self.dag.run(&self.config, &self.engine_ctx, None).await?)
     }
 
     /// Like [`run`](Self::run) but also streams lightweight per-node events
@@ -237,7 +251,10 @@ impl DataEngine {
         &mut self,
         event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
     ) -> Result<RunReport> {
-        Ok(self.dag.run(&self.config, Some(event_sink)).await?)
+        Ok(self
+            .dag
+            .run(&self.config, &self.engine_ctx, Some(event_sink))
+            .await?)
     }
 
     pub async fn get_output(
@@ -523,8 +540,6 @@ mod tests {
                         .add_input_port(None)
                         .add_output_port(None),
                     r#"SELECT COUNT(*) AS cnt FROM port_0"#.to_string(),
-                    engine.runtime_env.clone(),
-                    engine.iceberg_catalog.clone(),
                 ),
             )
             .unwrap();
@@ -772,6 +787,7 @@ mod tests {
         }
         async fn execute(
             &mut self,
+            _ctx: &crate::node_registry::registry::NodeCtx,
             _inputs: &[NodeInput],
             _reporter: &crate::dag::node_event::NodeReporter,
         ) -> Result<PortOutputs, DagError> {
@@ -819,6 +835,7 @@ mod tests {
         }
         async fn execute(
             &mut self,
+            _ctx: &crate::node_registry::registry::NodeCtx,
             _inputs: &[NodeInput],
             _reporter: &crate::dag::node_event::NodeReporter,
         ) -> Result<PortOutputs, DagError> {

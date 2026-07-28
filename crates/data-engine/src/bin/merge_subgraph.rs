@@ -11,15 +11,18 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 fn main() -> Result<(), BoxErr> {
     let args: Vec<String> = std::env::args().collect();
     let input_dir = args.get(1).map(|s| s.as_str()).unwrap_or(".");
-    let output = args.get(2).cloned().unwrap_or_else(|| "eur_subgraph.parquet".to_string());
+    let output = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "eur_subgraph.parquet".to_string());
 
     let out_schema = Arc::new(Schema::new(vec![
         Field::new("chrom", DataType::UInt32, false),
@@ -60,6 +63,9 @@ fn main() -> Result<(), BoxErr> {
 
     writer.close()?;
     let size = std::fs::metadata(&output)?.len();
-    eprintln!("done: {total_rows} 行, {:.1} MB → {output}", size as f64 / 1e6);
+    eprintln!(
+        "done: {total_rows} 行, {:.1} MB → {output}",
+        size as f64 / 1e6
+    );
     Ok(())
 }

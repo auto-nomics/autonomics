@@ -291,6 +291,7 @@ impl DagNode for LinearRegressionNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -322,7 +323,7 @@ impl DagNode for LinearRegressionNode {
 
         // Build output batch → DataFrame.
         let batch = build_result_batch(&reg, self.intercept);
-        let ctx = datafusion::prelude::SessionContext::new();
+        let ctx = node_ctx.session();
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: "linear_regression".to_string(),
             msg: format!("read_batch failed: {e}"),
@@ -340,6 +341,14 @@ impl DagNode for LinearRegressionNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
     use arrow_array::{Float64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -374,7 +383,11 @@ mod tests {
                 .unwrap(),
         };
         let outs = node
-            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         assert_eq!(outs.len(), 1);
@@ -437,7 +450,11 @@ mod tests {
                 .unwrap(),
         };
         let outs = node
-            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let rows = outs[&0].clone().collect().await.unwrap();

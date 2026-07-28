@@ -68,7 +68,10 @@ async fn print_df(df: datafusion::dataframe::DataFrame, limit: Option<usize>) ->
 // ════════════════════════════════════════════════════════════════
 
 async fn cmd_query(ctx: &SessionContext, sql: &str) -> Result<()> {
-    let df = ctx.sql(sql).await.map_err(|e| BoxErr::from(e.to_string()))?;
+    let df = ctx
+        .sql(sql)
+        .await
+        .map_err(|e| BoxErr::from(e.to_string()))?;
     print_df(df, None).await
 }
 
@@ -140,7 +143,10 @@ async fn cmd_tables_in(datalake: &Datalake, ns_str: &str) -> Result<()> {
 async fn cmd_schema(ctx: &SessionContext, ident: &str) -> Result<()> {
     // LIMIT 1 探一下 schema（避免拉全表）
     let sql = format!("SELECT * FROM iceberg.{ident} LIMIT 1");
-    let df = ctx.sql(&sql).await.map_err(|e| BoxErr::from(e.to_string()))?;
+    let df = ctx
+        .sql(&sql)
+        .await
+        .map_err(|e| BoxErr::from(e.to_string()))?;
     let schema = df.schema();
     println!("{ident} 的列:");
     for f in schema.fields() {
@@ -151,8 +157,14 @@ async fn cmd_schema(ctx: &SessionContext, ident: &str) -> Result<()> {
 
 async fn cmd_count(ctx: &SessionContext, ident: &str) -> Result<()> {
     let sql = format!("SELECT COUNT(*) AS n FROM iceberg.{ident}");
-    let df = ctx.sql(&sql).await.map_err(|e| BoxErr::from(e.to_string()))?;
-    let batches: Vec<RecordBatch> = df.collect().await.map_err(|e| BoxErr::from(e.to_string()))?;
+    let df = ctx
+        .sql(&sql)
+        .await
+        .map_err(|e| BoxErr::from(e.to_string()))?;
+    let batches: Vec<RecordBatch> = df
+        .collect()
+        .await
+        .map_err(|e| BoxErr::from(e.to_string()))?;
     let n = batches
         .first()
         .and_then(|b| b.column_by_name("n"))
@@ -260,7 +272,9 @@ async fn main() -> Result<()> {
             cmd_query(&datalake.get_ctx().await?, sql).await
         }
         "sql-file" => {
-            let path = rest.first().ok_or_else(|| BoxErr::from("sql-file 需要路径"))?;
+            let path = rest
+                .first()
+                .ok_or_else(|| BoxErr::from("sql-file 需要路径"))?;
             cmd_sql_file(&datalake.get_ctx().await?, path).await
         }
         "namespaces" => cmd_namespaces(&datalake).await,
@@ -272,15 +286,21 @@ async fn main() -> Result<()> {
             cmd_tables_in(&datalake, ns).await
         }
         "schema" => {
-            let ident = rest.first().ok_or_else(|| BoxErr::from("schema 需要 ident"))?;
+            let ident = rest
+                .first()
+                .ok_or_else(|| BoxErr::from("schema 需要 ident"))?;
             cmd_schema(&datalake.get_ctx().await?, ident).await
         }
         "count" => {
-            let ident = rest.first().ok_or_else(|| BoxErr::from("count 需要 ident"))?;
+            let ident = rest
+                .first()
+                .ok_or_else(|| BoxErr::from("count 需要 ident"))?;
             cmd_count(&datalake.get_ctx().await?, ident).await
         }
         "drop" => {
-            let ident = rest.first().ok_or_else(|| BoxErr::from("drop 需要 ident"))?;
+            let ident = rest
+                .first()
+                .ok_or_else(|| BoxErr::from("drop 需要 ident"))?;
             cmd_drop(&datalake, ident).await
         }
         "upload" => {

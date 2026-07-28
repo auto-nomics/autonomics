@@ -15,16 +15,23 @@ use std::time::Instant;
 
 use datalake::Datalake;
 
+use data_engine::node_registry::registry::NodeCtx;
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec,
-};
+use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
 
 #[tokio::test]
 #[ignore]
 async fn node_runs_on_intercepted_nochrom_input() {
     let dk = Arc::new(Datalake::new());
     let ctx = dk.get_ctx().await.expect("无法连 Iceberg 数据湖");
+    let node_ctx = NodeCtx {
+        runtime_env: ctx.runtime_env(),
+        iceberg_catalog: Some(Arc::new(
+            dk.get_provider().await.expect("datalake provider"),
+        )),
+        datalake: dk.clone(),
+        opendal: None,
+    };
 
     // The exact DataFrame the TUI pipeline handed the node.
     let sumstats = ctx
@@ -52,7 +59,7 @@ async fn node_runs_on_intercepted_nochrom_input() {
         extract_subset: 2_000_000,
         extract_r2: 0.8,
     };
-    let mut node = UnivariateMixerNode::new(ctx.clone(), spec);
+    let mut node = UnivariateMixerNode::new(spec);
 
     let input = NodeInput {
         port: 0u8,
@@ -61,6 +68,7 @@ async fn node_runs_on_intercepted_nochrom_input() {
     let started = Instant::now();
     let outputs = node
         .execute(
+            &node_ctx,
             &[input],
             &data_engine::dag::node_event::NodeReporter::noop(),
         )

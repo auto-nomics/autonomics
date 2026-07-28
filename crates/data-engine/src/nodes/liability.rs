@@ -287,6 +287,7 @@ impl DagNode for LiabilityNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -303,7 +304,7 @@ impl DagNode for LiabilityNode {
 
         let out_batches = self.apply(&batches)?;
 
-        let ctx = datafusion::prelude::SessionContext::new();
+        let ctx = node_ctx.session();
         let df = ctx
             .read_batches(out_batches)
             .map_err(LiabilityNodeError::ReadBatch)?;

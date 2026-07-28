@@ -286,8 +286,16 @@ pub trait DagNode: Send + Sync {
     /// external observers (e.g. the `run_dag` tool's live output). A node that
     /// has nothing to report simply ignores it (bind it to `_reporter`); the
     /// scheduler emits the authoritative terminal `Finished` event regardless.
+    ///
+    /// `ctx` is the framework-injected, immutable engine ingredients. A node
+    /// that needs a `SessionContext` (e.g. to register upstream DataFrames as
+    /// views and run SQL) obtains a **fresh**, isolated one via
+    /// [`NodeCtx::session`](crate::node_registry::registry::NodeCtx::session)
+    /// and never stores one as a field — that is what keeps mutable catalog
+    /// state from leaking across runs or between `clone_box` copies of a node.
     async fn execute(
         &mut self,
+        ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError>;

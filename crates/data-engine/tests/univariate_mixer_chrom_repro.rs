@@ -25,13 +25,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::prelude::SessionContext;
 use datalake::Datalake;
 
+use data_engine::node_registry::registry::NodeCtx;
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec,
-};
+use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
 
 /// Base SELECT computing Z = β/SE and N = sample_size from chr22 GWAS.
 /// `{chrom_proj}` is either `` (omit chrom) or `chrom,` (include it).
@@ -44,7 +42,7 @@ const SUMSTATS_TEMPLATE: &str = r#"SELECT rsid, {chrom_proj} effect_size / std_e
 /// Build the node and feed `sumstats` as input port 0. Returns the fit row
 /// collected from output port 0, or the DagError message.
 async fn run_node(
-    ctx: SessionContext,
+    node_ctx: &NodeCtx,
     sumstats: datafusion::dataframe::DataFrame,
     label: &str,
 ) -> Result<String, String> {
@@ -58,7 +56,7 @@ async fn run_node(
         extract_subset: 2_000_000,
         extract_r2: 0.8,
     };
-    let mut node = UnivariateMixerNode::new(ctx, spec);
+    let mut node = UnivariateMixerNode::new(spec);
 
     // Print the input schema so we can SEE which columns the node received.
     let fields: Vec<String> = sumstats
@@ -77,6 +75,7 @@ async fn run_node(
     let started = Instant::now();
     let outputs = node
         .execute(
+            node_ctx,
             &[input],
             &data_engine::dag::node_event::NodeReporter::noop(),
         )
@@ -114,6 +113,14 @@ async fn run_node(
 async fn repro_chrom_presence_changes_result() {
     let dk = Arc::new(Datalake::new());
     let ctx = dk.get_ctx().await.expect("无法连 Iceberg 数据湖");
+    let node_ctx = NodeCtx {
+        runtime_env: ctx.runtime_env(),
+        iceberg_catalog: Some(Arc::new(
+            dk.get_provider().await.expect("datalake provider"),
+        )),
+        datalake: dk.clone(),
+        opendal: None,
+    };
 
     // --- variant A: NO chrom column (matches the documented input schema) ---
     let sql_a = SUMSTATS_TEMPLATE.replace("{chrom_proj}", "");
@@ -130,8 +137,8 @@ async fn repro_chrom_presence_changes_result() {
     // Sanity: both variants must carry the same rows, just ±chrom.
     assert_eq!(n_a, n_b, "two variants should have identical row counts");
 
-    let res_a = run_node(ctx.clone(), sumstats_a, "A no-chrom").await;
-    let res_b = run_node(ctx.clone(), sumstats_b, "B with-chrom").await;
+    let res_a = run_node(&node_ctx, sumstats_a, "A no-chrom").await;
+    let res_b = run_node(&node_ctx, sumstats_b, "B with-chrom").await;
 
     println!("\n========== VERDICT ==========");
     match (&res_a, &res_b) {

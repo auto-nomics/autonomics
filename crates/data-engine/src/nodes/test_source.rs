@@ -116,6 +116,7 @@ impl DagNode for TestSourceNode {
 
     async fn execute(
         &mut self,
+        _ctx: &crate::node_registry::registry::NodeCtx,
         _inputs: &[crate::dag::NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -138,13 +139,25 @@ impl DagNode for TestSourceNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
 
     #[tokio::test]
     async fn test_loads_iris_dataset() {
         let mut node = TestSourceNode::new("iris".into());
         let outputs = node
-            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
@@ -157,7 +170,11 @@ mod tests {
     async fn test_unknown_dataset_errors() {
         let mut node = TestSourceNode::new("nonexistent".into());
         let err = node
-            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap_err();
         let msg = err.to_string();

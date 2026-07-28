@@ -18,7 +18,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -147,13 +147,6 @@ fn build_result_batch(r: &ldsc::hsq::HsqResult) -> Result<RecordBatch, LdscNodeE
 pub struct LdscHsqNode {
     /// DAG node metadata (id, ports).
     meta: NodePorts,
-    /// Shared object-store registry, used to build an isolated context for
-    /// the join SQL against upstream sumstats.
-    runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-    /// Optional Iceberg catalog, registered under `"iceberg"` on the
-    /// per-execution context so the join SQL resolves
-    /// `iceberg.ld_score.*`.
-    iceberg_catalog: Option<Arc<dyn datafusion::catalog::CatalogProvider>>,
     /// Configuration for the LDSC h² estimation algorithm itself
     /// (per-annotation M, jackknife blocks, optional fixed intercept).
     /// See [`LdscHsqConfig`].
@@ -231,10 +224,10 @@ impl NodeFactory for LdscHsqNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config: LdscHsqConfig = serde_json::from_value(spec)?;
-        let node = LdscHsqNode::new(node_ctx.runtime_env, node_ctx.iceberg_catalog, config);
+        let node = LdscHsqNode::new(config);
         Ok(Box::new(node))
     }
 }
@@ -242,29 +235,18 @@ impl NodeFactory for LdscHsqNodeFactory {
 impl LdscHsqNode {
     /// Construct an [`LdscHsqNode`].
     ///
-    /// # Arguments
-    ///
-    /// * `runtime_env` — shared object-store registry, used to build the
-    ///   per-execution context for the join SQL.
-    /// * `iceberg_catalog` — Iceberg catalog, registered under `"iceberg"`
-    ///   so the join SQL resolves `iceberg.ld_score.*`.
-    /// * `ldsc_hsq` — algorithm configuration; see [`LdscHsqConfig`].
-    ///
-    /// The upstream `DataFrame` must expose columns `z` (Float64), `n`
-    /// (Float64), and `rsid` (Utf8) — enforced by the input port schema.
-    pub fn new(
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn datafusion::catalog::CatalogProvider>>,
-        ldsc_hsq: LdscHsqConfig,
-    ) -> Self {
+    /// The per-execution `SessionContext` (object-store registry + Iceberg
+    /// catalog) is injected by the framework at `execute` time, so the node
+    /// holds only its algorithm configuration. The upstream `DataFrame` must
+    /// expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
+    /// enforced by the input port schema.
+    pub fn new(ldsc_hsq: LdscHsqConfig) -> Self {
         // Fixed, typed ports: a single input carrying GWAS sumstats (z, n,
         // rsid) and a single output with the fixed h² summary schema.
         // Declaring the schemas lets the DAG validate edge compatibility
         // at `add_edge`/`validate` time.
         Self {
             meta: port_layout(),
-            runtime_env,
-            iceberg_catalog,
             ldsc_hsq,
         }
     }
@@ -299,6 +281,7 @@ impl DagNode for LdscHsqNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -313,7 +296,7 @@ impl DagNode for LdscHsqNode {
         //    catalog-independent pipeline. Splitting here lets the pipeline
         //    be exercised end-to-end against an in-memory catalog (see
         //    `tests`).
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
+        let ctx = node_ctx.session();
 
         // TODO: Auto select LD score panel table by population
         let result = Self::run_with_ctx(&ctx, &input.data, "ukbb_eur", &self.ldsc_hsq).await?;
@@ -457,6 +440,14 @@ fn extract_scalar_u64(batches: &[RecordBatch], col: &str) -> Result<u64, LdscNod
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
     use arrow_array::{Array, Float64Array, Int64Array, StringArray, StructArray};
     use datafusion::catalog::{
@@ -471,11 +462,7 @@ mod tests {
     /// Construct the node and assert its kind and single-in/single-out topology.
     #[tokio::test]
     async fn test_ldsc_hsq_node_structure() {
-        let node = LdscHsqNode::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-            LdscHsqConfig::new(5, None),
-        );
+        let node = LdscHsqNode::new(LdscHsqConfig::new(5, None));
         assert_eq!(node.kind(), "ldsc");
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -751,13 +738,13 @@ mod tests {
     /// A missing input must surface a clear error before any catalog work.
     #[tokio::test]
     async fn e2e_missing_input_yields_error() {
-        let mut node = LdscHsqNode::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-            LdscHsqConfig::new(5, None),
-        );
+        let mut node = LdscHsqNode::new(LdscHsqConfig::new(5, None));
         let res = node
-            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await;
         assert!(res.is_err(), "missing input must error");
     }

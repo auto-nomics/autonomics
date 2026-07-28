@@ -16,10 +16,9 @@ use std::sync::Arc;
 
 use datalake::Datalake;
 
+use data_engine::node_registry::registry::NodeCtx;
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec,
-};
+use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
 
 #[tokio::test]
 #[ignore]
@@ -28,6 +27,14 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
 
     // 1. 上游 sumstats DataFrame：Z = β/SE，N = sample_size。列名必须为 Z/N/rsid。
     let ctx = dk.get_ctx().await.expect("无法连 Iceberg 数据湖");
+    let node_ctx = NodeCtx {
+        runtime_env: ctx.runtime_env(),
+        iceberg_catalog: Some(Arc::new(
+            dk.get_provider().await.expect("datalake provider"),
+        )),
+        datalake: dk.clone(),
+        opendal: None,
+    };
     let sumstats = ctx
         .sql(
             r#"SELECT rsid, effect_size / std_error AS "Z", sample_size AS "N"
@@ -54,7 +61,7 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
         extract_subset: 2_000_000,
         extract_r2: 0.8,
     };
-    let mut node = UnivariateMixerNode::new(ctx.clone(), spec);
+    let mut node = UnivariateMixerNode::new(spec);
 
     // 3. 喂入并执行。
     let input = NodeInput {
@@ -63,6 +70,7 @@ async fn univariate_mixer_node_runs_on_iceberg_gwas() {
     };
     let outputs = node
         .execute(
+            &node_ctx,
             &[input],
             &data_engine::dag::node_event::NodeReporter::noop(),
         )

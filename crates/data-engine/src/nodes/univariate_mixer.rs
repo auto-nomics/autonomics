@@ -13,7 +13,6 @@ use ahash::AHashMap;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::prelude::SessionContext;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -21,7 +20,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -226,7 +225,6 @@ const TAGSUFF_TABLE: &str = "eur_tagsuff";
 #[derive(Clone)]
 pub struct UnivariateMixerNode {
     meta: NodePorts,
-    ctx: SessionContext,
     spec: UnivariateMixerNodeSpec,
 }
 
@@ -237,10 +235,9 @@ fn port_layout() -> NodePorts {
 }
 
 impl UnivariateMixerNode {
-    pub fn new(ctx: SessionContext, spec: UnivariateMixerNodeSpec) -> Self {
+    pub fn new(spec: UnivariateMixerNodeSpec) -> Self {
         Self {
             meta: port_layout(),
-            ctx,
             spec,
         }
     }
@@ -279,11 +276,10 @@ impl NodeFactory for UnivariateMixerNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config: UnivariateMixerNodeSpec = serde_json::from_value(spec)?;
-        let ctx = new_isolated_ctx(node_ctx.runtime_env, node_ctx.iceberg_catalog);
-        let node = UnivariateMixerNode::new(ctx, config);
+        let node = UnivariateMixerNode::new(config);
         Ok(Box::new(node))
     }
 }
@@ -308,6 +304,7 @@ impl DagNode for UnivariateMixerNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -322,17 +319,17 @@ impl DagNode for UnivariateMixerNode {
         reporter.info(format!(
             "fit1: start (chromosomes={n_chrom}, r2_min={}, \
              extract={}, diffevo_repeats={})",
-            self.spec.r2_min,
-            self.spec.extract_enabled,
-            self.spec.diffevo_repeats,
+            self.spec.r2_min, self.spec.extract_enabled, self.spec.diffevo_repeats,
         ));
 
         let input = inputs.first().ok_or(UnivariateMixerError::InvalidInput(
             "no input DataFrame".into(),
         ))?;
 
-        // 1. Build a fresh, isolated context per execution — no shared CatalogList,
-        let ctx = &self.ctx;
+        // 1. Build a fresh, isolated context per execution — no shared
+        //    CatalogList, so concurrent nodes / re-runs never collide on
+        //    `register_table`. Dropped at the end of this call.
+        let ctx = node_ctx.session();
 
         // 2. 把上游 sumstats 注册为临时表，并**提前校验必需列**（Z/N/rsid）——
         //    缺列时给清晰提示，而不是让后面的 SQL 抛出晦涩错误。
@@ -695,7 +692,7 @@ mod tests {
             extract_subset: 2_000_000,
             extract_r2: 0.8,
         };
-        let node = UnivariateMixerNode::new(SessionContext::new(), spec);
+        let node = UnivariateMixerNode::new(spec);
         assert_eq!(node.kind(), "univariate_mixer");
         // 一个输入端口（sumstats）、一个输出端口（fit1 结果）
         assert_eq!(node.ports().input_ports().len(), 1);

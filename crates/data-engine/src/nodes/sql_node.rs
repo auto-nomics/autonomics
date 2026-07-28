@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use datafusion::{catalog::CatalogProvider, common::HashMap, execution::runtime_env::RuntimeEnv};
+use datafusion::common::HashMap;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
@@ -10,7 +8,7 @@ use super::meta::{DagNode, NodeInput, NodePorts};
 
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -41,8 +39,6 @@ impl From<SqlNodeError> for DagError {
 pub struct SqlNode {
     meta: NodePorts,
     sql_query: String,
-    runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
 }
 
 #[derive(Debug, JsonSchema, Deserialize)]
@@ -88,45 +84,28 @@ impl NodeFactory for SqlNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: SqlNodeSpec = serde_json::from_value(spec)?;
-        let sql_node = SqlNode::new(
-            node_spec.sql_query,
-            node_ctx.runtime_env,
-            node_ctx.iceberg_catalog,
-        );
+        let sql_node = SqlNode::new(node_spec.sql_query);
         Ok(Box::new(sql_node))
     }
 }
 
 impl SqlNode {
-    pub fn new(
-        query: String,
-        runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    ) -> Self {
+    pub fn new(query: String) -> Self {
         Self {
             meta: port_layout(),
             sql_query: query,
-            runtime_env,
-            iceberg_catalog,
         }
     }
 
     /// Create a [`SqlNode`] from a pre-built [`NodePorts`] (useful for
     /// multi-input join nodes that declare several input ports).
-    pub fn from_ports(
-        ports: NodePorts,
-        query: String,
-        runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    ) -> Self {
+    pub fn from_ports(ports: NodePorts, query: String) -> Self {
         Self {
             meta: ports,
             sql_query: query,
-            runtime_env,
-            iceberg_catalog,
         }
     }
 
@@ -155,6 +134,7 @@ impl DagNode for SqlNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -167,7 +147,7 @@ impl DagNode for SqlNode {
 
         // Build a fresh, isolated context per execution — no shared CatalogList,
         // so concurrent SqlNodes never collide on `port_N` registrations.
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
+        let ctx = node_ctx.session();
 
         for inp in inputs {
             // Register each upstream DataFrame under `port_{port}`.
@@ -184,6 +164,14 @@ impl DagNode for SqlNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
 
     use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
@@ -200,7 +188,7 @@ mod tests {
             RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
         let df = ctx.read_batch(batch).unwrap();
         ctx.register_table("src", df.clone().into_view()).unwrap();
-        let node = SqlNode::new(sql.into(), ctx.runtime_env(), None);
+        let node = SqlNode::new(sql.into());
         (ctx, node, df)
     }
 
@@ -228,7 +216,11 @@ mod tests {
 
         // Verify SQL node input mapping: it should use 'port_0' to reference data.
         let output = node
-            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         dbg!(output);
@@ -322,10 +314,14 @@ mod tests {
                    FROM port_0 \
                    WHERE info['age'] > 28 \
                    ORDER BY id";
-        let mut node = SqlNode::new(sql.into(), ctx.runtime_env(), None);
+        let mut node = SqlNode::new(sql.into());
         let input = NodeInput { port: 0, data: df };
         let outputs = node
-            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
@@ -366,13 +362,10 @@ mod tests {
         .unwrap();
         let a_df = ctx.read_batch(a_batch).unwrap();
 
-        let mut node_a = SqlNode::new(
-            "SELECT * FROM port_0 WHERE id <= 2".into(),
-            ctx.runtime_env(),
-            None,
-        );
+        let mut node_a = SqlNode::new("SELECT * FROM port_0 WHERE id <= 2".into());
         let a_out = node_a
             .execute(
+                &node_ctx(),
                 &[NodeInput {
                     port: 0,
                     data: a_df,
@@ -398,13 +391,10 @@ mod tests {
         .unwrap();
         let b_df = ctx.read_batch(b_batch).unwrap();
 
-        let mut node_b = SqlNode::new(
-            "SELECT * FROM port_0 WHERE score > 80".into(),
-            ctx.runtime_env(),
-            None,
-        );
+        let mut node_b = SqlNode::new("SELECT * FROM port_0 WHERE score > 80".into());
         let b_out = node_b
             .execute(
+                &node_ctx(),
                 &[NodeInput {
                     port: 0,
                     data: b_df,
@@ -421,11 +411,10 @@ mod tests {
              FROM port_0 AS a JOIN port_1 AS b ON a.id = b.id \
              ORDER BY a.id"
                 .into(),
-            ctx.runtime_env(),
-            None,
         );
         let c_out = node_c
             .execute(
+                &node_ctx(),
                 &[
                     NodeInput {
                         port: 0,

@@ -4,14 +4,11 @@
 //! One untyped input port; no output ports. Symmetric to [`crate::nodes::FileSourceNode`]
 //! for the file case.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use datafusion::{
     common::HashMap,
     common::config::{CsvOptions, TableParquetOptions},
     dataframe::{DataFrame, DataFrameWriteOptions},
-    execution::runtime_env::RuntimeEnv,
 };
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -23,7 +20,7 @@ use super::source_file::normalize_path;
 use crate::{
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 /// Supported on-disk write formats.
@@ -60,22 +57,15 @@ pub struct FileSinkNode {
     path: String,
     format: WriteFormat,
     mode: SinkMode,
-    runtime_env: Arc<RuntimeEnv>,
 }
 
 impl FileSinkNode {
-    pub fn new(
-        path: String,
-        format: WriteFormat,
-        mode: SinkMode,
-        runtime_env: Arc<RuntimeEnv>,
-    ) -> Self {
+    pub fn new(path: String, format: WriteFormat, mode: SinkMode) -> Self {
         Self {
             meta: port_layout(),
             path,
             format,
             mode,
-            runtime_env,
         }
     }
 
@@ -100,6 +90,7 @@ impl FileSinkNode {
     /// is returned unchanged.
     async fn append_existing(
         &self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         path: &str,
         format: WriteFormat,
         new: DataFrame,
@@ -115,7 +106,7 @@ impl FileSinkNode {
             path: path.to_string(),
             source: e,
         };
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), None);
+        let ctx = node_ctx.session();
         let existing = match format {
             WriteFormat::Csv => ctx
                 .read_csv(path, CsvReadOptions::default())
@@ -184,15 +175,10 @@ impl NodeFactory for FileSinkNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSinkNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSinkNode::new(
-            node_spec.path,
-            node_spec.format,
-            node_spec.mode,
-            node_ctx.runtime_env,
-        );
+        let node = FileSinkNode::new(node_spec.path, node_spec.format, node_spec.mode);
         Ok(Box::new(node))
     }
 }
@@ -209,7 +195,6 @@ impl DagNode for FileSinkNode {
             path: self.path.clone(),
             format: self.format,
             mode: self.mode,
-            runtime_env: self.runtime_env.clone(),
         };
 
         Box::new(cp_node)
@@ -225,6 +210,7 @@ impl DagNode for FileSinkNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -247,7 +233,7 @@ impl DagNode for FileSinkNode {
                 let _ = std::fs::remove_file(&path);
                 df
             }
-            SinkMode::Append => self.append_existing(&path, format, df).await?,
+            SinkMode::Append => self.append_existing(node_ctx, &path, format, df).await?,
         };
 
         let options = DataFrameWriteOptions::new().with_single_file_output(true);
@@ -271,6 +257,14 @@ impl DagNode for FileSinkNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -365,14 +359,13 @@ mod tests {
     #[tokio::test]
     async fn test_sink_file_overwrite_replaces() {
         let ctx = SessionContext::new();
-        let runtime_env = ctx.runtime_env();
         let path = format!("/tmp/sink_overwrite_{}.csv", std::process::id());
 
         let sink = |df: DataFrame, mode| {
-            let mut node =
-                FileSinkNode::new(path.clone(), WriteFormat::Csv, mode, runtime_env.clone());
+            let mut node = FileSinkNode::new(path.clone(), WriteFormat::Csv, mode);
             async move {
                 node.execute(
+                    &node_ctx(),
                     &[NodeInput { port: 0, data: df }],
                     &crate::dag::node_event::NodeReporter::noop(),
                 )
@@ -396,18 +389,13 @@ mod tests {
     #[tokio::test]
     async fn test_sink_file_append_accumulates() {
         let ctx = SessionContext::new();
-        let runtime_env = ctx.runtime_env();
         let path = format!("/tmp/sink_append_{}.csv", std::process::id());
 
         let write = |df: DataFrame| {
-            let mut node = FileSinkNode::new(
-                path.clone(),
-                WriteFormat::Csv,
-                SinkMode::Append,
-                runtime_env.clone(),
-            );
+            let mut node = FileSinkNode::new(path.clone(), WriteFormat::Csv, SinkMode::Append);
             async move {
                 node.execute(
+                    &node_ctx(),
                     &[NodeInput { port: 0, data: df }],
                     &crate::dag::node_event::NodeReporter::noop(),
                 )

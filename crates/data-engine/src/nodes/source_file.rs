@@ -8,14 +8,11 @@
 //! them as DataFusion tables. Symmetric to [`crate::nodes::FileSinkNode`] for
 //! the file case.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use biofusion::datasource::BioReadOptions;
 use biofusion::ext::DataFusionReadExt;
 use datafusion::{
     common::HashMap,
-    execution::runtime_env::RuntimeEnv,
     prelude::{CsvReadOptions, DataFrame, ParquetReadOptions, SessionContext},
 };
 use schemars::{JsonSchema, schema_for};
@@ -25,7 +22,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 /// Supported file formats. Tabular formats go through DataFusion natively;
@@ -122,17 +119,15 @@ pub struct FileSourceNode {
     meta: NodePorts,
     path: String,
     format: Option<FileFormat>,
-    runtime_env: Arc<RuntimeEnv>,
 }
 
 impl FileSourceNode {
-    pub fn new(path: String, format: Option<FileFormat>, runtime_env: Arc<RuntimeEnv>) -> Self {
+    pub fn new(path: String, format: Option<FileFormat>) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
             path,
             format,
-            runtime_env,
         }
     }
 }
@@ -181,10 +176,10 @@ impl NodeFactory for FileSourceNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSourceNode::new(node_spec.path, node_spec.format, node_ctx.runtime_env);
+        let node = FileSourceNode::new(node_spec.path, node_spec.format);
         Ok(Box::new(node))
     }
 }
@@ -222,10 +217,11 @@ impl DagNode for FileSourceNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         _inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), None);
+        let ctx = node_ctx.session();
         let path = normalize_path(&self.path);
         let fmt = self
             .format

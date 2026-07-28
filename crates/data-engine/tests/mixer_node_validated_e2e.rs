@@ -21,14 +21,21 @@ use datalake::Datalake;
 use tokio::sync::mpsc;
 
 use data_engine::dag::node_event::{NodeEvent, NodeEventKind, NodeReporter};
+use data_engine::node_registry::registry::NodeCtx;
 use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::univariate_mixer::{
-    UnivariateMixerNode, UnivariateMixerNodeSpec,
-};
+use data_engine::nodes::univariate_mixer::{UnivariateMixerNode, UnivariateMixerNodeSpec};
 
 /// 输出端口 schema 字段名（顺序与 `output_schema()` 一致）。
 const OUTPUT_NAMES: [&str; 9] = [
-    "pi", "sig2_beta", "sig2_zero", "h2", "nc", "nc_p9", "aic", "bic", "loglike",
+    "pi",
+    "sig2_beta",
+    "sig2_zero",
+    "h2",
+    "nc",
+    "nc_p9",
+    "aic",
+    "bic",
+    "loglike",
 ];
 
 /// 阶段标记：从 NodeEvent Log 消息里识别（start → end 配对算耗时）。
@@ -50,6 +57,14 @@ async fn mixer_node_validated_e2e() {
 
     // 1. 上游 sumstats: BMI（ieu-a-2）/ chr22。
     let ctx = dk.get_ctx().await.expect("无法连 Iceberg 数据湖");
+    let node_ctx = NodeCtx {
+        runtime_env: ctx.runtime_env(),
+        iceberg_catalog: Some(Arc::new(
+            dk.get_provider().await.expect("datalake provider"),
+        )),
+        datalake: dk.clone(),
+        opendal: None,
+    };
     let sumstats = ctx
         .sql(
             r#"SELECT rsid, effect_size / std_error AS "Z", sample_size AS "N"
@@ -74,7 +89,7 @@ async fn mixer_node_validated_e2e() {
         extract_subset: 2_000_000,
         extract_r2: 0.8,
     };
-    let mut node = UnivariateMixerNode::new(ctx.clone(), spec);
+    let mut node = UnivariateMixerNode::new(spec);
 
     // 3. 设自定义 reporter，把事件捕到本地（用接收时刻作为事件时间戳）。
     let (tx, mut rx) = mpsc::channel::<NodeEvent>(4096);
@@ -92,7 +107,11 @@ async fn mixer_node_validated_e2e() {
     let wall_start = Instant::now();
     let outputs = node
         .execute(
-            &[NodeInput { port: 0, data: sumstats }],
+            &node_ctx,
+            &[NodeInput {
+                port: 0,
+                data: sumstats,
+            }],
             &reporter,
         )
         .await
@@ -117,23 +136,36 @@ async fn mixer_node_validated_e2e() {
             }
         }
     }
-    let phase = |a: &str, b: &str| -> Option<Duration> {
-        Some(hits.get(b)?.checked_sub(*hits.get(a)?)?)
-    };
+    let phase =
+        |a: &str, b: &str| -> Option<Duration> { Some(hits.get(b)?.checked_sub(*hits.get(a)?)?) };
     let t_universe = phase("universe_start", "extract_start");
     let t_extract = phase("extract_start", "extract_end");
     let t_fold = phase("fold_start", "fold_end");
     let t_fit1 = phase("fit1_start", "fit1_end");
-    println!("[phase] universe     : {:>8.2?}", t_universe.unwrap_or_default());
-    println!("[phase] extract      : {:>8.2?}", t_extract.unwrap_or_default());
-    println!("[phase] LD fold      : {:>8.2?}", t_fold.unwrap_or_default());
-    println!("[phase] fit1 (DE+NM) : {:>8.2?}", t_fit1.unwrap_or_default());
+    println!(
+        "[phase] universe     : {:>8.2?}",
+        t_universe.unwrap_or_default()
+    );
+    println!(
+        "[phase] extract      : {:>8.2?}",
+        t_extract.unwrap_or_default()
+    );
+    println!(
+        "[phase] LD fold      : {:>8.2?}",
+        t_fold.unwrap_or_default()
+    );
+    println!(
+        "[phase] fit1 (DE+NM) : {:>8.2?}",
+        t_fit1.unwrap_or_default()
+    );
     let sum_phases = t_universe.unwrap_or_default()
         + t_extract.unwrap_or_default()
         + t_fold.unwrap_or_default()
         + t_fit1.unwrap_or_default();
-    println!("[phase] 四阶段求和   : {:>8.2?}（wall={:.2?}，差值≈setup/serde 等开销）",
-        sum_phases, wall);
+    println!(
+        "[phase] 四阶段求和   : {:>8.2?}（wall={:.2?}，差值≈setup/serde 等开销）",
+        sum_phases, wall
+    );
 
     // 6. 收集并解析 fit1 单行结果。
     let out_df = outputs.get(&0u8).cloned().expect("无输出端口 0 数据");
@@ -183,10 +215,11 @@ async fn mixer_node_validated_e2e() {
     assert!(nc >= 0.0, "nc={nc} < 0");
     assert!(nc_p9 >= 0.0, "nc_p9={nc_p9} < 0");
 
-    println!("[validate] ✓ 9 个输出字段均有限，且 h²∈[0,1]、π∈(0.001, 0.999)、方差非负、loglike 有限");
+    println!(
+        "[validate] ✓ 9 个输出字段均有限，且 h²∈[0,1]、π∈(0.001, 0.999)、方差非负、loglike 有限"
+    );
     println!(
         "[result] pi={:.4} sig2_beta={:.4} sig2_zero={:.4} h2={:.4} nc={:.0} nc_p9={:.0} loglike={:.2} aic={:.2} bic={:.2}",
-        pi, sig2_beta, sig2_zero, h2, nc, nc_p9,
-        values["loglike"], values["aic"], values["bic"],
+        pi, sig2_beta, sig2_zero, h2, nc, nc_p9, values["loglike"], values["aic"], values["bic"],
     );
 }

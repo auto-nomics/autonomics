@@ -131,8 +131,7 @@ fn read_ld(path: &Path) -> Vec<(String, String, f64)> {
 #[test]
 #[ignore]
 fn scz_chr22_repro_vs_original_mixer() {
-    let fixtures =
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let fixtures = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
     let sumstats_path = Path::new("/tmp/scz_chr22_mixer/scz_chr22.sumstats.tsv");
 
     let sumstats = read_sumstats(&sumstats_path);
@@ -184,7 +183,10 @@ fn scz_chr22_repro_vs_original_mixer() {
     data.weights = rp_weights.clone();
     let sum_w_rp: f64 = data.weights.iter().sum();
     println!("sum_weights (randprune): {sum_w_rp:.2}");
-    println!("sum_weights (ldscore):   {:.2}", ldscore_wts.iter().sum::<f64>());
+    println!(
+        "sum_weights (ldscore):   {:.2}",
+        ldscore_wts.iter().sum::<f64>()
+    );
 
     let cfg = FitConfig {
         diffevo_repeats: 2,
@@ -202,15 +204,33 @@ fn scz_chr22_repro_vs_original_mixer() {
     let ld_result = fit1(&suff_ld, &cfg);
 
     println!("=== SCZ chr22: Rust Randprune vs LdScore vs Original MiXeR ===");
-    println!("{:<14} {:>14} {:>14} {:>14}", "param", "Rust(RP)", "Rust(LD)", "Original");
+    println!(
+        "{:<14} {:>14} {:>14} {:>14}",
+        "param", "Rust(RP)", "Rust(LD)", "Original"
+    );
     let rows: [(&str, f64, f64, f64); 7] = [
         ("pi", rp_result.params.pi, ld_result.params.pi, REF_PI),
-        ("sig2_beta", rp_result.params.sig2_beta, ld_result.params.sig2_beta, REF_SIG2_BETA),
-        ("sig2_zero", rp_result.params.sig2_zero, ld_result.params.sig2_zero, REF_SIG2_ZERO),
+        (
+            "sig2_beta",
+            rp_result.params.sig2_beta,
+            ld_result.params.sig2_beta,
+            REF_SIG2_BETA,
+        ),
+        (
+            "sig2_zero",
+            rp_result.params.sig2_zero,
+            ld_result.params.sig2_zero,
+            REF_SIG2_ZERO,
+        ),
         ("h2", rp_result.h2, ld_result.h2, REF_H2),
         ("cost", rp_result.loglike, ld_result.loglike, REF_COST),
         ("nc", rp_result.nc, ld_result.nc, 400.2348754154353),
-        ("nc_p9", rp_result.nc_p9, ld_result.nc_p9, 127.67492525752385),
+        (
+            "nc_p9",
+            rp_result.nc_p9,
+            ld_result.nc_p9,
+            127.67492525752385,
+        ),
     ];
     for (name, rp, ld, ref_val) in &rows {
         println!("{:<14} {:>14.8} {:>14.8} {:>14.8}", name, rp, ld, ref_val);
@@ -221,8 +241,14 @@ fn scz_chr22_repro_vs_original_mixer() {
 
     // Both modes should be within ~2x of each other (π↔σ²β degeneracy)
     let pi_ratio = rp_result.params.pi / ld_result.params.pi;
-    assert!(pi_ratio > 0.3 && pi_ratio < 3.0, "pi ratio {pi_ratio:.2} out of range");
+    assert!(
+        pi_ratio > 0.3 && pi_ratio < 3.0,
+        "pi ratio {pi_ratio:.2} out of range"
+    );
     let h2_ratio = rp_result.h2 / ld_result.h2;
-    assert!(h2_ratio > 0.7 && h2_ratio < 1.3, "h2 ratio {h2_ratio:.2} out of range");
+    assert!(
+        h2_ratio > 0.7 && h2_ratio < 1.3,
+        "h2 ratio {h2_ratio:.2} out of range"
+    );
     println!("pi(RP)/pi(LD)={pi_ratio:.2}  h2(RP)/h2(LD)={h2_ratio:.2}");
 }

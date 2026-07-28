@@ -14,15 +14,25 @@ use super::error::{Error, Result};
 use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
-    bivariate_mixer::BivariateMixerNodeFactory, echo_node::EchoNodeFactory,
-    ldsc_hsq::LdscHsqNodeFactory, ldsc_rg::LdscRgNodeFactory,
-    lava::{LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory, LavaUnivNodeFactory},
-    liability::LiabilityNodeFactory, linear_regression::LinearRegressionNodeFactory,
+    bivariate_mixer::BivariateMixerNodeFactory,
+    echo_node::EchoNodeFactory,
+    lava::{
+        LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
+        LavaUnivNodeFactory,
+    },
+    ldsc_hsq::LdscHsqNodeFactory,
+    ldsc_rg::LdscRgNodeFactory,
+    liability::LiabilityNodeFactory,
+    linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
-    sink_file::FileSinkNodeFactory, sink_iceberg::IcebergSinkNodeFactory,
-    source_file::FileSourceNodeFactory, source_iceberg::IcebergSourceNodeFactory,
-    sql_node::SqlNodeFactory, test_source::TestSourceFactory,
-    univariate_mixer::UnivariateMixerNodeFactory, viz::VizNodeFactory,
+    sink_file::FileSinkNodeFactory,
+    sink_iceberg::IcebergSinkNodeFactory,
+    source_file::FileSourceNodeFactory,
+    source_iceberg::IcebergSourceNodeFactory,
+    sql_node::SqlNodeFactory,
+    test_source::TestSourceFactory,
+    univariate_mixer::UnivariateMixerNodeFactory,
+    viz::VizNodeFactory,
 };
 
 /// Build a fresh, isolated [`SessionContext`].
@@ -85,6 +95,22 @@ pub struct NodeCtx {
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
     pub opendal: Option<Arc<fs::OpendalFileStorage>>,
+}
+
+impl NodeCtx {
+    /// Build a **fresh**, isolated [`SessionContext`] from these ingredients.
+    ///
+    /// Each call returns a brand-new context with its own `CatalogList` (so
+    /// `register_table("port_0", …)` / `register_table("sumstats", …)` never
+    /// collide across nodes or across executions) while sharing the engine-wide
+    /// [`RuntimeEnv`]. This is the *only* way a `DagNode` should obtain a
+    /// `SessionContext` inside `execute`: the framework injects a `&NodeCtx`,
+    /// the node calls `ctx.session()`, and the resulting context is dropped at
+    /// the end of the execution — no mutable catalog state ever leaks across
+    /// runs or between `clone_box` copies of a node.
+    pub fn session(&self) -> SessionContext {
+        new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone())
+    }
 }
 
 /// Summary of a registered node kind returned by [`NodeRegistry::list_nodes`].
@@ -236,7 +262,9 @@ mod tests {
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
-            "lava_locus" => serde_json::json!({"loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]}),
+            "lava_locus" => {
+                serde_json::json!({"loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]})
+            }
             "lava_univ" => serde_json::json!({}),
             "lava_bivar" => serde_json::json!({}),
             "lava_pcor" => serde_json::json!({"target": ["p1", "p2"]}),

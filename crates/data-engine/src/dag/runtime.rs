@@ -281,8 +281,7 @@ mod tests {
     #[test]
     fn threshold_boundary_is_full() {
         // Exactly SCHEMA_FULL_THRESHOLD columns is still "narrow" (full).
-        let report =
-            SchemaReport::from_fields(&fields(SCHEMA_FULL_THRESHOLD, DataType::Int32));
+        let report = SchemaReport::from_fields(&fields(SCHEMA_FULL_THRESHOLD, DataType::Int32));
         assert_eq!(report.columns.len(), SCHEMA_FULL_THRESHOLD);
         assert!(report.type_distribution.is_none());
     }

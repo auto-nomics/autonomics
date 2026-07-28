@@ -184,6 +184,7 @@ impl DagNode for VizNode {
 
     async fn execute(
         &mut self,
+        _ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -233,6 +234,14 @@ impl DagNode for VizNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
     use arrow_array::{Float64Array, Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -282,6 +291,7 @@ mod tests {
         let df = sample_dataframe();
         let res = node
             .execute(
+                &node_ctx(),
                 &[NodeInput { port: 0, data: df }],
                 &crate::dag::node_event::NodeReporter::noop(),
             )

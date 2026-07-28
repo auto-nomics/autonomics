@@ -106,6 +106,7 @@ impl DagNode for EchoNode {
 
     async fn execute(
         &mut self,
+        _ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -119,6 +120,14 @@ impl DagNode for EchoNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
 
     use arrow_array::Int32Array;
@@ -140,6 +149,7 @@ mod tests {
         let mut node = EchoNode::default();
         let outputs = node
             .execute(
+                &node_ctx(),
                 &[NodeInput {
                     port: 0,
                     data: df.clone(),
@@ -175,6 +185,7 @@ mod tests {
         let mut node = EchoNode::default();
         let outputs = node
             .execute(
+                &node_ctx(),
                 &[
                     NodeInput { port: 0, data: df1 },
                     NodeInput { port: 1, data: df2 },

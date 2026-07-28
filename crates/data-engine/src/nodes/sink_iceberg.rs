@@ -8,10 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::{
-    catalog::CatalogProvider, common::HashMap, dataframe::DataFrame, error::DataFusionError,
-    execution::runtime_env::RuntimeEnv,
-};
+use datafusion::{common::HashMap, dataframe::DataFrame, error::DataFusionError};
 use datalake::Datalake;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
@@ -24,7 +21,7 @@ use super::sink_common::SinkMode;
 use crate::{
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -128,25 +125,15 @@ pub struct IcebergSinkNode {
     meta: NodePorts,
     ident: String,
     mode: SinkMode,
-    runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     datalake: Arc<Datalake>,
 }
 
 impl IcebergSinkNode {
-    pub fn new(
-        ident: String,
-        mode: SinkMode,
-        runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-        datalake: Arc<Datalake>,
-    ) -> Self {
+    pub fn new(ident: String, mode: SinkMode, datalake: Arc<Datalake>) -> Self {
         Self {
             meta: port_layout(),
             ident,
             mode,
-            runtime_env,
-            iceberg_catalog,
             datalake,
         }
     }
@@ -223,13 +210,7 @@ impl NodeFactory for IcebergSinkNodeFactory {
         node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: IcebergSinkNodeSpec = serde_json::from_value(spec)?;
-        let node = IcebergSinkNode::new(
-            node_spec.ident,
-            node_spec.mode,
-            node_ctx.runtime_env,
-            node_ctx.iceberg_catalog,
-            node_ctx.datalake,
-        );
+        let node = IcebergSinkNode::new(node_spec.ident, node_spec.mode, node_ctx.datalake);
         Ok(Box::new(node))
     }
 }
@@ -245,8 +226,6 @@ impl DagNode for IcebergSinkNode {
             meta: self.meta.clone(),
             ident: self.ident.clone(),
             mode: self.mode,
-            runtime_env: self.runtime_env.clone(),
-            iceberg_catalog: self.iceberg_catalog.clone(),
             datalake: self.datalake.clone(),
         };
 
@@ -263,6 +242,7 @@ impl DagNode for IcebergSinkNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -346,13 +326,18 @@ impl DagNode for IcebergSinkNode {
 
         // Build a fresh context with the fresh iceberg provider so the
         // planner discovers the table we just created through the REST
-        // API. The previous provider cached its table list at
-        // creation time, so a freshly-created table is invisible to it.
+        // API. The provider cached in the injected `NodeCtx` captured its
+        // table list at engine-build time, so a freshly-created table is
+        // invisible to `node_ctx.session()` — we must build the context
+        // from a *fresh* provider instead.
         let fresh_provider = datalake
             .get_provider()
             .await
             .map_err(|e| IcebergSinkError::Iceberg { msg: e.to_string() })?;
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), Some(Arc::new(fresh_provider)));
+        let ctx = crate::node_registry::registry::new_isolated_ctx(
+            node_ctx.runtime_env.clone(),
+            Some(Arc::new(fresh_provider)),
+        );
 
         // 4. Register the upstream DataFrame as a temp view and INSERT.
         let src_name = format!("__sink_src_{:x}", std::process::id());
@@ -394,6 +379,14 @@ impl DagNode for IcebergSinkNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -537,21 +530,23 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_sink_iceberg() {
-        let ctx = Datalake::default().get_ctx().await.unwrap();
-        let provider = Datalake::default().get_provider().await.unwrap();
+        let _ctx = Datalake::default().get_ctx().await.unwrap();
+        let _provider = Datalake::default().get_provider().await.unwrap();
         let datalake = Arc::new(Datalake::default());
         let mut node = IcebergSinkNode::new(
             "gwas.test4".to_string(),
             crate::nodes::sink_common::SinkMode::Overwrite,
-            ctx.runtime_env(),
-            Some(Arc::new(provider)),
             datalake,
         );
 
         let (_, df) = sample_dataframe();
         let input = NodeInput { port: 0, data: df };
         let _res = node
-            .execute(&[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         // let df = res.get(&0).unwrap();

@@ -30,7 +30,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -212,13 +212,6 @@ const LDSC_RG_NODE_KIND: &str = "ldsc_rg";
 pub struct LdscRgNode {
     /// DAG node metadata (id, ports): two typed inputs, one typed output.
     meta: NodePorts,
-    /// Shared object-store registry, used to build an isolated context for
-    /// the 3-way join SQL.
-    runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-    /// Optional Iceberg catalog, registered under `"iceberg"` on the
-    /// per-execution context so the join SQL can resolve
-    /// `iceberg.ld_score.*`.
-    iceberg_catalog: Option<Arc<dyn datafusion::catalog::CatalogProvider>>,
     /// Algorithm configuration; see [`LdscRgConfig`].
     ldsc_rg: LdscRgConfig,
 }
@@ -254,10 +247,10 @@ impl NodeFactory for LdscRgNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config: LdscRgConfig = serde_json::from_value(spec)?;
-        let node = LdscRgNode::new(node_ctx.runtime_env, node_ctx.iceberg_catalog, config);
+        let node = LdscRgNode::new(config);
         Ok(Box::new(node))
     }
 }
@@ -265,27 +258,18 @@ impl NodeFactory for LdscRgNodeFactory {
 impl LdscRgNode {
     /// Construct an [`LdscRgNode`].
     ///
-    /// * `runtime_env` — shared object-store registry, used to build the
-    ///   per-execution context for the 3-way join.
-    /// * `iceberg_catalog` — Iceberg catalog, registered under `"iceberg"`
-    ///   so the join SQL resolves `iceberg.ld_score.*`.
-    /// * `ldsc_rg` — algorithm configuration; see [`LdscRgConfig`].
-    ///
-    /// Both upstream `DataFrame`s must expose columns `z` (Float64), `n`
-    /// (Float64), and `rsid` (Utf8) — enforced by the input port schemas.
-    pub fn new(
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn datafusion::catalog::CatalogProvider>>,
-        ldsc_rg: LdscRgConfig,
-    ) -> Self {
+    /// The per-execution `SessionContext` (object-store registry + Iceberg
+    /// catalog) is injected by the framework at `execute` time, so the node
+    /// holds only its algorithm configuration. Both upstream `DataFrame`s
+    /// must expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
+    /// enforced by the input port schemas.
+    pub fn new(ldsc_rg: LdscRgConfig) -> Self {
         // Fixed, typed ports: two inputs (trait 1, trait 2) carrying GWAS
         // sumstats, and one output with the fixed rg summary schema. Declaring
         // the schemas lets the DAG validate edge compatibility at
         // `add_edge`/`validate` time.
         Self {
             meta: port_layout(),
-            runtime_env,
-            iceberg_catalog,
             ldsc_rg,
         }
     }
@@ -331,6 +315,7 @@ impl DagNode for LdscRgNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -353,7 +338,7 @@ impl DagNode for LdscRgNode {
         //    catalog-independent pipeline. Splitting here lets the pipeline be
         //    exercised end-to-end against an in-memory catalog (see
         //    `tests::run_with_test_catalog`).
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
+        let ctx = node_ctx.session();
 
         // TODO: Auto select LD score panel table by population
         let (rg, n_snp) =
@@ -630,6 +615,14 @@ async fn count_panel_snp(
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
     use arrow_array::{Array, Int64Array, StringArray, StructArray};
     use datafusion::catalog::{
@@ -645,11 +638,7 @@ mod tests {
     /// topology.
     #[tokio::test]
     async fn test_ldsc_rg_node_structure() {
-        let node = LdscRgNode::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-            LdscRgConfig::new(5),
-        );
+        let node = LdscRgNode::new(LdscRgConfig::new(5));
         assert_eq!(node.kind(), "ldsc_rg");
         assert_eq!(node.ports().input_ports().len(), 2);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -1029,8 +1018,7 @@ mod tests {
     /// A missing input port must surface a clear error before any catalog work.
     #[tokio::test]
     async fn e2e_missing_input_yields_error() {
-        let mut node =
-            LdscRgNode::new(SessionContext::new().runtime_env(), None, constrained_cfg());
+        let mut node = LdscRgNode::new(constrained_cfg());
         let batch = sumstats_batch(
             &[1.0, 2.0, 3.0],
             &["rs1".into(), "rs2".into(), "rs3".into()],
@@ -1039,7 +1027,11 @@ mod tests {
         let df = SessionContext::new().read_batch(batch).unwrap();
         let one_input = vec![super::super::meta::NodeInput { port: 0, data: df }];
         let res = node
-            .execute(&one_input, &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &one_input,
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await;
         assert!(res.is_err(), "missing trait-2 input must error");
     }

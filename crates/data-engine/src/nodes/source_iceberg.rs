@@ -5,10 +5,8 @@
 //! catalog registered on the engine context. Symmetric to
 //! [`crate::nodes::IcebergSinkNode`] for the Iceberg case.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use datafusion::{catalog::CatalogProvider, common::HashMap, execution::runtime_env::RuntimeEnv};
+use datafusion::common::HashMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -16,29 +14,21 @@ use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory, new_isolated_ctx},
+    node_registry::registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Clone)]
 pub struct IcebergSourceNode {
     meta: NodePorts,
     ident: String,
-    runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
 }
 
 impl IcebergSourceNode {
-    pub fn new(
-        ident: String,
-        runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    ) -> Self {
+    pub fn new(ident: String) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
             ident,
-            runtime_env,
-            iceberg_catalog,
         }
     }
 }
@@ -85,14 +75,10 @@ impl NodeFactory for IcebergSourceNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: NodeCtx,
+        _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let node_spec: IcebergSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = IcebergSourceNode::new(
-            node_spec.ident,
-            node_ctx.runtime_env,
-            node_ctx.iceberg_catalog,
-        );
+        let node = IcebergSourceNode::new(node_spec.ident);
         Ok(Box::new(node))
     }
 }
@@ -117,10 +103,11 @@ impl DagNode for IcebergSourceNode {
 
     async fn execute(
         &mut self,
+        node_ctx: &crate::node_registry::registry::NodeCtx,
         _inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let ctx = new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone());
+        let ctx = node_ctx.session();
         // The iceberg catalog is registered under "iceberg"; qualify the
         // identifier so DataFusion resolves it through that catalog.
         let df = ctx
@@ -134,21 +121,29 @@ impl DagNode for IcebergSourceNode {
 
 #[cfg(test)]
 mod tests {
+    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
+        crate::node_registry::registry::NodeCtx {
+            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
     use super::*;
     use datalake::Datalake;
 
     #[tokio::test]
     #[ignore = "e2e test"]
     async fn test_load_from_iceberg() {
-        let ctx = Datalake::default().get_ctx().await.unwrap();
-        let provider = Datalake::default().get_provider().await.unwrap();
-        let mut node = IcebergSourceNode::new(
-            "gwas.gwas_study".to_string(),
-            ctx.runtime_env(),
-            Some(Arc::new(provider)),
-        );
+        let _ctx = Datalake::default().get_ctx().await.unwrap();
+        let _provider = Datalake::default().get_provider().await.unwrap();
+        let mut node = IcebergSourceNode::new("gwas.gwas_study".to_string());
         let res = node
-            .execute(&[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let df = res.get(&0).unwrap().clone();
