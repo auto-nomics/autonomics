@@ -16,6 +16,7 @@ use crate::nodes::meta::NodePorts;
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
     echo_node::EchoNodeFactory,
+    hdl_l::HdlLNodeFactory,
     lava::{
         LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
         LavaUnivNodeFactory,
@@ -168,6 +169,7 @@ impl NodeRegistry {
         registry.register(Box::new(LavaBivarNodeFactory {}));
         registry.register(Box::new(LavaPcorNodeFactory {}));
         registry.register(Box::new(LavaMultiregNodeFactory {}));
+        registry.register(Box::new(HdlLNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
@@ -269,6 +271,11 @@ mod tests {
             "lava_bivar" => serde_json::json!({}),
             "lava_pcor" => serde_json::json!({"target": ["p1", "p2"]}),
             "lava_multireg" => serde_json::json!({"target": "p1"}),
+            "hdl_l" => serde_json::json!({
+                "ld_ref_prefix": "/path/to/region_plink_prefix",
+                "trait1_name": "trait1",
+                "trait2_name": "trait2"
+            }),
             "visualization" => serde_json::json!({
                 "output_path": "/tmp/dummy_viz.png",
                 "r_code": "p <- ggplot(df, aes(x = x, y = y)) + geom_point()"

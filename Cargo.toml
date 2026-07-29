@@ -21,6 +21,7 @@ members = [
   "crates/biofusion-cache",
   "bio_crates/ldsc",
   "bio_crates/lava",
+  "bio_crates/hdl",
   "bio_crates/mixer",
   "bio_crates/mr",
   "infra/sink_ld_matrix",

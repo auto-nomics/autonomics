@@ -81,7 +81,11 @@ fn build_r_from_eigen(lambda: &[f64], q: MatRef<f64>, prune_thresh: f64) -> (Mat
 /// Symmetric eigendecomposition; returns (eigenvalues_desc, eigenvectors).
 /// Eigenvalues are sorted in **descending** order (R `eigen` returns
 /// descending) with eigenvectors permuted accordingly.
-fn sym_eigen(a: MatRef<f64>) -> Result<(Vec<f64>, Mat<f64>)> {
+///
+/// Public so sibling crates (e.g. `hdl`'s HDL-L port, which needs the raw
+/// eigenpairs `(lam, V)` of the LD correlation matrix rather than LAVA's
+/// PC-projection matrix) can reuse the exact same decomposition.
+pub fn sym_eigen(a: MatRef<f64>) -> Result<(Vec<f64>, Mat<f64>)> {
     let n = a.nrows();
     // faer self-adjoint eigendecomposition (high-level API, Result-returning).
     let e = a

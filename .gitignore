@@ -13,6 +13,7 @@ results/
 phloem.json
 
 # Vendored external crates / R packages (cloned for reference, not part of workspace)
+reference/
 ratatui-comfy-tabs/
 dendrite/
 notes/

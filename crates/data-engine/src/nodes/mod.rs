@@ -7,6 +7,7 @@
 
 pub mod bivariate_mixer;
 pub mod echo_node;
+pub mod hdl_l;
 pub mod lava;
 pub mod ldsc_hsq;
 pub mod ldsc_rg;
@@ -26,6 +27,7 @@ pub mod viz;
 
 pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
+pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};
 pub use lava::{
     LavaBivarNode, LavaBivarNodeFactory, LavaLocusNode, LavaLocusNodeFactory, LavaMultiregNode,
     LavaMultiregNodeFactory, LavaPcorNode, LavaPcorNodeFactory, LavaUnivNode, LavaUnivNodeFactory,

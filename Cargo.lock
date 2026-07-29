@@ -1693,6 +1693,7 @@ dependencies = [
  "faer",
  "fs",
  "futures",
+ "hdl",
  "iceberg",
  "iceberg-catalog-rest",
  "lava",
@@ -3530,6 +3531,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32069d97bb81e38fa67eab65e3393bf804bb85969f2bc06bf13f64aef5aba248"
 dependencies = [
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "hdl"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "lava",
+ "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
