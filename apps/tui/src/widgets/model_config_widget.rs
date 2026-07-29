@@ -183,16 +183,22 @@ impl ModelConfigState {
                 KeyCode::Enter => {
                     // Confirm: write the entered api_key back to the provider entry.
                     let mut command = ConfigCommand::None;
-                    if let ProviderPanelState::Config { provider_name, textarea, .. } =
-                        std::mem::replace(&mut self.provider_panel_state, ProviderPanelState::Preview)
-                    {
+                    if let ProviderPanelState::Config {
+                        provider_name,
+                        textarea,
+                        ..
+                    } = std::mem::replace(
+                        &mut self.provider_panel_state,
+                        ProviderPanelState::Preview,
+                    ) {
                         let key_val = textarea.text().trim().to_string();
-                        if let Some(p) = self
-                            .providers
-                            .iter_mut()
-                            .find(|p| p.name == provider_name)
+                        if let Some(p) = self.providers.iter_mut().find(|p| p.name == provider_name)
                         {
-                            p.api_key = if key_val.is_empty() { None } else { Some(key_val.clone()) };
+                            p.api_key = if key_val.is_empty() {
+                                None
+                            } else {
+                                Some(key_val.clone())
+                            };
                             p.configured = p.api_key.is_some();
                             p.expanded = p.configured;
                         }
@@ -286,7 +292,11 @@ impl StatefulWidgetRef for ModelConfigWidget {
             ProviderPanelState::Preview => {
                 render_detail(chunks[1], buf, state);
             }
-            ProviderPanelState::Config { provider_name, textarea, textarea_state } => {
+            ProviderPanelState::Config {
+                provider_name,
+                textarea,
+                textarea_state,
+            } => {
                 render_config_panel(
                     chunks[1],
                     buf,
@@ -510,9 +520,7 @@ fn render_config_panel(
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
-        .title_bottom(
-            Line::from("[Enter] save  [Esc] cancel").alignment(Alignment::Center),
-        );
+        .title_bottom(Line::from("[Enter] save  [Esc] cancel").alignment(Alignment::Center));
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -559,9 +567,10 @@ fn render_config_panel(
     .render(rows[2], buf);
 
     // API Key label
-    Paragraph::new(Line::from(vec![
-        Span::styled(" API Key        :", label_style),
-    ]))
+    Paragraph::new(Line::from(vec![Span::styled(
+        " API Key        :",
+        label_style,
+    )]))
     .render(rows[4], buf);
 
     // Textarea: render into a bordered sub-area inside rows[5].
@@ -616,9 +625,7 @@ pub fn build_catalog(
                 .iter()
                 .find(|(pt, _, _)| pt.eq_ignore_ascii_case(type_str));
             let (configured, api_key) = match db_match {
-                Some((_, key, _)) if !key.is_empty() => {
-                    (true, Some(key.clone()))
-                }
+                Some((_, key, _)) if !key.is_empty() => (true, Some(key.clone())),
                 _ => (false, None),
             };
 

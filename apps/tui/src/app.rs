@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use ratatui::{
     Frame,
@@ -139,14 +139,12 @@ impl App {
         };
 
         // Parse "provider_name:model_name"
-        let (provider_name, model_name) = active
-            .split_once(':')
-            .ok_or_else(|| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid active_model format: {active}"),
-                )) as Box<dyn std::error::Error>
-            })?;
+        let (provider_name, model_name) = active.split_once(':').ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid active_model format: {active}"),
+            )) as Box<dyn std::error::Error>
+        })?;
 
         // Look up provider credentials from DB (only api_key matters —
         // base_url always comes from the registry so code updates take
@@ -332,8 +330,8 @@ impl App {
         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     ) -> std::io::Result<()> {
         use crossterm::event::EventStream;
-        use tokio_stream::StreamExt;
         use tokio::time::{self, Duration, MissedTickBehavior};
+        use tokio_stream::StreamExt;
 
         let mut event_stream = EventStream::new();
 
@@ -407,10 +405,7 @@ impl App {
                 self.should_quit = true;
             }
             crate::app_event::AppEvent::ConfigReload => {
-                Self::load_model_config(
-                    &self.conn,
-                    &mut self.state.model_config_state,
-                );
+                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
             }
         }
     }
@@ -810,20 +805,23 @@ impl App {
 
         let cmd = self.state.model_config_state.handle_key(*key);
         match cmd {
-            ConfigCommand::SaveProvider { provider_name, api_key } => {
+            ConfigCommand::SaveProvider {
+                provider_name,
+                api_key,
+            } => {
                 self.save_provider_config(&provider_name, &api_key);
             }
-            ConfigCommand::SelectModel { provider_name, model_name } => {
+            ConfigCommand::SelectModel {
+                provider_name,
+                model_name,
+            } => {
                 self.activate_model(&provider_name, &model_name);
             }
             ConfigCommand::None => {
                 // Key not consumed by widget — try App-level handlers.
                 match key.code {
                     KeyCode::Char('r') => {
-                        Self::load_model_config(
-                            &self.conn,
-                            &mut self.state.model_config_state,
-                        );
+                        Self::load_model_config(&self.conn, &mut self.state.model_config_state);
                     }
                     _ => {}
                 }
