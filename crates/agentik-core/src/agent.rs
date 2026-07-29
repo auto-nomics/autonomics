@@ -12,8 +12,8 @@ use std::{sync::Arc, time::Duration, time::UNIX_EPOCH};
 use crate::context::ContextProvider;
 use crate::message_ext::AgentMessageExt;
 use agentik_sdk::model::model_pool::ModelPool;
-use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::ToolDefinition;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -61,8 +61,6 @@ pub enum InternalEvent {
     /// `view_task_results` — it is NOT injected into memory.
     BgTaskComplete(String),
     Done,
-    /// A tool requested the current session be aborted (e.g. `abort_task`).
-    Abort,
     /// External Runtime requests the agent to shut down.
     Shutdown,
     /// Replace the agent's cancellation token with a fresh one.
@@ -267,7 +265,7 @@ impl Agent {
                 }
                 true
             }
-            InternalEvent::Abort | InternalEvent::Shutdown => {
+            InternalEvent::Shutdown => {
                 self.lifecycle.set_aborted();
                 false
             }
@@ -534,10 +532,7 @@ impl Agent {
 
         let tool_results = self
             .toolset
-            .execute(
-                &toolcalls,
-                Some(self.internal_event_tx.clone()),
-            )
+            .execute(&toolcalls, Some(self.internal_event_tx.clone()))
             .await?;
         tracing::debug!(?tool_results, "tool execution results");
 

@@ -116,7 +116,10 @@ impl ToolFunction for DownloadFilesTool {
         ctx.emit(
             ProgressRecord::new("status")
                 .status("downloading")
-                .message(format!("resolved {total_files} file(s) for {} study/studies", input.id.len())),
+                .message(format!(
+                    "resolved {total_files} file(s) for {} study/studies",
+                    input.id.len()
+                )),
         );
 
         // 2. Stream-download each file, emitting progress along the way.

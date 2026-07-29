@@ -233,7 +233,17 @@ impl NodeFactory for LdscRgNodeFactory {
         DataFrames (trait 1 on port 0, trait 2 on port 1, each with z, n, rsid), \
         queries the Iceberg data lake for the LD score panel, 3-way joins on rsid, \
         and runs bivariate LDSC. Outputs a single-row summary with rg, its SE/z/p, \
-        cross-trait gencov, and each trait's h²."
+        cross-trait gencov, and each trait's h².\n\n\
+        IMPORTANT — you MUST perform the following quality control on the \
+        input GWAS summary statistics BEFORE feeding them into this node:\n\
+        1. Remove palindromic SNPs (alleles that are complementary on the two \
+        strands, e.g. A/T or C/G) to avoid strand-alignment ambiguity.\n\
+        2. Remove duplicate SNPs so each rsid appears at most once.\n\
+        3. Keep only biallelic SNPs (exactly two alleles per variant).\n\
+        4. Remove SNPs on sex chromosomes (X, Y, MT) — retain autosomal SNPs \
+        only.\n\
+        5. Filter by minor allele frequency: keep only SNPs with MAF > 0.01 \
+        (1%)."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

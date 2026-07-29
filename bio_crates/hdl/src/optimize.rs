@@ -134,8 +134,10 @@ fn minimize_box<F: Fn(&[f64]) -> f64>(
                     // BFGS inverse-Hessian update:
                     // H ← (I − ρ s yᵀ) H (I − ρ y sᵀ) + ρ s sᵀ
                     let rho = 1.0 / sy;
-                    let iayt = outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * y[i] * s[j]);
-                    let isyt = outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * s[i] * y[j]);
+                    let iayt =
+                        outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * y[i] * s[j]);
+                    let isyt =
+                        outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * s[i] * y[j]);
                     let h_new = &(&iayt * &h) * &isyt;
                     let mut h_up = h_new;
                     for i in 0..n {
@@ -237,7 +239,14 @@ mod tests {
     fn quadratic_2d() {
         // minimise -(x-3)²-(y+2)² → maximise at (3,-2)
         let f = |x: &[f64]| -((x[0] - 3.0).powi(2)) - (x[1] + 2.0).powi(2);
-        let r = lbfgsb_max(f, &[0.0, 0.0], &[-10.0, -10.0], &[10.0, 10.0], &[1e-5, 1e-5]).unwrap();
+        let r = lbfgsb_max(
+            f,
+            &[0.0, 0.0],
+            &[-10.0, -10.0],
+            &[10.0, 10.0],
+            &[1e-5, 1e-5],
+        )
+        .unwrap();
         assert!(r.converged, "converged=false");
         assert!(approx(r.par[0], 3.0, 1e-3), "x={}", r.par[0]);
         assert!(approx(r.par[1], -2.0, 1e-3), "y={}", r.par[1]);
@@ -266,7 +275,9 @@ mod tests {
         let lam = vec![2.0_f64, 3.0, 1.5];
         let bstar = vec![0.3_f64, -0.2, 0.5];
         let lim = (-18.0f64).exp();
-        let ll = |x: &[f64]| crate::likelihood::ll_univ(x[0], 1.0, 1000.0, lam.len(), 335272.0, &lam, &bstar, lim);
+        let ll = |x: &[f64]| {
+            crate::likelihood::ll_univ(x[0], 1.0, 1000.0, lam.len(), 335272.0, &lam, &bstar, lim)
+        };
         let r = lbfgsb_max(ll, &[0.1], &[0.0], &[1.0], &[1e-7]).unwrap();
         // gradient near zero at the max
         let g = |x: &[f64]| -ll(x);

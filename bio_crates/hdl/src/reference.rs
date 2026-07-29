@@ -166,9 +166,8 @@ pub fn ld_ref_from_plink(prefix: &Path, keep_snps: &[String]) -> Result<LdRefere
     let ldsc: Vec<f64> = (0..n)
         .map(|i| (0..n).map(|j| r[(i, j)] * r[(i, j)]).sum())
         .collect();
-    let (lam, v) = lava::decompose::sym_eigen(r.as_ref()).map_err(|e| {
-        HdlError::Reference(format!("eigendecomposition failed: {e}"))
-    })?;
+    let (lam, v) = lava::decompose::sym_eigen(r.as_ref())
+        .map_err(|e| HdlError::Reference(format!("eigendecomposition failed: {e}")))?;
 
     Ok(LdReference {
         lam,

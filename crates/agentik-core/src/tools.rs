@@ -1,8 +1,8 @@
-//! Tool framework (trait, registry, executor) and built-in lifecycle tools.
+//! Tool framework (trait, registry, executor) and built-in tools.
 //!
 //! - The *framework* modules (`function`, `registry`, `toolset`,
 //!   `executor`, `error`, `truncation`) define how tools are declared and dispatched.
-//! - [`builtins`] holds the lifecycle tool implementations (attempt_complete, abort_task).
+//! - [`builtins`] holds the lifecycle and task tool implementations.
 //! - Primitive tools (bash, read, write, edit, glob, grep, webfetch)
 //!   live in the separate `agentik-tools` crate.
 
@@ -31,9 +31,9 @@ pub use agentik_sdk::types::{
     ToolValidationError,
 };
 
-// Re-export lifecycle tools at the `tools` facade so callers can do
-// `use agentik_core::tools::{AbortTaskTool, ...}`.
+// Re-export built-in tools at the `tools` facade so callers can do
+// `use agentik_core::tools::{WaitTaskTool, ...}`.
 pub use builtins::{
-    AbortTaskInput, AbortTaskTool, TaskResultViewerTool, ViewTaskResultsInput, WaitTaskInput,
-    WaitTaskTool, lifecycle_registrations, task_registrations,
+    TaskResultViewerTool, ViewTaskResultsInput, WaitTaskInput, WaitTaskTool,
+    lifecycle_registrations, task_registrations,
 };

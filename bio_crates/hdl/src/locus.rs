@@ -128,11 +128,7 @@ fn h2_mle(
                     20.0,
                     nd * 100.0,
                 )?;
-                if alt.converged
-                    && null.converged
-                    && alt.value > best
-                    && alt.value > null.value
-                {
+                if alt.converged && null.converged && alt.value > best && alt.value > null.value {
                     best = alt.value;
                     out = (alt.par[0], alt.par[1], alt.value, null.value);
                 }
@@ -190,18 +186,16 @@ fn gcov_mle(
                 )?;
                 let null = lbfgsb_max_1d(
                     |int: f64| {
-                        ll_gcov_null(int, h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim)
+                        ll_gcov_null(
+                            int, h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim,
+                        )
                     },
                     sv2,
                     -20.0,
                     20.0,
                     nd * 100.0,
                 )?;
-                if alt.converged
-                    && null.converged
-                    && alt.value > best
-                    && alt.value > null.value
-                {
+                if alt.converged && null.converged && alt.value > best && alt.value > null.value {
                     best = alt.value;
                     out = (alt.par[0], alt.par[1], alt.value, null.value);
                 }
@@ -302,8 +296,19 @@ pub fn run_locus(
     }
 
     let (h12, int_h12, ll_alt_12, ll_null_12) = gcov_mle(
-        &bstar1_k, &bstar2_k, &lam_k, &[h11, int_h11], &[h22, int_h22], n1, n2, n0, nref, m_tot,
-        lim, sv.h12_wls[0], rho12,
+        &bstar1_k,
+        &bstar2_k,
+        &lam_k,
+        &[h11, int_h11],
+        &[h22, int_h22],
+        n1,
+        n2,
+        n0,
+        nref,
+        m_tot,
+        lim,
+        sv.h12_wls[0],
+        rho12,
     )?;
     let p_h12 = pchisq_sf(-2.0 * (ll_null_12 - ll_alt_12), 1.0);
 
@@ -319,8 +324,20 @@ pub fn run_locus(
         let hv = -denom + (2.0 * denom) * (i as f64) / ((n_grid - 1) as f64);
         h12_val[i] = hv;
         let lv = ll_gcov(
-            hv, int_h12, &[h11, int_h11], &[h22, int_h22], m_tot, n1, n2, n0, nref, &lam_k, &lam_k,
-            &bstar1_k, &bstar2_k, lim,
+            hv,
+            int_h12,
+            &[h11, int_h11],
+            &[h22, int_h22],
+            m_tot,
+            n1,
+            n2,
+            n0,
+            nref,
+            &lam_k,
+            &lam_k,
+            &bstar1_k,
+            &bstar2_k,
+            lim,
         );
         ll_vals[i] = lv;
         if lv > best_ll {
@@ -329,7 +346,11 @@ pub fn run_locus(
         }
     }
     let h12_lci = h12_val[best_idx]; // grid-argmax (R reports rg from this)
-    let rg = if denom > 0.0 { h12_lci / denom } else { f64::NAN };
+    let rg = if denom > 0.0 {
+        h12_lci / denom
+    } else {
+        f64::NAN
+    };
 
     // CI = {h12 : exp(ll - max ll) > c}
     let (mut rg_lower, mut rg_upper) = (f64::NAN, f64::NAN);
@@ -407,8 +428,16 @@ mod tests {
             DEFAULT_ALPHA,
         )
         .expect("run_locus");
-        assert!(res.h11.is_finite() && res.h11 >= 0.0 && res.h11 <= 1.0, "h11={}", res.h11);
-        assert!(res.h22.is_finite() && res.h22 >= 0.0 && res.h22 <= 1.0, "h22={}", res.h22);
+        assert!(
+            res.h11.is_finite() && res.h11 >= 0.0 && res.h11 <= 1.0,
+            "h11={}",
+            res.h11
+        );
+        assert!(
+            res.h22.is_finite() && res.h22 >= 0.0 && res.h22 <= 1.0,
+            "h22={}",
+            res.h22
+        );
         assert!(res.p_h1 >= 0.0 && res.p_h1 <= 1.0, "p_h1={}", res.p_h1);
         if res.rg.is_finite() {
             assert!(res.rg >= -1.0 && res.rg <= 1.0, "rg={}", res.rg);

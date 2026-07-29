@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, BooleanArray, Float64Array, Float32Array, Int64Array, RecordBatch, StringArray,
+    Array, BooleanArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -160,7 +160,11 @@ fn col_f64(batches: &[RecordBatch], name: &str) -> Option<Vec<f64>> {
     for b in batches {
         let col = b.column_by_name(name)?;
         for i in 0..col.len() {
-            out.push(if col.is_null(i) { f64::NAN } else { arr_f64(col.as_ref(), i) });
+            out.push(if col.is_null(i) {
+                f64::NAN
+            } else {
+                arr_f64(col.as_ref(), i)
+            });
         }
     }
     Some(out)
@@ -179,9 +183,15 @@ fn parse_sumstats(batches: &[RecordBatch]) -> Result<Vec<hdl::input::SumStatRow>
             node_type: HDL_L_KIND.into(),
             msg: "sumstats missing SNP column".into(),
         })?;
-    let a1 = col_str(batches, "A1").or_else(|| col_str(batches, "a1")).unwrap_or_default();
-    let a2 = col_str(batches, "A2").or_else(|| col_str(batches, "a2")).unwrap_or_default();
-    let n = col_f64(batches, "N").or_else(|| col_f64(batches, "n")).unwrap_or_else(|| vec![f64::NAN; snp.len()]);
+    let a1 = col_str(batches, "A1")
+        .or_else(|| col_str(batches, "a1"))
+        .unwrap_or_default();
+    let a2 = col_str(batches, "A2")
+        .or_else(|| col_str(batches, "a2"))
+        .unwrap_or_default();
+    let n = col_f64(batches, "N")
+        .or_else(|| col_f64(batches, "n"))
+        .unwrap_or_else(|| vec![f64::NAN; snp.len()]);
 
     let z = if let Some(z) = col_f64(batches, "Z").or_else(|| col_f64(batches, "STAT")) {
         z
@@ -200,14 +210,22 @@ fn parse_sumstats(batches: &[RecordBatch]) -> Result<Vec<hdl::input::SumStatRow>
         })?;
         // OR → log(OR); plain b stays. Detect OR by median(|b|) ≈ 1.
         let med = {
-            let mut s: Vec<f64> = b.iter().filter(|v| v.is_finite()).map(|v| v.abs()).collect();
+            let mut s: Vec<f64> = b
+                .iter()
+                .filter(|v| v.is_finite())
+                .map(|v| v.abs())
+                .collect();
             s.sort_by(|x, y| x.partial_cmp(y).unwrap());
             s.get(s.len() / 2).copied().unwrap_or(0.0)
         };
         b.iter()
             .zip(&se)
             .map(|(bv, sv)| {
-                let eff = if (med - 1.0).abs() < 0.1 { bv.ln() } else { *bv };
+                let eff = if (med - 1.0).abs() < 0.1 {
+                    bv.ln()
+                } else {
+                    *bv
+                };
                 if sv.is_finite() && sv.abs() > 0.0 {
                     eff / sv
                 } else {
@@ -237,12 +255,16 @@ async fn collect_input_batches(
     input: &NodeInput,
     kind: &str,
 ) -> Result<Vec<RecordBatch>, DagError> {
-    let batches: Vec<RecordBatch> = input.data.clone().collect().await.map_err(|e| {
-        DagError::NodeError {
-            node_type: kind.into(),
-            msg: format!("collect failed: {e}"),
-        }
-    })?;
+    let batches: Vec<RecordBatch> =
+        input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect failed: {e}"),
+            })?;
     if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
         return Err(DagError::NodeError {
             node_type: kind.into(),
@@ -299,10 +321,10 @@ impl DagNode for HdlLNode {
         // ---- harmonise sumstats → bhat ----
         let rows1 = parse_sumstats(&b1)?;
         let rows2 = parse_sumstats(&b2)?;
-        let (bhat1, n1) =
-            hdl::input::harmonise_gwas(&rows1, &ldref.snps, &ldref.a2_ref).map_err(|e| err(e.to_string()))?;
-        let (bhat2, n2) =
-            hdl::input::harmonise_gwas(&rows2, &ldref.snps, &ldref.a2_ref).map_err(|e| err(e.to_string()))?;
+        let (bhat1, n1) = hdl::input::harmonise_gwas(&rows1, &ldref.snps, &ldref.a2_ref)
+            .map_err(|e| err(e.to_string()))?;
+        let (bhat2, n2) = hdl::input::harmonise_gwas(&rows2, &ldref.snps, &ldref.a2_ref)
+            .map_err(|e| err(e.to_string()))?;
 
         reporter.info(format!(
             "hdl_l: region has {} reference SNPs; estimating",

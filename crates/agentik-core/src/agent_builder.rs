@@ -165,17 +165,13 @@ impl AgentBuilder {
         // Instantiate the skill runtime (if any) and its `update_todo` tool.
         let skill_runtime = self.skill.take().map(skill::instantiate);
 
-        // Internal event channel — created early so the lifecycle tools
-        // (e.g. `abort_task`) can hold a clone of the sender. tx is also
-        // handed to the external runtime, rx is consumed once by Agent::run().
+        // Internal event channel — tx is handed to the external runtime,
+        // rx is consumed once by Agent::run().
         let (internal_event_tx, internal_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Register the toolset: lifecycle (abort_task etc.), caller-supplied
-        // external tools, and background-task tools.
+        // Register the toolset: caller-supplied external tools and
+        // background-task tools.
         let mut toolset = Toolset::new(self.agent_event_tx.clone());
-        toolset.register_all(crate::tools::lifecycle_registrations(
-            internal_event_tx.clone(),
-        ))?;
         toolset.register_all(self.tools)?;
         toolset.register_all(crate::tools::task_registrations(toolset.tasks_handle()))?;
 

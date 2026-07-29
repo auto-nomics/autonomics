@@ -43,7 +43,11 @@ fn lm_wls(y: &[f64], x: &[f64], w: Option<&[f64]>) -> (f64, f64) {
     let (sxx, sxy) = match w {
         None => {
             let sxx: f64 = x.iter().map(|xi| (xi - xbar).powi(2)).sum();
-            let sxy: f64 = x.iter().zip(y).map(|(xi, yi)| (xi - xbar) * (yi - ybar)).sum();
+            let sxy: f64 = x
+                .iter()
+                .zip(y)
+                .map(|(xi, yi)| (xi - xbar) * (yi - ybar))
+                .sum();
             (sxx, sxy)
         }
         Some(w) => {
@@ -170,7 +174,12 @@ mod tests {
         let b2 = vec![0.02_f64, -0.01, 0.03, 0.01, 0.025];
         let sv = start_values(&b1, &b2, &ldsc, 1000.0, 2000.0, 0.0, 0.0);
         // h² estimates should be finite and in a sane range.
-        for v in sv.h11_wls.iter().chain(sv.h22_wls.iter()).chain(sv.h12_wls.iter()) {
+        for v in sv
+            .h11_wls
+            .iter()
+            .chain(sv.h22_wls.iter())
+            .chain(sv.h12_wls.iter())
+        {
             assert!(v.is_finite(), "non-finite start value");
         }
     }

@@ -210,7 +210,17 @@ impl NodeFactory for LdscHsqNodeFactory {
         (with z, n, rsid columns), queries the Iceberg data lake for LD score \
         panel data, joins on rsid, and runs LDSC via block-jackknife. Outputs a \
         single-row summary with h², intercept, ratio, and per-annotation \
-        coefficients."
+        coefficients.\n\n\
+        IMPORTANT — you MUST perform the following quality control on the \
+        input GWAS summary statistics BEFORE feeding them into this node:\n\
+        1. Remove palindromic SNPs (alleles that are complementary on the two \
+        strands, e.g. A/T or C/G) to avoid strand-alignment ambiguity.\n\
+        2. Remove duplicate SNPs so each rsid appears at most once.\n\
+        3. Keep only biallelic SNPs (exactly two alleles per variant).\n\
+        4. Remove SNPs on sex chromosomes (X, Y, MT) — retain autosomal SNPs \
+        only.\n\
+        5. Filter by minor allele frequency: keep only SNPs with MAF > 0.01 \
+        (1%)."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -504,14 +514,20 @@ mod tests {
     /// Per-SNP sample size used by the fixtures.
     const N_SAMP: f64 = 1000.0;
 
-    /// Synthetic LD-score panel `RecordBatch` (`rsid`, `ld_score`,
+    /// Synthetic LD-score panel `RecordBatch` (`rsid`, `ld_score`, `AF`,
     /// `locus<position>`), matching the node SQL's `l.rsid`, `l.ld_score`,
-    /// `l.locus.position`. `ld_score` strictly increases; `position` tracks it
-    /// so `ORDER BY l.locus.position` preserves LD order.
+    /// `l.locus.position`, and the M-count filter `WHERE "AF" BETWEEN 0.05 AND 0.95`.
+    /// `ld_score` strictly increases; `position` tracks it so `ORDER BY
+    /// l.locus.position` preserves LD order. `AF` alternates around 0.5 so all
+    /// rows survive the MAF filter (M_5_50 = N_SNP).
     fn ld_panel_batch(n: usize) -> RecordBatch {
         let rsids: Vec<String> = (0..n).map(|i| format!("rs{}", 1_000_000 + i)).collect();
         let ld: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
         let pos: Vec<i64> = (0..n).map(|i| i as i64).collect();
+        // AF linearly spaced in [0.1, 0.9] so every row passes the 0.05–0.95 filter.
+        let af: Vec<f64> = (0..n)
+            .map(|i| 0.1 + 0.8 * (i as f64) / ((n - 1) as f64).max(1.0))
+            .collect();
 
         let position_field = Arc::new(Field::new("position", DataType::Int64, false));
         let locus = StructArray::new(
@@ -522,6 +538,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("rsid", DataType::Utf8, false),
             Field::new("ld_score", DataType::Float64, false),
+            Field::new("AF", DataType::Float64, false),
             Field::new(
                 "locus",
                 DataType::Struct(
@@ -535,6 +552,7 @@ mod tests {
             vec![
                 Arc::new(StringArray::from(rsids)),
                 Arc::new(Float64Array::from(ld)),
+                Arc::new(Float64Array::from(af)),
                 Arc::new(locus) as Arc<dyn Array>,
             ],
         )

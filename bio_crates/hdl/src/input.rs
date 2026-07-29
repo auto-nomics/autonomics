@@ -26,7 +26,11 @@ pub struct SumStatRow {
 /// Faithful port of `HDL.L.R` lines 388-453: filter to reference SNPs, drop
 /// duplicates (keeping the first distinct SNP — R's `distinct(SNP, A1, A2)`),
 /// `bhat.raw = Z/√N`, sign-flip when `gwas.A2 != ref.A2`.
-pub fn harmonise_gwas(rows: &[SumStatRow], snps_ref: &[String], a2_ref: &[String]) -> Result<(Vec<f64>, f64)> {
+pub fn harmonise_gwas(
+    rows: &[SumStatRow],
+    snps_ref: &[String],
+    a2_ref: &[String],
+) -> Result<(Vec<f64>, f64)> {
     if snps_ref.len() != a2_ref.len() {
         return Err(HdlError::Input(
             "harmonise_gwas: snps_ref / a2_ref length mismatch".into(),
@@ -59,7 +63,11 @@ pub fn harmonise_gwas(rows: &[SumStatRow], snps_ref: &[String], a2_ref: &[String
             continue;
         }
         // allele-align: sign +1 if gwas.A2 == ref.A2 else -1
-        let sign = if r.a2.eq_ignore_ascii_case(a2r) { 1.0 } else { -1.0 };
+        let sign = if r.a2.eq_ignore_ascii_case(a2r) {
+            1.0
+        } else {
+            -1.0
+        };
         // if bhat[i] already set by an earlier row of the same SNP, R keeps the
         // first distinct; emulate by only writing when still 0 from a *match*.
         bhat[i] = sign * r.z / r.n.sqrt();
@@ -67,7 +75,9 @@ pub fn harmonise_gwas(rows: &[SumStatRow], snps_ref: &[String], a2_ref: &[String
     }
 
     let n_eff = if n_vals.is_empty() {
-        return Err(HdlError::Input("no overlapping SNPs between GWAS and reference".into()));
+        return Err(HdlError::Input(
+            "no overlapping SNPs between GWAS and reference".into(),
+        ));
     } else {
         median(&n_vals)
     };
@@ -95,12 +105,28 @@ mod tests {
         let a2 = vec!["A".into(), "C".into(), "G".into()];
         // rs1: A2 matches → +; rs2: A2 flipped → -; rs3: absent → 0
         let rows = vec![
-            SumStatRow { snp: "rs1".into(), a1: "T".into(), a2: "A".into(), n: 100.0, z: 2.0 },
-            SumStatRow { snp: "rs2".into(), a1: "G".into(), a2: "G".into(), n: 100.0, z: 3.0 },
+            SumStatRow {
+                snp: "rs1".into(),
+                a1: "T".into(),
+                a2: "A".into(),
+                n: 100.0,
+                z: 2.0,
+            },
+            SumStatRow {
+                snp: "rs2".into(),
+                a1: "G".into(),
+                a2: "G".into(),
+                n: 100.0,
+                z: 3.0,
+            },
         ];
         let (bhat, n) = harmonise_gwas(&rows, &snps, &a2).unwrap();
         assert!((bhat[0] - 2.0 / 10.0).abs() < 1e-12, "rs1 bhat={}", bhat[0]);
-        assert!((bhat[1] - (-3.0 / 10.0)).abs() < 1e-12, "rs2 bhat={}", bhat[1]);
+        assert!(
+            (bhat[1] - (-3.0 / 10.0)).abs() < 1e-12,
+            "rs2 bhat={}",
+            bhat[1]
+        );
         assert!(bhat[2].abs() < 1e-12, "rs3 bhat={}", bhat[2]);
         assert!((n - 100.0).abs() < 1e-12);
     }
@@ -110,8 +136,20 @@ mod tests {
         let snps = vec!["rs1".into()];
         let a2 = vec!["A".into()];
         let rows = vec![
-            SumStatRow { snp: "rs1".into(), a1: "T".into(), a2: "A".into(), n: 100.0, z: 2.0 },
-            SumStatRow { snp: "rs1".into(), a1: "T".into(), a2: "A".into(), n: 200.0, z: 4.0 },
+            SumStatRow {
+                snp: "rs1".into(),
+                a1: "T".into(),
+                a2: "A".into(),
+                n: 100.0,
+                z: 2.0,
+            },
+            SumStatRow {
+                snp: "rs1".into(),
+                a1: "T".into(),
+                a2: "A".into(),
+                n: 200.0,
+                z: 4.0,
+            },
         ];
         let (bhat, _) = harmonise_gwas(&rows, &snps, &a2).unwrap();
         // first distinct row kept

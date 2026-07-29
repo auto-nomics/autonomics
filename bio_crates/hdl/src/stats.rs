@@ -14,9 +14,7 @@ use statrs::distribution::{ChiSquared, ContinuousCDF};
 /// Used for the likelihood-based CI cutoff:
 /// `c = exp(-qchisq(1 - alpha, 1) / 2)` (e.g. alpha = 0.05 → 95% CI).
 pub fn qchisq(p: f64, df: u32) -> f64 {
-    ChiSquared::new(df as f64)
-        .expect("valid df")
-        .inverse_cdf(p)
+    ChiSquared::new(df as f64).expect("valid df").inverse_cdf(p)
 }
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ impl ToolFunction for TodoUpdateTool {
 mod tests {
     use super::*;
     use crate::skill::definition::{Skill, SkillStep};
-    use crate::tools::{Toolset, lifecycle_registrations};
+    use crate::tools::Toolset;
     use agentik_sdk::types::tools::ToolUse;
     use serde_json::json;
 
@@ -169,10 +169,6 @@ mod tests {
         let mut toolset = Toolset::new(Some(
             tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
         ));
-        let tx = tokio::sync::mpsc::unbounded_channel().0;
-        for reg in lifecycle_registrations(tx) {
-            toolset.register(reg).unwrap();
-        }
         toolset.register(todo_reg).unwrap();
 
         // allowed_tools whitelist must always permit update_todo.

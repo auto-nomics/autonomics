@@ -7,10 +7,9 @@
 
 use super::definition::{Skill, SkillStep};
 
-/// Public name of the lifecycle + skill tools that are always allowed
+/// Public name of the skill tools that are always allowed
 /// regardless of the current step's `allowed_tools`.
 pub const UPDATE_TODO_TOOL: &str = "update_todo";
-const ABORT_TASK_TOOL: &str = "abort_task";
 
 /// Completion status of a single todo item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,13 +124,13 @@ impl SkillRuntime {
     }
 
     /// Tools the agent may call right now: the current step's declared
-    /// tools, plus the always-available lifecycle and todo tools.
+    /// tools, plus the always-available todo tool.
     pub fn allowed_tools_for_current_step(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .current_step()
             .map(|s| s.allowed_tools.clone())
             .unwrap_or_default();
-        for always in [UPDATE_TODO_TOOL, ABORT_TASK_TOOL] {
+        for always in [UPDATE_TODO_TOOL] {
             if !names.iter().any(|n| n == always) {
                 names.push(always.to_string());
             }
@@ -275,12 +274,11 @@ mod tests {
     }
 
     #[test]
-    fn allowed_tools_always_include_lifecycle_and_todo() {
+    fn allowed_tools_always_include_todo() {
         let rt = SkillRuntime::new(two_step_skill());
         let allowed = rt.allowed_tools_for_current_step();
         assert!(allowed.contains(&"read".to_string()));
         assert!(allowed.contains(&UPDATE_TODO_TOOL.to_string()));
-        assert!(allowed.contains(&"abort_task".to_string()));
         // write tool not yet allowed (it belongs to step 2)
         assert!(!allowed.contains(&"write".to_string()));
     }

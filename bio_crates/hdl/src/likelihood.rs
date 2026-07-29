@@ -26,11 +26,7 @@
 /// Floor `x` at `lim` (R `ifelse(x < lim, lim, x)`).
 #[inline]
 fn floor_at(x: f64, lim: f64) -> f64 {
-    if x < lim {
-        lim
-    } else {
-        x
-    }
+    if x < lim { lim } else { x }
 }
 
 /// Univariate HDL log-likelihood of one trait.
@@ -38,12 +34,24 @@ fn floor_at(x: f64, lim: f64) -> f64 {
 /// `param = [h2, int]`, `lam`/`bstar` are the retained eigen-components.
 /// Faithful port of `HDL.L.R::llfun` (lines 73-79).
 #[allow(clippy::too_many_arguments)]
-pub fn ll_univ(h2: f64, int: f64, n: f64, m: usize, nref: f64, lam: &[f64], bstar: &[f64], lim: f64) -> f64 {
+pub fn ll_univ(
+    h2: f64,
+    int: f64,
+    n: f64,
+    m: usize,
+    nref: f64,
+    lam: &[f64],
+    bstar: &[f64],
+    lim: f64,
+) -> f64 {
     let mf = m as f64;
     let mut sum_log = 0.0;
     let mut sum_quad = 0.0;
     for k in 0..lam.len() {
-        let lamh2 = floor_at(h2 / mf * lam[k] * lam[k] - h2 * lam[k] / nref + int * lam[k] / n, lim);
+        let lamh2 = floor_at(
+            h2 / mf * lam[k] * lam[k] - h2 * lam[k] / nref + int * lam[k] / n,
+            lim,
+        );
         sum_log += lamh2.ln();
         sum_quad += bstar[k] * bstar[k] / lamh2;
     }
@@ -55,7 +63,15 @@ pub fn ll_univ(h2: f64, int: f64, n: f64, m: usize, nref: f64, lam: &[f64], bsta
 /// Faithful port of `HDL.L.R::llfun0` (lines 82-87). Only `int` is free;
 /// `m`/`nref` are kept in the signature to mirror R's `llfun0(int, N, M, Nref, …)`.
 #[allow(unused_variables)]
-pub fn ll_univ_null(int: f64, n: f64, m: usize, nref: f64, lam: &[f64], bstar: &[f64], lim: f64) -> f64 {
+pub fn ll_univ_null(
+    int: f64,
+    n: f64,
+    m: usize,
+    nref: f64,
+    lam: &[f64],
+    bstar: &[f64],
+    lim: f64,
+) -> f64 {
     // h2 = 0 ⇒ lamh2 = int * lam / n
     let mut sum_log = 0.0;
     let mut sum_quad = 0.0;
@@ -190,8 +206,12 @@ mod tests {
         let b1 = [0.4_f64, -0.2];
         let b2 = [0.3_f64, 0.1];
         let lim = (-18.0f64).exp();
-        let a = ll_gcov(0.0, 0.7, &h11, &h22, 2, 1000.0, 2000.0, 0.0, 335272.0, &lam, &lam, &b1, &b2, lim);
-        let b = ll_gcov_null(0.7, &h11, &h22, 2, 1000.0, 2000.0, 0.0, 335272.0, &lam, &lam, &b1, &b2, lim);
+        let a = ll_gcov(
+            0.0, 0.7, &h11, &h22, 2, 1000.0, 2000.0, 0.0, 335272.0, &lam, &lam, &b1, &b2, lim,
+        );
+        let b = ll_gcov_null(
+            0.7, &h11, &h22, 2, 1000.0, 2000.0, 0.0, 335272.0, &lam, &lam, &b1, &b2, lim,
+        );
         assert!(approx(a, b), "a={a} b={b}");
     }
 

@@ -54,7 +54,11 @@ fn read_matrix(path: &Path) -> Mat<f64> {
         .unwrap()
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| l.split_whitespace().map(|x| x.parse::<f64>().unwrap()).collect())
+        .map(|l| {
+            l.split_whitespace()
+                .map(|x| x.parse::<f64>().unwrap())
+                .collect()
+        })
         .collect();
     let n = rows.len();
     let m = rows[0].len();
@@ -123,22 +127,22 @@ fn estimator_from_r_arrays() {
         res.rg, meta["rg"], res.rg_lower, res.rg_upper, meta["rg.lower"], meta["rg.upper"]
     );
     assert!(close(res.rg, meta["rg"], 6e-4, 1e-4), "rg mismatch");
-    assert!(close(res.rg_lower, meta["rg.lower"], 5e-3, 1e-3), "rg.lower mismatch");
-    assert!(close(res.rg_upper, meta["rg.upper"], 5e-3, 1e-3), "rg.upper mismatch");
+    assert!(
+        close(res.rg_lower, meta["rg.lower"], 5e-3, 1e-3),
+        "rg.lower mismatch"
+    );
+    assert!(
+        close(res.rg_upper, meta["rg.upper"], 5e-3, 1e-3),
+        "rg.upper mismatch"
+    );
 
     // ---- LRT P values (relative tolerance for the tiny tails) ----
     println!(
         "p_h1: rust={:.4e} R={:.4e} | p_h2: rust={:.4e} R={:.4e} | p_h12: rust={:.4e} R={:.4e}",
         res.p_h1, meta["p.h1"], res.p_h2, meta["p.h2"], res.p_h12, meta["p.h12"]
     );
-    assert!(
-        close(res.p_h1, meta["p.h1"], 1e-3, 1e-300),
-        "p_h1 mismatch"
-    );
-    assert!(
-        close(res.p_h2, meta["p.h2"], 1e-3, 1e-300),
-        "p_h2 mismatch"
-    );
+    assert!(close(res.p_h1, meta["p.h1"], 1e-3, 1e-300), "p_h1 mismatch");
+    assert!(close(res.p_h2, meta["p.h2"], 1e-3, 1e-300), "p_h2 mismatch");
     assert!(
         close(res.p_h12, meta["p.h12"], 2e-2, 1e-12),
         "p_h12 mismatch"
@@ -146,8 +150,7 @@ fn estimator_from_r_arrays() {
 
     // ---- eigen-cut retained component count ----
     assert_eq!(
-        res.n_retained,
-        meta["n.retained"] as usize,
+        res.n_retained, meta["n.retained"] as usize,
         "eigen-cut retained count mismatch"
     );
     assert!(res.converged, "Rust reported non-convergence");
@@ -165,8 +168,18 @@ fn defaults_match_explicit() {
     let meta = read_meta(&gold("result.tsv"));
 
     let explicit = locus::run_locus(
-        &bhat1, &bhat2, &lam, v.as_ref(), &ldsc, meta["N1"], meta["N2"], meta["N0"],
-        DEFAULT_NREF, DEFAULT_EIGEN_CUT, DEFAULT_LIM, DEFAULT_ALPHA,
+        &bhat1,
+        &bhat2,
+        &lam,
+        v.as_ref(),
+        &ldsc,
+        meta["N1"],
+        meta["N2"],
+        meta["N0"],
+        DEFAULT_NREF,
+        DEFAULT_EIGEN_CUT,
+        DEFAULT_LIM,
+        DEFAULT_ALPHA,
     )
     .unwrap();
     assert!(close(explicit.h11, meta["h11"], 1e-4, 1e-6));
@@ -189,8 +202,7 @@ fn defaults_match_explicit() {
 /// Path to the demo PLINK prefix inside the cloned HDL reference repo.
 fn demo_prefix() -> PathBuf {
     // CARGO_MANIFEST_DIR = bio_crates/hdl → repo root is two levels up.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../reference/HDL/build_ld_ref/demo/test")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../reference/HDL/build_ld_ref/demo/test")
 }
 
 fn demo_available() -> bool {
@@ -230,8 +242,8 @@ fn reference_from_plink() {
         .map(|l| l.trim().to_string())
         .collect();
 
-    let ldref = hdl::reference::ld_ref_from_plink(&demo_prefix(), &snps)
-        .expect("ld_ref_from_plink");
+    let ldref =
+        hdl::reference::ld_ref_from_plink(&demo_prefix(), &snps).expect("ld_ref_from_plink");
 
     // eigenvalues should match R to high precision.
     let lam_r = read_col(&gold("lam.tsv"));
@@ -242,7 +254,10 @@ fn reference_from_plink() {
     }
     println!("reference_from_plink: max |lam_rust - lam_R| = {max_lam_err:.3e}");
     // faer vs R eigen on the same symmetric matrix → very close.
-    assert!(max_lam_err < 1e-6, "eigenvalue mismatch too large: {max_lam_err}");
+    assert!(
+        max_lam_err < 1e-6,
+        "eigenvalue mismatch too large: {max_lam_err}"
+    );
 
     // reconstructed R must match (sign/permutation invariant).
     let v_r = read_matrix(&gold("V.tsv"));
@@ -267,8 +282,8 @@ fn full_pipeline() {
         .map(|l| l.trim().to_string())
         .collect();
 
-    let ldref = hdl::reference::ld_ref_from_plink(&demo_prefix(), &snps)
-        .expect("ld_ref_from_plink");
+    let ldref =
+        hdl::reference::ld_ref_from_plink(&demo_prefix(), &snps).expect("ld_ref_from_plink");
     let bhat1 = read_col(&gold("bhat1.tsv"));
     let bhat2 = read_col(&gold("bhat2.tsv"));
     let meta = read_meta(&gold("result.tsv"));

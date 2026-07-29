@@ -36,9 +36,8 @@ pub struct SkillStep {
     /// What the agent must accomplish in this phase. Injected into the
     /// system prompt as the step's "Goal".
     pub goal: String,
-    /// Tools the agent is allowed to call during this step. The lifecycle
-    /// tool (`abort_task`) and the skill's own
-    /// `update_todo` tool are always available in addition to these.
+    /// Tools the agent is allowed to call during this step. The skill's own
+    /// `update_todo` tool is always available in addition to these.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     /// Sub-tasks for this step. The workflow auto-advances to the next

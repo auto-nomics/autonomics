@@ -50,27 +50,13 @@ impl ToolProviderRegistry {
         names
     }
 
-    /// Build a `Toolset` containing only the named tools (plus optionally
-    /// the built-in lifecycle tools).
+    /// Build a `Toolset` containing only the named tools.
     ///
-    /// `event_tx` is handed to the lifecycle tools (e.g. `abort_task`) so
-    /// they can signal the agent. Tools not found in the registry are
-    /// silently skipped (with a warning log).
-    pub fn build_toolset(
-        &self,
-        names: &[String],
-        include_lifecycle: bool,
-        event_tx: tokio::sync::mpsc::UnboundedSender<crate::agent::InternalEvent>,
-    ) -> Toolset {
+    /// Tools not found in the registry are silently skipped (with a warning log).
+    pub fn build_toolset(&self, names: &[String]) -> Toolset {
         let mut toolset = Toolset::new(Some(
             tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
         ));
-
-        if include_lifecycle {
-            for reg in super::lifecycle_registrations(event_tx.clone()) {
-                let _ = toolset.register(reg);
-            }
-        }
 
         for name in names {
             match self.tools.get(name) {
@@ -161,36 +147,21 @@ mod tests {
         assert!(names.contains(&"dummy_tool".to_string()));
     }
 
-    fn dummy_tx() -> tokio::sync::mpsc::UnboundedSender<crate::agent::InternalEvent> {
-        tokio::sync::mpsc::unbounded_channel().0
-    }
-
     #[tokio::test]
     async fn test_build_toolset() {
         let mut reg = ToolProviderRegistry::new();
         reg.register(make_reg());
 
-        let toolset = reg.build_toolset(&["dummy_tool".to_string()], false, dummy_tx());
+        let toolset = reg.build_toolset(&["dummy_tool".to_string()]);
         let tools = toolset.tools();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "dummy_tool");
     }
 
     #[tokio::test]
-    async fn test_build_toolset_with_lifecycle() {
-        let mut reg = ToolProviderRegistry::new();
-        reg.register(make_reg());
-
-        let toolset = reg.build_toolset(&["dummy_tool".to_string()], true, dummy_tx());
-        let tools = toolset.tools();
-        // dummy_tool + abort_task
-        assert_eq!(tools.len(), 2);
-    }
-
-    #[tokio::test]
     async fn test_build_toolset_skips_missing() {
         let reg = ToolProviderRegistry::new();
-        let toolset = reg.build_toolset(&["nonexistent".to_string()], false, dummy_tx());
+        let toolset = reg.build_toolset(&["nonexistent".to_string()]);
         assert_eq!(toolset.tools().len(), 0);
     }
 }
