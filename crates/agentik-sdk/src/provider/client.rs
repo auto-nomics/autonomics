@@ -66,6 +66,18 @@ fn message_to_content(msg: Message) -> MessageContent {
     MessageContent::Blocks(
         msg.content
             .into_iter()
+            // Drop thinking blocks with empty signatures — some providers
+            // (ZAI, MiniMax) don't support signed thinking and choke on
+            // the empty value, returning empty responses or errors.
+            .filter(|block| {
+                !matches!(
+                    block,
+                    ContentBlock::Thinking {
+                        signature,
+                        ..
+                    } if signature.is_empty()
+                )
+            })
             .map(content_block_to_param)
             .collect(),
     )

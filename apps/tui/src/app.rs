@@ -17,7 +17,7 @@ use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
-use crate::state::{self, AgentStatus, AppState, ConfigMode, InputMode, MainTabState};
+use crate::state::{self, AgentStatus, AppState, InputMode, MainTabState};
 use crate::widgets::agent_tab_widget::AgentTabWidget;
 use runtime::AgentRuntime;
 
@@ -56,7 +56,7 @@ fn set_panic_hook() {
 pub struct App {
     state: AppState,
     tab_state: TabNavState,
-    agent_runtime: AgentRuntime,
+    agent_runtime: Option<AgentRuntime>,
     /// Kept alive to drive the agent's background event loop task.
     _runtime: Option<tokio::runtime::Runtime>,
     conn: Connection,
@@ -82,14 +82,22 @@ impl App {
 
         Self::init_database(&conn).expect("failed to initialize database schema");
 
-        let model = Self::build_model(&conn).expect("failed to build model");
-
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let agent_runtime =
-            AgentRuntime::new(&runtime, model).expect("failed to create agent runtime");
+
+        // Try to build a Model from DB; if none configured yet, start without an agent.
+        let agent_runtime = Self::build_model(&conn)
+            .and_then(|model| {
+                AgentRuntime::new(&runtime, model)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            })
+            .ok();
+
+        if agent_runtime.is_none() {
+            tracing::info!("no model configured — starting without agent runtime");
+        }
 
         let mut state = AppState::default();
-        crate::config_db::reload_config(&mut state.config_tab_state, &conn);
+        Self::load_model_config(&conn, &mut state.model_config_state);
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -106,74 +114,128 @@ impl App {
         }
     }
 
-    /// Build a single `Model` from the database: pick the first model row,
-    /// join it with its referenced provider, and construct the `Model`.
+    /// Build a `Model` from the DB settings + built-in catalog.
+    ///
+    /// Reads `active_model` from the `settings` table (format:
+    /// `"provider_name:model_name"`), looks up the model in the SDK registry,
+    /// and joins it with provider credentials from the `providers` table.
     fn build_model(conn: &Connection) -> Result<Model, Box<dyn std::error::Error>> {
-        // Load all providers into a lookup map keyed by integer id.
-        let mut stmt = conn.prepare(
-            "SELECT id, name, base_url, api_key, auth_method, provider_type FROM providers",
-        )?;
-        let providers: Vec<ProviderConfig> = stmt
-            .query_map([], |row| {
-                let id: i64 = row.get(0)?;
-                let auth_method: String = row.get(4)?;
-                let auth: AuthMethod = auth_method.try_into().map_err(
-                    |e: agentik_sdk::types::errors::AnthropicError| {
-                        rusqlite::Error::ToSqlConversionFailure(e.into())
-                    },
-                )?;
-                let provider_type: String = row.get(5)?;
-                Ok(ProviderConfig {
-                    id: Uuid::from_u128(id as u128),
-                    name: row.get(1)?,
-                    base_url: row.get(2)?,
-                    api_key: row.get(3)?,
-                    provider_type: ProviderType::from(provider_type),
-                    auth_method: auth,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        use agentik_sdk::provider::registry;
 
-        // Pick the first model row.
-        let mut stmt = conn.prepare(
-            "SELECT model_name, provider_id, context_length, max_output_tokens,
-                    vision_ability, supports_function_calling, supports_streaming,
-                    supports_thinking, input_token_price, output_token_price
-             FROM models ORDER BY id LIMIT 1",
-        )?;
-        let model_info = stmt
-            .query_row([], |row| {
-                let provider_id: i64 = row.get(1)?;
-                Ok(ModelInfo {
-                    model_name: row.get(0)?,
-                    provider_id: Uuid::from_u128(provider_id as u128),
-                    context_length: row.get::<_, i64>(2)? as u64,
-                    max_output_tokens: row.get::<_, i64>(3)? as u64,
-                    vision_ability: row.get::<_, i32>(4)? != 0,
-                    supports_function_calling: row.get::<_, i32>(5)? != 0,
-                    supports_streaming: row.get::<_, i32>(6)? != 0,
-                    supports_thinking: row.get::<_, i32>(7)? != 0,
-                    input_token_price: row.get(8)?,
-                    output_token_price: row.get(9)?,
-                })
-            })
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        // Read the active model setting.
+        let active: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'active_model'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
 
-        // Find the matching provider.
-        let provider = providers
-            .iter()
-            .find(|p| p.id == model_info.provider_id)
+        let Some(active) = active else {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no active_model in settings",
+            )));
+        };
+
+        // Parse "provider_name:model_name"
+        let (provider_name, model_name) = active
+            .split_once(':')
             .ok_or_else(|| {
                 Box::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!(
-                        "model '{}' references unknown provider_id {}",
-                        model_info.model_name, model_info.provider_id
-                    ),
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid active_model format: {active}"),
                 )) as Box<dyn std::error::Error>
             })?;
 
-        Model::new(model_info, provider).map_err(Into::into)
+        // Look up provider credentials from DB (only api_key matters —
+        // base_url always comes from the registry so code updates take
+        // effect without needing to re-write the DB).
+        let api_key: String = conn
+            .query_row(
+                "SELECT api_key FROM providers WHERE name = ?1",
+                [provider_name],
+                |row| row.get(0),
+            )
+            .map_err(|_| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("provider '{provider_name}' not configured in DB"),
+                )) as Box<dyn std::error::Error>
+            })?;
+
+        if api_key.is_empty() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("provider '{provider_name}' has empty api_key"),
+            )));
+        }
+
+        // Look up model info + base_url from the built-in catalog.
+        let provider_type = ProviderType::from(provider_name);
+        let base_url = registry::default_base_url(&provider_type)
+            .unwrap_or("")
+            .to_string();
+        let preset_models = registry::preset_models(&provider_type).ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no preset models for provider '{provider_name}'"),
+            )) as Box<dyn std::error::Error>
+        })?;
+
+        let mut model_info = preset_models
+            .into_iter()
+            .find(|m| m.model_name == model_name)
+            .ok_or_else(|| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("model '{model_name}' not found in {provider_name} catalog"),
+                )) as Box<dyn std::error::Error>
+            })?;
+
+        // Build ProviderConfig: api_key from DB, base_url from registry.
+        let provider_config = ProviderConfig {
+            id: Uuid::nil(),
+            name: provider_name.to_string(),
+            provider_type,
+            base_url,
+            api_key,
+            auth_method: AuthMethod::Anthropic,
+        };
+        model_info.provider_id = provider_config.id;
+
+        Model::new(model_info, &provider_config).map_err(Into::into)
+    }
+
+    /// Load the built-in provider catalogue, augmented with DB credentials,
+    /// into [`ModelConfigState`] for the model config widget to render.
+    fn load_model_config(
+        conn: &Connection,
+        state: &mut crate::widgets::model_config_widget::ModelConfigState,
+    ) {
+        use crate::config_db::ProviderRow;
+
+        // Read configured providers from DB.
+        let providers = ProviderRow::all(conn).unwrap_or_default();
+        let db_tuples: Vec<(String, String, String)> = providers
+            .into_iter()
+            .map(|p| (p.provider_type, p.api_key, p.base_url))
+            .collect();
+
+        // Build catalogue from SDK registry + DB credentials.
+        *state = crate::widgets::model_config_widget::build_catalog(&db_tuples);
+
+        // Load active model name from settings.
+        if let Ok(value) = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'active_model'",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            // value format: "provider_name:model_name"
+            if let Some((_, model_name)) = value.split_once(':') {
+                state.active_model_name = Some(model_name.to_string());
+            }
+        }
     }
 
     fn init_database(conn: &Connection) -> rusqlite::Result<()> {
@@ -207,6 +269,14 @@ impl App {
             (),
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key             TEXT PRIMARY KEY,
+                value           TEXT NOT NULL
+            )",
+            (),
+        )?;
+
         Ok(())
     }
 
@@ -231,7 +301,9 @@ impl App {
 
         // Ensure the agent and engine tasks are torn down even if the main
         // loop exited without a cooperative shutdown (e.g. force-quit).
-        self.agent_runtime.shutdown();
+        if let Some(rt) = &mut self.agent_runtime {
+            rt.shutdown();
+        }
 
         // Restore terminal on exit (whether normal or error).
         let _ = restore_terminal();
@@ -290,8 +362,10 @@ impl App {
                     }
                 }
 
-                // ── Agent streaming events ──
-                maybe_agent = self.agent_runtime.recv_event() => {
+                // ── Agent streaming events (only when runtime exists) ──
+                maybe_agent = async {
+                    self.agent_runtime.as_mut()?.recv_event().await
+                }, if self.agent_runtime.is_some() => {
                     if let Some(event) = maybe_agent {
                         state::apply_event(&mut self.state.agent_tab_state, event);
                     } else {
@@ -333,9 +407,9 @@ impl App {
                 self.should_quit = true;
             }
             crate::app_event::AppEvent::ConfigReload => {
-                crate::config_db::reload_config(
-                    &mut self.state.config_tab_state,
+                Self::load_model_config(
                     &self.conn,
+                    &mut self.state.model_config_state,
                 );
             }
         }
@@ -358,21 +432,13 @@ impl App {
                         ts.input.insert_str(s);
                     }
                 }
-                // Insert paste into the focused field of config tab forms (Provider / Model).
+                // Insert paste into the api_key textarea when in Config mode.
                 if matches!(self.state.main_tab_state, MainTabState::ConfigTab) {
-                    let cs = &mut self.state.config_tab_state;
-                    match &mut cs.mode {
-                        ConfigMode::EditProvider(form) => {
-                            let f = form.focus;
-                            form.fields_mut()[f].insert_str(s);
-                        }
-                        ConfigMode::EditModel(form) => {
-                            let f = form.focus;
-                            if f < state::ModelForm::TEXT_FIELD_COUNT {
-                                form.text_fields_mut()[f].insert_str(s);
-                            }
-                        }
-                        ConfigMode::Browsing => {}
+                    use crate::widgets::model_config_widget::ProviderPanelState;
+                    if let ProviderPanelState::Config { textarea, .. } =
+                        &mut self.state.model_config_state.provider_panel_state
+                    {
+                        textarea.insert_str(s);
                     }
                 }
                 0
@@ -440,13 +506,17 @@ impl App {
             if let Some(ts) = self.cancel_requested_at {
                 if ts.elapsed() < FORCE_QUIT_WINDOW {
                     tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                    self.agent_runtime.shutdown();
+                    if let Some(rt) = &mut self.agent_runtime {
+                        rt.shutdown();
+                    }
                     self.should_quit = true;
                     return;
                 }
             }
             // First Ctrl+C: cooperative cancel.
-            self.agent_runtime.cancel();
+            if let Some(rt) = &mut self.agent_runtime {
+                rt.cancel();
+            }
             self.cancel_requested_at = Some(Instant::now());
             return;
         }
@@ -593,7 +663,9 @@ impl App {
                     );
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                     ts.push_user_message(text.clone());
-                    self.agent_runtime.send_message(text);
+                    if let Some(rt) = &self.agent_runtime {
+                        rt.send_message(text);
+                    }
                     ts.scroll_to_bottom();
                 }
                 ts.input_mode = InputMode::Browse;
@@ -715,10 +787,12 @@ impl App {
                 }
             }
             MainTabState::ConfigTab => {
-                crate::widgets::config_widget::render_config(
-                    &self.state.config_tab_state,
+                use ratatui::widgets::StatefulWidgetRef;
+                let widget = crate::widgets::model_config_widget::ModelConfigWidget;
+                widget.render_ref(
                     areas[1],
                     frame.buffer_mut(),
+                    &mut self.state.model_config_state,
                 );
             }
         }
@@ -726,40 +800,106 @@ impl App {
 
     // ── Config tab ──────────────────────────────────────
 
-    /// Config tab key handling. Esc/Enter-in-form/'d'-delete need database
-    /// access, so they are handled here; everything else is delegated to the
-    /// widget's key handler.
+    /// Config tab key handling.
+    ///
+    /// Widget-internal keys are delegated to [`ModelConfigState::handle_key`],
+    /// which returns a [`ConfigCommand`] for operations requiring DB access.
+    /// Unrecognized keys fall through to App-level handlers (e.g. `r` reload).
     fn handle_config_key(&mut self, key: &KeyEvent) {
-        let code = key.code;
-        let cs = &mut self.state.config_tab_state;
+        use crate::widgets::model_config_widget::ConfigCommand;
 
-        // Esc closes any open form.
-        if code == KeyCode::Esc && !matches!(cs.mode, state::ConfigMode::Browsing) {
-            cs.mode = state::ConfigMode::Browsing;
-            cs.message.clear();
-            return;
-        }
-
-        // Enter inside a form validates and saves.
-        if code == KeyCode::Enter {
-            if matches!(cs.mode, state::ConfigMode::EditProvider(_)) {
-                cs.message = crate::config_db::save_provider(cs, &self.conn).unwrap_or_else(|e| e);
-                return;
+        let cmd = self.state.model_config_state.handle_key(*key);
+        match cmd {
+            ConfigCommand::SaveProvider { provider_name, api_key } => {
+                self.save_provider_config(&provider_name, &api_key);
             }
-            if matches!(cs.mode, state::ConfigMode::EditModel(_)) {
-                cs.message = crate::config_db::save_model(cs, &self.conn).unwrap_or_else(|e| e);
-                return;
+            ConfigCommand::SelectModel { provider_name, model_name } => {
+                self.activate_model(&provider_name, &model_name);
+            }
+            ConfigCommand::None => {
+                // Key not consumed by widget — try App-level handlers.
+                match key.code {
+                    KeyCode::Char('r') => {
+                        Self::load_model_config(
+                            &self.conn,
+                            &mut self.state.model_config_state,
+                        );
+                    }
+                    _ => {}
+                }
             }
         }
+    }
 
-        // 'd' in browsing deletes the selected row.
-        if code == KeyCode::Char('d') && matches!(cs.mode, state::ConfigMode::Browsing) {
-            cs.message = crate::config_db::delete_selected(cs, &self.conn);
-            return;
+    /// Persist the active model selection to the `settings` table.
+    ///
+    /// The agent runtime cannot be rebuilt at runtime (Tokio disallows nested
+    /// `block_on`), so we save the selection and shut down the current runtime.
+    /// The next app startup will load the new model automatically.
+    fn activate_model(&mut self, provider_name: &str, model_name: &str) {
+        let value = format!("{provider_name}:{model_name}");
+
+        // Persist to settings table.
+        let _ = self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('active_model', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = ?1",
+            [&value],
+        );
+
+        // Shut down the current runtime — it's bound to the old model.
+        if let Some(rt) = &mut self.agent_runtime {
+            rt.shutdown();
         }
+        self.agent_runtime = None;
 
-        // Everything else (navigation, opening forms, typing) goes to the widget.
-        crate::widgets::config_widget::handle_config_key(&mut self.state.config_tab_state, *key);
+        tracing::info!("model '{value}' saved — restart to apply");
+    }
+
+    /// Insert or update a provider's api_key in the database.
+    fn save_provider_config(&self, provider_name: &str, api_key: &str) {
+        // Look up the built-in provider to get its type and default base_url.
+        let provider = self
+            .state
+            .model_config_state
+            .providers
+            .iter()
+            .find(|p| p.name == provider_name);
+
+        let Some(provider) = provider else {
+            tracing::error!("provider not found in catalog: {provider_name}");
+            return;
+        };
+
+        let provider_type = provider.provider_type.as_str().to_string();
+        let base_url = provider.base_url.clone();
+
+        // Check if a row for this provider name already exists.
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM providers WHERE name = ?1",
+                [provider_name],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let result = if let Some(id) = existing {
+            self.conn.execute(
+                "UPDATE providers SET api_key = ?1, base_url = ?2 WHERE id = ?3",
+                rusqlite::params![api_key, &base_url, id],
+            )
+        } else {
+            self.conn.execute(
+                "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+                 VALUES (?1, ?2, ?3, ?4, 'Anthropic')",
+                rusqlite::params![provider_name, &provider_type, &base_url, api_key],
+            )
+        };
+
+        match &result {
+            Ok(_) => tracing::info!("saved provider config: {provider_name}"),
+            Err(e) => tracing::error!("failed to save provider config: {e}"),
+        }
     }
 }
 

@@ -39,7 +39,11 @@ pub enum ContentBlock {
     Text { text: String },
 
     #[serde(rename = "thinking")]
-    Thinking { thinking: String, signature: String },
+    Thinking {
+        thinking: String,
+        #[serde(default)]
+        signature: String,
+    },
 
     #[serde(rename = "image")]
     Image { source: ImageSource },
@@ -124,7 +128,11 @@ pub enum ContentBlockParam {
     Text { text: String },
 
     #[serde(rename = "thinking")]
-    Thinking { thinking: String, signature: String },
+    Thinking {
+        thinking: String,
+        #[serde(default)]
+        signature: String,
+    },
 
     #[serde(rename = "image")]
     Image { source: ImageSource },

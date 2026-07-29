@@ -11,6 +11,7 @@ use agentik_types::errors::AnthropicError;
 use agentik_types::messages::Message;
 use agentik_types::tools::ToolDefinition;
 
+#[derive(Clone)]
 pub struct Model {
     pub model_info: ModelInfo,
     client: Arc<dyn ApiClient>,

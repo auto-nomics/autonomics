@@ -88,7 +88,15 @@ impl HttpStreamClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(AnthropicError::from_status(status.as_u16(), text));
+            // Include the URL and status code in the error message so the user
+            // can diagnose routing/config issues even when the response body is
+            // empty (e.g. bare 404 from a gateway).
+            let message = if text.trim().is_empty() {
+                format!("[HTTP {}] (empty response body)", status.as_u16())
+            } else {
+                text
+            };
+            return Err(AnthropicError::from_status(status.as_u16(), message));
         }
 
         // Convert the response into a byte stream

@@ -4,19 +4,23 @@ use crate::model::model_info::ModelInfoBuilder;
 use crate::provider::ProviderPreset;
 
 // ─── Model IDs ──────────────────────────────────────────────────────────────
-// Flagship series
+// Latest flagship
+pub const MODEL_GLM_5_2: &str = "glm-5.2";
 pub const MODEL_GLM_5_1: &str = "glm-5.1";
 pub const MODEL_GLM_5: &str = "glm-5";
 pub const MODEL_GLM_5_TURBO: &str = "glm-5-turbo";
-// 4.x series
+// Multimodal coding
+pub const MODEL_GLM_5V_TURBO: &str = "glm-5v-turbo";
+// 4.x flagship series
 pub const MODEL_GLM_4_7: &str = "glm-4.7";
 pub const MODEL_GLM_4_6: &str = "glm-4.6";
 pub const MODEL_GLM_4_5: &str = "glm-4.5";
 pub const MODEL_GLM_4_5_AIR: &str = "glm-4.5-air";
-// Flash / lightweight
+// Flash / free
+pub const MODEL_GLM_4_7_FLASHX: &str = "glm-4.7-flashx";
 pub const MODEL_GLM_4_7_FLASH: &str = "glm-4.7-flash";
 pub const MODEL_GLM_4_FLASH: &str = "glm-4-flash";
-// Vision-capable
+// Vision series
 pub const MODEL_GLM_4_1V_THINKING_FLASH: &str = "glm-4.1v-thinking-flash";
 pub const MODEL_GLM_4_6V_FLASH: &str = "glm-4.6v-flash";
 pub const MODEL_GLM_4V_FLASH: &str = "glm-4v-flash";
@@ -30,17 +34,18 @@ pub const MODEL_GLM_4V_FLASH: &str = "glm-4v-flash";
 pub enum ZaiEndpoint {
     /// General Open API — `https://open.bigmodel.cn/api/paas/v4`
     Api,
-    /// GLM coding token-plan — `https://open.bigmodel.cn/api/coding/paas/v4`
-    /// (coding token-plan) and is only valid for coding scenarios.
+    /// GLM coding token-plan (Anthropic-compatible endpoint).
     #[default]
     TokenPlan,
 }
 
 impl ZaiEndpoint {
+    /// The SDK appends `/v1/messages` to the base URL, so these must be the
+    /// Anthropic-compatible root (not the OpenAI-compatible `/api/paas/v4`).
     pub fn base_url(self) -> &'static str {
         match self {
-            ZaiEndpoint::Api => "https://open.bigmodel.cn/api/paas/v4",
-            ZaiEndpoint::TokenPlan => "https://open.bigmodel.cn/api/coding/paas/v4",
+            ZaiEndpoint::Api => "https://open.bigmodel.cn/api/anthropic",
+            ZaiEndpoint::TokenPlan => "https://open.bigmodel.cn/api/anthropic",
         }
     }
 }
@@ -55,7 +60,6 @@ impl ProviderPreset for ZaiProvider {
         Self::model_definitions()
     }
     fn default_base_url() -> &'static str {
-        // Default to the token-plan endpoint (coding scenarios).
         ZaiEndpoint::default().base_url()
     }
 }
@@ -68,70 +72,98 @@ impl ZaiProvider {
 
     fn model_definitions() -> Vec<ModelInfo> {
         vec![
-            // ── Flagship series (200K context, 32K output) ───────────────
-            ModelInfoBuilder::new(MODEL_GLM_5_1)
-                .context(200_000, 32_000)
+            // ── Latest flagship: GLM-5.2 — 1M context, long-horizon tasks ─
+            // Stable 1M token context, 128K max output.
+            // Pricing: $1.40 input / $4.40 output (Z.AI official).
+            ModelInfoBuilder::new(MODEL_GLM_5_2)
+                .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
-                .pricing(2.0, 8.0)
+                .pricing(1.40, 4.40)
                 .build(),
+            // ── Previous flagship: GLM-5.1 — 200K context ────────────────
+            // Same pricing as GLM-5.2; 128K max output.
+            ModelInfoBuilder::new(MODEL_GLM_5_1)
+                .context(200_000, 131_072)
+                .capabilities(false, true, true, true)
+                .pricing(1.40, 4.40)
+                .build(),
+            // ── Multimodal coding: GLM-5V-Turbo ──────────────────────────
+            // Vision-capable coding model (image input + code output).
+            ModelInfoBuilder::new(MODEL_GLM_5V_TURBO)
+                .context(200_000, 32_000)
+                .capabilities(true, true, true, true)
+                .pricing(1.40, 4.40)
+                .build(),
+            // ── GLM-5 base — Agentic Engineering foundation ──────────────
             ModelInfoBuilder::new(MODEL_GLM_5)
                 .context(200_000, 32_000)
                 .capabilities(false, true, true, true)
-                .pricing(2.0, 8.0)
+                .pricing(1.40, 4.40)
                 .build(),
+            // ── GLM-5-Turbo — fast variant, no thinking mode ─────────────
             ModelInfoBuilder::new(MODEL_GLM_5_TURBO)
                 .context(200_000, 32_000)
                 .capabilities(false, true, true, false)
-                .pricing(1.0, 3.0)
+                .pricing(0.70, 2.20)
                 .build(),
-            // ── 4.x flagship series (128K context, 16K output) ───────────
+            // ── 4.x flagship series (200K context) ───────────────────────
+            // GLM-4.7 — enhanced coding & multi-step reasoning, 128K output
             ModelInfoBuilder::new(MODEL_GLM_4_7)
-                .context(128_000, 16_000)
+                .context(200_000, 131_072)
                 .capabilities(false, true, true, true)
-                .pricing(2.0, 8.0)
+                .pricing(0.57, 2.27)
                 .build(),
+            // GLM-4.6 — advanced coding & complex reasoning, 128K output
             ModelInfoBuilder::new(MODEL_GLM_4_6)
-                .context(128_000, 16_000)
+                .context(200_000, 131_072)
                 .capabilities(false, true, true, true)
-                .pricing(1.0, 4.0)
+                .pricing(0.50, 2.00)
                 .build(),
+            // GLM-4.5 — 355B MoE foundational model, 96K max output
             ModelInfoBuilder::new(MODEL_GLM_4_5)
-                .context(128_000, 16_000)
+                .context(128_000, 96_000)
                 .capabilities(false, true, true, true)
-                .pricing(1.0, 4.0)
+                .pricing(0.50, 2.00)
                 .build(),
             // ── Air / mid-tier ───────────────────────────────────────────
             ModelInfoBuilder::new(MODEL_GLM_4_5_AIR)
                 .context(128_000, 16_000)
                 .capabilities(false, true, true, false)
-                .pricing(0.3, 1.2)
+                .pricing(0.15, 0.60)
                 .build(),
-            // ── Flash / lightweight ──────────────────────────────────────
+            // ── Flash / free tier ────────────────────────────────────────
+            // GLM-4.7-FlashX — free, 200K context, 128K output
+            ModelInfoBuilder::new(MODEL_GLM_4_7_FLASHX)
+                .context(200_000, 131_072)
+                .capabilities(false, true, true, false)
+                .pricing(0.0, 0.0)
+                .build(),
+            // GLM-4.7-Flash — free, lighter variant
             ModelInfoBuilder::new(MODEL_GLM_4_7_FLASH)
                 .context(128_000, 16_000)
                 .capabilities(false, true, true, false)
-                .pricing(0.1, 0.1)
+                .pricing(0.0, 0.0)
                 .build(),
             ModelInfoBuilder::new(MODEL_GLM_4_FLASH)
                 .context(128_000, 16_000)
                 .capabilities(false, true, true, false)
-                .pricing(0.1, 0.1)
+                .pricing(0.10, 0.10)
                 .build(),
-            // ── Vision series (64K context) ─────────────────────────────
+            // ── Vision series ────────────────────────────────────────────
             ModelInfoBuilder::new(MODEL_GLM_4_1V_THINKING_FLASH)
                 .context(64_000, 8_000)
                 .capabilities(true, true, true, true)
-                .pricing(0.5, 0.5)
+                .pricing(0.50, 0.50)
                 .build(),
             ModelInfoBuilder::new(MODEL_GLM_4_6V_FLASH)
                 .context(64_000, 8_000)
                 .capabilities(true, true, true, false)
-                .pricing(0.5, 0.5)
+                .pricing(0.50, 0.50)
                 .build(),
             ModelInfoBuilder::new(MODEL_GLM_4V_FLASH)
                 .context(64_000, 8_000)
                 .capabilities(true, true, true, false)
-                .pricing(0.1, 0.1)
+                .pricing(0.10, 0.10)
                 .build(),
         ]
     }

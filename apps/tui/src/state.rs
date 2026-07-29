@@ -650,5 +650,5 @@ impl ConfigTabState {
 pub struct AppState {
     pub main_tab_state: MainTabState,
     pub agent_tab_state: AgentTabState,
-    pub config_tab_state: ConfigTabState,
+    pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
 }
