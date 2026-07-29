@@ -245,8 +245,8 @@ mod tests {
             .collect();
         for (i, field) in fields(SCHEMA_PREVIEW_COLS, DataType::Int32)
             .iter()
-            .cloned()
             .take(SCHEMA_PREVIEW_COLS)
+            .cloned()
             .enumerate()
         {
             all[i] = field;

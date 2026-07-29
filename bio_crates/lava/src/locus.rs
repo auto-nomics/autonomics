@@ -383,7 +383,7 @@ pub fn process_locus(
         input.reference.chr_prefix.get(&chr),
         input.reference.chr_offset.get(&chr),
     ) {
-        (Some(p), Some(o)) => (p.with_extension("bed"), *o),
+        (Some(p), Some(o)) => (crate::plink::plink_file(p, "bed"), *o),
         _ => return Ok(None), // chromosome not present in the reference
     };
 

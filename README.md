@@ -1,8 +1,13 @@
 # autonomics / agentik
 
-`autonomics` is a Rust 2024 workspace for agent-assisted bioinformatics and data analysis. It combines an Anthropic-compatible LLM SDK and agent runtime with a DataFusion-based DAG engine, readers for common genomic formats, and Iceberg data-lake integration.
+`autonomics` is a Rust workspace for **agent-driven bioinformatics and data analysis**. Rather than scripts and notebooks, an analyst converses with an LLM agent that builds, runs, and inspects real computational pipelines — composing a DataFusion DAG of typed nodes, reading genomic formats (VCF / BGEN / PLINK), fitting statistical-genetics models, and persisting results to an Iceberg data lake.
 
-The Agent SDK originated as a hard fork of [dimichgh/anthropic-sdk-rust](https://github.com/dimichgh/anthropic-sdk-rust). The repository has since grown into a broader analysis platform.
+Four pieces, usually kept separate, are integrated here:
+
+- **LLM SDK + agent runtime** (`agentik-*`) — an Anthropic-compatible client with multi-provider support, SSE streaming, and tool / function calling, on top of an agent loop that handles memory compaction, lifecycle management, and multi-agent orchestration.
+- **DataFusion DAG engine** (`data-engine`) — a typed, concurrently-scheduled node graph where each step transforms `DataFrame`s. The agent assembles and runs pipelines through tool calls; heavy statistical-genetics computation (MiXeR, LDSC, MR, LAVA) runs as pure-Rust node logic over [`faer`](https://github.com/sarah-ek/faer).
+- **Bioinformatics I/O** (`biofusion`, `datalake`) — DataFusion readers for common genomic formats and an Iceberg-backed lake holding LD reference panels and precomputed sufficient-statistics tables.
+- **Scientific data clients** (`eutils`, `opengwas`, `gwascatalog-sdk`) — fetch metadata and summary statistics from NCBI, OpenGWAS, and the GWAS Catalog without leaving the conversation.
 
 ## Demo
 

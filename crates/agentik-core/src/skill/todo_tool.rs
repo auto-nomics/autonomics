@@ -186,7 +186,7 @@ mod tests {
             input: json!({ "index": 0, "status": "completed" }),
         };
         let results = toolset
-            .execute(std::slice::from_ref(&tc), Some(&allowed), None)
+            .execute(std::slice::from_ref(&tc), None)
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -196,14 +196,13 @@ mod tests {
         assert_eq!(runtime.lock().await.current_step_index(), 1);
 
         // Complete step 1 → skill complete.
-        let allowed2 = runtime.lock().await.allowed_tools_for_current_step();
         let tc2 = ToolUse {
             id: "tu_2".to_string(),
             name: "update_todo".to_string(),
             input: json!({ "index": 0, "status": "completed" }),
         };
         let _ = toolset
-            .execute(std::slice::from_ref(&tc2), Some(&allowed2), None)
+            .execute(std::slice::from_ref(&tc2), None)
             .await
             .unwrap();
         assert!(runtime.lock().await.is_complete());

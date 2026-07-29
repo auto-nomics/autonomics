@@ -13,6 +13,7 @@ use crate::context::ContextProvider;
 use crate::message_ext::AgentMessageExt;
 use agentik_sdk::model::model_pool::ModelPool;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
+use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::tools::ToolUse;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -535,7 +536,6 @@ impl Agent {
             .toolset
             .execute(
                 &toolcalls,
-                allowed.as_deref(),
                 Some(self.internal_event_tx.clone()),
             )
             .await?;
@@ -587,6 +587,21 @@ impl Agent {
         let rt = self.skill_runtime.as_ref()?;
         let guard = rt.lock().await;
         Some(guard.allowed_tools_for_current_step())
+    }
+
+    /// Tool definitions the LLM is offered this turn: every registered
+    /// tool, optionally narrowed to the active skill's current-step
+    /// whitelist. Filtering lives here (not in `Toolset`) because it is
+    /// orchestration policy, not a property of the tool registry itself.
+    fn visible_tools(&self, allowed: Option<&[String]>) -> Vec<ToolDefinition> {
+        let all = self.toolset.tools();
+        match allowed {
+            None => all,
+            Some(names) => all
+                .into_iter()
+                .filter(|t| names.iter().any(|n| n == &t.name))
+                .collect(),
+        }
     }
 
     async fn build_context(&mut self) -> Result<Vec<Message>, AgentError> {
@@ -657,7 +672,7 @@ impl Agent {
             return Err(AgentError::CompactionRebuild);
         }
 
-        let all_tools = self.toolset.tools_filtered(allowed);
+        let all_tools = self.visible_tools(allowed);
 
         let mut stream = model.request_stream(context, &all_tools).await?;
 

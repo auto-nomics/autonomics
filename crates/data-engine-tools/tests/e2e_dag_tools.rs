@@ -58,7 +58,6 @@ async fn test_add_source_sql_run_dag() {
                 json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -78,7 +77,6 @@ async fn test_add_source_sql_run_dag() {
                 }),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -93,7 +91,6 @@ async fn test_add_source_sql_run_dag() {
                 "add_edge",
                 json!({"from": "src", "from_port": 0, "to": "sql", "to_port": 0}),
             )],
-            None,
             None,
         )
         .await
@@ -114,7 +111,6 @@ async fn test_add_source_sql_run_dag() {
                 }),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -129,7 +125,6 @@ async fn test_add_source_sql_run_dag() {
                 "add_edge",
                 json!({"from": "sql", "from_port": 0, "to": "sink", "to_port": 0}),
             )],
-            None,
             None,
         )
         .await
@@ -150,7 +145,6 @@ async fn test_add_source_sql_run_dag() {
                     "spec": {"ident": "gwas.iris_test", "mode": "overwrite"}
                 }),
             )],
-            None,
             None,
         )
         .await
@@ -206,7 +200,6 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
                 json!({"id": "vcf_src", "kind": "source_file", "spec": {"path": "/sample.vcf.gz"}}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -227,7 +220,6 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
                 }),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -242,14 +234,13 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
                 json!({"from": "vcf_src", "from_port": 0, "to": "preview", "to_port": 0}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
     check_ok(&res[0], "add_edge vcf_src->preview");
 
     let res = toolset
-        .execute(&[build_tooluse("v4", "run_dag", json!({}))], None, None)
+        .execute(&[build_tooluse("v4", "run_dag", json!({}))], None)
         .await
         .unwrap();
     check_ok(&res[0], "run_dag");
@@ -262,7 +253,6 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
                 "get_output",
                 json!({"id": "preview", "limit": 50}),
             )],
-            None,
             None,
         )
         .await
@@ -345,7 +335,6 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
                 json!({"id": "src", "kind": "source_file", "spec": {"path": "/badcast.csv"}}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -366,7 +355,6 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
                 }),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -380,14 +368,13 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
                 json!({"from": "src", "from_port": 0, "to": "badcast", "to_port": 0}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
     check_ok(&res[0], "add_edge");
 
     let res = toolset
-        .execute(&[build_tooluse("e4", "run_dag", json!({}))], None, None)
+        .execute(&[build_tooluse("e4", "run_dag", json!({}))], None)
         .await
         .unwrap();
     check_ok(&res[0], "run_dag");
@@ -399,7 +386,6 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
                 "get_output",
                 json!({"id": "badcast", "limit": 50}),
             )],
-            None,
             None,
         )
         .await
@@ -468,7 +454,6 @@ async fn test_get_output_synthetic_struct_column_baseline() {
                 json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -488,7 +473,6 @@ async fn test_get_output_synthetic_struct_column_baseline() {
                 }),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
@@ -502,14 +486,13 @@ async fn test_get_output_synthetic_struct_column_baseline() {
                 json!({"from": "src", "from_port": 0, "to": "struct_node", "to_port": 0}),
             )],
             None,
-            None,
         )
         .await
         .unwrap();
     check_ok(&res[0], "add_edge");
 
     let res = toolset
-        .execute(&[build_tooluse("b4", "run_dag", json!({}))], None, None)
+        .execute(&[build_tooluse("b4", "run_dag", json!({}))], None)
         .await
         .unwrap();
     check_ok(&res[0], "run_dag");
@@ -521,7 +504,6 @@ async fn test_get_output_synthetic_struct_column_baseline() {
                 "get_output",
                 json!({"id": "struct_node", "limit": 50}),
             )],
-            None,
             None,
         )
         .await

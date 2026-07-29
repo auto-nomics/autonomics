@@ -101,7 +101,6 @@ impl Toolset {
     pub async fn execute(
         &self,
         toolcalls: &[ToolUse],
-        allowed_tools: Option<&[String]>,
         // This tokio sender is prepared for waking up agent in IDLE status
         notify_tx: Option<super::task_runtime::BgTaskNotifyTx>,
     ) -> Result<Vec<ToolResult>, ToolError> {
@@ -119,20 +118,6 @@ impl Toolset {
         let mut new_entries: Vec<TaskEntry> = Vec::with_capacity(toolcalls.len());
 
         for tc in toolcalls {
-            // 当 allowed_tools 存在时，跳过不在白名单内的工具
-            if let Some(allowed) = allowed_tools
-                && !allowed.contains(&tc.name)
-            {
-                immediate_results.push(ToolResult::error_with_id(
-                    tc.id.clone(),
-                    format!(
-                        "tool '{}' is not available in current skill context",
-                        tc.name
-                    ),
-                ));
-                continue;
-            }
-
             let Some(registration) = self.tools.get(&tc.name) else {
                 continue;
             };
@@ -280,25 +265,8 @@ impl Toolset {
         let tasks = self.tasks.read().await;
         !tasks.is_empty()
     }
-
-    /// Return tool definitions, optionally restricted to a name whitelist.
-    ///
-    /// When `allowed` is `None`, behaves like [`tools`](Self::tools).
-    /// When `Some(names)`, only tools whose name is in `names` are
-    /// returned. Used by the skill system to limit which tools the LLM
-    /// is offered during a given workflow step.
-    pub fn tools_filtered(&self, allowed: Option<&[String]>) -> Vec<ToolDefinition> {
-        match allowed {
-            None => self.tools(),
-            Some(names) => self
-                .tools
-                .iter()
-                .filter(|(name, _)| names.iter().any(|n| n == name.as_str()))
-                .map(|(_, r)| r.definition.clone())
-                .collect(),
-        }
-    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -412,7 +380,7 @@ mod tests {
             input: json!({ "reason": "test" }),
         };
 
-        let results = toolset.execute(&[tool_call], None, None).await.unwrap();
+        let results = toolset.execute(&[tool_call], None).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tool_use_id, "tc1");
     }
@@ -441,7 +409,7 @@ mod tests {
         };
 
         let result = toolset
-            .execute(&[tool_call, tool_call_immediate], None, None)
+            .execute(&[tool_call, tool_call_immediate], None)
             .await
             .unwrap();
 
@@ -498,7 +466,7 @@ mod tests {
 
         // Returns once the sync window expires; the tool is now a background
         // task still mid-sleep, with its output already emitted.
-        let _ = toolset.execute(&[tool_call], None, None).await.unwrap();
+        let _ = toolset.execute(&[tool_call], None).await.unwrap();
 
         let tasks = toolset.tasks_handle();
         let tasks = tasks.read().await;

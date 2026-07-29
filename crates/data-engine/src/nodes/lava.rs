@@ -1478,4 +1478,46 @@ mod tests {
         assert!(b.binary[1]);
         assert!((b.h2_obs[0] - 0.01).abs() < 1e-12);
     }
+
+    /// Smoke test: the node builds from a minimal spec, and the hardcoded
+    /// per-chromosome PLINK reference ([`REF_PREFIX_TEMPLATE`]) actually loads
+    /// for chromosome 1. Ignored by default — it needs the local 1000G EUR panel
+    /// at `/mnt/disk2/dataset/1000g_plink`, which is not available in CI.
+    /// Run with: `cargo test -p data-engine -- --ignored load_reference`
+    #[tokio::test]
+    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
+    async fn load_reference() {
+        let spec = LavaLocusSpec {
+            loci: vec![LavaLocus {
+                loc: "1:1-1000000".into(),
+                chr: 1,
+                start: 1,
+                stop: 1_000_000,
+            }],
+            pheno_meta: HashMap::new(),
+            sample_overlap: None,
+            prune_thresh: d_prune(),
+            max_prop_k: d_max_prop_k(),
+            min_k: d_min_k(),
+        };
+        let node = LavaLocusNode::new(spec);
+        assert_eq!(node.kind(), LOCUS_KIND);
+        assert_eq!(node.ports().input_ports().len(), 1);
+        assert_eq!(node.ports().output_ports().len(), 1);
+
+        // The hardcoded reference template must resolve + load chr1.
+        let reference = lava::plink::load_reference_template(REF_PREFIX_TEMPLATE, &[1])
+            .expect("1000G EUR chr1 reference loads");
+        assert!(reference.sample_size > 0, "non-empty .fam sample size");
+        assert!(
+            !reference.snp_info.snp.is_empty(),
+            "chr1 .bim contributed SNPs"
+        );
+        assert_eq!(
+            reference.chr_prefix.get(&1).map(|p| p.to_path_buf()),
+            Some(std::path::PathBuf::from(
+                "/mnt/disk2/dataset/1000g_plink/eur/chr1/1000G.EUR.chr1.qc"
+            ))
+        );
+    }
 }

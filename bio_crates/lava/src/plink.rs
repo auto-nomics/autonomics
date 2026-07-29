@@ -13,6 +13,20 @@ use std::path::{Path, PathBuf};
 
 use faer::Mat;
 
+/// Resolve a PLINK file path by **appending** `.bed`/`.bim`/`.fam` to the
+/// prefix, not replacing its last extension.
+///
+/// This is the PLINK convention: a prefix like `1000G.EUR.chr1.qc` maps to
+/// `1000G.EUR.chr1.qc.bim` etc. Using [`Path::with_extension`] instead would
+/// strip the trailing `.qc`, yielding `1000G.EUR.chr1.bim` (a nonexistent
+/// file) whenever the prefix itself contains dots.
+pub(crate) fn plink_file(prefix: &Path, ext: &str) -> PathBuf {
+    let mut s = prefix.as_os_str().to_owned();
+    s.push(".");
+    s.push(ext);
+    PathBuf::from(s)
+}
+
 use crate::error::{LavaError, Result};
 use crate::input::{PlinkRef, SnpInfo};
 
@@ -192,9 +206,9 @@ pub fn load_plink(
 /// [`crate::locus::process_locus`] resolves the right `.bed` per chromosome
 /// through the same code path used for per-chromosome references.
 pub fn load_reference(prefix: &Path) -> Result<PlinkRef> {
-    let bim = prefix.with_extension("bim");
-    let fam = prefix.with_extension("fam");
-    let bed = prefix.with_extension("bed");
+    let bim = plink_file(prefix, "bim");
+    let fam = plink_file(prefix, "fam");
+    let bed = plink_file(prefix, "bed");
     if !bed.exists() || !bim.exists() || !fam.exists() {
         return Err(LavaError::Input(format!(
             "missing PLINK files for prefix {}",
@@ -245,9 +259,9 @@ pub fn load_reference_template(template: &str, chroms: &[i64]) -> Result<PlinkRe
     let mut sample_size: Option<usize> = None;
     for c in chroms {
         let resolved = PathBuf::from(template.replace("{N}", &c.to_string()));
-        let bim = resolved.with_extension("bim");
-        let fam = resolved.with_extension("fam");
-        let bed = resolved.with_extension("bed");
+        let bim = plink_file(&resolved, "bim");
+        let fam = plink_file(&resolved, "fam");
+        let bed = plink_file(&resolved, "bed");
         if !bed.exists() || !bim.exists() || !fam.exists() {
             // graceful skip — locus on this chr will find no SNPs
             continue;

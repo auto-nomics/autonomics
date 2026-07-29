@@ -936,6 +936,13 @@ impl OpengwasClient {
     // Download
     // =======================================================================
 
+    /// Return a reference to the inner reqwest [`Client`] (carrying auth
+    /// headers), so callers can issue streaming requests without exposing
+    /// other internals.
+    pub fn http_client(&self) -> &Client {
+        &self.client
+    }
+
     /// Download a file from a URL and store it in [`OpendalFileStorage`].
     ///
     /// Uses the existing `Client` (with auth headers) to fetch the file,
@@ -955,6 +962,53 @@ impl OpengwasClient {
         storage.op.write(path, bytes.to_vec()).await?;
 
         Ok(size)
+    }
+
+    /// Stream-download a file, calling `on_progress` after every chunk with
+    /// `(bytes_downloaded, total_bytes)`.
+    ///
+    /// Unlike [`download_file_to_storage`](Self::download_file_to_storage),
+    /// which buffers the entire body in memory, this method streams chunks
+    /// through a bounded `Vec` so the peak memory is the chunk size (≈64 KiB)
+    /// rather than the full file. `on_progress` is invoked on every chunk,
+    /// giving the caller real-time download progress.
+    ///
+    /// `total_bytes` is `Some` when the server sends a `Content-Length` header;
+    /// `None` for chunked-transfer or compressed responses without it.
+    pub async fn download_stream_to_storage<F>(
+        &self,
+        url: &str,
+        storage: &OpendalFileStorage,
+        path: &str,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64, Option<u64>),
+    {
+        use futures::StreamExt;
+
+        let resp = self.client.get(url).send().await?;
+        resp.error_for_status_ref()?;
+
+        let total = resp.content_length();
+        let mut stream = resp.bytes_stream();
+
+        // Accumulate chunks into a buffer that grows by the real total (when
+        // known) so we avoid reallocations. When the size is unknown we start
+        // small and let Vec amortize.
+        let mut buf: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
+        let mut downloaded: u64 = 0;
+
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk?;
+            buf.extend_from_slice(&bytes);
+            downloaded += bytes.len() as u64;
+            on_progress(downloaded, total);
+        }
+
+        storage.op.write(path, buf).await?;
+
+        Ok(downloaded)
     }
 }
 
