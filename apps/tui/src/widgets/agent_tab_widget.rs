@@ -119,14 +119,20 @@ impl Widget for AgentTabWidget<'_> {
             }
         };
         // Status label inlined in the top border (top-left), reflecting what
-        // the agent is doing right now.
-        let title: &str = match ts.status {
-            AgentStatus::Requesting => "thinking…",
-            AgentStatus::Streaming => "responding…",
-            AgentStatus::Error => "error",
+        // the agent is doing right now. While active, a braille spinner is
+        // prepended for a visual loading indicator.
+        let spinner = if running {
+            BRAILLE_SPINNER[(ts.frame / 4) as usize % BRAILLE_SPINNER.len()]
+        } else {
+            ""
+        };
+        let title: String = match ts.status {
+            AgentStatus::Requesting => format!("{spinner} thinking…"),
+            AgentStatus::Streaming => format!("{spinner} responding…"),
+            AgentStatus::Error => "error".to_string(),
             AgentStatus::Idle => match ts.input_mode {
-                InputMode::Browse => "browse",
-                InputMode::Input => "compose",
+                InputMode::Browse => "browse".to_string(),
+                InputMode::Input => "compose".to_string(),
             },
         };
 
@@ -136,13 +142,18 @@ impl Widget for AgentTabWidget<'_> {
             // Browse mode hides the caret and the app routes keys away from the
             // composer in that mode (see App::handle_key).
             editable: !running && ts.input_mode == InputMode::Input,
-            title,
+            title: &title,
             placeholder,
         };
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
         input_widget.render(layout[3], buf, &mut input_state);
+
+        // ── Animated loading bar on the input box bottom border ──
+        if running {
+            render_loading_bar(layout[3], buf, ts.frame);
+        }
 
         // ── Footer hint line ──
         render_footer_hint(
@@ -155,6 +166,54 @@ impl Widget for AgentTabWidget<'_> {
             ts.history_search_selected,
             ts.history_search_matches.len(),
         );
+    }
+}
+
+/// Braille spinner frames for the loading indicator.
+const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Draw an animated loading bar on the bottom border of the input box.
+///
+/// A bright segment (`━`) slides across the border left→right, wraps around,
+/// and repeats. The rest of the border remains the default `─`. The effect is
+/// a "scrolling" progress indicator — like a download bar — driven by `frame`.
+fn render_loading_bar(area: Rect, buf: &mut ratatui::prelude::Buffer, frame: u64) {
+    // Bottom border row sits at y = area bottom; inner span excludes corners.
+    let y = area.y + area.height - 1;
+    let start = area.x + 1;
+    let end = area.x + area.width.saturating_sub(1);
+    let width = end.saturating_sub(start) as usize;
+    if width < 4 {
+        return;
+    }
+
+    // Segment length: ~1/4 of the border, clamped to a sensible range.
+    let bar_len = (width / 4).clamp(3, 12);
+
+    // Animation speed: advance 1 position every 2 frames (~30 fps at 60 fps render).
+    let pos = ((frame / 2) as usize) % (width + bar_len);
+
+    let bar_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    for i in 0..width {
+        // The bar occupies indices [pos - bar_len, pos) clamped to [0, width).
+        // When pos > width, the bar has partially wrapped to the start.
+        let in_bar = if pos < bar_len {
+            // Bar straddles the wrap boundary: tail at [0, pos) and
+            // head at [width + pos - bar_len, width).
+            i < pos || i >= width + pos - bar_len
+        } else if pos > width {
+            // Past the right edge: wrapped portion [0, pos - width).
+            i < pos - width
+        } else {
+            // Normal: bar fully inside [pos - bar_len, pos).
+            i >= pos - bar_len && i < pos
+        };
+        if in_bar {
+            buf.set_string(start + i as u16, y, "━", bar_style);
+        }
     }
 }
 

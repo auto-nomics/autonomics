@@ -4,7 +4,6 @@ pub mod errors;
 pub mod files_api;
 pub mod lifecycle;
 pub mod messages;
-pub mod models;
 pub mod models_api;
 pub mod shared;
 pub mod streaming;
@@ -17,8 +16,6 @@ pub use messages::{
     ContentBlock, ContentBlockParam, ImageSource, Message, MessageContent, MessageCreateBuilder,
     MessageCreateParams, MessageParam, Role, StopReason,
 };
-
-pub use models::Model;
 
 pub use streaming::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
 use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use ratatui::{
@@ -20,9 +20,6 @@ use uuid::Uuid;
 use crate::state::{self, AgentStatus, AppState, ConfigMode, InputMode, MainTabState};
 use crate::widgets::agent_tab_widget::AgentTabWidget;
 use runtime::AgentRuntime;
-
-const POLL_TIMEOUT_ACTIVE: Duration = Duration::from_millis(16);
-const POLL_TIMEOUT_IDLE: Duration = Duration::from_millis(100);
 
 /// Lines scrolled by a half-page motion (PageDown / PageUp in browse mode).
 const HALF_PAGE: usize = 12;
@@ -61,16 +58,14 @@ pub struct App {
     tab_state: TabNavState,
     agent_runtime: AgentRuntime,
     /// Kept alive to drive the agent's background event loop task.
-    _runtime: tokio::runtime::Runtime,
+    _runtime: Option<tokio::runtime::Runtime>,
     conn: Connection,
     /// Internal event channel for decoupled communication.
-    app_event_rx: std::sync::mpsc::Receiver<crate::app_event::AppEvent>,
+    app_event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::app_event::AppEvent>,
     /// Sender half exposed for subsystems (file search, plugins, etc.)
     /// to push events into the main loop without direct App access.
     #[allow(dead_code)]
     pub(crate) app_event_tx: crate::app_event_sender::AppEventSender,
-    /// True when state has changed and a re-render is needed.
-    dirty: bool,
     /// Set to break the main event loop so `ratatui::run()` can call `restore()`.
     should_quit: bool,
     /// Timestamp of the last cooperative cancel (Ctrl+C while agent running).
@@ -96,17 +91,16 @@ impl App {
         let mut state = AppState::default();
         crate::config_db::reload_config(&mut state.config_tab_state, &conn);
 
-        let (app_event_tx, app_event_rx) = std::sync::mpsc::channel();
+        let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             state,
             tab_state: TabNavState::new(MainTabState::default().index()),
             agent_runtime,
-            _runtime: runtime,
+            _runtime: Some(runtime),
             conn,
             app_event_rx,
             app_event_tx: crate::app_event_sender::AppEventSender::new(app_event_tx),
-            dirty: true, // render the initial frame
             should_quit: false,
             cancel_requested_at: None,
         }
@@ -230,7 +224,10 @@ impl App {
 
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-        let result = self.app(&mut terminal);
+        // The main loop is async (tokio::select! driven); run it on the
+        // existing tokio runtime that also hosts the agent task.
+        let runtime = self._runtime.take().expect("runtime already consumed");
+        let result = runtime.block_on(self.run_loop(&mut terminal));
 
         // Ensure the agent and engine tasks are torn down even if the main
         // loop exited without a cooperative shutdown (e.g. force-quit).
@@ -243,87 +240,105 @@ impl App {
         Ok(())
     }
 
-    fn app(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
+    /// Async main loop driven by `tokio::select!` with a fixed-rate render tick.
+    ///
+    /// **Design**: state mutation and rendering are strictly separated.
+    ///
+    /// - **Event branches** (terminal, agent, app) only mutate state.
+    ///   They never render.
+    /// - **Render tick** fires at a fixed interval (~60 fps) and redraws
+    ///   unconditionally. Ratatui's internal buffer-diff ensures only
+    ///   changed cells are written to the terminal, so idle frames are
+    ///   near-zero cost.
+    ///
+    /// This eliminates all drain/batch logic and the `dirty` flag: events
+    /// between two ticks are naturally coalesced into a single render.
+    /// The first interval tick completes immediately, so the initial frame
+    /// is drawn right away.
+    async fn run_loop(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ) -> std::io::Result<()> {
+        use crossterm::event::EventStream;
+        use tokio_stream::StreamExt;
+        use tokio::time::{self, Duration, MissedTickBehavior};
+
+        let mut event_stream = EventStream::new();
+
+        // Fixed-rate render clock. The first tick completes immediately
+        // (guaranteeing the initial frame), then fires every ~16 ms.
+        // `Skip` discards ticks that arrive while we were busy handling
+        // events, preventing burst-renders after a long event handler.
+        let mut render_tick = time::interval(Duration::from_millis(16));
+        render_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         loop {
             if self.should_quit {
                 break Ok(());
             }
 
-            // ── Drain internal app events (non-blocking) ──
-            while let Ok(event) = self.app_event_rx.try_recv() {
-                match event {
-                    crate::app_event::AppEvent::Agent(e) => {
-                        state::apply_event(&mut self.state.agent_tab_state, *e);
+            tokio::select! {
+                biased;
+
+                // ── Terminal input (keys, mouse, paste, resize) ──
+                maybe_event = event_stream.next() => {
+                    if let Some(Ok(event)) = maybe_event {
+                        let delta = self.handle_event(&event);
+                        if delta != 0 {
+                            self.apply_scroll_delta(delta);
+                        }
                     }
-                    crate::app_event::AppEvent::Quit => {
+                }
+
+                // ── Agent streaming events ──
+                maybe_agent = self.agent_runtime.recv_event() => {
+                    if let Some(event) = maybe_agent {
+                        state::apply_event(&mut self.state.agent_tab_state, event);
+                    } else {
+                        // Agent channel closed → shutdown.
                         self.should_quit = true;
                     }
-                    crate::app_event::AppEvent::ConfigReload => {
-                        crate::config_db::reload_config(
-                            &mut self.state.config_tab_state,
-                            &self.conn,
-                        );
+                }
+
+                // ── App internal events ──
+                maybe_app = self.app_event_rx.recv() => {
+                    match maybe_app {
+                        Some(event) => self.handle_app_event(event),
+                        None => self.should_quit = true,
                     }
                 }
-                self.dirty = true;
-            }
 
-            // ── Event handling phase ──
-            // Drain all queued input events before rendering.
-            if event::poll(self.poll_timeout())? {
-                let mut scroll_delta: i32 = 0;
-                loop {
-                    let event = event::read()?;
-                    let scroll = self.handle_event(&event);
-                    scroll_delta += scroll;
-                    // Check for more events without blocking.
-                    if !event::poll(Duration::ZERO)? {
-                        break;
+                // ── Fixed-rate render tick ──
+                _ = render_tick.tick() => {
+                    if matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
+                        self.clear_cancel_pending();
+                    } else {
+                        // Advance animation frame counter while the agent is active.
+                        self.state.agent_tab_state.frame =
+                            self.state.agent_tab_state.frame.wrapping_add(1);
                     }
+                    terminal.draw(|f| self.render(f))?;
                 }
-                // Apply batched scroll delta once.
-                if scroll_delta != 0 {
-                    self.apply_scroll_delta(scroll_delta);
-                }
-                self.dirty = true;
-            } else {
-                // Timeout: drain agent streaming events.
-                let had_events = self.drain_agent_events();
-                if had_events {
-                    self.dirty = true;
-                }
-            }
-
-            // ── Render phase (only when state changed) ──
-            if self.dirty {
-                terminal.draw(|f| self.render(f))?;
-                self.dirty = false;
             }
         }
     }
 
-    /// Return a poll timeout appropriate for the current agent status.
-    /// When idle we poll less frequently to save CPU; during streaming we
-    /// poll at ~60 fps for smooth text rendering.
-    fn poll_timeout(&self) -> Duration {
-        match self.state.agent_tab_state.status {
-            AgentStatus::Idle => POLL_TIMEOUT_IDLE,
-            _ => POLL_TIMEOUT_ACTIVE,
+    /// Apply an internal [`AppEvent`] to state.
+    fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
+        match event {
+            crate::app_event::AppEvent::Agent(e) => {
+                state::apply_event(&mut self.state.agent_tab_state, *e);
+            }
+            crate::app_event::AppEvent::Quit => {
+                self.should_quit = true;
+            }
+            crate::app_event::AppEvent::ConfigReload => {
+                crate::config_db::reload_config(
+                    &mut self.state.config_tab_state,
+                    &self.conn,
+                );
+            }
         }
-    }
-
-    fn drain_agent_events(&mut self) -> bool {
-        let mut had_events = false;
-        while let Some(event) = self.agent_runtime.poll_event() {
-            state::apply_event(&mut self.state.agent_tab_state, event);
-            had_events = true;
-        }
-        // Clear the cancel-pending flag once the agent is idle so a single
-        // Ctrl+C will quit normally next time.
-        if had_events && matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
-            self.clear_cancel_pending();
-        }
-        had_events
     }
 
     /// Handle a single event. Returns a scroll delta to be accumulated.

@@ -19,7 +19,7 @@ pub use agentik_types::{
     BatchStatus, ContentBlock, ContentBlockDelta, ContentBlockParam, FileDownload, FileList,
     FileListParams, FileObject, FileOrder, FilePurpose, FileStatus, FileUploadParams, ImageSource,
     Message, MessageBatch, MessageContent, MessageCreateBuilder, MessageCreateParams, MessageDelta,
-    MessageDeltaUsage, MessageParam, MessageStreamEvent, Model, ModelList, ModelListParams,
+    MessageDeltaUsage, MessageParam, MessageStreamEvent, ModelList, ModelListParams,
     ModelObject, RequestId, Result, Role, ServerTool, StopReason, StorageInfo, TextCitation,
     ToolChoice, ToolDefinition, ToolDefinitionBuilder, ToolResult, ToolResultContent, ToolUse,
     ToolValidationError, UploadProgress, Usage, WebSearchParameters,

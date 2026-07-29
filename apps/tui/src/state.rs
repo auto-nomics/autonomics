@@ -156,6 +156,9 @@ pub struct AgentTabState {
     /// `UsageUpdate` events can be attributed to the right turn. Reset on each
     /// `Requesting` (one per LLM call); `None` for tool-only turns.
     pub streaming_assistant: Option<usize>,
+    /// Monotonic frame counter, incremented each render tick while the agent
+    /// is active (Requesting / Streaming). Drives loading animations.
+    pub frame: u64,
 }
 
 impl Default for AgentTabState {
@@ -186,6 +189,7 @@ impl Default for AgentTabState {
             cached_width: 0,
             messages_version: 0,
             streaming_assistant: None,
+            frame: 0,
         }
     }
 }

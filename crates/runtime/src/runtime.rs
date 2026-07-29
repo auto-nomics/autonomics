@@ -214,4 +214,9 @@ impl AgentRuntime {
     pub fn poll_event(&mut self) -> Option<AgentEvent> {
         self.event_rx.try_recv().ok()
     }
+
+    /// Async receive: suspends until an agent event arrives (or the channel closes).
+    pub async fn recv_event(&mut self) -> Option<AgentEvent> {
+        self.event_rx.recv().await
+    }
 }

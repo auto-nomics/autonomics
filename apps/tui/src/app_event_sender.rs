@@ -1,25 +1,20 @@
 //! A cloneable handle for sending `AppEvent`s into the main loop's channel.
 //!
-//! Uses `std::sync::mpsc` because the main loop is synchronous. The standard
-//! channel is unbounded (no capacity limit). If the app later moves to an
-//! async loop (as codex does), switch to `tokio::sync::mpsc`.
+//! Uses `tokio::sync::mpsc` so the main loop can await events via `tokio::select!`.
 
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
 
 /// Cloneable handle for pushing [`AppEvent`]s into the main loop's channel.
-///
-/// Currently unused (no subsystem sends yet); retained with the channel
-/// plumbing in `App` so it stays type-checked as it gets wired up.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub(crate) struct AppEventSender {
-    pub tx: Sender<AppEvent>,
+    pub tx: UnboundedSender<AppEvent>,
 }
 
 impl AppEventSender {
-    pub fn new(tx: Sender<AppEvent>) -> Self {
+    pub fn new(tx: UnboundedSender<AppEvent>) -> Self {
         Self { tx }
     }
 
