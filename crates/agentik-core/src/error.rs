@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-use agentik_sdk::model::model_pool::ModelPoolError;
 use agentik_sdk::types::errors::AnthropicError;
 use agentik_sdk::types::tools::ToolUse;
 
@@ -51,9 +50,6 @@ impl Retryable for ToolError {
 
 #[derive(Debug, Error)]
 pub enum AgentError {
-    #[error("ModelPool error occurred")]
-    ModelPool(#[from] ModelPoolError),
-
     #[error("ApiClient request error: {0}")]
     ApiRequestError(#[from] AnthropicError),
 

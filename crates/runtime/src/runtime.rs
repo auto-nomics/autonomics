@@ -3,7 +3,7 @@ use std::sync::Arc;
 use agentik_core::Agent;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
-use agentik_sdk::model::model_pool::ModelPool;
+use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
@@ -129,7 +129,7 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    pub fn new(runtime: &tokio::runtime::Runtime, model_pool: ModelPool) -> Result<Self> {
+    pub fn new(runtime: &tokio::runtime::Runtime, model: Model) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
@@ -153,7 +153,7 @@ impl AgentRuntime {
             )?;
 
             let mut agent = Agent::builder()
-                .with_model_pool(Arc::new(model_pool))
+                .with_model(Arc::new(model))
                 .with_agent_event_tx(event_tx)
                 .with_system_prompt_identity(
                     "You are a biomedical research assistant specializing in genomics, \

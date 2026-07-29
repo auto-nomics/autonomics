@@ -1,5 +1,4 @@
 use agentik_sdk::http::auth::AuthMethod;
-use agentik_sdk::model::model_pool::ModelPool;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig};
 use agentik_sdk::provider::client::MockApiClient;
 
@@ -31,9 +30,6 @@ pub fn dummy_provider_config() -> ProviderConfig {
     }
 }
 
-pub fn get_mock_model_pool(dummy_model_name: &str) -> ModelPool {
-    let mut model_pool = ModelPool::new();
-    let mock_model = Model::with_client(dummy_model_info(dummy_model_name), MockApiClient::new());
-    model_pool.add_model(mock_model);
-    model_pool
+pub fn get_mock_model(dummy_model_name: &str) -> Model {
+    Model::with_client(dummy_model_info(dummy_model_name), MockApiClient::new())
 }

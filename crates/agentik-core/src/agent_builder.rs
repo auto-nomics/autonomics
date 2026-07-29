@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use agentik_sdk::model::model_pool::ModelPool;
+use agentik_sdk::model::Model;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ use crate::{lifecycle::AgentLifecycle, memory::Memory, tools::Toolset};
 use agentik_sdk::types::messages::Message;
 
 pub struct AgentBuilder {
-    model_pool: Option<Arc<ModelPool>>,
+    model: Option<Arc<Model>>,
     initial_messages: Vec<Message>,
     context_provider: Option<Arc<dyn ContextProvider>>,
     config: AgentConfig,
@@ -36,7 +36,7 @@ pub struct AgentBuilder {
 impl Clone for AgentBuilder {
     fn clone(&self) -> Self {
         Self {
-            model_pool: self.model_pool.clone(),
+            model: self.model.clone(),
             initial_messages: self.initial_messages.clone(),
             context_provider: self.context_provider.clone(),
             config: self.config.clone(),
@@ -56,7 +56,7 @@ impl Clone for AgentBuilder {
 impl AgentBuilder {
     pub fn new() -> Self {
         Self {
-            model_pool: None,
+            model: None,
             initial_messages: Vec::new(),
             context_provider: None,
             config: AgentConfig::default(),
@@ -77,8 +77,8 @@ impl AgentBuilder {
         self
     }
 
-    pub fn with_model_pool(mut self, pool: Arc<ModelPool>) -> Self {
-        self.model_pool = Some(pool);
+    pub fn with_model(mut self, model: Arc<Model>) -> Self {
+        self.model = Some(model);
         self
     }
 
@@ -158,9 +158,9 @@ impl AgentBuilder {
     }
 
     pub async fn build(mut self) -> Result<Agent, AgentError> {
-        let model_pool = self
-            .model_pool
-            .ok_or_else(|| AgentError::MissingConfig("model_pool".to_string()))?;
+        let model = self
+            .model
+            .ok_or_else(|| AgentError::MissingConfig("model".to_string()))?;
 
         // Instantiate the skill runtime (if any) and its `update_todo` tool.
         let skill_runtime = self.skill.take().map(skill::instantiate);
@@ -196,7 +196,7 @@ impl AgentBuilder {
 
         Ok(Agent {
             id: self.id.unwrap_or_else(Uuid::new_v4),
-            model_pool,
+            model,
             memory,
             toolset,
             lifecycle: AgentLifecycle::new(),
@@ -208,7 +208,6 @@ impl AgentBuilder {
             system_prompt_identity: self.system_prompt_identity,
             skill_runtime: skill_runtime.map(|(rt, _)| rt),
             agent_event_tx: self.agent_event_tx,
-            current_model_name: None,
             cancel_token,
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),

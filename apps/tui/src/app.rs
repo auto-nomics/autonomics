@@ -1,8 +1,7 @@
 use std::time::{Duration, Instant};
 
 use agentik_sdk::AuthMethod;
-use agentik_sdk::model::model_pool::ModelPoolConfig;
-use agentik_sdk::model::{ModelInfo, ProviderConfig, ProviderType};
+use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
@@ -88,11 +87,11 @@ impl App {
 
         Self::init_database(&conn).expect("failed to initialize database schema");
 
-        let model_pool = Self::build_model_pool(&conn).expect("failed to build model pool");
+        let model = Self::build_model(&conn).expect("failed to build model");
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
         let agent_runtime =
-            AgentRuntime::new(&runtime, model_pool).expect("failed to create agent runtime");
+            AgentRuntime::new(&runtime, model).expect("failed to create agent runtime");
 
         let mut state = AppState::default();
         crate::config_db::reload_config(&mut state.config_tab_state, &conn);
@@ -113,18 +112,15 @@ impl App {
         }
     }
 
-    fn build_model_pool(
-        conn: &Connection,
-    ) -> Result<agentik_core::model::model_pool::ModelPool, Box<dyn std::error::Error>> {
+    /// Build a single `Model` from the database: pick the first model row,
+    /// join it with its referenced provider, and construct the `Model`.
+    fn build_model(conn: &Connection) -> Result<Model, Box<dyn std::error::Error>> {
+        // Load all providers into a lookup map keyed by integer id.
         let mut stmt = conn.prepare(
             "SELECT id, name, base_url, api_key, auth_method, provider_type FROM providers",
         )?;
         let providers: Vec<ProviderConfig> = stmt
             .query_map([], |row| {
-                // The schema uses an INTEGER autoincrement PK, but ProviderConfig
-                // keys providers by Uuid. Map the integer to a deterministic Uuid
-                // so the same id always yields the same Uuid (the pool joins
-                // models to providers by Uuid equality).
                 let id: i64 = row.get(0)?;
                 let auth_method: String = row.get(4)?;
                 let auth: AuthMethod = auth_method.try_into().map_err(
@@ -144,14 +140,15 @@ impl App {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Pick the first model row.
         let mut stmt = conn.prepare(
             "SELECT model_name, provider_id, context_length, max_output_tokens,
                     vision_ability, supports_function_calling, supports_streaming,
                     supports_thinking, input_token_price, output_token_price
-             FROM models",
+             FROM models ORDER BY id LIMIT 1",
         )?;
-        let models: Vec<ModelInfo> = stmt
-            .query_map([], |row| {
+        let model_info = stmt
+            .query_row([], |row| {
                 let provider_id: i64 = row.get(1)?;
                 Ok(ModelInfo {
                     model_name: row.get(0)?,
@@ -165,11 +162,24 @@ impl App {
                     input_token_price: row.get(8)?,
                     output_token_price: row.get(9)?,
                 })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+            })
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-        let config = ModelPoolConfig { providers, models };
-        agentik_core::model::model_pool::ModelPool::from_config(config).map_err(Into::into)
+        // Find the matching provider.
+        let provider = providers
+            .iter()
+            .find(|p| p.id == model_info.provider_id)
+            .ok_or_else(|| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!(
+                        "model '{}' references unknown provider_id {}",
+                        model_info.model_name, model_info.provider_id
+                    ),
+                )) as Box<dyn std::error::Error>
+            })?;
+
+        Model::new(model_info, provider).map_err(Into::into)
     }
 
     fn init_database(conn: &Connection) -> rusqlite::Result<()> {

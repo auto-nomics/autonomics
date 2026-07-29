@@ -1,6 +1,5 @@
 pub mod model_info;
 pub mod model_instance;
-pub mod model_pool;
 pub mod provider_config;
 
 pub use model_info::ModelInfo;

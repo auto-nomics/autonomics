@@ -19,7 +19,7 @@ pub struct Model {
 impl Model {
     /// Primary constructor: build `ApiClient` from the referenced provider's
     /// connection config. The model's own `provider_id` must already match
-    /// `provider.id` — the caller (usually `ModelPool`) is responsible for the join.
+    /// `provider.id` — the caller is responsible for the join.
     pub fn new(model_info: ModelInfo, provider: &ProviderConfig) -> Result<Self, AnthropicError> {
         debug_assert_eq!(
             model_info.provider_id, provider.id,

@@ -7,12 +7,11 @@ use agentik_sdk::model::ProviderConfig;
 use agentik_sdk::provider::mimo::MODEL_MIMO_V2_5;
 use agentik_sdk::{
     model::Model,
-    model::model_pool::ModelPool,
     provider::mimo::{MimoEndpoint, MimoProvider, TokenPlanRegion},
     types::AgentEvent,
 };
 
-fn build_mimo_model_pool() -> ModelPool {
+fn build_mimo_model() -> Model {
     let api_key = std::env::var("MIMO_API_KEY").expect("MIMO_API_KEY not set");
     let endpoint = MimoEndpoint::TokenPlan(TokenPlanRegion::China);
 
@@ -30,11 +29,7 @@ fn build_mimo_model_pool() -> ModelPool {
         .expect("preset model not found");
     model_info.provider_id = provider.id;
 
-    let model = Model::new(model_info, &provider).expect("failed to build mimo model");
-
-    let mut pool = ModelPool::new();
-    pool.add_model(model);
-    pool
+    Model::new(model_info, &provider).expect("failed to build mimo model")
 }
 
 #[tokio::test]
@@ -43,7 +38,7 @@ async fn test_agent_basic_workflow_with_mimo() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
     let mut agent = Agent::builder()
-        .with_model_pool(Arc::new(build_mimo_model_pool()))
+        .with_model(Arc::new(build_mimo_model()))
         .with_system_prompt_section(
             "You are a helpful assistant. Keep responses very short (one sentence).",
         )

@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration, time::UNIX_EPOCH};
 
 use crate::context::ContextProvider;
 use crate::message_ext::AgentMessageExt;
-use agentik_sdk::model::model_pool::ModelPool;
+use agentik_sdk::model::Model;
 use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
@@ -71,7 +71,7 @@ pub enum InternalEvent {
 
 pub struct Agent {
     pub(crate) id: Uuid,
-    pub(crate) model_pool: Arc<ModelPool>,
+    pub(crate) model: Arc<Model>,
     pub(crate) memory: Memory,
     pub(crate) lifecycle: AgentLifecycle,
     pub(crate) toolset: Toolset,
@@ -87,8 +87,6 @@ pub struct Agent {
     pub(crate) skill_runtime: Option<SharedSkillRuntime>,
     /// Optional event channel for streaming progress to external observers.
     pub agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
-    /// Currently selected model name. If None, falls back to round-robin.
-    pub(crate) current_model_name: Option<String>,
     /// External cancellation signal, Cloned out to callers so they can
     /// interrupt the agent loop cooperatively.
     pub(crate) cancel_token: CancellationToken,
@@ -107,18 +105,6 @@ impl Agent {
         if let Some(tx) = &self.agent_event_tx {
             let _ = tx.send(event);
         }
-    }
-
-    /// Switch to a different model by name. No-op if the name is not in the pool.
-    pub fn select_model(&mut self, name: &str) {
-        if self.model_pool.get_model_by_name(name).is_ok() {
-            self.current_model_name = Some(name.to_string());
-        }
-    }
-
-    /// Returns the currently selected model name, or None for round-robin.
-    pub fn current_model(&self) -> Option<&str> {
-        self.current_model_name.as_deref()
     }
 
     /// Returns the agent's unique ID.
@@ -641,13 +627,7 @@ impl Agent {
         let span = span!(Level::TRACE, "API Request");
         let _enter = span.enter();
 
-        let model = if let Some(name) = &self.current_model_name {
-            self.model_pool
-                .get_model_by_name(name)
-                .unwrap_or_else(|_| self.model_pool.get_model_roundrobin().unwrap())
-        } else {
-            self.model_pool.get_model_roundrobin().unwrap()
-        };
+        let model = &self.model;
 
         // Accurate overflow detection using full message-list token estimation,
         // matching OpenCode's `compactIfNeeded()` logic.
@@ -849,13 +829,12 @@ mod tests {
     async fn build_test_agent(
         mock_api: MockApiClient,
     ) -> (Agent, tokio::sync::mpsc::UnboundedReceiver<AgentEvent>) {
-        let mut model_pool = ModelPool::new();
-        model_pool.add_model(Model::with_client(test_model_info(), mock_api));
+        let model = Model::with_client(test_model_info(), mock_api);
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mut agent = Agent::builder()
-            .with_model_pool(Arc::new(model_pool))
+            .with_model(Arc::new(model))
             .with_config(AgentConfig {
                 max_iterations: 5,
                 max_retries: 0,
