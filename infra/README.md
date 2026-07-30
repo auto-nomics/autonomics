@@ -9,21 +9,38 @@ Reproducible setup for the Iceberg datalake that powers the `autonomics` data-en
 - **Garage S3** (or any S3-compatible storage) for the warehouse backend
 - **Hail** (optional, only needed for `main.py`)
 
-## Environment Variables
+## Unified Connection Layer
+
+All Python infra scripts share a single Iceberg connection via the `datalake`
+package (`infra/datalake/`). Import it anywhere:
+
+```python
+from datalake import get_catalog
+
+catalog = get_catalog()       # singleton, reads ICEBERG_* env vars
+table = catalog.load_table("ld_score.ukbb_eur")
+```
+
+The old `infra/ld_score/config.py` is now a thin re-export shim for backward
+compatibility — new code should import from `datalake` directly.
+
+### Environment Variables
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
-| `ICEBERG_REST_URI` | `http://localhost:8181` | no | REST catalog endpoint |
+| `ICEBERG_REST_URI` | `http://localhost:8181/catalog` | no | REST catalog endpoint |
 | `ICEBERG_S3_ENDPOINT` | `http://localhost:3900` | no | S3 / Garage endpoint |
 | `ICEBERG_S3_ACCESS_KEY_ID` | — | **yes** | S3 access key |
 | `ICEBERG_S3_SECRET_ACCESS_KEY` | — | **yes** | S3 secret key |
+| `ICEBERG_S3_REGION` | `garage` | no | S3 region |
+| `ICEBERG_S3_BUCKET` | `datalake` | no | Warehouse / bucket name |
 
 ## Quick Start
 
 ```bash
 cd infra
 uv sync                          # install dependencies
-python -c "from ld_score.schema import LD_SCORE_SCHEMA; print(LD_SCORE_SCHEMA)"
+python -c "from datalake import get_catalog; print(get_catalog())"
 ```
 
 ## LD-Score Panel Scripts
@@ -96,3 +113,12 @@ Defined in `ld_score/schema.py`, this is the canonical schema for all LD-score p
 | `ld_score` | float64 | LD score value |
 
 The Rust `LdscHsqNode` consumes `rsid`, `ld_score`, and `locus.position` from this table via an SQL join.
+
+> **S-LDSC note:** The current schema has a single `ld_score` column (univariate h²).
+> Stratified LDSC (`LdscSldscNode`) requires multi-annotation LD scores (baselineLD v2.2,
+> 97 columns). Until the lake has a multi-annotation panel table, the S-LDSC node reads
+> from files instead. The reference panel is archived at
+> `aliyun:autonomics-data/ldsc/s-ldsc-ref/` — restore with:
+> ```bash
+> rclone copy aliyun:autonomics-data/ldsc/s-ldsc-ref/ reference/ldsc_data/ -P
+> ```

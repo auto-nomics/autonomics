@@ -345,7 +345,23 @@ impl LdscHsqNode {
         // 2. Count the total SNPs in the LD score panel to derive M — the
         //    normalising constant in the LDSC regression.
         //
-        // NOTE: Rare SNP need to be filtered out (MAF < 0.05)
+        // ⚠️ BUG: This uses COUNT(*) of the Iceberg panel as M, but the correct
+        //    LDSC value is M_5_50 — the L2-summed per-annotation SNP count from
+        //    the `.l2.M_5_50` file written when LD scores are computed. COUNT(*)
+        //    counts the rows in the panel table (one per SNP with MAF in range),
+        //    which overestimates M because it ignores the L2 weighting and may
+        //    include/exclude SNPs differently from the M_5_50 computation. This
+        //    inflates h² (observed: h² > 1 in some cases).
+        //
+        //    Correct fix: read M from a companion `.l2.M_5_50` value (stored
+        //    alongside the panel at LD-score-computation time), or from a
+        //    dedicated M table in the lake. Until the lake has this, the file-
+        //    driver path (`sumstats::estimate_h2_from_files`) which reads
+        //    `.l2.M_5_50` is the accurate route. See memory note
+        //    `ldsc-hsq-node-m-and-liability`.
+        //
+        //    The AF BETWEEN 0.05 AND 0.95 filter below mimics the MAF range of
+        //    M_5_50 but is NOT equivalent to the real M_5_50.
         let count_sql = format!(
             r#"SELECT COUNT(*) AS "n" FROM iceberg.ld_score.{ld_table} WHERE "AF" BETWEEN 0.05 AND 0.95"#
         );

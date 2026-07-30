@@ -248,6 +248,16 @@ fn resolve_ldscore(
 /// fitted [`Hsq`] (whose `.reg` carries coef/cat/tot/prop/... and `.mean_chisq`,
 /// `.lambda_gc`, `.ratio`).
 pub fn estimate_h2_from_files(cfg: &H2Config, log: &mut dyn Logger) -> Result<Hsq> {
+    Ok(estimate_h2_full(cfg, log)?.0)
+}
+
+/// Same pipeline as [`estimate_h2_from_files`], but additionally returns the
+/// (variance-filtered) ref_ld column names and the regression SNP count — the
+/// pieces the S-LDSC result layer ([`crate::sldsc::build_sldsc_results`]) needs
+/// to label per-annotation rows.
+///
+/// Returns `(Hsq, ref_ld_cnames, n_snp)`.
+fn estimate_h2_full(cfg: &H2Config, log: &mut dyn Logger) -> Result<(Hsq, Vec<String>, usize)> {
     let sumstats = io::read_sumstats(&cfg.sumstats, false, true)?;
     log.log(&format!(
         "Read summary statistics for {} SNPs.",
@@ -338,8 +348,10 @@ pub fn estimate_h2_from_files(cfg: &H2Config, log: &mut dyn Logger) -> Result<Hs
         log.log(&format!("Using two-step estimator with cutoff at {ts}."));
     }
 
+    let n_snp = joined.snp.len();
+    let cnames = joined.ref_ld_cnames.clone();
     let chisq = joined.chisq.clone();
-    Hsq::new(
+    let hsq = Hsq::new(
         &chisq,
         &joined.ref_ld,
         &joined.w_ld,
@@ -349,7 +361,26 @@ pub fn estimate_h2_from_files(cfg: &H2Config, log: &mut dyn Logger) -> Result<Hs
         cfg.intercept_h2,
         two_step,
         old_weights,
-    )
+    )?;
+    Ok((hsq, cnames, n_snp))
+}
+
+/// Run the stratified LD Score Regression (`--h2` with multiple ref_ld
+/// annotations) driver and return a per-annotation result table
+/// ([`crate::sldsc::SldscResults`]).
+///
+/// This shares the exact read/merge/filter/regress pipeline of
+/// [`estimate_h2_from_files`] (so the S-LDSC defaults — `old_weights` and
+/// `chisq_max = max(0.001·Nmax, 80)` for `n_annot > 1` — are applied
+/// automatically) and then derives the partitioned quantities (per-annotation
+/// h², proportion, enrichment, and their SE / z / p) via
+/// [`crate::sldsc::build_sldsc_results`].
+pub fn estimate_sldsc(
+    cfg: &H2Config,
+    log: &mut dyn Logger,
+) -> Result<crate::sldsc::SldscResults> {
+    let (hsq, cnames, n_snp) = estimate_h2_full(cfg, log)?;
+    Ok(crate::sldsc::build_sldsc_results(&hsq, &cnames, n_snp))
 }
 
 /// Port of `_print_cov` / `_print_delete_values` — write the jackknife delete
