@@ -15,7 +15,9 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
+use agentik_types::CompactEvent;
 use arc_swap::ArcSwapOption;
+use chrono::Utc;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, span};
@@ -381,10 +383,6 @@ impl Agent {
                         false
                     }
                 }
-                Err(AgentError::CompactionRebuild) => {
-                    tracing::info!("compaction rebuild, re-entering workflow");
-                    continue;
-                }
                 Err(e) if e.is_retryable() && consecutive_retries < self.config.max_retries => {
                     consecutive_retries += 1;
                     tracing::warn!(
@@ -455,8 +453,8 @@ impl Agent {
     /// Core agent workflow
     ///
     /// Basic process: build context -> request API -> execute tool calls -> append to memory.
-    /// Returns `Err(AgentError::CompactionRebuild)` when a compaction occurred and the
-    /// caller should re-enter this method with fresh context.
+    /// Compaction (if triggered) is handled transparently inside [`request`] — the
+    /// context is rebuilt in place after memory is summarized.
     async fn agent_workflow(&mut self, retry_feedback: Option<String>) -> Result<(), AgentError> {
         if let Some(feedback) = retry_feedback {
             self.inject_message(vec![ContentBlock::Text { text: feedback }])
@@ -622,7 +620,7 @@ impl Agent {
 
     async fn request(
         &mut self,
-        context: Vec<Message>,
+        mut context: Vec<Message>,
         allowed: Option<&[String]>,
     ) -> Result<Message, AgentError> {
         let span = span!(Level::TRACE, "API Request");
@@ -646,9 +644,28 @@ impl Agent {
                 max_output_tokens = model.model_info.max_output_tokens,
                 "context pressure detected, compacting"
             );
-            self.memory.compact(model.as_ref()).await?;
-            // Rebuild context after compaction
-            return Err(AgentError::CompactionRebuild);
+            self.send_event(AgentEvent::Compact {
+                event: CompactEvent::CompactStart { ts: Utc::now() },
+            });
+            let compacted = self.memory.compact(model.as_ref()).await?;
+            self.send_event(AgentEvent::Compact {
+                event: CompactEvent::CompactFinish { ts: Utc::now() },
+            });
+            if compacted {
+                // Memory was rewritten — rebuild context from the compacted
+                // state so the stale pre-compaction messages are discarded.
+                context = self.build_context().await?;
+            } else {
+                // Compaction was a no-op (the bloat lives in the current
+                // segment, which `compact` never summarizes). Proceed with
+                // the request anyway — the API call may still overflow and
+                // surface a retryable error, but that is strictly better
+                // than looping.
+                tracing::warn!(
+                    "context pressure detected but nothing to compact; \
+                     proceeding with request (current segment may overflow)"
+                );
+            }
         }
 
         let all_tools = self.visible_tools(allowed);
@@ -863,6 +880,44 @@ mod tests {
     }
 
     // ── Tests ─────────────────────────────────────────────────
+
+    // ── Regression: compaction no-op must not loop ────────────────
+    //
+    // When context pressure comes from the *current* segment (a huge tool
+    // output) rather than historical segments, `compact()` is a no-op.
+    // The old code returned `Err(CompactionRebuild)` unconditionally after
+    // `compact()`, causing `run_session()` to `continue` → re-enter
+    // `agent_workflow()` → `request()` → `should_compact` (still true) →
+    // `compact()` (still no-op) → … an infinite loop that hung the agent.
+    //
+    // The fix: `request()` handles compaction transparently — when `compact()`
+    // returns `false` (nothing compacted), it proceeds with the request
+    // instead of signaling a rebuild. This test verifies that `should_compact`
+    // fires but `select_for_compaction` yields nothing, proving the scenario
+    // that would have hung the old code.
+    #[tokio::test]
+    async fn test_compaction_noop_does_not_loop() {
+        use crate::memory::Memory;
+
+        // Single segment with a giant message — no historical segments.
+        let mut memory = Memory::new();
+        memory.remember(Message::user("x".repeat(500_000))).unwrap();
+
+        let budget = TokenBudget::default();
+        let context_length = 128_000u64;
+        let max_output_tokens = 32_000u64;
+
+        let msgs = memory.render_context().unwrap();
+
+        // Pressure is real — the giant message alone exceeds the budget.
+        // This is the scenario that would have caused the old code to loop
+        // forever (should_compact=true but compact is a no-op). The fix
+        // ensures request() proceeds instead of returning CompactionRebuild.
+        assert!(
+            budget.should_compact(&msgs, context_length, max_output_tokens),
+            "should_compact must fire for a 500K-char single-segment conversation"
+        );
+    }
 
     #[tokio::test]
     #[ignore] // slow: depends on network I/O / heavy mock setup

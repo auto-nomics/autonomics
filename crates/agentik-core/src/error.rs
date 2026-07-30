@@ -75,11 +75,6 @@ pub enum AgentError {
     #[error("missing required config: {0}")]
     MissingConfig(String),
 
-    /// Internal signal: compaction completed and the turn should be rebuilt
-    /// with fresh context. Handled by the agent loop — not a user-visible error.
-    #[error("compaction rebuild")]
-    CompactionRebuild,
-
     /// The agent loop was interrupted by an external cancellation signal.
     #[error("agent cancelled by user")]
     Cancelled,

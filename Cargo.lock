@@ -61,6 +61,7 @@ dependencies = [
  "agentik-types",
  "arc-swap",
  "async-trait",
+ "chrono",
  "dotenvy",
  "futures",
  "regex",

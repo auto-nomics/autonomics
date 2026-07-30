@@ -19,22 +19,22 @@ pub struct StatusBar<'a> {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub model_name: Option<&'a str>,
+    pub is_compacting: bool,
 }
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
-        let (indicator, indicator_color) = match self.status {
-            AgentStatus::Idle => ("○", Color::Gray),
-            AgentStatus::Requesting => ("◐", Color::Yellow),
-            AgentStatus::Streaming => ("●", Color::Green),
-            AgentStatus::Error => ("✗", Color::Red),
-        };
-
-        let status_text = match self.status {
-            AgentStatus::Idle => "idle",
-            AgentStatus::Requesting => "requesting",
-            AgentStatus::Streaming => "streaming",
-            AgentStatus::Error => "error",
+        // Compaction takes over the status display so the user can see the
+        // agent is summarizing context, not idle/requesting.
+        let (indicator, indicator_color, status_text) = if self.is_compacting {
+            ("⟳", Color::Magenta, "compacting")
+        } else {
+            match self.status {
+                AgentStatus::Idle => ("○", Color::Gray, "idle"),
+                AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
+                AgentStatus::Streaming => ("●", Color::Green, "streaming"),
+                AgentStatus::Error => ("✗", Color::Red, "error"),
+            }
         };
 
         let in_tok = format_tokens(self.input_tokens);

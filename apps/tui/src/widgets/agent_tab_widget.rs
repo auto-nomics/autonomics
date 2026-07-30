@@ -65,6 +65,7 @@ impl Widget for AgentTabWidget<'_> {
             output_tokens: ts.output_tokens,
             cache_read_tokens: ts.cache_read_tokens,
             model_name: self.active_model,
+            is_compacting: ts.compact_state.is_compacting,
         };
         status_bar.render(layout[0], buf);
 

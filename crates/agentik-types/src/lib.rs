@@ -30,7 +30,7 @@ pub use tools::{
     tool_definition_from_schema,
 };
 
-pub use agent_events::{AgentEvent, ContentBlockKind};
+pub use agent_events::{AgentEvent, CompactEvent, ContentBlockKind};
 
 pub use lifecycle::AgentLifecycleStatus;
 

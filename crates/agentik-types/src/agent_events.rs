@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{ContentBlockDelta, Message, MessageStreamEvent, StopReason};
@@ -67,11 +69,20 @@ pub enum AgentEvent {
     /// A background tool task completed with its real result.
     ToolBackgroundComplete { id: String, ok: bool },
 
+    /// Agent is performing context compaction
+    Compact { event: CompactEvent },
+
     /// Agent finished its workflow.
     Done,
 
     /// An error occurred.
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CompactEvent {
+    CompactStart { ts: DateTime<Utc> },
+    CompactFinish { ts: DateTime<Utc> },
 }
 
 /// Coarse-grained kind of a content block, sufficient for UI observation

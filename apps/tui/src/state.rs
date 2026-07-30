@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::config_db::{ModelInput, ProviderInput, ProviderRow};
 use crate::widgets::input_area::{InputArea, InputState};
 use agentik_sdk::model::Model;
-use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::{AgentEvent, CompactEvent};
 use arc_swap::ArcSwapOption;
 use ratatui::text::Line;
 
@@ -161,6 +161,12 @@ pub struct AgentTabState {
     /// Monotonic frame counter, incremented each render tick while the agent
     /// is active (Requesting / Streaming). Drives loading animations.
     pub frame: u64,
+    pub compact_state: CompactState,
+}
+
+#[derive(Debug, Default)]
+pub struct CompactState {
+    pub is_compacting: bool,
 }
 
 impl Default for AgentTabState {
@@ -192,6 +198,7 @@ impl Default for AgentTabState {
             messages_version: 0,
             streaming_assistant: None,
             frame: 0,
+            compact_state: CompactState::default(),
         }
     }
 }
@@ -386,6 +393,10 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         | AgentEvent::ContentBlockStart { .. }
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => {}
+        AgentEvent::Compact { event } => match event {
+            CompactEvent::CompactStart { .. } => state.compact_state.is_compacting = true,
+            CompactEvent::CompactFinish { .. } => state.compact_state.is_compacting = false,
+        },
     }
 }
 

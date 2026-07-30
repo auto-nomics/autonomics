@@ -489,13 +489,26 @@ impl Memory {
     /// 2. Serializes the head messages for the summarization LLM
     /// 3. Supports anchored updates when a previous summary exists
     /// 4. Stores the summary and preserves the tail as a new segment
-    pub async fn compact(&mut self, model: &Model) -> Result<()> {
+    /// Compact conversation history using a sliding-window approach.
+    ///
+    /// 1. Selects a head/tail split point based on `keep_tokens` budget
+    /// 2. Serializes the head messages for the summarization LLM
+    /// 3. Supports anchored updates when a previous summary exists
+    /// 4. Stores the summary and preserves the tail as a new segment
+    ///
+    /// Returns `Ok(true)` when compaction actually occurred, or `Ok(false)`
+    /// when there is nothing to compact (conversation too short / no historical
+    /// segments). The caller MUST distinguish these: returning
+    /// `CompactionRebuild` unconditionally — even when nothing was compacted —
+    /// creates an infinite loop (`should_compact` keeps firing because the
+    /// bloat lives in the *current* segment, which `compact` never touches).
+    pub async fn compact(&mut self, model: &Model) -> Result<bool> {
         // Step 1: Select head/tail split
         let selection = match select_for_compaction(&self.items, DEFAULT_KEEP_TOKENS) {
             Some(sel) => sel,
             None => {
                 tracing::debug!("nothing to compact — conversation is too short");
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -578,7 +591,7 @@ impl Memory {
             "memory compacted, new segment created"
         );
 
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -667,6 +680,50 @@ mod tests {
         // Very short — should not need compaction
         let result = select_for_compaction(&memory.items, 10);
         assert!(result.is_none());
+    }
+
+    // ── Regression: compaction infinite-loop (GH hang) ───────────────
+    //
+    // Bug: `TokenBudget::should_compact` checks the FULL rendered context
+    // (including the current segment), but `Memory::compact` only summarizes
+    // HISTORICAL segments. When a single huge message (e.g. a massive tool
+    // output) lands in the current segment, `should_compact` fires forever
+    // while `compact` is a permanent no-op — the agent loop spins
+    // `request → compact(no-op) → CompactionRebuild → request → …` and hangs.
+    //
+    // The fix: `compact` returns `Ok(false)` when it does nothing, and
+    // `request` only signals `CompactionRebuild` on `Ok(true)`.
+
+    #[test]
+    fn test_should_compact_true_but_compact_noop_single_segment() {
+        // One segment with a giant user message — no historical segments.
+        let mut memory = Memory::new();
+        memory
+            .remember(Message::user(&"x".repeat(200_000)))
+            .unwrap();
+
+        // `should_compact` would return true (200K chars ≈ 50K tokens >> any
+        // reasonable context budget), but `select_for_compaction` returns None
+        // because there is only one segment.
+        let sel = select_for_compaction(&memory.items, DEFAULT_KEEP_TOKENS);
+        assert!(sel.is_none(), "single segment must yield no compaction");
+    }
+
+    #[test]
+    fn test_should_compact_true_but_compact_noop_small_history() {
+        // Two segments: a tiny historical segment + a huge current segment.
+        let mut memory = Memory::new();
+        memory.remember(Message::user("tiny history")).unwrap();
+        memory.items.push(MemoryItem::default());
+        memory
+            .remember(Message::user(&"x".repeat(200_000)))
+            .unwrap();
+
+        // Historical tokens (~3) are well below DEFAULT_KEEP_TOKENS (8000),
+        // so `select_for_compaction` returns None even though the total
+        // context is huge.
+        let sel = select_for_compaction(&memory.items, DEFAULT_KEEP_TOKENS);
+        assert!(sel.is_none(), "small history must yield no compaction");
     }
 
     #[test]
