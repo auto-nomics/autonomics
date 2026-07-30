@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use agentik_sdk::model::Model;
+use arc_swap::ArcSwapOption;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -14,7 +15,7 @@ use crate::{lifecycle::AgentLifecycle, memory::Memory, tools::Toolset};
 use agentik_sdk::types::messages::Message;
 
 pub struct AgentBuilder {
-    model: Option<Arc<Model>>,
+    model: Arc<ArcSwapOption<Model>>,
     initial_messages: Vec<Message>,
     context_provider: Option<Arc<dyn ContextProvider>>,
     config: AgentConfig,
@@ -56,7 +57,7 @@ impl Clone for AgentBuilder {
 impl AgentBuilder {
     pub fn new() -> Self {
         Self {
-            model: None,
+            model: Default::default(),
             initial_messages: Vec::new(),
             context_provider: None,
             config: AgentConfig::default(),
@@ -77,8 +78,8 @@ impl AgentBuilder {
         self
     }
 
-    pub fn with_model(mut self, model: Arc<Model>) -> Self {
-        self.model = Some(model);
+    pub fn with_model(mut self, model: Arc<ArcSwapOption<Model>>) -> Self {
+        self.model = model;
         self
     }
 
@@ -158,9 +159,7 @@ impl AgentBuilder {
     }
 
     pub async fn build(mut self) -> Result<Agent, AgentError> {
-        let model = self
-            .model
-            .ok_or_else(|| AgentError::MissingConfig("model".to_string()))?;
+        let model = self.model.clone();
 
         // Instantiate the skill runtime (if any) and its `update_todo` tool.
         let skill_runtime = self.skill.take().map(skill::instantiate);

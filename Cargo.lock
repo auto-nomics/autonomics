@@ -59,6 +59,7 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
+ "arc-swap",
  "async-trait",
  "dotenvy",
  "futures",
@@ -340,6 +341,15 @@ dependencies = [
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -6767,6 +6777,7 @@ version = "0.1.0"
 dependencies = [
  "agentik-core",
  "agentik-sdk",
+ "arc-swap",
  "data-engine",
  "data-engine-tools",
  "datalake",
@@ -8202,6 +8213,7 @@ dependencies = [
  "agentik-core",
  "agentik-sdk",
  "arboard",
+ "arc-swap",
  "chrono",
  "clap",
  "color-eyre",

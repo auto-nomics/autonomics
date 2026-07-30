@@ -38,7 +38,9 @@ async fn test_agent_basic_workflow_with_mimo() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
     let mut agent = Agent::builder()
-        .with_model(Arc::new(build_mimo_model()))
+        .with_model(Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(
+            build_mimo_model(),
+        ))))
         .with_system_prompt_section(
             "You are a helpful assistant. Keep responses very short (one sentence).",
         )

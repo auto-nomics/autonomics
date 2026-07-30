@@ -19,6 +19,7 @@ fs = { path = "../fs" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }
+arc-swap.workspace = true
 
 [lints]
 workspace = true

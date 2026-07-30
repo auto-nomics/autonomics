@@ -5,6 +5,7 @@ use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
+use arc_swap::ArcSwapOption;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
 use datalake::Datalake;
@@ -129,7 +130,10 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    pub fn new(runtime: &tokio::runtime::Runtime, model: Model) -> Result<Self> {
+    pub fn new(
+        runtime: &tokio::runtime::Runtime,
+        model: Arc<ArcSwapOption<Model>>,
+    ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
@@ -153,7 +157,7 @@ impl AgentRuntime {
             )?;
 
             let mut agent = Agent::builder()
-                .with_model(Arc::new(model))
+                .with_model(model)
                 .with_agent_event_tx(event_tx)
                 .with_system_prompt_identity(
                     "You are a biomedical research assistant specializing in genomics, \

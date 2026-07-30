@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::config_db::{ModelInput, ProviderInput, ProviderRow};
 use crate::widgets::input_area::{InputArea, InputState};
+use agentik_sdk::model::Model;
 use agentik_sdk::types::AgentEvent;
+use arc_swap::ArcSwapOption;
 use ratatui::text::Line;
 
 pub const TABS: &[&str] = &["Agent", "Config"];
@@ -651,4 +653,5 @@ pub struct AppState {
     pub main_tab_state: MainTabState,
     pub agent_tab_state: AgentTabState,
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
+    pub active_model: Arc<ArcSwapOption<Model>>,
 }

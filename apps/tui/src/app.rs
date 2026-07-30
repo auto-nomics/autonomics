@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
+use arc_swap::ArcSwapOption;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
     KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
@@ -56,7 +58,7 @@ fn set_panic_hook() {
 pub struct App {
     state: AppState,
     tab_state: TabNavState,
-    agent_runtime: Option<AgentRuntime>,
+    agent_runtime: AgentRuntime,
     /// Kept alive to drive the agent's background event loop task.
     _runtime: Option<tokio::runtime::Runtime>,
     conn: Connection,
@@ -85,18 +87,16 @@ impl App {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
         // Try to build a Model from DB; if none configured yet, start without an agent.
-        let agent_runtime = Self::build_model(&conn)
-            .and_then(|model| {
-                AgentRuntime::new(&runtime, model)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-            })
-            .ok();
+        let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
 
-        if agent_runtime.is_none() {
-            tracing::info!("no model configured — starting without agent runtime");
-        }
+        let agent_runtime =
+            AgentRuntime::new(&runtime, model.clone()).expect("failed to build agent runtime");
 
-        let mut state = AppState::default();
+        let mut state = AppState {
+            active_model: model,
+            ..Default::default()
+        };
+
         Self::load_model_config(&conn, &mut state.model_config_state);
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -119,32 +119,22 @@ impl App {
     /// Reads `active_model` from the `settings` table (format:
     /// `"provider_name:model_name"`), looks up the model in the SDK registry,
     /// and joins it with provider credentials from the `providers` table.
-    fn build_model(conn: &Connection) -> Result<Model, Box<dyn std::error::Error>> {
+    /// Returns `None` if no model is configured, credentials are missing,
+    /// or any lookup fails — the caller treats that as "start without agent".
+    fn build_model(conn: &Connection) -> Option<Model> {
         use agentik_sdk::provider::registry;
 
         // Read the active model setting.
-        let active: Option<String> = conn
+        let active: String = conn
             .query_row(
                 "SELECT value FROM settings WHERE key = 'active_model'",
                 [],
                 |row| row.get(0),
             )
-            .ok();
-
-        let Some(active) = active else {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "no active_model in settings",
-            )));
-        };
+            .ok()?;
 
         // Parse "provider_name:model_name"
-        let (provider_name, model_name) = active.split_once(':').ok_or_else(|| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid active_model format: {active}"),
-            )) as Box<dyn std::error::Error>
-        })?;
+        let (provider_name, model_name) = active.split_once(':')?;
 
         // Look up provider credentials from DB (only api_key matters —
         // base_url always comes from the registry so code updates take
@@ -155,18 +145,10 @@ impl App {
                 [provider_name],
                 |row| row.get(0),
             )
-            .map_err(|_| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("provider '{provider_name}' not configured in DB"),
-                )) as Box<dyn std::error::Error>
-            })?;
+            .ok()?;
 
         if api_key.is_empty() {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("provider '{provider_name}' has empty api_key"),
-            )));
+            return None;
         }
 
         // Look up model info + base_url from the built-in catalog.
@@ -174,22 +156,10 @@ impl App {
         let base_url = registry::default_base_url(&provider_type)
             .unwrap_or("")
             .to_string();
-        let preset_models = registry::preset_models(&provider_type).ok_or_else(|| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no preset models for provider '{provider_name}'"),
-            )) as Box<dyn std::error::Error>
-        })?;
-
+        let preset_models = registry::preset_models(&provider_type)?;
         let mut model_info = preset_models
             .into_iter()
-            .find(|m| m.model_name == model_name)
-            .ok_or_else(|| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("model '{model_name}' not found in {provider_name} catalog"),
-                )) as Box<dyn std::error::Error>
-            })?;
+            .find(|m| m.model_name == model_name)?;
 
         // Build ProviderConfig: api_key from DB, base_url from registry.
         let provider_config = ProviderConfig {
@@ -202,7 +172,7 @@ impl App {
         };
         model_info.provider_id = provider_config.id;
 
-        Model::new(model_info, &provider_config).map_err(Into::into)
+        Model::new(model_info, &provider_config).ok()
     }
 
     /// Load the built-in provider catalogue, augmented with DB credentials,
@@ -299,9 +269,7 @@ impl App {
 
         // Ensure the agent and engine tasks are torn down even if the main
         // loop exited without a cooperative shutdown (e.g. force-quit).
-        if let Some(rt) = &mut self.agent_runtime {
-            rt.shutdown();
-        }
+        self.agent_runtime.shutdown();
 
         // Restore terminal on exit (whether normal or error).
         let _ = restore_terminal();
@@ -360,10 +328,8 @@ impl App {
                     }
                 }
 
-                // ── Agent streaming events (only when runtime exists) ──
-                maybe_agent = async {
-                    self.agent_runtime.as_mut()?.recv_event().await
-                }, if self.agent_runtime.is_some() => {
+                // ── Agent streaming events ──
+                maybe_agent = self.agent_runtime.recv_event() => {
                     if let Some(event) = maybe_agent {
                         state::apply_event(&mut self.state.agent_tab_state, event);
                     } else {
@@ -501,17 +467,13 @@ impl App {
             if let Some(ts) = self.cancel_requested_at {
                 if ts.elapsed() < FORCE_QUIT_WINDOW {
                     tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                    if let Some(rt) = &mut self.agent_runtime {
-                        rt.shutdown();
-                    }
+                    self.agent_runtime.shutdown();
                     self.should_quit = true;
                     return;
                 }
             }
             // First Ctrl+C: cooperative cancel.
-            if let Some(rt) = &mut self.agent_runtime {
-                rt.cancel();
-            }
+            self.agent_runtime.cancel();
             self.cancel_requested_at = Some(Instant::now());
             return;
         }
@@ -658,9 +620,7 @@ impl App {
                     );
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                     ts.push_user_message(text.clone());
-                    if let Some(rt) = &self.agent_runtime {
-                        rt.send_message(text);
-                    }
+                    self.agent_runtime.send_message(text);
                     ts.scroll_to_bottom();
                 }
                 ts.input_mode = InputMode::Browse;
@@ -829,11 +789,9 @@ impl App {
         }
     }
 
-    /// Persist the active model selection to the `settings` table.
-    ///
-    /// The agent runtime cannot be rebuilt at runtime (Tokio disallows nested
-    /// `block_on`), so we save the selection and shut down the current runtime.
-    /// The next app startup will load the new model automatically.
+    /// Persist the active model selection to the `settings` table and hot-swap
+    /// the model in the shared [`ArcSwapOption`]. The agent picks up the new
+    /// model on its next turn — no runtime restart needed.
     fn activate_model(&mut self, provider_name: &str, model_name: &str) {
         let value = format!("{provider_name}:{model_name}");
 
@@ -844,13 +802,13 @@ impl App {
             [&value],
         );
 
-        // Shut down the current runtime — it's bound to the old model.
-        if let Some(rt) = &mut self.agent_runtime {
-            rt.shutdown();
+        // Hot-swap: rebuild the Model from DB and atomically store it.
+        if let Some(new_model) = Self::build_model(&self.conn) {
+            self.state.active_model.store(Some(Arc::new(new_model)));
+            tracing::info!("model '{value}' hot-swapped");
+        } else {
+            tracing::warn!("model '{value}' saved but failed to build — restart to apply");
         }
-        self.agent_runtime = None;
-
-        tracing::info!("model '{value}' saved — restart to apply");
     }
 
     /// Insert or update a provider's api_key in the database.

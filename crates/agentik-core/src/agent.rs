@@ -15,6 +15,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
+use arc_swap::ArcSwapOption;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, span};
@@ -71,7 +72,7 @@ pub enum InternalEvent {
 
 pub struct Agent {
     pub(crate) id: Uuid,
-    pub(crate) model: Arc<Model>,
+    pub(crate) model: Arc<ArcSwapOption<Model>>,
     pub(crate) memory: Memory,
     pub(crate) lifecycle: AgentLifecycle,
     pub(crate) toolset: Toolset,
@@ -627,7 +628,10 @@ impl Agent {
         let span = span!(Level::TRACE, "API Request");
         let _enter = span.enter();
 
-        let model = &self.model;
+        let model = self
+            .model
+            .load_full()
+            .ok_or_else(|| AgentError::MissingConfig("no active model configured".into()))?;
 
         // Accurate overflow detection using full message-list token estimation,
         // matching OpenCode's `compactIfNeeded()` logic.
@@ -834,7 +838,7 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mut agent = Agent::builder()
-            .with_model(Arc::new(model))
+            .with_model(Arc::new(ArcSwapOption::from_pointee(Some(model))))
             .with_config(AgentConfig {
                 max_iterations: 5,
                 max_retries: 0,
