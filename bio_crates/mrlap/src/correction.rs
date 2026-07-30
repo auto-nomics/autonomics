@@ -32,13 +32,7 @@ pub const M_CONST: f64 = 1_150_000.0;
 /// `abs(denominator - sumbeta2)`, where `denominator` is the model-implied
 /// Σβ² under a mixture-of-normals genetic architecture (lines 35-44).
 #[allow(non_snake_case)]
-fn get_pi_loss(
-    my_pi: f64,
-    sumbeta2: f64,
-    Tr: f64,
-    n_exp: f64,
-    h2_ldsc: f64,
-) -> f64 {
+fn get_pi_loss(my_pi: f64, sumbeta2: f64, Tr: f64, n_exp: f64, h2_ldsc: f64) -> f64 {
     if my_pi <= 0.0 {
         return 1e6;
     }
@@ -221,8 +215,9 @@ pub fn corrected_alpha(
     let b = (1.0 - pi_x) * 2.0 / n_exp * C;
     let d = a + b;
 
-    let numerator =
-        alpha_obs * d - (lambda_prime * pi_x * (2.0 * A + B + sigma2 * n_exp * B) + lambda_prime * (1.0 - pi_x) * 2.0 * C);
+    let numerator = alpha_obs * d
+        - (lambda_prime * pi_x * (2.0 * A + B + sigma2 * n_exp * B)
+            + lambda_prime * (1.0 - pi_x) * 2.0 * C);
     let denominator = pi_x * sigma2 * (2.0 * A + B * n_exp * sigma2 + B);
     numerator / denominator
 }
@@ -296,7 +291,9 @@ fn draw_batch(
     let nrm = Normal::new(0.0, 1.0).unwrap();
 
     // L ~ N(lambda, lambda_se) / sqrt(n_exp*n_out)
-    let l_draws: Vec<f64> = (0..s).map(|_| nrm.sample(rng) * lambda_se + lambda).collect();
+    let l_draws: Vec<f64> = (0..s)
+        .map(|_| nrm.sample(rng) * lambda_se + lambda)
+        .collect();
     let lambda_prime: Vec<f64> = l_draws.iter().map(|v| v * lambda_prime_scale).collect();
 
     // E ~ N(effect_i, se_i) per (iv, sim), column-major (sim varies fastest in R matrix)
@@ -310,7 +307,9 @@ fn draw_batch(
 
     // H ~ N(h2, h2_se), resample negatives
     let mut neg_h2 = false;
-    let mut h: Vec<f64> = (0..s).map(|_| nrm.sample(rng) * h2_ldsc_se + h2_ldsc).collect();
+    let mut h: Vec<f64> = (0..s)
+        .map(|_| nrm.sample(rng) * h2_ldsc_se + h2_ldsc)
+        .collect();
     if h.iter().any(|v| *v < 0.0) {
         neg_h2 = true;
         let mut guard = 0;
@@ -346,7 +345,10 @@ fn draw_batch(
 ///
 /// R uses `sqrt(n_exp*n_out)` as the lambda→lambdaPrime scale inside the
 /// bootstrap draws (line 108).
-fn group_var_cov(rows: &[(f64, f64, f64, f64, f64, bool)], num_groups: usize) -> (Vec<f64>, Vec<f64>) {
+fn group_var_cov(
+    rows: &[(f64, f64, f64, f64, f64, bool)],
+    num_groups: usize,
+) -> (Vec<f64>, Vec<f64>) {
     let n = rows.len();
     if n == 0 {
         return (vec![], vec![]);
@@ -388,7 +390,11 @@ fn sample_cov_owned(a: &[f64], b: &[f64]) -> f64 {
     let n = n as f64;
     let mx = a.iter().sum::<f64>() / n;
     let my = b.iter().sum::<f64>() / n;
-    let s: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - mx) * (y - my)).sum();
+    let s: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - mx) * (y - my))
+        .sum();
     s / (n - 1.0)
 }
 
@@ -407,12 +413,8 @@ pub fn correct(input: &CorrectionInput<'_>, seed: u64) -> Result<CorrectionResul
     let lambda_prime = input.lambda / (n_exp * input.n_out).sqrt();
 
     // Genetic architecture from the observed IVs.
-    let (pi_x, sigma) = estimate_genetic_architecture(
-        input.iv_std_beta_exp,
-        input.h2_ldsc,
-        n_exp,
-        tr,
-    );
+    let (pi_x, sigma) =
+        estimate_genetic_architecture(input.iv_std_beta_exp, input.h2_ldsc, n_exp, tr);
     let alpha_corrected = corrected_alpha(n_exp, lambda_prime, pi_x, sigma, input.alpha_obs, tr);
 
     // ---- bootstrap SE + cov (get_correctedSE) ----
@@ -433,10 +435,7 @@ pub fn correct(input: &CorrectionInput<'_>, seed: u64) -> Result<CorrectionResul
         S_BATCH,
     );
     // tmp_sd_corrected = sd(res$corrected) of the first batch (line 146).
-    let tmp_sd_corrected = sample_var_owned(
-        &rows.iter().map(|r| r.4).collect::<Vec<_>>(),
-    )
-    .sqrt();
+    let tmp_sd_corrected = sample_var_owned(&rows.iter().map(|r| r.4).collect::<Vec<_>>()).sqrt();
 
     // first convergence assessment
     let (vars, covs) = group_var_cov(&rows, NUM_GROUPS);
@@ -460,7 +459,7 @@ pub fn correct(input: &CorrectionInput<'_>, seed: u64) -> Result<CorrectionResul
         );
         rows.extend(extra);
         // filter only for the subset diagnostic (res stays unfiltered)
-        let filtered: Vec<(f64,f64,f64,f64,f64,bool)> = rows
+        let filtered: Vec<(f64, f64, f64, f64, f64, bool)> = rows
             .iter()
             .filter(|r| {
                 r.4 < alpha_corrected + 10.0 * tmp_sd_corrected
@@ -471,10 +470,11 @@ pub fn correct(input: &CorrectionInput<'_>, seed: u64) -> Result<CorrectionResul
         let (v2, c2) = group_var_cov(&filtered, NUM_GROUPS);
         let extra_check = input.alpha_obs_se.powi(2)
             + sample_var_owned(&rows.iter().map(|r| r.4).collect::<Vec<_>>())
-            - 2.0 * sample_cov_owned(
-                &rows.iter().map(|r| r.4).collect::<Vec<_>>(),
-                &rows.iter().map(|r| r.2).collect::<Vec<_>>(),
-            )
+            - 2.0
+                * sample_cov_owned(
+                    &rows.iter().map(|r| r.4).collect::<Vec<_>>(),
+                    &rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+                )
             < 0.0;
         needmore = cv_high(&v2, S_THRESHOLD) || cv_high(&c2, S_THRESHOLD) || extra_check;
         guard += 1;
@@ -488,7 +488,9 @@ pub fn correct(input: &CorrectionInput<'_>, seed: u64) -> Result<CorrectionResul
     let n_sim = rows.len();
 
     // test difference (lines 174-176)
-    let denom = (input.alpha_obs_se.powi(2) + se.powi(2) - 2.0 * cov).max(0.0).sqrt();
+    let denom = (input.alpha_obs_se.powi(2) + se.powi(2) - 2.0 * cov)
+        .max(0.0)
+        .sqrt();
     let test_diff = if denom > 0.0 {
         (input.alpha_obs - alpha_corrected) / denom
     } else {

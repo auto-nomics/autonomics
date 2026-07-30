@@ -7,9 +7,9 @@
 //! [`crate::pruning`].
 
 use crate::pruning::Instrument;
+use mr::Parameters;
 use mr::methods::egger::mr_egger_regression;
 use mr::methods::ivw::mr_ivw;
-use mr::Parameters;
 
 /// Result of the MR stage — matches the values MRlap reports.
 #[derive(Clone, Debug)]
@@ -54,9 +54,5 @@ pub fn run_mr(ivs: &[Instrument]) -> MrResult {
 
 fn mean<I: Iterator<Item = f64>>(it: I) -> f64 {
     let (sum, n) = it.fold((0.0_f64, 0usize), |(s, n), v| (s + v, n + 1));
-    if n == 0 {
-        f64::NAN
-    } else {
-        sum / n as f64
-    }
+    if n == 0 { f64::NAN } else { sum / n as f64 }
 }

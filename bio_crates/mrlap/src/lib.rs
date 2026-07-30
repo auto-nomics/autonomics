@@ -63,7 +63,7 @@ pub struct MrlapResult {
     pub int_crosstrait: f64,
     pub int_crosstrait_se: f64,
     // ---- Genetic architecture ----
-    pub polygenicity: f64,  // π
+    pub polygenicity: f64,         // π
     pub per_snp_heritability: f64, // σ²
     // ---- bootstrap diagnostics ----
     pub n_sim: usize,
@@ -97,7 +97,9 @@ pub fn run(input: RunInput<'_>) -> Result<MrlapResult> {
     // Instrument selection.
     let (ivs, _pruned) = pruning::select_instruments(input.harmonised, &input.prune)?;
     if ivs.is_empty() {
-        return Err(error::MrlapError::numerical("no instruments survived pruning"));
+        return Err(error::MrlapError::numerical(
+            "no instruments survived pruning",
+        ));
     }
     let mr = mr_runner::run_mr(&ivs);
 

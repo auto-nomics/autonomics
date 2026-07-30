@@ -83,8 +83,8 @@ fn apply_reverse(data: &mut Vec<HarmonisedRow>, mr_reverse: Option<f64>) {
     if let Some(p) = mr_reverse {
         let t = crate::input::z_threshold(p); // qnorm(MR_reverse)
         data.retain(|r| {
-            let stat =
-                (r.std_beta_exp.abs() - r.std_beta_out.abs()) / (r.std_se_exp.powi(2) + r.std_se_out.powi(2)).sqrt();
+            let stat = (r.std_beta_exp.abs() - r.std_beta_out.abs())
+                / (r.std_se_exp.powi(2) + r.std_se_out.powi(2)).sqrt();
             stat > t
         });
     }
@@ -94,10 +94,7 @@ fn apply_reverse(data: &mut Vec<HarmonisedRow>, mr_reverse: Option<f64>) {
 ///
 /// Input slices are `(rsid, chr, pos, p)`. Returns the kept rsids in the order
 /// they survive (most significant first within each region).
-fn prune_by_distance(
-    mut rows: Vec<(String, i32, i64, f64)>,
-    prune_dist_kb: f64,
-) -> Vec<String> {
+fn prune_by_distance(mut rows: Vec<(String, i32, i64, f64)>, prune_dist_kb: f64) -> Vec<String> {
     // order by p ascending (most significant first) — `byP = T`
     rows.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
     let prune_dist_bp = (prune_dist_kb * 1000.0) as i64;

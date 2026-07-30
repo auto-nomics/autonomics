@@ -24,7 +24,7 @@ pub struct RawGwasRow {
     pub rsid: String,
     pub chr: Option<i32>,
     pub pos: Option<i64>,
-    pub alt: String,   // effect allele (A1)
+    pub alt: String,        // effect allele (A1)
     pub ref_allele: String, // reference allele (A2)
     pub beta: Option<f64>,
     pub or: Option<f64>,

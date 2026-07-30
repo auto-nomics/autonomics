@@ -54,7 +54,9 @@ pub fn harmonise(exposure: &[TidyRow], outcome: &[TidyRow]) -> Vec<HarmonisedRow
             } else {
                 None // mismatch → drop
             };
-            let Some(std_beta_out) = aligned else { continue };
+            let Some(std_beta_out) = aligned else {
+                continue;
+            };
             out.push(HarmonisedRow {
                 rsid: e.rsid.clone(),
                 chr_exp: e.chr,

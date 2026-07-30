@@ -34,7 +34,12 @@ fn gold(name: &str) -> String {
 fn read_tsv(name: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let s = gold(name);
     let mut lines = s.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(str::to_owned).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(str::to_owned)
+        .collect();
     let rows: Vec<Vec<String>> = lines
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.split('\t').map(str::to_owned).collect())
@@ -43,7 +48,10 @@ fn read_tsv(name: &str) -> (Vec<String>, Vec<Vec<String>>) {
 }
 
 fn col<'a>(header: &[String], row: &'a [String], name: &str) -> &'a str {
-    let i = header.iter().position(|h| h == name).unwrap_or_else(|| panic!("col {name}"));
+    let i = header
+        .iter()
+        .position(|h| h == name)
+        .unwrap_or_else(|| panic!("col {name}"));
     &row[i]
 }
 
@@ -83,11 +91,22 @@ fn tidy_matches_r() {
     assert_eq!(tidy_rows.len(), golden.len(), "row count");
     // index by rsid
     use std::collections::HashMap;
-    let map: HashMap<&str, &Vec<String>> = golden.iter().map(|r| (col(&h, r, "rsid").into(), r)).collect();
+    let map: HashMap<&str, &Vec<String>> = golden
+        .iter()
+        .map(|r| (col(&h, r, "rsid").into(), r))
+        .collect();
     for t in &tidy_rows {
         let g = map.get(t.rsid.as_str()).unwrap();
-        assert!(approx(t.std_beta, f(g, &h, "std_beta"), 1e-9, 1e-12), "std_beta {}", t.rsid);
-        assert!(approx(t.std_se, f(g, &h, "std_SE"), 1e-9, 1e-12), "std_SE {}", t.rsid);
+        assert!(
+            approx(t.std_beta, f(g, &h, "std_beta"), 1e-9, 1e-12),
+            "std_beta {}",
+            t.rsid
+        );
+        assert!(
+            approx(t.std_se, f(g, &h, "std_SE"), 1e-9, 1e-12),
+            "std_SE {}",
+            t.rsid
+        );
         assert!(approx(t.p, f(g, &h, "p"), 1e-6, 1e-12), "p {}", t.rsid);
         assert!(approx(t.z, f(g, &h, "Z"), 1e-9, 1e-12), "Z {}", t.rsid);
     }
@@ -100,13 +119,26 @@ fn harmonise_matches_r() {
     let harm = harmonise(&exp, &out);
     let (h, golden) = read_tsv("harmonised.tsv");
     use std::collections::HashMap;
-    let map: HashMap<&str, &Vec<String>> = golden.iter().map(|r| (col(&h, r, "rsid").into(), r)).collect();
+    let map: HashMap<&str, &Vec<String>> = golden
+        .iter()
+        .map(|r| (col(&h, r, "rsid").into(), r))
+        .collect();
     assert_eq!(harm.len(), golden.len(), "harmonised row count");
     for row in &harm {
         let g = map.get(row.rsid.as_str()).unwrap();
-        assert!(approx(row.std_beta_exp, f(g, &h, "std_beta.exp"), 1e-9, 1e-12));
-        assert!(approx(row.std_beta_out, f(g, &h, "std_beta.out"), 1e-9, 1e-12),
-            "std_beta.out mismatch {}: rust={} r={}", row.rsid, row.std_beta_out, f(g, &h, "std_beta.out"));
+        assert!(approx(
+            row.std_beta_exp,
+            f(g, &h, "std_beta.exp"),
+            1e-9,
+            1e-12
+        ));
+        assert!(
+            approx(row.std_beta_out, f(g, &h, "std_beta.out"), 1e-9, 1e-12),
+            "std_beta.out mismatch {}: rust={} r={}",
+            row.rsid,
+            row.std_beta_out,
+            f(g, &h, "std_beta.out")
+        );
         assert!(approx(row.p_exp, f(g, &h, "p.exp"), 1e-6, 1e-12));
     }
 }
@@ -139,11 +171,15 @@ fn pruning_and_ivw_match_r() {
     let g = &irow[0];
     assert!(
         approx(mr.alpha_obs, f(g, &ih, "alpha_obs"), 1e-6, 1e-8),
-        "alpha_obs: rust={} r={}", mr.alpha_obs, f(g, &ih, "alpha_obs")
+        "alpha_obs: rust={} r={}",
+        mr.alpha_obs,
+        f(g, &ih, "alpha_obs")
     );
     assert!(
         approx(mr.alpha_obs_se, f(g, &ih, "alpha_obs_se"), 1e-6, 1e-8),
-        "alpha_obs_se: rust={} r={}", mr.alpha_obs_se, f(g, &ih, "alpha_obs_se")
+        "alpha_obs_se: rust={} r={}",
+        mr.alpha_obs_se,
+        f(g, &ih, "alpha_obs_se")
     );
 }
 
@@ -186,26 +222,54 @@ fn correction_matches_r() {
     let res = correct(&input, 42).unwrap();
 
     // Deterministic — tight tolerance.
-    assert!(approx(res.pi_x, f(g, &ch, "pi_x"), 1e-4, 1e-10),
-        "pi_x: rust={} r={}", res.pi_x, f(g, &ch, "pi_x"));
-    assert!(approx(res.sigma2_x, f(g, &ch, "sigma2_x"), 1e-4, 1e-12),
-        "sigma2_x: rust={} r={}", res.sigma2_x, f(g, &ch, "sigma2_x"));
-    assert!(approx(res.alpha_corrected, f(g, &ch, "alpha_corrected"), 1e-4, 1e-10),
-        "alpha_corrected: rust={} r={}", res.alpha_corrected, f(g, &ch, "alpha_corrected"));
+    assert!(
+        approx(res.pi_x, f(g, &ch, "pi_x"), 1e-4, 1e-10),
+        "pi_x: rust={} r={}",
+        res.pi_x,
+        f(g, &ch, "pi_x")
+    );
+    assert!(
+        approx(res.sigma2_x, f(g, &ch, "sigma2_x"), 1e-4, 1e-12),
+        "sigma2_x: rust={} r={}",
+        res.sigma2_x,
+        f(g, &ch, "sigma2_x")
+    );
+    assert!(
+        approx(
+            res.alpha_corrected,
+            f(g, &ch, "alpha_corrected"),
+            1e-4,
+            1e-10
+        ),
+        "alpha_corrected: rust={} r={}",
+        res.alpha_corrected,
+        f(g, &ch, "alpha_corrected")
+    );
 
     // Monte-Carlo — relative tolerance (different RNG streams).
     let r_se = f(g, &ch, "alpha_corrected_se");
-    assert!(approx(res.alpha_corrected_se, r_se, 0.20, 1e-4),
+    assert!(
+        approx(res.alpha_corrected_se, r_se, 0.20, 1e-4),
         "alpha_corrected_se: rust={} r={} (diff {:.2}%)",
-        res.alpha_corrected_se, r_se, (res.alpha_corrected_se - r_se).abs() / r_se * 100.0);
+        res.alpha_corrected_se,
+        r_se,
+        (res.alpha_corrected_se - r_se).abs() / r_se * 100.0
+    );
     let r_cov = f(g, &ch, "cov_obs_corrected");
     assert!(
         r_cov.abs() < 1e-8 || approx(res.cov_obs_corrected, r_cov, 0.35, 1e-5),
-        "cov_obs_corrected: rust={} r={}", res.cov_obs_corrected, r_cov
+        "cov_obs_corrected: rust={} r={}",
+        res.cov_obs_corrected,
+        r_cov
     );
 
     // Both should detect a significant obs-vs-corrected difference (same sign).
     let r_test = f(g, &ch, "test_diff");
-    assert_eq!(res.test_diff.is_sign_negative(), r_test.is_sign_negative(),
-        "test_diff sign: rust={} r={}", res.test_diff, r_test);
+    assert_eq!(
+        res.test_diff.is_sign_negative(),
+        r_test.is_sign_negative(),
+        "test_diff sign: rust={} r={}",
+        res.test_diff,
+        r_test
+    );
 }
