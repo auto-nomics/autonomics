@@ -27,6 +27,7 @@ ahash = "0.8"
 blake3 = "1.8.5"
 derive_more.workspace = true
 stat-primitives = { path = "../stat-primitives" }
+opentargets = { path = "../opentargets" }
 ldsc = { path = "../../bio_crates/ldsc" }
 lava = { path = "../../bio_crates/lava" }
 hdl = { path = "../../bio_crates/hdl" }

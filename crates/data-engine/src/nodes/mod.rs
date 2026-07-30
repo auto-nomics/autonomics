@@ -24,6 +24,7 @@ pub mod sink_file;
 pub mod sink_iceberg;
 pub mod source_file;
 pub mod source_iceberg;
+pub mod source_opentargets;
 pub mod sql_node;
 pub mod test_source;
 pub mod univariate_mixer;
@@ -53,6 +54,11 @@ pub use sink_file::{FileSinkNode, FileSinkNodeFactory, FileSinkNodeSpec, WriteFo
 pub use sink_iceberg::{IcebergSinkNode, IcebergSinkNodeFactory, IcebergSinkNodeSpec};
 pub use source_file::{FileFormat, FileSourceNode, FileSourceNodeFactory, FileSourceNodeSpec};
 pub use source_iceberg::{IcebergSourceNode, IcebergSourceNodeFactory, IcebergSourceNodeSpec};
+pub use source_opentargets::{
+    OpentargetsAssociationsNode, OpentargetsAssociationsNodeFactory,
+    OpentargetsAssociationsSpec, OpentargetsSearchNode, OpentargetsSearchNodeFactory,
+    OpentargetsSearchSpec,
+};
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
 pub use univariate_mixer::{

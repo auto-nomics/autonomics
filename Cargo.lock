@@ -1723,6 +1723,7 @@ dependencies = [
  "mrlap",
  "mtag",
  "nanoid",
+ "opentargets",
  "parquet",
  "petgraph",
  "schemars 1.2.2",
