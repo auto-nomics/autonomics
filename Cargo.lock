@@ -4828,6 +4828,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtag"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "murmur3"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
