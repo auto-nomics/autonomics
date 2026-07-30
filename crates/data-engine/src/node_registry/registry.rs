@@ -23,6 +23,7 @@ use crate::nodes::{
     },
     ldsc_hsq::LdscHsqNodeFactory,
     ldsc_rg::LdscRgNodeFactory,
+    lcv::LcvNodeFactory,
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
@@ -159,6 +160,7 @@ impl NodeRegistry {
         registry.register(Box::new(IcebergSinkNodeFactory {}));
         registry.register(Box::new(LdscHsqNodeFactory {}));
         registry.register(Box::new(LdscRgNodeFactory {}));
+        registry.register(Box::new(LcvNodeFactory {}));
         registry.register(Box::new(LiabilityNodeFactory {}));
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
@@ -262,6 +264,7 @@ mod tests {
             }
             "ldsc" => serde_json::json!({"n_blocks": 200}),
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
+            "lcv" => serde_json::json!({"no_blocks": 100}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
             "lava_locus" => {
