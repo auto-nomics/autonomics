@@ -26,6 +26,7 @@ members = [
   "bio_crates/mixer",
   "bio_crates/mr",
   "bio_crates/lcv",
+  "bio_crates/mtag",
   "infra/sink_ld_matrix",
   "crates/visualization",
   "infra/sink_af",
