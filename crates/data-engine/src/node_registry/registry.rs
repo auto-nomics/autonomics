@@ -21,9 +21,10 @@ use crate::nodes::{
         LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
         LavaUnivNodeFactory,
     },
+    lcv::LcvNodeFactory,
     ldsc_hsq::LdscHsqNodeFactory,
     ldsc_rg::LdscRgNodeFactory,
-    lcv::LcvNodeFactory,
+    ldsc_sldsc::LdscSldscNodeFactory,
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
@@ -161,6 +162,7 @@ impl NodeRegistry {
         registry.register(Box::new(LdscHsqNodeFactory {}));
         registry.register(Box::new(LdscRgNodeFactory {}));
         registry.register(Box::new(LcvNodeFactory {}));
+        registry.register(Box::new(LdscSldscNodeFactory {}));
         registry.register(Box::new(LiabilityNodeFactory {}));
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
@@ -265,6 +267,7 @@ mod tests {
             "ldsc" => serde_json::json!({"n_blocks": 200}),
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
             "lcv" => serde_json::json!({"no_blocks": 100}),
+            "sldsc" => serde_json::json!({}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
             "lava_locus" => {

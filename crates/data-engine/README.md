@@ -22,6 +22,9 @@ Every edge connects one named output port to one named input port. The public co
 | `IcebergSourceNode` | 0 → 1 | Reads an Iceberg table by `namespace.table` identifier into a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
+| `LdscHsqNode` | 1 → 1 | LD Score Regression for SNP-heritability (h²). Reads LD scores from the Iceberg `ld_score` panel. |
+| `LdscRgNode` | 1+ → 1 | Bivariate LD Score Regression for genetic correlation (rg). |
+| `LdscSldscNode` | 1 → 1 | Stratified LD Score Regression (S-LDSC). Reads multi-annotation baselineLD from files (`ref_ld_chr` / `w_ld_chr` config prefixes). Outputs a per-annotation result table. |
 | `FileSinkNode` | 1 → 0 | Writes CSV or Parquet. |
 | `IcebergSinkNode` | 1 → 0 | Writes a `DataFrame` to an Iceberg table via the catalog's `INSERT INTO` path. |
 

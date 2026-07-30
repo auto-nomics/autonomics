@@ -1,4 +1,4 @@
-from .catalog import get_catalog, scan_table
+from .catalog import IcebergEnv, get_catalog, list_tables, load_table, scan_table
 from .study_manage import (
     Analysis,
     AnalysisStatus,
@@ -20,6 +20,9 @@ from .study_manage import (
 
 __all__ = [
     "get_catalog",
+    "IcebergEnv",
+    "list_tables",
+    "load_table",
     "scan_table",
     "Analysis",
     "Study",

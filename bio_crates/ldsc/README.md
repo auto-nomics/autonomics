@@ -32,6 +32,7 @@ ported to Rust, and its golden fixtures (vendored under `tests/data/`).
 | | [`ldscore`](src/ldscore.rs) | `getBlockLefts`, `block_left_to_right`, `corSumVarBlocks`, `.l2.ldscore` writer |
 | `ldscore/parse.py` | [`io`](src/io.rs) | LDSC file-format readers (ldscore / M / annot / frq / cts / sumstats / bim / fam) |
 | `ldscore/sumstats.py` | [`sumstats`](src/sumstats.rs) | `estimate_h2_from_files` driver, `check_variance`, allele filter/align, summary text |
+| (new) | [`sldsc`](src/sldsc.rs) | S-LDSC per-annotation result table (`SldscResults`) + `.results` writer |
 | `munge_sumstats.py` | [`munge`](src/munge.rs) | full column-mapping, filters, `process_n`, daner formats, `p_to_z` |
 | `make_annot.py` | [`bed`](src/bed.rs) + [`make_annot`](src/make_annot.rs) | pure-Rust BED interval sort/merge/intersect; gene-set / BED → `.annot` |
 | (scipy specials) | [`stats`](src/stats.rs) | `erfc`, `norm_ppf`, `chi2_sf` / `chi2_isf` (dependency-free) |
@@ -90,6 +91,23 @@ let cfg = H2Config {
 let hsq = estimate_h2_from_files(&cfg, &mut NullLogger)?;
 ```
 
+### S-LDSC (partitioned / stratified h²) from files
+
+```rust,no_run
+use ldsc::sumstats::{H2Config, NullLogger, estimate_sldsc};
+let cfg = H2Config {
+    sumstats: "trait.sumstats.gz".into(),
+    ref_ld_chr: Some("baselineLD.").into(),   // multi-annotation (e.g. 97 cols)
+    w_ld_chr: Some("weights.").into(),
+    n_blocks: 200,
+    ..Default::default()
+};
+let results = estimate_sldsc(&cfg, &mut NullLogger)?;
+// results.annotations[k] = { category, coef, coef_se, coef_z, coef_p,
+//   cat (per-annot h²), cat_se, enrichment, enrichment_se, enrichment_p, ... }
+ldsc::sldsc::write_results(&results, "out.results")?;
+```
+
 ### Munge a GWAS summary-statistics file
 
 ```rust,no_run
@@ -142,8 +160,33 @@ More robust to high-χ² outliers than the joint fit. Implemented in
 **rg (bivariate).** `RG` runs `Hsq` on each trait and `Gencov` on their product
 `z₁·z₂`, then a `RatioJackknife` of `gencov / √(h²₁·h²₂)`.
 
+**S-LDSC (partitioned h²).** `estimate_sldsc` runs `Hsq` with `n_annot > 1`
+(`old_weights`, `chisq_max = max(0.001·Nmax, 80)`), then
+[`sldsc::build_sldsc_results`] derives per-annotation quantities:
+`cat_k = M_k·β_k` (per-annot h²), `prop_k = cat_k/tot`,
+`enrichment = prop_k / m_prop_k`, `enrichment_se = prop_se / m_prop_k`,
+`enrichment_p` = two-sided test of enrichment ≠ 1.
+
 **Liability scale.** `h2_obs_to_liab` / `gencov_obs_to_liab` convert observed-
 scale estimates for binary traits given sample/population prevalence.
+
+## S-LDSC reference panel
+
+The baselineLD v2.2 reference panel (1000G EUR, 97 annotations) is archived at
+`aliyun:autonomics-data/ldsc/s-ldsc-ref/`. Restore with:
+
+```bash
+rclone copy aliyun:autonomics-data/ldsc/s-ldsc-ref/ reference/ldsc_data/ -P
+```
+
+After restore, the file prefixes for `H2Config` / `read_ldscore` are:
+- `ref_ld_chr`: `reference/ldsc_data/baselineLD.`
+- `w_ld_chr`: `reference/ldsc_data/weights.hm3_noMHC.`
+- `frqfile_chr`: `reference/ldsc_data/1000G.EUR.QC.`
+- M_5_50 is read automatically from the `ref_ld_chr` prefix.
+
+A golden BMI cross-validation output (`h²=0.2176`, from the Python LDSC suite)
+is included at `test-bmi/xval_bmi.log`.
 
 ## File formats
 
