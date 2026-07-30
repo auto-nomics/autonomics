@@ -32,6 +32,7 @@ lava = { path = "../../bio_crates/lava" }
 hdl = { path = "../../bio_crates/hdl" }
 mixer = { path = "../../bio_crates/mixer" }
 mr = { path = "../../bio_crates/mr" }
+lcv = { path = "../../bio_crates/lcv" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }
