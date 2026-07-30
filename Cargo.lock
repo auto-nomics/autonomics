@@ -6821,6 +6821,7 @@ dependencies = [
  "eutils",
  "fs",
  "opengwas",
+ "opentargets",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",

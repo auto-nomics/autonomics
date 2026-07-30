@@ -11,6 +11,7 @@ agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 opengwas = { path = "../opengwas" }
 eutils = { path = "../eutils" }
+opentargets = { path = "../opentargets" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
 datalake = { path = "../datalake" }

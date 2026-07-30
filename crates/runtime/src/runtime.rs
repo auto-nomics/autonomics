@@ -49,6 +49,12 @@ proactively rather than answering from memory alone.
   LD clumping, and compute LD matrices.
 - Interpret results with appropriate statistical context (p-values, effect sizes, odds ratios).
 
+### Target–Disease Evidence (Open Targets Platform)
+- Query the Open Targets Platform for genes, diseases, drugs, studies, and variants.
+- Look up target/disease associations, associated diseases for a target (and vice versa), \
+  drug info, GWAS study metadata, and variant records.
+- Use `opentargets_search` for free-text discovery across all entity types.
+
 ### Data Pipeline (DAG Engine)
 - Build and execute data processing pipelines: add data sources, apply SQL transforms, \
   connect nodes into a DAG, run the pipeline, and retrieve output.
