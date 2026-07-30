@@ -328,9 +328,8 @@ impl LdscSldscNode {
             .map_err(LdscSldscNodeError::ReadBatch)?;
 
         // 2. Query M table for annotation names + M values.
-        let m_sql = format!(
-            r#"SELECT "annotation", "m_5_50" FROM iceberg.ld_score."{ld_table}_m""#
-        );
+        let m_sql =
+            format!(r#"SELECT "annotation", "m_5_50" FROM iceberg.ld_score."{ld_table}_m""#);
         let m_df = ctx
             .sql(&m_sql)
             .await
@@ -389,14 +388,10 @@ impl LdscSldscNode {
             tbl = ld_table,
         );
 
-        let joined_df = ctx
-            .sql(&sql)
-            .await
-            .map_err(LdscSldscNodeError::ReadBatch)?;
+        let joined_df = ctx.sql(&sql).await.map_err(LdscSldscNodeError::ReadBatch)?;
 
         // 4. Extract arrays via the ldsc ingest helper.
-        let ref_ld_names: Vec<String> =
-            annot_names.iter().map(|c| format!("l2_{c}")).collect();
+        let ref_ld_names: Vec<String> = annot_names.iter().map(|c| format!("l2_{c}")).collect();
         let ref_ld_refs: Vec<&str> = ref_ld_names.iter().map(|s| s.as_str()).collect();
         let cols = ldsc::hsq::HsqColumns {
             snp: "",
@@ -435,11 +430,7 @@ impl LdscSldscNode {
         )?;
 
         // 6. Derive per-annotation results.
-        Ok(ldsc::sldsc::build_sldsc_results(
-            &hsq,
-            &annot_names,
-            n_snp,
-        ))
+        Ok(ldsc::sldsc::build_sldsc_results(&hsq, &annot_names, n_snp))
     }
 }
 
@@ -450,7 +441,6 @@ impl LdscSldscNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// Construct the node and assert its kind and topology.
     #[tokio::test]
@@ -482,7 +472,7 @@ mod tests {
         }
     }
 
-    /// `run_with_ctx` is 
+    /// `run_with_ctx` is
     /// error (either file-not-found or Unimplemented) rather than panic.
     #[tokio::test]
     async fn test_run_with_ctx_errors_without_catalog() {
@@ -490,9 +480,7 @@ mod tests {
         let df = ctx
             .read_batch(arrow_array::RecordBatch::new_empty(input_schema()))
             .unwrap();
-        let res =
-            LdscSldscNode::run_with_ctx(&ctx, &df, &LdscSldscConfig::new())
-                .await;
+        let res = LdscSldscNode::run_with_ctx(&ctx, &df, &LdscSldscConfig::new()).await;
         assert!(res.is_err(), "should error without Iceberg catalog");
     }
 

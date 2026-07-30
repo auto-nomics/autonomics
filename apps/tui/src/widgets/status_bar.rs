@@ -79,12 +79,7 @@ impl Widget for StatusBar<'_> {
             if total_w < area.width as usize {
                 let x = area.x + area.width - total_w as u16;
                 let y = area.y;
-                buf.set_string(
-                    x,
-                    y,
-                    label,
-                    Style::default().fg(Color::DarkGray),
-                );
+                buf.set_string(x, y, label, Style::default().fg(Color::DarkGray));
                 buf.set_string(
                     x + label_w as u16,
                     y,

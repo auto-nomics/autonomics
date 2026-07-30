@@ -17,8 +17,8 @@
 //! `z = (enrichment − 1) / enrichment_se`, `p = 2·Φ(−|z|)`.
 //! `coef_p` is likewise the two-sided test of `H₀: β_k = 0`.
 
-use crate::regress::{Hsq, p_z_norm};
 use crate::Result;
+use crate::regress::{Hsq, p_z_norm};
 
 /// One row of the S-LDSC per-annotation results table (mirrors the Python
 /// `.results` columns, with the two-sided p-values added).
@@ -109,8 +109,7 @@ pub fn build_sldsc_results(hsq: &Hsq, cnames: &[String], n_snp: usize) -> SldscR
                 0.0
             };
             // Two-sided test of enrichment == 1.
-            let (enrichment_p, _enrichment_z) =
-                p_z_norm(enrichment - 1.0, enrichment_se);
+            let (enrichment_p, _enrichment_z) = p_z_norm(enrichment - 1.0, enrichment_se);
 
             SldscAnnotResult {
                 category,
@@ -240,8 +239,16 @@ mod tests {
         assert_eq!(r.n_annot, 2);
         assert_eq!(r.n_snp, 400);
         // per-annot h² recovered
-        assert!((r.annotations[0].cat - hsq1).abs() < 1e-6, "cat0={}", r.annotations[0].cat);
-        assert!((r.annotations[1].cat - hsq2).abs() < 1e-6, "cat1={}", r.annotations[1].cat);
+        assert!(
+            (r.annotations[0].cat - hsq1).abs() < 1e-6,
+            "cat0={}",
+            r.annotations[0].cat
+        );
+        assert!(
+            (r.annotations[1].cat - hsq2).abs() < 1e-6,
+            "cat1={}",
+            r.annotations[1].cat
+        );
         // tot == Σ cat
         assert!((r.tot - (hsq1 + hsq2)).abs() < 1e-6, "tot={}", r.tot);
         assert!((r.tot - r.annotations.iter().map(|a| a.cat).sum::<f64>()).abs() < 1e-9);
@@ -255,12 +262,20 @@ mod tests {
         // enrichment_se ≈ prop_se / m_prop
         // (prop = cat/tot ⇒ prop_se from jackknife; enrichment = prop/m_prop)
         let expected_enrich = (a.cat / 1e7 * 2.0) / ((hsq1 + hsq2) / 1e7);
-        assert!((a.enrichment - expected_enrich).abs() < 1e-6, "enrich={}", a.enrichment);
+        assert!(
+            (a.enrichment - expected_enrich).abs() < 1e-6,
+            "enrich={}",
+            a.enrichment
+        );
         // equal M ⇒ enrichment == 2·cat/tot == prop/m_prop
         assert!((a.enrichment - (a.cat / r.tot) / a.m_prop).abs() < 1e-9);
         // p-values in [0,1] and finite
         for a in &r.annotations {
-            assert!(a.coef_p.is_finite() && (0.0..=1.0).contains(&a.coef_p), "coef_p={}", a.coef_p);
+            assert!(
+                a.coef_p.is_finite() && (0.0..=1.0).contains(&a.coef_p),
+                "coef_p={}",
+                a.coef_p
+            );
             assert!(
                 a.enrichment_p.is_finite() && (0.0..=1.0).contains(&a.enrichment_p),
                 "enrichment_p={}",
@@ -289,8 +304,8 @@ mod tests {
         let r = build_sldsc_results(&hsq, &["AL2".to_string(), "BL2".to_string()], 400);
         // process-unique path under the system temp dir (avoids a `tempfile`
         // dev-dependency and parallel-test collisions).
-        let path = std::env::temp_dir()
-            .join(format!("sldsc_results_{}.results", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("sldsc_results_{}.results", std::process::id()));
         write_results(&r, path.to_str().unwrap()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
@@ -315,7 +330,10 @@ mod tests {
 
     /// Deterministic pseudo-random in [1, 2) (no RNG dependency).
     fn ldet(i: usize, seed: f64) -> f64 {
-        ((i as f64 * 12.9898 + seed).sin() * 43758.5453).fract().abs() + 1.0
+        ((i as f64 * 12.9898 + seed).sin() * 43758.5453)
+            .fract()
+            .abs()
+            + 1.0
     }
 
     /// Write a whitespace-delimited table with a header row.
@@ -331,11 +349,8 @@ mod tests {
 
     /// A process-unique scratch directory under the system temp dir.
     fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ldsc_sldsc_test_{}_{}",
-            std::process::id(),
-            name
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ldsc_sldsc_test_{}_{}", std::process::id(), name));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -370,11 +385,7 @@ mod tests {
             let wld = al2 + bl2;
             w_rows.push(format!("1\t{snp}\t{}\t0\t0.5\t{wld}", 1 + i));
         }
-        write_table(
-            &dir.join("sumstats"),
-            "SNP\tN\tZ\tA1\tA2",
-            &sumstats_rows,
-        );
+        write_table(&dir.join("sumstats"), "SNP\tN\tZ\tA1\tA2", &sumstats_rows);
         write_table(
             &dir.join("ref.l2.ldscore"),
             "CHR\tSNP\tBP\tCM\tMAF\tAL2\tBL2",
@@ -420,15 +431,21 @@ mod tests {
         assert_eq!(r.n_annot, 2);
         assert_eq!(r.n_snp, n_snp);
         // Per-annotation h² recovered (cat = M_k · β_k).
-        assert!((r.annotations[0].cat - h2_1).abs() < 1e-6, "cat0={}", r.annotations[0].cat);
-        assert!((r.annotations[1].cat - h2_2).abs() < 1e-6, "cat1={}", r.annotations[1].cat);
+        assert!(
+            (r.annotations[0].cat - h2_1).abs() < 1e-6,
+            "cat0={}",
+            r.annotations[0].cat
+        );
+        assert!(
+            (r.annotations[1].cat - h2_2).abs() < 1e-6,
+            "cat1={}",
+            r.annotations[1].cat
+        );
         // tot == Σ cat == h2_1 + h2_2
         assert!((r.tot - (h2_1 + h2_2)).abs() < 1e-6, "tot={}", r.tot);
         // equal M ⇒ m_prop = 0.5 each, sums to 1
         assert!((r.annotations[0].m_prop - 0.5).abs() < 1e-9);
-        assert!(
-            (r.annotations.iter().map(|a| a.m_prop).sum::<f64>() - 1.0).abs() < 1e-9
-        );
+        assert!((r.annotations.iter().map(|a| a.m_prop).sum::<f64>() - 1.0).abs() < 1e-9);
         // enrichment = (cat/M_k)/(tot/M_tot); equal M ⇒ (cat·2)/(tot)
         let tot = h2_1 + h2_2;
         assert!(

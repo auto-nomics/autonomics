@@ -375,10 +375,7 @@ fn estimate_h2_full(cfg: &H2Config, log: &mut dyn Logger) -> Result<(Hsq, Vec<St
 /// automatically) and then derives the partitioned quantities (per-annotation
 /// h², proportion, enrichment, and their SE / z / p) via
 /// [`crate::sldsc::build_sldsc_results`].
-pub fn estimate_sldsc(
-    cfg: &H2Config,
-    log: &mut dyn Logger,
-) -> Result<crate::sldsc::SldscResults> {
+pub fn estimate_sldsc(cfg: &H2Config, log: &mut dyn Logger) -> Result<crate::sldsc::SldscResults> {
     let (hsq, cnames, n_snp) = estimate_h2_full(cfg, log)?;
     Ok(crate::sldsc::build_sldsc_results(&hsq, &cnames, n_snp))
 }
