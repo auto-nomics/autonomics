@@ -309,7 +309,14 @@ impl DagNode for LdscHsqNode {
         let ctx = node_ctx.session();
 
         // TODO: Auto select LD score panel table by population
-        let result = Self::run_with_ctx(&ctx, &input.data, "ukbb_eur", &self.ldsc_hsq).await?;
+        // TODO: Make the LD panel configurable so callers can switch between
+        // panels (e.g. 1000g_eur vs ukbb_eur) without editing source.
+        //
+        // --- Old ukbb_eur panel (single ld_score column, no w_ld) ---
+        // let result = Self::run_with_ctx(&ctx, &input.data, "ukbb_eur", &self.ldsc_hsq).await?;
+        //
+        // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
+        let result = Self::run_with_ctx(&ctx, &input.data, "1000g_eur", &self.ldsc_hsq).await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&result)?;
@@ -342,43 +349,36 @@ impl LdscHsqNode {
         ctx.register_table("sumstats", input.clone().into_view())
             .map_err(LdscNodeError::ReadBatch)?;
 
-        // 2. Count the total SNPs in the LD score panel to derive M — the
-        //    normalising constant in the LDSC regression.
-        //
-        // ⚠️ BUG: This uses COUNT(*) of the Iceberg panel as M, but the correct
-        //    LDSC value is M_5_50 — the L2-summed per-annotation SNP count from
-        //    the `.l2.M_5_50` file written when LD scores are computed. COUNT(*)
-        //    counts the rows in the panel table (one per SNP with MAF in range),
-        //    which overestimates M because it ignores the L2 weighting and may
-        //    include/exclude SNPs differently from the M_5_50 computation. This
-        //    inflates h² (observed: h² > 1 in some cases).
-        //
-        //    Correct fix: read M from a companion `.l2.M_5_50` value (stored
-        //    alongside the panel at LD-score-computation time), or from a
-        //    dedicated M table in the lake. Until the lake has this, the file-
-        //    driver path (`sumstats::estimate_h2_from_files`) which reads
-        //    `.l2.M_5_50` is the accurate route. See memory note
+        // 2. Read per-annotation M_5_50 — the L2-summed SNP count that
+        //    normalises the LDSC regression slope into h².  This comes from the
+        //    companion `iceberg.ld_score.{ld_table}_m` table (written alongside
+        //    the LD scores), NOT from COUNT(*) of the panel.  Using COUNT(*)
+        //    overestimates M and inflates h² because the panel row set can
+        //    differ from the M_5_50 SNP set.  See memory note
         //    `ldsc-hsq-node-m-and-liability`.
-        //
-        //    The AF BETWEEN 0.05 AND 0.95 filter below mimics the MAF range of
-        //    M_5_50 but is NOT equivalent to the real M_5_50.
-        let count_sql = format!(
-            r#"SELECT COUNT(*) AS "n" FROM iceberg.ld_score.{ld_table} WHERE "AF" BETWEEN 0.05 AND 0.95"#
-        );
-        let count_df = ctx
-            .sql(&count_sql)
+        let m = super::ldsc_common::read_m_5_50(ctx, ld_table, 1)
             .await
-            .map_err(LdscNodeError::ReadBatch)?;
-        let count_batches = count_df.collect().await.map_err(LdscNodeError::ReadBatch)?;
-        let panel_count = extract_scalar_u64(&count_batches, "n")?;
-        let m = vec![panel_count as f64];
+            .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 
         // 3. Build SQL: join sumstats with LD score panel on rsid.
-        //    ld_score is used for both ref_ld and w_ld (single-annotation baseline).
+        //    The 1000g_eur panel has separate ld_score (ref LD) and w_ld
+        //    (weight LD) columns.
+        //
+        // --- Old ukbb_eur panel (ld_score used for both ref_ld and w_ld) ---
+        // let sql = format!(
+        //     r#"SELECT s."{z}" AS "{Z}", s."{n}" AS "{N}",
+        //               l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
+        //        FROM sumstats AS s
+        //        INNER JOIN iceberg.ld_score.{table} AS l
+        //        ON s."{rsid}" = l.rsid
+        //        ORDER BY l.locus.position"#,
+        //     ... (same bind params)
+        // );
         let sql = format!(
-            r#"SELECT s."{z}" AS "{Z}", s."{n}" AS "{N}", l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
+            r#"SELECT s."{z}" AS "{Z}", s."{n}" AS "{N}",
+                      l.ld_score AS "{REF}", l.w_ld AS "{WLD}"
                FROM sumstats AS s
-               INNER JOIN iceberg.ld_score.{table} AS l
+               INNER JOIN iceberg.ld_score."{table}" AS l
                ON s."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
@@ -411,52 +411,6 @@ impl LdscHsqNode {
             .map_err(LdscNodeError::from)?;
 
         Ok(result)
-    }
-}
-
-/// Extract a single u64 scalar from a one-row, one-column `RecordBatch` result.
-fn extract_scalar_u64(batches: &[RecordBatch], col: &str) -> Result<u64, LdscNodeError> {
-    let batch = batches
-        .first()
-        .ok_or(LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-            "extract_scalar_u64: no batches".into(),
-        )))?;
-    let idx = batch.schema().index_of(col).map_err(|_| {
-        LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(format!(
-            "missing column '{col}'"
-        )))
-    })?;
-    let arr = batch.column(idx);
-    if arr.is_null(0) {
-        return Err(LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-            "extract_scalar_u64: null value".into(),
-        )));
-    }
-    let dtype = arr.data_type();
-    match dtype {
-        DataType::UInt64 => Ok(arr
-            .as_any()
-            .downcast_ref::<arrow_array::UInt64Array>()
-            .unwrap()
-            .value(0)),
-        DataType::Int64 => Ok(arr
-            .as_any()
-            .downcast_ref::<arrow_array::Int64Array>()
-            .unwrap()
-            .value(0) as u64),
-        DataType::UInt32 => Ok(arr
-            .as_any()
-            .downcast_ref::<arrow_array::UInt32Array>()
-            .unwrap()
-            .value(0) as u64),
-        DataType::Int32 => Ok(arr
-            .as_any()
-            .downcast_ref::<arrow_array::Int32Array>()
-            .unwrap()
-            .value(0) as u64),
-        _ => Err(LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(format!(
-            "extract_scalar_u64: unsupported dtype {dtype} for column '{col}'"
-        )))),
     }
 }
 
@@ -521,7 +475,7 @@ mod tests {
     //
     // Same approach as `ldsc_rg::tests`: register an in-memory
     // `MemoryCatalogProvider` under the production `iceberg` name with a
-    // `ld_score.ukbb_eur` `MemTable`, so the node's SQL resolves identically
+    // `ld_score.1000g_eur` `MemTable`, so the node's SQL resolves identically
     // to production and the full pipeline (join → estimate_h2 → batch) runs
     // deterministically with no external service.
 
@@ -530,20 +484,15 @@ mod tests {
     /// Per-SNP sample size used by the fixtures.
     const N_SAMP: f64 = 1000.0;
 
-    /// Synthetic LD-score panel `RecordBatch` (`rsid`, `ld_score`, `AF`,
-    /// `locus<position>`), matching the node SQL's `l.rsid`, `l.ld_score`,
-    /// `l.locus.position`, and the M-count filter `WHERE "AF" BETWEEN 0.05 AND 0.95`.
-    /// `ld_score` strictly increases; `position` tracks it so `ORDER BY
-    /// l.locus.position` preserves LD order. `AF` alternates around 0.5 so all
-    /// rows survive the MAF filter (M_5_50 = N_SNP).
+    /// Synthetic LD-score panel `RecordBatch` matching the `1000g_eur` panel
+    /// schema: `rsid`, `ld_score`, `w_ld`, `locus<position>`. `ld_score`
+    /// strictly increases; `w_ld` mirrors `ld_score` (same values) so the
+    /// analytic test fixtures remain exact; `position` tracks `ld_score` so
+    /// `ORDER BY l.locus.position` preserves LD order.
     fn ld_panel_batch(n: usize) -> RecordBatch {
         let rsids: Vec<String> = (0..n).map(|i| format!("rs{}", 1_000_000 + i)).collect();
         let ld: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
         let pos: Vec<i64> = (0..n).map(|i| i as i64).collect();
-        // AF linearly spaced in [0.1, 0.9] so every row passes the 0.05–0.95 filter.
-        let af: Vec<f64> = (0..n)
-            .map(|i| 0.1 + 0.8 * (i as f64) / ((n - 1) as f64).max(1.0))
-            .collect();
 
         let position_field = Arc::new(Field::new("position", DataType::Int64, false));
         let locus = StructArray::new(
@@ -554,7 +503,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("rsid", DataType::Utf8, false),
             Field::new("ld_score", DataType::Float64, false),
-            Field::new("AF", DataType::Float64, false),
+            Field::new("w_ld", DataType::Float64, false),
             Field::new(
                 "locus",
                 DataType::Struct(
@@ -567,8 +516,8 @@ mod tests {
             schema,
             vec![
                 Arc::new(StringArray::from(rsids)),
+                Arc::new(Float64Array::from(ld.clone())),
                 Arc::new(Float64Array::from(ld)),
-                Arc::new(Float64Array::from(af)),
                 Arc::new(locus) as Arc<dyn Array>,
             ],
         )
@@ -594,14 +543,34 @@ mod tests {
         .unwrap()
     }
 
-    /// `SessionContext` with an in-memory `iceberg.ld_score.ukbb_eur` table.
+    /// `SessionContext` with an in-memory `iceberg.ld_score.1000g_eur` table
+    /// plus its `1000g_eur_m` companion (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+
+        // Companion M table: one row, annotation "baseline", m_5_50 = n.
+        let m_schema = Arc::new(Schema::new(vec![
+            Field::new("annotation", DataType::Utf8, false),
+            Field::new("m_5_50", DataType::Float64, false),
+        ]));
+        let m_batch = RecordBatch::try_new(
+            m_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["baseline"])),
+                Arc::new(Float64Array::from(vec![n as f64])),
+            ],
+        )
+        .unwrap();
+        let m_table = MemTable::try_new(m_batch.schema(), vec![vec![m_batch]]).unwrap();
+
         let ld_schema = MemorySchemaProvider::new();
         ld_schema
-            .register_table("ukbb_eur".to_string(), Arc::new(table))
+            .register_table("1000g_eur".to_string(), Arc::new(table))
+            .unwrap();
+        ld_schema
+            .register_table("1000g_eur_m".to_string(), Arc::new(m_table))
             .unwrap();
         let catalog = MemoryCatalogProvider::new();
         catalog
@@ -626,7 +595,7 @@ mod tests {
             .collect();
         let ctx = ctx_with_ld_panel(N_SNP);
         let df = ctx.read_batch(sumstats_batch(z, &rsids)).unwrap();
-        LdscHsqNode::run_with_ctx(&ctx, &df, "ukbb_eur", cfg)
+        LdscHsqNode::run_with_ctx(&ctx, &df, "1000g_eur", cfg)
             .await
             .expect("hsq pipeline should succeed")
     }
@@ -762,7 +731,7 @@ mod tests {
         let df = ctx.read_batch(sumstats_batch(&z, &rsids)).unwrap();
 
         let res =
-            LdscHsqNode::run_with_ctx(&ctx, &df, "ukbb_eur", &LdscHsqConfig::new(20, None)).await;
+            LdscHsqNode::run_with_ctx(&ctx, &df, "1000g_eur", &LdscHsqConfig::new(20, None)).await;
         assert!(
             res.is_err(),
             "no rsid overlap must error, not silently return NaN"

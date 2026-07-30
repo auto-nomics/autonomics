@@ -12,10 +12,12 @@ pub mod client;
 pub mod deepseek;
 pub mod mimo;
 pub mod minimax;
+pub mod moonshot;
 pub mod registry;
 pub mod sensenova;
 pub mod zai;
 
+use crate::http::auth::AuthMethod;
 use crate::model::{ModelInfo, ProviderType};
 
 /// Implemented by each built-in provider module to expose its preset model
@@ -35,4 +37,12 @@ pub trait ProviderPreset {
     /// Returns `""` for providers that require explicit configuration
     /// (e.g. minimax).
     fn default_base_url() -> &'static str;
+
+    /// Default authentication method for this provider type.
+    /// Most Anthropic-compatible endpoints use [`AuthMethod::Anthropic`]
+    /// (`x-api-key` header). Providers whose gateway requires a Bearer token
+    /// override this to return [`AuthMethod::Bearer`].
+    fn default_auth_method() -> AuthMethod {
+        AuthMethod::Anthropic
+    }
 }

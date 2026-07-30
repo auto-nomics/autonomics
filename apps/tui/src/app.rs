@@ -156,19 +156,21 @@ impl App {
         let base_url = registry::default_base_url(&provider_type)
             .unwrap_or("")
             .to_string();
+        let auth_method = registry::default_auth_method(&provider_type);
         let preset_models = registry::preset_models(&provider_type)?;
         let mut model_info = preset_models
             .into_iter()
             .find(|m| m.model_name == model_name)?;
 
-        // Build ProviderConfig: api_key from DB, base_url from registry.
+        // Build ProviderConfig: api_key from DB, base_url and auth_method
+        // from registry defaults.
         let provider_config = ProviderConfig {
             id: Uuid::nil(),
             name: provider_name.to_string(),
             provider_type,
             base_url,
             api_key,
-            auth_method: AuthMethod::Anthropic,
+            auth_method,
         };
         model_info.provider_id = provider_config.id;
 
@@ -856,6 +858,11 @@ impl App {
 
         let provider_type = provider.provider_type.as_str().to_string();
         let base_url = provider.base_url.clone();
+        // Resolve the default auth method from the registry for this provider.
+        let auth_str = match agentik_sdk::provider::registry::default_auth_method(&provider.provider_type) {
+            AuthMethod::Bearer => "Bearer",
+            AuthMethod::Anthropic => "Anthropic",
+        };
 
         // Check if a row for this provider name already exists.
         let existing: Option<i64> = self
@@ -869,14 +876,14 @@ impl App {
 
         let result = if let Some(id) = existing {
             self.conn.execute(
-                "UPDATE providers SET api_key = ?1, base_url = ?2 WHERE id = ?3",
-                rusqlite::params![api_key, &base_url, id],
+                "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = ?3 WHERE id = ?4",
+                rusqlite::params![api_key, &base_url, auth_str, id],
             )
         } else {
             self.conn.execute(
                 "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
-                 VALUES (?1, ?2, ?3, ?4, 'Anthropic')",
-                rusqlite::params![provider_name, &provider_type, &base_url, api_key],
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![provider_name, &provider_type, &base_url, api_key, auth_str],
             )
         };
 

@@ -10,6 +10,7 @@ pub mod echo_node;
 pub mod hdl_l;
 pub mod lava;
 pub mod lcv;
+pub mod ldsc_common;
 pub mod ldsc_hsq;
 pub mod ldsc_rg;
 pub mod ldsc_sldsc;

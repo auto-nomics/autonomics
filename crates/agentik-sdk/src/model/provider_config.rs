@@ -14,6 +14,7 @@ pub enum ProviderType {
     Deepseek,
     Mimo,
     Minimax,
+    Moonshot,
     Zai,
     Sensenova,
     /// A user-defined or externally-registered provider type.
@@ -28,6 +29,7 @@ impl ProviderType {
             ProviderType::Deepseek => "deepseek",
             ProviderType::Mimo => "mimo",
             ProviderType::Minimax => "minimax",
+            ProviderType::Moonshot => "moonshot",
             ProviderType::Zai => "zai",
             ProviderType::Sensenova => "sensenova",
             ProviderType::Custom(s) => s.as_str(),
@@ -47,6 +49,7 @@ impl From<&str> for ProviderType {
             "deepseek" => ProviderType::Deepseek,
             "mimo" => ProviderType::Mimo,
             "minimax" => ProviderType::Minimax,
+            "moonshot" => ProviderType::Moonshot,
             "zai" => ProviderType::Zai,
             "sensenova" => ProviderType::Sensenova,
             custom => ProviderType::Custom(custom.to_string()),

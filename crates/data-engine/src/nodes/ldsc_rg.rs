@@ -351,8 +351,16 @@ impl DagNode for LdscRgNode {
         let ctx = node_ctx.session();
 
         // TODO: Auto select LD score panel table by population
+        // TODO: Make the LD panel configurable so callers can switch between
+        // panels (e.g. 1000g_eur vs ukbb_eur) without editing source.
+        //
+        // --- Old ukbb_eur panel (single ld_score column, no w_ld) ---
+        // let (rg, n_snp) =
+        //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
+        //
+        // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
         let (rg, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "1000g_eur", &self.ldsc_rg).await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&rg, n_snp)?;
@@ -391,16 +399,29 @@ impl LdscRgNode {
             .map_err(LdscRgNodeError::ReadBatch)?;
 
         // 2. Build SQL: 3-way inner join — both traits share an rsid that is
-        //    also present in the LD score panel. ld_score is used for both
-        //    ref_ld and w_ld (single-annotation baseline). Ordered by genomic
-        //    position so the block jackknife groups consecutive SNPs.
+        //    also present in the LD score panel. The 1000g_eur panel has
+        //    separate ld_score (ref LD) and w_ld (weight LD) columns.
+        //    Ordered by genomic position so the block jackknife groups
+        //    consecutive SNPs.
+        //
+        // --- Old ukbb_eur panel (ld_score used for both ref_ld and w_ld) ---
+        // let sql = format!(
+        //     r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
+        //               s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
+        //               l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
+        //        FROM sumstats1 AS s1
+        //        INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
+        //        INNER JOIN iceberg.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
+        //        ORDER BY l.locus.position"#,
+        //     ... (same bind params)
+        // );
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
-                      l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
+                      l.ld_score AS "{REF}", l.w_ld AS "{WLD}"
                FROM sumstats1 AS s1
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN iceberg.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN iceberg.ld_score."{table}" AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
@@ -466,8 +487,13 @@ impl LdscRgNode {
             intercept_gencov,
             two_step,
         } = cfg;
-        // Derive M from the LD score panel SNP count.
-        let m = vec![count_panel_snp(ctx, ld_table).await? as f64];
+        // Derive M from the companion `_m` table (per-annotation M_5_50),
+        // matching the h² node and S-LDSC. Using COUNT(*) of the panel
+        // overestimates M because the panel row set can differ from the
+        // M_5_50 SNP set used when LD scores were computed.
+        let m = super::ldsc_common::read_m_5_50(ctx, ld_table, 1)
+            .await
+            .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
         let two_step = two_step.or(
             if intercept_hsq1.is_none() && intercept_hsq2.is_none() && intercept_gencov.is_none() {
                 Some(30.0)
@@ -569,56 +595,6 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
     cast!(col, Float64Array);
 }
 
-/// Count the total number of SNPs in the LD score panel table to derive M.
-async fn count_panel_snp(
-    ctx: &datafusion::prelude::SessionContext,
-    ld_table: &str,
-) -> Result<usize, LdscRgNodeError> {
-    let sql = format!(r#"SELECT COUNT(*) AS "n" FROM iceberg.ld_score.{ld_table}"#);
-    let df = ctx.sql(&sql).await.map_err(LdscRgNodeError::ReadBatch)?;
-    let batches = df.collect().await.map_err(LdscRgNodeError::ReadBatch)?;
-    let batch = batches
-        .first()
-        .ok_or(LdscRgNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-            "count_panel_snp: no batches returned".into(),
-        )))?;
-    let idx = batch.schema().index_of("n").map_err(|_| {
-        LdscRgNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-            "count_panel_snp: missing column 'n'".into(),
-        ))
-    })?;
-    let col = batch.column(idx);
-    let dtype = col.data_type();
-    let n = match dtype {
-        DataType::UInt64 => col
-            .as_any()
-            .downcast_ref::<arrow_array::UInt64Array>()
-            .unwrap()
-            .value(0) as usize,
-        DataType::Int64 => col
-            .as_any()
-            .downcast_ref::<arrow_array::Int64Array>()
-            .unwrap()
-            .value(0) as usize,
-        DataType::UInt32 => col
-            .as_any()
-            .downcast_ref::<arrow_array::UInt32Array>()
-            .unwrap()
-            .value(0) as usize,
-        DataType::Int32 => col
-            .as_any()
-            .downcast_ref::<arrow_array::Int32Array>()
-            .unwrap()
-            .value(0) as usize,
-        _ => {
-            return Err(LdscRgNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-                format!("count_panel_snp: unsupported dtype {dtype}"),
-            )));
-        }
-    };
-    Ok(n)
-}
-
 // =====================================================================
 // Tests
 // =====================================================================
@@ -703,19 +679,19 @@ mod tests {
     // (SQL 3-way join → vector extraction → RG fit → output batch)
     // deterministically and without any external service, we register an
     // in-memory `MemoryCatalogProvider` under the same `iceberg` name, with a
-    // `ld_score.ukbb_eur` table backed by a `MemTable`. The node's SQL then
+    // `ld_score.1000g_eur` table backed by a `MemTable`. The node's SQL then
     // resolves identically to production.
 
     /// The LD-panel row count used by the synthetic fixtures.
     const N_SNP: usize = 200;
 
-    /// Build a synthetic LD-score panel `RecordBatch` with columns
-    /// `rsid` (Utf8), `ld_score` (Float64), `locus` (Struct<position: Int64>),
-    /// matching the schema the node's SQL reads (`l.rsid`, `l.ld_score`,
-    /// `l.locus.position`). `ld_score` strictly increases so the LDSC slope is
-    /// well identified; `position` increases in lock-step so the SQL
-    /// `ORDER BY l.locus.position` preserves the LD order (keeping the block
-    /// jackknife deterministic).
+    /// Build a synthetic LD-score panel `RecordBatch` matching the `1000g_eur`
+    /// panel schema: `rsid` (Utf8), `ld_score` (Float64), `w_ld` (Float64),
+    /// `locus` (Struct<position: Int64>). `ld_score` strictly increases so the
+    /// LDSC slope is well identified; `w_ld` mirrors `ld_score` (same values)
+    /// so the analytic test fixtures remain exact; `position` increases in
+    /// lock-step so the SQL `ORDER BY l.locus.position` preserves the LD order
+    /// (keeping the block jackknife deterministic).
     fn ld_panel_batch(n: usize) -> RecordBatch {
         let rsids: Vec<String> = (0..n).map(|i| format!("rs{}", 1_000_000 + i)).collect();
         let ld: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
@@ -731,6 +707,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("rsid", DataType::Utf8, false),
             Field::new("ld_score", DataType::Float64, false),
+            Field::new("w_ld", DataType::Float64, false),
             Field::new(
                 "locus",
                 DataType::Struct(
@@ -743,6 +720,7 @@ mod tests {
             schema,
             vec![
                 Arc::new(StringArray::from(rsids)),
+                Arc::new(Float64Array::from(ld.clone())),
                 Arc::new(Float64Array::from(ld)),
                 Arc::new(locus) as Arc<dyn Array>,
             ],
@@ -770,17 +748,37 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a `SessionContext` with an in-memory `iceberg.ld_score.ukbb_eur`
-    /// table holding `ld_panel_batch(n)`.
+    /// Build a `SessionContext` with an in-memory `iceberg.ld_score.1000g_eur`
+    /// table holding `ld_panel_batch(n)`, plus its `1000g_eur_m` companion
+    /// (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);
 
         let schema = batch.schema();
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+
+        // Companion M table: one row, annotation "baseline", m_5_50 = n.
+        let m_schema = Arc::new(Schema::new(vec![
+            Field::new("annotation", DataType::Utf8, false),
+            Field::new("m_5_50", DataType::Float64, false),
+        ]));
+        let m_batch = RecordBatch::try_new(
+            m_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["baseline"])),
+                Arc::new(Float64Array::from(vec![n as f64])),
+            ],
+        )
+        .unwrap();
+        let m_table = MemTable::try_new(m_batch.schema(), vec![vec![m_batch]]).unwrap();
+
         let ld_schema = MemorySchemaProvider::new();
         ld_schema
-            .register_table("ukbb_eur".to_string(), Arc::new(table))
+            .register_table("1000g_eur".to_string(), Arc::new(table))
+            .unwrap();
+        ld_schema
+            .register_table("1000g_eur_m".to_string(), Arc::new(m_table))
             .unwrap();
         let catalog = MemoryCatalogProvider::new();
         catalog
@@ -816,7 +814,7 @@ mod tests {
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 1000.0)).unwrap();
-        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", cfg)
+        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", cfg)
             .await
             .expect("rg pipeline should succeed")
     }
@@ -1018,7 +1016,7 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z1, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z2, &rs2, 1000.0)).unwrap();
 
-        let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &constrained_cfg()).await;
+        let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", &constrained_cfg()).await;
         assert!(
             res.is_err(),
             "disjoint rsid sets must error, not silently return NaN"
@@ -1065,7 +1063,7 @@ mod tests {
             .read_batch(sumstats_batch(&z2, &shared, 1000.0))
             .unwrap();
         let (rg, n_snp) =
-            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &constrained_cfg())
+            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", &constrained_cfg())
                 .await
                 .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");
