@@ -28,6 +28,7 @@ use crate::nodes::{
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
+    mtag::MtagNodeFactory,
     sink_file::FileSinkNodeFactory,
     sink_iceberg::IcebergSinkNodeFactory,
     source_file::FileSourceNodeFactory,
@@ -176,6 +177,7 @@ impl NodeRegistry {
         registry.register(Box::new(HdlLNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry.register(Box::new(BivariateMixerNodeFactory {}));
+        registry.register(Box::new(MtagNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
         registry
     }
