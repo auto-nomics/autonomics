@@ -478,6 +478,24 @@ impl App {
             return;
         }
 
+        // Ctrl+G: toggle the auto-scroll-to-bottom lock on the Agent tab.
+        // When locked (following the tail), the first press releases the lock
+        // so the user can scroll freely; a second press re-pins to the bottom.
+        // Scroll-producing keys/mouse also release the lock (see handle_mouse
+        // and handle_browse_key); Ctrl+G is the dedicated toggle.
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('g')
+            && matches!(self.state.main_tab_state, MainTabState::AgentTab)
+        {
+            let ts = &mut self.state.agent_tab_state;
+            if ts.auto_scroll {
+                ts.auto_scroll = false;
+            } else {
+                ts.scroll_to_bottom();
+            }
+            return;
+        }
+
         // Tab switching (global)
         match key.code {
             KeyCode::Char(']') => {

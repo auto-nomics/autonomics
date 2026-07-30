@@ -1,157 +1,170 @@
-# Univariate MiXeR 节点：算法与数据基础设施
+# Univariate MiXeR Node: Algorithm & Data Infrastructure
 
-> **节点类型**：`univariate_mixer`  
-> **输入端口**：上游 GWAS sumstats（`Z: Float64, N: Float64, rsid: Utf8`）
-> **输出端口**：单行拟合结果 DataFrame（pi, sig2_beta, sig2_zero, h2, nc, nc_p9, aic, bic, loglike）
-> **依赖表**：`iceberg.af.eur_af`（等位基因频率）、`iceberg.mixer.eur_tagsuff`（预计算充分统计量）
+[English](univariate_mixer.md) | [中文](univariate_mixer_zh.md)
 
-## 1. 数学模型
+> **Node type**: `univariate_mixer`  
+> **Input port**: upstream GWAS sumstats (`Z: Float64, N: Float64, rsid: Utf8`)  
+> **Output port**: single-row fit result DataFrame (pi, sig2_beta, sig2_zero, h2, nc, nc_p9, aic, bic, loglike)  
+> **Depends on**: `iceberg.af.eur_af` (allele frequencies), `iceberg.mixer.eur_tagsuff` (precomputed sufficient statistics)
 
-### 1.1 先验：spike-and-slab
+## 1. Mathematical model
 
-每个 SNP 的效应量 β_s 服从两分量混合先验：
+### 1.1 Prior: spike-and-slab
+
+Each SNP's effect size β_s follows a two-component mixture prior:
 
 ```
 β_s ~ (1-π)·δ_0 + π·N(0, σ²_β)
 ```
 
-三个自由参数：
-| 参数 | 含义 | 约束 |
-|------|------|------|
-| π | 多基因比例（polygenicity）| (0, 1) |
-| σ²_β | causal 效应量方差（discoverability）| >0 |
-| σ²_zero | null 分量方差的膨胀系数（截距）| >0 |
+Three free parameters:
+| Parameter  | Description                                  | Constraint |
+|------------|----------------------------------------------|------------|
+| π          | Polygenicity (fraction of causal SNPs)       | (0, 1)     |
+| σ²_β       | Causal effect-size variance (discoverability)| >0         |
+| σ²_zero    | Inflation factor for the null component (intercept) | >0   |
 
-### 1.2 观测模型：LD 传播
+### 1.2 Observation model: LD propagation
 
-每个 tag SNP j 的 z-score 是所有因果 SNP 经 LD 传播的叠加：
+The z-score of each tag SNP j is the superposition of all causal SNPs propagated through LD:
 
 ```
 z_j = Σ_s √(N_j · h_s · r²_{js}) · β_s + ε,   ε ~ N(0, σ²_zero)
 ```
 
-其中 h_s = 2·maf_s·(1-maf_s) 是 SNP s 的杂合度，r²_{js} 是 tag j 与邻居 s 之间的 LD。
+where h_s = 2·maf_s·(1-maf_s) is the heterozygosity of SNP s, and r²_{js} is the LD between tag j and neighbor s.
 
-### 1.3 矩匹配 Gaussian 近似
+### 1.3 Moment-matching Gaussian approximation
 
-z_j 的精确边际分布是复杂的（因果变异数目不确定）。MiXeR 用一个 2 分量 Gaussian 混合来近似：
+The exact marginal distribution of z_j is complex (the number of causal variants is uncertain).
+MiXeR approximates it with a 2-component Gaussian mixture:
 
 ```
 f(z_j) = tag_pi₀ · φ(z_j; 0, s₁²) + tag_pi₁ · φ(z_j; 0, s₂²)
 ```
 
-两个分量（null 与 signal）的权重和方差由 tag j 的遗传效应 2 阶矩 A_j 和 4 阶累积量 B_j 唯一确定：
+The weights and variances of the two components (null and signal) are uniquely determined by
+the 2nd moment A_j and 4th cumulant B_j of tag j's genetic effect:
 
 ```
 A_j = E[δ_j²]   = π·σ²_β · Σ_s N_j · h_s · r²_{js}
 B_j = κ₄(δ_j)   = 3π(1-π)(σ²_β)² · Σ_s (N_j · h_s · r²_{js})²
 ```
 
-闭式解：
+Closed-form solution:
 ```
-tag_pi₀ = B / (B + 3A²)           ← null 权重
-tag_pi₁ = 1 − tag_pi₀             ← signal 权重
-σ²_tag  = (B + 3A²) / (3A)        ← signal 额外方差
-s₂      = √(σ²_zero + σ²_tag)     ← signal 分量标准差
+tag_pi₀ = B / (B + 3A²)           ← null weight
+tag_pi₁ = 1 − tag_pi₀             ← signal weight
+σ²_tag  = (B + 3A²) / (3A)        ← signal excess variance
+s₂      = √(σ²_zero + σ²_tag)     ← signal component std dev
 ```
 
-## 2. 充分统计量压缩
+## 2. Sufficient-statistics compression
 
-### 2.1 核心洞察
+### 2.1 Core insight
 
-A_j 和 B_j 可以因式分解为**参数部分 × 数据部分**：
+A_j and B_j factorize into **parameter part × data part**:
 
 ```
 A_j = ebeta2 × m1_j    where ebeta2 = π·σ²_β,           m1_j = Σ_s N_j · h_s · r²_{js}
 B_j = ebeta4 × m2_j    where ebeta4 = 3π(1-π)(σ²_β)²,  m2_j = Σ_s (N_j · h_s · r²_{js})²
 ```
 
-m1_j 和 m2_j 是纯数据的标量，不依赖参数。把它们**预计算一次**后，每次 cost 求值只需 O(1)/tag 的浮点乘加，不再访问 LD 矩阵。
+m1_j and m2_j are pure-data scalars, independent of parameters. By **precomputing them once**,
+each cost evaluation requires only O(1)/tag floating-point multiply-adds — no LD matrix access.
 
-### 2.2 为什么 key
+### 2.2 Why it matters
 
-优化器（DE×20 轮 → Nelder-Mead 精修）对 cost 函数调用数万次。原版实现每次评估都用 `tag_moments` 遍历 CSR 邻居表（O(nnz)/次），总开销巨大。
+The optimizer (DE×20 rounds → Nelder-Mead refinement) calls the cost function tens of thousands
+of times. The original implementation traverses the CSR neighbor table (`tag_moments`) on every
+evaluation (O(nnz)/call), incurring massive total overhead.
 
-压缩后：
-- 扫 LD 从 数万次 → 1 次（预算）
-- 内存从 O(nnz) CSR 塌缩为 O(n_snp) 的 m1/m2/weights 向量
-- CSR 在拟合开始前即可释放
+After compression:
+- LD scan goes from tens of thousands of times → 1 time (precompute)
+- Memory collapses from O(nnz) CSR to O(n_snp) m1/m2/weights vectors
+- The CSR can be released before fitting begins
 
-### 2.3 两阶段管线
+### 2.3 Two-phase pipeline
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  阶段 1: precompute_tags（离线，逐染色体）                        │
+│  Phase 1: precompute_tags (offline, per-chromosome)              │
 │                                                                  │
 │  af.eur_af ─→ h_vec (maf → 2·maf·(1-maf))                      │
 │  ld_matrix.eur_chr{N} ─→ ld_pairs (r² ≥ 0.05)                  │
 │                                                                  │
 │  select_tags: MAF≥0.05 → LD prune (r²>0.8) → random subset      │
 │                                                                  │
-│  对每个 LD pair (a,b,r²):                                        │
+│  For each LD pair (a,b,r²):                                      │
 │    if a ∈ tags: s1[a] += h_b·r²,  s2[a] += (h_b·r²)²           │
 │    if b ∈ tags: s1[b] += h_a·r²,  s2[b] += (h_a·r²)²           │
 │                                                                  │
-│  weight = 1/(1 + Σr²)   ← 逆 LD-score（去冗余）                  │
+│  weight = 1/(1 + Σr²)   ← inverse LD-score (de-redundancy)      │
 │                                                                  │
-│  输出: iceberg.mixer.eur_tagsuff                                 │
-│        列: id_tag | s1 | s2 | sr | weight                       │
+│  Output: iceberg.mixer.eur_tagsuff                               │
+│         columns: id_tag | s1 | s2 | sr | weight                 │
 ├──────────────────────────────────────────────────────────────────┤
-│  阶段 2: univariate_mixer 节点（运行时）                          │
+│  Phase 2: univariate_mixer node (runtime)                        │
 │                                                                  │
-│  1. 读上游 sumstats → z_vec, n_vec, rsid→idx                    │
-│  2. 查 af.eur_af → totalhet = Σ 2·maf·(1-maf), n_snp_ref       │
-│  3. 读 eur_tagsuff → rsid 匹配后:                                │
-│       m1[idx] = N × s1     （注：s1 是 N-free，运行时刻乘 N）     │
+│  1. Read upstream sumstats → z_vec, n_vec, rsid→idx             │
+│  2. Query af.eur_af → totalhet = Σ 2·maf·(1-maf), n_snp_ref    │
+│  3. Read eur_tagsuff → after rsid matching:                      │
+│       m1[idx] = N × s1     (note: s1 is N-free; multiply by N    │
+│                                 at runtime)                      │
 │       m2[idx] = N² × s2                                          │
 │       weights[idx] = 1/(1+sr)                                    │
 │       tags = [matched tag indices]                               │
 │  4. fit1(suff): DE×repeats → NM → FitResult.derive()            │
-│  5. 输出单行 RecordBatch                                         │
+│  5. Output single-row RecordBatch                                │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.4 N-free 设计
+### 2.4 N-free design
 
-`s1`/`s2` 预计算时不带 N（N 来自 GWAS sumstats，per-SNP 不同）。运行时刻再乘 `N_tag` 和 `N_tag²` 注入：
+`s1`/`s2` are precomputed without N (N comes from GWAS sumstats, varying per-SNP). At runtime,
+`N_tag` and `N_tag²` are injected:
 
 ```
-m1[j] = n_vec[j] × s1[j]         ← s1[j] 从 tagsuff 表读
-m2[j] = n_vec[j]² × s2[j]        ← s2[j] 从 tagsuff 表读
+m1[j] = n_vec[j] × s1[j]         ← s1[j] read from tagsuff table
+m2[j] = n_vec[j]² × s2[j]        ← s2[j] read from tagsuff table
 ```
 
-好处：同一份 tagsuff 可复用给不同样本量的 GWAS（N 不同时不需重算 LD）。
+Benefit: the same tagsuff can be reused for GWAS with different sample sizes (no LD recompute
+needed when N changes).
 
-## 3. Cost Function
+## 3. Cost function
 
-### 3.1 数学形式
+### 3.1 Mathematical form
 
 ```
 cost(π, σ²_β, σ²_zero) = -log L = Σ_{j∈tags} w_j · [-log f(z_j)]
 ```
 
-其中 w_j 是去冗余权重（逆 LD-score），f(z_j) 是矩匹配 Gaussian 混合密度（见 §1.3）。
+where w_j is the de-redundancy weight (inverse LD-score), and f(z_j) is the moment-matched
+Gaussian mixture density (see §1.3).
 
-### 3.2 实现位置
+### 3.2 Implementation locations
 
-| 函数 | 文件 | 用途 |
-|------|------|------|
-| `univariate_cost_gaussian` | `bio_crates/mixer/src/cost.rs` | CSR 版参考实现（逐邻居遍历） |
-| `univariate_cost_sufficient` | `bio_crates/mixer/src/cost.rs` | 压缩版（读 m1/m2），rayon 多核并行 |
-| `tag_moments` | `bio_crates/mixer/src/cost.rs` | 计算 tag j 的 (A_j, B_j)，CSR 使用 |
+| Function                  | File                              | Purpose                                       |
+|---------------------------|-----------------------------------|-----------------------------------------------|
+| `univariate_cost_gaussian`| `bio_crates/mixer/src/cost.rs`    | CSR reference impl (per-neighbor traversal)   |
+| `univariate_cost_sufficient` | `bio_crates/mixer/src/cost.rs` | Compressed version (reads m1/m2), rayon parallel |
+| `tag_moments`             | `bio_crates/mixer/src/cost.rs`    | Computes (A_j, B_j) for tag j, used by CSR   |
 
-验证：`sufficient_cost_matches_gaussian` 测试确认两版误差 < 1e-9（ULP 级重结合）。
+Validation: the `sufficient_cost_matches_gaussian` test confirms the two versions agree to < 1e-9
+(ULP-level recombination).
 
-### 3.3 数值保护
+### 3.3 Numerical safeguards
 
-- `K_MIN_PDF = 1e-300`：防止 pdf 下溢导致 `log(0) = -∞`
-- A=0 时跳过（无 LD 信号的 tag），避免 `tag_pi1 = 1 - B/(B+0)` 和 `sig2_tag` 除零
+- `K_MIN_PDF = 1e-300`: prevents pdf underflow causing `log(0) = -∞`
+- Skip when A=0 (tag with no LD signal), avoiding `tag_pi1 = 1 - B/(B+0)` and `sig2_tag` division by zero
 
-## 4. 优化策略
+## 4. Optimization strategy
 
-### 4.1 参数变换
+### 4.1 Parameter transformation
 
-优化器在无约束空间搜索（宽松边界），通过 bijection 映射到参数空间：
+The optimizer searches in an unconstrained space (with loose bounds), mapped to the parameter
+space via bijection:
 
 ```
 x₀ = ln(σ²_zero)     → σ²_zero > 0
@@ -159,159 +172,171 @@ x₁ = ln(σ²_β)        → σ²_β > 0
 x₂ = logit(π)        → π ∈ (0,1),  logit(p) = ln(p/(1-p))
 ```
 
-搜索范围（参数空间）：
+Search range (parameter space):
 ```
 σ²_zero: [0.9, 2.5]
 σ²_β:    [5e-6, 5e-2]
 π:       [5e-5, 5e-1]
 ```
 
-### 4.2 两阶段优化
+### 4.2 Two-stage optimization
 
 ```
 fit1(data, cfg):
-  1. 差分进化 (DE/rand/1/bin)
-     - 种群 45 (15×3 维)
-     - 每代 F∈[0.5,1.0] 随机, CR=0.7
-     - 收敛: max_cost-min_cost < 0.01
-     - 重复 cfg.diffevo_repeats 次（默认 20），每次种子不同
-     - 取全局最优
+  1. Differential evolution (DE/rand/1/bin)
+     - Population 45 (15×3 dims)
+     - Per generation F∈[0.5,1.0] random, CR=0.7
+     - Convergence: max_cost-min_cost < 0.01
+     - Repeated cfg.diffevo_repeats times (default 20), different seed each time
+     - Take global best
 
-  2. Nelder-Mead 精修
-     - 初始单纯形边长 0.5
-     - 收敛: Δcost < 1e-7
-     - 最大 1200 次迭代
-     - 从 DE 最优解出发
+  2. Nelder-Mead refinement
+     - Initial simplex edge length 0.5
+     - Convergence: Δcost < 1e-7
+     - Max 1200 iterations
+     - Starts from DE best
 ```
 
-完全无导数——不需要梯度或 Hessian。
+Fully derivative-free — no gradients or Hessians needed.
 
-## 5. 派生量
+## 5. Derived quantities
 
-拟合完成后从最优参数 + 数据 derived 得到：
+After fitting, derived quantities are computed from the optimal parameters + data:
 
-| 量 | 公式 | 含义 |
-|----|------|------|
-| h² | π·σ²_β·totalhet | SNP 遗传力 |
-| nc | π·n_snp | causal 变异总数 |
-| nc_p9 | nc·0.319 | 解释 90% h² 的 causal 变异数 |
-| AIC | 2·3 + 2·cost | Akaike 信息准则 |
-| BIC | ln(Σw)·3 + 2·cost | Bayesian 信息准则 |
+| Quantity | Formula            | Description                                |
+|----------|--------------------|--------------------------------------------|
+| h²       | π·σ²_β·totalhet    | SNP heritability                           |
+| nc       | π·n_snp            | Total number of causal variants            |
+| nc_p9    | nc·0.319           | Number of causal variants explaining 90% h²|
+| AIC      | 2·3 + 2·cost       | Akaike information criterion               |
+| BIC      | ln(Σw)·3 + 2·cost  | Bayesian information criterion             |
 
-其中 `totalhet = Σ_s 2·maf_s·(1-maf_s)`（全部参考面板 SNP 的杂合度和），
-`n_snp = |af.eur_af ∩ 指定染色体|`。
+Where `totalhet = Σ_s 2·maf_s·(1-maf_s)` (sum of heterozygosity over all reference-panel SNPs),
+and `n_snp = |af.eur_af ∩ specified chromosomes|`.
 
-**nc_p9 的 0.319**：原版 C++ 中经验标定的常数。其含义是：效应最大的前 31.9% 因果变异
-即可解释 90% 的遗传力（受负选择下效应 size-MAF 负相关驱动）。当前简化版尚未实现
-MAF 依赖效应模型（`sig2 ∝ maf^s`），直接复用原版常数。
+**The 0.319 constant in nc_p9**: an empirically calibrated constant from the original C++.
+Its meaning: the top 31.9% of causal variants (by effect size) explain 90% of heritability
+(driven by the negative correlation between effect size and MAF under negative selection).
+The current simplified version has not yet implemented the MAF-dependent effect-size model
+(`sig2 ∝ maf^s`); the original constant is reused directly.
 
-## 6. LD-score 权重
+## 6. LD-score weighting
 
-### 6.1 动机
+### 6.1 Motivation
 
-邻近 tag 通过 LD 共享大量邻居，z-score 高度相关。若每个 tag 独立计入 likelihood，
-等于**重复计数**同一份 LD 信息。
+Nearby tags share many neighbors through LD, making their z-scores highly correlated. If each
+tag is counted independently in the likelihood, this is effectively **double-counting** the same
+LD information.
 
-### 6.2 公式
+### 6.2 Formula
 
 ```
 w_j = 1 / (1 + Σ_s r²_{js})
 ```
 
-| Σr²（该 tag 的 LD 总分） | w_j | 含义 |
-|---|---|---|
-| ≈ 0 | ≈ 1.0 | 接近独立 |
-| 10 | ≈ 0.09 | 高度冗余 |
-| 100 | ≈ 0.01 | 几乎完全被邻居代表 |
+| Σr² (tag's total LD score) | w_j  | Meaning                        |
+|----------------------------|------|--------------------------------|
+| ≈ 0                        | ≈ 1.0| Nearly independent             |
+| 10                         | ≈ 0.09 | Highly redundant             |
+| 100                        | ≈ 0.01 | Almost fully represented by neighbors |
 
-LD-score 是"软"去冗余——比 randprune 的"硬"边界（入选/落选）更平滑，
-且只需一次扫 LD 即可完成，不需要随机采样。统计方向上两者等价（差异 1-3%）。
+LD-score weighting is a "soft" de-redundancy — smoother than randprune's "hard" boundary
+(included/excluded), and requires only a single LD scan, no random sampling.
+Statistically the two are equivalent (differ by 1–3%).
 
-## 7. Tagsuff 表结构
+## 7. Tagsuff table schema
 
-`iceberg.mixer.eur_tagsuff`（全染色体合并，EUR 人群）：
+`iceberg.mixer.eur_tagsuff` (all chromosomes merged, EUR population):
 
-| 列名 | 类型 | 含义 |
-|------|------|------|
-| `id_tag` | Utf8 | tag SNP 的 rsid |
-| `s1` | Float64 | N-free 一阶充分统计量 Σ h_neighbor·r² |
-| `s2` | Float64 | N-free 二阶充分统计量 Σ (h_neighbor·r²)² |
-| `sr` | Float64 | Σ r²（用于 weight 派生，冗余但保留用于诊断） |
-| `weight` | Float64 | LdScore 权重 1/(1+sr) |
+| Column   | Type     | Description                                        |
+|----------|----------|----------------------------------------------------|
+| `id_tag` | Utf8     | rsid of the tag SNP                                |
+| `s1`     | Float64  | N-free 1st-order sufficient statistic Σ h_neighbor·r² |
+| `s2`     | Float64  | N-free 2nd-order sufficient statistic Σ (h_neighbor·r²)² |
+| `sr`     | Float64  | Σ r² (for weight derivation; redundant but kept for diagnostics) |
+| `weight` | Float64  | LdScore weight 1/(1+sr)                            |
 
-每行一个 tag SNP（通过 MAF≥0.05 → LD prune r²>0.8 → random subset 筛选）。
-非 tag SNP 不出现在表中。
+One row per tag SNP (selected via MAF≥0.05 → LD prune r²>0.8 → random subset).
+Non-tag SNPs are not in the table.
 
-## 8. 关键实现决策
+## 8. Key implementation decisions
 
-### 8.1 单表统一（当前方案）
+### 8.1 Unified single table (current approach)
 
-- `eur_tagsuff` 是单张全染色体的 Iceberg 表（`iceberg.mixer` 命名空间下）。
-- 由 `precompute_tags`（`crates/data-engine/src/bin/precompute_tags.rs`）**逐染色体产出
-  parquet 文件后合并上传**。
-- 节点按 rsid 字符串匹配（不依赖染色体编号或整数 index），因此 tagsuff 与 sumstats
-  的 index 空间可以不同。
+- `eur_tagsuff` is a single genome-wide Iceberg table (under the `iceberg.mixer` namespace).
+- Produced by `precompute_tags` (`crates/data-engine/src/bin/precompute_tags.rs`) — **per-chromosome
+  parquet files are generated and then merged and uploaded**.
+- The node matches by rsid string (independent of chromosome number or integer index), so tagsuff
+  and sumstats can have different index spaces.
 
-### 8.2 N-free 设计
+### 8.2 N-free design
 
-`m1/m2` 的运行时刻化：tagsuff 中预计算的是不含 N 的 `s1/s2`，运行时刻由节点按
-per-SNP 的 N 注入。这样同一份 tagsuff 可复用给不同 sample size 的 GWAS 研究。
+Runtime instantiation of `m1/m2`: tagsuff stores N-free `s1/s2`; the node injects per-SNP N at
+runtime. This allows the same tagsuff to be reused for GWAS studies with different sample sizes.
 
-### 8.3 全染色体范围
+### 8.3 Genome-wide scope
 
-`eur_tagsuff` 包含所有 22 条常染色体的 tag。节点按 sumstats rsid 交集动态过滤，
-因此即使 tagsuff 有全基因组 tag，只与 sumstats 重叠的部分参与拟合。
+`eur_tagsuff` contains tags from all 22 autosomes. The node dynamically filters by sumstats rsid
+intersection, so even though tagsuff has genome-wide tags, only the portion overlapping with
+sumstats participates in the fit.
 
-`totalhet` 和 `n_snp_ref` 来自 `af.eur_af` 对 spec 指定染色体的聚合查询——
-必须与 sumstats 的染色体范围一致，否则 h² 和 nc 的尺度不对。
+`totalhet` and `n_snp_ref` come from aggregate queries on `af.eur_af` for the chromosomes
+specified in the spec — they must match the chromosome range of the sumstats, otherwise h² and nc
+will be mis-scaled.
 
-### 8.4 简化：sig2_zeroL = 0
+### 8.4 Simplification: sig2_zeroL = 0
 
-原版 MiXeR 有一个 sig2_zeroL 参数捕获低 r²（<阈值）LD 尾部的残余贡献。
-当前实现固定 sig2_zeroL=0。这是与金标准 ~0.15% 残余差异的主要来源。
+The original MiXeR has a sig2_zeroL parameter capturing residual contributions from the low-r²
+(< threshold) LD tail. The current implementation fixes sig2_zeroL=0. This is the main source of
+the ~0.15% residual difference vs. the gold standard.
 
-### 8.5 合并 vs 块对角
+### 8.5 Merge vs. block-diagonal
 
-多染色体时，LD 矩阵是块对角的（不跨染色体）。原版 MiXeR 会 `merge_blocks` 构建全局 CSR。
-当前实现中：
-- LdScore 模式**不需要 CSR**——逐批 LD 流式折叠进 m1/m2/sr，峰值内存 = 单条染色体一个 batch。
-- tagsuff 预计算替代了运行时刻 CSR 构建，峰值内存进一步降到 O(n_snp)。
+With multiple chromosomes, the LD matrix is block-diagonal (no cross-chromosome LD). The original
+MiXeR would `merge_blocks` to build a global CSR. In the current implementation:
+- LdScore mode **does not need CSR** — LD is folded into m1/m2/sr in streaming batches, peak memory
+  = one batch of a single chromosome.
+- Tagsuff precompute replaces runtime CSR construction, further reducing peak memory to O(n_snp).
 
-## 9. 已知限制
+## 9. Known limitations
 
-1. **Only EUR population**：`eur_tagsuff` 名暗示当前仅 EUR 人群可用的 LD 参考面板。
-   对跨人群 GWAS 不能直接复用。
+1. **EUR population only**: the `eur_tagsuff` name reflects that only EUR LD reference panels are
+   currently available. Cannot be directly reused for cross-population GWAS.
 
-2. **nc_p9 常数未精确推导**：0.319 来自原版 C++，基于负选择下效应 size-MAF 模型标定。
-   简化版尚未实现该模型，但 nc_p9 仅影响展示，不反馈到拟合。
+2. **nc_p9 constant not precisely derived**: 0.319 comes from the original C++, calibrated on a
+   negative-selection effect size-MAF model. The simplified version has not implemented this model,
+   but nc_p9 only affects display, not fitting.
 
-3. **extract 参数与 tagsuff 的一致性问题**：节点 spec 的 `extract_*` 字段仅用于日志/文档，
-   `eur_tagsuff` 表的内容由 `precompute_tags` 脚本的硬编码常数（MAF=0.05, R2_PRUNE=0.8,
-   SUBSET=2M, SEED=123）决定。若修改 spec 中的 extract 参数而不重跑 precompute_tags，
-   tagsuff 内容不会改变，导致 spec 与数据不一致。
+3. **Extract parameter / tagsuff consistency issue**: the node spec's `extract_*` fields are for
+   logging/documentation only. The contents of the `eur_tagsuff` table are determined by hardcoded
+   constants in the `precompute_tags` script (MAF=0.05, R2_PRUNE=0.8, SUBSET=2M, SEED=123).
+   Modifying spec extract parameters without re-running precompute_tags will not change the tagsuff
+   contents, leading to spec/data inconsistency.
 
-4. **LdScore only**：当前标签权重固定为 `1/(1+Σr²)`。randprune 加权模式需另行构建
-   不同的 tagsuff 表（randprune 权重需 CSR + 多次随机采样，无法折叠进标量权重）。
+4. **LdScore only**: tag weights are currently fixed to `1/(1+Σr²)`. The randprune weighting mode
+   requires building a different tagsuff table (randprune weights need CSR + multiple random samples,
+   cannot be folded into scalar weights).
 
-5. **无中游进度回调**：fit1 的 DE×NM 是同步 CPU 密集型优化，无 `await` 点。
-   节点在执行前后发 info 事件标注时间段，但优化过程中无法 emit 进度。
+5. **No mid-stream progress callback**: fit1's DE×NM is a synchronous CPU-intensive optimization
+   with no `await` points. The node emits info events before and after execution to mark the time
+   window, but cannot emit progress during optimization.
 
-## 10. 代码索引
+## 10. Code index
 
-| 组件 | 路径 |
-|------|------|
-| 节点定义 + execute | `crates/data-engine/src/nodes/univariate_mixer.rs` |
-| tagsuff 预算脚本 | `crates/data-engine/src/bin/precompute_tags.rs` |
-| 模型参数 | `bio_crates/mixer/src/params.rs` |
-| 数据容器（ChromData, UnivariateSufficient） | `bio_crates/mixer/src/data.rs` |
-| Cost function | `bio_crates/mixer/src/cost.rs` |
-| 优化器（DE + NM） | `bio_crates/mixer/src/optimizer.rs` |
-| fit1 入口 | `bio_crates/mixer/src/fit.rs` |
-| 结果派生（h², nc, AIC…） | `bio_crates/mixer/src/result.rs` |
-| 参数映射（log, logit） | `bio_crates/mixer/src/parametrize.rs` |
-| LD 稀疏矩阵（CSR + BlockDiagonal） | `bio_crates/mixer/src/ld_matrix.rs` |
-| tag 选择（clumping） | `bio_crates/mixer/src/extract.rs` |
-| 模拟器（合成 z-score） | `bio_crates/mixer/src/simulate.rs` |
-| Cross-validation vs 原版金标准 | `bio_crates/mixer/tests/cross_validation.rs` |
-| E2E test（Iceberg GWAS） | `bio_crates/mixer/tests/test_univariate_mixer_e2e.rs` |
-| 数学推导背景 | `bio_crates/mixer/README.md` |
+| Component                                           | Path                                                |
+|-----------------------------------------------------|-----------------------------------------------------|
+| Node definition + execute                           | `crates/data-engine/src/nodes/univariate_mixer.rs`  |
+| tagsuff precompute script                           | `crates/data-engine/src/bin/precompute_tags.rs`     |
+| Model parameters                                    | `bio_crates/mixer/src/params.rs`                    |
+| Data containers (ChromData, UnivariateSufficient)   | `bio_crates/mixer/src/data.rs`                      |
+| Cost function                                       | `bio_crates/mixer/src/cost.rs`                      |
+| Optimizer (DE + NM)                                 | `bio_crates/mixer/src/optimizer.rs`                 |
+| fit1 entry point                                    | `bio_crates/mixer/src/fit.rs`                       |
+| Result derivation (h², nc, AIC…)                    | `bio_crates/mixer/src/result.rs`                    |
+| Parameter mapping (log, logit)                      | `bio_crates/mixer/src/parametrize.rs`               |
+| LD sparse matrix (CSR + BlockDiagonal)              | `bio_crates/mixer/src/ld_matrix.rs`                 |
+| Tag selection (clumping)                            | `bio_crates/mixer/src/extract.rs`                   |
+| Simulator (synthetic z-scores)                      | `bio_crates/mixer/src/simulate.rs`                  |
+| Cross-validation vs original gold standard          | `bio_crates/mixer/tests/cross_validation.rs`        |
+| E2E test (Iceberg GWAS)                             | `bio_crates/mixer/tests/test_univariate_mixer_e2e.rs` |
+| Math derivation background                          | `bio_crates/mixer/README.md`                        |

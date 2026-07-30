@@ -1,151 +1,154 @@
-# Tag-Induced LD Subgraph 数据基础设施
+# Tag-Induced LD Subgraph Data Infrastructure
 
-> **命名空间**：`iceberg.mixer`  
-> **表**：`eur_subgraph`（全基因组合并为一张表）  
-> **人群**：EUR（1000 Genomes Phase 3）  
-> **构建状态**：已上线，267,215,170 行（2.67 亿条 LD 边）
+[English](subgraph.md) | [中文](subgraph_zh.md)
 
-## 数据结构
+> **Namespace**: `iceberg.mixer`  
+> **Table**: `eur_subgraph` (genome-wide merged into a single table)  
+> **Population**: EUR (1000 Genomes Phase 3)  
+> **Build status**: Live, 267,215,170 rows (267M LD edges)
 
-单张 Iceberg 表，每行是一条 tag 诱导的 LD 边：
+## Schema
 
-| 列名      | 类型     | 含义                                    |
-|-----------|----------|-----------------------------------------|
-| `chrom`   | Int64    | 染色体号（1–22）                        |
-| `id_a`    | Utf8     | SNP A 的 rsid                           |
-| `id_b`    | Utf8     | SNP B 的 rsid                           |
-| `r2`      | Float32  | 未相位 LD r²                            |
-| `h_a`     | Float32  | SNP A 的杂合度 2·maf·(1-maf)           |
-| `h_b`     | Float32  | SNP B 的杂合度                          |
+A single Iceberg table; each row is a tag-induced LD edge:
 
-**语义**：每行是参考面板里 r²≥0.05 的一对 SNP，且**至少一端是 tag**（tag 诱导）。
-非 tag↔非 tag 的对不在表里——fold 不需要它们。
+| Column   | Type     | Description                                  |
+|----------|----------|----------------------------------------------|
+| `chrom`  | Int64    | Chromosome number (1–22)                     |
+| `id_a`   | Utf8     | rsid of SNP A                                |
+| `id_b`   | Utf8     | rsid of SNP B                                |
+| `r2`     | Float32  | Unphased LD r²                               |
+| `h_a`    | Float32  | Heterozygosity of SNP A: 2·maf·(1-maf)       |
+| `h_b`    | Float32  | Heterozygosity of SNP B                      |
 
-**rsid 标识**：用 rsid 字符串（非整数 index），因为 precompute 和消费节点（mixer
-节点）的 index 空间不同（全 AF 面板 vs universe），整数 index 无法跨进程对齐。
+**Semantics**: each row is an LD pair with r²≥0.05 where **at least one endpoint is a tag**
+(tag-induced). Non-tag↔non-tag pairs are not in the table — the fold does not need them.
 
-**h 预算好**：杂合度在 precompute 时从 AF 算好存入，消费方不再查 AF 表取 h。
+**rsid identification**: rsid strings (not integer indices) are used because precompute and
+consumer nodes (mixer nodes) have different index spaces (full AF panel vs. universe);
+integer indices cannot align across processes.
 
-## 构建方式
+**h precomputed**: heterozygosity is computed from AF during precompute and stored, so
+consumers do not query the AF table for h.
 
-三步管线：**逐染色体预算** → **合并 + 转 rsid** → **上传 Iceberg**。
+## Construction
+
+Three-step pipeline: **per-chrom precompute** → **merge + rsid conversion** → **Iceberg upload**.
 
 ```
 af.eur_af + ld_matrix.eur_chr{N}
     │
-    ▼  precompute_tags2 <N>  （per-chrom，逐条跑）
-select_tags → tag 集合
+    ▼  precompute_tags2 <N>  (per-chrom, run one at a time)
+select_tags → tag set
     │
-    ▼  筛 tag 诱导边（任一端是 tag, r²≥0.05）
-chr{N}_subgraph.parquet  （UInt32 local index + h）
+    ▼  filter tag-induced edges (either endpoint is a tag, r²≥0.05)
+chr{N}_subgraph.parquet  (UInt32 local index + h)
     │
-    ▼  merge_subgraph  （读 AF 重建 rsid 列表，local idx → rsid）
-eur_subgraph.parquet  （rsid + chrom + h，单文件）
+    ▼  merge_subgraph  (read AF to rebuild rsid list, local idx → rsid)
+eur_subgraph.parquet  (rsid + chrom + h, single file)
     │
     ▼  lake_cli upload --parquet --overwrite
-iceberg.mixer.eur_subgraph  （SQL 可查询）
+iceberg.mixer.eur_subgraph  (SQL queryable)
 ```
 
-### 第一步：逐染色体预算
+### Step 1: per-chrom precompute
 
-**工具**：`cargo run -p data-engine --bin precompute_tags2 -- {N}`
+**Tool**: `cargo run -p data-engine --bin precompute_tags2 -- {N}`
 
-对每条染色体：
-1. 读 AF（`af.eur_af WHERE chrom=N`）→ rsids / maf_vec / rsid→idx / h_vec。
-2. 读 LD 一次（`ld_matrix.eur_chr{N} WHERE r²≥0.05`）→ 物化 `Vec<(a,b,r²)>`。
-3. 从物化数据筛 r²>0.8 建邻接 CSR → `select_tags` → tag 集合。
-4. 从物化数据筛 tag 诱导边（任一端是 tag）→ `chr{N}_subgraph.parquet`。
+For each chromosome:
+1. Read AF (`af.eur_af WHERE chrom=N`) → rsids / maf_vec / rsid→idx / h_vec.
+2. Read LD once (`ld_matrix.eur_chr{N} WHERE r²≥0.05`) → materialize `Vec<(a,b,r²)>`.
+3. Filter r²>0.8 from materialized data to build adjacency CSR → `select_tags` → tag set.
+4. Filter tag-induced edges from materialized data (either endpoint is a tag) → `chr{N}_subgraph.parquet`.
 
-subset 按染色体 SNP 占比分配（`GLOBAL_SUBSET × chr_snps / total_snps`）。
+Subset is allocated by per-chrom SNP proportion (`GLOBAL_SUBSET × chr_snps / total_snps`).
 
-**逐条跑全基因组**：
+**Run all chromosomes**:
 ```bash
 for c in $(seq 1 22); do
     cargo run -p data-engine --bin precompute_tags2 -- $c
 done
 ```
 
-产物：`chr1_subgraph.parquet` … `chr22_subgraph.parquet`（per-chrom，UInt32
-local index + h_a/h_b）。
+Output: `chr1_subgraph.parquet` … `chr22_subgraph.parquet` (per-chrom, UInt32 local index + h_a/h_b).
 
-### 第二步：合并 + 转 rsid
+### Step 2: merge + rsid conversion
 
-**工具**：`cargo run -p data-engine --bin merge_subgraph -- . eur_subgraph.parquet`
+**Tool**: `cargo run -p data-engine --bin merge_subgraph -- . eur_subgraph.parquet`
 
-对每条染色体：
-1. 读 AF 重建 rsid 列表（和 precompute_tags2 同样的扫描顺序）。
-2. 读 `chr{N}_subgraph.parquet` 的 `a_idx/b_idx`（UInt32 local index）。
-3. 查 `rsids[a_idx]` → rsid 字符串。
-4. 输出 `(chrom, id_a, id_b, r2, h_a, h_b)`。
+For each chromosome:
+1. Read AF to rebuild the rsid list (same scan order as precompute_tags2).
+2. Read `chr{N}_subgraph.parquet`'s `a_idx/b_idx` (UInt32 local index).
+3. Look up `rsids[a_idx]` → rsid string.
+4. Output `(chrom, id_a, id_b, r2, h_a, h_b)`.
 
-产物：`eur_subgraph.parquet`（单文件，rsid 格式，~2.3 GB）。
+Output: `eur_subgraph.parquet` (single file, rsid format, ~2.3 GB).
 
-### 第三步：上传 Iceberg
+### Step 3: Iceberg upload
 
 ```bash
 cargo run -p data-engine --bin lake_cli -- \
     upload eur_subgraph.parquet mixer.eur_subgraph --parquet --overwrite
 ```
 
-## 所需原料
+## Required inputs
 
-| 原料                    | 来源                                      | 说明                          |
-|-------------------------|-------------------------------------------|-------------------------------|
-| `af.eur_af`             | Iceberg 数据湖（AF 基础设施）             | MAF / rsid 列表 / 杂合度      |
-| `ld_matrix.eur_chr{N}`  | Iceberg 数据湖（LD matrix 基础设施）      | r² LD 对（precompute 扫描）   |
-| `mixer::extract::select_tags` | bio_crates/mixer                     | tag 选择算法（MAF+subset+剪枝）|
+| Input                    | Source                                         | Notes                          |
+|--------------------------|------------------------------------------------|--------------------------------|
+| `af.eur_af`              | Iceberg data lake (AF infrastructure)          | MAF / rsid list / heterozygosity |
+| `ld_matrix.eur_chr{N}`   | Iceberg data lake (LD matrix infrastructure)   | r² LD pairs (precompute scan)  |
+| `mixer::extract::select_tags` | bio_crates/mixer                           | Tag selection algorithm (MAF+subset+pruning) |
 
-## 关键参数
+## Key parameters
 
-| 参数            | 默认值     | 位置                 | 含义                          |
-|-----------------|------------|----------------------|-------------------------------|
-| MAF_MIN         | 0.05       | precompute_tags2     | tag 候选 MAF 下限             |
-| R2_PRUNE        | 0.8        | precompute_tags2     | LD 剪枝阈值（tag 选择用）     |
-| R2_MIN          | 0.05       | precompute_tags2     | 子图最低 r²（fold 用）        |
-| GLOBAL_SUBSET   | 2,000,000  | precompute_tags2     | 全基因组 subset 总预算        |
-| SEED            | 123        | precompute_tags2     | 随机种子（可复现）            |
+| Parameter       | Default    | Location             | Description                          |
+|-----------------|------------|----------------------|--------------------------------------|
+| MAF_MIN         | 0.05       | precompute_tags2     | Lower bound on tag candidate MAF     |
+| R2_PRUNE        | 0.8        | precompute_tags2     | LD pruning threshold (for tag selection) |
+| R2_MIN          | 0.05       | precompute_tags2     | Minimum subgraph r² (for fold)       |
+| GLOBAL_SUBSET   | 2,000,000  | precompute_tags2     | Genome-wide subset budget            |
+| SEED            | 123        | precompute_tags2     | Random seed (reproducible)           |
 
-## 下游消费方
+## Downstream consumers
 
-| 消费方               | 查询                                                  | 用途                      |
-|----------------------|-------------------------------------------------------|---------------------------|
-| univariate_mixer     | `SELECT ... FROM eur_subgraph WHERE chrom={N}`       | LD fold（替代 ld_matrix） |
-| bivariate_mixer      | 同上                                                  | LD fold                   |
-| 任何 SQL 工具        | `SELECT COUNT(*) FROM mixer.eur_subgraph`             | 数据探查                  |
+| Consumer             | Query                                                    | Purpose                     |
+|----------------------|----------------------------------------------------------|-----------------------------|
+| univariate_mixer     | `SELECT ... FROM eur_subgraph WHERE chrom={N}`          | LD fold (replaces ld_matrix) |
+| bivariate_mixer      | same                                                     | LD fold                     |
+| Any SQL tool         | `SELECT COUNT(*) FROM mixer.eur_subgraph`                | Data exploration            |
 
-## 验证
+## Verification
 
 ```bash
-# 行数
+# Row count
 cargo run -p data-engine --bin lake_cli -- count mixer.eur_subgraph
-# → mixer.eur_subgraph: 267215170 行
+# → mixer.eur_subgraph: 267215170 rows
 
-# schema
+# Schema
 cargo run -p data-engine --bin lake_cli -- schema mixer.eur_subgraph
 
-# 抽样
+# Sample
 cargo run -p data-engine --bin lake_cli -- query \
     "SELECT * FROM iceberg.mixer.eur_subgraph WHERE chrom = 22 LIMIT 10"
 ```
 
-## 规模参考
+## Scale reference
 
-| 指标         | 值             |
-|--------------|----------------|
-| 总行数       | 267,215,170    |
-| 文件大小     | ~2.3 GB (Parquet) |
-| 染色体数     | 22             |
-| 最大染色体   | chr6 (35.6M 边) |
-| 最小染色体   | chr21 (2.9M 边) |
-| tag 总数     | ~2M（全基因组） |
+| Metric           | Value             |
+|------------------|-------------------|
+| Total rows       | 267,215,170       |
+| File size        | ~2.3 GB (Parquet) |
+| Chromosomes      | 22                |
+| Largest chrom    | chr6 (35.6M edges) |
+| Smallest chrom   | chr21 (2.9M edges) |
+| Total tags       | ~2M (genome-wide)  |
 
-## 重建条件
+## Rebuild conditions
 
-以下任一变化时需重新构建：
+Rebuild when any of the following changes:
 
-| 变化                  | 重建？ |
-|-----------------------|--------|
-| 换 GWAS 性状          | **否**（子图与 GWAS 无关） |
-| 改 MAF/r²/subset/seed | **是** |
-| 换参考面板 / AF / LD  | **是** |
-| 加新染色体            | **是**（跑新染色体的 precompute + 重新 merge） |
+| Change                     | Rebuild? |
+|----------------------------|----------|
+| Change GWAS trait          | **No** (subgraph is GWAS-independent) |
+| Change MAF/r²/subset/seed  | **Yes**  |
+| Change ref panel / AF / LD | **Yes**  |
+| Add new chromosome         | **Yes** (run precompute for the new chrom + re-merge) |

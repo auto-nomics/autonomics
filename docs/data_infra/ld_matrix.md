@@ -1,39 +1,41 @@
-# LD Matrix 数据基础设施
+# LD Matrix Data Infrastructure
 
-> **命名空间**：`iceberg.ld_matrix`  
-> **表**：`eur_chr1` … `eur_chr22`（一条染色体一张表）  
-> **人群**：EUR（1000 Genomes Phase 3）  
-> **构建状态**：已上线，chr1–22 全量入库
+[English](ld_matrix.md) | [中文](ld_matrix_zh.md)
 
-## 数据结构
+> **Namespace**: `iceberg.ld_matrix`  
+> **Table**: `eur_chr1` … `eur_chr22` (one table per chromosome)  
+> **Population**: EUR (1000 Genomes Phase 3)  
+> **Build status**: Live, chr1–22 fully ingested
 
-每条染色体一张 Iceberg 表，schema 如下：
+## Schema
 
-| 列名           | 类型      | 含义                              | 源 TSV 列头     |
-|----------------|-----------|-----------------------------------|-----------------|
-| `chrom_a`      | Int64     | SNP A 的染色体号                  | `#CHROM_A`      |
-| `pos_a`        | Int64     | SNP A 的物理坐标（bp）            | `POS_A`         |
-| `id_a`         | Utf8      | SNP A 的 rsid                     | `ID_A`          |
-| `chrom_b`      | Int64     | SNP B 的染色体号                  | `#CHROM_B`      |
-| `pos_b`        | Int64     | SNP B 的物理坐标（bp）            | `POS_B`         |
-| `id_b`         | Utf8      | SNP B 的 rsid                     | `ID_B`          |
-| `unphased_r2`  | Float64   | 未相位 LD 的 r²（0–1）           | `UNPHASED_R2`  |
+One Iceberg table per chromosome:
 
-**语义**：每行是一对 SNP 的 LD（r²）。只存 `r² ≥ LD_R2_MIN`（默认 0.01）的对——
-稀疏存储，不存 r²≈0 的无关对。
+| Column          | Type     | Description                         | Source TSV header |
+|-----------------|----------|-------------------------------------|-------------------|
+| `chrom_a`       | Int64    | Chromosome of SNP A                 | `#CHROM_A`        |
+| `pos_a`         | Int64    | Physical position of SNP A (bp)     | `POS_A`           |
+| `id_a`          | Utf8     | rsid of SNP A                       | `ID_A`            |
+| `chrom_b`       | Int64    | Chromosome of SNP B                 | `#CHROM_B`        |
+| `pos_b`         | Int64    | Physical position of SNP B (bp)     | `POS_B`           |
+| `id_b`          | Utf8     | rsid of SNP B                       | `ID_B`            |
+| `unphased_r2`   | Float64  | Unphased LD r² (0–1)               | `UNPHASED_R2`    |
 
-**表内无整数 SNP ID**——SNP 用 rsid 字符串标识。整数 index 是消费方运行时临时
-建的，不持久化（详见消费方文档）。
+**Semantics**: each row is an LD pair (r²). Only pairs with `r² ≥ LD_R2_MIN` (default 0.01) are stored —
+sparse storage, no r²≈0 pairs.
 
-## 构建方式
+**No integer SNP IDs in-table** — SNPs are identified by rsid strings. Integer indices are
+built at runtime by consumers, not persisted (see consumer docs).
 
-完整管线分两段：**上游 PLINK2 计算** → **Iceberg 入库**。
+## Construction
+
+The full pipeline has two stages: **upstream PLINK2 computation** → **Iceberg ingest**.
 
 ```
 1000G VCF (raw)
     │
     ▼  infra/thousand_genomes/ld_matrix.sh
-PLINK2 QC + --r2 计算
+PLINK2 QC + --r2 computation
     │
     ▼
 zstd TSV (per-chrom sparse LD matrix)
@@ -42,89 +44,91 @@ zstd TSV (per-chrom sparse LD matrix)
 iceberg.ld_matrix.eur_chr{N} (per-chrom table)
 ```
 
-### 第一段：上游 PLINK2 计算
+### Stage 1: upstream PLINK2 computation
 
-**脚本**：`infra/thousand_genomes/ld_matrix.sh`
+**Script**: `infra/thousand_genomes/ld_matrix.sh`
 
 ```bash
-./ld_matrix.sh EUR          # 跑 EUR 人群 chr1–22
-POPS="EUR" CHRS="21 22" ./ld_matrix.sh   # 指定
+./ld_matrix.sh EUR          # Run EUR population chr1–22
+POPS="EUR" CHRS="21 22" ./ld_matrix.sh   # Specify
 ```
 
-**步骤**：
-1. 从 1000G panel 文件提取 EUR 样本列表（FID/IID）。
-2. 按染色体将 VCF 转为 PLINK bfile（`.bed/.bim/.fam`）。
-3. QC 过滤：
-   - `--maf 0.01`（MAF ≥ 1%，1000G N=503 的统计功效底线）
-   - `--geno 0.05`（SNP 缺失率 ≤ 5%）
-4. PLINK2 `--r2` 计算 LD：
-   - 窗口 `10 Mb`（LD 衰减距离，超过此距离 r²≈0）
-   - 阈值 `r² ≥ 0.01`（只存有意义的对）
-5. 输出：每条染色体一个 `.ld.vcor.zst`（zstd 压缩 TSV）。
+**Steps**:
+1. Extract EUR sample list (FID/IID) from the 1000G panel file.
+2. Convert VCF to PLINK bfile (`.bed/.bim/.fam`) per chromosome.
+3. QC filtering:
+   - `--maf 0.01` (MAF ≥ 1%, statistical power floor for 1000G N=503)
+   - `--geno 0.05` (SNP missing rate ≤ 5%)
+4. PLINK2 `--r2` LD computation:
+   - Window `10 Mb` (LD decay distance; r²≈0 beyond)
+   - Threshold `r² ≥ 0.01` (only meaningful pairs stored)
+5. Output: one `.ld.vcor.zst` (zstd-compressed TSV) per chromosome.
 
-**输出目录**：`/mnt/disk2/dataset/1000g_plink/eur/ld/`
+**Output directory**: `/mnt/disk2/dataset/1000g_plink/eur/ld/`
 
-### 第二段：Iceberg 入库
+### Stage 2: Iceberg ingest
 
-**工具**：`infra/sink_ld_matrix`（`cargo run -p sink_ld_matrix`）
+**Tool**: `infra/sink_ld_matrix` (`cargo run -p sink_ld_matrix`)
 
-读取 zstd TSV，按 schema 列名**位置赋值**（`CsvReadOptions::schema`），写入
-Iceberg 表。每条染色体独立写入，并发度 = CPU 核数（`SINK_CONCURRENCY=N` 可调）。
+Reads zstd TSV, assigns column names **positionally** (`CsvReadOptions::schema`), writes to
+Iceberg table. Each chromosome is written independently; concurrency = CPU core count
+(`SINK_CONCURRENCY=N` to tune).
 
-- **幂等**：已有 snapshot 的表跳过；被 kill 的空表下次自动补。
-- **重写**：先 `drop_table` 再跑。
+- **Idempotent**: tables with existing snapshots are skipped; empty tables from killed runs
+  are auto-completed on the next run.
+- **Rewrite**: `drop_table` first, then re-run.
 
-**列名坑**：源 TSV 首列 `#CHROM_A` 带 `#`，DataFusion 当成 qualifier 分隔符 →
-name-based 重命名静默失败。所以用**位置 schema** 赋名，且 `#` 被 Iceberg 字段名
-规范拒绝 → 统一转小写 `chrom_a`。
+**Column-name gotcha**: the source TSV first column `#CHROM_A` contains `#`, which DataFusion
+treats as a qualifier separator → name-based renaming silently fails. A **positional schema**
+is used instead, and `#` is rejected by Iceberg field-name rules → lowercased to `chrom_a`.
 
-## 所需原料
+## Required inputs
 
-| 原料                | 位置 / 来源                                          | 说明                          |
-|---------------------|------------------------------------------------------|-------------------------------|
-| 1000G VCF           | `/mnt/disk2/dataset/1000g_genotype_data/`            | 1000G Phase 3 全基因组分型    |
-| 样本 panel          | `integrated_call_samples_v3.20130502.ALL.panel`      | 人群→样本映射（EUR/AFR/…）   |
-| PLINK2              | 系统 PATH                                            | LD 计算（`--r2`）             |
-| zstd                | 系统 PATH                                            | TSV 压缩                      |
-| Iceberg REST catalog| 数据湖配置（`Datalake::new()`）                      | 表存储后端                    |
+| Input               | Location / source                                     | Notes                          |
+|---------------------|-------------------------------------------------------|--------------------------------|
+| 1000G VCF           | `/mnt/disk2/dataset/1000g_genotype_data/`             | 1000G Phase 3 whole-genome genotyping |
+| Sample panel        | `integrated_call_samples_v3.20130502.ALL.panel`       | Population→sample mapping (EUR/AFR/…) |
+| PLINK2              | System PATH                                           | LD computation (`--r2`)        |
+| zstd                | System PATH                                           | TSV compression                |
+| Iceberg REST catalog| Data lake config (`Datalake::new()`)                  | Table storage backend          |
 
-## 关键参数
+## Key parameters
 
-| 参数          | 值      | 位置                 | 含义                                   |
-|---------------|---------|----------------------|----------------------------------------|
-| MAF_MIN       | 0.01    | ld_matrix.sh         | SNP 最低 MAF（QC 过滤）                |
-| GENO_MAX      | 0.05    | ld_matrix.sh         | SNP 最大缺失率（QC 过滤）              |
-| LD_WINDOW_KB  | 10000   | ld_matrix.sh         | LD 计算窗口（10 Mb）                   |
-| LD_R2_MIN     | 0.01    | ld_matrix.sh         | 存储阈值（r² < 0.01 不入库）           |
-| THREADS       | 8       | ld_matrix.sh         | PLINK2 线程数                          |
+| Parameter     | Value  | Location             | Description                              |
+|----------------|--------|----------------------|------------------------------------------|
+| MAF_MIN        | 0.01   | ld_matrix.sh         | Minimum SNP MAF (QC filter)              |
+| GENO_MAX       | 0.05   | ld_matrix.sh         | Maximum SNP missing rate (QC filter)     |
+| LD_WINDOW_KB   | 10000  | ld_matrix.sh         | LD computation window (10 Mb)            |
+| LD_R2_MIN      | 0.01   | ld_matrix.sh         | Storage threshold (r² < 0.01 not stored) |
+| THREADS        | 8      | ld_matrix.sh         | PLINK2 thread count                      |
 
-## 下游消费方
+## Downstream consumers
 
-| 消费方               | 查询                                           | 用途                      |
-|----------------------|------------------------------------------------|---------------------------|
-| MiXeR extract        | `WHERE unphased_r2 > 0.8`                     | tag 选择（LD 剪枝）       |
-| MiXeR LD fold        | `WHERE unphased_r2 >= 0.05`                   | 充分统计量（m1/m2）       |
-| LDSC                 | 全量扫描                                       | LD score 计算             |
-| precompute_tags      | `WHERE unphased_r2 > 0.8` + `>= 0.05`         | 预算 tag 面板 + 子图      |
+| Consumer             | Query                                        | Purpose                     |
+|----------------------|----------------------------------------------|-----------------------------|
+| MiXeR extract        | `WHERE unphased_r2 > 0.8`                    | Tag selection (LD pruning)  |
+| MiXeR LD fold        | `WHERE unphased_r2 >= 0.05`                  | Sufficient statistics (m1/m2) |
+| LDSC                 | Full scan                                    | LD score computation        |
+| precompute_tags      | `WHERE unphased_r2 > 0.8` + `>= 0.05`        | Precompute tag panel + subgraph |
 
-## 验证
+## Verification
 
 ```bash
-# 检查表是否存在 + 行数
+# Check table existence + row count
 cargo run -p data-engine --bin lake_cli -- count ld_matrix.eur_chr22
 
-# 看表结构
+# View schema
 cargo run -p data-engine --bin lake_cli -- schema ld_matrix.eur_chr22
 
-# 抽样
+# Sample
 cargo run -p data-engine --bin lake_cli -- query \
     "SELECT * FROM iceberg.ld_matrix.eur_chr22 WHERE unphased_r2 > 0.8 LIMIT 10"
 ```
 
-## 规模参考
+## Scale reference
 
-| 染色体 | SNP 数（AF 面板） | LD 对数（r²≥0.01） | Iceberg 表名          |
-|--------|-------------------|--------------------|-----------------------|
-| chr1   | ~176k             | ~数十 M            | `eur_chr1`            |
-| chr22  | ~32k              | ~数 M              | `eur_chr22`           |
-| 全基因组| ~10.7M           | ~数亿              | chr1–chr22 共 22 张表  |
+| Chromosome | SNP count (AF panel) | LD pairs (r²≥0.01) | Iceberg table name    |
+|------------|----------------------|--------------------|-----------------------|
+| chr1       | ~176k                | ~tens of M         | `eur_chr1`            |
+| chr22      | ~32k                 | ~a few M           | `eur_chr22`           |
+| Genome-wide| ~10.7M               | ~hundreds of M     | chr1–chr22 (22 tables) |
