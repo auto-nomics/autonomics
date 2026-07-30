@@ -727,8 +727,18 @@ impl App {
 
         match self.state.main_tab_state {
             MainTabState::AgentTab => {
+                // Load the current model name from the shared ArcSwapOption.
+                // `load_full()` returns an owned Option<Arc<Model>> (one refcount
+                // bump), so the immutable borrow of `active_model` is released
+                // before we mutably borrow `agent_tab_state` below.
+                let model_name = self
+                    .state
+                    .active_model
+                    .load_full()
+                    .map(|m| m.model_info.model_name.clone());
                 let widget = AgentTabWidget {
                     state: &mut self.state.agent_tab_state,
+                    active_model: model_name.as_deref(),
                 };
                 frame.render_widget(widget, areas[1]);
 

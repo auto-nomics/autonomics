@@ -5,15 +5,20 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::AgentStatus;
 
-/// 1-row status bar showing agent state and token counts.
+/// 1-row status bar showing agent state, token counts, and active model.
+///
+/// Status + tokens are left-aligned; the model name is right-aligned on the
+/// same row so both fit in a single line.
 pub struct StatusBar<'a> {
     pub status: &'a AgentStatus,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    pub model_name: Option<&'a str>,
 }
 
 impl Widget for StatusBar<'_> {
@@ -64,6 +69,30 @@ impl Widget for StatusBar<'_> {
         let line = Line::from(spans);
 
         Paragraph::new(line).render(area, buf);
+
+        // ── Model name (right-aligned) ──
+        if let Some(name) = self.model_name {
+            let label = "model ";
+            let label_w = label.width();
+            let name_w = name.width();
+            let total_w = label_w + name_w;
+            if total_w < area.width as usize {
+                let x = area.x + area.width - total_w as u16;
+                let y = area.y;
+                buf.set_string(
+                    x,
+                    y,
+                    label,
+                    Style::default().fg(Color::DarkGray),
+                );
+                buf.set_string(
+                    x + label_w as u16,
+                    y,
+                    name,
+                    Style::default().fg(Color::Gray),
+                );
+            }
+        }
     }
 }
 

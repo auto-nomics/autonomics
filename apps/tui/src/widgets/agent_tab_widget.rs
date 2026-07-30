@@ -17,6 +17,8 @@ use crate::widgets::{
 /// scrollbar, borderless input area, and a keybinding hint footer.
 pub struct AgentTabWidget<'a> {
     pub state: &'a mut AgentTabState,
+    /// Active model name shown on the composer border.
+    pub active_model: Option<&'a str>,
 }
 
 impl Widget for AgentTabWidget<'_> {
@@ -46,7 +48,7 @@ impl Widget for AgentTabWidget<'_> {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // StatusBar
+                Constraint::Length(1), // StatusBar (includes model name)
                 task_constraint,       // ToolExecWidget (0 when empty)
                 Constraint::Min(3),    // Chat (shrinks as input grows)
                 input_constraint,      // Input (dynamic, borderless)
@@ -62,6 +64,7 @@ impl Widget for AgentTabWidget<'_> {
             input_tokens: ts.input_tokens,
             output_tokens: ts.output_tokens,
             cache_read_tokens: ts.cache_read_tokens,
+            model_name: self.active_model,
         };
         status_bar.render(layout[0], buf);
 
