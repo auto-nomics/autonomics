@@ -5616,7 +5616,12 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 name = "opentargets"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
  "reqwest 0.13.4",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

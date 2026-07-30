@@ -1,11 +1,14 @@
 //! Async Rust SDK for the [Open Targets Platform GraphQL API](
 //! https://platform.opentargets.org/api).
 //!
-//! The API is public (no authentication). Create an [`OpenTargetsClient`]
-//! and call the typed helpers, or use [`OpenTargetsClient::query`] for
-//! arbitrary GraphQL.
+//! The API is public (no authentication). This crate provides:
 //!
-//! # Example
+//! - **`OpenTargetsClient`** — an async HTTP/GraphQL client with typed helpers
+//!   for targets, diseases, drugs, studies, variants, search, and associations.
+//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
+//!   the same capabilities to an agentik agent as LLM-friendly Markdown.
+//!
+//! # Quick start (SDK only)
 //!
 //! ```no_run
 //! # use opentargets::OpenTargetsClient;
@@ -19,11 +22,26 @@
 //! }
 //! # Ok(()) }
 //! ```
+//!
+//! # Wiring tools into an agent
+//!
+//! ```no_run,ignore
+//! use opentargets::{OpenTargetsClient, opentargets_registrations};
+//! use std::sync::Arc;
+//!
+//! let client = Arc::new(OpenTargetsClient::new());
+//! let tools = opentargets_registrations(client);
+//! // pass `tools` to Agent::builder().with_tools(tools)
+//! ```
+//!
+//! [`ToolFunction`]: agentik_core::tools::ToolFunction
 
 pub mod associations;
 pub mod client;
 pub mod error;
+pub mod format;
 pub mod search;
+pub mod tools;
 pub mod types;
 
 pub use associations::{
@@ -32,6 +50,7 @@ pub use associations::{
 pub use client::{OpenTargetsClient, DEFAULT_ENDPOINT};
 pub use error::{OpenTargetsError, Result};
 pub use search::{SearchResult, SearchResults};
+pub use tools::opentargets_registrations;
 pub use types::{
     ApiVersion, DataVersion, Disease, Drug, GenomicLocation, Meta, Sample,
     ScoredComponent, Study, Target, Variant,
