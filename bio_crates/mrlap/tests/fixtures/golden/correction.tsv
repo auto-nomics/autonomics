@@ -1,0 +1,2 @@
+pi_x	sigma2_x	alpha_corrected	alpha_corrected_se	cov_obs_corrected	test_diff	p_diff	n_sim	lambda	lambda_se	h2_LDSC	h2_LDSC_se	mr_threshold	n_exp	n_out
+0.00406110047350822	3.21180880550878e-05	0.339471819492209	0.0849508604060192	0.00547546515226581	-4.23410340502016	2.29465348747181e-05	7000	0.005	0.001	0.15	0.02	5e-08	1e+05	80000

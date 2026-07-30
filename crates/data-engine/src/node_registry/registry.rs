@@ -28,6 +28,7 @@ use crate::nodes::{
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     mr::MrNodeFactory,
+    mrlap::MrlapNodeFactory,
     mtag::MtagNodeFactory,
     sink_file::FileSinkNodeFactory,
     sink_iceberg::IcebergSinkNodeFactory,
@@ -169,6 +170,7 @@ impl NodeRegistry {
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(TestSourceFactory {}));
         registry.register(Box::new(MrNodeFactory {}));
+        registry.register(Box::new(MrlapNodeFactory {}));
         registry.register(Box::new(LavaLocusNodeFactory {}));
         registry.register(Box::new(LavaUnivNodeFactory {}));
         registry.register(Box::new(LavaBivarNodeFactory {}));
@@ -272,6 +274,11 @@ mod tests {
             "sldsc" => serde_json::json!({}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
+            "mrlap" => serde_json::json!({
+                "exposure_name": "exp",
+                "outcome_name": "out"
+            }),
+            "mtag" => serde_json::json!({"n_blocks": 200}),
             "lava_locus" => {
                 serde_json::json!({"loci": [{"loc": "1", "chr": 1, "start": 1, "stop": 2}]})
             }

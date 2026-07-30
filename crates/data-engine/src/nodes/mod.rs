@@ -17,6 +17,7 @@ pub mod liability;
 pub mod linear_regression;
 pub mod meta;
 pub mod mr;
+pub mod mrlap;
 pub mod mtag;
 pub mod sink_common;
 pub mod sink_file;
@@ -45,6 +46,7 @@ pub use linear_regression::{
 };
 pub use meta::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port};
 pub use mr::{MrNode, MrNodeFactory, MrNodeSpec, MrParameters};
+pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 pub use mtag::{MtagConfig, MtagNode, MtagNodeFactory};
 pub use sink_common::SinkMode;
 pub use sink_file::{FileSinkNode, FileSinkNodeFactory, FileSinkNodeSpec, WriteFormat};

@@ -1,0 +1,32 @@
+[package]
+name = "mrlap"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "mrlap"
+path = "src/lib.rs"
+
+[dependencies]
+faer.workspace = true
+thiserror.workspace = true
+# Normal distribution functions (pnorm / qnorm / dnorm) — reproduces R's stats.
+statrs = "0.18"
+# Seeded RNG (ChaCha8) for the parametric-bootstrap variance of the corrected
+# effect (`get_correctedSE` in the R reference).
+rand = "0.9"
+rand_distr = "0.5"
+rand_chacha = "0.9"
+rayon = "1.10"
+# LDSC (cross-trait rg / gencov / h²) and IVW-MR / Egger stages reuse the
+# already-validated `ldsc` and `mr` crates instead of re-porting them.
+ldsc = { path = "../ldsc" }
+mr = { path = "../mr" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
