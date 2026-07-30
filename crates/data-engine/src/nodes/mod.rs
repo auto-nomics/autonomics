@@ -56,9 +56,8 @@ pub use sink_iceberg::{IcebergSinkNode, IcebergSinkNodeFactory, IcebergSinkNodeS
 pub use source_file::{FileFormat, FileSourceNode, FileSourceNodeFactory, FileSourceNodeSpec};
 pub use source_iceberg::{IcebergSourceNode, IcebergSourceNodeFactory, IcebergSourceNodeSpec};
 pub use source_opentargets::{
-    OpentargetsAssociationsNode, OpentargetsAssociationsNodeFactory,
-    OpentargetsAssociationsSpec, OpentargetsSearchNode, OpentargetsSearchNodeFactory,
-    OpentargetsSearchSpec,
+    OpentargetsAssociationsNode, OpentargetsAssociationsNodeFactory, OpentargetsAssociationsSpec,
+    OpentargetsSearchNode, OpentargetsSearchNodeFactory, OpentargetsSearchSpec,
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};

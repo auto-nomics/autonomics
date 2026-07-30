@@ -14,9 +14,11 @@
 
 use faer::Mat;
 
-use crate::linalg::{compute_n_mats, compute_z_outer, is_pos_semidef, mvn_pdf, pos_def_adjustment, cholesky};
-use crate::nelder::nelder_mead_generic;
 use crate::error::Result;
+use crate::linalg::{
+    cholesky, compute_n_mats, compute_z_outer, is_pos_semidef, mvn_pdf, pos_def_adjustment,
+};
+use crate::nelder::nelder_mead_generic;
 
 /// GMM (method-of-moments) estimator of Omega.
 ///
@@ -133,7 +135,11 @@ pub fn rebuild_omega(chol_elems: &[f64]) -> Mat<f64> {
 fn omega_neglog_l(x: &[f64], zs: &Mat<f64>, n_mats: &[Mat<f64>], sigma_ld: &Mat<f64>) -> f64 {
     let omega_it = rebuild_omega(x);
     let joint_prob = mvn_pdf(zs, &omega_it, sigma_ld, n_mats);
-    -joint_prob.iter().filter(|p| **p > 0.0).map(|p| p.ln()).sum::<f64>()
+    -joint_prob
+        .iter()
+        .filter(|p| **p > 0.0)
+        .map(|p| p.ln())
+        .sum::<f64>()
 }
 
 /// Configuration for Omega estimation.
@@ -193,20 +199,26 @@ pub fn estimate_omega(
 
         let x_start = flatten_out_omega(&omega_in);
         let n_mats = compute_n_mats(ns);
-        let max_iter = if cfg.perfect_gencov { p * 250 } else { p * (p + 1) * 500 };
+        let max_iter = if cfg.perfect_gencov {
+            p * 250
+        } else {
+            p * (p + 1) * 500
+        };
 
         let opt_x = nelder_mead_generic(
             |x| omega_neglog_l(x, zs, &n_mats, sigma_ld),
             &x_start,
-            0.5, // initial step
+            0.5,     // initial step
             cfg.tol, // xatol
-            1e-8,   // fatol
+            1e-8,    // fatol
             max_iter,
         );
 
         if cfg.perfect_gencov {
             // sqrt(exp(x) ⊗ exp(x))
-            let diag: Vec<f64> = (0..p).map(|i| opt_x[i * (i + 1) / 2 + i].exp().sqrt()).collect();
+            let diag: Vec<f64> = (0..p)
+                .map(|i| opt_x[i * (i + 1) / 2 + i].exp().sqrt())
+                .collect();
             let mut omega = Mat::zeros(p, p);
             for i in 0..p {
                 for j in 0..p {

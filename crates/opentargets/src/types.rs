@@ -6,8 +6,8 @@
 //! `#[serde(default)]` where a field may legitimately be absent and
 //! `rename_all = "camelCase"` to match the GraphQL field naming.
 
-use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Common

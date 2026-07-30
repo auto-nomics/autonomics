@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use agentik_core::tools::ToolRegistration;
-use opentargets::{opentargets_registrations, OpenTargetsClient};
+use opentargets::{OpenTargetsClient, opentargets_registrations};
 use serde_json::json;
 
 fn registrations() -> Vec<ToolRegistration> {
@@ -24,7 +24,11 @@ async fn run_tool(name: &str, input: serde_json::Value) -> String {
         .into_iter()
         .find(|r| r.definition.name == name)
         .unwrap_or_else(|| panic!("tool '{name}' not registered"));
-    let res = reg.implementation.execute(input).await.expect("tool failed");
+    let res = reg
+        .implementation
+        .execute(input)
+        .await
+        .expect("tool failed");
     assert!(
         !res.is_error.unwrap_or(false),
         "tool {name} returned an error: {}",
@@ -98,10 +102,6 @@ async fn target_tool_runs() {
 #[tokio::test]
 #[ignore = "hits the live Open Targets API"]
 async fn disease_tool_runs() {
-    let text = run_tool(
-        "opentargets_disease",
-        json!({ "efo_id": "MONDO_0004975" }),
-    )
-    .await;
+    let text = run_tool("opentargets_disease", json!({ "efo_id": "MONDO_0004975" })).await;
     assert!(text.to_lowercase().contains("alzheimer"));
 }

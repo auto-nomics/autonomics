@@ -6,8 +6,8 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use super::json_err;
-use crate::format::format_variant;
 use crate::OpenTargetsClient;
+use crate::format::format_variant;
 
 #[tool(
     name = "opentargets_variant",
@@ -29,7 +29,11 @@ impl ToolFunction for VariantTool {
     type Input = VariantInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let variant = self.client.variant(&input.variant_id).await.map_err(json_err)?;
+        let variant = self
+            .client
+            .variant(&input.variant_id)
+            .await
+            .map_err(json_err)?;
         match variant {
             Some(v) => Ok(AgentToolResult::success(format_variant(&v))),
             None => Ok(AgentToolResult::error(format!(

@@ -12,7 +12,11 @@ use crate::types::{Disease, Drug, Study, Target, Variant};
 /// top contributors (score > 0) and capped to `max` entries.
 fn top_datasources(scores: &[crate::types::ScoredComponent], max: usize) -> String {
     let mut sorted: Vec<_> = scores.iter().filter(|s| s.score > 0.0).collect();
-    sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     sorted
         .iter()
         .take(max)
@@ -31,7 +35,11 @@ pub fn format_search(results: &SearchResults) -> String {
         return format!("No hits found (total reported: {}).", results.total);
     }
     let mut out = String::with_capacity(2048);
-    out.push_str(&format!("**{} hits** (total {})\n\n", results.hits.len(), results.total));
+    out.push_str(&format!(
+        "**{} hits** (total {})\n\n",
+        results.hits.len(),
+        results.total
+    ));
     out.push_str("| # | Entity | ID | Name | Score | Description |\n");
     out.push_str("|---|---------|----|------|-------|-------------|\n");
     for (i, h) in results.hits.iter().enumerate() {
@@ -111,7 +119,10 @@ pub fn format_disease(d: &Disease) -> String {
             out.push_str(&format!("{desc}\n\n"));
         }
     }
-    out.push_str(&format!("- **Therapeutic area:** {}\n", d.is_therapeutic_area));
+    out.push_str(&format!(
+        "- **Therapeutic area:** {}\n",
+        d.is_therapeutic_area
+    ));
     if !d.parents.is_empty() {
         let parents = disease_id_list(&d.parents);
         out.push_str(&format!("- **Parents:** {parents}\n"));
@@ -135,7 +146,10 @@ pub fn format_drug(d: &Drug) -> String {
     let mut out = String::with_capacity(512);
     out.push_str(&format!("## {} ({})\n\n", d.name, d.id));
     out.push_str(&format!("- **Type:** {}\n", d.drug_type));
-    out.push_str(&format!("- **Max clinical stage:** {}\n", d.maximum_clinical_stage));
+    out.push_str(&format!(
+        "- **Max clinical stage:** {}\n",
+        d.maximum_clinical_stage
+    ));
     if let Some(ref desc) = d.description {
         if !desc.is_empty() {
             out.push_str(&format!("- **Description:** {desc}\n"));
@@ -227,9 +241,7 @@ pub fn format_associated_diseases(rows: &[AssociatedDisease], count: i64) -> Str
             a.score,
             a.disease.id,
             a.disease.name.replace('|', "\\|"),
-            a.novelty
-                .map(|n| format!("{:.4}", n))
-                .unwrap_or("-".into()),
+            a.novelty.map(|n| format!("{:.4}", n)).unwrap_or("-".into()),
             top_datasources(&a.datasource_scores, 5),
         ));
     }

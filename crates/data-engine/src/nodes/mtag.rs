@@ -133,7 +133,11 @@ fn build_trait_batch(
     let n_dist = statrs::distribution::Normal::new(0.0, 1.0).unwrap();
 
     for i in 0..m {
-        let weight = if std_betas { 1.0 } else { (2.0 * freqs[i] * (1.0 - freqs[i])).sqrt() };
+        let weight = if std_betas {
+            1.0
+        } else {
+            (2.0 * freqs[i] * (1.0 - freqs[i])).sqrt()
+        };
         let beta = mtag_betas[i] / weight;
         let se = mtag_ses[i] / weight;
         let z = mtag_betas[i] / mtag_ses[i];
@@ -429,7 +433,8 @@ impl MtagNode {
 
         if batches.is_empty() {
             return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(
-                "mtag: joined DataFrame is empty (no SNPs shared by both traits and the LD panel)".into(),
+                "mtag: joined DataFrame is empty (no SNPs shared by both traits and the LD panel)"
+                    .into(),
             ))
             .into());
         }
@@ -461,10 +466,20 @@ impl MtagNode {
         };
 
         let rg = ldsc::regress::RG::new(
-            &z1, &z2, &x, &w_ld, &n1, &n2, &m,
-            cfg.intercept_hsq1, cfg.intercept_hsq2, cfg.intercept_gencov,
-            cfg.n_blocks, two_step,
-        ).map_err(MtagNodeError::from)?;
+            &z1,
+            &z2,
+            &x,
+            &w_ld,
+            &n1,
+            &n2,
+            &m,
+            cfg.intercept_hsq1,
+            cfg.intercept_hsq2,
+            cfg.intercept_gencov,
+            cfg.n_blocks,
+            two_step,
+        )
+        .map_err(MtagNodeError::from)?;
 
         // Σ matrix from LDSC intercepts.
         let sigma_00 = rg.hsq1.reg.intercept.unwrap_or(1.0);
@@ -477,8 +492,8 @@ impl MtagNode {
         });
 
         // Positive-definiteness adjustment.
-        sigma_hat = mtag::linalg::pos_def_adjustment(sigma_hat, 0.99, 1000)
-            .map_err(MtagNodeError::from)?;
+        sigma_hat =
+            mtag::linalg::pos_def_adjustment(sigma_hat, 0.99, 1000).map_err(MtagNodeError::from)?;
 
         // 6. Build Z and N matrices for Ω estimation and MTAG analysis.
         let mut zs = Mat::zeros(n_snp, 2);
@@ -511,13 +526,21 @@ impl MtagNode {
         let mtag_ses_t2: Vec<f64> = (0..n_snp).map(|i| result.mtag_se[(i, 1)]).collect();
 
         let batch1 = build_trait_batch(
-            &rsids, &z1, &n1, &frq1,
-            &mtag_betas_t1, &mtag_ses_t1,
+            &rsids,
+            &z1,
+            &n1,
+            &frq1,
+            &mtag_betas_t1,
+            &mtag_ses_t1,
             cfg.std_betas,
         )?;
         let batch2 = build_trait_batch(
-            &rsids, &z2, &n2, &frq2,
-            &mtag_betas_t2, &mtag_ses_t2,
+            &rsids,
+            &z2,
+            &n2,
+            &frq2,
+            &mtag_betas_t2,
+            &mtag_ses_t2,
             cfg.std_betas,
         )?;
 
@@ -544,13 +567,20 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, MtagNode
     let dtype = schema.field(idx).data_type().clone();
     if !matches!(
         dtype,
-        DataType::Float32 | DataType::Float64
-            | DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-            | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+        DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
     ) {
-        return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(
-            format!("column '{name}' is not numeric (got {dtype})"),
-        )));
+        return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(format!(
+            "column '{name}' is not numeric (got {dtype})"
+        ))));
     }
 
     let mut out = Vec::new();
@@ -585,9 +615,9 @@ fn extract_string(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, Mt
                 out.push(v.unwrap_or("").to_string());
             }
         } else {
-            return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(
-                format!("column '{name}' is not a string type"),
-            )));
+            return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(format!(
+                "column '{name}' is not a string type"
+            ))));
         }
     }
     Ok(out)
@@ -639,20 +669,12 @@ async fn count_panel_snp(
     let col = batch.column(idx);
     let dtype = col.data_type();
     let n = match dtype {
-        DataType::UInt64 => col
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap()
-            .value(0) as usize,
-        DataType::Int64 => col
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap()
-            .value(0) as usize,
+        DataType::UInt64 => col.as_any().downcast_ref::<UInt64Array>().unwrap().value(0) as usize,
+        DataType::Int64 => col.as_any().downcast_ref::<Int64Array>().unwrap().value(0) as usize,
         _ => {
-            return Err(MtagNodeError::Ldsc(ldsc::LdscError::InvalidInput(
-                format!("count_panel_snp: unsupported dtype {dtype}"),
-            )));
+            return Err(MtagNodeError::Ldsc(ldsc::LdscError::InvalidInput(format!(
+                "count_panel_snp: unsupported dtype {dtype}"
+            ))));
         }
     };
     Ok(n)
@@ -768,9 +790,7 @@ mod tests {
         // Scale 0.2 ⇒ max chi² ≈ 17.5 < 30 (two-step keeps all SNPs), mean chi² ≈ 6 ≫ 1.
         let z1: Vec<f64> = ld.iter().map(|l| l * 0.2).collect();
         let z2: Vec<f64> = z1.iter().map(|z| z * 0.8).collect();
-        let rsids: Vec<String> = (0..N_SNP)
-            .map(|i| format!("rs{}", 1_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..N_SNP).map(|i| format!("rs{}", 1_000_000 + i)).collect();
 
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx
@@ -791,10 +811,9 @@ mod tests {
             ..Default::default()
         };
 
-        let (batch1, batch2) =
-            MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
-                .await
-                .expect("MTAG pipeline should succeed");
+        let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
+            .await
+            .expect("MTAG pipeline should succeed");
 
         assert_eq!(batch1.num_rows(), N_SNP);
         assert_eq!(batch2.num_rows(), N_SNP);
@@ -836,9 +855,7 @@ mod tests {
         let ld: Vec<f64> = (0..N_SNP).map(|i| 1.0 + 0.1 * i as f64).collect();
         let z1: Vec<f64> = ld.iter().map(|l| l * 0.2).collect();
         let z2: Vec<f64> = z1.iter().map(|z| z * 0.9).collect(); // highly correlated
-        let rsids: Vec<String> = (0..N_SNP)
-            .map(|i| format!("rs{}", 1_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..N_SNP).map(|i| format!("rs{}", 1_000_000 + i)).collect();
 
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx
@@ -856,10 +873,9 @@ mod tests {
             ..Default::default()
         };
 
-        let (batch1, _batch2) =
-            MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
-                .await
-                .expect("MTAG pipeline should succeed");
+        let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
+            .await
+            .expect("MTAG pipeline should succeed");
 
         // Mean input chi² for trait 1.
         let mean_input_chi2: f64 = z1.iter().map(|z| z * z).sum::<f64>() / N_SNP as f64;
@@ -870,7 +886,8 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        let mean_mtag_chi2: f64 = (0..N_SNP).map(|i| mtag_z.value(i).powi(2)).sum::<f64>() / N_SNP as f64;
+        let mean_mtag_chi2: f64 =
+            (0..N_SNP).map(|i| mtag_z.value(i).powi(2)).sum::<f64>() / N_SNP as f64;
 
         eprintln!("mean input chi² = {mean_input_chi2:.4}, mean MTAG chi² = {mean_mtag_chi2:.4}");
 

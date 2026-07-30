@@ -104,9 +104,7 @@ pub fn mtag_analysis(
 
             // W_inv_Z = W_N_inv[idx] · zs[idx,:]
             // = zs[idx,p] / sqrt(N[idx,p])
-            let w_inv_z: Vec<f64> = (0..p)
-                .map(|j| zs[(idx, j)] / ns[(idx, j)].sqrt())
-                .collect();
+            let w_inv_z: Vec<f64> = (0..p).map(|j| zs[(idx, j)] / ns[(idx, j)].sqrt()).collect();
 
             // beta_denom = yy^T · inv_xx · yy  (scalar, per SNP)
             // = sum_p ( sum_q ( yy_q * inv_xx[q,p] ) ) * yy_p

@@ -6,9 +6,9 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use super::json_err;
-use crate::format::format_search;
 use crate::OpenTargetsClient;
 use crate::Pagination;
+use crate::format::format_search;
 
 #[tool(
     name = "opentargets_search",
@@ -48,7 +48,11 @@ impl ToolFunction for SearchTool {
 
         let results = self
             .client
-            .search(&input.query, entities.as_deref(), Some(Pagination::new(index, size)))
+            .search(
+                &input.query,
+                entities.as_deref(),
+                Some(Pagination::new(index, size)),
+            )
             .await
             .map_err(json_err)?;
 

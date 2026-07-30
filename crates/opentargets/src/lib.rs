@@ -44,14 +44,12 @@ pub mod search;
 pub mod tools;
 pub mod types;
 
-pub use associations::{
-    AssociationPage, AssociatedDisease, AssociatedTarget, Pagination,
-};
-pub use client::{OpenTargetsClient, DEFAULT_ENDPOINT};
+pub use associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
+pub use client::{DEFAULT_ENDPOINT, OpenTargetsClient};
 pub use error::{OpenTargetsError, Result};
 pub use search::{SearchResult, SearchResults};
 pub use tools::opentargets_registrations;
 pub use types::{
-    ApiVersion, DataVersion, Disease, Drug, GenomicLocation, Meta, Sample,
-    ScoredComponent, Study, Target, Variant,
+    ApiVersion, DataVersion, Disease, Drug, GenomicLocation, Meta, Sample, ScoredComponent, Study,
+    Target, Variant,
 };

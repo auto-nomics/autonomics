@@ -253,10 +253,12 @@ fn render_footer_hint(
     } else {
         match mode {
             InputMode::Browse => {
-                " Enter edit  ↑↓ scroll  PageUp/PageDown  Home/End  Ctrl+G follow  Ctrl+C quit ".to_string()
+                " Enter edit  ↑↓ scroll  PageUp/PageDown  Home/End  Ctrl+G follow  Ctrl+C quit "
+                    .to_string()
             }
             InputMode::Input => {
-                " Insert  Esc exit  Enter send  Shift+Enter newline  Ctrl+R history  Ctrl+G follow ".to_string()
+                " Insert  Esc exit  Enter send  Shift+Enter newline  Ctrl+R history  Ctrl+G follow "
+                    .to_string()
             }
         }
     };

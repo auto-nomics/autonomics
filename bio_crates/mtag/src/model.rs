@@ -7,8 +7,8 @@ use faer::Mat;
 use crate::data::{self, DataConfig, MergedData, TraitData};
 use crate::error::{MtagError, Result};
 use crate::linalg::{cov2corr, pos_def_adjustment};
-use crate::mtag::{mtag_analysis, MtagResult};
-use crate::omega::{estimate_omega, OmegaConfig};
+use crate::mtag::{MtagResult, mtag_analysis};
+use crate::omega::{OmegaConfig, estimate_omega};
 
 /// Full configuration for an MTAG analysis run.
 #[derive(Clone, Debug)]
@@ -87,7 +87,9 @@ pub fn run_mtag(traits: &[TraitData], cfg: &MtagConfig) -> Result<MtagAnalysis> 
     // Check chi2.
     let _mean_c2: Vec<f64> = (0..p)
         .map(|j| {
-            let col_sq: f64 = (0..merged.zs.nrows()).map(|i| merged.zs[(i, j)] * merged.zs[(i, j)]).sum::<f64>()
+            let col_sq: f64 = (0..merged.zs.nrows())
+                .map(|i| merged.zs[(i, j)] * merged.zs[(i, j)])
+                .sum::<f64>()
                 / merged.zs.nrows() as f64;
             col_sq / sigma_hat[(j, j)]
         })
@@ -212,7 +214,10 @@ pub fn format_summary(analysis: &MtagAnalysis) -> String {
     let m = analysis.result.mtag_factor.nrows();
     let avg_factors: Vec<f64> = (0..p)
         .map(|j| {
-            (0..m).map(|i| analysis.result.mtag_factor[(i, j)]).sum::<f64>() / m as f64
+            (0..m)
+                .map(|i| analysis.result.mtag_factor[(i, j)])
+                .sum::<f64>()
+                / m as f64
         })
         .collect();
     out.push_str("\nMTAG weight factors (average across SNPs):\n");

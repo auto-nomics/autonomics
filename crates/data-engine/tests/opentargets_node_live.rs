@@ -47,8 +47,14 @@ fn factories_are_registered() {
     assert!(kinds.contains(&"source_opentargets_associations".to_string()));
     assert!(kinds.contains(&"source_opentargets_search".to_string()));
     // Sanity: factory kind strings match.
-    assert_eq!(OpentargetsAssociationsNodeFactory {}.kind(), "source_opentargets_associations");
-    assert_eq!(OpentargetsSearchNodeFactory {}.kind(), "source_opentargets_search");
+    assert_eq!(
+        OpentargetsAssociationsNodeFactory {}.kind(),
+        "source_opentargets_associations"
+    );
+    assert_eq!(
+        OpentargetsSearchNodeFactory {}.kind(),
+        "source_opentargets_search"
+    );
 }
 
 #[test]
@@ -69,9 +75,7 @@ fn build_node_smoke() {
 async fn run_node(
     kind: &str,
     spec: serde_json::Value,
-) -> datafusion::common::Result<
-    Vec<arrow_array::RecordBatch>,
-> {
+) -> datafusion::common::Result<Vec<arrow_array::RecordBatch>> {
     let mut node = build_node(kind, spec);
     let mut outputs = node
         .execute(
@@ -103,7 +107,16 @@ async fn associations_target_to_disease() {
     assert!(total > 0, "expected association rows for BRCA1");
     let schema = batches[0].schema();
     let cols: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-    assert_eq!(cols, vec!["target_id", "disease_id", "disease_name", "score", "novelty"]);
+    assert_eq!(
+        cols,
+        vec![
+            "target_id",
+            "disease_id",
+            "disease_name",
+            "score",
+            "novelty"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -126,7 +139,15 @@ async fn associations_disease_to_target() {
     let cols: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
         cols,
-        vec!["disease_id", "target_id", "symbol", "approved_name", "biotype", "score", "novelty"]
+        vec![
+            "disease_id",
+            "target_id",
+            "symbol",
+            "approved_name",
+            "biotype",
+            "score",
+            "novelty"
+        ]
     );
 }
 

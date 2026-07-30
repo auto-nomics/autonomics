@@ -6,8 +6,8 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use super::json_err;
-use crate::format::format_drug;
 use crate::OpenTargetsClient;
+use crate::format::format_drug;
 
 #[tool(
     name = "opentargets_drug",

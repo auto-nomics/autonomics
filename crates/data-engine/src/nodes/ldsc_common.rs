@@ -25,9 +25,7 @@ pub async fn read_m_5_50(
     ld_table: &str,
     n_annot: usize,
 ) -> Result<Vec<f64>, LdscCommonError> {
-    let sql = format!(
-        r#"SELECT "m_5_50" FROM iceberg.ld_score."{ld_table}_m""#
-    );
+    let sql = format!(r#"SELECT "m_5_50" FROM iceberg.ld_score."{ld_table}_m""#);
     let df = ctx.sql(&sql).await.map_err(LdscCommonError::ReadBatch)?;
     let batches = df.collect().await.map_err(LdscCommonError::ReadBatch)?;
 
@@ -37,9 +35,9 @@ pub async fn read_m_5_50(
             .column(0)
             .as_any()
             .downcast_ref::<Float64Array>()
-            .ok_or_else(|| LdscCommonError::InvalidInput(
-                "M table 'm_5_50' column is not Float64".into(),
-            ))?;
+            .ok_or_else(|| {
+                LdscCommonError::InvalidInput("M table 'm_5_50' column is not Float64".into())
+            })?;
         for i in 0..batch.num_rows() {
             m_values.push(col.value(i));
         }

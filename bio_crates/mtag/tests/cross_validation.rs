@@ -17,8 +17,8 @@ use serde_json::Value;
 
 use mtag::linalg::{cov2corr, pos_def_adjustment};
 use mtag::mtag::mtag_analysis;
-use mtag::omega::{estimate_omega, gmm_omega, flatten_out_omega, rebuild_omega, OmegaConfig};
 use mtag::nelder::nelder_mead_generic;
+use mtag::omega::{OmegaConfig, estimate_omega, flatten_out_omega, gmm_omega, rebuild_omega};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -182,7 +182,11 @@ fn test_scenario2_gmm_omega_3traits() {
     let omega_rust = gmm_omega(&zs, &ns, &sigma_ld);
     let omega_python = json_to_mat(&s["omega_gmm"]);
 
-    assert_mat_close(&omega_rust, &omega_python, "GMM Omega (scenario 2, 3 traits)");
+    assert_mat_close(
+        &omega_rust,
+        &omega_python,
+        "GMM Omega (scenario 2, 3 traits)",
+    );
 }
 
 #[test]
@@ -279,7 +283,11 @@ fn test_scenario4_posdef_adjustment() {
 
     let adjusted_rust = pos_def_adjustment(input, 0.99, 1000).unwrap();
 
-    assert_mat_close(&adjusted_rust, &adjusted_python, "PosDef adjustment (scenario 4)");
+    assert_mat_close(
+        &adjusted_rust,
+        &adjusted_python,
+        "PosDef adjustment (scenario 4)",
+    );
 }
 
 #[test]
@@ -316,7 +324,12 @@ fn test_nelder_mead_matches_scipy() {
     // Test that our Nelder-Mead can minimise a simple function to the same
     // point as scipy.optimize.minimize.
     // f(x) = sum((x_i - c_i)^2) where c = [1, 2, 3]
-    let f = |x: &[f64]| x.iter().enumerate().map(|(i, &v)| (v - (i as f64 + 1.0)).powi(2)).sum::<f64>();
+    let f = |x: &[f64]| {
+        x.iter()
+            .enumerate()
+            .map(|(i, &v)| (v - (i as f64 + 1.0)).powi(2))
+            .sum::<f64>()
+    };
     let x0 = vec![0.0, 0.0, 0.0];
     let result = nelder_mead_generic(f, &x0, 0.5, 1e-6, 1e-8, 5000);
 

@@ -54,5 +54,12 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
 
 /// Lists all built-in provider type names that have presets.
 pub fn known_provider_types() -> Vec<&'static str> {
-    vec!["deepseek", "mimo", "minimax", "moonshot", "sensenova", "zai"]
+    vec![
+        "deepseek",
+        "mimo",
+        "minimax",
+        "moonshot",
+        "sensenova",
+        "zai",
+    ]
 }

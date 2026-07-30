@@ -83,7 +83,10 @@ async fn associated_diseases_all_small_filter() {
         .await
         .unwrap();
     assert!(!all.is_empty());
-    assert!(all.iter().all(|a| a.disease.name.to_lowercase().contains("breast")));
+    assert!(
+        all.iter()
+            .all(|a| a.disease.name.to_lowercase().contains("breast"))
+    );
 }
 
 #[tokio::test]

@@ -859,10 +859,11 @@ impl App {
         let provider_type = provider.provider_type.as_str().to_string();
         let base_url = provider.base_url.clone();
         // Resolve the default auth method from the registry for this provider.
-        let auth_str = match agentik_sdk::provider::registry::default_auth_method(&provider.provider_type) {
-            AuthMethod::Bearer => "Bearer",
-            AuthMethod::Anthropic => "Anthropic",
-        };
+        let auth_str =
+            match agentik_sdk::provider::registry::default_auth_method(&provider.provider_type) {
+                AuthMethod::Bearer => "Bearer",
+                AuthMethod::Anthropic => "Anthropic",
+            };
 
         // Check if a row for this provider name already exists.
         let existing: Option<i64> = self

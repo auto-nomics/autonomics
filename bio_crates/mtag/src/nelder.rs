@@ -83,12 +83,16 @@ where
         let second_worst_cost = simplex[n - 1].1;
 
         // Reflection.
-        let xr: Vec<f64> = (0..n).map(|d| centroid[d] + ALPHA * (centroid[d] - worst[d])).collect();
+        let xr: Vec<f64> = (0..n)
+            .map(|d| centroid[d] + ALPHA * (centroid[d] - worst[d]))
+            .collect();
         let fr = f(&xr);
 
         let new_point = if fr < best_cost {
             // Expansion.
-            let xe: Vec<f64> = (0..n).map(|d| centroid[d] + GAMMA * (xr[d] - centroid[d])).collect();
+            let xe: Vec<f64> = (0..n)
+                .map(|d| centroid[d] + GAMMA * (xr[d] - centroid[d]))
+                .collect();
             let fe = f(&xe);
             if fe < fr { (xe, fe) } else { (xr, fr) }
         } else if fr < second_worst_cost {
@@ -97,7 +101,9 @@ where
         } else {
             // Contraction.
             let dir = if fr < simplex[n].1 { &xr } else { worst };
-            let xc: Vec<f64> = (0..n).map(|d| centroid[d] + RHO * (dir[d] - centroid[d])).collect();
+            let xc: Vec<f64> = (0..n)
+                .map(|d| centroid[d] + RHO * (dir[d] - centroid[d]))
+                .collect();
             let fc = f(&xc);
             if fc < simplex[n].1 {
                 (xc, fc)
@@ -105,7 +111,9 @@ where
                 // Shrink toward best.
                 let best = simplex[0].0.clone();
                 for vertex in simplex.iter_mut().take(n + 1).skip(1) {
-                    let xs: Vec<f64> = (0..n).map(|d| best[d] + SIGMA * (vertex.0[d] - best[d])).collect();
+                    let xs: Vec<f64> = (0..n)
+                        .map(|d| best[d] + SIGMA * (vertex.0[d] - best[d]))
+                        .collect();
                     let fs = f(&xs);
                     *vertex = (xs, fs);
                 }
@@ -127,11 +135,20 @@ mod tests {
     #[test]
     fn test_quadratic() {
         // f(x) = sum((x_i - i)^2), minimum at x = [0, 1, 2, ...]
-        let f = |x: &[f64]| x.iter().enumerate().map(|(i, &v)| (v - i as f64).powi(2)).sum::<f64>();
+        let f = |x: &[f64]| {
+            x.iter()
+                .enumerate()
+                .map(|(i, &v)| (v - i as f64).powi(2))
+                .sum::<f64>()
+        };
         let x0 = vec![5.0, 5.0, 5.0, 5.0];
         let result = nelder_mead_generic(f, &x0, 0.5, 1e-10, 1e-12, 5000);
         for i in 0..4 {
-            assert!((result[i] - i as f64).abs() < 1e-4, "x[{i}] = {}", result[i]);
+            assert!(
+                (result[i] - i as f64).abs() < 1e-4,
+                "x[{i}] = {}",
+                result[i]
+            );
         }
     }
 

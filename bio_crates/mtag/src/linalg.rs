@@ -13,8 +13,8 @@
 //! - [`cholesky`] / [`solve_lower`] — thin wrappers around faer's SPD
 //!   factorisation used by the MVN PDF.
 
-use faer::Mat;
 use crate::error::{MtagError, Result};
+use faer::Mat;
 
 /// Check whether a symmetric matrix is positive semi-definite.
 ///
@@ -46,7 +46,9 @@ pub fn is_pos_semidef(m: &Mat<f64>) -> bool {
 /// are returned sorted in ascending order to match numpy.
 fn symmetric_eigvals(m: &Mat<f64>) -> Vec<f64> {
     let n = m.nrows();
-    let mut a: Vec<f64> = (0..n).flat_map(|i| (0..n).map(move |j| m[(i, j)])).collect();
+    let mut a: Vec<f64> = (0..n)
+        .flat_map(|i| (0..n).map(move |j| m[(i, j)]))
+        .collect();
     let mut eigenvalues = vec![0.0f64; n];
 
     // Jacobi rotations: iterate until off-diagonal is negligible.
@@ -71,8 +73,7 @@ fn symmetric_eigvals(m: &Mat<f64>) -> Vec<f64> {
                 let app: f64 = a[p * n + p];
                 let aqq: f64 = a[q * n + q];
                 let theta: f64 = (aqq - app) / (2.0 * apq);
-                let t: f64 = theta.signum()
-                    / (theta.abs() + (1.0_f64 + theta * theta).sqrt());
+                let t: f64 = theta.signum() / (theta.abs() + (1.0_f64 + theta * theta).sqrt());
                 let c: f64 = 1.0_f64 / (1.0_f64 + t * t).sqrt();
                 let s: f64 = t * c;
                 // Apply rotation
@@ -107,7 +108,11 @@ fn symmetric_eigvals(m: &Mat<f64>) -> Vec<f64> {
 /// 2. Cap each off-diagonal `|m[i,j]|` at `scaling_factor * sqrt(m[i,i]*m[j,j])`.
 /// 3. Iteratively scale off-diagonals by `scaling_factor` (keeping the
 ///    diagonal fixed) until PSD or `max_it` reached.
-pub fn pos_def_adjustment(mut mat: Mat<f64>, scaling_factor: f64, max_it: usize) -> Result<Mat<f64>> {
+pub fn pos_def_adjustment(
+    mut mat: Mat<f64>,
+    scaling_factor: f64,
+    max_it: usize,
+) -> Result<Mat<f64>> {
     let n = mat.nrows();
     if n != mat.ncols() {
         return Err(MtagError::DimensionMismatch(format!(

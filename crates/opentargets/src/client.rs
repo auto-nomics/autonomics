@@ -15,18 +15,15 @@
 //! ```
 
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::associations::{
-    AssociationPage, AssociatedDisease, AssociatedTarget, Pagination,
-};
+use crate::associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
 use crate::error::{OpenTargetsError, Result};
 use crate::search::SearchResults;
 use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
 
 /// Default GraphQL endpoint (API v4).
-pub const DEFAULT_ENDPOINT: &str =
-    "https://api.platform.opentargets.org/api/v4/graphql";
+pub const DEFAULT_ENDPOINT: &str = "https://api.platform.opentargets.org/api/v4/graphql";
 
 // Maximum page size accepted by the API (server enforces ≤ 3000).
 const MAX_PAGE_SIZE: u32 = 3000;
@@ -145,11 +142,7 @@ impl OpenTargetsClient {
     ///
     /// This is the escape-hatch for endpoints or fields not covered by the
     /// typed helpers below.
-    pub async fn query<T: DeserializeOwned>(
-        &self,
-        request: &str,
-        variables: Value,
-    ) -> Result<T> {
+    pub async fn query<T: DeserializeOwned>(&self, request: &str, variables: Value) -> Result<T> {
         let body = json!({ "query": request, "variables": variables });
         let resp = self.http.post(&self.endpoint).json(&body).send().await?;
         let status = resp.status().as_u16();
@@ -180,10 +173,7 @@ impl OpenTargetsClient {
     ) -> Result<T> {
         // Reuse `query` to get the `data` object, then pick the field.
         let data: Value = self.query(query, variables).await?;
-        let v = data
-            .get(field_name)
-            .cloned()
-            .unwrap_or(Value::Null);
+        let v = data.get(field_name).cloned().unwrap_or(Value::Null);
         Ok(serde_json::from_value(v)?)
     }
 
@@ -201,9 +191,7 @@ impl OpenTargetsClient {
 
     /// Fetch a single target (gene) by Ensembl ID.
     pub async fn target(&self, ensembl_id: &str) -> Result<Option<Target>> {
-        let q = format!(
-            "query($id: String!) {{ target(ensemblId: $id) {{ {TARGET_FRAGMENT} }} }}"
-        );
+        let q = format!("query($id: String!) {{ target(ensemblId: $id) {{ {TARGET_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": ensembl_id }), "target").await
     }
 
@@ -212,16 +200,15 @@ impl OpenTargetsClient {
         let q = format!(
             "query($ids: [String!]!) {{ targets(ensemblIds: $ids) {{ {TARGET_FRAGMENT} }} }}"
         );
-        self.field(&q, json!({ "ids": ensembl_ids }), "targets").await
+        self.field(&q, json!({ "ids": ensembl_ids }), "targets")
+            .await
     }
 
     // ----- disease -------------------------------------------------------
 
     /// Fetch a single disease by EFO / MONDO / HP / Orphanet ID.
     pub async fn disease(&self, efo_id: &str) -> Result<Option<Disease>> {
-        let q = format!(
-            "query($id: String!) {{ disease(efoId: $id) {{ {DISEASE_FRAGMENT} }} }}"
-        );
+        let q = format!("query($id: String!) {{ disease(efoId: $id) {{ {DISEASE_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": efo_id }), "disease").await
     }
 
@@ -237,17 +224,14 @@ impl OpenTargetsClient {
 
     /// Fetch a single drug by ChEMBL ID.
     pub async fn drug(&self, chembl_id: &str) -> Result<Option<Drug>> {
-        let q = format!(
-            "query($id: String!) {{ drug(chemblId: $id) {{ {DRUG_FRAGMENT} }} }}"
-        );
+        let q = format!("query($id: String!) {{ drug(chemblId: $id) {{ {DRUG_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": chembl_id }), "drug").await
     }
 
     /// Fetch several drugs at once.
     pub async fn drugs(&self, chembl_ids: &[&str]) -> Result<Vec<Drug>> {
-        let q = format!(
-            "query($ids: [String!]!) {{ drugs(chemblIds: $ids) {{ {DRUG_FRAGMENT} }} }}"
-        );
+        let q =
+            format!("query($ids: [String!]!) {{ drugs(chemblIds: $ids) {{ {DRUG_FRAGMENT} }} }}");
         self.field(&q, json!({ "ids": chembl_ids }), "drugs").await
     }
 
@@ -255,9 +239,7 @@ impl OpenTargetsClient {
 
     /// Fetch a single GWAS study by study ID (e.g. GCST…).
     pub async fn study(&self, study_id: &str) -> Result<Option<Study>> {
-        let q = format!(
-            "query($id: String!) {{ study(studyId: $id) {{ {STUDY_FRAGMENT} }} }}"
-        );
+        let q = format!("query($id: String!) {{ study(studyId: $id) {{ {STUDY_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": study_id }), "study").await
     }
 
@@ -265,9 +247,8 @@ impl OpenTargetsClient {
 
     /// Fetch a single variant by `chr_pos_ref_alt` (GRCh38) ID.
     pub async fn variant(&self, variant_id: &str) -> Result<Option<Variant>> {
-        let q = format!(
-            "query($id: String!) {{ variant(variantId: $id) {{ {VARIANT_FRAGMENT} }} }}"
-        );
+        let q =
+            format!("query($id: String!) {{ variant(variantId: $id) {{ {VARIANT_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": variant_id }), "variant").await
     }
 
@@ -379,7 +360,12 @@ impl OpenTargetsClient {
         let size = MAX_PAGE_SIZE;
         loop {
             let page = self
-                .associated_diseases(ensembl_id, Pagination::new(index, size), enable_indirect, b_filter)
+                .associated_diseases(
+                    ensembl_id,
+                    Pagination::new(index, size),
+                    enable_indirect,
+                    b_filter,
+                )
                 .await?;
             let count = page.count;
             let got = page.rows.len();
@@ -393,10 +379,7 @@ impl OpenTargetsClient {
     }
 
     /// Auto-paginate **all** target associations for a disease.
-    pub async fn associated_targets_all(
-        &self,
-        efo_id: &str,
-    ) -> Result<Vec<AssociatedTarget>> {
+    pub async fn associated_targets_all(&self, efo_id: &str) -> Result<Vec<AssociatedTarget>> {
         self.associated_targets_all_filtered(efo_id, false, None)
             .await
     }
@@ -413,7 +396,12 @@ impl OpenTargetsClient {
         let size = MAX_PAGE_SIZE;
         loop {
             let page = self
-                .associated_targets(efo_id, Pagination::new(index, size), enable_indirect, b_filter)
+                .associated_targets(
+                    efo_id,
+                    Pagination::new(index, size),
+                    enable_indirect,
+                    b_filter,
+                )
                 .await?;
             let count = page.count;
             let got = page.rows.len();

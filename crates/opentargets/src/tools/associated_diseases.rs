@@ -6,9 +6,9 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use super::json_err;
-use crate::format::format_associated_diseases;
 use crate::OpenTargetsClient;
 use crate::Pagination;
+use crate::format::format_associated_diseases;
 
 #[tool(
     name = "opentargets_associated_diseases",
@@ -64,7 +64,8 @@ impl ToolFunction for AssociatedDiseasesTool {
             let total = rows.len();
             apply_min_score_disease(&mut rows, min_score);
             Ok(AgentToolResult::success(format_associated_diseases(
-                &rows, total as i64,
+                &rows,
+                total as i64,
             )))
         } else {
             let size = input.size.unwrap_or(25).min(3000);
@@ -82,8 +83,7 @@ impl ToolFunction for AssociatedDiseasesTool {
             let mut rows = page.rows;
             apply_min_score_disease(&mut rows, min_score);
             Ok(AgentToolResult::success(format_associated_diseases(
-                &rows,
-                page.count,
+                &rows, page.count,
             )))
         }
     }

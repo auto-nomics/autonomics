@@ -3,9 +3,9 @@
 //! Port of `load_and_merge_data`, `extract_gwas_sumstats`,
 //! `save_mtag_results`, and `write_summary` from `mtag.py`.
 
+use statrs::distribution::ContinuousCDF;
 use std::collections::HashSet;
 use std::path::Path;
-use statrs::distribution::ContinuousCDF;
 
 use faer::Mat;
 
@@ -17,10 +17,7 @@ use crate::mtag::MtagResult;
 /// A pair is strand-ambiguous if it cannot be distinguished from its
 /// reverse complement: A/T, T/A, C/G, G/C.
 fn is_strand_ambiguous(a1: &str, a2: &str) -> bool {
-    matches!(
-        (a1, a2),
-        ("A", "T") | ("T", "A") | ("C", "G") | ("G", "C")
-    )
+    matches!((a1, a2), ("A", "T") | ("T", "A") | ("C", "G") | ("G", "C"))
 }
 
 /// A single GWAS summary-statistics record as loaded from file.
@@ -57,11 +54,9 @@ impl TraitData {
         col_chr: Option<&str>,
         col_bp: Option<&str>,
     ) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| MtagError::Io(e))?;
+        let content = std::fs::read_to_string(path).map_err(|e| MtagError::Io(e))?;
         Self::from_str(
-            &content,
-            col_snp, col_z, col_n, col_freq, col_a1, col_a2, col_chr, col_bp,
+            &content, col_snp, col_z, col_n, col_freq, col_a1, col_a2, col_chr, col_bp,
         )
     }
 
@@ -78,17 +73,15 @@ impl TraitData {
         col_bp: Option<&str>,
     ) -> Result<Self> {
         let mut lines = content.lines();
-        let header = lines.next().ok_or_else(|| {
-            MtagError::InvalidInput("empty sumstats file".into())
-        })?;
+        let header = lines
+            .next()
+            .ok_or_else(|| MtagError::InvalidInput("empty sumstats file".into()))?;
 
         // Parse header — support both whitespace and tab delimited.
         let headers: Vec<&str> = header.split_whitespace().collect();
         let find_col = |name: &str| -> Result<usize> {
             headers.iter().position(|h| *h == name).ok_or_else(|| {
-                MtagError::InvalidInput(format!(
-                    "column '{name}' not found in sumstats header"
-                ))
+                MtagError::InvalidInput(format!("column '{name}' not found in sumstats header"))
             })
         };
 
@@ -413,7 +406,11 @@ pub fn build_output_rows(
 
     for i in 0..m {
         let freq = data.fs[(i, trait_idx)];
-        let weight = if std_betas { 1.0 } else { (2.0 * freq * (1.0 - freq)).sqrt() };
+        let weight = if std_betas {
+            1.0
+        } else {
+            (2.0 * freq * (1.0 - freq)).sqrt()
+        };
         let mtag_beta = result.mtag_betas[(i, trait_idx)] / weight;
         let mtag_se = result.mtag_se[(i, trait_idx)] / weight;
         let mtag_z = result.mtag_betas[(i, trait_idx)] / result.mtag_se[(i, trait_idx)];
@@ -495,11 +492,15 @@ mod tests {
 
     #[test]
     fn test_load_and_merge_simple() {
-        let content1 = "SNP\tZ\tN\tFRQ\tA1\tA2\nrs1\t2.0\t100\t0.3\tA\tG\nrs2\t1.5\t100\t0.4\tA\tG\n";
-        let content2 = "SNP\tZ\tN\tFRQ\tA1\tA2\nrs1\t1.8\t200\t0.3\tA\tG\nrs2\t-1.5\t200\t0.6\tG\tA\n";
+        let content1 =
+            "SNP\tZ\tN\tFRQ\tA1\tA2\nrs1\t2.0\t100\t0.3\tA\tG\nrs2\t1.5\t100\t0.4\tA\tG\n";
+        let content2 =
+            "SNP\tZ\tN\tFRQ\tA1\tA2\nrs1\t1.8\t200\t0.3\tA\tG\nrs2\t-1.5\t200\t0.6\tG\tA\n";
 
-        let t1 = TraitData::from_str(content1, "SNP", "Z", "N", "FRQ", "A1", "A2", None, None).unwrap();
-        let t2 = TraitData::from_str(content2, "SNP", "Z", "N", "FRQ", "A1", "A2", None, None).unwrap();
+        let t1 =
+            TraitData::from_str(content1, "SNP", "Z", "N", "FRQ", "A1", "A2", None, None).unwrap();
+        let t2 =
+            TraitData::from_str(content2, "SNP", "Z", "N", "FRQ", "A1", "A2", None, None).unwrap();
 
         let cfg = DataConfig {
             maf_min: 0.0,

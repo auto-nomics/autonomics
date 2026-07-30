@@ -196,13 +196,13 @@ impl DagNode for OpentargetsAssociationsNode {
 
         let batch = match direction.as_str() {
             "target_to_disease" => {
-                let rows = assoc_disease_rows(&client, &self.spec, enable_indirect, b_filter)
-                    .await?;
+                let rows =
+                    assoc_disease_rows(&client, &self.spec, enable_indirect, b_filter).await?;
                 build_disease_batch(&session, &self.spec.id, rows, min_score)?
             }
             "disease_to_target" => {
-                let rows = assoc_target_rows(&client, &self.spec, enable_indirect, b_filter)
-                    .await?;
+                let rows =
+                    assoc_target_rows(&client, &self.spec, enable_indirect, b_filter).await?;
                 build_target_batch(&session, &self.spec.id, rows, min_score)?
             }
             other => {
@@ -289,8 +289,10 @@ fn build_disease_batch(
     }
     let n = rows.len();
     let target_ids = vec![Some(target_id.to_string()); n];
-    let disease_ids: Vec<Option<String>> = rows.iter().map(|a| Some(a.disease.id.clone())).collect();
-    let disease_names: Vec<Option<String>> = rows.iter().map(|a| Some(a.disease.name.clone())).collect();
+    let disease_ids: Vec<Option<String>> =
+        rows.iter().map(|a| Some(a.disease.id.clone())).collect();
+    let disease_names: Vec<Option<String>> =
+        rows.iter().map(|a| Some(a.disease.name.clone())).collect();
     let scores: Vec<Option<f64>> = rows.iter().map(|a| Some(a.score)).collect();
     let novelties: Vec<Option<f64>> = rows.iter().map(|a| a.novelty).collect();
 
@@ -301,13 +303,16 @@ fn build_disease_batch(
         Field::new("score", DataType::Float64, true),
         Field::new("novelty", DataType::Float64, true),
     ]));
-    RecordBatch::try_new(schema, vec![
-        str_array(target_ids),
-        str_array(disease_ids),
-        str_array(disease_names),
-        f64_array(scores),
-        f64_array(novelties),
-    ])
+    RecordBatch::try_new(
+        schema,
+        vec![
+            str_array(target_ids),
+            str_array(disease_ids),
+            str_array(disease_names),
+            f64_array(scores),
+            f64_array(novelties),
+        ],
+    )
     .map_err(|e| DagError::Schedule(format!("failed to build association batch: {e}")))
 }
 
@@ -325,9 +330,18 @@ fn build_target_batch(
     let n = rows.len();
     let disease_ids = vec![Some(disease_id.to_string()); n];
     let target_ids: Vec<Option<String>> = rows.iter().map(|a| Some(a.target.id.clone())).collect();
-    let symbols: Vec<Option<String>> = rows.iter().map(|a| Some(a.target.approved_symbol.clone())).collect();
-    let names: Vec<Option<String>> = rows.iter().map(|a| Some(a.target.approved_name.clone())).collect();
-    let biotypes: Vec<Option<String>> = rows.iter().map(|a| Some(a.target.biotype.clone())).collect();
+    let symbols: Vec<Option<String>> = rows
+        .iter()
+        .map(|a| Some(a.target.approved_symbol.clone()))
+        .collect();
+    let names: Vec<Option<String>> = rows
+        .iter()
+        .map(|a| Some(a.target.approved_name.clone()))
+        .collect();
+    let biotypes: Vec<Option<String>> = rows
+        .iter()
+        .map(|a| Some(a.target.biotype.clone()))
+        .collect();
     let scores: Vec<Option<f64>> = rows.iter().map(|a| Some(a.score)).collect();
     let novelties: Vec<Option<f64>> = rows.iter().map(|a| a.novelty).collect();
 
@@ -340,15 +354,18 @@ fn build_target_batch(
         Field::new("score", DataType::Float64, true),
         Field::new("novelty", DataType::Float64, true),
     ]));
-    RecordBatch::try_new(schema, vec![
-        str_array(disease_ids),
-        str_array(target_ids),
-        str_array(symbols),
-        str_array(names),
-        str_array(biotypes),
-        f64_array(scores),
-        f64_array(novelties),
-    ])
+    RecordBatch::try_new(
+        schema,
+        vec![
+            str_array(disease_ids),
+            str_array(target_ids),
+            str_array(symbols),
+            str_array(names),
+            str_array(biotypes),
+            f64_array(scores),
+            f64_array(novelties),
+        ],
+    )
     .map_err(|e| DagError::Schedule(format!("failed to build association batch: {e}")))
 }
 
@@ -491,12 +508,15 @@ fn build_search_batch(rows: Vec<SearchResult>) -> Result<RecordBatch, DagError> 
         Field::new("score", DataType::Float64, true),
         field("description", true),
     ]));
-    RecordBatch::try_new(schema, vec![
-        str_array(entities),
-        str_array(ids),
-        str_array(names),
-        f64_array(scores),
-        str_array(descriptions),
-    ])
+    RecordBatch::try_new(
+        schema,
+        vec![
+            str_array(entities),
+            str_array(ids),
+            str_array(names),
+            f64_array(scores),
+            str_array(descriptions),
+        ],
+    )
     .map_err(|e| DagError::Schedule(format!("failed to build search batch: {e}")))
 }

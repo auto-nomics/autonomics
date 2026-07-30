@@ -15,7 +15,7 @@
 //! - [`ss_estimation`] — spike-slab fitting to restrict the grid.
 
 use faer::Mat;
-use statrs::distribution::{Normal, ContinuousCDF};
+use statrs::distribution::{ContinuousCDF, Normal};
 
 use crate::linalg::{invert, is_pos_semidef};
 
@@ -95,7 +95,13 @@ pub fn simplex_walk(num_dims: usize, samples_per_dim: usize) -> Vec<Vec<f64>> {
 /// Generate all combinations of choosing `k` items from `n` (like
 /// `itertools.combinations(range(n), k)`).
 fn combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
-    fn recurse(start: usize, n: usize, k: usize, current: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
+    fn recurse(
+        start: usize,
+        n: usize,
+        k: usize,
+        current: &mut Vec<usize>,
+        result: &mut Vec<Vec<usize>>,
+    ) {
         if current.len() == k {
             result.push(current.clone());
             return;
@@ -312,7 +318,11 @@ pub fn compute_fdr(
 /// Port of `some_causal_for_allT` in `mtag.py`.
 pub fn some_causal_for_all_t(probs: &[f64], s: &[Vec<bool>]) -> bool {
     let n_s = s.len();
-    let t = if n_s == 0 { return false; } else { s[0].len() };
+    let t = if n_s == 0 {
+        return false;
+    } else {
+        s[0].len()
+    };
 
     // Each trait must have non-zero causal probability.
     for tt in 0..t {
@@ -385,9 +395,7 @@ pub fn run_fdr(
     // yield a PSD scaled omega.
     let prob_grid: Vec<Vec<f64>> = prob_grid_raw
         .iter()
-        .filter(|p| {
-            some_causal_for_all_t(p, &s) && is_pos_semidef(&scale_omega(omega_hat, p, &s))
-        })
+        .filter(|p| some_causal_for_all_t(p, &s) && is_pos_semidef(&scale_omega(omega_hat, p, &s)))
         .cloned()
         .collect();
 

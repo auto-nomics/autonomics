@@ -9,9 +9,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, Float64Array, Int64Array, RecordBatch, StringArray,
-};
+use arrow_array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use faer::Mat;
@@ -89,12 +87,24 @@ pub struct MrlapSpec {
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
-fn default_ld_table() -> String { "ukbb_eur".into() }
-fn default_n_blocks() -> usize { 200 }
-fn default_mr_threshold() -> f64 { 5e-8 }
-fn default_pruning_dist() -> f64 { 500.0 }
-fn default_mr_reverse() -> f64 { 1e-3 }
-fn default_seed() -> u64 { 42 }
+fn default_ld_table() -> String {
+    "ukbb_eur".into()
+}
+fn default_n_blocks() -> usize {
+    200
+}
+fn default_mr_threshold() -> f64 {
+    5e-8
+}
+fn default_pruning_dist() -> f64 {
+    500.0
+}
+fn default_mr_reverse() -> f64 {
+    1e-3
+}
+fn default_seed() -> u64 {
+    42
+}
 
 #[derive(Clone)]
 pub struct MrlapNode {
@@ -117,7 +127,9 @@ impl MrlapNode {
 pub struct MrlapNodeFactory {}
 
 impl NodeFactory for MrlapNodeFactory {
-    fn kind(&self) -> &'static str { MRLAP_KIND }
+    fn kind(&self) -> &'static str {
+        MRLAP_KIND
+    }
     fn desc(&self) -> &'static str {
         "MRlap: sample-overlap-aware Mendelian randomisation (cross-trait LDSC + IVW-MR + correction)."
     }
@@ -127,7 +139,9 @@ impl NodeFactory for MrlapNodeFactory {
          IVW-MR, and the de-biasing correction for sample overlap / weak \
          instruments / Winner's curse. Emits a one-row summary."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(MrlapSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(MrlapSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -158,7 +172,11 @@ fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
         let col = b.column_by_name(name)?;
         let arr = col.as_any().downcast_ref::<StringArray>()?;
         for i in 0..arr.len() {
-            out.push(if arr.is_null(i) { String::new() } else { arr.value(i).to_string() });
+            out.push(if arr.is_null(i) {
+                String::new()
+            } else {
+                arr.value(i).to_string()
+            });
         }
     }
     Some(out)
@@ -169,7 +187,11 @@ fn col_f64(batches: &[RecordBatch], name: &str) -> Option<Vec<f64>> {
     for b in batches {
         let col = b.column_by_name(name)?;
         for i in 0..col.len() {
-            out.push(if col.is_null(i) { f64::NAN } else { arr_f64(col.as_ref(), i) });
+            out.push(if col.is_null(i) {
+                f64::NAN
+            } else {
+                arr_f64(col.as_ref(), i)
+            });
         }
     }
     Some(out)
@@ -186,7 +208,11 @@ fn col_i32(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i32>>> {
             }
         } else if let Some(a) = col.as_any().downcast_ref::<I64>() {
             for i in 0..a.len() {
-                out.push(if a.is_null(i) { None } else { Some(a.value(i) as i32) });
+                out.push(if a.is_null(i) {
+                    None
+                } else {
+                    Some(a.value(i) as i32)
+                });
             }
         } else {
             return None;
@@ -206,7 +232,11 @@ fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i64>>> {
             }
         } else if let Some(a) = col.as_any().downcast_ref::<Int32Array>() {
             for i in 0..a.len() {
-                out.push(if a.is_null(i) { None } else { Some(a.value(i) as i64) });
+                out.push(if a.is_null(i) {
+                    None
+                } else {
+                    Some(a.value(i) as i64)
+                });
             }
         } else {
             return None;
@@ -216,11 +246,19 @@ fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i64>>> {
 }
 
 fn err(msg: impl Into<String>) -> DagError {
-    DagError::NodeError { node_type: MRLAP_KIND.into(), msg: msg.into() }
+    DagError::NodeError {
+        node_type: MRLAP_KIND.into(),
+        msg: msg.into(),
+    }
 }
 
 async fn collect_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, DagError> {
-    let batches: Vec<RecordBatch> = input.data.clone().collect().await.map_err(|e| err(format!("collect: {e}")))?;
+    let batches: Vec<RecordBatch> = input
+        .data
+        .clone()
+        .collect()
+        .await
+        .map_err(|e| err(format!("collect: {e}")))?;
     if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
         return Err(err("empty GWAS input"));
     }
@@ -254,10 +292,18 @@ fn parse_gwas(batches: &[RecordBatch]) -> Result<Vec<mrlap::input::RawGwasRow>, 
 
 #[async_trait]
 impl DagNode for MrlapNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new((*self).clone()) }
-    fn kind(&self) -> &'static str { MRLAP_KIND }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new((*self).clone())
+    }
+    fn kind(&self) -> &'static str {
+        MRLAP_KIND
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -267,8 +313,12 @@ impl DagNode for MrlapNode {
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
 
-        let in0 = inputs.first().ok_or_else(|| err("no exposure input (port 0)"))?;
-        let in1 = inputs.get(1).ok_or_else(|| err("no outcome input (port 1)"))?;
+        let in0 = inputs
+            .first()
+            .ok_or_else(|| err("no exposure input (port 0)"))?;
+        let in1 = inputs
+            .get(1)
+            .ok_or_else(|| err("no outcome input (port 1)"))?;
         let b1 = collect_batches(in0).await?;
         let b2 = collect_batches(in1).await?;
         reporter.info(format!(
@@ -306,34 +356,54 @@ impl DagNode for MrlapNode {
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
                INNER JOIN iceberg.ld_score.{tbl} AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
-            z = IN_Z, n = IN_N, rsid = IN_RSID, tbl = self.spec.ld_table,
+            z = IN_Z,
+            n = IN_N,
+            rsid = IN_RSID,
+            tbl = self.spec.ld_table,
         );
-        let joined = ctx.sql(&sql).await.map_err(|e| err(format!("ldsc join: {e}")))?;
-        let jb = joined.collect().await.map_err(|e| err(format!("ldsc collect: {e}")))?;
+        let joined = ctx
+            .sql(&sql)
+            .await
+            .map_err(|e| err(format!("ldsc join: {e}")))?;
+        let jb = joined
+            .collect()
+            .await
+            .map_err(|e| err(format!("ldsc collect: {e}")))?;
         let z1 = col_f64(&jb, "z1").ok_or_else(|| err("ldsc join missing z1"))?;
         let z2 = col_f64(&jb, "z2").ok_or_else(|| err("ldsc join missing z2"))?;
         let n1 = col_f64(&jb, "n1").ok_or_else(|| err("ldsc join missing n1"))?;
         let n2 = col_f64(&jb, "n2").ok_or_else(|| err("ldsc join missing n2"))?;
         let ref_ld = col_f64(&jb, "ref_ld").ok_or_else(|| err("ldsc join missing ref_ld"))?;
-        let w_ld = col_f64(&jb, "wld").or_else(|| col_f64(&jb, "w_ld")).unwrap_or_else(|| ref_ld.clone());
+        let w_ld = col_f64(&jb, "wld")
+            .or_else(|| col_f64(&jb, "w_ld"))
+            .unwrap_or_else(|| ref_ld.clone());
         let n_snp = z1.len();
         if n_snp < 2 {
             return Err(err("LDSC join yielded < 2 shared SNPs"));
         }
         let _ = Mat::from_fn(n_snp, 1, |i, _| ref_ld[i]); // shape sanity
         let ldsc_res = mrlap::ldsc_runner::run_ldsc(&mrlap::ldsc_runner::LdscInput {
-            z1: &z1, z2: &z2, n1: &n1, n2: &n2,
-            ref_ld: &ref_ld, w_ld: &w_ld, m: m as f64,
+            z1: &z1,
+            z2: &z2,
+            n1: &n1,
+            n2: &n2,
+            ref_ld: &ref_ld,
+            w_ld: &w_ld,
+            m: m as f64,
             n_blocks: self.spec.n_blocks,
-        }).map_err(|e| err(format!("LDSC: {e}")))?;
+        })
+        .map_err(|e| err(format!("LDSC: {e}")))?;
         reporter.info(format!(
             "mrlap LDSC: h2_exp={:.4}±{:.4} rg={:.3} λ={:.4}±{:.4}",
-            ldsc_res.h2_exp, ldsc_res.h2_exp_se, ldsc_res.rg,
-            ldsc_res.lambda, ldsc_res.lambda_se,
+            ldsc_res.h2_exp, ldsc_res.h2_exp_se, ldsc_res.rg, ldsc_res.lambda, ldsc_res.lambda_se,
         ));
 
         // ---- MR stage: prune + IVW + Egger ----
-        let mr_reverse = if self.spec.mr_reverse > 0.0 { Some(self.spec.mr_reverse) } else { None };
+        let mr_reverse = if self.spec.mr_reverse > 0.0 {
+            Some(self.spec.mr_reverse)
+        } else {
+            None
+        };
         let (ivs, _pruned) = mrlap::pruning::select_instruments(
             &harm,
             &mrlap::pruning::PruneMode::Distance {
@@ -341,14 +411,17 @@ impl DagNode for MrlapNode {
                 mr_reverse,
                 pruning_dist_kb: self.spec.mr_pruning_dist_kb,
             },
-        ).map_err(|e| err(format!("pruning: {e}")))?;
+        )
+        .map_err(|e| err(format!("pruning: {e}")))?;
         if ivs.is_empty() {
             return Err(err("no instruments survived pruning"));
         }
         let mr = mrlap::mr_runner::run_mr(&ivs);
         reporter.info(format!(
             "mrlap MR: {} IVs, observed effect {:.4}±{:.4}",
-            ivs.len(), mr.alpha_obs, mr.alpha_obs_se,
+            ivs.len(),
+            mr.alpha_obs,
+            mr.alpha_obs_se,
         ));
 
         // ---- correction ----
@@ -369,7 +442,8 @@ impl DagNode for MrlapNode {
                 mr_threshold: self.spec.mr_threshold,
             },
             self.spec.seed,
-        ).map_err(|e| err(format!("correction: {e}")))?;
+        )
+        .map_err(|e| err(format!("correction: {e}")))?;
         reporter.info(format!(
             "mrlap corrected: {:.4}±{:.4} (p_diff={:.3e}, {} sims)",
             corr.alpha_corrected, corr.alpha_corrected_se, corr.p_diff, corr.n_sim,
@@ -384,10 +458,14 @@ impl DagNode for MrlapNode {
                 Arc::new(StringArray::from(vec![self.spec.outcome_name.clone()])),
                 Arc::new(Float64Array::from(vec![f(mr.alpha_obs)])),
                 Arc::new(Float64Array::from(vec![f(mr.alpha_obs_se)])),
-                Arc::new(Float64Array::from(vec![f(mrlap::input::pnorm2_abs(mr.alpha_obs / mr.alpha_obs_se))])),
+                Arc::new(Float64Array::from(vec![f(mrlap::input::pnorm2_abs(
+                    mr.alpha_obs / mr.alpha_obs_se,
+                ))])),
                 Arc::new(Float64Array::from(vec![f(corr.alpha_corrected)])),
                 Arc::new(Float64Array::from(vec![f(corr.alpha_corrected_se)])),
-                Arc::new(Float64Array::from(vec![f(mrlap::input::pnorm2_abs(corr.alpha_corrected / corr.alpha_corrected_se))])),
+                Arc::new(Float64Array::from(vec![f(mrlap::input::pnorm2_abs(
+                    corr.alpha_corrected / corr.alpha_corrected_se,
+                ))])),
                 Arc::new(Float64Array::from(vec![f(corr.test_diff)])),
                 Arc::new(Float64Array::from(vec![f(corr.p_diff)])),
                 Arc::new(Float64Array::from(vec![f(mr.egger_b)])),
@@ -405,9 +483,12 @@ impl DagNode for MrlapNode {
                 Arc::new(Float64Array::from(vec![f(corr.sigma2_x)])),
                 Arc::new(Int64Array::from(vec![corr.n_sim as i64])),
             ],
-        ).map_err(|e| err(format!("arrow: {e}")))?;
+        )
+        .map_err(|e| err(format!("arrow: {e}")))?;
 
-        let df = ctx.read_batch(batch).map_err(|e| err(format!("read_batch: {e}")))?;
+        let df = ctx
+            .read_batch(batch)
+            .map_err(|e| err(format!("read_batch: {e}")))?;
         let mut out: PortOutputs = PortOutputs::new();
         out.insert(0, df);
         Ok(out)
@@ -420,12 +501,29 @@ async fn count_panel_snp(
     ld_table: &str,
 ) -> Result<usize, DagError> {
     let sql = format!("SELECT COUNT(*) AS n FROM iceberg.ld_score.{ld_table}");
-    let df = ctx.sql(&sql).await.map_err(|e| err(format!("count panel: {e}")))?;
-    let batches = df.collect().await.map_err(|e| err(format!("count collect: {e}")))?;
-    let batch = batches.first().ok_or_else(|| err("count_panel: no batches"))?;
-    let col = batch.column(batch.schema().index_of("n").map_err(|_| err("count_panel: no n col"))?);
+    let df = ctx
+        .sql(&sql)
+        .await
+        .map_err(|e| err(format!("count panel: {e}")))?;
+    let batches = df
+        .collect()
+        .await
+        .map_err(|e| err(format!("count collect: {e}")))?;
+    let batch = batches
+        .first()
+        .ok_or_else(|| err("count_panel: no batches"))?;
+    let col = batch.column(
+        batch
+            .schema()
+            .index_of("n")
+            .map_err(|_| err("count_panel: no n col"))?,
+    );
     Ok(match col.data_type() {
-        DataType::UInt64 => col.as_any().downcast_ref::<arrow_array::UInt64Array>().unwrap().value(0) as usize,
+        DataType::UInt64 => col
+            .as_any()
+            .downcast_ref::<arrow_array::UInt64Array>()
+            .unwrap()
+            .value(0) as usize,
         DataType::Int64 => col.as_any().downcast_ref::<Int64Array>().unwrap().value(0) as usize,
         _ => return Err(err("count_panel: unexpected count type")),
     })

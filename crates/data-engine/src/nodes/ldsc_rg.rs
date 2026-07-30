@@ -360,7 +360,8 @@ impl DagNode for LdscRgNode {
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
         let (rg, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "1000g_eur", &self.ldsc_rg).await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "1000g_eur", &self.ldsc_rg)
+                .await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&rg, n_snp)?;
