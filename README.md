@@ -53,6 +53,8 @@ Four pieces, usually kept separate, are integrated here:
                                                │  │ _mixer      │ │
                                                │  │ sink_file   │ │
                                                │  │ viz         │ │
+                                               │  │ open_       │ │
+                                               │  │  targets    │ │
                                                │  │ ...         │ │
                                                │  └─────────────┘ │
                                                └────────┬────────┘

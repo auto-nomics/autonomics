@@ -34,6 +34,7 @@ use crate::nodes::{
     sink_iceberg::IcebergSinkNodeFactory,
     source_file::FileSourceNodeFactory,
     source_iceberg::IcebergSourceNodeFactory,
+    source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
     test_source::TestSourceFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
@@ -181,6 +182,8 @@ impl NodeRegistry {
         registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(MtagNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
+        registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
+        registry.register(Box::new(OpentargetsSearchNodeFactory {}));
         registry
     }
 
@@ -297,6 +300,10 @@ mod tests {
             }),
             "echo" => serde_json::json!({}),
             "test_source" => serde_json::json!({"dataset": "iris"}),
+            "source_opentargets_associations" => {
+                serde_json::json!({"id": "ENSG00000012048"})
+            }
+            "source_opentargets_search" => serde_json::json!({"query": "BRCA1"}),
             "univariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
             "bivariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
             other => panic!("no fixture spec for kind '{other}'"),
