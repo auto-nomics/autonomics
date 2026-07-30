@@ -17,6 +17,7 @@ members = [
   "crates/datalake-tools",
   "crates/biofusion",
   "crates/data-engine-tools",
+  "crates/apply-patch",
 
   "crates/biofusion-cache",
   "bio_crates/ldsc",

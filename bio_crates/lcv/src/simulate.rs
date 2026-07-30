@@ -85,12 +85,7 @@ pub fn simulate_lcv(params: &SimParams, seed: u64) -> (Vec<f64>, Vec<f64>) {
 /// Generate a sparse component: `n_causal = floor(m * p)` entries drawn from
 /// `N(0,1)`, the rest zero, randomly shuffled, then normalised to sample
 /// variance = 1 (matching R `var()`, n-1 divisor).
-fn make_sparse_component<R: Rng>(
-    m: usize,
-    p: f64,
-    rng: &mut R,
-    normal: &Normal<f64>,
-) -> Vec<f64> {
+fn make_sparse_component<R: Rng>(m: usize, p: f64, rng: &mut R, normal: &Normal<f64>) -> Vec<f64> {
     let n_causal = ((m as f64) * p).floor() as usize;
     let n_causal = n_causal.min(m);
     let n_zero = m - n_causal;

@@ -12,16 +12,12 @@ use statrs::distribution::{Continuous, ContinuousCDF, StudentsT};
 
 /// Student's t density at `x` with `df` degrees of freedom — R `dt(x, df)`.
 pub fn dt(x: f64, df: f64) -> f64 {
-    StudentsT::new(0.0, 1.0, df)
-        .expect("valid df")
-        .pdf(x)
+    StudentsT::new(0.0, 1.0, df).expect("valid df").pdf(x)
 }
 
 /// Student's t CDF `P(T ≤ q)` with `df` degrees of freedom — R `pt(q, df)`.
 pub fn pt(q: f64, df: f64) -> f64 {
-    StudentsT::new(0.0, 1.0, df)
-        .expect("valid df")
-        .cdf(q)
+    StudentsT::new(0.0, 1.0, df).expect("valid df").cdf(q)
 }
 
 /// Two-tailed t-distribution p-value — R `2 * pt(-abs(t), df)`.

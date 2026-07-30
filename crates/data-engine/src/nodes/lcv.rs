@@ -101,7 +101,10 @@ fn input_schema() -> SchemaRef {
 }
 
 /// Build a single-row LCV summary `RecordBatch` from [`lcv::model::LcvOutput`].
-fn build_result_batch(out: &lcv::model::LcvOutput, n_snp: usize) -> Result<RecordBatch, LcvNodeError> {
+fn build_result_batch(
+    out: &lcv::model::LcvOutput,
+    n_snp: usize,
+) -> Result<RecordBatch, LcvNodeError> {
     let schema = output_schema();
     let batch = RecordBatch::try_new(
         schema,
@@ -293,18 +296,16 @@ impl DagNode for LcvNode {
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input1 = inputs
-            .iter()
-            .find(|i| i.port == 0)
-            .ok_or_else(|| LcvNodeError::Lcv(lcv::LcvError::Input(
+        let input1 = inputs.iter().find(|i| i.port == 0).ok_or_else(|| {
+            LcvNodeError::Lcv(lcv::LcvError::Input(
                 "missing trait-1 input DataFrame (port 0)".into(),
-            )))?;
-        let input2 = inputs
-            .iter()
-            .find(|i| i.port == 1)
-            .ok_or_else(|| LcvNodeError::Lcv(lcv::LcvError::Input(
+            ))
+        })?;
+        let input2 = inputs.iter().find(|i| i.port == 1).ok_or_else(|| {
+            LcvNodeError::Lcv(lcv::LcvError::Input(
                 "missing trait-2 input DataFrame (port 1)".into(),
-            )))?;
+            ))
+        })?;
 
         let ctx = node_ctx.session();
         let (out, n_snp) =
@@ -452,9 +453,9 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, LcvNodeE
         .first()
         .ok_or_else(|| LcvNodeError::Lcv(lcv::LcvError::Input("extract_f64: no batches".into())))?
         .schema();
-    let idx = schema.index_of(name).map_err(|_| {
-        LcvNodeError::Lcv(lcv::LcvError::Input(format!("missing column '{name}'")))
-    })?;
+    let idx = schema
+        .index_of(name)
+        .map_err(|_| LcvNodeError::Lcv(lcv::LcvError::Input(format!("missing column '{name}'"))))?;
     let dtype = schema.field(idx).data_type().clone();
     if !matches!(
         dtype,
@@ -581,7 +582,9 @@ mod tests {
             Field::new("ld_score", DataType::Float64, false),
             Field::new(
                 "locus",
-                DataType::Struct(vec![Arc::new(Field::new("position", DataType::Int64, false))].into()),
+                DataType::Struct(
+                    vec![Arc::new(Field::new("position", DataType::Int64, false))].into(),
+                ),
                 false,
             ),
         ]));
@@ -643,12 +646,8 @@ mod tests {
             .map(|i| format!("rs{}", 1_000_000 + i))
             .collect();
         let ctx = ctx_with_ld_panel(N_SNP);
-        let df1 = ctx
-            .read_batch(sumstats_batch(z1, &rsids, 20000.0))
-            .unwrap();
-        let df2 = ctx
-            .read_batch(sumstats_batch(z2, &rsids, 50000.0))
-            .unwrap();
+        let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 20000.0)).unwrap();
+        let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 50000.0)).unwrap();
         LcvNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", cfg)
             .await
             .expect("LCV pipeline should succeed")

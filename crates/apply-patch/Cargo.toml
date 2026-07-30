@@ -1,0 +1,23 @@
+[package]
+name = "apply-patch"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Patch-based file editing engine ported from Codex: parse, fuzzy-match, and apply structured patches."
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+similar = "2"
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["fs", "macros", "rt"] }
+tempfile = "3"
+pretty_assertions = "1.4"
+
+[lints]
+workspace = true

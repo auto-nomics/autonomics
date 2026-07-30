@@ -5,6 +5,7 @@
 //! that the framework remains dependency-light and can be reused in
 //! environments that don't need bash/fs/web capabilities.
 
+pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod glob;
@@ -13,6 +14,7 @@ pub mod read;
 pub mod webfetch;
 pub mod write;
 
+pub use apply_patch::{ApplyPatchInput, ApplyPatchTool};
 pub use bash::{BashInput, BashTool};
 pub use edit::{EditInput, EditTool};
 pub use glob::{GlobInput, GlobTool};
@@ -23,15 +25,16 @@ pub use write::{WriteInput, WriteTool};
 
 pub use agentik_core::tools::ToolRegistration;
 
-/// The foundational primitive tools: bash, read, write, edit, glob, grep,
-/// webfetch. Wire these into an agent's toolset for basic filesystem,
-/// command, and web-fetch capability.
+/// The foundational primitive tools: bash, read, write, edit, apply_patch,
+/// glob, grep, webfetch. Wire these into an agent's toolset for basic
+/// filesystem, command, and web-fetch capability.
 pub fn primitive_registrations() -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(BashTool),
         ToolRegistration::from(ReadTool),
         ToolRegistration::from(WriteTool),
         ToolRegistration::from(EditTool),
+        ToolRegistration::from(ApplyPatchTool),
         ToolRegistration::from(GlobTool),
         ToolRegistration::from(GrepTool),
         ToolRegistration::from(WebFetchTool),

@@ -132,13 +132,23 @@ fn check_scenario(tag: &str, n1: f64, n2: f64) {
         gget!("pval_gcpzero_2tailed")
     );
     assert!(
-        close(out.pval_fullycausal[0], gget!("pval_fullycausal_1"), rel, abs),
+        close(
+            out.pval_fullycausal[0],
+            gget!("pval_fullycausal_1"),
+            rel,
+            abs
+        ),
         "[{tag}] pval_fullycausal_1: rust={:.4e} r={:.4e}",
         out.pval_fullycausal[0],
         gget!("pval_fullycausal_1")
     );
     assert!(
-        close(out.pval_fullycausal[1], gget!("pval_fullycausal_2"), rel, abs),
+        close(
+            out.pval_fullycausal[1],
+            gget!("pval_fullycausal_2"),
+            rel,
+            abs
+        ),
         "[{tag}] pval_fullycausal_2: rust={:.4e} r={:.4e}",
         out.pval_fullycausal[1],
         gget!("pval_fullycausal_2")

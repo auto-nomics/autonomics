@@ -51,8 +51,8 @@ pub mod stats;
 
 pub use error::{LcvError, Result};
 
-use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 /// Default number of jackknife blocks (matches the R / Matlab reference).
 pub const DEFAULT_NO_BLOCKS: usize = 100;

@@ -7,7 +7,7 @@
 //! z-score and p-value, and the fully-causal p-values.
 
 use crate::error::{LcvError, Result};
-use crate::moments::{estimate_k4, weighted_mean, K4Config, MomentEstimates};
+use crate::moments::{K4Config, MomentEstimates, estimate_k4, weighted_mean};
 use crate::stats::{dt, pt, pt_two_tailed};
 
 /// Full LCV analysis output — mirrors the named list returned by R `RunLCV`.
