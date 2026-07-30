@@ -9,7 +9,7 @@
 - **LLM SDK + 智能体运行时**（`agentik-*`）——兼容 Anthropic 的客户端，支持多服务商、SSE 流式输出和工具/函数调用；其上是处理记忆压缩、生命周期管理和多智能体编排的智能体循环。
 - **DataFusion DAG 引擎**（`data-engine`）——一个类型化、并发调度的节点图，每个步骤变换 `DataFrame`。智能体通过工具调用组装并运行流水线；重计算量的统计遗传学计算（MiXeR、LDSC、MR、LAVA）作为纯 Rust 节点逻辑运行于 [`faer`](https://github.com/sarah-ek/faer) 之上。
 - **生物信息学 I/O**（`biofusion`、`datalake`）——针对常见基因组格式的 DataFusion 读取器，以及由 Iceberg 支撑、存储 LD 参考面板和预计算充分统计量表的数据湖。
-- **科学数据客户端**（`eutils`、`opengwas`、`gwascatalog-sdk`）——无需离开对话即可从 NCBI、OpenGWAS 和 GWAS Catalog 获取元数据与汇总统计数据。
+- **科学数据客户端**（`eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`）——无需离开对话即可从 NCBI、OpenGWAS、GWAS Catalog 和 Open Targets Platform 获取元数据、汇总统计数据与靶点–疾病关联评分。
 
 ## 演示
 
@@ -95,6 +95,7 @@
 │                                                                  │
 │  GWAS Catalog  │  OpenGWAS  │  NCBI E-utilities  │  VCF / BGEN   │
 │  (gwascatalog) │ (opengwas) │     (eutils)       │  (biofusion)  │
+│  Open Targets (opentargets) — 靶点–疾病关联评分                      │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
@@ -112,7 +113,7 @@
 
 重计算量的统计遗传学计算（MiXeR、LDSC）在 DAG 节点内以纯 Rust 运行。LD 参考数据和预计算的充分统计量存储在 Iceberg 数据湖中；离线 `precompute_tags` 流水线物化了每个 tag 的汇总标量，使运行时拟合永远无需扫描完整 LD 矩阵。
 
-GWAS Catalog、OpenGWAS 和 NCBI E-utilities 的 API 客户端让智能体无需离开对话即可获取元数据和汇总统计数据。大型测试夹具（LD 矩阵、金标准输出）保存在私有 OSS 存储桶中，通过 `rclone` 恢复。
+GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客户端让智能体无需离开对话即可获取元数据、汇总统计数据和靶点–疾病关联评分。大型测试夹具（LD 矩阵、金标准输出）保存在私有 OSS 存储桶中，通过 `rclone` 恢复。
 
 ## 工作空间
 
@@ -120,8 +121,8 @@ GWAS Catalog、OpenGWAS 和 NCBI E-utilities 的 API 客户端让智能体无需
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 智能体平台                   | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                                                 | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                         |
 | 数据分析                     | `data-engine`、`data-engine-tools`、`stat-primitives`、`fs`、`datalake`、`datalake-tools`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、统计量、OpenDAL 文件、Iceberg 存储与查询工具、生物格式导入，以及 R/ggplot2 可视化。                                               |
-| 统计遗传学                   | `ldsc`、`mr`、`mixer`、`lava`                                                                                                              | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）和 LAVA（局部遗传相关）的纯 Rust 移植，基于 `faer`。                                          |
-| 科学数据客户端               | `eutils`、`opengwas`、`gwascatalog-sdk`                                                                                                    | NCBI E-utilities、OpenGWAS 和 GWAS Catalog 的客户端。                                                                                                              |
+| 统计遗传学                   | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mtag`、`mrlap`、`lcv`                                                                               | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MTAG、MRlap 和 LCV 的纯 Rust 移植，基于 `faer`。                |
+| 科学数据客户端               | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                                     | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                       |
 | 用户界面与渲染               | `tui`                                                                                                                                      | 终端智能体 UI。                                                                                                                                                    |
 
 `fixtures/` 包含读取器和集成测试使用的代表性及格式错误的基因组文件。
@@ -182,13 +183,18 @@ autonomics/
 │   ├── eutils/              # NCBI E-utilities 客户端
 │   ├── opengwas/            # OpenGWAS 客户端
 │   ├── gwascatalog-sdk/     # GWAS Catalog 客户端
+│   ├── opentargets/         # Open Targets Platform GraphQL 客户端（靶点–疾病关联）
 │   ├── stat-primitives/     # 描述性统计、分布、回归
 │   ├── runtime/             # Agentik 的同步宿主桥接
 ├── bio_crates/
 │   ├── ldsc/                # 纯 Rust LD Score Regression (h²/rg/cts) 移植
 │   ├── mr/                  # 纯 Rust TwoSampleMR（孟德尔随机化）移植
 │   ├── mixer/               # 纯 Rust MiXeR 单变量 + 双变量 (spike-and-slab) 移植
-│   └── lava/                # 纯 Rust LAVA 局部遗传相关移植
+│   ├── lava/                # 纯 Rust LAVA 局部遗传相关移植
+│   ├── hdl/                 # 纯 Rust HDL-L 增强局部遗传相关移植
+│   ├── mtag/                # 纯 Rust MTAG（多性状 GWAS）移植
+│   ├── mrlap/               # 纯 Rust MRlap（样本重叠感知 MR）移植
+│   └── lcv/                 # 纯 Rust LCV（潜在因果变量）移植
 ├── fixtures/                # 有效和格式错误的基因组输入夹具
 ├── Cargo.toml               # 工作空间清单
 └── .cargo/config.toml       # 默认 Cargo target 目录

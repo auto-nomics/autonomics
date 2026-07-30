@@ -11,6 +11,7 @@ members = [
   "apps/tui",
   "crates/opengwas",
   "crates/eutils",
+  "crates/opentargets",
   "crates/runtime",
   "crates/fs",
   "crates/datalake",
