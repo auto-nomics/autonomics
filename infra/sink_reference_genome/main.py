@@ -1,33 +1,36 @@
-"""Ingest GRCh37 reference genome (FASTA + GTF) into the Iceberg data lake.
+"""Ingest human reference genome (GRCh37 or GRCh38) into the Iceberg data lake.
 
-Downloads (or reads pre-downloaded) Ensembl GRCh37 data, parses it into
+Downloads (or reads pre-downloaded) Ensembl genome data, parses it into
 structured Iceberg tables, and optionally archives the raw files to OSS.
 
 The FASTA is downloaded as per-chromosome files (more reliable than the single
 large primary_assembly.fa.gz from rate-limited FTP connections), in batches of
 5 with resume support (``curl -C -``).
 
-Two tables are created in the ``reference`` namespace:
+Two tables are created in the ``reference`` namespace per assembly:
 
-- ``reference.grch37_contigs`` — one row per chromosome / contig with
+- ``reference.{prefix}_contigs`` — one row per chromosome / contig with
   length and MD5 checksum.
-- ``reference.grch37_genes`` — parsed GTF gene annotation, one row per
+- ``reference.{prefix}_genes`` — parsed GTF gene annotation, one row per
   feature (gene, transcript, exon, CDS, …) with structured attribute
   columns (gene_id, gene_name, biotype, transcript_id, …).
 
 Usage
 -----
-    # Download + ingest (full pipeline)
-    python main.py --staging-dir ../../reference/grch37 --mode overwrite
+    # GRCh37 (Ensembl archive, release 87)
+    python main.py --assembly grch37 --staging-dir ../../reference/grch37 --mode overwrite
+
+    # GRCh38 (Ensembl release 116)
+    python main.py --assembly grch38 --staging-dir ../../reference/grch38 --mode overwrite
 
     # Use pre-downloaded per-chromosome files
-    python main.py \\
-        --fasta-dir ../../reference/grch37 \\
-        --gtf ../../reference/grch37/Homo_sapiens.GRCh37.87.gtf.gz \\
+    python main.py --assembly grch38 \\
+        --fasta-dir ../../reference/grch38 \\
+        --gtf ../../reference/grch38/Homo_sapiens.GRCh38.116.gtf.gz \\
         --mode overwrite
 
     # Skip ingest, just archive raw files to OSS
-    python main.py --staging-dir ../../reference/grch37 --archive-only
+    python main.py --assembly grch38 --staging-dir ../../reference/grch38 --archive-only
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -47,25 +51,73 @@ import pyarrow as pa
 from datalake import get_catalog
 
 # ---------------------------------------------------------------------------
-# Constants
+# Assembly configuration
 # ---------------------------------------------------------------------------
 
-# Use the main FTP (useast mirror does not serve FTP files)
-ENSEMBL_FTP = "https://ftp.ensembl.org/pub/grch37/current"
-FASTA_FILE = "Homo_sapiens.GRCh37.dna.primary_assembly.fa.gz"
-GTF_FILE = "Homo_sapiens.GRCh37.87.gtf.gz"
-
-# Per-chromosome FASTA files (downloaded in parallel, more reliable than the
-# single large primary_assembly file from rate-limited connections)
 CHROMOSOMES = [*map(str, range(1, 23)), "X", "Y", "MT"]
-PER_CHROM_FASTA_GLOB = "Homo_sapiens.GRCh37.dna.chromosome.*.fa.gz"
-
 NAMESPACE = "reference"
-CONTIG_TABLE = "grch37_contigs"
-GENE_TABLE = "grch37_genes"
 
-# rclone archive destination
-ARCHIVE_REMOTE = "aliyun:autonomics-data/reference/grch37"
+
+@dataclass(frozen=True)
+class AssemblyConfig:
+    """All assembly-specific parameters for the ingest pipeline."""
+
+    key: str               # grch37 / grch38 — used for table names + paths
+    ensembl_name: str       # GRCh37 / GRCh38 — in filenames
+    release_label: str      # human-readable release for docs
+    ftp_base: str           # Ensembl FTP base URL for this assembly
+    gtf_filename: str       # GTF .gz filename
+    staging_dir: Path       # local download directory
+
+    @property
+    def fasta_glob(self) -> str:
+        return f"Homo_sapiens.{self.ensembl_name}.dna.chromosome.*.fa.gz"
+
+    @property
+    def fasta_url_base(self) -> str:
+        return f"{self.ftp_base}/fasta/homo_sapiens/dna"
+
+    @property
+    def gtf_url(self) -> str:
+        return f"{self.ftp_base}/gtf/homo_sapiens/{self.gtf_filename}"
+
+    @property
+    def contig_table(self) -> str:
+        return f"{self.key}_contigs"
+
+    @property
+    def gene_table(self) -> str:
+        return f"{self.key}_genes"
+
+    @property
+    def archive_remote(self) -> str:
+        return f"aliyun:autonomics-data/reference/{self.key}"
+
+    def fasta_filename(self, chrom: str) -> str:
+        return f"Homo_sapiens.{self.ensembl_name}.dna.chromosome.{chrom}.fa.gz"
+
+    @staticmethod
+    def for_assembly(assembly: str, staging_dir: Path) -> AssemblyConfig:
+        if assembly == "grch37":
+            return AssemblyConfig(
+                key="grch37",
+                ensembl_name="GRCh37",
+                release_label="GRCh37.p13 / Ensembl r87",
+                ftp_base="https://ftp.ensembl.org/pub/grch37/current",
+                gtf_filename="Homo_sapiens.GRCh37.87.gtf.gz",
+                staging_dir=staging_dir,
+            )
+        if assembly == "grch38":
+            return AssemblyConfig(
+                key="grch38",
+                ensembl_name="GRCh38",
+                release_label="GRCh38.p14 / Ensembl r116",
+                ftp_base="https://ftp.ensembl.org/pub/release-116",
+                gtf_filename="Homo_sapiens.GRCh38.116.gtf.gz",
+                staging_dir=staging_dir,
+            )
+        raise ValueError(f"Unknown assembly: {assembly!r} (expected 'grch37' or 'grch38')")
+
 
 # ---------------------------------------------------------------------------
 # Download helpers
@@ -87,12 +139,12 @@ def download(url: str, dest: Path) -> Path:
     return dest
 
 
-def download_fasta(staging_dir: Path) -> list[Path]:
+def download_fasta(cfg: AssemblyConfig) -> list[Path]:
     """Download per-chromosome FASTA files (batched for FTP rate-limit friendliness).
 
     Returns a sorted list of .fa.gz paths — one per chromosome.
     """
-    base = f"{ENSEMBL_FTP}/fasta/homo_sapiens/dna"
+    base = cfg.fasta_url_base
     batch_size = 5
 
     paths = []
@@ -100,18 +152,16 @@ def download_fasta(staging_dir: Path) -> list[Path]:
         batch = CHROMOSOMES[i : i + batch_size]
         procs = []
         for chrom in batch:
-            fname = f"Homo_sapiens.GRCh37.dna.chromosome.{chrom}.fa.gz"
-            dest = staging_dir / fname
+            fname = cfg.fasta_filename(chrom)
+            dest = cfg.staging_dir / fname
             paths.append(dest)
             if dest.exists() and dest.stat().st_size > 0:
                 # Verify gzip integrity before skipping
-                import gzip as _gz
-
                 try:
-                    with _gz.open(dest, "rb") as _fh:
+                    with gzip.open(dest, "rb") as _fh:
                         _fh.read(1024)
                     continue
-                except (_gz.BadGzipFile, EOFError):
+                except (gzip.BadGzipFile, EOFError):
                     pass  # truncated — re-download
             p = subprocess.Popen(
                 ["curl", "-sL", "-C", "-", "-o", str(dest), f"{base}/{fname}"]
@@ -124,19 +174,19 @@ def download_fasta(staging_dir: Path) -> list[Path]:
     return sorted(paths)
 
 
-def ensure_files(staging_dir: Path) -> tuple[list[Path], Path]:
-    """Ensure FASTA + GTF exist in *staging_dir*, downloading if necessary.
+def ensure_files(cfg: AssemblyConfig) -> tuple[list[Path], Path]:
+    """Ensure FASTA + GTF exist in staging_dir, downloading if necessary.
 
     Returns ``(fasta_paths, gtf_path)`` where *fasta_paths* is a list of
     per-chromosome .fa.gz files.
     """
-    fasta_glob = sorted(staging_dir.glob(PER_CHROM_FASTA_GLOB))
-    gtf_path = staging_dir / GTF_FILE
+    fasta_glob = sorted(cfg.staging_dir.glob(cfg.fasta_glob))
+    gtf_path = cfg.staging_dir / cfg.gtf_filename
 
     if len(fasta_glob) < len(CHROMOSOMES) or not gtf_path.exists():
-        print("=== Downloading GRCh37 data from Ensembl FTP ===")
-        fasta_glob = download_fasta(staging_dir)
-        download(f"{ENSEMBL_FTP}/gtf/homo_sapiens/{GTF_FILE}", gtf_path)
+        print(f"=== Downloading {cfg.ensembl_name} data from Ensembl FTP ===")
+        fasta_glob = download_fasta(cfg)
+        download(cfg.gtf_url, gtf_path)
 
     return fasta_glob, gtf_path
 
@@ -184,9 +234,6 @@ def parse_contig_name(header: str) -> str:
 
 def build_contig_table(fasta_paths: list[Path]) -> pa.Table:
     """Parse FASTA file(s) to build an Arrow table of contig metadata.
-
-    Accepts either a single primary_assembly.fa.gz or a list of per-chromosome
-    .fa.gz files.
 
     Columns: contig (string), length (int32), md5 (string).
     """
@@ -378,7 +425,9 @@ def create_or_load_table(catalog, full_table: str, pa_schema: pa.Schema):
     return catalog.create_table(full_table, schema=iceberg_schema)
 
 
-def sink_contigs(fasta_paths: list[Path], namespace: str, mode: str) -> None:
+def sink_contigs(
+    fasta_paths: list[Path], cfg: AssemblyConfig, namespace: str, mode: str
+) -> None:
     """Parse FASTA → contig metadata → Iceberg table."""
     print("=== Parsing FASTA for contig metadata ===")
     t0 = time.time()
@@ -390,7 +439,7 @@ def sink_contigs(fasta_paths: list[Path], namespace: str, mode: str) -> None:
     print("  Catalog:", catalog.name)
     catalog.create_namespace_if_not_exists(namespace=namespace)
 
-    full = f"{namespace}.{CONTIG_TABLE}"
+    full = f"{namespace}.{cfg.contig_table}"
     tbl = create_or_load_table(catalog, full, arrow_tbl.schema)
     if mode == "overwrite" and tbl.snapshots():
         tbl.overwrite(arrow_tbl)
@@ -399,7 +448,9 @@ def sink_contigs(fasta_paths: list[Path], namespace: str, mode: str) -> None:
     print(f"  Ingested {arrow_tbl.num_rows} contigs → {full}")
 
 
-def sink_genes(gtf_path: Path, namespace: str, mode: str) -> None:
+def sink_genes(
+    gtf_path: Path, cfg: AssemblyConfig, namespace: str, mode: str
+) -> None:
     """Parse GTF → gene annotation → Iceberg table."""
     print("=== Parsing GTF gene annotation ===")
     t0 = time.time()
@@ -410,7 +461,7 @@ def sink_genes(gtf_path: Path, namespace: str, mode: str) -> None:
     catalog = get_catalog()
     catalog.create_namespace_if_not_exists(namespace=namespace)
 
-    full = f"{namespace}.{GENE_TABLE}"
+    full = f"{namespace}.{cfg.gene_table}"
     tbl = create_or_load_table(catalog, full, arrow_tbl.schema)
     if mode == "overwrite" and tbl.snapshots():
         tbl.overwrite(arrow_tbl)
@@ -424,10 +475,10 @@ def sink_genes(gtf_path: Path, namespace: str, mode: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def archive_to_oss(staging_dir: Path, files: list[Path]) -> None:
+def archive_to_oss(cfg: AssemblyConfig, files: list[Path]) -> None:
     """Upload raw files to aliyun OSS via rclone."""
-    print(f"=== Archiving to {ARCHIVE_REMOTE} ===")
-    # Check rclone is available
+    remote = cfg.archive_remote
+    print(f"=== Archiving to {remote} ===")
     rclone = os.environ.get("RCLONE", "rclone")
     try:
         subprocess.run([rclone, "version"], capture_output=True, check=True)
@@ -437,7 +488,7 @@ def archive_to_oss(staging_dir: Path, files: list[Path]) -> None:
         return
 
     for f in files:
-        dest = f"{ARCHIVE_REMOTE}/{f.name}"
+        dest = f"{remote}/{f.name}"
         print(f"  {f.name} → {dest}")
         subprocess.run(
             [rclone, "copyto", str(f), dest, "-P"],
@@ -446,15 +497,15 @@ def archive_to_oss(staging_dir: Path, files: list[Path]) -> None:
         print(f"  done: {f.name}")
 
     # Also write a README manifest
-    manifest = staging_dir / "ARCHIVE_README.txt"
+    manifest = cfg.staging_dir / "ARCHIVE_README.txt"
     manifest.write_text(
-        f"GRCh37 Reference Genome — archived {time.strftime('%Y-%m-%d')}\n"
-        f"Source: {ENSEMBL_FTP}\n"
+        f"{cfg.release_label} — archived {time.strftime('%Y-%m-%d')}\n"
+        f"Source: {cfg.ftp_base}\n"
         f"Files:\n"
         + "".join(f"  - {f.name} ({f.stat().st_size:,} bytes)\n" for f in files)
     )
     subprocess.run(
-        [rclone, "copyto", str(manifest), f"{ARCHIVE_REMOTE}/ARCHIVE_README.txt"],
+        [rclone, "copyto", str(manifest), f"{remote}/ARCHIVE_README.txt"],
         check=True,
     )
     print(f"  manifest uploaded")
@@ -467,13 +518,19 @@ def archive_to_oss(staging_dir: Path, files: list[Path]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ingest GRCh37 reference genome (FASTA + GTF) into Iceberg"
+        description="Ingest human reference genome (GRCh37/GRCh38) into Iceberg"
+    )
+    parser.add_argument(
+        "--assembly",
+        choices=["grch37", "grch38"],
+        required=True,
+        help="Genome assembly to ingest",
     )
     parser.add_argument(
         "--staging-dir",
         type=Path,
-        default=Path("../../reference/grch37"),
-        help="Directory for downloaded files (default: ../../reference/grch37)",
+        default=None,
+        help="Directory for downloaded files (default: ../../reference/{assembly})",
     )
     parser.add_argument(
         "--fasta-dir",
@@ -490,8 +547,8 @@ def main() -> None:
     parser.add_argument(
         "--fasta-glob",
         type=str,
-        default=PER_CHROM_FASTA_GLOB,
-        help=f"Glob pattern for per-chromosome FASTA files (default: {PER_CHROM_FASTA_GLOB})",
+        default=None,
+        help="Glob pattern for per-chromosome FASTA files (auto-detected from assembly)",
     )
     parser.add_argument(
         "--namespace",
@@ -521,36 +578,40 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Build assembly config
+    staging_dir = args.staging_dir or Path(f"../../reference/{args.assembly}")
+    cfg = AssemblyConfig.for_assembly(args.assembly, staging_dir.resolve())
+
+    fasta_glob_pattern = args.fasta_glob or cfg.fasta_glob
+
     # Resolve file paths
-    if args.fasta_dir and args.gtf:
-        fasta_paths = sorted(args.fasta_dir.glob(args.fasta_glob))
+    fasta_search_dir = (args.fasta_dir or cfg.staging_dir).resolve()
+    gtf_path = args.gtf
+
+    if gtf_path:
+        fasta_paths = sorted(fasta_search_dir.glob(fasta_glob_pattern))
         if not fasta_paths:
-            print(f"No FASTA files matching {args.fasta_glob} in {args.fasta_dir}")
+            print(f"No FASTA files matching {fasta_glob_pattern} in {fasta_search_dir}")
             sys.exit(1)
-        gtf_path = args.gtf
-    elif args.gtf:
-        # GTF given but no fasta_dir → use staging_dir for FASTA
-        fasta_paths = sorted(args.staging_dir.resolve().glob(args.fasta_glob))
-        gtf_path = args.gtf
     else:
-        fasta_paths, gtf_path = ensure_files(args.staging_dir.resolve())
+        fasta_paths, gtf_path = ensure_files(cfg)
 
     files_to_archive = [*fasta_paths, gtf_path]
 
     if args.archive_only:
-        archive_to_oss(args.staging_dir.resolve(), files_to_archive)
+        archive_to_oss(cfg, files_to_archive)
         return
 
     # Ingest to Iceberg
     if not args.skip_fasta:
-        sink_contigs(fasta_paths, args.namespace, args.mode)
-    sink_genes(gtf_path, args.namespace, args.mode)
+        sink_contigs(fasta_paths, cfg, args.namespace, args.mode)
+    sink_genes(gtf_path, cfg, args.namespace, args.mode)
 
     # Archive raw files
     if not args.skip_archive:
-        archive_to_oss(args.staging_dir.resolve(), files_to_archive)
+        archive_to_oss(cfg, files_to_archive)
 
-    print("\n=== Done ===")
+    print(f"\n=== Done ({cfg.release_label}) ===")
 
 
 if __name__ == "__main__":

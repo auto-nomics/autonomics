@@ -213,10 +213,6 @@ pub struct BivariateMixerNodeSpec {
     /// extract 的 LD 剪枝阈值（原版 `--r2`，默认 0.8；严格 > 才剪）。
     #[serde(default = "default_extract_r2")]
     pub extract_r2: f64,
-    /// tag 面板的 Iceberg 表名（`iceberg.mixer` 命名空间下）。默认 `"eur_tag_panel"`。
-    /// 设了跳过 extract，直接从表读 tag rsid。设为 `None` 走内联 extract。
-    #[serde(default = "default_panel")]
-    pub panel: Option<String>,
     /// tag 诱导 LD 子图的 Iceberg 表名。默认 `"eur_subgraph"`。
     /// 设了跳过 fold 的 ld_matrix 扫描，直接查子图表建 CSR。
     #[serde(default = "default_panel_ld")]
@@ -255,9 +251,6 @@ fn default_extract_subset() -> usize {
 }
 fn default_extract_r2() -> f64 {
     0.8
-}
-fn default_panel() -> Option<String> {
-    Some("eur_tag_panel".to_string())
 }
 fn default_panel_ld() -> Option<String> {
     Some("eur_subgraph".to_string())
@@ -385,8 +378,44 @@ impl DagNode for BivariateMixerNode {
         // Dropped at the end of this call.
         let ctx = node_ctx.session();
 
-        // 1. 校验两个上游 sumstats 的必需列 + 注册为临时表
-        for (i, inp) in inputs[..2].iter().enumerate() {
+        // 1. 按 **port index** 查输入（不能用位置下标——`build_inputs` 推送顺序
+        //    是 petgraph 边存储序，与 `to_port` 无关；见 ldsc_rg/lcv/mtag 的同样
+        //    pattern）。端口布局：0/1=sumstats，2/3=fit1 约束。
+        let sumstats1 = inputs
+            .iter()
+            .find(|i| i.port == 0)
+            .ok_or_else(|| {
+                BivariateMixerError::InvalidInput(
+                    "missing trait1 sumstats input (port 0)".into(),
+                )
+            })?;
+        let sumstats2 = inputs
+            .iter()
+            .find(|i| i.port == 1)
+            .ok_or_else(|| {
+                BivariateMixerError::InvalidInput(
+                    "missing trait2 sumstats input (port 1)".into(),
+                )
+            })?;
+        let fit1_t1 = inputs
+            .iter()
+            .find(|i| i.port == 2)
+            .ok_or_else(|| {
+                BivariateMixerError::InvalidInput(
+                    "missing trait1 fit1 result input (port 2)".into(),
+                )
+            })?;
+        let fit1_t2 = inputs
+            .iter()
+            .find(|i| i.port == 3)
+            .ok_or_else(|| {
+                BivariateMixerError::InvalidInput(
+                    "missing trait2 fit1 result input (port 3)".into(),
+                )
+            })?;
+
+        // 校验两个上游 sumstats 的必需列
+        for (i, inp) in [sumstats1, sumstats2].iter().enumerate() {
             let sch = inp.data.schema();
             let avail: Vec<&str> = sch.fields().iter().map(|f| f.name().as_str()).collect();
             for needed in [INPUT_Z_COL, INPUT_N_COL, INPUT_RSID_COL] {
@@ -399,20 +428,20 @@ impl DagNode for BivariateMixerNode {
                 }
             }
         }
-        ctx.register_table("sumstats1", inputs[0].data.clone().into_view())
+        ctx.register_table("sumstats1", sumstats1.data.clone().into_view())
             .map_err(|e| BivariateMixerError::Step {
                 context: "register sumstats1".into(),
                 detail: e.to_string(),
             })?;
-        ctx.register_table("sumstats2", inputs[1].data.clone().into_view())
+        ctx.register_table("sumstats2", sumstats2.data.clone().into_view())
             .map_err(|e| BivariateMixerError::Step {
                 context: "register sumstats2".into(),
                 detail: e.to_string(),
             })?;
 
         // 2. 从 fit1 结果端口取 univariate 约束（pi, sig2_beta, sig2_zero）
-        let c1 = read_constraint(&inputs[2].data).await?;
-        let c2 = read_constraint(&inputs[3].data).await?;
+        let c1 = read_constraint(&fit1_t1.data).await?;
+        let c2 = read_constraint(&fit1_t2.data).await?;
         reporter.info(format!(
             "constraints: t1(pi={:.5}, sig2_beta={:.6}, sig2_zero={:.4})  \
              t2(pi={:.5}, sig2_beta={:.6}, sig2_zero={:.4})",
@@ -779,14 +808,21 @@ async fn read_constraint(
 // =====================================================================
 
 fn single_f64(batch: &RecordBatch, name: &str) -> Result<f64, BivariateMixerError> {
+    // fit1 结果由 univariate_mixer 节点产出，schema 声明为 Float64（非 Iceberg
+    // round-trip），所以这里仍严格匹配 Float64；若遇到 Float32 友好提示。
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("fit1 结果缺列 '{name}'")))?;
-    let arr = col
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .ok_or_else(|| BivariateMixerError::InvalidInput(format!("列 '{name}' 非 Float64")))?;
-    Ok(arr.value(0))
+    if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
+        return Ok(a.value(0));
+    }
+    if let Some(a) = col.as_any().downcast_ref::<arrow_array::Float32Array>() {
+        return Ok(a.value(0) as f64);
+    }
+    Err(BivariateMixerError::InvalidInput(format!(
+        "列 '{name}' 非 Float32/Float64 (got {})",
+        col.data_type()
+    )))
 }
 
 fn col_as_string<'a>(
@@ -821,19 +857,43 @@ fn for_each_ld_pair(
     Ok(())
 }
 
+/// 读 f64 列的轻量视图：兼容 Iceberg 里常见的 `Float32` 存储（如 `r2`、
+/// `h_a`），按需 `as f64` 提升。调用方仍用 `.value(row)` 取值——零分配。
+///
+/// 上游 GWAS sumstats 的 Z/N 与 `af.eur_af.alt_freq` 仍是 Float64，走 `F64`
+/// 分支无额外开销；只有 `eur_subgraph` 的 `r2` 等列走 `F32` 分支。
+enum F64Col<'a> {
+    F64(&'a Float64Array),
+    F32(&'a arrow_array::Float32Array),
+}
+
+impl F64Col<'_> {
+    #[inline]
+    fn value(&self, i: usize) -> f64 {
+        match self {
+            F64Col::F64(a) => a.value(i),
+            F64Col::F32(a) => a.value(i) as f64,
+        }
+    }
+}
+
 fn col_as_f64<'a>(
     batch: &'a RecordBatch,
     name: &str,
-) -> Result<&'a Float64Array, BivariateMixerError> {
+) -> Result<F64Col<'a>, BivariateMixerError> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
-    col.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
-        BivariateMixerError::InvalidInput(format!(
-            "column '{name}' is not Float64 (got {})",
-            col.data_type()
-        ))
-    })
+    if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
+        return Ok(F64Col::F64(a));
+    }
+    if let Some(a) = col.as_any().downcast_ref::<arrow_array::Float32Array>() {
+        return Ok(F64Col::F32(a));
+    }
+    Err(BivariateMixerError::InvalidInput(format!(
+        "column '{name}' is not Float32/Float64 (got {})",
+        col.data_type()
+    )))
 }
 
 // =====================================================================
@@ -864,7 +924,6 @@ mod tests {
             extract_maf: 0.05,
             extract_subset: 2_000_000,
             extract_r2: 0.8,
-            panel: None,
             panel_ld: None,
         };
         let node = BivariateMixerNode::new(spec);
