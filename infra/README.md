@@ -127,14 +127,25 @@ The Rust `LdscHsqNode` consumes `rsid`, `ld_score`, and `locus.position` from th
 
 Located in `infra/sink_reference_genome/`.
 
-Ingests the **GRCh37** (hg19) human reference genome from Ensembl into the
-`reference` namespace:
+Ingests the **GRCh37** (hg19) and/or **GRCh38** (hg38) human reference genome
+from Ensembl into the `reference` namespace:
 
-- `reference.grch37_contigs` — chromosome metadata (name, length, MD5)
-- `reference.grch37_genes` — structured gene annotation from GTF (~2.6M features)
+- `reference.{grch37|grch38}_contigs` — chromosome metadata (name, length, MD5)
+- `reference.{grch37|grch38}_genes` — structured gene annotation from GTF
 
-Raw files are archived to `aliyun:autonomics-data/reference/grch37/`.
+| Assembly | Features | Genes | Release |
+|----------|----------|-------|---------|
+| GRCh37   | 2.6M     | 57,905  | r87 |
+| GRCh38   | 11.2M    | 78,941  | r116 |
+
+Raw files are archived to `aliyun:autonomics-data/reference/{assembly}/`.
 
 ```bash
-python -m sink_reference_genome.main --staging-dir ../reference/grch37 --mode overwrite
+# GRCh37
+python -m sink_reference_genome.main --assembly grch37 \
+    --staging-dir ../reference/grch37 --mode overwrite
+
+# GRCh38
+python -m sink_reference_genome.main --assembly grch38 \
+    --staging-dir ../reference/grch38 --mode overwrite
 ```

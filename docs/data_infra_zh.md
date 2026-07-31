@@ -27,10 +27,10 @@ GWAS VCF (公开汇总统计)
               │
               └──→ MiXeR / LDSC / MR 节点
 
-Ensembl GRCh37 (参考基因组)
+Ensembl GRCh37 / GRCh38 (参考基因组)
     │
-    ├──→ [Contig 元数据] reference.grch37_contigs        （染色体名称/长度/MD5）
-    └──→ [基因注释] reference.grch37_genes                 （结构化 GTF 特征）
+    ├──→ [Contig 元数据] reference.grch{37,38}_contigs    （染色体名称/长度/MD5）
+    └──→ [基因注释] reference.grch{37,38}_genes             （结构化 GTF 特征）
               │
               └──→ SNP-基因映射、基因层面分析
 ```
@@ -41,7 +41,7 @@ Ensembl GRCh37 (参考基因组)
 |----------|-----|------|------|
 | **LD matrix** | `ld_matrix.eur_chr{1..22}` | [ld_matrix.md](data_infra/ld_matrix.md) | ✅ 已上线 |
 | **LD 子图** | `mixer.eur_subgraph` | [subgraph.md](data_infra/subgraph.md) | ✅ 已上线（待修复 tag 一致性） |
-| **参考基因组** | `reference.grch37_contigs`, `reference.grch37_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ 已上线 |
+| **参考基因组** | `reference.grch{37,38}_contigs`, `reference.grch{37,38}_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ 已上线 |
 
 ## 待补文档
 
@@ -71,13 +71,15 @@ Ensembl GRCh37 (参考基因组)
 - **规模**：267M 行，2.3 GB
 - **详见**：[subgraph.md](data_infra/subgraph.md)
 
-### 参考基因组（GRCh37）
+### 参考基因组（GRCh37 + GRCh38）
 
-- **表**：`iceberg.reference.grch37_contigs`、`iceberg.reference.grch37_genes`
-- **Contigs**：`contig, length, md5`（25 行，染色体 1–22, X, Y, MT）
-- **基因注释**：Ensembl r87 GTF 解析为 16 个结构化列（2,613,765 条特征）
-- **构建**：Ensembl FTP → 逐染色体 FASTA + GTF → `sink_reference_genome` → Iceberg
-- **归档**：`aliyun:autonomics-data/reference/grch37/`
+- **表**：`iceberg.reference.grch{37,38}_contigs`、`iceberg.reference.grch{37,38}_genes`
+- **Contigs**：`contig, length, md5`（各 25 行，染色体 1–22, X, Y, MT）
+- **基因注释**：Ensembl GTF 解析为 16 个结构化列
+  - GRCh37 r87：2,613,765 条特征（57,905 个基因）
+  - GRCh38 r116：11,248,794 条特征（78,941 个基因）
+- **构建**：Ensembl FTP → 逐染色体 FASTA + GTF → `sink_reference_genome --assembly {grch37|grch38}` → Iceberg
+- **归档**：`aliyun:autonomics-data/reference/grch{37,38}/`
 - **详见**：[reference_genome.md](data_infra/reference_genome.md)
 
 ### AF 面板（待补）

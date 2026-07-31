@@ -1734,6 +1734,7 @@ dependencies = [
  "lava",
  "lcv",
  "ldsc",
+ "magma",
  "mixer",
  "mr",
  "mrlap",

@@ -27,10 +27,10 @@ GWAS VCF (public summary statistics)
               │
               └──→ MiXeR / LDSC / MR nodes
 
-Ensembl GRCh37 (reference genome)
+Ensembl GRCh37 / GRCh38 (reference genome)
     │
-    ├──→ [Contigs] reference.grch37_contigs        (chromosome metadata)
-    └──→ [Gene annotation] reference.grch37_genes   (structured GTF features)
+    ├──→ [Contigs] reference.grch{37,38}_contigs    (chromosome metadata)
+    └──→ [Gene annotation] reference.grch{37,38}_genes (structured GTF features)
               │
               └──→ SNP-to-gene mapping, gene-based analysis
 ```
@@ -41,7 +41,7 @@ Ensembl GRCh37 (reference genome)
 |----------------|-------|-----|--------|
 | **LD matrix** | `ld_matrix.eur_chr{1..22}` | [ld_matrix.md](data_infra/ld_matrix.md) | ✅ Live |
 | **LD subgraph** | `mixer.eur_subgraph` | [subgraph.md](data_infra/subgraph.md) | ✅ Live (tag consistency fix pending) |
-| **Reference genome** | `reference.grch37_contigs`, `reference.grch37_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ Live |
+| **Reference genome** | `reference.grch{37,38}_contigs`, `reference.grch{37,38}_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ Live |
 
 ## Pending docs
 
@@ -71,13 +71,15 @@ Ensembl GRCh37 (reference genome)
 - **Scale**: 267M rows, 2.3 GB
 - **Details**: [subgraph.md](data_infra/subgraph.md)
 
-### Reference genome (GRCh37)
+### Reference genome (GRCh37 + GRCh38)
 
-- **Tables**: `iceberg.reference.grch37_contigs`, `iceberg.reference.grch37_genes`
-- **Contigs**: `contig, length, md5` (25 rows, chromosomes 1–22, X, Y, MT)
-- **Genes**: 16 structured columns from Ensembl r87 GTF (2,613,765 features)
-- **Pipeline**: Ensembl FTP → per-chromosome FASTA + GTF → `sink_reference_genome` → Iceberg
-- **Archive**: `aliyun:autonomics-data/reference/grch37/`
+- **Tables**: `iceberg.reference.grch{37,38}_contigs`, `iceberg.reference.grch{37,38}_genes`
+- **Contigs**: `contig, length, md5` (25 rows each, chromosomes 1–22, X, Y, MT)
+- **Genes**: 16 structured columns from Ensembl GTF
+  - GRCh37 r87: 2,613,765 features (57,905 genes)
+  - GRCh38 r116: 11,248,794 features (78,941 genes)
+- **Pipeline**: Ensembl FTP → per-chromosome FASTA + GTF → `sink_reference_genome --assembly {grch37|grch38}` → Iceberg
+- **Archive**: `aliyun:autonomics-data/reference/grch{37,38}/`
 - **Details**: [reference_genome.md](data_infra/reference_genome.md)
 
 ### AF panel (pending)
