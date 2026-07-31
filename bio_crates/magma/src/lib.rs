@@ -6,24 +6,24 @@
 //! analysis. It supports both raw genotype data (PLINK format) and
 //! summary statistics (SNP p-values + reference LD panel).
 //!
-//! # Analysis modes
+//! # Summary-stats pipeline (fully covered)
 //!
-//! | Mode | Description | Module |
-//! |------|-------------|--------|
-//! | Annotation | Map SNPs to genes → `.genes.annot` | [`annotation`] |
-//! | Gene analysis (pval) | SNP p-values + reference LD → gene p-values | [`geneanalysis`] |
-//! | Gene analysis (raw) | PLINK genotypes + phenotype → gene p-values | [`geneanalysis`] |
-//! | Gene-set analysis | Competitive regression test on gene sets | _todo_ |
-//! | Gene-property analysis | Continuous gene-level covariate regression | _todo_ |
-//! | Meta-analysis | Combine multiple gene results | _todo_ |
+//! | Step | CLI | Module | Status |
+//! |------|-----|--------|--------|
+//! | Annotation | `--annotate` | [`annotation`] | ✅ |
+//! | Gene analysis (pval) | `--bfile --pval --gene-annot` | [`geneanalysis`] | ✅ |
+//! | Gene-set analysis | `--gene-results --set-annot` | [`setanalysis`] | ✅ |
+//! | Gene-property analysis | `--gene-results --gene-covar` | [`setanalysis`] | ✅ |
+//! | Meta-analysis | `--meta` | [`meta`] | ✅ |
+//! | Merge | `--merge` | [`meta`] | ✅ |
 //!
 //! # Faithfulness conventions
 //!
 //! - Linear algebra runs on [`faer`] (no LAPACK/MKL).
 //! - Normal distribution functions reproduce R's `pnorm`/`qnorm` via [`statrs`].
-//! - Imhof's method (weighted sum of χ²) is implemented via adaptive quadrature.
+//! - Imhof's method (weighted sum of χ²) via midpoint quadrature with u=t/(1-t).
 //! - PLINK `.bed` decoding follows the SNP-major 2-bit format specification.
-//! - P-value truncation defaults match MAGMA: `[1e-50, 1e-5]`.
+//! - P-value truncation: `[1e-50, 1-1e-5]` (MAGMA's `set_bounds(low, 1-high)`).
 
 #![allow(clippy::needless_range_loop)]
 
@@ -31,7 +31,9 @@ pub mod annotation;
 pub mod error;
 pub mod geneanalysis;
 pub mod geneinput;
+pub mod meta;
 pub mod plink;
+pub mod setanalysis;
 pub mod stats;
 
 pub use error::{MagmaError, Result};
