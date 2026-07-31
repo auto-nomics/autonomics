@@ -26,6 +26,13 @@ GWAS VCF (公开汇总统计)
     └──→ [GWAS sumstats] gwas.*            （Z/N/rsid 汇总统计）
               │
               └──→ MiXeR / LDSC / MR 节点
+
+Ensembl GRCh37 (参考基因组)
+    │
+    ├──→ [Contig 元数据] reference.grch37_contigs        （染色体名称/长度/MD5）
+    └──→ [基因注释] reference.grch37_genes                 （结构化 GTF 特征）
+              │
+              └──→ SNP-基因映射、基因层面分析
 ```
 
 ## 已有文档
@@ -34,6 +41,7 @@ GWAS VCF (公开汇总统计)
 |----------|-----|------|------|
 | **LD matrix** | `ld_matrix.eur_chr{1..22}` | [ld_matrix.md](data_infra/ld_matrix.md) | ✅ 已上线 |
 | **LD 子图** | `mixer.eur_subgraph` | [subgraph.md](data_infra/subgraph.md) | ✅ 已上线（待修复 tag 一致性） |
+| **参考基因组** | `reference.grch37_contigs`, `reference.grch37_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ 已上线 |
 
 ## 待补文档
 
@@ -63,6 +71,15 @@ GWAS VCF (公开汇总统计)
 - **规模**：267M 行，2.3 GB
 - **详见**：[subgraph.md](data_infra/subgraph.md)
 
+### 参考基因组（GRCh37）
+
+- **表**：`iceberg.reference.grch37_contigs`、`iceberg.reference.grch37_genes`
+- **Contigs**：`contig, length, md5`（25 行，染色体 1–22, X, Y, MT）
+- **基因注释**：Ensembl r87 GTF 解析为 16 个结构化列（2,613,765 条特征）
+- **构建**：Ensembl FTP → 逐染色体 FASTA + GTF → `sink_reference_genome` → Iceberg
+- **归档**：`aliyun:autonomics-data/reference/grch37/`
+- **详见**：[reference_genome.md](data_infra/reference_genome.md)
+
 ### AF 面板（待补）
 
 - **表**：`iceberg.af.eur_af`
@@ -84,3 +101,4 @@ GWAS VCF (公开汇总统计)
 | `lake_cli` | 数据湖查询 / 管理 / 上传 | `src/bin/lake_cli.rs` |
 | `sink_ld_matrix` | LD matrix TSV → Iceberg 入库 | `infra/sink_ld_matrix/` |
 | `ld_matrix.sh` | 1000G VCF → PLINK2 LD 计算 | `infra/thousand_genomes/ld_matrix.sh` |
+| `sink_reference_genome` | GRCh37 FASTA + GTF → Iceberg 入库 | `infra/sink_reference_genome/` |

@@ -122,3 +122,19 @@ The Rust `LdscHsqNode` consumes `rsid`, `ld_score`, and `locus.position` from th
 > ```bash
 > rclone copy aliyun:autonomics-data/ldsc/s-ldsc-ref/ reference/ldsc_data/ -P
 > ```
+
+## Reference Genome Scripts
+
+Located in `infra/sink_reference_genome/`.
+
+Ingests the **GRCh37** (hg19) human reference genome from Ensembl into the
+`reference` namespace:
+
+- `reference.grch37_contigs` — chromosome metadata (name, length, MD5)
+- `reference.grch37_genes` — structured gene annotation from GTF (~2.6M features)
+
+Raw files are archived to `aliyun:autonomics-data/reference/grch37/`.
+
+```bash
+python -m sink_reference_genome.main --staging-dir ../reference/grch37 --mode overwrite
+```

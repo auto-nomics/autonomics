@@ -4,6 +4,7 @@ use crate::Anthropic;
 use crate::config::ClientConfig;
 use crate::model::ProviderConfig;
 use crate::model::model_info::ModelInfo;
+use crate::model::sanitize::sanitize_messages;
 use crate::provider::client::AnthropicApiClient;
 use crate::provider::client::ApiClient;
 use crate::streaming::MessageStream;
@@ -62,6 +63,7 @@ impl Model {
         messages: Vec<Message>,
         tools: &[ToolDefinition],
     ) -> Result<Message, AnthropicError> {
+        let messages = sanitize_messages(messages);
         let response = self
             .client
             .request(messages, tools.to_vec(), &self.model_info)
@@ -74,6 +76,7 @@ impl Model {
         messages: Vec<Message>,
         tools: &[ToolDefinition],
     ) -> Result<MessageStream, AnthropicError> {
+        let messages = sanitize_messages(messages);
         self.client
             .request_stream(messages, tools.to_vec(), &self.model_info)
             .await

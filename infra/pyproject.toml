@@ -17,6 +17,7 @@ members = [
     "datalake",
     "thousand_genomes",
     "sink_ldsc_panel",
+    "sink_reference_genome",
 ]
 
 [tool.uv.sources]

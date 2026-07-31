@@ -15,6 +15,7 @@ members = [
     "autonomics-infra",
     "datalake",
     "sink-ldsc-panel",
+    "sink-reference-genome",
     "thousand-genomes",
 ]
 
@@ -648,6 +649,17 @@ wheels = [
 name = "sink-ldsc-panel"
 version = "0.1.0"
 source = { virtual = "sink_ldsc_panel" }
+dependencies = [
+    { name = "datalake" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "datalake", editable = "datalake" }]
+
+[[package]]
+name = "sink-reference-genome"
+version = "0.1.0"
+source = { virtual = "sink_reference_genome" }
 dependencies = [
     { name = "datalake" },
 ]

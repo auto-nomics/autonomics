@@ -20,6 +20,24 @@ pub struct Message {
     pub request_id: Option<RequestId>,
 }
 
+impl Message {
+    pub fn has_tool_use(&self) -> bool {
+        self.content.iter().any(ContentBlock::is_tool_use)
+    }
+
+    pub fn has_tool_result(&self) -> bool {
+        self.content.iter().any(ContentBlock::is_tool_result)
+    }
+
+    pub fn tool_uses(&self) -> Vec<&ContentBlock> {
+        self.content.iter().filter(|c| c.is_tool_use()).collect()
+    }
+
+    pub fn tool_results(&self) -> Vec<&ContentBlock> {
+        self.content.iter().filter(|c| c.is_tool_result()).collect()
+    }
+}
+
 fn default_type() -> String {
     "message".to_string()
 }
@@ -61,6 +79,36 @@ pub enum ContentBlock {
         content: Option<String>,
         is_error: Option<bool>,
     },
+}
+
+impl ContentBlock {
+    pub fn is_text(&self) -> bool {
+        matches!(self, ContentBlock::Text { .. })
+    }
+
+    pub fn is_thinking(&self) -> bool {
+        matches!(self, ContentBlock::Thinking { .. })
+    }
+
+    pub fn is_image(&self) -> bool {
+        matches!(self, ContentBlock::Image { .. })
+    }
+
+    pub fn is_tool_use(&self) -> bool {
+        matches!(self, ContentBlock::ToolUse { .. })
+    }
+
+    pub fn is_tool_result(&self) -> bool {
+        matches!(self, ContentBlock::ToolResult { .. })
+    }
+
+    pub fn get_tool_call_id(&self) -> Option<String> {
+        match self {
+            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

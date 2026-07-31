@@ -1,0 +1,10 @@
+[project]
+name = "sink-reference-genome"
+version = "0.1.0"
+description = "Ingest GRCh37 reference genome (FASTA + GTF) into the Iceberg data lake"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["datalake"]
+
+[tool.uv.sources]
+datalake = { workspace = true }

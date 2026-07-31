@@ -10,6 +10,7 @@
 use std::{sync::Arc, time::Duration, time::UNIX_EPOCH};
 
 use crate::context::ContextProvider;
+use crate::error::Result;
 use crate::message_ext::AgentMessageExt;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::ToolDefinition;
@@ -132,7 +133,7 @@ impl Agent {
     }
 
     /// Register a single tool.
-    pub fn register_tool(&mut self, registration: ToolRegistration) -> Result<(), AgentError> {
+    pub fn register_tool(&mut self, registration: ToolRegistration) -> Result<()> {
         self.toolset
             .register(registration)
             .map_err(AgentError::Tool)?;
@@ -140,10 +141,7 @@ impl Agent {
     }
 
     /// Register multiple tools at once.
-    pub fn register_tools(
-        &mut self,
-        registrations: Vec<ToolRegistration>,
-    ) -> Result<(), AgentError> {
+    pub fn register_tools(&mut self, registrations: Vec<ToolRegistration>) -> Result<()> {
         self.toolset
             .register_all(registrations)
             .map_err(AgentError::Tool)?;
@@ -187,7 +185,7 @@ impl Agent {
         self.lifecycle.is_running()
     }
 
-    pub fn inject_message(&mut self, user_content: Vec<ContentBlock>) -> Result<(), AgentError> {
+    pub fn inject_message(&mut self, user_content: Vec<ContentBlock>) -> Result<()> {
         let message = Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
@@ -359,6 +357,14 @@ impl Agent {
             let result = tokio::select! {
                 biased; // cancellation always takes priority
                 _ = cancelled.cancelled() => {
+                    // agent_workflow was dropped mid-execution. If the LLM
+                    // had already emitted tool_use blocks (saved to memory at
+                    // line ~494) but toolset.execute was interrupted before
+                    // recording tool_results, we now have orphaned tool_use
+                    // blocks. Patch memory immediately so every future
+                    // request — including the one triggered by the user's
+                    // next message — sees a well-formed history.
+                    self.patch_orphaned_tool_use().await;
                     self.lifecycle.set_aborted();
                     self.snapshot().await;
                     self.send_event(AgentEvent::Error("Task cancelled by user".into()));
@@ -450,12 +456,63 @@ impl Agent {
         }
     }
 
+    /// After a mid-workflow cancellation, the last assistant message may
+    /// contain `tool_use` blocks whose `tool_result` was never recorded
+    /// (because `agent_workflow` was dropped before `toolset.execute`
+    /// returned). This inserts stub `tool_result` messages into memory so
+    /// the conversation history always satisfies the Anthropic API contract.
+    async fn patch_orphaned_tool_use(&mut self) {
+        let Some(last_msg) = self
+            .memory
+            .items
+            .last()
+            .and_then(|item| item.messages.last())
+        else {
+            return;
+        };
+
+        let unresolved: Vec<String> = last_msg
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if unresolved.is_empty() {
+            return;
+        }
+
+        let stub = Message {
+            id: Uuid::new_v4().to_string(),
+            type_: "message".to_string(),
+            role: Role::User,
+            content: unresolved
+                .into_iter()
+                .map(|tc_id| ContentBlock::ToolResult {
+                    tool_use_id: tc_id,
+                    content: Some("Tool execution has been interrupted".to_string()),
+                    is_error: Some(true),
+                })
+                .collect(),
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+
+        tracing::debug!("patching {} orphaned tool_use blocks after cancellation", stub.content.len());
+        let _ = self.memory.remember(stub);
+    }
+
     /// Core agent workflow
     ///
     /// Basic process: build context -> request API -> execute tool calls -> append to memory.
     /// Compaction (if triggered) is handled transparently inside [`request`] — the
     /// context is rebuilt in place after memory is summarized.
-    async fn agent_workflow(&mut self, retry_feedback: Option<String>) -> Result<(), AgentError> {
+    async fn agent_workflow(&mut self, retry_feedback: Option<String>) -> Result<()> {
         if let Some(feedback) = retry_feedback {
             self.inject_message(vec![ContentBlock::Text { text: feedback }])
                 .unwrap();
@@ -584,7 +641,7 @@ impl Agent {
         }
     }
 
-    async fn build_context(&mut self) -> Result<Vec<Message>, AgentError> {
+    async fn build_context(&mut self) -> Result<Vec<Message>> {
         use crate::prompt::context::Context;
 
         let mut builder =
@@ -622,7 +679,7 @@ impl Agent {
         &mut self,
         mut context: Vec<Message>,
         allowed: Option<&[String]>,
-    ) -> Result<Message, AgentError> {
+    ) -> Result<Message> {
         let span = span!(Level::TRACE, "API Request");
         let _enter = span.enter();
 

@@ -26,6 +26,13 @@ GWAS VCF (public summary statistics)
     └──→ [GWAS sumstats] gwas.*            (Z/N/rsid summary statistics)
               │
               └──→ MiXeR / LDSC / MR nodes
+
+Ensembl GRCh37 (reference genome)
+    │
+    ├──→ [Contigs] reference.grch37_contigs        (chromosome metadata)
+    └──→ [Gene annotation] reference.grch37_genes   (structured GTF features)
+              │
+              └──→ SNP-to-gene mapping, gene-based analysis
 ```
 
 ## Existing docs
@@ -34,6 +41,7 @@ GWAS VCF (public summary statistics)
 |----------------|-------|-----|--------|
 | **LD matrix** | `ld_matrix.eur_chr{1..22}` | [ld_matrix.md](data_infra/ld_matrix.md) | ✅ Live |
 | **LD subgraph** | `mixer.eur_subgraph` | [subgraph.md](data_infra/subgraph.md) | ✅ Live (tag consistency fix pending) |
+| **Reference genome** | `reference.grch37_contigs`, `reference.grch37_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ Live |
 
 ## Pending docs
 
@@ -63,6 +71,15 @@ GWAS VCF (public summary statistics)
 - **Scale**: 267M rows, 2.3 GB
 - **Details**: [subgraph.md](data_infra/subgraph.md)
 
+### Reference genome (GRCh37)
+
+- **Tables**: `iceberg.reference.grch37_contigs`, `iceberg.reference.grch37_genes`
+- **Contigs**: `contig, length, md5` (25 rows, chromosomes 1–22, X, Y, MT)
+- **Genes**: 16 structured columns from Ensembl r87 GTF (2,613,765 features)
+- **Pipeline**: Ensembl FTP → per-chromosome FASTA + GTF → `sink_reference_genome` → Iceberg
+- **Archive**: `aliyun:autonomics-data/reference/grch37/`
+- **Details**: [reference_genome.md](data_infra/reference_genome.md)
+
 ### AF panel (pending)
 
 - **Table**: `iceberg.af.eur_af`
@@ -84,3 +101,4 @@ GWAS VCF (public summary statistics)
 | `lake_cli` | Data lake query / management / upload | `src/bin/lake_cli.rs` |
 | `sink_ld_matrix` | LD matrix TSV → Iceberg ingest | `infra/sink_ld_matrix/` |
 | `ld_matrix.sh` | 1000G VCF → PLINK2 LD computation | `infra/thousand_genomes/ld_matrix.sh` |
+| `sink_reference_genome` | GRCh37 FASTA + GTF → Iceberg ingest | `infra/sink_reference_genome/` |

@@ -7,6 +7,9 @@ use crate::tools::ToolError;
 
 use crate::memory::error::Error as MemoryError;
 
+pub type Result<T> = std::result::Result<T, Error>;
+pub type Error = AgentError;
+
 pub trait Retryable {
     fn is_retryable(&self) -> bool;
     fn retry_message(&self) -> String;
