@@ -6,6 +6,7 @@
 //! [`sink_iceberg`].
 
 pub mod bivariate_mixer;
+pub mod cpassoc;
 pub mod echo_node;
 pub mod hdl_l;
 pub mod lava;
@@ -32,6 +33,7 @@ pub mod univariate_mixer;
 pub mod viz;
 
 pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
+pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};
 pub use lava::{

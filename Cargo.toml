@@ -32,6 +32,8 @@ members = [
   "infra/sink_ld_matrix",
   "crates/visualization",
   "infra/sink_af",
+
+  "bio_crates/cpassoc",
 ]
 resolver = "3"
 

@@ -1401,6 +1401,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "cpassoc"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_distr 0.5.1",
+ "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1707,6 +1721,7 @@ dependencies = [
  "async-trait",
  "biofusion",
  "blake3",
+ "cpassoc",
  "datafusion",
  "datalake",
  "derive_more",
