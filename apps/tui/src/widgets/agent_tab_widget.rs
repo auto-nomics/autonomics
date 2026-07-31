@@ -1,8 +1,8 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    prelude::{StatefulWidget, Widget},
+    prelude::{Buffer, StatefulWidget, Widget},
     style::{Color, Modifier, Style},
-    widgets::{Block, Padding, Paragraph},
+    widgets::{Block, Padding, Paragraph, StatefulWidgetRef},
 };
 
 use crate::state::{AgentStatus, AgentTabState, InputMode};
@@ -16,14 +16,15 @@ use crate::widgets::{
 /// Composite widget that renders the entire Agent tab: status bar, chat area with
 /// scrollbar, borderless input area, and a keybinding hint footer.
 pub struct AgentTabWidget<'a> {
-    pub state: &'a mut AgentTabState,
     /// Active model name shown on the composer border.
     pub active_model: Option<&'a str>,
 }
 
-impl Widget for AgentTabWidget<'_> {
-    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
-        let task_count = self.state.tool_tasks.len() as u16;
+impl StatefulWidgetRef for AgentTabWidget<'_> {
+    type State = AgentTabState;
+
+    fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
+        let task_count = ts.tool_tasks.len() as u16;
         let task_constraint = if task_count > 0 {
             Constraint::Length(task_count + 2) // +2 for border
         } else {
@@ -34,14 +35,14 @@ impl Widget for AgentTabWidget<'_> {
         // (word-wrapped), capped at MAX_INPUT_ROWS text rows. The widget draws
         // a rounded border box, so reserve +2 rows (top/bottom) and subtract
         // the border columns (+ gutter) from the wrap width.
-        let running = self.state.status != crate::state::AgentStatus::Idle;
+        let running = ts.status != crate::state::AgentStatus::Idle;
         // area.width − 2 (box borders) − 2 (❯ prefix gutter).
         let text_width = area.width.saturating_sub(PROMPT_GUTTER + 2);
-        let input_text_rows = if running && self.state.input.is_empty() {
+        let input_text_rows = if running && ts.input.is_empty() {
             // While the agent runs, keep the composer collapsed to one text row.
             1
         } else {
-            self.state.input.display_height(text_width)
+            ts.input.display_height(text_width)
         };
         let input_constraint = Constraint::Length(input_text_rows + 2);
 
@@ -55,8 +56,6 @@ impl Widget for AgentTabWidget<'_> {
                 Constraint::Length(1), // Footer hints
             ])
             .split(area);
-
-        let ts = &mut *self.state;
 
         // ── StatusBar ──
         let status_bar = StatusBar {

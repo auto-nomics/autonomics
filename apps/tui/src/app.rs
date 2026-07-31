@@ -747,6 +747,7 @@ impl App {
 
         match self.state.main_tab_state {
             MainTabState::AgentTab => {
+                use ratatui::widgets::StatefulWidgetRef;
                 // Load the current model name from the shared ArcSwapOption.
                 // `load_full()` returns an owned Option<Arc<Model>> (one refcount
                 // bump), so the immutable borrow of `active_model` is released
@@ -757,10 +758,9 @@ impl App {
                     .load_full()
                     .map(|m| m.model_info.model_name.clone());
                 let widget = AgentTabWidget {
-                    state: &mut self.state.agent_tab_state,
                     active_model: model_name.as_deref(),
                 };
-                frame.render_widget(widget, areas[1]);
+                widget.render_ref(areas[1], frame.buffer_mut(), &mut self.state.agent_tab_state);
 
                 // Position the terminal hardware cursor over the chat input.
                 // The xAI TextArea renders only text; the host must place the

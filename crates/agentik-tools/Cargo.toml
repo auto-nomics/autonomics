@@ -23,6 +23,7 @@ regex = "1"
 ignore = "0.4"
 reqwest = { version = "0.13", features = ["json", "gzip", "brotli"] }
 html2text = "0.14"
+base64 = "0.22"
 
 [dev-dependencies]
 dotenvy = "0.15"

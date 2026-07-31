@@ -9,12 +9,29 @@ use crate::{EutilsClient, format::format_esearch};
 
 #[tool(
     name = "pubmed_search",
-    description = "Search PubMed by keyword. Returns matching PMIDs, total count, \
-                  and optional history info for chaining into pubmed_fetch or pubmed_summary. \
-                  Supports date filters, sort orders, and pagination."
+    description = "Search PubMed with Entrez query syntax. Returns matching PMIDs, \
+                  total count, and history info for chaining into pubmed_fetch or \
+                  pubmed_summary. Supports date filters, sort orders, and pagination. \
+                  \
+                  The `term` MUST use structured Entrez query syntax, NOT plain keywords. \
+                  Always qualify search terms with field tags for precise results. \
+                  \
+                  Field tags: [Title/Abstract], [Title], [Author], [MeSH], \
+                  [Publication Type], [Journal], [Affiliation], [Year]. \
+                  \
+                  Boolean operators (uppercase): AND, OR, NOT. \
+                  Parentheses group sub-expressions. \
+                  \
+                  Examples: \
+                  • \"cancer immunotherapy[Title/Abstract]\" \
+                  • \"CRISPR[Title/Abstract] AND review[Publication Type]\" \
+                  • \"(cancer OR neoplasm)[Title] AND Smith J[Author]\" \
+                  • \"brca1[Title/Abstract] AND 2020:2024[Year]"
 )]
 pub struct PubmedSearchInput {
-    #[desc = "PubMed search query using Entrez syntax (e.g. 'cancer immunotherapy[Title/Abstract]')."]
+    #[desc = "Entrez query expression. Use field tags and boolean operators (see tool \
+             description). Do NOT send plain space-separated keywords. \
+             Example: '(cancer OR tumor)[Title/Abstract] AND review[Publication Type]'"]
     pub term: String,
     #[desc = "Maximum number of results to return (default 20, max 10000)."]
     pub retmax: Option<u32>,

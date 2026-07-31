@@ -127,6 +127,7 @@ dependencies = [
  "agentik-sdk",
  "apply-patch",
  "async-trait",
+ "base64 0.22.1",
  "dotenvy",
  "glob",
  "html2text",
