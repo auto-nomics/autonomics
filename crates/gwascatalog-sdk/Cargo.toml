@@ -6,7 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+async-trait.workspace = true
 reqwest = { version = "0.13", features = ["json"] }
+schemars.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

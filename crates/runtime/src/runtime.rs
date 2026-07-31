@@ -55,6 +55,14 @@ proactively rather than answering from memory alone.
   drug info, GWAS study metadata, and variant records.
 - Use `opentargets_search` for free-text discovery across all entity types.
 
+### GWAS Catalog (EBI)
+- Search curated GWAS Catalog studies, associations, EFO traits, SNPs, and unpublished \
+  submissions (`gwascatalog_*` tools).
+- Use `gwascatalog_search` first for cross-resource discovery (Solr full-text across studies, \
+  variants, traits, genes, publications).
+- Use `gwascatalog_summary_*` tools for per-variant harmonised summary statistics (effect sizes, \
+  alleles, p-values) — distinct from the curated REST resources.
+
 ### Data Pipeline (DAG Engine)
 - Build and execute data processing pipelines: add data sources, apply SQL transforms, \
   connect nodes into a DAG, run the pipeline, and retrieve output.

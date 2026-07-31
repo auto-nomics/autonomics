@@ -12,6 +12,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 opengwas = { path = "../opengwas" }
 eutils = { path = "../eutils" }
 opentargets = { path = "../opentargets" }
+gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
 datalake = { path = "../datalake" }

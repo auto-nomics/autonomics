@@ -3081,6 +3081,7 @@ dependencies = [
  "agentik-sdk",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "datafusion",
@@ -3466,7 +3467,12 @@ dependencies = [
 name = "gwascatalog-sdk"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
  "reqwest 0.13.4",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -6822,6 +6828,7 @@ dependencies = [
  "datalake-tools",
  "eutils",
  "fs",
+ "gwascatalog-sdk",
  "opengwas",
  "opentargets",
  "thiserror 2.0.19",
