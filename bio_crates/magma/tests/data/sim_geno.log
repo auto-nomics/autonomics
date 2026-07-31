@@ -1,0 +1,33 @@
+PLINK v2.0.0-a.7.1LM AVX2 Intel (4 May 2026)
+Options in effect:
+  --make-bed
+  --map sim_geno.map
+  --out sim_geno
+  --ped sim_geno.ped
+
+Hostname: archlinux
+Working directory: /mnt/projects/autonomics_projects/port-magma/bio_crates/magma/tests/data
+Start time: Fri Jul 31 18:34:36 2026
+
+Random number seed: 1785494076
+31898 MiB RAM detected, ~17185 available; reserving 15949 MiB for main
+workspace.
+Using up to 12 threads (change this with --threads).
+--pedmap: 500 variants in .map file.
+--pedmap: 200 samples present, genotypes extracted to
+sim_geno-temporary.bed.smaj .
+Transposing sample-major .bed to sim_geno-temporary.pgen , and setting major
+alleles to provisional-REF.
+Transpose complete.
+--pedmap: sim_geno-temporary.pgen + sim_geno-temporary.pvar +
+sim_geno-temporary.psam written. .bed.smaj and .fam.tmp temporary files
+deleted.
+200 samples (104 females, 96 males; 200 founders) loaded from
+sim_geno-temporary.psam.
+500 variants loaded from sim_geno-temporary.pvar.
+1 binary phenotype loaded (106 cases, 94 controls).
+Writing sim_geno.fam ... done.
+Writing sim_geno.bim ... done.
+Writing sim_geno.bed ... done.
+
+End time: Fri Jul 31 18:34:36 2026

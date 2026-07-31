@@ -1,0 +1,32 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--bfile /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22
+	--pval /tmp/gwas_height_chr22.txt ncol=N snp-id=SNP pval=P
+	--gene-annot /tmp/real_annot.genes.annot
+	--out /tmp/real_gene_pval
+
+Start time is 18:49:01, Friday 31 Jul 2026
+
+Loading PLINK-format data...
+Reading file /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22.fam... 489 individuals read
+Reading file /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22.bim... 141123 SNPs read
+Preparing file /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22.bed... 
+
+Reading SNP p-values from file /tmp/gwas_height_chr22.txt... 
+	detected 3 variables in file
+	using variable: SNP (SNP id)
+	using variable: P (p-value)
+	using variable: N (sample size; discarding SNPs with N < 50)
+	read 15917 lines from file, containing valid SNP p-values for 15916 SNPs in data (99.99% of lines, 11.28% of SNPs in data)
+Loading gene annotation from file /tmp/real_annot.genes.annot... 
+	442 gene definitions read from file
+	found 432 genes containing valid SNPs in genotype data
+
+
+Starting gene analysis... 
+	using model: SNPwise-mean
+	writing gene analysis results to file /tmp/real_gene_pval.genes.out
+	writing intermediate output to file /tmp/real_gene_pval.genes.raw
+
+
+End time is 18:53:13, Friday 31 Jul 2026 (elapsed: 00:04:12)

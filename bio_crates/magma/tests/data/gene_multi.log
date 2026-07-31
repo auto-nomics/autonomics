@@ -1,0 +1,32 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--bfile sim_geno
+	--gene-annot annot.genes.annot
+	--gene-model multi=all
+	--out gene_multi
+
+Start time is 18:35:36, Friday 31 Jul 2026
+
+Loading PLINK-format data...
+Reading file sim_geno.fam... 200 individuals read
+	phenotype is binary, values of -9 and 0 will be considered missing values
+Reading file sim_geno.bim... 500 SNPs read
+Preparing file sim_geno.bed... 
+
+Filtering phenotype/covariate missing values... 200 individuals remaining
+Loading gene annotation from file annot.genes.annot... 
+	20 gene definitions read from file
+	found 20 genes containing valid SNPs in genotype data
+
+
+Starting gene analysis... 
+	using multi-model containing:
+		principal components regression
+		SNPwise-mean
+		SNPwise-top
+	aggregating rare variants into automatic burden score per gene, for SNPs with both MAF <= 0.01 and MAC <= 100 (normalized, max. 25 variants per score)
+	writing gene analysis results to file gene_multi.genes.out
+	writing intermediate output to file gene_multi.genes.raw
+
+
+End time is 18:35:37, Friday 31 Jul 2026 (elapsed: 00:00:01)

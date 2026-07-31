@@ -4626,6 +4626,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "magma"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rand_distr 0.5.1",
+ "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

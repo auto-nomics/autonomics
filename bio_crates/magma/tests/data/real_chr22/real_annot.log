@@ -1,0 +1,21 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--annotate window=35
+	--snp-loc /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22.bim
+	--gene-loc /tmp/gene_loc_chr22.txt
+	--out /tmp/real_annot
+
+Start time is 18:48:58, Friday 31 Jul 2026
+
+Starting annotation...
+Reading gene locations from file /tmp/gene_loc_chr22.txt... 
+	adding window: 35000bp
+	442 gene locations read from file
+	chromosome 22: 442 genes
+Reading SNP locations from file /mnt/disk3/autonomics_tree/port_sldsc/reference/ldsc_data/1000G_EUR_Phase3_plink/1000G.EUR.QC.22.bim... 
+	141123 SNP locations read from file
+	of those, 107196 (75.96%) mapped to at least one gene
+Writing annotation to file /tmp/real_annot.genes.annot
+
+
+End time is 18:48:58, Friday 31 Jul 2026 (elapsed: 00:00:00)

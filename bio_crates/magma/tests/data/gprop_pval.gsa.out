@@ -1,0 +1,8 @@
+# MEAN_SAMPLE_SIZE = 50000
+# TOTAL_GENES = 20
+# TEST_DIRECTION = one-sided, positive (set), two-sided (covar)
+# CONDITIONED_INTERNAL = gene size, gene density, inverse mac, log(gene size), log(gene density), log(inverse mac)
+VARIABLE        TYPE  NGENES         BETA     BETA_STD           SE            P
+LENGTH         COVAR      20  -7.7378e-07    -0.022269   7.0533e-06      0.91386
+EXPRESSION     COVAR      20       -0.131     -0.39631     0.057577     0.035354
+GC_CONTENT     COVAR      20    -0.016337   -0.0014938       2.1985      0.99415
