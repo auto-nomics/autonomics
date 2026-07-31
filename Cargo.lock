@@ -1721,6 +1721,7 @@ dependencies = [
  "async-trait",
  "biofusion",
  "blake3",
+ "cpassoc",
  "datafusion",
  "datalake",
  "derive_more",
