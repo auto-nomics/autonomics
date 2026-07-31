@@ -32,6 +32,7 @@ use crate::{
 pub enum FileFormat {
     // DataFusion native
     Csv,
+    Tsv,
     Parquet,
     // biofusion bioinformatics
     Vcf,
@@ -83,6 +84,8 @@ impl FileFormat {
             (".bb", FileFormat::BigBed),
             (".bigbed", FileFormat::BigBed),
             (".csv", FileFormat::Csv),
+            (".tsv.gz", FileFormat::Tsv),
+            (".tsv", FileFormat::Tsv),
             (".parquet", FileFormat::Parquet),
         ];
         suffixes
@@ -240,8 +243,26 @@ async fn read_file(
     fmt: FileFormat,
 ) -> Result<DataFrame, DagError> {
     use FileFormat::*;
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     let df = match fmt {
         Csv => ctx.read_csv(path, CsvReadOptions::default()).await,
+        Tsv => {
+            // DataFusion's listing layer rejects files whose extension doesn't
+            // match the format's default (`.csv`). For TSV we must both set the
+            // tab delimiter AND override the expected extension to `.tsv`
+            // (or `.tsv.gz` for gzipped files) so the path passes validation.
+            let lower = path.to_lowercase();
+            let (ext, compression) = if lower.ends_with(".tsv.gz") {
+                (".tsv.gz", FileCompressionType::GZIP)
+            } else {
+                (".tsv", FileCompressionType::UNCOMPRESSED)
+            };
+            let opts = CsvReadOptions::default()
+                .delimiter(b'\t')
+                .file_extension(ext)
+                .file_compression_type(compression);
+            ctx.read_csv(path, opts).await
+        }
         Parquet => ctx.read_parquet(path, ParquetReadOptions::default()).await,
         Vcf => ctx.read_vcf(path, BioReadOptions::default()).await,
         Bcf => ctx.read_bcf(path, BioReadOptions::default()).await,

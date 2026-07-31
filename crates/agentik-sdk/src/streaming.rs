@@ -85,9 +85,20 @@ pub struct MessageStream {
     /// Event handlers for different event types
     event_handlers: Arc<Mutex<HashMap<EventType, Vec<EventHandler>>>>,
 
-    /// Broadcast channel for distributing events to handlers
-    event_sender: broadcast::Sender<MessageStreamEvent>,
-
+    // NOTE: The broadcast sender is intentionally NOT stored here.
+    // The background task holds the sole sender clone. When it finishes,
+    // the clone is dropped, the broadcast channel closes, and
+    // `BroadcastStream::poll_next` reliably returns `Ready(None)` — which
+    // is the primary termination signal for async-iteration consumers.
+    //
+    // Previously, keeping a sender alive in this struct prevented the
+    // channel from ever closing. Combined with a race in the watch-channel
+    // fallback (the `changed()` future is created-and-dropped per
+    // `poll_next`, unregistering the waker before the notification arrives),
+    // this caused consumers to hang permanently after the background task
+    // finished — especially with non-standard providers (e.g. Zhipu GLM)
+    // that send `MessageStart` + `MessageStop` with no content blocks in a
+    // single burst.
     /// Stream for events from the underlying HTTP stream
     #[pin]
     event_stream: BroadcastStream<MessageStreamEvent>,
@@ -142,7 +153,9 @@ impl MessageStream {
         let cm = current_message.clone();
         let handlers = event_handlers.clone();
         let end = ended.clone();
-        let tx = event_sender.clone();
+        // The background task owns the sole sender. When it finishes, the
+        // sender is dropped and the broadcast channel closes.
+        let tx = event_sender;
 
         tokio::spawn(async move {
             // `running_final` mirrors `final_message` through the
@@ -154,6 +167,9 @@ impl MessageStream {
                 MessageStream::dispatch_event(event, &handlers, &cm);
                 let _ = tx.send(event.clone());
             }
+            // Drop the sender before signalling completion so that
+            // BroadcastStream consumers see Ready(None) immediately.
+            drop(tx);
             let _ = completion_sender.send(running_final.ok_or_else(|| {
                 AnthropicError::StreamError("Stream ended without message".to_string())
             }));
@@ -164,7 +180,6 @@ impl MessageStream {
         Self {
             current_message,
             event_handlers,
-            event_sender,
             event_stream: BroadcastStream::new(event_receiver),
             completion_sender: None,
             completion_receiver,
@@ -255,7 +270,7 @@ impl MessageStream {
         let ended_bg = ended.clone();
         let errored_bg = errored.clone();
         let aborted_bg = aborted.clone();
-        let event_sender_bg = event_sender.clone();
+        let event_sender_bg = event_sender;
 
         let bg_handle = Arc::new(Mutex::new(None));
         let bg_handle_clone = bg_handle.clone();
@@ -426,6 +441,14 @@ impl MessageStream {
                 }
             }
 
+            // Drop the broadcast sender so the channel closes immediately.
+            // This guarantees that any consumer parked on
+            // `BroadcastStream::poll_next` receives `Ready(None)` without
+            // having to wait for the drain loop or the watch-channel
+            // fallback. The drain loop below only touches the HTTP body
+            // (`http_stream`), not the broadcast channel.
+            drop(event_sender_bg);
+
             // Gracefully drain remaining HTTP body bytes to prevent
             // sending RST_STREAM(CANCEL) to the server.  The background
             // task has already accumulated the full message; we just need
@@ -479,7 +502,6 @@ impl MessageStream {
         Ok(Self {
             current_message,
             event_handlers,
-            event_sender,
             event_stream: BroadcastStream::new(event_receiver),
             completion_sender: None, // Already consumed by the task
             completion_receiver,
@@ -1622,5 +1644,40 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
             count += 1;
         }
         assert_eq!(count, 5, "all events should be drained before stream ends");
+    }
+
+    /// Regression test for the Zhipu GLM hang: when a provider sends only
+    /// `MessageStart` + `MessageStop` in a single burst (no content blocks),
+    /// the consumer must drain both events and then receive `None` from
+    /// `poll_next` — not hang forever waiting for a watch-channel wakeup
+    /// that was unregistered when the `changed()` future was dropped.
+    #[tokio::test]
+    async fn poll_next_exits_on_empty_burst_response() {
+        let mut stream = MessageStream::from_events(
+            vec![
+                MessageStreamEvent::MessageStart {
+                    message: sample_message("msg_empty", 0, vec![]),
+                },
+                MessageStreamEvent::MessageStop,
+            ],
+            sample_message("msg_empty", 0, vec![]),
+        );
+
+        use futures::StreamExt;
+        let mut count = 0u32;
+        // If the bug is present, this loop will hang forever.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while let Some(event) = stream.next().await {
+                assert!(event.is_ok(), "event should be Ok");
+                count += 1;
+            }
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "stream consumption timed out — consumer hung"
+        );
+        assert_eq!(count, 2, "should receive MessageStart and MessageStop");
     }
 }
