@@ -37,6 +37,7 @@ lcv = { path = "../../bio_crates/lcv" }
 mtag = { path = "../../bio_crates/mtag" }
 mrlap = { path = "../../bio_crates/mrlap" }
 cpassoc = { path = "../../bio_crates/cpassoc" }
+magma = { path = "../../bio_crates/magma" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }

@@ -28,6 +28,9 @@ use crate::nodes::{
     ldsc_sldsc::LdscSldscNodeFactory,
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
+    magma::{
+        MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
+    },
     mr::MrNodeFactory,
     mrlap::MrlapNodeFactory,
     mtag::MtagNodeFactory,
@@ -186,6 +189,10 @@ impl NodeRegistry {
         registry.register(Box::new(VizNodeFactory {}));
         registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
         registry.register(Box::new(OpentargetsSearchNodeFactory {}));
+        registry.register(Box::new(MagmaAnnotateNodeFactory {}));
+        registry.register(Box::new(MagmaGeneNodeFactory {}));
+        registry.register(Box::new(MagmaSetNodeFactory {}));
+        registry.register(Box::new(MagmaMetaNodeFactory {}));
         registry
     }
 
