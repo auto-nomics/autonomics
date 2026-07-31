@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction};
-use agentik_sdk::types::{
-    ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock,
-};
+use agentik_sdk::types::{ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::Engine as _;
 
@@ -78,11 +76,7 @@ async fn read_text(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     // Stat for total size reporting.
-    let total_size = op
-        .stat(path)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let total_size = op.stat(path).await.map(|m| m.content_length()).unwrap_or(0);
 
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
@@ -125,8 +119,9 @@ async fn read_text(
     if out.is_empty() {
         if start >= total_lines {
             out.push_str(&format!(
-                "(offset {} exceeds file length; file has {total_lines} lines)"
-            , offset.unwrap_or(1)));
+                "(offset {} exceeds file length; file has {total_lines} lines)",
+                offset.unwrap_or(1)
+            ));
         }
     }
 
@@ -159,11 +154,7 @@ async fn read_image(
     display_path: &str,
     ext: &str,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op
-        .stat(path)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let total_size = op.stat(path).await.map(|m| m.content_length()).unwrap_or(0);
 
     if total_size == 0 {
         return Ok(AgentToolResult::error(format!(
@@ -206,11 +197,7 @@ async fn read_notebook(
     path: &str,
     display_path: &str,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op
-        .stat(path)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let total_size = op.stat(path).await.map(|m| m.content_length()).unwrap_or(0);
 
     if total_size == 0 {
         return Ok(AgentToolResult::error(format!(

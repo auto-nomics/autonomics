@@ -237,13 +237,11 @@ impl RestAssociation {
         self.loci
             .iter()
             .flat_map(|l| {
-                l.author_reported_genes
-                    .iter()
-                    .flat_map(|g| {
-                        g.entrez_gene_ids
-                            .iter()
-                            .filter_map(|id| id.entrez_gene_id.as_deref())
-                    })
+                l.author_reported_genes.iter().flat_map(|g| {
+                    g.entrez_gene_ids
+                        .iter()
+                        .filter_map(|id| id.entrez_gene_id.as_deref())
+                })
             })
             .collect()
     }
@@ -537,9 +535,7 @@ impl GwasCatalogClient {
                 "/studies/search/findByEfoTrait",
                 vec![("efoTrait", t.clone())],
             ),
-            StudyQuery::EfoUri(uri) => {
-                ("/studies/search/findByEfoUri", vec![("uri", uri.clone())])
-            }
+            StudyQuery::EfoUri(uri) => ("/studies/search/findByEfoUri", vec![("uri", uri.clone())]),
             StudyQuery::Pmid(pmid) => (
                 "/studies/search/findByPublicationIdPubmedId",
                 vec![("pubmedId", pmid.clone())],
@@ -586,9 +582,10 @@ impl GwasCatalogClient {
         size: Option<u32>,
     ) -> Result<RestPage<EmbeddedRestAssociations>> {
         let (path, extra) = match query {
-            AssociationQueryKind::RsId(rs) => {
-                ("/associations/search/findByRsId", vec![("rsId", rs.clone())])
-            }
+            AssociationQueryKind::RsId(rs) => (
+                "/associations/search/findByRsId",
+                vec![("rsId", rs.clone())],
+            ),
             AssociationQueryKind::StudyAccession(acc) => (
                 "/associations/search/findByStudyAccessionId",
                 vec![("accessionId", acc.clone())],
@@ -613,8 +610,7 @@ impl GwasCatalogClient {
 
     /// `GET /associations/{id}` — single association by numeric ID.
     pub async fn rest_get_association(&self, id: u64) -> Result<RestAssociation> {
-        self.rest_get(&format!("/associations/{id}"), vec![])
-            .await
+        self.rest_get(&format!("/associations/{id}"), vec![]).await
     }
 
     /// `GET /efoTraits/search/findBy*` — search EFO traits.
@@ -629,10 +625,7 @@ impl GwasCatalogClient {
                 "/efoTraits/search/findByShortForm",
                 vec![("shortForm", sf.clone())],
             ),
-            EfoQuery::Uri(uri) => (
-                "/efoTraits/search/findByEfoUri",
-                vec![("uri", uri.clone())],
-            ),
+            EfoQuery::Uri(uri) => ("/efoTraits/search/findByEfoUri", vec![("uri", uri.clone())]),
             EfoQuery::Trait(t) => (
                 "/efoTraits/search/findByEfoTrait",
                 vec![("trait", t.clone())],
@@ -767,7 +760,8 @@ impl GwasCatalogClient {
         if let Some(v) = &filter.trait_ {
             pairs.push(("trait", v.clone()));
         }
-        self.rest_get("/unpublished-studies/search/filter", pairs).await
+        self.rest_get("/unpublished-studies/search/filter", pairs)
+            .await
     }
 }
 

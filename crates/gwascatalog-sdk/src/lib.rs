@@ -35,9 +35,7 @@ pub mod gwas_catalog {
 
 pub use client::{GwasCatalogApi, GwasCatalogClient};
 pub use error::{GwasCatalogError, Result};
-pub use rest::{
-    EfoTrait, RestAssociation, RestPage, RestStudy, Snp, UnpublishedStudy,
-};
+pub use rest::{EfoTrait, RestAssociation, RestPage, RestStudy, Snp, UnpublishedStudy};
 pub use search::{SearchDoc, SearchFilter, SearchResponse};
 pub use summary_stats::{
     AssociationQuery, ChromosomeAssociationQuery, PaginatedResponse, PaginationQuery, RevealMode,

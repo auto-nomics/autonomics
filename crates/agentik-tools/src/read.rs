@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use agentik_sdk::types::{ToolResult, ToolResultBlock, ToolResultContent};
 use agentik_sdk::types::ToolImageSource;
+use agentik_sdk::types::{ToolResult, ToolResultBlock, ToolResultContent};
 use async_trait::async_trait;
 use base64::Engine as _;
 use tokio::fs;
@@ -146,11 +146,7 @@ async fn read_text(
 
 // ─────────────────────────── image ───────────────────────────
 
-async fn read_image(
-    path: &Path,
-    file_path: &str,
-    ext: &str,
-) -> Result<ToolResult, ToolError> {
+async fn read_image(path: &Path, file_path: &str, ext: &str) -> Result<ToolResult, ToolError> {
     let bytes = match fs::read(path).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -199,10 +195,7 @@ fn image_media_type(ext: &str) -> &'static str {
 
 // ──────────────────────── notebook (.ipynb) ────────────────────────
 
-async fn read_notebook(
-    path: &Path,
-    file_path: &str,
-) -> Result<ToolResult, ToolError> {
+async fn read_notebook(path: &Path, file_path: &str) -> Result<ToolResult, ToolError> {
     let raw = match fs::read_to_string(path).await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -252,12 +245,9 @@ async fn read_notebook(
 
             // Show outputs for code cells.
             if cell_type == "code" {
-                if let Some(outputs) = cell.get("outputs").and_then(|o| o.as_array())
-                {
+                if let Some(outputs) = cell.get("outputs").and_then(|o| o.as_array()) {
                     for output in outputs {
-                        if let Some(text) =
-                            output.get("text").and_then(|t| t.as_str())
-                        {
+                        if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
                             out.push_str("[output]\n");
                             out.push_str(text);
                             if !text.ends_with('\n') {
@@ -391,9 +381,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("agentik_read_test.png");
         // Minimal 1×1 PNG.
-        let png_bytes: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        ];
+        let png_bytes: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         std::fs::write(&path, png_bytes).unwrap();
         let tool = ReadTool;
         let result = tool

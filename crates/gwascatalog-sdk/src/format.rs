@@ -1,11 +1,11 @@
 //! Render SDK responses into clean, LLM-friendly Markdown.
 
 use crate::rest::{
-    EmbeddedRestAssociations, EmbeddedRestStudies, EmbeddedEfoTraits, EmbeddedSnps,
-    EmbeddedUnpublishedStudies, EfoTrait, RestAssociation, RestStudy, Snp, UnpublishedStudy,
+    EfoTrait, EmbeddedEfoTraits, EmbeddedRestAssociations, EmbeddedRestStudies, EmbeddedSnps,
+    EmbeddedUnpublishedStudies, RestAssociation, RestStudy, Snp, UnpublishedStudy,
 };
 use crate::search::SearchResponse;
-use crate::summary_stats::{Association, PaginatedResponse, EmbeddedAssociations};
+use crate::summary_stats::{Association, EmbeddedAssociations, PaginatedResponse};
 
 // ── Solr Search ─────────────────────────────────────────────────────────────
 
@@ -169,14 +169,14 @@ pub fn format_rest_efo_traits(embedded: &EmbeddedEfoTraits) -> String {
         return "No EFO traits found.\n".to_string();
     }
     let mut out = String::with_capacity(2048);
-    out.push_str(&format!(
-        "**{} EFO traits**\n\n",
-        embedded.efo_traits.len()
-    ));
+    out.push_str(&format!("**{} EFO traits**\n\n", embedded.efo_traits.len()));
     out.push_str("| Trait | Short Form | URI |\n");
     out.push_str("|-------|------------|-----|\n");
     for t in &embedded.efo_traits {
-        out.push_str(&format!("| {} | {} | {} |\n", t.trait_name, t.short_form, t.uri));
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            t.trait_name, t.short_form, t.uri
+        ));
     }
     out
 }
@@ -195,7 +195,9 @@ pub fn format_rest_snps(embedded: &EmbeddedSnps) -> String {
     for s in &embedded.single_nucleotide_polymorphisms {
         let loc = s.primary_location();
         let chrom = loc.map(|l| l.chromosome_name.as_str()).unwrap_or("-");
-        let pos = loc.map(|l| l.chromosome_position.to_string()).unwrap_or_default();
+        let pos = loc
+            .map(|l| l.chromosome_position.to_string())
+            .unwrap_or_default();
         let region = loc
             .and_then(|l| l.region.as_ref())
             .and_then(|r| r.name.as_deref())
@@ -297,4 +299,73 @@ fn format_alleles(a: &Association) -> String {
     let ea = a.effect_allele.as_deref().unwrap_or("?");
     let oa = a.other_allele.as_deref().unwrap_or("?");
     format!("{ea} / {oa}")
+}
+
+// ── Download ───────────────────────────────────────────────────────────────
+
+/// Format download results (structured as `{ accession, count, files, errors? }`).
+pub fn format_download(value: &serde_json::Value) -> String {
+    let count = value.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let accession = value
+        .get("accession")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let files = value.get("files").and_then(|v| v.as_array());
+    let errors = value.get("errors").and_then(|v| v.as_array());
+
+    let mut out = format!("Downloaded **{count}** file(s) for **{accession}**\n\n");
+
+    if let Some(files) = files {
+        if !files.is_empty() {
+            out.push_str("| File | Path | Size |\n");
+            out.push_str("|------|------|------|\n");
+            for f in files {
+                let filename = str_or(f, "filename", "-");
+                let path = str_or(f, "path", "-");
+                let size = f.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                out.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    filename,
+                    path,
+                    format_bytes(size)
+                ));
+            }
+        }
+    }
+
+    if let Some(errs) = errors {
+        if !errs.is_empty() {
+            out.push_str(&format!("\n**{} error(s):**\n\n", errs.len()));
+            for e in errs {
+                let file = str_or(e, "filename", "-");
+                let msg = str_or(e, "error", "-");
+                out.push_str(&format!("- **{file}**: {msg}\n"));
+            }
+        }
+    }
+
+    out
+}
+
+fn str_or<'a>(v: &'a serde_json::Value, key: &str, default: &'a str) -> &'a str {
+    v.get(key).and_then(|v| v.as_str()).unwrap_or(default)
+}
+
+/// Format bytes into a human-readable string.
+fn format_bytes(bytes: u64) -> String {
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }

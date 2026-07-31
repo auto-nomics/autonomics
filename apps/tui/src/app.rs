@@ -760,7 +760,11 @@ impl App {
                 let widget = AgentTabWidget {
                     active_model: model_name.as_deref(),
                 };
-                widget.render_ref(areas[1], frame.buffer_mut(), &mut self.state.agent_tab_state);
+                widget.render_ref(
+                    areas[1],
+                    frame.buffer_mut(),
+                    &mut self.state.agent_tab_state,
+                );
 
                 // Position the terminal hardware cursor over the chat input.
                 // The xAI TextArea renders only text; the host must place the

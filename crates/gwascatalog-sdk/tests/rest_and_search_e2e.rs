@@ -6,11 +6,9 @@
 //! ```
 
 use gwascatalog_sdk::{
-    rest::{
-        AssociationQueryKind, EfoQuery, SnpQuery, StudyQuery, UnpublishedFilter,
-    },
-    search::SearchFilter,
     GwasCatalogClient,
+    rest::{AssociationQueryKind, EfoQuery, SnpQuery, StudyQuery, UnpublishedFilter},
+    search::SearchFilter,
 };
 
 fn client() -> GwasCatalogClient {
@@ -68,10 +66,7 @@ async fn search_with_genomic_filter() {
 #[tokio::test]
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_list_studies() {
-    let resp = client()
-        .rest_studies(Some(0), Some(2))
-        .await
-        .unwrap();
+    let resp = client().rest_studies(Some(0), Some(2)).await.unwrap();
     assert!(resp.page.total_elements > 0);
 }
 
@@ -79,10 +74,7 @@ async fn rest_list_studies() {
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_find_study_by_accession() {
     // findByAccessionId returns a flat entity, so use the direct GET endpoint
-    let study = client()
-        .rest_get_study("GCST005038")
-        .await
-        .unwrap();
+    let study = client().rest_get_study("GCST005038").await.unwrap();
     assert_eq!(study.accession_id, "GCST005038");
 }
 
@@ -90,11 +82,7 @@ async fn rest_find_study_by_accession() {
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_find_studies_by_pmid() {
     let resp = client()
-        .rest_find_studies(
-            &StudyQuery::Pmid("21041247".into()),
-            Some(0),
-            Some(5),
-        )
+        .rest_find_studies(&StudyQuery::Pmid("21041247".into()), Some(0), Some(5))
         .await
         .unwrap();
     let embedded = resp._embedded.unwrap();
@@ -134,10 +122,7 @@ async fn rest_find_associations_by_rsid() {
 #[tokio::test]
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_get_efo_trait() {
-    let trait_ = client()
-        .rest_get_efo_trait("EFO_0004343")
-        .await
-        .unwrap();
+    let trait_ = client().rest_get_efo_trait("EFO_0004343").await.unwrap();
     assert_eq!(trait_.short_form, "EFO_0004343");
     assert!(!trait_.trait_name.is_empty());
 }
@@ -146,11 +131,7 @@ async fn rest_get_efo_trait() {
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_find_efo_traits_by_name() {
     let resp = client()
-        .rest_find_efo_traits(
-            &EfoQuery::Trait("body mass index".into()),
-            Some(0),
-            Some(5),
-        )
+        .rest_find_efo_traits(&EfoQuery::Trait("body mass index".into()), Some(0), Some(5))
         .await
         .unwrap();
     let embedded = resp._embedded.unwrap();
@@ -170,11 +151,7 @@ async fn rest_get_snp() {
 #[ignore = "hits the live GWAS Catalog REST API"]
 async fn rest_find_snp_by_gene() {
     let resp = client()
-        .rest_find_snps(
-            &SnpQuery::Gene("BRCA1".into()),
-            Some(0),
-            Some(3),
-        )
+        .rest_find_snps(&SnpQuery::Gene("BRCA1".into()), Some(0), Some(3))
         .await
         .unwrap();
     let embedded = resp._embedded.unwrap();

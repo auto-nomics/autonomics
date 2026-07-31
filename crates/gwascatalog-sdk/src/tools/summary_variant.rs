@@ -50,10 +50,13 @@ impl ToolFunction for SummaryVariantTool {
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let page = input.page.unwrap_or(0) as usize;
         let size = input.size.unwrap_or(20) as usize;
-        let reveal = input.reveal.as_deref().map(|v| match v.to_lowercase().as_str() {
-            "raw" => RevealMode::Raw,
-            _ => RevealMode::All,
-        });
+        let reveal = input
+            .reveal
+            .as_deref()
+            .map(|v| match v.to_lowercase().as_str() {
+                "raw" => RevealMode::Raw,
+                _ => RevealMode::All,
+            });
 
         let query = AssociationQuery {
             start: Some(page),
@@ -75,8 +78,8 @@ impl ToolFunction for SummaryVariantTool {
         }
         .map_err(super::json_err)?;
 
-        Ok(AgentToolResult::success(format::format_summary_associations(
-            &resp,
-        )))
+        Ok(AgentToolResult::success(
+            format::format_summary_associations(&resp),
+        ))
     }
 }

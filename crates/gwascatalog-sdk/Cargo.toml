@@ -10,6 +10,8 @@ agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 async-trait.workspace = true
+fs = { path = "../fs" }
+futures = { workspace = true }
 reqwest = { version = "0.13", features = ["json"] }
 schemars.workspace = true
 serde = { workspace = true }

@@ -376,7 +376,8 @@ impl GwasCatalogClient {
 
     /// `GET /chromosomes/{chromosome}` — specific chromosome resource.
     pub async fn get_chromosome(&self, chromosome: &str) -> Result<Chromosome> {
-        self.ss_get(&format!("/chromosomes/{chromosome}"), &()).await
+        self.ss_get(&format!("/chromosomes/{chromosome}"), &())
+            .await
     }
 
     /// `GET /chromosomes/{chromosome}/associations` — associations on a chromosome.
@@ -385,11 +386,8 @@ impl GwasCatalogClient {
         chromosome: &str,
         query: &ChromosomeAssociationQuery,
     ) -> Result<PaginatedResponse<EmbeddedAssociations>> {
-        self.ss_get(
-            &format!("/chromosomes/{chromosome}/associations"),
-            query,
-        )
-        .await
+        self.ss_get(&format!("/chromosomes/{chromosome}/associations"), query)
+            .await
     }
 
     /// `GET /chromosomes/{chromosome}/associations/{variant_id}`
@@ -459,10 +457,7 @@ impl GwasCatalogClient {
         study_accession: &str,
         query: &AssociationQuery,
     ) -> Result<PaginatedResponse<EmbeddedAssociations>> {
-        self.ss_get(
-            &format!("/studies/{study_accession}/associations"),
-            query,
-        )
-        .await
+        self.ss_get(&format!("/studies/{study_accession}/associations"), query)
+            .await
     }
 }

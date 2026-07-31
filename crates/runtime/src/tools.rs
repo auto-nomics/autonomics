@@ -10,9 +10,9 @@ use data_engine::runtime::DataEngineClient;
 use datalake::Datalake;
 use eutils::EutilsClient;
 use fs::OpendalFileStorage;
+use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
 use opentargets::OpenTargetsClient;
-use gwascatalog_sdk::GwasCatalogClient;
 
 /// OpenGWAS tools (GWAS catalog lookup).
 ///
@@ -38,10 +38,11 @@ pub fn opentargets_tools() -> Vec<ToolRegistration> {
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
-/// unpublished submissions, summary statistics, and Solr full-text search).
-pub fn gwascatalog_tools() -> Vec<ToolRegistration> {
+/// unpublished submissions, summary statistics, full summary-stats file
+/// download, and Solr full-text search).
+pub fn gwascatalog_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
     let client = Arc::new(GwasCatalogClient::new());
-    gwascatalog_sdk::gwascatalog_registrations(client)
+    gwascatalog_sdk::gwascatalog_registrations(client, storage)
 }
 
 /// Iceberg data-lake tools (query_iceberg).
@@ -60,10 +61,10 @@ pub fn default_tool_set(
     data_engine_client: Arc<DataEngineClient>,
 ) -> Result<Vec<ToolRegistration>, OpengwasError> {
     let mut tools = fs::file_base_registrations(file_storage.clone());
-    tools.extend(opengwas_tools(file_storage)?);
+    tools.extend(opengwas_tools(file_storage.clone())?);
     tools.extend(eutils_tools());
     tools.extend(opentargets_tools());
-    tools.extend(gwascatalog_tools());
+    tools.extend(gwascatalog_tools(file_storage));
     tools.extend(datalake_tools(datalake.clone()));
     tools.extend(data_engine_tools::registrations(data_engine_client));
     Ok(tools)

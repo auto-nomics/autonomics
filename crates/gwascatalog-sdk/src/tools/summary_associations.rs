@@ -74,19 +74,16 @@ impl ToolFunction for SummaryAssociationsTool {
             study_accession: input.study_accession.clone(),
         };
 
-        let resp: PaginatedResponse<EmbeddedAssociations> = if let Some(trait_id) =
-            &input.trait_id
+        let resp: PaginatedResponse<EmbeddedAssociations> = if let Some(trait_id) = &input.trait_id
         {
-            self.client
-                .list_trait_associations(trait_id, &query)
-                .await
+            self.client.list_trait_associations(trait_id, &query).await
         } else {
             self.client.list_associations(&query).await
         }
         .map_err(super::json_err)?;
 
-        Ok(AgentToolResult::success(format::format_summary_associations(
-            &resp,
-        )))
+        Ok(AgentToolResult::success(
+            format::format_summary_associations(&resp),
+        ))
     }
 }

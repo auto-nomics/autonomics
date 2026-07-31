@@ -230,7 +230,9 @@ impl GwasCatalogClient {
         let resp = reqwest::get(&url).await?;
         let status = resp.status();
         if status.is_success() {
-            resp.json().await.map_err(crate::error::GwasCatalogError::Http)
+            resp.json()
+                .await
+                .map_err(crate::error::GwasCatalogError::Http)
         } else {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             let message = body["message"]

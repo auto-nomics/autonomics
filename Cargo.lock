@@ -3471,6 +3471,8 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "async-trait",
+ "fs",
+ "futures",
  "reqwest 0.13.4",
  "schemars 1.2.2",
  "serde",

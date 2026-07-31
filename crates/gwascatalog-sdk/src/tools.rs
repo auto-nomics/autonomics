@@ -3,6 +3,7 @@
 //! Wire into an agent's toolset via [`gwascatalog_registrations`].
 
 mod associations;
+pub mod download;
 mod efo_traits;
 mod search;
 mod snp;
@@ -15,6 +16,7 @@ mod unpublished;
 use std::sync::Arc;
 
 use agentik_core::tools::ToolRegistration;
+use fs::OpendalFileStorage;
 
 pub(crate) use self::helpers::json_err;
 use crate::client::GwasCatalogClient;
@@ -42,8 +44,12 @@ mod helpers {
 /// Build [`ToolRegistration`]s for all GWAS Catalog tools.
 ///
 /// Pass a shared [`GwasCatalogClient`] so every tool reuses the same HTTP
-/// connection pool.
-pub fn gwascatalog_registrations(client: Arc<GwasCatalogClient>) -> Vec<ToolRegistration> {
+/// connection pool, and a shared [`OpendalFileStorage`] for the summary-
+/// statistics download tool.
+pub fn gwascatalog_registrations(
+    client: Arc<GwasCatalogClient>,
+    storage: Arc<OpendalFileStorage>,
+) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     vec![
         R::from(search::SearchTool {
@@ -70,6 +76,9 @@ pub fn gwascatalog_registrations(client: Arc<GwasCatalogClient>) -> Vec<ToolRegi
         R::from(summary_associations::SummaryAssociationsTool {
             client: client.clone(),
         }),
-        R::from(summary_variant::SummaryVariantTool { client }),
+        R::from(summary_variant::SummaryVariantTool {
+            client: client.clone(),
+        }),
+        R::from(download::DownloadSummaryStatsTool { client, storage }),
     ]
 }
