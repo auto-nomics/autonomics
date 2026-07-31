@@ -344,14 +344,63 @@ impl CpassocNode {
         for i in 0..k {
             z_cols.push(extract_f64(&batches, &format!("z{i}"))?);
             let ns = extract_f64(&batches, &format!("n{i}"))?;
-            // Take the sample size from the first row (assumed constant per trait).
-            n_vals.push(ns.first().copied().unwrap_or(0.0));
+            // CPASSOC assumes sample size is constant per trait (the R reference
+            // takes a single SampleSize vector). Take the first non-NaN n value.
+            // If n is null/NaN for every row of a trait, this is a hard error.
+            let n_trait = ns
+                .iter()
+                .copied()
+                .find(|v| v.is_finite())
+                .ok_or_else(|| {
+                    CpassocNodeError::Cpassoc(format!(
+                        "CPASSOC: trait {i} has no valid sample size (column 'n{i}' is null for all rows)"
+                    ))
+                })?;
+            if n_trait <= 0.0 {
+                return Err(CpassocNodeError::Cpassoc(format!(
+                    "CPASSOC: trait {i} has non-positive sample size n={n_trait} (must be > 0)"
+                ))
+                .into());
+            }
+            n_vals.push(n_trait);
         }
 
-        // Build M×K Z-score matrix.
-        let z_matrix = Mat::from_fn(n_snp, k, |row, col| z_cols[col][row]);
+        // Build M×K Z-score matrix, then filter out rows where any trait's Z
+        // is NaN. CPASSOC assumes no missing summary statistics (R reference:
+        // "the current version assumes no missing summary statistics"). The
+        // inner-join guarantees rsid is present in all traits, but individual
+        // Z-scores may still be null/NaN in the source data.
+        let valid_idx: Vec<usize> = (0..n_snp)
+            .filter(|&row| {
+                (0..k).all(|col| {
+                    let v = z_cols[col][row];
+                    v.is_finite()
+                })
+            })
+            .collect();
 
-        // 4. Estimate correlation matrix R = cor(Z).
+        let n_valid = valid_idx.len();
+        let n_dropped = n_snp - n_valid;
+        if n_dropped > 0 {
+            tracing::info!(
+                "CPASSOC: dropped {n_dropped} / {n_snp} SNPs with missing (NaN/null) Z-scores"
+            );
+        }
+        if n_valid == 0 {
+            return Err(CpassocNodeError::Cpassoc(
+                "CPASSOC: all SNPs have at least one missing Z-score after inner join".into(),
+            )
+            .into());
+        }
+
+        // Build filtered rsid list and Z-score matrix.
+        let rsids_filtered: Vec<String> = valid_idx.iter().map(|&i| rsids[i].clone()).collect();
+        let rsids = rsids_filtered;
+        let z_matrix = Mat::from_fn(n_valid, k, |row, col| {
+            z_cols[col][valid_idx[row]]
+        });
+
+        // 4. Estimate correlation matrix R = cor(Z) on the complete-case data.
         let corr = cpassoc::input::corr_matrix(&z_matrix);
 
         // 5. Build SHet options from config.
@@ -757,5 +806,276 @@ mod tests {
             )
             .await;
         assert!(res.is_err(), "missing trait-2 input must error");
+    }
+
+    /// Build a sumstats batch where some Z-scores are null (None).
+    /// Null positions are given as row indices.
+    fn sumstats_batch_with_nulls(
+        z: &[Option<f64>],
+        rsids: &[String],
+        n_samp: f64,
+    ) -> RecordBatch {
+        let n: Vec<f64> = vec![n_samp; z.len()];
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("z", DataType::Float64, true),
+            Field::new("n", DataType::Float64, false),
+            Field::new("rsid", DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(z.to_vec())),
+                Arc::new(Float64Array::from(n)),
+                Arc::new(StringArray::from(rsids.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn e2e_cpassoc_filters_nan_z() {
+        // 10 SNPs; SNP 3 has null z in trait 1, SNP 7 has null z in trait 2.
+        // These should be silently dropped; the remaining 8 SNPs should
+        // produce valid results.
+        let rsids: Vec<String> = (0..10)
+            .map(|i| format!("rs{}", 4_000_000 + i))
+            .collect();
+        let z1: Vec<Option<f64>> = (0..10)
+            .map(|i| {
+                if i == 3 {
+                    None
+                } else {
+                    Some(i as f64 * 0.3 - 1.0)
+                }
+            })
+            .collect();
+        let z2: Vec<Option<f64>> = (0..10)
+            .map(|i| {
+                if i == 7 {
+                    None
+                } else {
+                    Some(i as f64 * 0.2 - 0.5)
+                }
+            })
+            .collect();
+
+        let ctx = SessionContext::new();
+        let df1 = ctx
+            .read_batch(sumstats_batch_with_nulls(&z1, &rsids, 1000.0))
+            .unwrap();
+        let df2 = ctx
+            .read_batch(sumstats_batch_with_nulls(&z2, &rsids, 800.0))
+            .unwrap();
+
+        let cfg = CpassocConfig {
+            n_sim: 2000,
+            ..Default::default()
+        };
+        let inputs = vec![
+            NodeInput { port: 0, data: df1 },
+            NodeInput { port: 1, data: df2 },
+        ];
+        let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
+            .await
+            .expect("CPASSOC with NaN filtering should succeed");
+
+        // 10 - 2 dropped = 8 SNPs remain.
+        assert_eq!(batch.num_rows(), 8, "expected 8 SNPs after NaN filtering");
+
+        // The dropped rsids should NOT appear in the output.
+        let rsid_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let output_rsids: std::collections::HashSet<&str> =
+            (0..batch.num_rows()).map(|i| rsid_col.value(i)).collect();
+        assert!(
+            !output_rsids.contains("rs4000003"),
+            "SNP with null z in trait 1 should be filtered"
+        );
+        assert!(
+            !output_rsids.contains("rs4000007"),
+            "SNP with null z in trait 2 should be filtered"
+        );
+
+        // All remaining SHom/SHet should be finite and non-negative.
+        let shom = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let shet = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        for i in 0..8 {
+            assert!(shom.value(i).is_finite(), "shom[{i}] not finite after NaN filter");
+            assert!(shom.value(i) >= 0.0);
+            assert!(shet.value(i).is_finite(), "shet[{i}] not finite after NaN filter");
+            assert!(shet.value(i) >= 0.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn e2e_cpassoc_all_nan_errors() {
+        // Every SNP has a null in at least one trait → all filtered → error.
+        let rsids: Vec<String> = vec!["rs1".into(), "rs2".into()];
+        let z1: Vec<Option<f64>> = vec![None, None];
+        let z2: Vec<Option<f64>> = vec![None, None];
+
+        let ctx = SessionContext::new();
+        let df1 = ctx
+            .read_batch(sumstats_batch_with_nulls(&z1, &rsids, 1000.0))
+            .unwrap();
+        let df2 = ctx
+            .read_batch(sumstats_batch_with_nulls(&z2, &rsids, 800.0))
+            .unwrap();
+
+        let cfg = CpassocConfig::default();
+        let inputs = vec![
+            NodeInput { port: 0, data: df1 },
+            NodeInput { port: 1, data: df2 },
+        ];
+        let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
+        assert!(
+            result.is_err(),
+            "all-NaN input must error after filtering"
+        );
+    }
+
+    /// Build a sumstats batch where the sample-size column has nulls.
+    fn sumstats_batch_null_n(
+        z: &[f64],
+        rsids: &[String],
+        n_vals: &[Option<f64>],
+    ) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("z", DataType::Float64, false),
+            Field::new("n", DataType::Float64, true),
+            Field::new("rsid", DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(z.to_vec())),
+                Arc::new(Float64Array::from(n_vals.to_vec())),
+                Arc::new(StringArray::from(rsids.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn e2e_cpassoc_null_n_first_row_falls_back() {
+        // Trait 2 has null n at row 0 but valid n at row 1.
+        // The node should fall back to the first valid n (not 0.0 or NaN).
+        let rsids: Vec<String> = (0..5)
+            .map(|i| format!("rs{}", 5_000_000 + i))
+            .collect();
+        let z1: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let z2: Vec<f64> = vec![0.5, 1.0, 1.5, 2.0, 2.5];
+        // n for trait 1: all 1000.0
+        let n1: Vec<Option<f64>> = vec![Some(1000.0); 5];
+        // n for trait 2: row 0 is null, rest are 800.0
+        let n2: Vec<Option<f64>> = vec![None, Some(800.0), Some(800.0), Some(800.0), Some(800.0)];
+
+        let ctx = SessionContext::new();
+        let df1 = ctx
+            .read_batch(sumstats_batch_null_n(&z1, &rsids, &n1))
+            .unwrap();
+        let df2 = ctx
+            .read_batch(sumstats_batch_null_n(&z2, &rsids, &n2))
+            .unwrap();
+
+        let cfg = CpassocConfig {
+            n_sim: 2000,
+            ..Default::default()
+        };
+        let inputs = vec![
+            NodeInput { port: 0, data: df1 },
+            NodeInput { port: 1, data: df2 },
+        ];
+        let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
+            .await
+            .expect("should fall back to first valid n");
+
+        assert_eq!(batch.num_rows(), 5);
+        // All results should be finite (n=800 was found despite row-0 null).
+        let shom = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        for i in 0..5 {
+            assert!(shom.value(i).is_finite(), "shom[{i}] not finite with fallback n");
+        }
+    }
+
+    #[tokio::test]
+    async fn e2e_cpassoc_all_null_n_errors() {
+        // Trait 2 has null n for every row → should error.
+        let rsids: Vec<String> = (0..3)
+            .map(|i| format!("rs{}", 6_000_000 + i))
+            .collect();
+        let z1: Vec<f64> = vec![1.0, 2.0, 3.0];
+        let z2: Vec<f64> = vec![0.5, 1.0, 1.5];
+        let n1: Vec<Option<f64>> = vec![Some(1000.0); 3];
+        let n2: Vec<Option<f64>> = vec![None, None, None];
+
+        let ctx = SessionContext::new();
+        let df1 = ctx
+            .read_batch(sumstats_batch_null_n(&z1, &rsids, &n1))
+            .unwrap();
+        let df2 = ctx
+            .read_batch(sumstats_batch_null_n(&z2, &rsids, &n2))
+            .unwrap();
+
+        let cfg = CpassocConfig::default();
+        let inputs = vec![
+            NodeInput { port: 0, data: df1 },
+            NodeInput { port: 1, data: df2 },
+        ];
+        let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
+        assert!(result.is_err(), "all-null n should error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no valid sample size") || msg.contains("sample size"),
+            "error should mention sample size, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn e2e_cpassoc_zero_n_errors() {
+        // Trait 2 has n=0 → should error (weight would be 0).
+        let rsids: Vec<String> = (0..3)
+            .map(|i| format!("rs{}", 7_000_000 + i))
+            .collect();
+        let z1: Vec<f64> = vec![1.0, 2.0, 3.0];
+        let z2: Vec<f64> = vec![0.5, 1.0, 1.5];
+        let n1: Vec<Option<f64>> = vec![Some(1000.0); 3];
+        let n2: Vec<Option<f64>> = vec![Some(0.0); 3];
+
+        let ctx = SessionContext::new();
+        let df1 = ctx
+            .read_batch(sumstats_batch_null_n(&z1, &rsids, &n1))
+            .unwrap();
+        let df2 = ctx
+            .read_batch(sumstats_batch_null_n(&z2, &rsids, &n2))
+            .unwrap();
+
+        let cfg = CpassocConfig::default();
+        let inputs = vec![
+            NodeInput { port: 0, data: df1 },
+            NodeInput { port: 1, data: df2 },
+        ];
+        let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
+        assert!(result.is_err(), "zero n should error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-positive"),
+            "error should mention non-positive sample size, got: {msg}"
+        );
     }
 }

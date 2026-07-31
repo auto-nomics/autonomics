@@ -143,7 +143,9 @@ pub fn shet_single(
     let cutoffs: Vec<f64> = if opts.is_all_possible {
         // sort(unique(abs(x)))
         let mut abs_vals: Vec<f64> = x.iter().map(|v| v.abs()).collect();
-        abs_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // NaN-safe sort: NaN sorts as +∞ so it ends up last (and will cause
+        // all elements to be dropped, yielding S(t)=0 for that threshold).
+        abs_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
         abs_vals.dedup();
         abs_vals
     } else {
