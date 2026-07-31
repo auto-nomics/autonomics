@@ -1,0 +1,21 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--annotate window=35
+	--snp-loc sim_geno.bim
+	--gene-loc gene_loc.txt
+	--out annot
+
+Start time is 18:35:01, Friday 31 Jul 2026
+
+Starting annotation...
+Reading gene locations from file gene_loc.txt... 
+	adding window: 35000bp
+	20 gene locations read from file
+	chromosome  1: 20 genes
+Reading SNP locations from file sim_geno.bim... 
+	500 SNP locations read from file
+	of those, 274 (54.8%) mapped to at least one gene
+Writing annotation to file annot.genes.annot
+
+
+End time is 18:35:01, Friday 31 Jul 2026 (elapsed: 00:00:00)

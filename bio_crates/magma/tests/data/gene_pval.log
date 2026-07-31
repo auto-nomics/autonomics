@@ -1,0 +1,31 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--bfile sim_geno
+	--pval gwas_pval.txt N=50000 snp-id=SNP pval=P
+	--gene-annot annot.genes.annot
+	--out gene_pval
+
+Start time is 18:35:12, Friday 31 Jul 2026
+
+Loading PLINK-format data...
+Reading file sim_geno.fam... 200 individuals read
+Reading file sim_geno.bim... 500 SNPs read
+Preparing file sim_geno.bed... 
+
+Reading SNP p-values from file gwas_pval.txt... 
+	detected 3 variables in file
+	using variable: SNP (SNP id)
+	using variable: P (p-value)
+	read 501 lines from file, containing valid SNP p-values for 500 SNPs in data (99.8% of lines, 100% of SNPs in data)
+Loading gene annotation from file annot.genes.annot... 
+	20 gene definitions read from file
+	found 20 genes containing valid SNPs in genotype data
+
+
+Starting gene analysis... 
+	using model: SNPwise-mean
+	writing gene analysis results to file gene_pval.genes.out
+	writing intermediate output to file gene_pval.genes.raw
+
+
+End time is 18:35:12, Friday 31 Jul 2026 (elapsed: 00:00:00)

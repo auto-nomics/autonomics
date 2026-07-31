@@ -17,6 +17,7 @@ pub mod ldsc_rg;
 pub mod ldsc_sldsc;
 pub mod liability;
 pub mod linear_regression;
+pub mod magma;
 pub mod meta;
 pub mod mr;
 pub mod mrlap;

@@ -34,6 +34,7 @@ members = [
   "infra/sink_af",
 
   "bio_crates/cpassoc",
+  "bio_crates/magma",
 ]
 resolver = "3"
 

@@ -1,0 +1,41 @@
+Welcome to MAGMA v1.10 (custom)
+Using flags:
+	--gene-results /tmp/real_gene_pval.genes.raw
+	--set-annot /tmp/miR137_gene_set_list_4_magma.txt col=2,1
+	--out /tmp/real_gsa
+
+Start time is 18:53:19, Friday 31 Jul 2026
+
+Reading file /tmp/real_gene_pval.genes.raw... 
+	432 genes read from file
+Loading gene-set annotation...
+Reading file /tmp/miR137_gene_set_list_4_magma.txt... 
+	detected 2 variables in file
+	using variable: variable 2 (gene ID)
+	using variable: variable 1 (set ID)
+	5 gene-set definitions read from file
+	found 5 gene sets containing genes defined in genotype data (containing a total of 24 unique genes)
+Preparing variables for analysis...
+	truncating Z-scores 3 points below zero or 6 standard deviations above the mean
+	WARNING: discarding gene set 'Dopa' from file /tmp/miR137_gene_set_list_4_magma.txt, variance is too low (set contains only one gene used in analysis)
+	WARNING: discarding gene set 'GABA' from file /tmp/miR137_gene_set_list_4_magma.txt, variance is too low (set contains only one gene used in analysis)
+	WARNING: discarding gene set 'Glut' from file /tmp/miR137_gene_set_list_4_magma.txt, variance is too low (set contains only one gene used in analysis)
+	WARNING: discarding gene set 'NPC' from file /tmp/miR137_gene_set_list_4_magma.txt, variance is too low (set contains only one gene used in analysis)
+	truncating covariate values more than 5 standard deviations from the mean
+	total variables available for analysis: 1 gene set
+
+Parsing model specifications...
+Inverting gene-gene correlation matrix...
+Performing regression analysis...
+	testing direction: one-sided, positive (sets), two-sided (covar)
+	conditioning on internal variables:
+		gene size, log(gene size)
+		gene density, log(gene density)
+		sample size, log(sample size)
+		inverse mac, log(inverse mac)
+	analysing individual variables
+
+	analysing single-variable models (number of models: 1)
+	writing results to file /tmp/real_gsa.gsa.out
+
+End time is 18:53:19, Friday 31 Jul 2026 (elapsed: 00:00:00)
