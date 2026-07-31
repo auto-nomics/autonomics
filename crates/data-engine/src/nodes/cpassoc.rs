@@ -79,8 +79,16 @@ const OUT_SHET_P_COL: &str = "shet_pval";
 /// Input port schema: per-SNP Z-score, sample size, rsid join key.
 fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
+        // `z` is per-SNP — missing Z-scores are common in real GWAS data
+        // (SNP not genotyped, failed QC, etc.). The node filters rows where
+        // any trait's Z is null.
         Field::new(INPUT_Z_COL, DataType::Float64, true),
-        Field::new(INPUT_N_COL, DataType::Float64, true),
+        // `n` is per-trait (CPASSOC assumes constant sample size per trait).
+        // Upstream nodes are expected to fill any null n values before this
+        // node runs; the schema declares it non-nullable to enforce this
+        // contract. If a null slips through, the node errors with a clear
+        // message rather than silently producing NaN statistics.
+        Field::new(INPUT_N_COL, DataType::Float64, false),
         Field::new(INPUT_RSID_COL, DataType::Utf8, false),
     ]))
 }
