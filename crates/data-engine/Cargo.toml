@@ -38,6 +38,7 @@ mrlap = { path = "../../bio_crates/mrlap" }
 cpassoc = { path = "../../bio_crates/cpassoc" }
 magma = { path = "../../bio_crates/magma" }
 statkit = { path = "../../stat_crates/statkit" }
+epi = { path = "../../stat_crates/epi" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }

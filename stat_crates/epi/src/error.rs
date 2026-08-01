@@ -1,5 +1,6 @@
 //! Error type for the epi crate.
 
+use statkit::StatError;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
@@ -16,6 +17,16 @@ pub enum EpiError {
     InvalidProbability(f64),
     #[error("numerical error: {0}")]
     Numerical(String),
+}
+
+impl From<StatError> for EpiError {
+    fn from(e: StatError) -> Self {
+        match e {
+            StatError::EmptyInput => EpiError::EmptyInput,
+            StatError::LengthMismatch { a, b } => EpiError::DimensionMismatch { a, b },
+            other => EpiError::Numerical(other.to_string()),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EpiError>;

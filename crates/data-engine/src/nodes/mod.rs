@@ -6,8 +6,14 @@
 //! [`sink_iceberg`].
 
 pub mod bivariate_mixer;
+pub mod chi_square;
+pub mod cox_regression;
 pub mod cpassoc;
 pub mod echo_node;
+pub mod epi_lasso;
+pub mod epi_rcs;
+pub mod epi_roc;
+pub mod epi_wqs;
 pub mod hdl_l;
 pub mod hdl_l_scan;
 pub mod lava;
@@ -18,11 +24,13 @@ pub mod ldsc_rg;
 pub mod ldsc_sldsc;
 pub mod liability;
 pub mod linear_regression;
+pub mod logistic_regression;
 pub mod magma;
 pub mod meta;
 pub mod mr;
 pub mod mrlap;
 pub mod mtag;
+pub mod numeric_util;
 pub mod sink_common;
 pub mod sink_file;
 pub mod sink_iceberg;
@@ -35,6 +43,7 @@ pub mod univariate_mixer;
 pub mod viz;
 
 pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
+pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
 pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};

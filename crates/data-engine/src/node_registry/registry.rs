@@ -15,8 +15,14 @@ use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
+    chi_square::ChiSquareNodeFactory,
+    cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
     echo_node::EchoNodeFactory,
+    epi_lasso::EpiLassoNodeFactory,
+    epi_rcs::EpiRcsNodeFactory,
+    epi_roc::EpiRocNodeFactory,
+    epi_wqs::EpiWqsNodeFactory,
     hdl_l::HdlLNodeFactory,
     hdl_l_scan::HdlLScanNodeFactory,
     lava::{
@@ -29,6 +35,7 @@ use crate::nodes::{
     ldsc_sldsc::LdscSldscNodeFactory,
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
+    logistic_regression::LogisticRegressionNodeFactory,
     magma::{
         MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
     },
@@ -173,6 +180,13 @@ impl NodeRegistry {
         registry.register(Box::new(LdscSldscNodeFactory {}));
         registry.register(Box::new(LiabilityNodeFactory {}));
         registry.register(Box::new(LinearRegressionNodeFactory {}));
+        registry.register(Box::new(LogisticRegressionNodeFactory {}));
+        registry.register(Box::new(ChiSquareNodeFactory {}));
+        registry.register(Box::new(CoxRegressionNodeFactory {}));
+        registry.register(Box::new(EpiRcsNodeFactory {}));
+        registry.register(Box::new(EpiRocNodeFactory {}));
+        registry.register(Box::new(EpiLassoNodeFactory {}));
+        registry.register(Box::new(EpiWqsNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(TestSourceFactory {}));
         registry.register(Box::new(MrNodeFactory {}));
@@ -282,6 +296,37 @@ mod tests {
             "linear_regression" => {
                 serde_json::json!({"x_columns": ["x"], "y_column": "y"})
             }
+            "logistic_regression" => {
+                serde_json::json!({"predictors": ["x"], "outcome": "y"})
+            }
+            "chi_square" => {
+                serde_json::json!({"row_column": "group", "col_column": "var"})
+            }
+            "cox_regression" => {
+                serde_json::json!({"predictors": ["x"], "time_column": "time", "event_column": "event"})
+            }
+            "epi_rcs" => {
+                serde_json::json!({"x_column": "x", "outcome_column": "y"})
+            }
+            "epi_roc" => {
+                serde_json::json!({"score1_column": "score", "label_column": "label"})
+            }
+            "epi_lasso" => {
+                serde_json::json!({"predictors": ["x"], "outcome_column": "y"})
+            }
+            "epi_wqs" => {
+                serde_json::json!({"exposures": ["x"], "outcome_column": "y"})
+            }
+            "magma_annotate" => serde_json::json!({"gene_loc": "g.txt", "snp_loc": "s.bim"}),
+            "magma_gene" => serde_json::json!({"gene_annot": "a.genes.annot"}),
+            "magma_set" => serde_json::json!({}),
+            "magma_meta" => serde_json::json!({"cohort_files": ["c.genes.raw"]}),
+            "cpassoc" => serde_json::json!({}),
+            "hdl_l_scan" => serde_json::json!({
+                "chr": 22, "scan_start": 1, "scan_stop": 2,
+                "window_size": 1, "step": 1,
+                "trait1_name": "t1", "trait2_name": "t2"
+            }),
             "ldsc" => serde_json::json!({"n_blocks": 200}),
             "ldsc_rg" => serde_json::json!({"n_blocks": 200}),
             "lcv" => serde_json::json!({"no_blocks": 100}),

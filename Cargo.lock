@@ -1725,6 +1725,7 @@ dependencies = [
  "datafusion",
  "datalake",
  "derive_more",
+ "epi",
  "faer",
  "fs",
  "futures",
@@ -2713,6 +2714,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "epi"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "serde_json",
+ "statkit",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -7600,6 +7614,7 @@ name = "statkit"
 version = "0.1.0"
 dependencies = [
  "faer",
+ "serde_json",
  "statrs",
  "thiserror 2.0.19",
 ]

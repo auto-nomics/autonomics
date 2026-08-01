@@ -10,8 +10,10 @@
 //! - [`logistic`]: IRLS (Newton-Raphson) with Wald z-tests, odds ratios, and
 //!   95% CIs; log-likelihood returned for downstream LR tests.
 
+mod cox;
 mod logistic;
 mod ols;
 
+pub use cox::{CoxResult, cox};
 pub use logistic::{LogisticResult, logistic};
 pub use ols::{Regression, ols, wls};
