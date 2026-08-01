@@ -554,6 +554,10 @@ fn extract_string(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, Cp
             for v in arr.iter() {
                 out.push(v.unwrap_or("").to_string());
             }
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow_array::StringViewArray>() {
+            for v in arr.iter() {
+                out.push(v.unwrap_or("").to_string());
+            }
         } else {
             return Err(CpassocNodeError::Cpassoc(format!(
                 "column '{name}' is not a string type"

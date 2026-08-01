@@ -845,6 +845,14 @@ fn extract_string_col(batches: &[RecordBatch], name: &str) -> Result<Vec<String>
             for v in arr.iter() {
                 out.push(v.unwrap_or("").to_string());
             }
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow_array::LargeStringArray>() {
+            for v in arr.iter() {
+                out.push(v.unwrap_or("").to_string());
+            }
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow_array::StringViewArray>() {
+            for v in arr.iter() {
+                out.push(v.unwrap_or("").to_string());
+            }
         } else {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(format!(
                 "column '{name}' is not a string"

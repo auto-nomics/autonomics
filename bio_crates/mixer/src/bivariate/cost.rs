@@ -7,6 +7,7 @@
 //! 简化（与原版 `.cost()` 调用一致，r2min=0 下成立）：
 //!   sig2_zeroC = [1,1]、sig2_zeroL = [0,0]、rho_zeroL = 0 → 无 below-r2min 项。
 
+use rayon::prelude::*;
 use std::f64::consts::PI;
 
 use crate::bivariate::data::BivariateData;
@@ -57,48 +58,52 @@ pub fn bivariate_cost_gaussian(data: &BivariateData, p: &BivariateParams) -> f64
     let sz22 = p.sig2_zero[1];
     let sz12 = p.rho_zero * (p.sig2_zero[0] * p.sig2_zero[1]).sqrt();
 
-    let mut cost = 0.0;
-    for &tag in &data.tags {
-        let j = tag as usize;
-        let n1j = data.n1[j];
-        let n2j = data.n2[j];
+    data.tags
+        .par_iter()
+        .map(|&tag| {
+            let j = tag as usize;
+            let n1j = data.n1[j];
+            let n2j = data.n2[j];
+            // 预算 √(n1·n2)：使得内层逐邻居的 √(a1·a2) 可改写为 hr2·√(n1·n2)，
+            // 消除每邻居一次 sqrt（a1=n1·hr2, a2=n2·hr2 → √(a1·a2)=hr2·√(n1·n2)）。
+            let sqrt_n1n2 = (n1j * n2j).sqrt();
 
-        // 2. LD 传播：a1=n1·h·r²、a2=n2·h·r²（sig2_zeroC=1）
-        let mut ed20 = 0.0;
-        let mut ed02 = 0.0;
-        let mut ed11 = 0.0;
-        let (cols, r2s) = data.ld.row(j);
-        for (k, &s) in cols.iter().enumerate() {
-            let hi = data.h[s as usize];
-            let a1 = n1j * hi * r2s[k] as f64;
-            let a2 = n2j * hi * r2s[k] as f64;
-            ed20 += a1 * eb20;
-            ed02 += a2 * eb02;
-            // Edelta11 用 √(a1·a2)·Eb11（原版的 √(a2ij1·a2ij2) 技巧）
-            ed11 += (a1 * a2).sqrt() * eb11;
-        }
+            // 2. LD 传播：a1=n1·h·r²、a2=n2·h·r²（sig2_zeroC=1）
+            let mut ed20 = 0.0;
+            let mut ed02 = 0.0;
+            let mut ed11 = 0.0;
+            let (cols, r2s) = data.ld.row(j);
+            for (k, &s) in cols.iter().enumerate() {
+                let hi = data.h[s as usize];
+                let r2 = r2s[k] as f64;
+                let hr2 = hi * r2; // h·r² 公共子表达式
+                ed20 += n1j * hr2 * eb20;
+                ed02 += n2j * hr2 * eb02;
+                // √(a1·a2) = √(n1·n2)·h·r² = √(n1·n2)·hr2（等价于原 (a1*a2).sqrt()）
+                ed11 += hr2 * sqrt_n1n2 * eb11;
+            }
 
-        // 两 trait 都无 LD 信号 → 跳过（原版 l.1077）
-        if ed20 == 0.0 && ed02 == 0.0 {
-            continue;
-        }
+            // 两 trait 都无 LD 信号 → 跳过（原版 l.1077）
+            if ed20 == 0.0 && ed02 == 0.0 {
+                return 0.0;
+            }
 
-        // 3. 组装协方差 + 2D 高斯密度
-        let a11 = ed20 + sz11;
-        let a22 = ed02 + sz22;
-        let a12 = ed11 + sz12;
+            // 3. 组装协方差 + 2D 高斯密度
+            let a11 = ed20 + sz11;
+            let a22 = ed02 + sz22;
+            let a12 = ed11 + sz12;
 
-        let mut pdf = gaussian2_pdf(data.z1[j], data.z2[j], a11, a12, a22);
-        if pdf <= 0.0 || pdf.is_nan() {
-            pdf = K_MIN_TAG_PDF;
-        }
-        let mut inc = -pdf.ln() * data.weights[j];
-        if !inc.is_finite() {
-            inc = -K_MIN_TAG_PDF.ln() * data.weights[j];
-        }
-        cost += inc;
-    }
-    cost
+            let mut pdf = gaussian2_pdf(data.z1[j], data.z2[j], a11, a12, a22);
+            if pdf <= 0.0 || pdf.is_nan() {
+                pdf = K_MIN_TAG_PDF;
+            }
+            let mut inc = -pdf.ln() * data.weights[j];
+            if !inc.is_finite() {
+                inc = -K_MIN_TAG_PDF.ln() * data.weights[j];
+            }
+            inc
+        })
+        .sum()
 }
 
 #[cfg(test)]

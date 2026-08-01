@@ -47,11 +47,24 @@ fn result_schema() -> SchemaRef {
     ]))
 }
 
+/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
+/// per chromosome). `{N}` is resolved to [`HdlLSpec::chr`] at execution time.
+///
+/// This is the **same** panel used by [`super::lava::LavaLocusNode`] — see
+/// `lava::REF_PREFIX_TEMPLATE`. Both nodes share the reference so results are
+/// directly comparable.
+const REF_PREFIX_TEMPLATE: &str = "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
+
 /// Spec for [`HdlLNode`].
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HdlLSpec {
-    /// PLINK `.bed/.bim/.fam` prefix for this region's LD reference.
-    pub ld_ref_prefix: String,
+    /// Chromosome number of the region being analysed (1–22). Used to resolve
+    /// the `{N}` placeholder in [`REF_PREFIX_TEMPLATE`].
+    pub chr: i64,
+    /// Region start (bp, 1-based inclusive).
+    pub start: i64,
+    /// Region stop  (bp, 1-based inclusive).
+    pub stop: i64,
     pub trait1_name: String,
     pub trait2_name: String,
     /// Sample overlap (0 for independent cohorts; HDL-L default).
@@ -139,17 +152,14 @@ fn arr_f64(arr: &dyn Array, i: usize) -> f64 {
     f64::NAN
 }
 
+/// Extract string values from a column, accepting both `StringArray` (Utf8)
+/// and `StringViewArray` (Utf8View) — see [`super::meta::string_opt_values`].
 fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        let arr = col.as_any().downcast_ref::<StringArray>()?;
-        for i in 0..arr.len() {
-            out.push(if arr.is_null(i) {
-                String::new()
-            } else {
-                arr.value(i).to_string()
-            });
+        for v in super::meta::string_opt_values(col.as_ref())? {
+            out.push(v.unwrap_or_default());
         }
     }
     Some(out)
@@ -305,17 +315,48 @@ impl DagNode for HdlLNode {
         let b1 = collect_input_batches(in0, HDL_L_KIND).await?;
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
+        // ---- Resolve the per-chromosome PLINK reference prefix ----
+        let ld_ref_prefix = PathBuf::from(
+            REF_PREFIX_TEMPLATE.replace("{N}", &self.spec.chr.to_string()),
+        );
+
+        // ---- Filter reference SNPs to the region [start, stop] ----
+        // Load the .bim to get SNP ids + positions, keep only those within the
+        // region window, then build the LD reference from that subset. This
+        // mirrors how LAVA's process.locus extracts a locus from the per-chrom
+        // panel — same reference, region-level slice.
+        let refr = lava::plink::load_reference(&ld_ref_prefix)
+            .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;
+        let si = &refr.snp_info;
+        let region_snps: Vec<String> = (0..si.snp.len())
+            .filter(|&i| {
+                si.chr[i] == self.spec.chr
+                    && si.pos[i] >= self.spec.start
+                    && si.pos[i] <= self.spec.stop
+            })
+            .map(|i| si.snp[i].clone())
+            .collect();
+        if region_snps.is_empty() {
+            return Err(err(format!(
+                "no reference SNPs in chr{}:{}-{}",
+                self.spec.chr, self.spec.start, self.spec.stop
+            )));
+        }
         reporter.info(format!(
-            "hdl_l: {} ({} rows) ~ {} ({} rows); loading LD ref {}",
+            "hdl_l: {} ({} rows) ~ {} ({} rows); loading LD ref {} (chr{}:{}-{}, {} SNPs)",
             self.spec.trait1_name,
             b1.iter().map(|b| b.num_rows()).sum::<usize>(),
             self.spec.trait2_name,
             b2.iter().map(|b| b.num_rows()).sum::<usize>(),
-            self.spec.ld_ref_prefix,
+            ld_ref_prefix.display(),
+            self.spec.chr,
+            self.spec.start,
+            self.spec.stop,
+            region_snps.len(),
         ));
 
-        // ---- LD reference from PLINK ----
-        let ldref = hdl::reference::ld_ref_from_plink_all(&PathBuf::from(&self.spec.ld_ref_prefix))
+        // ---- LD reference from PLINK (region-filtered) ----
+        let ldref = hdl::reference::ld_ref_from_plink(&ld_ref_prefix, &region_snps)
             .map_err(|e| err(format!("LD reference: {e}")))?;
 
         // ---- harmonise sumstats → bhat ----
@@ -392,5 +433,166 @@ impl DagNode for HdlLNode {
         let mut out: PortOutputs = PortOutputs::new();
         out.insert(0, df);
         Ok(out)
+    }
+}
+
+// =====================================================================
+// Integration test — exercises the full node against the real 1000G EUR
+// chr22 panel. Ignored by default (needs /mnt/disk2/dataset/1000g_plink).
+// Run with:
+//   cargo test -p data-engine -- --ignored hdl_l_e2e_real_panel
+// =====================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::prelude::SessionContext;
+
+    fn node_ctx() -> NodeCtx {
+        NodeCtx {
+            runtime_env: SessionContext::new().runtime_env(),
+            iceberg_catalog: None,
+            datalake: std::sync::Arc::new(datalake::Datalake::default()),
+            opendal: None,
+        }
+    }
+
+    /// Read SNP / A1 / A2 from a .bim file for SNPs within [start, stop].
+    fn read_region_bim(prefix: &str, chr: i64, start: i64, stop: i64) -> Vec<(String, String, String)> {
+        let bim = std::fs::read_to_string(format!("{prefix}.bim")).unwrap();
+        bim.lines()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split_whitespace().collect();
+                if f.len() < 6 { return None; }
+                let c: i64 = f[0].parse().ok()?;
+                let pos: i64 = f[3].parse().ok()?;
+                if c == chr && pos >= start && pos <= stop {
+                    Some((f[1].to_string(), f[4].to_string(), f[5].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Build a sumstat RecordBatch from (snp, a1, a2) tuples with synthetic Z + N.
+    fn make_sumstats(snps: &[(String, String, String)], z_seed: f64, n: f64) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("SNP", DataType::Utf8, false),
+            Field::new("A1", DataType::Utf8, false),
+            Field::new("A2", DataType::Utf8, false),
+            Field::new("Z", DataType::Float64, false),
+            Field::new("N", DataType::Float64, false),
+        ]));
+        let snp_arr: Vec<&str> = snps.iter().map(|(s, _, _)| s.as_str()).collect();
+        let a1_arr: Vec<&str> = snps.iter().map(|(_, a, _)| a.as_str()).collect();
+        let a2_arr: Vec<&str> = snps.iter().map(|(_, _, a)| a.as_str()).collect();
+        let z_arr: Vec<f64> = (0..snps.len())
+            .map(|i| {
+                // deterministic pseudo-Z: alternate sign, decreasing magnitude
+                let z = z_seed * (1.0 - (i as f64 / snps.len() as f64));
+                if i % 2 == 0 { z } else { -z }
+            })
+            .collect();
+        let n_arr = vec![n; snps.len()];
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(snp_arr)),
+                Arc::new(StringArray::from(a1_arr)),
+                Arc::new(StringArray::from(a2_arr)),
+                Arc::new(Float64Array::from(z_arr)),
+                Arc::new(Float64Array::from(n_arr)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// End-to-end: HDL-L node reads the real 1000G EUR chr22 panel,
+    /// filters to a ~472-SNP region, builds the LD reference, and runs the
+    /// full MLE + LRT pipeline.
+    #[tokio::test]
+    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
+    async fn hdl_l_e2e_real_panel() {
+        let chr = 22i64;
+        let start = 17_000_000i64;
+        let stop = 17_100_000i64;
+        let prefix = REF_PREFIX_TEMPLATE.replace("{N}", &chr.to_string());
+
+        // Read region SNPs from the .bim
+        let snps = read_region_bim(&prefix, chr, start, stop);
+        assert!(snps.len() > 100, "expected >100 SNPs in region, got {}", snps.len());
+        eprintln!("region chr{chr}:{start}-{stop}: {} SNPs", snps.len());
+
+        // Build synthetic sumstats for two "traits" with slightly different Z profiles
+        let ctx = node_ctx();
+        let batch1 = make_sumstats(&snps, 2.5, 50_000.0);
+        let batch2 = make_sumstats(&snps, 1.8, 80_000.0);
+        let sess = SessionContext::new();
+        let df1 = sess.read_batch(batch1).unwrap();
+        let df2 = sess.read_batch(batch2).unwrap();
+
+        let mut node = HdlLNode::new(HdlLSpec {
+            chr,
+            start,
+            stop,
+            trait1_name: "traitA".into(),
+            trait2_name: "traitB".into(),
+            n0: 0.0,
+            nref: default_nref(),
+            eigen_cut: default_eigen_cut(),
+            alpha: default_alpha(),
+        });
+
+        let reporter = crate::dag::node_event::NodeReporter::noop();
+        let res = node
+            .execute(&ctx, &[NodeInput { port: 0, data: df1 }, NodeInput { port: 0, data: df2 }], &reporter)
+            .await
+            .expect("HDL-L execute should succeed");
+
+        let df = &res[&0];
+        let batches = df.clone().collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+
+        // Verify output columns
+        let row = &batches[0];
+        let trait1 = col_str(std::slice::from_ref(row), "trait1").unwrap()[0].clone();
+        let trait2 = col_str(std::slice::from_ref(row), "trait2").unwrap()[0].clone();
+        assert_eq!(trait1, "traitA");
+        assert_eq!(trait2, "traitB");
+
+        let n_retained_arr = row.column_by_name("n_retained").unwrap();
+        let n_retained = n_retained_arr
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        eprintln!("n_retained = {n_retained}");
+        assert!(n_retained > 50, "should retain a meaningful number of eigen-components");
+
+        // h² estimates — synthetic data may yield h² ≤ 0, in which case HDL
+        // intentionally returns NaN for rg/p_h12 (the genetic covariance is
+        // undefined when either trait has no signal). Verify structural validity.
+        let h11 = col_f64(std::slice::from_ref(row), "h11").unwrap()[0];
+        let h22 = col_f64(std::slice::from_ref(row), "h22").unwrap()[0];
+        let rg = col_f64(std::slice::from_ref(row), "rg").unwrap()[0];
+        eprintln!("h11={h11:.4}, h22={h22:.4}, rg={rg:.4}");
+
+        if h11 > 0.0 && h22 > 0.0 {
+            assert!(rg >= -1.01 && rg <= 1.01, "rg should be in [-1, 1], got {rg}");
+            let p_h12 = col_f64(std::slice::from_ref(row), "p_h12").unwrap()[0];
+            eprintln!("p_h12 = {p_h12:.3e}");
+            assert!(p_h12 >= 0.0 && p_h12 <= 1.0, "p-value out of range: {p_h12}");
+        } else {
+            eprintln!("(h² ≤ 0 for at least one trait — rg/p_h12 are NaN by design)");
+            assert!(rg.is_nan(), "rg should be NaN when h² ≤ 0");
+        }
+
+        let converged = row.column_by_name("converged").unwrap();
+        let conv_arr = converged.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert!(conv_arr.value(0), "estimation should converge");
+
+        eprintln!("✅ HDL-L e2e real panel: n_retained={n_retained}, h11={h11:.4}, h22={h22:.4}, rg={rg:.4}, converged=true");
     }
 }

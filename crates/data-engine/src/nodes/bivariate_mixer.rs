@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Float64Array, RecordBatch, StringArray};
+use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::prelude::DataFrame;
@@ -492,7 +492,7 @@ impl DagNode for BivariateMixerNode {
                 let z2s = col_as_f64(batch, "z2")?;
                 let n2s = col_as_f64(batch, "n2")?;
                 for row in 0..batch.num_rows() {
-                    let rsid = rsids.value(row);
+                    let rsid = rsids[row].as_str();
                     if rsid_to_idx.contains_key(rsid) {
                         continue;
                     }
@@ -570,8 +570,8 @@ impl DagNode for BivariateMixerNode {
                 let b_ids = col_as_string(&batch, "id_b")?;
                 let r2s = col_as_f64(&batch, "r2")?;
                 for row in 0..batch.num_rows() {
-                    let a = a_ids.value(row);
-                    let b = b_ids.value(row);
+                    let a = a_ids[row].as_str();
+                    let b = b_ids[row].as_str();
                     // id_a = tag、id_b = 邻居；两端都必须落在 universe 内。
                     if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
                         tag_set.insert(ta);
@@ -825,16 +825,18 @@ fn single_f64(batch: &RecordBatch, name: &str) -> Result<f64, BivariateMixerErro
     )))
 }
 
-fn col_as_string<'a>(
-    batch: &'a RecordBatch,
+fn col_as_string(
+    batch: &RecordBatch,
     name: &str,
-) -> Result<&'a StringArray, BivariateMixerError> {
-    batch
+) -> Result<Vec<String>, BivariateMixerError> {
+    let col = batch
         .column_by_name(name)
-        .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' is not Utf8")))
+        .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
+    super::meta::string_opt_values(col.as_ref())
+        .map(|vals| vals.into_iter().map(|v| v.unwrap_or_default()).collect())
+        .ok_or_else(|| {
+            BivariateMixerError::InvalidInput(format!("column '{name}' is not a string type"))
+        })
 }
 
 /// 对一条 LD batch 的每个 pair（两端点都在 universe 内）调用 `emit(global_a, global_b, r2)`。
@@ -848,8 +850,8 @@ fn for_each_ld_pair(
     let b_ids = col_as_string(batch, "id_b")?;
     let r2s = col_as_f64(batch, "unphased_r2")?;
     for row in 0..batch.num_rows() {
-        let a = a_ids.value(row);
-        let b = b_ids.value(row);
+        let a = a_ids[row].as_str();
+        let b = b_ids[row].as_str();
         if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
             emit(ta, tb, r2s.value(row));
         }

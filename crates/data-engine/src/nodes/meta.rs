@@ -6,6 +6,7 @@
 //! [`NodeInput`] per connected input port, tagged with the port name so the node knows
 //! which slot each DataFrame belongs to.
 
+use arrow_array::Array as _;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::{common::HashMap, prelude::DataFrame};
@@ -323,5 +324,48 @@ pub trait DagNode: Send + Sync {
 impl Clone for Box<dyn DagNode> {
     fn clone(&self) -> Self {
         self.clone_box()
+    }
+}
+
+// ============================ string-column helper ============================
+
+/// Extract string values from an Arrow column, accepting **both** physical
+/// layouts: `Utf8` (`StringArray`) and `Utf8View` (`StringViewArray`).
+///
+/// DataFusion ≥42 emits `Utf8View` for SQL output and Parquet reads, while
+/// many older code paths produce `Utf8`. A bare
+/// `downcast_ref::<StringArray>()` silently returns `None` on a `Utf8View`
+/// column, which manifests upstream as a misleading "missing column" error.
+/// This helper accepts either layout so node code is immune to the upstream
+/// physical representation. Returns `None` only when the column is neither
+/// string type.
+pub(crate) fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<String>>> {
+    use arrow_array::{StringArray, StringViewArray};
+    if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
+        Some(
+            (0..a.len())
+                .map(|i| {
+                    if a.is_null(i) {
+                        None
+                    } else {
+                        Some(a.value(i).to_string())
+                    }
+                })
+                .collect(),
+        )
+    } else if let Some(a) = arr.as_any().downcast_ref::<StringViewArray>() {
+        Some(
+            (0..a.len())
+                .map(|i| {
+                    if a.is_null(i) {
+                        None
+                    } else {
+                        Some(a.value(i).to_string())
+                    }
+                })
+                .collect(),
+        )
+    } else {
+        None
     }
 }

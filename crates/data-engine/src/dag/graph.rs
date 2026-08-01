@@ -1,7 +1,10 @@
 //! The DAG data structure: a payload store + a structural index.
 
 use std::collections::VecDeque;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+
+use futures::FutureExt;
 
 use datafusion::common::HashMap;
 use datafusion::prelude::DataFrame;
@@ -188,19 +191,42 @@ impl DAG {
                     let _permit = sem.acquire().await.ok();
                     let mut node = node_box;
                     let start = std::time::Instant::now();
-                    let result = node.execute(&engine_ctx, &inputs, &reporter).await;
+
+                    // Catch panics from `execute` so a crashing node is converted
+                    // to a `JobResult::Failed` instead of silently dropping the
+                    // `Done` signal — which would hang the scheduler (in_flight
+                    // never decrements, rx.recv() blocks forever).
+                    let result = AssertUnwindSafe(node.execute(&engine_ctx, &inputs, &reporter))
+                        .catch_unwind()
+                        .await;
+
                     let duration = start.elapsed();
                     let res = match result {
-                        Ok(outs) => JobResult::Success {
+                        Ok(Ok(outs)) => JobResult::Success {
                             id: job_id.clone(),
                             outputs: outs,
                             duration,
                         },
-                        Err(error) => {
+                        Ok(Err(error)) => {
                             warn!(node = %job_id, error = %error, "node failed");
                             JobResult::Failed {
                                 id: job_id.clone(),
                                 error,
+                                duration,
+                            }
+                        }
+                        Err(panic_payload) => {
+                            let msg = panic_payload
+                                .downcast_ref::<&str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| {
+                                    "panicked with non-string payload".to_string()
+                                });
+                            warn!(node = %job_id, panic = %msg, "node panicked");
+                            JobResult::Failed {
+                                id: job_id.clone(),
+                                error: DagError::Schedule(format!("node panicked: {msg}")),
                                 duration,
                             }
                         }

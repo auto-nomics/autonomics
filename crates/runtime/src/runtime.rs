@@ -125,6 +125,19 @@ or any other tool that accepts SQL.
   The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, \
   `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).
 
+### Data Persistence (Iceberg Data Lake)
+- **Prefer the Iceberg data lake for any intermediate or derived data** that needs to \
+persist beyond a single DAG run — transformed datasets, analysis results, reference \
+tables, snapshots, or any table you may re-query later.
+- Writing to Iceberg keeps data queryable (SQL, DataFusion), versioned (snapshots), \
+and immediately consumable by downstream pipeline nodes — far better than ad-hoc \
+CSV/Parquet files scattered on the local filesystem.
+- Use the filesystem only for ephemeral scratch files, downloaded raw artifacts \
+that have not yet been ingested, or small human-readable summaries meant for \
+immediate inspection.
+
+### Data Infrastucture
+
 ### General
 - Read, write, and manage files on the local filesystem.
 - Break complex research questions into sequential tool calls; explain your reasoning.

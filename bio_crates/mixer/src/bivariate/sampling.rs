@@ -50,11 +50,26 @@ struct SamplingBuffers<'a> {
     delta02: &'a mut [f64],
     delta11: &'a mut [f64],
     slots: &'a mut [u32],
+    /// 代次戳——`gen_stamps[slot] == current_gen` 表示该 slot 本 tag 已被触碰（delta 已清零并累加）。
+    gen_stamps: &'a mut [u32],
+    /// 本 tag 被触碰的 slot 列表（pdf 循环只遍历这些 slot + 未触碰的 null 分量）。
+    touched: &'a mut Vec<u32>,
+    current_gen: u32,
 }
 
 /// 单个 tag 的采样 pdf（实现 `find_unified_bivariate_tag_delta_sampling` + 内层 pdf 循环）。
 ///
 /// 返回该 tag 的混合 pdf（未取对数）。`buf_*` 是长度 `k_max` 的工作缓冲（复用，避免反复分配）。
+///
+/// # 稀疏 pdf 优化
+///
+/// GWAS 数据 pi~0.001 下，每个邻居的多项采样只触碰 ~50/20000 个 slot。
+/// 全部邻居遍历后，仅 ~15–30 % 的 slot 有非零 delta；其余 slot 的 delta 恒为 0，
+/// 协方差退化为 null（仅 sig2_zero），pdf 相同。
+///
+/// 用代次戳（`gen_stamps[slot] == current_gen`）追踪被触碰的 slot，pdf 循环只算被触碰的
+/// slot + 未触碰 slot 的 null 分量（`n_null · null_pdf`），把 O(k_max) 降到 O(touched)。
+/// 同时代次戳免除了每 tag 的 delta 缓冲零填和 slots 重初始化。
 fn tag_pdf_sampling(
     data: &BivariateData,
     p: &BivariateParams,
@@ -68,7 +83,11 @@ fn tag_pdf_sampling(
         delta02,
         delta11,
         slots,
+        gen_stamps,
+        touched,
+        current_gen,
     } = buffers;
+
     // 先验矩分量（常数，跨 snp）
     let sb1 = p.sig2_beta[0];
     let sb2 = p.sig2_beta[1];
@@ -77,21 +96,13 @@ fn tag_pdf_sampling(
 
     let n1j = data.n1[tag_j];
     let n2j = data.n2[tag_j];
+    // 预算 √(n1·n2)：使 d11_c2 的 sqrt 提升到循环外。
+    let sqrt_n1n2 = (n1j * n2j).sqrt();
 
-    // 重置工作缓冲
-    for x in delta20.iter_mut() {
-        *x = 0.0;
-    }
-    for x in delta02.iter_mut() {
-        *x = 0.0;
-    }
-    for x in delta11.iter_mut() {
-        *x = 0.0;
-    }
-    // slots = [0..k_max)
-    for (i, s) in slots.iter_mut().enumerate() {
-        *s = i as u32;
-    }
+    // 不再逐 tag 零填 delta 缓冲 / 重初始化 slots：
+    // - delta 缓冲靠代次戳懒清零（首次触碰时置零）。
+    // - slots 是上 tag 的遗留置换；Fisher-Yates 部分洗牌在任何起始置换上都产出
+    //   {0..k_max-1} 的均匀随机子集，统计等价。
 
     let mut rng = SmallRng::seed_from_u64(tag_seed(seed, tag_j as u32));
 
@@ -104,8 +115,9 @@ fn tag_pdf_sampling(
     for (k_nb, &s) in cols.iter().enumerate() {
         let hi = data.h[s as usize];
         let r2 = r2s[k_nb] as f64; // f32 存储 → f64 算术
-        let a1 = r2 * hi * n1j; // sig2_zeroC = 1
-        let a2 = r2 * hi * n2j;
+        let hr2 = r2 * hi; // 公共子表达式
+        let a1 = hr2 * n1j; // sig2_zeroC = 1
+        let a2 = hr2 * n2j;
 
         // 三成分的 delta 值
         // comp0(trait1-only): d20=a1*sb1, d02=0,        d11=0
@@ -113,7 +125,7 @@ fn tag_pdf_sampling(
         // comp2(shared):      d20=a1*sb1,  d02=a2*sb2,  d11=rho*sqrt(a1*sb1*a2*sb2)
         let d20_c2 = a1 * sb1;
         let d02_c2 = a2 * sb2;
-        let d11_c2 = rho * (d20_c2 * d02_c2).sqrt();
+        let d11_c2 = rho * hr2 * sqrt_n1n2 * (sb1 * sb2).sqrt();
         let d20_val = [d20_c2, 0.0, d20_c2];
         let d02_val = [0.0, d02_c2, d02_c2];
         let d11_val = [0.0, 0.0, d11_c2];
@@ -174,6 +186,14 @@ fn tag_pdf_sampling(
             let _ = pi_val;
             for _ in 0..counts[c] {
                 let slot = slots[idx] as usize;
+                // 代次戳懒清零：首次触碰本 tag 时置零 delta 并记录到 touched 列表。
+                if gen_stamps[slot] != current_gen {
+                    gen_stamps[slot] = current_gen;
+                    delta20[slot] = 0.0;
+                    delta02[slot] = 0.0;
+                    delta11[slot] = 0.0;
+                    touched.push(slot as u32);
+                }
                 delta20[slot] += d20;
                 delta02[slot] += d02;
                 delta11[slot] += d11;
@@ -191,12 +211,23 @@ fn tag_pdf_sampling(
     let z1 = data.z1[tag_j];
     let z2 = data.z2[tag_j];
     let pi_k = 1.0 / k_max as f64;
-    let mut pdf_tag = 0.0f64;
-    for k in 0..k_max {
+
+    // 稀疏 pdf 循环：未触碰 slot 的 delta 恒 0，协方差 = null（+ d*__inf），pdf 相同。
+    let n_touched = touched.len();
+    let n_null = k_max - n_touched;
+    let null_a11 = d20_inf.max(0.0) + sz11;
+    let null_a22 = d02_inf.max(0.0) + sz22;
+    let null_a12 = d11_inf.max(0.0) + sz12;
+    let null_pdf = gaussian2_pdf(z1, z2, null_a11, null_a12, null_a22);
+    let mut pdf_tag = n_null as f64 * null_pdf * pi_k;
+
+    // 仅遍历被触碰的 slot
+    for &k in touched.iter() {
+        let kk = k as usize;
         // 逐分量 max(0, delta+delta_inf) 钳制（镜像 C++ l.710-712，含 delta11）
-        let a11 = (delta20[k] + d20_inf).max(0.0) + sz11;
-        let a22 = (delta02[k] + d02_inf).max(0.0) + sz22;
-        let a12 = (delta11[k] + d11_inf).max(0.0) + sz12;
+        let a11 = (delta20[kk] + d20_inf).max(0.0) + sz11;
+        let a22 = (delta02[kk] + d02_inf).max(0.0) + sz22;
+        let a12 = (delta11[kk] + d11_inf).max(0.0) + sz12;
         pdf_tag += gaussian2_pdf(z1, z2, a11, a12, a22) * pi_k;
     }
     pdf_tag
@@ -230,12 +261,16 @@ fn total_pdf_worker(
     k_max: usize,
     seed: u64,
 ) -> f64 {
-    // 线程局部缓冲：用 thread_local 复用 k_max 长度的 buffer
+    // 线程局部缓冲：用 thread_local 复用 k_max 长度的 buffer。
+    // gen/touched 支撑代次戳懒清零 + 稀疏 pdf 循环（见 tag_pdf_sampling 文档）。
     thread_local! {
         static BUF20: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
         static BUF02: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
         static BUF11: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
         static SLOTS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static GEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static TOUCHED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static CUR_GEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
     tags.par_iter()
         .map(|&tag| {
@@ -245,33 +280,63 @@ fn total_pdf_worker(
                 BUF02.with(|b2| {
                     BUF11.with(|b11| {
                         SLOTS.with(|sl| {
-                            let mut bm = b.borrow_mut();
-                            let mut bn = b2.borrow_mut();
-                            let mut be = b11.borrow_mut();
-                            let mut bs = sl.borrow_mut();
-                            bm.resize(k_max, 0.0);
-                            bn.resize(k_max, 0.0);
-                            be.resize(k_max, 0.0);
-                            bs.resize(k_max, 0);
-                            let pdf = tag_pdf_sampling(
-                                data,
-                                p,
-                                j,
-                                k_max,
-                                seed,
-                                SamplingBuffers {
-                                    delta20: &mut bm,
-                                    delta02: &mut bn,
-                                    delta11: &mut be,
-                                    slots: &mut bs,
-                                },
-                            );
-                            let pdf = if pdf > 0.0 { pdf } else { K_MIN_TAG_PDF };
-                            let mut inc = -pdf.ln() * w;
-                            if !inc.is_finite() {
-                                inc = -K_MIN_TAG_PDF.ln() * w;
-                            }
-                            inc
+                            GEN.with(|gn| {
+                                TOUCHED.with(|tc| {
+                                    CUR_GEN.with(|cg| {
+                                        let mut bm = b.borrow_mut();
+                                        let mut bn = b2.borrow_mut();
+                                        let mut be = b11.borrow_mut();
+                                        let mut bs = sl.borrow_mut();
+                                        let mut bg = gn.borrow_mut();
+                                        let mut bt = tc.borrow_mut();
+
+                                        bm.resize(k_max, 0.0);
+                                        bn.resize(k_max, 0.0);
+                                        be.resize(k_max, 0.0);
+                                        bs.resize(k_max, 0);
+                                        bg.resize(k_max, 0);
+                                        // slots 首次创建时初始化为恒等置换；
+                                        // 后续 tag 靠 Fisher-Yates 部分洗牌保持有效置换。
+                                        if bs.iter().enumerate().any(|(i, &v)| v != i as u32) {
+                                            for (i, s) in bs.iter_mut().enumerate() {
+                                                *s = i as u32;
+                                            }
+                                        }
+
+                                        // 推进代次（wrapping_add；溢出时全量重置 gen）
+                                        let mut cur = cg.get().wrapping_add(1);
+                                        if cur == 0 {
+                                            bg.fill(0);
+                                            cur = 1;
+                                        }
+                                        cg.set(cur);
+                                        bt.clear();
+
+                                        let pdf = tag_pdf_sampling(
+                                            data,
+                                            p,
+                                            j,
+                                            k_max,
+                                            seed,
+                                            SamplingBuffers {
+                                                delta20: &mut bm,
+                                                delta02: &mut bn,
+                                                delta11: &mut be,
+                                                slots: &mut bs,
+                                                gen_stamps: &mut bg,
+                                                touched: &mut bt,
+                                                current_gen: cur,
+                                            },
+                                        );
+                                        let pdf = if pdf > 0.0 { pdf } else { K_MIN_TAG_PDF };
+                                        let mut inc = -pdf.ln() * w;
+                                        if !inc.is_finite() {
+                                            inc = -K_MIN_TAG_PDF.ln() * w;
+                                        }
+                                        inc
+                                    })
+                                })
+                            })
                         })
                     })
                 })

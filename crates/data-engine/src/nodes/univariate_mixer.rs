@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ahash::AHashMap;
 
-use arrow_array::{Float64Array, RecordBatch, StringArray};
+use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -378,7 +378,7 @@ impl DagNode for UnivariateMixerNode {
             let zs = col_as_f64(batch, "zc")?;
             let ns = col_as_f64(batch, "nc")?;
             for row in 0..batch.num_rows() {
-                let rsid = rsids.value(row);
+                let rsid = rsids[row].as_str();
                 if rsid_to_idx.contains_key(rsid) {
                     continue;
                 }
@@ -455,18 +455,13 @@ impl DagNode for UnivariateMixerNode {
         let mut tags: Vec<u32> = Vec::new();
         let mut panel_tag_count = 0u64;
         for batch in &suff_batches {
-            let id_col = batch
-                .column_by_name("id_tag")
-                .ok_or_else(|| UnivariateMixerError::InvalidInput("col id_tag missing".into()))?
-                .as_any()
-                .downcast_ref::<arrow_array::StringArray>()
-                .ok_or_else(|| UnivariateMixerError::InvalidInput("col id_tag not Utf8".into()))?;
+            let id_col = col_as_string(batch, "id_tag")?;
             let s1_col = col_as_f64(batch, "s1")?;
             let s2_col = col_as_f64(batch, "s2")?;
             let wt_col = col_as_f64(batch, "weight")?;
             for r in 0..batch.num_rows() {
                 panel_tag_count += 1;
-                let rsid = id_col.value(r);
+                let rsid = id_col[r].as_str();
                 if let Some(&idx) = rsid_to_idx.get(rsid) {
                     let n_tag = n_vec[idx as usize];
                     let s1 = s1_col.value(r);
@@ -580,17 +575,20 @@ impl DagNode for UnivariateMixerNode {
 // Arrow 列提取 helpers
 // =====================================================================
 
-/// 按列名取 `StringArray`（rsid 等 Utf8 列）。
-fn col_as_string<'a>(
-    batch: &'a RecordBatch,
+/// 按列名取字符串列（rsid 等 Utf8/Utf8View 列），返回 owned `Vec<String>`。
+/// 兼容 DataFusion ≥42 的 Utf8View 输出 — 见 [`super::meta::string_opt_values`]。
+fn col_as_string(
+    batch: &RecordBatch,
     name: &str,
-) -> Result<&'a StringArray, UnivariateMixerError> {
-    batch
+) -> Result<Vec<String>, UnivariateMixerError> {
+    let col = batch
         .column_by_name(name)
-        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' not found")))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' is not Utf8")))
+        .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
+    super::meta::string_opt_values(col.as_ref())
+        .map(|vals| vals.into_iter().map(|v| v.unwrap_or_default()).collect())
+        .ok_or_else(|| {
+            UnivariateMixerError::InvalidInput(format!("column '{name}' is not a string type"))
+        })
 }
 
 /// 按列名取 `Float64Array`（Z/N/alt_freq/unphased_r2 等）。

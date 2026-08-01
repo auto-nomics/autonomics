@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::{Float32Array, Float64Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{Array, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray, StringViewArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
@@ -38,12 +38,21 @@ fn h_of(maf: f64) -> f64 {
     2.0 * maf * (1.0 - maf)
 }
 
-fn col_str<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a StringArray, BoxErr> {
-    b.column_by_name(name)
-        .ok_or_else(|| BoxErr::from(format!("column {name} missing")))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| BoxErr::from(format!("column {name} not Utf8")))
+fn col_str(b: &RecordBatch, name: &str) -> Result<Vec<String>, BoxErr> {
+    let col = b
+        .column_by_name(name)
+        .ok_or_else(|| BoxErr::from(format!("column {name} missing")))?;
+    if let Some(a) = col.as_any().downcast_ref::<StringArray>() {
+        Ok((0..a.len())
+            .map(|i| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
+            .collect())
+    } else if let Some(a) = col.as_any().downcast_ref::<StringViewArray>() {
+        Ok((0..a.len())
+            .map(|i| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
+            .collect())
+    } else {
+        Err(BoxErr::from(format!("column {name} not a string type")))
+    }
 }
 
 fn col_f64<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a Float64Array, BoxErr> {
@@ -151,7 +160,7 @@ async fn main() -> Result<(), BoxErr> {
         let ids = col_str(b, "id")?;
         let afs = col_f64(b, "alt_freq")?;
         for r in 0..b.num_rows() {
-            let id = ids.value(r).to_string();
+            let id = ids[r].clone();
             if rsid_to_idx.contains_key(&id) {
                 continue;
             }
@@ -182,8 +191,8 @@ async fn main() -> Result<(), BoxErr> {
         let b_ids = col_str(&batch, "id_b")?;
         let r2s = col_f64(&batch, "unphased_r2")?;
         for r in 0..batch.num_rows() {
-            let a = a_ids.value(r);
-            let b = b_ids.value(r);
+            let a = a_ids[r].as_str();
+            let b = b_ids[r].as_str();
             // 两端都得在 AF 面板里（有 index）才算有效对
             if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
                 ld_pairs.push((ta, tb, r2s.value(r)));

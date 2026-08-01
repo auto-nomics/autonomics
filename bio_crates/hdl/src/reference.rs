@@ -127,7 +127,15 @@ pub fn ld_ref_from_plink(prefix: &Path, keep_snps: &[String]) -> Result<LdRefere
         col_of_req[req_pos] = sorted_col;
     }
 
-    let bed = prefix.with_extension("bed");
+    // Append ".bed" to the prefix — NOT `with_extension("bed")`, which would
+    // strip the last extension (e.g. `…chr22.qc` → `…chr22.bed`, missing the
+    // `.bed` file). This mirrors `lava::plink::plink_file` so prefixes like
+    // `1000G.EUR.chr22.qc` correctly resolve to `1000G.EUR.chr22.qc.bed`.
+    let bed = {
+        let mut s = prefix.as_os_str().to_owned();
+        s.push(".bed");
+        Path::new(&s).to_path_buf()
+    };
     // Permissive filter: keep every requested SNP (R computed LD from all).
     let filt = lava::plink::PlinkFilter {
         maf: 0.0,

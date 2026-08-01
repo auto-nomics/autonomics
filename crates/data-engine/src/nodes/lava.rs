@@ -142,17 +142,14 @@ pub struct LavaPhenoMeta {
 
 // ============================ column extractors ============================
 
+/// Extract string values from a column, accepting both `StringArray` (Utf8)
+/// and `StringViewArray` (Utf8View) — see [`super::meta::string_opt_values`].
 fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        let arr = col.as_any().downcast_ref::<StringArray>()?;
-        for i in 0..arr.len() {
-            out.push(if arr.is_null(i) {
-                String::new()
-            } else {
-                arr.value(i).to_string()
-            });
+        for v in super::meta::string_opt_values(col.as_ref())? {
+            out.push(v.unwrap_or_default());
         }
     }
     Some(out)
@@ -162,14 +159,7 @@ fn col_opt_str(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<String>
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        let arr = col.as_any().downcast_ref::<StringArray>()?;
-        for i in 0..arr.len() {
-            out.push(if arr.is_null(i) {
-                None
-            } else {
-                Some(arr.value(i).to_string())
-            });
-        }
+        out.extend(super::meta::string_opt_values(col.as_ref())?);
     }
     Some(out)
 }

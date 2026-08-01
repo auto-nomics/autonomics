@@ -299,7 +299,9 @@ mod tests {
             "lava_pcor" => serde_json::json!({"target": ["p1", "p2"]}),
             "lava_multireg" => serde_json::json!({"target": "p1"}),
             "hdl_l" => serde_json::json!({
-                "ld_ref_prefix": "/path/to/region_plink_prefix",
+                "chr": 22,
+                "start": 17000000,
+                "stop": 18000000,
                 "trait1_name": "trait1",
                 "trait2_name": "trait2"
             }),

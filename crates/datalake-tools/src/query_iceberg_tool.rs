@@ -283,6 +283,13 @@ pub(crate) fn scalar_to_json(col: &dyn arrow_array::Array, row: usize) -> serde_
                 .unwrap();
             serde_json::json!(arr.value(row))
         }
+        DataType::Utf8View => {
+            let arr = col
+                .as_any()
+                .downcast_ref::<arrow_array::StringViewArray>()
+                .unwrap();
+            serde_json::json!(arr.value(row))
+        }
         DataType::LargeUtf8 => {
             let arr = col
                 .as_any()

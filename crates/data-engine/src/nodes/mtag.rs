@@ -614,6 +614,10 @@ fn extract_string(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, Mt
             for v in arr.iter() {
                 out.push(v.unwrap_or("").to_string());
             }
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow_array::StringViewArray>() {
+            for v in arr.iter() {
+                out.push(v.unwrap_or("").to_string());
+            }
         } else {
             return Err(MtagNodeError::Mtag(mtag::MtagError::InvalidInput(format!(
                 "column '{name}' is not a string type"

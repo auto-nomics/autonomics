@@ -86,3 +86,8 @@ unused_imports = "allow"
 
 [profile.dev.package.faer]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

@@ -149,7 +149,7 @@ fn extract_required_string(
     let idx = column_index(batches, name)?;
     // Validate the type once on the first batch (all batches share the schema).
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8) {
+    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
         return Err(MrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
@@ -162,6 +162,13 @@ fn extract_required_string(
         let opt_iter: Box<dyn Iterator<Item = Option<&str>>> = match dtype {
             DataType::Utf8 => {
                 let a = col.as_any().downcast_ref::<StringArray>().unwrap();
+                Box::new(a.iter())
+            }
+            DataType::Utf8View => {
+                let a = col
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                    .unwrap();
                 Box::new(a.iter())
             }
             _ => Box::new(
@@ -188,7 +195,7 @@ fn extract_opt_string(
 ) -> Result<Vec<Option<String>>, MrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8) {
+    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
         return Err(MrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
@@ -201,6 +208,16 @@ fn extract_opt_string(
         match dtype {
             DataType::Utf8 => {
                 for v in col.as_any().downcast_ref::<StringArray>().unwrap().iter() {
+                    out.push(v.map(str::to_string));
+                }
+            }
+            DataType::Utf8View => {
+                for v in col
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                    .unwrap()
+                    .iter()
+                {
                     out.push(v.map(str::to_string));
                 }
             }
