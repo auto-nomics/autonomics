@@ -28,7 +28,6 @@ use crate::nodes::{
     ldsc_sldsc::LdscSldscNodeFactory,
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
-    mr::MrNodeFactory,
     mrlap::MrlapNodeFactory,
     mtag::MtagNodeFactory,
     sink_file::FileSinkNodeFactory,
@@ -38,6 +37,7 @@ use crate::nodes::{
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
     test_source::TestSourceFactory,
+    two_sample_mr::TwoSampleMrNodeFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
     viz::VizNodeFactory,
 };
@@ -171,7 +171,7 @@ impl NodeRegistry {
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(TestSourceFactory {}));
-        registry.register(Box::new(MrNodeFactory {}));
+        registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));
         registry.register(Box::new(LavaLocusNodeFactory {}));
         registry.register(Box::new(LavaUnivNodeFactory {}));
@@ -278,7 +278,7 @@ mod tests {
             "lcv" => serde_json::json!({"no_blocks": 100}),
             "sldsc" => serde_json::json!({}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
-            "mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
+            "two_sample_mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
             "mrlap" => serde_json::json!({
                 "exposure_name": "exp",
                 "outcome_name": "out"

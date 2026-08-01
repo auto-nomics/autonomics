@@ -18,7 +18,6 @@ pub mod ldsc_sldsc;
 pub mod liability;
 pub mod linear_regression;
 pub mod meta;
-pub mod mr;
 pub mod mrlap;
 pub mod mtag;
 pub mod sink_common;
@@ -29,6 +28,7 @@ pub mod source_iceberg;
 pub mod source_opentargets;
 pub mod sql_node;
 pub mod test_source;
+pub mod two_sample_mr;
 pub mod univariate_mixer;
 pub mod viz;
 
@@ -49,7 +49,6 @@ pub use linear_regression::{
     LinearRegressionNode, LinearRegressionNodeFactory, LinearRegressionNodeSpec,
 };
 pub use meta::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port};
-pub use mr::{MrNode, MrNodeFactory, MrNodeSpec, MrParameters};
 pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 pub use mtag::{MtagConfig, MtagNode, MtagNodeFactory};
 pub use sink_common::SinkMode;
@@ -63,6 +62,9 @@ pub use source_opentargets::{
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
+pub use two_sample_mr::{
+    TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrNodeSpec, TwoSampleMrParameters,
+};
 pub use univariate_mixer::{
     UnivariateMixerNode, UnivariateMixerNodeFactory, UnivariateMixerNodeSpec,
 };

@@ -84,8 +84,12 @@ pub type Result<T> = std::result::Result<T, MrError>;
 /// ```text
 /// list(test_dist = "z", nboot = 1000, Cov = 0, penk = 20, phi = 1,
 ///      alpha = 0.05, Qthresh = 0.05, over.dispersion = TRUE,
-///      loss.function = "huber", shrinkage = FALSE)
+///      shrinkage = FALSE)
 /// ```
+///
+/// `loss.function` from the R original is intentionally omitted: it is only
+/// consumed by RAPS (`mr_raps`), which is not ported, so the field was dead
+/// weight. If/when RAPS is ported, re-introduce it alongside the implementation.
 #[derive(Debug, Clone)]
 pub struct Parameters {
     /// `"z"` or `"t"` — test distribution for some methods.
@@ -103,11 +107,9 @@ pub struct Parameters {
     pub alpha: f64,
     /// Q-statistic threshold for the Rucker framework (`Qthresh`).
     pub qthresh: f64,
-    /// Whether the model accounts for overdispersion (RAPS / mode variants).
+    /// Whether the model accounts for overdispersion (mode variants).
     pub over_dispersion: bool,
-    /// Loss function name: `"l2"`, `"huber"`, `"tukey"` (RAPS).
-    pub loss_function: String,
-    /// Whether empirical partially-Bayes shrinkage is applied (RAPS).
+    /// Whether empirical partially-Bayes shrinkage is applied.
     pub shrinkage: bool,
 }
 
@@ -123,7 +125,6 @@ impl Parameters {
             alpha: 0.05,
             qthresh: 0.05,
             over_dispersion: true,
-            loss_function: "huber".to_string(),
             shrinkage: false,
         }
     }

@@ -315,7 +315,6 @@ mod tests {
         assert_eq!(p.phi, 1.0);
         assert_eq!(p.alpha, 0.05);
         assert!(p.over_dispersion);
-        assert_eq!(p.loss_function, "huber");
         assert!(!p.shrinkage);
     }
 }

@@ -36,7 +36,7 @@ use crate::{
 // =====================================================================
 
 #[derive(Debug, Error)]
-pub enum MrNodeError {
+pub enum TwoSampleMrNodeError {
     #[error("MR computation failed: {0}")]
     Mr(#[from] mr::MrError),
     #[error("failed to build result batch: {0}")]
@@ -59,10 +59,10 @@ pub enum MrNodeError {
     },
 }
 
-impl From<MrNodeError> for DagError {
-    fn from(e: MrNodeError) -> Self {
+impl From<TwoSampleMrNodeError> for DagError {
+    fn from(e: TwoSampleMrNodeError) -> Self {
         DagError::NodeError {
-            node_type: "mr".to_string(),
+            node_type: TWO_SAMPLE_MR_NODE_KIND.to_string(),
             msg: e.to_string(),
         }
     }
@@ -128,14 +128,14 @@ fn output_schema() -> SchemaRef {
 // Column extraction — Arrow array → Rust
 // =====================================================================
 
-fn column_index(batches: &[RecordBatch], name: &str) -> Result<usize, MrNodeError> {
+fn column_index(batches: &[RecordBatch], name: &str) -> Result<usize, TwoSampleMrNodeError> {
     let schema = batches
         .first()
         .map(|b| b.schema().clone())
-        .ok_or(MrNodeError::EmptyInput)?;
+        .ok_or(TwoSampleMrNodeError::EmptyInput)?;
     schema
         .index_of(name)
-        .map_err(|_| MrNodeError::MissingColumn {
+        .map_err(|_| TwoSampleMrNodeError::MissingColumn {
             name: name.to_string(),
         })
 }
@@ -145,12 +145,12 @@ fn column_index(batches: &[RecordBatch], name: &str) -> Result<usize, MrNodeErro
 fn extract_required_string(
     batches: &[RecordBatch],
     name: &str,
-) -> Result<Vec<String>, MrNodeError> {
+) -> Result<Vec<String>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     // Validate the type once on the first batch (all batches share the schema).
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8) {
-        return Err(MrNodeError::WrongColumnType {
+    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+        return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
         });
@@ -164,6 +164,13 @@ fn extract_required_string(
                 let a = col.as_any().downcast_ref::<StringArray>().unwrap();
                 Box::new(a.iter())
             }
+            DataType::Utf8View => {
+                let a = col
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                    .unwrap();
+                Box::new(a.iter())
+            }
             _ => Box::new(
                 col.as_any()
                     .downcast_ref::<arrow_array::LargeStringArray>()
@@ -172,7 +179,7 @@ fn extract_required_string(
             ),
         };
         for v in opt_iter {
-            out.push(v.map(str::to_string).ok_or(MrNodeError::WrongColumnType {
+            out.push(v.map(str::to_string).ok_or(TwoSampleMrNodeError::WrongColumnType {
                 name: name.to_string(),
                 dtype: "null".to_string(),
             })?);
@@ -185,11 +192,11 @@ fn extract_required_string(
 fn extract_opt_string(
     batches: &[RecordBatch],
     name: &str,
-) -> Result<Vec<Option<String>>, MrNodeError> {
+) -> Result<Vec<Option<String>>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8) {
-        return Err(MrNodeError::WrongColumnType {
+    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+        return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
         });
@@ -201,6 +208,16 @@ fn extract_opt_string(
         match dtype {
             DataType::Utf8 => {
                 for v in col.as_any().downcast_ref::<StringArray>().unwrap().iter() {
+                    out.push(v.map(str::to_string));
+                }
+            }
+            DataType::Utf8View => {
+                for v in col
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringViewArray>()
+                    .unwrap()
+                    .iter()
+                {
                     out.push(v.map(str::to_string));
                 }
             }
@@ -222,7 +239,7 @@ fn extract_opt_string(
 /// Extract a numeric column into `Vec<f64>`, casting integer/float types and
 /// replacing nulls with `NaN` (the `mr` crate's NA convention). Adapted from
 /// `linear_regression::extract_numeric_column`.
-fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, MrNodeError> {
+fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
     let is_numeric = matches!(
@@ -240,7 +257,7 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, MrNodeEr
             | DataType::UInt64
     );
     if !is_numeric {
-        return Err(MrNodeError::WrongColumnType {
+        return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
         });
@@ -255,7 +272,7 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, MrNodeEr
 
 /// Extract a numeric column into `Vec<Option<f64>>` (null → `None`). Used for
 /// the optional effect-allele-frequency columns.
-fn extract_opt_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<Option<f64>>, MrNodeError> {
+fn extract_opt_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<Option<f64>>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
     let is_numeric = matches!(
@@ -273,7 +290,7 @@ fn extract_opt_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<Option<f64
             | DataType::UInt64
     );
     if !is_numeric {
-        return Err(MrNodeError::WrongColumnType {
+        return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
         });
@@ -353,7 +370,7 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 /// registry needs (`mr::Parameters` itself does not). Field defaults reproduce
 /// [`mr::Parameters::default_for`] exactly.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MrParameters {
+pub struct TwoSampleMrParameters {
     /// `"z"` or `"t"` — test distribution for some methods.
     pub test_dist: String,
     /// Number of bootstrap replications for SE estimation.
@@ -370,13 +387,11 @@ pub struct MrParameters {
     pub qthresh: f64,
     /// Whether the model accounts for overdispersion.
     pub over_dispersion: bool,
-    /// Loss function name: `"l2"`, `"huber"`, `"tukey"`.
-    pub loss_function: String,
     /// Whether empirical partially-Bayes shrinkage is applied.
     pub shrinkage: bool,
 }
 
-impl Default for MrParameters {
+impl Default for TwoSampleMrParameters {
     fn default() -> Self {
         let p = mr::Parameters::default_for();
         Self {
@@ -388,14 +403,13 @@ impl Default for MrParameters {
             alpha: p.alpha,
             qthresh: p.qthresh,
             over_dispersion: p.over_dispersion,
-            loss_function: p.loss_function,
             shrinkage: p.shrinkage,
         }
     }
 }
 
-impl From<MrParameters> for mr::Parameters {
-    fn from(p: MrParameters) -> Self {
+impl From<TwoSampleMrParameters> for mr::Parameters {
+    fn from(p: TwoSampleMrParameters) -> Self {
         mr::Parameters {
             test_dist: p.test_dist,
             nboot: p.nboot,
@@ -405,7 +419,6 @@ impl From<MrParameters> for mr::Parameters {
             alpha: p.alpha,
             qthresh: p.qthresh,
             over_dispersion: p.over_dispersion,
-            loss_function: p.loss_function,
             shrinkage: p.shrinkage,
         }
     }
@@ -420,7 +433,7 @@ fn default_tolerance() -> f64 {
 
 /// Spec for the MR node, deserialised from the registry-provided JSON.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MrNodeSpec {
+pub struct TwoSampleMrNodeSpec {
     /// Methods to run, as `mr_method_list()` `obj` names (e.g. `"mr_ivw"`).
     /// Empty (the default) selects the `use_by_default` method set.
     #[serde(default)]
@@ -432,30 +445,30 @@ pub struct MrNodeSpec {
     /// Allele-frequency tolerance for palindrome inference (default `0.08`).
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
-    /// Full MR [`MrParameters`] (defaults reproduce `default_parameters()`).
+    /// Full MR [`TwoSampleMrParameters`] (defaults reproduce `default_parameters()`).
     #[serde(default)]
-    pub parameters: MrParameters,
+    pub parameters: TwoSampleMrParameters,
 }
 
 // =====================================================================
 // Node
 // =====================================================================
 
-const MR_NODE_KIND: &str = "mr";
+const TWO_SAMPLE_MR_NODE_KIND: &str = "two_sample_mr";
 
 /// A transform node that runs allele harmonisation + the main MR dispatch.
 ///
 /// The upstream `DataFrame` must be merged on SNP and carry the fixed input
 /// columns (see [`input_schema`]).
 #[derive(Clone)]
-pub struct MrNode {
+pub struct TwoSampleMrNode {
     meta: NodePorts,
-    spec: MrNodeSpec,
+    spec: TwoSampleMrNodeSpec,
 }
 
-impl MrNode {
-    /// Construct an [`MrNode`] from a fully-specified [`MrNodeSpec`].
-    pub fn new(spec: MrNodeSpec) -> Self {
+impl TwoSampleMrNode {
+    /// Construct an [`TwoSampleMrNode`] from a fully-specified [`TwoSampleMrNodeSpec`].
+    pub fn new(spec: TwoSampleMrNodeSpec) -> Self {
         Self {
             meta: port_layout(),
             spec,
@@ -463,9 +476,9 @@ impl MrNode {
     }
 }
 
-pub struct MrNodeFactory {}
+pub struct TwoSampleMrNodeFactory {}
 
-/// Static port layout for every [`MrNode`]: one typed input (harmonised GWAS
+/// Static port layout for every [`TwoSampleMrNode`]: one typed input (harmonised GWAS
 /// sumstats, see [`input_schema`]) and one typed output ([`output_schema`]).
 fn port_layout() -> NodePorts {
     NodePorts::new()
@@ -473,9 +486,9 @@ fn port_layout() -> NodePorts {
         .add_output_port(Some(output_schema()))
 }
 
-impl NodeFactory for MrNodeFactory {
+impl NodeFactory for TwoSampleMrNodeFactory {
     fn kind(&self) -> &'static str {
-        MR_NODE_KIND
+        TWO_SAMPLE_MR_NODE_KIND
     }
 
     fn desc(&self) -> &'static str {
@@ -491,7 +504,7 @@ impl NodeFactory for MrNodeFactory {
     }
 
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(MrNodeSpec)
+        schema_for!(TwoSampleMrNodeSpec)
     }
 
     fn ports(&self) -> NodePorts {
@@ -503,13 +516,13 @@ impl NodeFactory for MrNodeFactory {
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
-        let spec: MrNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(MrNode::new(spec)))
+        let spec: TwoSampleMrNodeSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(TwoSampleMrNode::new(spec)))
     }
 }
 
 #[async_trait]
-impl DagNode for MrNode {
+impl DagNode for TwoSampleMrNode {
     fn ports(&self) -> &NodePorts {
         &self.meta
     }
@@ -519,7 +532,7 @@ impl DagNode for MrNode {
     }
 
     fn kind(&self) -> &'static str {
-        MR_NODE_KIND
+        TWO_SAMPLE_MR_NODE_KIND
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -532,9 +545,9 @@ impl DagNode for MrNode {
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or(MrNodeError::EmptyInput)?;
+        let input = inputs.first().ok_or(TwoSampleMrNodeError::EmptyInput)?;
         if !matches!(self.spec.action, 1..=3) {
-            return Err(MrNodeError::InvalidAction(self.spec.action).into());
+            return Err(TwoSampleMrNodeError::InvalidAction(self.spec.action).into());
         }
 
         let batches: Vec<RecordBatch> =
@@ -544,11 +557,11 @@ impl DagNode for MrNode {
                 .collect()
                 .await
                 .map_err(|e| DagError::NodeError {
-                    node_type: MR_NODE_KIND.into(),
+                    node_type: TWO_SAMPLE_MR_NODE_KIND.into(),
                     msg: format!("collect failed: {e}"),
                 })?;
         if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
-            return Err(MrNodeError::EmptyInput.into());
+            return Err(TwoSampleMrNodeError::EmptyInput.into());
         }
 
         // ---- extract columns ----
@@ -582,7 +595,7 @@ impl DagNode for MrNode {
             (IN_EAF_OUT, eaf_out.len()),
         ] {
             if len != n {
-                return Err(MrNodeError::LengthMismatch {
+                return Err(TwoSampleMrNodeError::LengthMismatch {
                     name: name.into(),
                     len,
                     expected: n,
@@ -619,12 +632,12 @@ impl DagNode for MrNode {
         let parameters: mr::Parameters = self.spec.parameters.clone().into();
         let method_refs: Vec<&str> = self.spec.method_list.iter().map(|s| s.as_str()).collect();
         let rows =
-            mr::dispatch::mr(&harmonised, &parameters, &method_refs).map_err(MrNodeError::Mr)?;
+            mr::dispatch::mr(&harmonised, &parameters, &method_refs).map_err(TwoSampleMrNodeError::Mr)?;
 
         // ---- build output batch ----
         let batch = build_result_batch(&rows)?;
         let ctx = node_ctx.session();
-        let df = ctx.read_batch(batch).map_err(MrNodeError::from)?;
+        let df = ctx.read_batch(batch).map_err(TwoSampleMrNodeError::from)?;
 
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
@@ -633,7 +646,7 @@ impl DagNode for MrNode {
 }
 
 /// Build the output `RecordBatch` (one row per [`mr::dispatch::MrResultRow`]).
-fn build_result_batch(rows: &[mr::dispatch::MrResultRow]) -> Result<RecordBatch, MrNodeError> {
+fn build_result_batch(rows: &[mr::dispatch::MrResultRow]) -> Result<RecordBatch, TwoSampleMrNodeError> {
     let id_exp: Vec<&str> = rows.iter().map(|r| r.id_exposure.as_str()).collect();
     let id_out: Vec<&str> = rows.iter().map(|r| r.id_outcome.as_str()).collect();
     let method: Vec<&str> = rows.iter().map(|r| r.method.as_str()).collect();
@@ -730,13 +743,13 @@ mod tests {
 
     #[tokio::test]
     async fn runs_default_methods_and_emits_ivw() {
-        let mut node = MrNode::new(MrNodeSpec {
+        let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
             method_list: vec![],
             action: default_action(),
             tolerance: default_tolerance(),
-            parameters: MrParameters::default(),
+            parameters: TwoSampleMrParameters::default(),
         });
-        assert_eq!(node.kind(), "mr");
+        assert_eq!(node.kind(), "two_sample_mr");
 
         let outs = node
             .execute(
@@ -774,11 +787,11 @@ mod tests {
 
     #[tokio::test]
     async fn respects_explicit_method_list() {
-        let mut node = MrNode::new(MrNodeSpec {
+        let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
             method_list: vec!["mr_ivw".to_string()],
             action: default_action(),
             tolerance: default_tolerance(),
-            parameters: MrParameters::default(),
+            parameters: TwoSampleMrParameters::default(),
         });
         let outs = node
             .execute(
@@ -807,11 +820,11 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_action() {
-        let mut node = MrNode::new(MrNodeSpec {
+        let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
             method_list: vec![],
             action: 9,
             tolerance: default_tolerance(),
-            parameters: MrParameters::default(),
+            parameters: TwoSampleMrParameters::default(),
         });
         let err = node
             .execute(
