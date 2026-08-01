@@ -1,0 +1,21 @@
+[package]
+name = "epi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "epi"
+path = "src/lib.rs"
+
+[dependencies]
+statkit = { path = "../statkit" }
+faer.workspace = true
+statrs = "0.18"
+thiserror.workspace = true
+rand = "0.9"
+rand_chacha = "0.9"
+
+[lints]
+workspace = true

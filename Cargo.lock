@@ -1746,7 +1746,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
- "stat-primitives",
+ "statkit",
  "statrs",
  "tempfile",
  "thiserror 2.0.19",
@@ -7590,14 +7590,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "stat-primitives"
-version = "0.1.0"
-
-[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "statkit"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "statrs",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "statrs"

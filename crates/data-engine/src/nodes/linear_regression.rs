@@ -1,7 +1,7 @@
 //! Linear regression transform node.
 //!
 //! Takes a single upstream `DataFrame`, extracts the specified X and Y columns,
-//! fits an OLS model via [`stat_primitives::regression::ols`], and outputs a summary
+//! fits an OLS model via [`statkit::regression::ols`], and outputs a summary
 //! `DataFrame` with coefficients, standard errors, t-statistics, and p-values.
 
 use std::sync::Arc;
@@ -132,6 +132,8 @@ fn extract_numeric_column(col: &dyn Array, out: &mut Vec<f64>) {
     }
 }
 
+use statkit::regression;
+
 // =====================================================================
 // Output DataFrame construction
 // =====================================================================
@@ -140,10 +142,7 @@ fn extract_numeric_column(col: &dyn Array, out: &mut Vec<f64>) {
 ///
 /// Columns: `term` (Utf8), `coefficient`, `std_error`, `t_stat`, `p_value`,
 /// `r_squared`, `n_obs` (all Float64 except term).
-fn build_result_batch(
-    reg: &stat_primitives::regression::Regression,
-    intercept: bool,
-) -> RecordBatch {
+fn build_result_batch(reg: &regression::Regression, intercept: bool) -> RecordBatch {
     let n = reg.n_params;
     let mut terms = Vec::with_capacity(n);
     let mut coefficients = Vec::with_capacity(n);
@@ -318,7 +317,7 @@ impl DagNode for LinearRegressionNode {
         let x_slices: Vec<&[f64]> = x_owned.iter().map(|v| v.as_slice()).collect();
 
         // Run OLS.
-        let reg = stat_primitives::regression::ols(&x_slices, &y, self.intercept)
+        let reg = regression::ols(&x_slices, &y, self.intercept)
             .map_err(|e| LinearRegressionError::Regression(e.to_string()))?;
 
         // Build output batch → DataFrame.

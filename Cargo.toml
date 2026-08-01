@@ -34,6 +34,9 @@ members = [
 
   "bio_crates/cpassoc",
   "bio_crates/magma",
+
+  "stat_crates/statkit",
+  "stat_crates/epi",
 ]
 resolver = "3"
 
