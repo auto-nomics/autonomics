@@ -129,7 +129,7 @@ SELECT 'GRCh38', SUM(length) FROM reference.grch38_contigs;
 
 ## dbSNP155 变异表
 
-除基因注释表外，数据湖还包含 **dbSNP build 155** 变异表，约 7.56 亿变异，
+除基因注释表外，数据湖还包含 **dbSNP build 155** 变异表，约 9.28 亿变异，
 同时包含两个组装的坐标。
 
 **表**: `reference.dbsnp155`
@@ -152,7 +152,7 @@ cd infra
 python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
 ```
 
-**规模**: ~7.56 亿变异，25 条染色体（源 Parquet 17 GB）。
+**规模**: ~9.28 亿变异，25 条染色体（源 Parquet 17 GB）。
 
 ```sql
 -- 按 rsID 跨组装坐标查询

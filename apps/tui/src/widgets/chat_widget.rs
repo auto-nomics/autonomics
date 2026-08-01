@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 mod md_highlight;
 mod md_math;
 mod md_renderer;
@@ -16,16 +14,11 @@ use ratatui::{
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 
-use crate::state::ChatLine;
-
 /// State for [`ChatWidget`].
 pub struct ChatWidgetState {
     pub total_lines: usize,
     pub viewport_height: u16,
     pub scroll_offset: usize,
-    /// Lines rendered during a fresh (non-cached) render, available for caching by the caller.
-    /// Wrapped in `Arc` for zero-clone handoff to the caller's cache.
-    pub rendered_lines: Option<Arc<[Line<'static>]>>,
 }
 
 impl ChatWidgetState {
@@ -34,18 +27,17 @@ impl ChatWidgetState {
             total_lines: 0,
             viewport_height: 0,
             scroll_offset,
-            rendered_lines: None,
         }
     }
 }
 
 /// Chat message list with scrolling and scrollbar support.
+///
+/// Receives **pre-rendered** lines (assembled and cached by the caller) so the
+/// expensive markdown-parse / layout pass is never repeated for unchanged
+/// messages. See `AgentTabWidget` for the per-message incremental cache.
 pub struct ChatWidget<'a> {
-    pub messages: &'a [ChatLine],
-    /// Pre-rendered lines from a previous frame (same messages, same width).
-    /// When `Some`, the expensive markdown-parse / layout pass is skipped.
-    /// Wrapped in `Arc` so the caller retains ownership without cloning.
-    pub cached_lines: Option<Arc<[Line<'static>]>>,
+    pub lines: &'a [Line<'static>],
 }
 
 impl StatefulWidget for ChatWidget<'_> {
@@ -54,27 +46,9 @@ impl StatefulWidget for ChatWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer, state: &mut Self::State) {
         state.viewport_height = area.height;
 
-        let needs_render = self.cached_lines.is_none();
-
-        let lines: Arc<[Line<'static>]> = if let Some(cached) = self.cached_lines {
-            cached
-        } else {
-            Arc::from(
-                self.messages
-                    .iter()
-                    .flat_map(|f| render::render_line_owned(f, area))
-                    .collect::<Vec<_>>(),
-            )
-        };
-
-        // If we just freshly rendered, store back for next frame caching.
-        if needs_render {
-            state.rendered_lines = Some(lines.clone());
-        }
-
         // `trim: false` preserves leading whitespace so that pretty-printed JSON
         // (and indented markdown code blocks) keep their indentation when rendered.
-        let paragraph = Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(self.lines.to_vec()).wrap(Wrap { trim: false });
 
         state.total_lines = paragraph.line_count(area.width);
 

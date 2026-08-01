@@ -2,6 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::{Buffer, StatefulWidget, Widget},
     style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Padding, Paragraph, StatefulWidgetRef},
 };
 
@@ -83,34 +84,49 @@ impl StatefulWidgetRef for AgentTabWidget<'_> {
 
         let viewport_height = chat_inner_area.height;
         let width = chat_inner_area.width;
-        let cache_hit = ts.cached_version == ts.messages_version
-            && ts.cached_width == width
-            && !ts.cached_lines.is_empty();
 
-        let cached = if cache_hit {
-            Some(ts.cached_lines.clone())
-        } else {
-            None
-        };
+        // ── Incremental per-message render cache ──
+        //
+        // Only messages whose content version changed (or whose render width
+        // changed) are re-rendered through the expensive markdown / syntax-
+        // highlight pipeline. All other messages reuse their cached lines.
+        // This is the key optimisation that keeps the TUI responsive as the
+        // conversation grows: a streaming token delta only invalidates the
+        // single message being appended to, not the entire history.
+        let n = ts.messages.len();
+        if ts.cached_msg_lines.len() != n {
+            ts.cached_msg_lines.resize(n, Vec::new());
+            ts.cached_msg_versions.resize(n, 0);
+        }
+        if ts.cached_msg_width != width {
+            ts.cached_msg_width = width;
+            for v in &mut ts.cached_msg_versions {
+                *v = 0;
+            }
+        }
+
+        let mut flat: Vec<Line<'static>> = Vec::new();
+        for (i, msg) in ts.messages.iter().enumerate() {
+            if ts.cached_msg_versions[i] == ts.msg_versions[i]
+                && !ts.cached_msg_lines[i].is_empty()
+            {
+                flat.extend_from_slice(&ts.cached_msg_lines[i]);
+            } else {
+                let rendered =
+                    super::chat_widget::render::render_line_owned(msg, chat_inner_area);
+                flat.extend_from_slice(&rendered);
+                ts.cached_msg_lines[i] = rendered;
+                ts.cached_msg_versions[i] = ts.msg_versions[i];
+            }
+        }
 
         let mut chat_state = ChatWidgetState::new(ts.scroll_offset);
-        let chat_widget = ChatWidget {
-            messages: &ts.messages,
-            cached_lines: cached,
-        };
-
+        let chat_widget = ChatWidget { lines: &flat };
         chat_widget.render(chat_inner_area, buf, &mut chat_state);
         ts.content_line_count = chat_state.total_lines;
 
         // Clamp scroll *after* render so we use the current frame's line count.
         ts.clamp_scroll(viewport_height);
-
-        // Update cache: store freshly rendered lines if this was a cache miss.
-        if let Some(fresh) = chat_state.rendered_lines.take() {
-            ts.cached_lines = fresh;
-            ts.cached_width = width;
-            ts.cached_version = ts.messages_version;
-        }
 
         // ── Input area (boxed composer, ❯ prompt) ──
         let placeholder: &str = if running {

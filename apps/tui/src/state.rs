@@ -145,15 +145,22 @@ pub struct AgentTabState {
     pub history_search_draft: Option<String>,
     /// Cached total rendered line count (updated every frame).
     pub content_line_count: usize,
-    /// Pre-rendered lines cache, rebuilt only when messages change.
-    /// Wrapped in `Arc` so cached frames can be shared without cloning.
-    pub cached_lines: Arc<[Line<'static>]>,
-    /// The `messages_version` at which `cached_lines` was built.
-    pub cached_version: u64,
-    /// The terminal width at which `cached_lines` was built.
-    pub cached_width: u16,
-    /// Monotonic counter bumped on every message mutation; used to detect cache staleness.
-    pub messages_version: u64,
+    /// Per-message content version (parallel to `messages`). Bumped whenever
+    /// the rendered output of that message would change (text append, usage
+    /// update, etc.). The render cache compares these to decide which messages
+    /// need re-rendering.
+    pub msg_versions: Vec<u64>,
+    /// Monotonic counter backing `msg_versions`; each push/mutation assigns the
+    /// next value.
+    msg_version_counter: u64,
+    /// Per-message rendered-line cache (parallel to `messages`). Entry *i*
+    /// holds the last rendered `Vec<Line>` for `messages[i]`.
+    pub cached_msg_lines: Vec<Vec<Line<'static>>>,
+    /// The `msg_versions[i]` value at which `cached_msg_lines[i]` was rendered.
+    /// Zero means stale (never rendered).
+    pub cached_msg_versions: Vec<u64>,
+    /// Terminal width at which the per-message cache was built.
+    pub cached_msg_width: u16,
     /// Index of the assistant line currently being streamed, so incoming
     /// `UsageUpdate` events can be attributed to the right turn. Reset on each
     /// `Requesting` (one per LLM call); `None` for tool-only turns.
@@ -192,10 +199,11 @@ impl Default for AgentTabState {
             history_search_selected: 0,
             history_search_draft: None,
             content_line_count: 0,
-            cached_lines: Arc::from(vec![]),
-            cached_version: 0,
-            cached_width: 0,
-            messages_version: 0,
+            msg_versions: Vec::new(),
+            msg_version_counter: 0,
+            cached_msg_lines: Vec::new(),
+            cached_msg_versions: Vec::new(),
+            cached_msg_width: 0,
             streaming_assistant: None,
             frame: 0,
             compact_state: CompactState::default(),
@@ -218,8 +226,35 @@ impl AgentTabState {
 
     /// Push a user message and a separator after the previous assistant response.
     pub fn push_user_message(&mut self, text: String) {
-        self.messages.push(ChatLine::User(text));
-        self.messages_version += 1;
+        self.push_line(ChatLine::User(text));
+    }
+
+    // ── Per-message versioning helpers ──
+    //
+    // These keep `msg_versions` in lockstep with `messages` so the render
+    // cache in `AgentTabWidget` can skip re-rendering unchanged messages.
+
+    /// Push a new chat line, assigning it a fresh content version.
+    fn push_line(&mut self, line: ChatLine) {
+        self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
+        self.messages.push(line);
+        self.msg_versions.push(self.msg_version_counter);
+    }
+
+    /// Bump the content version of the last message (its content mutated in place).
+    fn bump_last_version(&mut self) {
+        self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
+        if let Some(v) = self.msg_versions.last_mut() {
+            *v = self.msg_version_counter;
+        }
+    }
+
+    /// Bump the content version of the message at `idx`.
+    fn bump_version_at(&mut self, idx: usize) {
+        self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
+        if let Some(v) = self.msg_versions.get_mut(idx) {
+            *v = self.msg_version_counter;
+        }
     }
 
     /// Re-enable auto-scroll so the next `clamp_scroll` call pins to the bottom.
@@ -270,13 +305,11 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 if let Some(ChatLine::Assistant { text: s, .. }) = state.messages.last_mut() {
                     s.push_str(&text);
                 }
+                state.bump_last_version();
             } else {
-                state
-                    .messages
-                    .push(ChatLine::Assistant { text, usage: None });
+                state.push_line(ChatLine::Assistant { text, usage: None });
                 state.streaming_assistant = Some(state.messages.len() - 1);
             }
-            state.messages_version += 1;
             state.scroll_to_bottom();
         }
         AgentEvent::ThinkingDelta(text) => {
@@ -288,10 +321,10 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 if let Some(ChatLine::Thinking(s)) = state.messages.last_mut() {
                     s.push_str(&text);
                 }
+                state.bump_last_version();
             } else {
-                state.messages.push(ChatLine::Thinking(text));
+                state.push_line(ChatLine::Thinking(text));
             }
-            state.messages_version += 1;
             state.scroll_to_bottom();
         }
         AgentEvent::UsageUpdate {
@@ -312,6 +345,7 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                         cache_read_input_tokens,
                     });
                 }
+                state.bump_version_at(idx);
             }
             // Cumulative totals for the status bar.
             // `input_tokens` is `Some` only on the final delta of a turn — at that
@@ -333,20 +367,18 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             // Aggregated thinking block — already streamed via ThinkingDelta.
         }
         AgentEvent::ToolCall { name, input } => {
-            state.messages.push(ChatLine::ToolCall {
+            state.push_line(ChatLine::ToolCall {
                 name,
                 input: input.to_string(),
             });
-            state.messages_version += 1;
             state.scroll_to_bottom();
         }
         AgentEvent::ToolResult { ok, content } => {
-            state.messages.push(ChatLine::ToolResult { ok, content });
-            state.messages_version += 1;
+            state.push_line(ChatLine::ToolResult { ok, content });
             state.scroll_to_bottom();
         }
         AgentEvent::ToolCallBackground { id, name } => {
-            state.messages.push(ChatLine::ToolBackground {
+            state.push_line(ChatLine::ToolBackground {
                 id: id.clone(),
                 name: name.clone(),
             });
@@ -355,18 +387,16 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 name,
                 status: ToolTaskStatus::Running,
             });
-            state.messages_version += 1;
             state.scroll_to_bottom();
         }
         AgentEvent::ToolBackgroundComplete { id, ok } => {
-            state.messages.push(ChatLine::ToolResult {
+            state.push_line(ChatLine::ToolResult {
                 ok,
                 content: format!("Background task `{id}` has completed"),
             });
             if let Some(task) = state.tool_tasks.iter_mut().find(|t| t.id == id) {
                 task.status = ToolTaskStatus::Done { ok };
             }
-            state.messages_version += 1;
             state.scroll_to_bottom();
         }
         AgentEvent::Done => {
@@ -378,13 +408,11 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             state
                 .tool_tasks
                 .retain(|t| matches!(t.status, ToolTaskStatus::Running));
-            state.messages.push(ChatLine::Separator);
-            state.messages_version += 1;
+            state.push_line(ChatLine::Separator);
             state.scroll_to_bottom();
         }
         AgentEvent::Error(msg) => {
-            state.messages.push(ChatLine::Error(msg));
-            state.messages_version += 1;
+            state.push_line(ChatLine::Error(msg));
             state.scroll_to_bottom();
             state.status = AgentStatus::Idle;
         }

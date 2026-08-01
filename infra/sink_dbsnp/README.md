@@ -1,7 +1,7 @@
 # sink_dbsnp — dbSNP155 Variant Data Ingest
 
 Loads **dbSNP build 155** variant data into the Iceberg data lake as a single
-queryable table `reference.dbsnp155`, containing ~756M variants with positions
+queryable table `reference.dbsnp155`, containing ~928M variants with positions
 on both GRCh37 and GRCh38.
 
 ## Source Data
@@ -29,7 +29,7 @@ on both GRCh37 and GRCh38.
 cd infra
 uv sync
 
-# Full ingest (all chromosomes, ~756M rows)
+# Full ingest (all chromosomes, ~928M rows)
 python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
 
 # Single chromosome (for testing)
@@ -45,7 +45,7 @@ python -m sink_dbsnp.main \
 
 ### `reference.dbsnp155`
 
-One row per variant (~756M total).
+One row per variant (~928M total).
 
 | Column   | Type   | Description |
 |----------|--------|-------------|

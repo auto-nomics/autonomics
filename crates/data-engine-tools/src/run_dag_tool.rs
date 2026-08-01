@@ -142,7 +142,7 @@ impl ToolFunction for RunDagTool {
     // heavy joins). Override the default 300s phase-2 timeout so that a
     // genuinely long run is not killed prematurely.
     fn timeout_seconds(&self) -> u64 {
-        3600
+        1
     }
 
     async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {

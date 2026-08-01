@@ -137,7 +137,7 @@ SELECT 'GRCh38', SUM(length) FROM reference.grch38_contigs;
 ## dbSNP155 Variant Table
 
 In addition to the gene annotation tables, the data lake contains a
-**dbSNP build 155** variant table with ~756M variants and dual-assembly
+**dbSNP build 155** variant table with ~928M variants and dual-assembly
 coordinates.
 
 **Table**: `reference.dbsnp155`
@@ -160,7 +160,7 @@ cd infra
 python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
 ```
 
-**Scale**: ~756M variants across 25 chromosomes (17 GB source Parquet).
+**Scale**: ~928M variants across 25 chromosomes (17 GB source Parquet).
 
 ```sql
 -- Cross-assembly coordinate lookup by rsID

@@ -36,7 +36,7 @@ Ensembl GRCh37 / GRCh38 (reference genome)
 
 dbSNP build 155 (variant catalog)
     │
-    └──→ [Variants] reference.dbsnp155   (~756M variants, dual-assembly coords)
+    └──→ [Variants] reference.dbsnp155   (~928M variants, dual-assembly coords)
               │
               └──→ rsID ↔ position lookup (GRCh37 + GRCh38)
 ```
@@ -93,7 +93,7 @@ dbSNP build 155 (variant catalog)
 
 - **Table**: `iceberg.reference.dbsnp155`
 - **Columns**: `rsid (int64), chrom (string), pos_37, pos_38, ref_37, ref_38, alt_37, alt_38`
-- **Scale**: ~756M variants across 25 chromosomes
+- **Scale**: ~928M variants across 25 chromosomes
 - **Pipeline**: dbSNP155 Parquet → `sink_dbsnp` → Iceberg (per-chromosome append)
 - **Archive**: `aliyun:autonomics-data/reference/dbsnp155/dbSNP155_v0.9.tar`
 - **Details**: [reference_genome.md](data_infra/reference_genome.md)

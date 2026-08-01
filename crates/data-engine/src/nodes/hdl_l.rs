@@ -7,6 +7,14 @@
 //!
 //! For genome-wide local-rG scans across many regions, chain one `hdl_l` node
 //! per region (or run the `hdl` crate directly and loop).
+//!
+//! # Region size limit
+//!
+//! The region width (`stop - start`) **must not exceed 5 Mb** (5,000,000 bp).
+//! HDL-L diagonalises an LD matrix whose dimension equals the number of
+//! in-region reference SNPs; a larger window makes the eigen-decomposition
+//! and likelihood optimisation prohibitively slow and memory-hungry. The
+//! check is enforced at execution time in [`HdlLNode::execute`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +33,12 @@ use crate::dag::{DagError, graph::PortOutputs};
 use crate::node_registry::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_KIND: &str = "hdl_l";
+
+/// Maximum permitted region width (bp). Regions wider than this are rejected
+/// because the eigen-decomposition / likelihood optimisation scales poorly
+/// with the number of in-region SNPs. See the module-level "Region size
+/// limit" note.
+pub const MAX_REGION_WIDTH: i64 = 5_000_000;
 
 fn result_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -62,8 +76,14 @@ pub struct HdlLSpec {
     /// the `{N}` placeholder in [`REF_PREFIX_TEMPLATE`].
     pub chr: i64,
     /// Region start (bp, 1-based inclusive).
+    ///
+    /// The window `stop - start` must be ≤ [`MAX_REGION_WIDTH`] (5 Mb);
+    /// wider regions are rejected at execution time.
     pub start: i64,
-    /// Region stop  (bp, 1-based inclusive).
+    /// Region stop (bp, 1-based inclusive).
+    ///
+    /// The window `stop - start` must be ≤ [`MAX_REGION_WIDTH`] (5 Mb);
+    /// wider regions are rejected at execution time.
     pub stop: i64,
     pub trait1_name: String,
     pub trait2_name: String,
@@ -309,6 +329,21 @@ impl DagNode for HdlLNode {
             node_type: HDL_L_KIND.into(),
             msg,
         };
+
+        // ---- Enforce the region-size guard up front ----
+        let width = self.spec.stop - self.spec.start;
+        if width < 0 {
+            return Err(err(format!(
+                "region stop ({}) < start ({})",
+                self.spec.stop, self.spec.start
+            )));
+        }
+        if width > MAX_REGION_WIDTH {
+            return Err(err(format!(
+                "region width {width} bp exceeds the 5 Mb limit ({MAX_REGION_WIDTH} bp); \
+                 split into smaller windows"
+            )));
+        }
 
         let in0 = inputs.first().ok_or_else(|| err("no GWAS1 input".into()))?;
         let in1 = inputs.get(1).ok_or_else(|| err("no GWAS2 input".into()))?;

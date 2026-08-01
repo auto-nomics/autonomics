@@ -136,7 +136,23 @@ CSV/Parquet files scattered on the local filesystem.
 that have not yet been ingested, or small human-readable summaries meant for \
 immediate inspection.
 
-### Data Infrastucture
+### Data Infrastructure
+
+The Iceberg data lake (`reference` namespace) contains reusable reference panels:
+
+- **GRCh37/GRCh38 gene annotation** — `reference.grch{37,38}_genes`: structured \
+  Ensembl GTF (gene, transcript, exon, CDS, UTR). Columns include `contig`, \
+  `feature`, `start`, `end_pos`, `strand`, `gene_id`, `gene_name`, `gene_biotype`, \
+  `transcript_id`. Use `end_pos` (not `end`) for the end coordinate. \
+  Query `WHERE feature = 'gene'` for gene boundaries.
+- **GRCh37/GRCh38 contig metadata** — `reference.grch{37,38}_contigs`: \
+  `contig, length, md5` per chromosome (1–22, X, Y, MT).
+- **dbSNP155 variants** — `reference.dbsnp155` (~928M rows): every variant has \
+  both GRCh37 and GRCh38 coordinates. Columns: `rsid` (int64), `chrom`, \
+  `pos_37`, `pos_38`, `ref_37`, `ref_38`, `alt_37`, `alt_38`. \
+  Use `WHERE rsid = <number>` for rsID→position lookup. \
+  **Caution**: this table has ~928M rows — always use filters (`chrom`, `rsid`, \
+  position range); never scan the full table.
 
 ### General
 - Read, write, and manage files on the local filesystem.
