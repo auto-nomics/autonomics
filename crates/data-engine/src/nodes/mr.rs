@@ -149,7 +149,10 @@ fn extract_required_string(
     let idx = column_index(batches, name)?;
     // Validate the type once on the first batch (all batches share the schema).
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(MrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
@@ -195,7 +198,10 @@ fn extract_opt_string(
 ) -> Result<Vec<Option<String>>, MrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(MrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),

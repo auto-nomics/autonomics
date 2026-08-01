@@ -259,8 +259,8 @@ impl UnivContext {
         let mut dll_dh2 = 0.0;
         let mut dll_dint = 0.0;
         for k in 0..self.lam_sq.len() {
-            let lamh2_raw =
-                h2 / self.mf * self.lam_sq[k] - h2 * self.lam_over_nref[k] + int * self.lam_over_n[k];
+            let lamh2_raw = h2 / self.mf * self.lam_sq[k] - h2 * self.lam_over_nref[k]
+                + int * self.lam_over_n[k];
             let lamh2 = floor_at(lamh2_raw, self.lim);
             let inv = 1.0 / lamh2;
             let ratio = self.bstar_sq[k] * inv;
@@ -275,7 +275,10 @@ impl UnivContext {
             sum_log += lamh2.ln();
             sum_quad += ratio;
         }
-        (-0.5 * (sum_log + sum_quad), [-0.5 * dll_dh2, -0.5 * dll_dint])
+        (
+            -0.5 * (sum_log + sum_quad),
+            [-0.5 * dll_dh2, -0.5 * dll_dint],
+        )
     }
 
     /// Null log-likelihood and its gradient w.r.t. `int` (single pass).
@@ -445,11 +448,9 @@ impl GcovContext {
                 let dlam22_1_dint = -2.0 * ratio_l12_l11 * dlam12_dint;
                 let dustar_dh12 = -dlam12_dh12 * inv_l11 * self.bstar1[k];
                 let dustar_dint = -dlam12_dint * inv_l11 * self.bstar1[k];
-                let common_h12 = dlam22_1_dh12 * inv_l22_1
-                    + 2.0 * ustar * dustar_dh12 * inv_l22_1
+                let common_h12 = dlam22_1_dh12 * inv_l22_1 + 2.0 * ustar * dustar_dh12 * inv_l22_1
                     - ustar_sq * dlam22_1_dh12 * inv_l22_1 * inv_l22_1;
-                let common_int = dlam22_1_dint * inv_l22_1
-                    + 2.0 * ustar * dustar_dint * inv_l22_1
+                let common_int = dlam22_1_dint * inv_l22_1 + 2.0 * ustar * dustar_dint * inv_l22_1
                     - ustar_sq * dlam22_1_dint * inv_l22_1 * inv_l22_1;
                 dll_dh12 += common_h12;
                 dll_dint += common_int;
@@ -457,7 +458,10 @@ impl GcovContext {
             sum_log += lam22_1.ln();
             sum_quad += ustar_sq * inv_l22_1;
         }
-        (-0.5 * (sum_log + sum_quad), [-0.5 * dll_dh12, -0.5 * dll_dint])
+        (
+            -0.5 * (sum_log + sum_quad),
+            [-0.5 * dll_dh12, -0.5 * dll_dint],
+        )
     }
 }
 
@@ -543,13 +547,19 @@ mod tests {
         ] {
             let a = ll_univ(h2, int, 1000.0, 4, 335_272.0, &lam, &bstar, lim);
             let b = ctx.ll(h2, int);
-            assert!(approx_loose(a, b), "h2={h2} int={int}: inline={a:.12e} ctx={b:.12e}");
+            assert!(
+                approx_loose(a, b),
+                "h2={h2} int={int}: inline={a:.12e} ctx={b:.12e}"
+            );
         }
         // null
         for &int in &[0.5_f64, 1.0, 10.0] {
             let a = ll_univ_null(int, 1000.0, 4, 335_272.0, &lam, &bstar, lim);
             let b = ctx.ll_null(int);
-            assert!(approx_loose(a, b), "int={int}: inline={a:.12e} ctx={b:.12e}");
+            assert!(
+                approx_loose(a, b),
+                "int={int}: inline={a:.12e} ctx={b:.12e}"
+            );
         }
     }
 
@@ -565,17 +575,15 @@ mod tests {
         let ctx = GcovContext::new(
             &h11, &h22, 4, 1000.0, 2000.0, 0.0, 335_272.0, &lam, &lam, &b1, &b2, lim,
         );
-        for &(h12, int) in &[
-            (0.0_f64, 0.7_f64),
-            (0.05, 1.0),
-            (-0.03, 0.5),
-            (0.1, 5.0),
-        ] {
+        for &(h12, int) in &[(0.0_f64, 0.7_f64), (0.05, 1.0), (-0.03, 0.5), (0.1, 5.0)] {
             let a = ll_gcov(
                 h12, int, &h11, &h22, 4, 1000.0, 2000.0, 0.0, 335_272.0, &lam, &lam, &b1, &b2, lim,
             );
             let b = ctx.ll(h12, int);
-            assert!(approx_loose(a, b), "h12={h12} int={int}: inline={a:.12e} ctx={b:.12e}");
+            assert!(
+                approx_loose(a, b),
+                "h12={h12} int={int}: inline={a:.12e} ctx={b:.12e}"
+            );
         }
         // with overlap
         let ctx_ov = GcovContext::new(
@@ -587,7 +595,10 @@ mod tests {
                 lim,
             );
             let b = ctx_ov.ll(h12, int);
-            assert!(approx_loose(a, b), "ov h12={h12} int={int}: inline={a:.12e} ctx={b:.12e}");
+            assert!(
+                approx_loose(a, b),
+                "ov h12={h12} int={int}: inline={a:.12e} ctx={b:.12e}"
+            );
         }
     }
 
@@ -611,8 +622,20 @@ mod tests {
             let fd = fd_grad(|a, b| ctx.ll(a, b), h2, int, 1e-6);
             let err0 = (grad[0] - fd[0]).abs();
             let err1 = (grad[1] - fd[1]).abs();
-            assert!(err0 < 1e-5, "univ grad h2: analytical={:.6e} fd={:.6e} err={:.2e}", grad[0], fd[0], err0);
-            assert!(err1 < 1e-5, "univ grad int: analytical={:.6e} fd={:.6e} err={:.2e}", grad[1], fd[1], err1);
+            assert!(
+                err0 < 1e-5,
+                "univ grad h2: analytical={:.6e} fd={:.6e} err={:.2e}",
+                grad[0],
+                fd[0],
+                err0
+            );
+            assert!(
+                err1 < 1e-5,
+                "univ grad int: analytical={:.6e} fd={:.6e} err={:.2e}",
+                grad[1],
+                fd[1],
+                err1
+            );
         }
     }
 
@@ -633,8 +656,20 @@ mod tests {
             let fd = fd_grad(|a, b| ctx.ll(a, b), h12, int, 1e-6);
             let err0 = (grad[0] - fd[0]).abs();
             let err1 = (grad[1] - fd[1]).abs();
-            assert!(err0 < 1e-4, "gcov grad h12: analytical={:.6e} fd={:.6e} err={:.2e}", grad[0], fd[0], err0);
-            assert!(err1 < 1e-4, "gcov grad int: analytical={:.6e} fd={:.6e} err={:.2e}", grad[1], fd[1], err1);
+            assert!(
+                err0 < 1e-4,
+                "gcov grad h12: analytical={:.6e} fd={:.6e} err={:.2e}",
+                grad[0],
+                fd[0],
+                err0
+            );
+            assert!(
+                err1 < 1e-4,
+                "gcov grad int: analytical={:.6e} fd={:.6e} err={:.2e}",
+                grad[1],
+                fd[1],
+                err1
+            );
         }
         // with overlap
         let ctx_ov = GcovContext::new(
@@ -643,8 +678,18 @@ mod tests {
         for &(h12, int) in &[(0.05_f64, 0.7_f64), (0.03, 1.5)] {
             let (_, grad) = ctx_ov.ll_grad(h12, int);
             let fd = fd_grad(|a, b| ctx_ov.ll(a, b), h12, int, 1e-6);
-            assert!((grad[0] - fd[0]).abs() < 1e-4, "gcov ov grad h12: ana={:.6e} fd={:.6e}", grad[0], fd[0]);
-            assert!((grad[1] - fd[1]).abs() < 1e-4, "gcov ov grad int: ana={:.6e} fd={:.6e}", grad[1], fd[1]);
+            assert!(
+                (grad[0] - fd[0]).abs() < 1e-4,
+                "gcov ov grad h12: ana={:.6e} fd={:.6e}",
+                grad[0],
+                fd[0]
+            );
+            assert!(
+                (grad[1] - fd[1]).abs() < 1e-4,
+                "gcov ov grad int: ana={:.6e} fd={:.6e}",
+                grad[1],
+                fd[1]
+            );
         }
     }
 }

@@ -153,9 +153,7 @@ pub fn read_gene_loc(path: &Path) -> Result<Vec<GeneLoc>> {
         });
     }
     if genes.is_empty() {
-        return Err(MagmaError::Input(format!(
-            "{path:?}: found no valid genes"
-        )));
+        return Err(MagmaError::Input(format!("{path:?}: found no valid genes")));
     }
     Ok(genes)
 }
@@ -163,9 +161,7 @@ pub fn read_gene_loc(path: &Path) -> Result<Vec<GeneLoc>> {
 /// Read SNP locations from either a `.bim` file or a 3-column text file.
 pub fn read_snp_loc(path: &Path) -> Result<Vec<SnpLoc>> {
     let content = std::fs::read_to_string(path).map_err(MagmaError::Io)?;
-    let is_bim = path
-        .extension()
-        .is_some_and(|e| e == "bim");
+    let is_bim = path.extension().is_some_and(|e| e == "bim");
 
     let mut snps = Vec::new();
     for (lineno, line) in content.lines().enumerate() {
@@ -213,9 +209,7 @@ pub fn read_snp_loc(path: &Path) -> Result<Vec<SnpLoc>> {
         });
     }
     if snps.is_empty() {
-        return Err(MagmaError::Input(format!(
-            "{path:?}: found no valid SNPs"
-        )));
+        return Err(MagmaError::Input(format!("{path:?}: found no valid SNPs")));
     }
     Ok(snps)
 }
@@ -267,10 +261,7 @@ pub fn annotate(
             snps: Vec::new(),
         });
 
-        by_chr
-            .entry(g.chr)
-            .or_default()
-            .push((gi, start, end));
+        by_chr.entry(g.chr).or_default().push((gi, start, end));
     }
 
     // Sort gene ranges by start within each chromosome.

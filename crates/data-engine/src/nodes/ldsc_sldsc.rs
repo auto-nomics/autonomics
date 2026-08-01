@@ -344,10 +344,11 @@ impl LdscSldscNode {
             let mut names = Vec::new();
             let mut values = Vec::new();
             for batch in &m_batches {
-                let name_vals = super::meta::string_opt_values(batch.column(0).as_ref())
-                    .ok_or(LdscSldscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
+                let name_vals = super::meta::string_opt_values(batch.column(0).as_ref()).ok_or(
+                    LdscSldscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
                         "M table 'annotation' column is not a string type".into(),
-                    )))?;
+                    )),
+                )?;
                 let val_col = batch
                     .column(1)
                     .as_any()

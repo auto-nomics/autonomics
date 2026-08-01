@@ -6,8 +6,7 @@ use magma::*;
 use std::path::PathBuf;
 
 fn real_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/real_chr22")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/real_chr22")
 }
 
 #[test]
@@ -15,7 +14,10 @@ fn test_real_chr22_gene_analysis() {
     let dir = real_dir();
     if !dir.join("g1k_eur_chr22.bed").exists() {
         eprintln!("Skipping: real chr22 data not present. Restore with:");
-        eprintln!("  rclone copy aliyun:autonomics-data/magma/real_chr22/ {}", dir.display());
+        eprintln!(
+            "  rclone copy aliyun:autonomics-data/magma/real_chr22/ {}",
+            dir.display()
+        );
         return;
     }
 
@@ -28,8 +30,12 @@ fn test_real_chr22_gene_analysis() {
     // Read p-value file with per-SNP N column
     let pval_data = geneinput::SnpPvalData::read(
         &dir.join("gwas_height_chr22.txt"),
-        "SNP", "P", Some("N"), None,
-    ).unwrap();
+        "SNP",
+        "P",
+        Some("N"),
+        None,
+    )
+    .unwrap();
 
     let config = geneanalysis::PvalAnalysisConfig {
         truncate_low: 1e-50,
@@ -44,7 +50,11 @@ fn test_real_chr22_gene_analysis() {
     let golden = std::fs::read_to_string(dir.join("gene_pval.genes.out")).unwrap();
     let golden_lines: Vec<&str> = golden.lines().skip(1).collect();
 
-    eprintln!("\n=== chr22 gene analysis: {} genes (golden: {}) ===\n", results.len(), golden_lines.len());
+    eprintln!(
+        "\n=== chr22 gene analysis: {} genes (golden: {}) ===\n",
+        results.len(),
+        golden_lines.len()
+    );
 
     let mut max_z_diff = 0.0_f64;
     let mut max_p_log_diff = 0.0_f64;
@@ -73,7 +83,11 @@ fn test_real_chr22_gene_analysis() {
         }
     }
 
-    eprintln!("\n=== Summary: {}/{} genes within Z tolerance 0.2 ===", n_match, results.len());
+    eprintln!(
+        "\n=== Summary: {}/{} genes within Z tolerance 0.2 ===",
+        n_match,
+        results.len()
+    );
     eprintln!("  Max ZSTAT diff: {:.4}", max_z_diff);
     eprintln!("  Max |ln(P) diff|: {:.4}", max_p_log_diff);
 
@@ -81,6 +95,8 @@ fn test_real_chr22_gene_analysis() {
     // (Imhof integration method differences may cause some divergence)
     assert!(
         n_match > results.len() / 2,
-        "too few genes match golden output: {}/{}", n_match, results.len()
+        "too few genes match golden output: {}/{}",
+        n_match,
+        results.len()
     );
 }

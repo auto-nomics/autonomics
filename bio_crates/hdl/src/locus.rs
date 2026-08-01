@@ -127,13 +127,7 @@ fn h2_mle(
                     &[1.0, 20.0],
                     &[nd, nd * 100.0],
                 )?;
-                let null = lbfgsb_max_1d(
-                    |int: f64| ctx.ll_null(int),
-                    sv2,
-                    0.0,
-                    20.0,
-                    nd * 100.0,
-                )?;
+                let null = lbfgsb_max_1d(|int: f64| ctx.ll_null(int), sv2, 0.0, 20.0, nd * 100.0)?;
                 if alt.converged && null.converged && alt.value > best && alt.value > null.value {
                     best = alt.value;
                     out = (alt.par[0], alt.par[1], alt.value, null.value);
@@ -177,9 +171,7 @@ fn gcov_mle(
     // Build the precomputed context once — lam11_k and lam22_k (functions of
     // the fixed per-trait MLEs) are the dominant per-component cost; precomputing
     // them eliminates ~2/3 of the arithmetic from every ll_gcov evaluation.
-    let ctx = GcovContext::new(
-        h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim,
-    );
+    let ctx = GcovContext::new(h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim);
 
     let mut best = f64::NEG_INFINITY;
     let mut out = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
@@ -194,13 +186,8 @@ fn gcov_mle(
                     &[bound, 20.0],
                     &[nd, nd * 100.0],
                 )?;
-                let null = lbfgsb_max_1d(
-                    |int: f64| ctx.ll(0.0, int),
-                    sv2,
-                    -20.0,
-                    20.0,
-                    nd * 100.0,
-                )?;
+                let null =
+                    lbfgsb_max_1d(|int: f64| ctx.ll(0.0, int), sv2, -20.0, 20.0, nd * 100.0)?;
                 if alt.converged && null.converged && alt.value > best && alt.value > null.value {
                     best = alt.value;
                     out = (alt.par[0], alt.par[1], alt.value, null.value);

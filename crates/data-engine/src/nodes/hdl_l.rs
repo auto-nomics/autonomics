@@ -40,7 +40,7 @@ const HDL_L_KIND: &str = "hdl_l";
 /// limit" note.
 pub const MAX_REGION_WIDTH: i64 = 5_000_000;
 
-fn result_schema() -> SchemaRef {
+pub(crate) fn result_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("trait1", DataType::Utf8, false),
         Field::new("trait2", DataType::Utf8, false),
@@ -67,7 +67,8 @@ fn result_schema() -> SchemaRef {
 /// This is the **same** panel used by [`super::lava::LavaLocusNode`] — see
 /// `lava::REF_PREFIX_TEMPLATE`. Both nodes share the reference so results are
 /// directly comparable.
-const REF_PREFIX_TEMPLATE: &str = "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
+pub(crate) const REF_PREFIX_TEMPLATE: &str =
+    "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
 
 /// Spec for [`HdlLNode`].
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -202,10 +203,14 @@ fn col_f64(batches: &[RecordBatch], name: &str) -> Option<Vec<f64>> {
 
 /// Build [`hdl::input::SumStatRow`]s from a sumstat RecordBatch.
 ///
+/// Shared by [`HdlLNode`] and [`crate::nodes::hdl_l_scan::HdlLScanNode`].
+///
 /// Z is taken from a `Z`/`STAT`/`Zscore` column if present; otherwise from
 /// `b`/`BETA` (or `OR`, log-transformed) divided by `se` — mirroring
 /// `HDL.L.R` lines 215-280.
-fn parse_sumstats(batches: &[RecordBatch]) -> Result<Vec<hdl::input::SumStatRow>, DagError> {
+pub(crate) fn parse_sumstats(
+    batches: &[RecordBatch],
+) -> Result<Vec<hdl::input::SumStatRow>, DagError> {
     let snp = col_str(batches, "SNP")
         .or_else(|| col_str(batches, "snp"))
         .or_else(|| col_str(batches, "rsid"))
@@ -281,7 +286,7 @@ fn parse_sumstats(batches: &[RecordBatch]) -> Result<Vec<hdl::input::SumStatRow>
     Ok(rows)
 }
 
-async fn collect_input_batches(
+pub(crate) async fn collect_input_batches(
     input: &NodeInput,
     kind: &str,
 ) -> Result<Vec<RecordBatch>, DagError> {
@@ -351,9 +356,8 @@ impl DagNode for HdlLNode {
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
         // ---- Resolve the per-chromosome PLINK reference prefix ----
-        let ld_ref_prefix = PathBuf::from(
-            REF_PREFIX_TEMPLATE.replace("{N}", &self.spec.chr.to_string()),
-        );
+        let ld_ref_prefix =
+            PathBuf::from(REF_PREFIX_TEMPLATE.replace("{N}", &self.spec.chr.to_string()));
 
         // ---- Filter reference SNPs to the region [start, stop] ----
         // Load the .bim to get SNP ids + positions, keep only those within the
@@ -493,12 +497,19 @@ mod tests {
     }
 
     /// Read SNP / A1 / A2 from a .bim file for SNPs within [start, stop].
-    fn read_region_bim(prefix: &str, chr: i64, start: i64, stop: i64) -> Vec<(String, String, String)> {
+    fn read_region_bim(
+        prefix: &str,
+        chr: i64,
+        start: i64,
+        stop: i64,
+    ) -> Vec<(String, String, String)> {
         let bim = std::fs::read_to_string(format!("{prefix}.bim")).unwrap();
         bim.lines()
             .filter_map(|l| {
                 let f: Vec<&str> = l.split_whitespace().collect();
-                if f.len() < 6 { return None; }
+                if f.len() < 6 {
+                    return None;
+                }
                 let c: i64 = f[0].parse().ok()?;
                 let pos: i64 = f[3].parse().ok()?;
                 if c == chr && pos >= start && pos <= stop {
@@ -556,7 +567,11 @@ mod tests {
 
         // Read region SNPs from the .bim
         let snps = read_region_bim(&prefix, chr, start, stop);
-        assert!(snps.len() > 100, "expected >100 SNPs in region, got {}", snps.len());
+        assert!(
+            snps.len() > 100,
+            "expected >100 SNPs in region, got {}",
+            snps.len()
+        );
         eprintln!("region chr{chr}:{start}-{stop}: {} SNPs", snps.len());
 
         // Build synthetic sumstats for two "traits" with slightly different Z profiles
@@ -581,7 +596,14 @@ mod tests {
 
         let reporter = crate::dag::node_event::NodeReporter::noop();
         let res = node
-            .execute(&ctx, &[NodeInput { port: 0, data: df1 }, NodeInput { port: 0, data: df2 }], &reporter)
+            .execute(
+                &ctx,
+                &[
+                    NodeInput { port: 0, data: df1 },
+                    NodeInput { port: 0, data: df2 },
+                ],
+                &reporter,
+            )
             .await
             .expect("HDL-L execute should succeed");
 
@@ -604,7 +626,10 @@ mod tests {
             .unwrap()
             .value(0);
         eprintln!("n_retained = {n_retained}");
-        assert!(n_retained > 50, "should retain a meaningful number of eigen-components");
+        assert!(
+            n_retained > 50,
+            "should retain a meaningful number of eigen-components"
+        );
 
         // h² estimates — synthetic data may yield h² ≤ 0, in which case HDL
         // intentionally returns NaN for rg/p_h12 (the genetic covariance is
@@ -615,10 +640,16 @@ mod tests {
         eprintln!("h11={h11:.4}, h22={h22:.4}, rg={rg:.4}");
 
         if h11 > 0.0 && h22 > 0.0 {
-            assert!(rg >= -1.01 && rg <= 1.01, "rg should be in [-1, 1], got {rg}");
+            assert!(
+                rg >= -1.01 && rg <= 1.01,
+                "rg should be in [-1, 1], got {rg}"
+            );
             let p_h12 = col_f64(std::slice::from_ref(row), "p_h12").unwrap()[0];
             eprintln!("p_h12 = {p_h12:.3e}");
-            assert!(p_h12 >= 0.0 && p_h12 <= 1.0, "p-value out of range: {p_h12}");
+            assert!(
+                p_h12 >= 0.0 && p_h12 <= 1.0,
+                "p-value out of range: {p_h12}"
+            );
         } else {
             eprintln!("(h² ≤ 0 for at least one trait — rg/p_h12 are NaN by design)");
             assert!(rg.is_nan(), "rg should be NaN when h² ≤ 0");
@@ -628,6 +659,8 @@ mod tests {
         let conv_arr = converged.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert!(conv_arr.value(0), "estimation should converge");
 
-        eprintln!("✅ HDL-L e2e real panel: n_retained={n_retained}, h11={h11:.4}, h22={h22:.4}, rg={rg:.4}, converged=true");
+        eprintln!(
+            "✅ HDL-L e2e real panel: n_retained={n_retained}, h11={h11:.4}, h22={h22:.4}, rg={rg:.4}, converged=true"
+        );
     }
 }

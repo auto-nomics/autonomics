@@ -5,8 +5,8 @@
 //! should return NaN gracefully (the DAG node is responsible for filtering NaN
 //! rows before calling the library).
 
-use cpassoc::stats::{self, ShetOptions};
 use cpassoc::input;
+use cpassoc::stats::{self, ShetOptions};
 use faer::Mat;
 
 #[test]
@@ -29,7 +29,11 @@ fn nan_in_shom_returns_nan_not_panic() {
     // SHom should return NaN for the NaN row, NOT panic.
     let shom = stats::shom(&x, &ss, &corr);
     assert!(shom[0].is_finite(), "valid row should give finite SHom");
-    assert!(shom[1].is_nan(), "NaN row should give NaN SHom, got {}", shom[1]);
+    assert!(
+        shom[1].is_nan(),
+        "NaN row should give NaN SHom, got {}",
+        shom[1]
+    );
 }
 
 #[test]

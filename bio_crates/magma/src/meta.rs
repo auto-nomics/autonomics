@@ -131,20 +131,12 @@ pub fn meta_analyze(
                     wsw += w[a] * w[b] * c;
                 }
             }
-            if wsw > 0.0 {
-                wz / wsw.sqrt()
-            } else {
-                0.0
-            }
+            if wsw > 0.0 { wz / wsw.sqrt() } else { 0.0 }
         } else {
             // No overlap correction: Σwᵢzᵢ / √(Σwᵢ²)
             let wz: f64 = w.iter().zip(z_vals.iter()).map(|(wi, zi)| wi * zi).sum();
             let wsq: f64 = w.iter().map(|wi| wi * wi).sum();
-            if wsq > 0.0 {
-                wz / wsq.sqrt()
-            } else {
-                0.0
-            }
+            if wsq > 0.0 { wz / wsq.sqrt() } else { 0.0 }
         };
 
         // Truncate Z to avoid extreme values

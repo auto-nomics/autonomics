@@ -76,7 +76,13 @@ impl GeneAnnot {
             })?;
 
             let snps: Vec<String> = fields[2..].iter().map(|s| s.to_string()).collect();
-            genes.push(GeneDef { id, chr, start, end, snps });
+            genes.push(GeneDef {
+                id,
+                chr,
+                start,
+                end,
+                snps,
+            });
         }
 
         if genes.is_empty() {
@@ -85,7 +91,11 @@ impl GeneAnnot {
             )));
         }
 
-        Ok(GeneAnnot { genes, window_up, window_down })
+        Ok(GeneAnnot {
+            genes,
+            window_up,
+            window_down,
+        })
     }
 
     /// Build a map from rsid → index into the PLINK .bim for SNP lookup.
@@ -143,9 +153,9 @@ impl SnpPvalData {
         let content = std::fs::read_to_string(path).map_err(MagmaError::Io)?;
         let mut lines = content.lines();
 
-        let header = lines.next().ok_or_else(|| {
-            MagmaError::Input(format!("{path:?}: file is empty"))
-        })?;
+        let header = lines
+            .next()
+            .ok_or_else(|| MagmaError::Input(format!("{path:?}: file is empty")))?;
         let headers: Vec<&str> = header.split_whitespace().collect();
 
         let snp_idx = headers.iter().position(|&h| h == snp_col).ok_or_else(|| {

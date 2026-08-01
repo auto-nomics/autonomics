@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow_array::{Array, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray, StringViewArray};
+use arrow_array::{
+    Array, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray, StringViewArray,
+};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
@@ -44,11 +46,23 @@ fn col_str(b: &RecordBatch, name: &str) -> Result<Vec<String>, BoxErr> {
         .ok_or_else(|| BoxErr::from(format!("column {name} missing")))?;
     if let Some(a) = col.as_any().downcast_ref::<StringArray>() {
         Ok((0..a.len())
-            .map(|i| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
+            .map(|i| {
+                if a.is_null(i) {
+                    String::new()
+                } else {
+                    a.value(i).to_string()
+                }
+            })
             .collect())
     } else if let Some(a) = col.as_any().downcast_ref::<StringViewArray>() {
         Ok((0..a.len())
-            .map(|i| if a.is_null(i) { String::new() } else { a.value(i).to_string() })
+            .map(|i| {
+                if a.is_null(i) {
+                    String::new()
+                } else {
+                    a.value(i).to_string()
+                }
+            })
             .collect())
     } else {
         Err(BoxErr::from(format!("column {name} not a string type")))

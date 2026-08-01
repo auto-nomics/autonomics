@@ -18,6 +18,7 @@ use crate::nodes::{
     cpassoc::CpassocNodeFactory,
     echo_node::EchoNodeFactory,
     hdl_l::HdlLNodeFactory,
+    hdl_l_scan::HdlLScanNodeFactory,
     lava::{
         LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
         LavaUnivNodeFactory,
@@ -182,6 +183,7 @@ impl NodeRegistry {
         registry.register(Box::new(LavaPcorNodeFactory {}));
         registry.register(Box::new(LavaMultiregNodeFactory {}));
         registry.register(Box::new(HdlLNodeFactory {}));
+        registry.register(Box::new(HdlLScanNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(MtagNodeFactory {}));

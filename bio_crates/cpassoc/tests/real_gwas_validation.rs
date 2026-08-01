@@ -94,7 +94,10 @@ fn golden_corr(golden: &Value) -> Mat<f64> {
 
 fn assert_close(a: f64, b: f64, tol: f64, ctx: &str) {
     let diff = (a - b).abs();
-    assert!(diff < tol, "{ctx}: Rust={a}, R={b}, |diff|={diff} (tol={tol})");
+    assert!(
+        diff < tol,
+        "{ctx}: Rust={a}, R={b}, |diff|={diff} (tol={tol})"
+    );
 }
 
 // ─── Correlation matrix ─────────────────────────────────────────────────────
@@ -107,12 +110,7 @@ fn real_corr_matrix() {
     let r_r = golden_corr(&golden);
     for i in 0..3 {
         for j in 0..3 {
-            assert_close(
-                r_rust[(i, j)],
-                r_r[(i, j)],
-                TOL,
-                &format!("corr[{i},{j}]"),
-            );
+            assert_close(r_rust[(i, j)], r_r[(i, j)], TOL, &format!("corr[{i},{j}]"));
         }
     }
 }
@@ -222,13 +220,8 @@ fn real_pipeline_rust_gamma() {
     };
 
     // Rust gamma (using more simulations for stability)
-    let rust_params = gamma::estimate_gamma(
-        50_000,
-        &sample_size(),
-        &corr,
-        ShetOptions::default(),
-        42,
-    );
+    let rust_params =
+        gamma::estimate_gamma(50_000, &sample_size(), &corr, ShetOptions::default(), 42);
 
     eprintln!(
         "R  gamma: shape={:.4} scale={:.4} shift={:.4}",
@@ -284,6 +277,10 @@ fn real_pipeline_rust_gamma() {
     eprintln!("R significant SNPs (p<0.05): {n_sig}");
 
     // At least 90% of significance calls should agree
-    assert!(agreement > 0.90, "significance agreement {:.4} < 0.90", agreement);
+    assert!(
+        agreement > 0.90,
+        "significance agreement {:.4} < 0.90",
+        agreement
+    );
     let _ = ids;
 }

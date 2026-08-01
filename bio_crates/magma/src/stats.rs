@@ -123,7 +123,11 @@ pub fn imhof_pvalue(obs: f64, lambdas: &[f64]) -> f64 {
 
     // Compute Brown's method as fallback
     let ref_pval = brown_pvalue(obs, lambdas);
-    let ref_pval = if ref_pval <= 0.0 { f64::MIN_POSITIVE } else { ref_pval };
+    let ref_pval = if ref_pval <= 0.0 {
+        f64::MIN_POSITIVE
+    } else {
+        ref_pval
+    };
 
     // Integrate the Gil-Pelaez/Imhof formula over [0, ∞).
     // Use the substitution u = t/(1-t), du = dt/(1-t)² to map [0,1) → [0,∞).
@@ -215,7 +219,6 @@ pub fn brown_pvalue(obs: f64, lambdas: &[f64]) -> f64 {
 
 // (Legacy integration function removed — the Imhof p-value now uses inline
 // midpoint quadrature with u=t/(1-t) substitution directly in `imhof_pvalue`.)
-
 
 #[cfg(test)]
 mod tests {

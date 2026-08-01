@@ -91,8 +91,25 @@ fn scale_columns(x: &Mat<f64>) -> Mat<f64> {
 /// `keep_snps` (lower-cased ids). Genotypes are loaded via [`lava::plink`], the
 /// LD correlation matrix `R = scale(X)ᵀ·scale(X)/(n-1)` is formed, and
 /// [`lava::decompose::sym_eigen`] produces `(lam, V)`.
+///
+/// This convenience wrapper parses the `.bim/.fam` on every call. For
+/// chromosome-wide scans that call this many times against the **same**
+/// prefix, use [`ld_ref_from_plink_with_ref`] with a pre-loaded [`PlinkRef`]
+/// to avoid re-parsing the `.bim` once per window.
 pub fn ld_ref_from_plink(prefix: &Path, keep_snps: &[String]) -> Result<LdReference> {
     let refr = lava::plink::load_reference(prefix)?;
+    ld_ref_from_plink_with_ref(prefix, &refr, keep_snps)
+}
+
+/// Same as [`ld_ref_from_plink`] but accepts a pre-loaded [`PlinkRef`] so the
+/// `.bim/.fam` parse is not repeated. Intended for scan-style nodes that build
+/// many [`LdReference`]s for different region subsets of the same chromosome.
+// test: unused_imports lint is allowed workspace-wide; lava::input is used here.
+pub fn ld_ref_from_plink_with_ref(
+    prefix: &Path,
+    refr: &lava::input::PlinkRef,
+    keep_snps: &[String],
+) -> Result<LdReference> {
     let n_indiv = refr.sample_size;
 
     // Resolve the indices (into the merged .bim) of the requested SNPs, in the

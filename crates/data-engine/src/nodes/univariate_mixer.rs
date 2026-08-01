@@ -577,10 +577,7 @@ impl DagNode for UnivariateMixerNode {
 
 /// 按列名取字符串列（rsid 等 Utf8/Utf8View 列），返回 owned `Vec<String>`。
 /// 兼容 DataFusion ≥42 的 Utf8View 输出 — 见 [`super::meta::string_opt_values`]。
-fn col_as_string(
-    batch: &RecordBatch,
-    name: &str,
-) -> Result<Vec<String>, UnivariateMixerError> {
+fn col_as_string(batch: &RecordBatch, name: &str) -> Result<Vec<String>, UnivariateMixerError> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| UnivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;

@@ -113,10 +113,26 @@ mod tests {
         // Pseudoinverse of [[1,2],[2,4]]: singular value σ=5, A⁺ = Aᵀ/125
         // = [[1,2],[2,4]]ᵀ / 25 ... actually A = u*vᵀ where u=[1,2], v=[1,2]
         // A⁺ = v*uᵀ / (||u||² * ||v||²) = [1,2]*[1,2]ᵀ / (5*5) = [[1,2],[2,4]]/25
-        assert!((pinv[(0, 0)] - 0.04).abs() < 1e-10, "pinv[0,0]={}", pinv[(0, 0)]);
-        assert!((pinv[(0, 1)] - 0.08).abs() < 1e-10, "pinv[0,1]={}", pinv[(0, 1)]);
-        assert!((pinv[(1, 0)] - 0.08).abs() < 1e-10, "pinv[1,0]={}", pinv[(1, 0)]);
-        assert!((pinv[(1, 1)] - 0.16).abs() < 1e-10, "pinv[1,1]={}", pinv[(1, 1)]);
+        assert!(
+            (pinv[(0, 0)] - 0.04).abs() < 1e-10,
+            "pinv[0,0]={}",
+            pinv[(0, 0)]
+        );
+        assert!(
+            (pinv[(0, 1)] - 0.08).abs() < 1e-10,
+            "pinv[0,1]={}",
+            pinv[(0, 1)]
+        );
+        assert!(
+            (pinv[(1, 0)] - 0.08).abs() < 1e-10,
+            "pinv[1,0]={}",
+            pinv[(1, 0)]
+        );
+        assert!(
+            (pinv[(1, 1)] - 0.16).abs() < 1e-10,
+            "pinv[1,1]={}",
+            pinv[(1, 1)]
+        );
     }
 
     #[test]

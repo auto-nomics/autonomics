@@ -3,7 +3,7 @@
 //! The library's `weight_vector` has no NaN guard — a null n propagates
 //! silently. This file documents the current behavior.
 
-use cpassoc::stats::{self, weight_vector, ShetOptions};
+use cpassoc::stats::{self, ShetOptions, weight_vector};
 use faer::Mat;
 
 #[test]
@@ -13,7 +13,10 @@ fn weight_vector_with_nan_n() {
     let w = weight_vector(&ss);
     // sum_sq = 1000² + NaN² + 800² = NaN → sum_w = NaN → all weights NaN
     println!("weights with NaN n: {:?}", w);
-    assert!(w.iter().all(|x| x.is_nan()), "NaN n should poison all weights");
+    assert!(
+        w.iter().all(|x| x.is_nan()),
+        "NaN n should poison all weights"
+    );
 }
 
 #[test]
@@ -32,7 +35,10 @@ fn weight_vector_all_zero_n() {
     let w = weight_vector(&ss);
     // 0/0 = NaN
     println!("weights with all-zero n: {:?}", w);
-    assert!(w.iter().all(|x| x.is_nan()), "all-zero n should give NaN weights");
+    assert!(
+        w.iter().all(|x| x.is_nan()),
+        "all-zero n should give NaN weights"
+    );
 }
 
 #[test]

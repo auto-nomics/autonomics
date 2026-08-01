@@ -107,13 +107,11 @@ impl StatefulWidgetRef for AgentTabWidget<'_> {
 
         let mut flat: Vec<Line<'static>> = Vec::new();
         for (i, msg) in ts.messages.iter().enumerate() {
-            if ts.cached_msg_versions[i] == ts.msg_versions[i]
-                && !ts.cached_msg_lines[i].is_empty()
+            if ts.cached_msg_versions[i] == ts.msg_versions[i] && !ts.cached_msg_lines[i].is_empty()
             {
                 flat.extend_from_slice(&ts.cached_msg_lines[i]);
             } else {
-                let rendered =
-                    super::chat_widget::render::render_line_owned(msg, chat_inner_area);
+                let rendered = super::chat_widget::render::render_line_owned(msg, chat_inner_area);
                 flat.extend_from_slice(&rendered);
                 ts.cached_msg_lines[i] = rendered;
                 ts.cached_msg_versions[i] = ts.msg_versions[i];

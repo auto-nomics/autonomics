@@ -220,9 +220,7 @@ impl DAG {
                                 .downcast_ref::<&str>()
                                 .map(|s| (*s).to_string())
                                 .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| {
-                                    "panicked with non-string payload".to_string()
-                                });
+                                .unwrap_or_else(|| "panicked with non-string payload".to_string());
                             warn!(node = %job_id, panic = %msg, "node panicked");
                             JobResult::Failed {
                                 id: job_id.clone(),

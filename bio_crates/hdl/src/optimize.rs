@@ -226,13 +226,7 @@ pub fn lbfgsb_max<F: Fn(&[f64]) -> f64>(
 /// Minimise `neg_f` over `[lb, ub]` by projected-gradient BFGS with an
 /// analytical gradient `neg_grad`. Same convergence criteria as
 /// [`minimize_box`].
-fn minimize_box_grad<F, G>(
-    neg_f: F,
-    neg_grad: G,
-    x0: &[f64],
-    lb: &[f64],
-    ub: &[f64],
-) -> OptResult
+fn minimize_box_grad<F, G>(neg_f: F, neg_grad: G, x0: &[f64], lb: &[f64], ub: &[f64]) -> OptResult
 where
     F: Fn(&[f64]) -> f64,
     G: Fn(&[f64]) -> Vec<f64>,
@@ -340,10 +334,8 @@ where
         let sy = dot(&s, &y);
         if sy.abs() > 1e-12 * (s.iter().map(|v| v.abs()).fold(0.0_f64, f64::max)) {
             let rho = 1.0 / sy;
-            let iayt =
-                outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * y[i] * s[j]);
-            let isyt =
-                outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * s[i] * y[j]);
+            let iayt = outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * y[i] * s[j]);
+            let isyt = outer_update(n, |i, j| if i == j { 1.0 } else { 0.0 } - rho * s[i] * y[j]);
             let h_new = &(&iayt * &h) * &isyt;
             let mut h_up = h_new;
             for i in 0..n {
@@ -416,13 +408,7 @@ where
 
 /// One-dimensional maximisation of `f(int)` over `[lower, upper]` with an
 /// analytical derivative `df`.
-pub fn lbfgsb_max_1d_grad<F, D>(
-    f: F,
-    df: D,
-    x0: f64,
-    lower: f64,
-    upper: f64,
-) -> Result<OptResult>
+pub fn lbfgsb_max_1d_grad<F, D>(f: F, df: D, x0: f64, lower: f64, upper: f64) -> Result<OptResult>
 where
     F: Fn(f64) -> f64,
     D: Fn(f64) -> f64,

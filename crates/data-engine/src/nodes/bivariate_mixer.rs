@@ -379,38 +379,18 @@ impl DagNode for BivariateMixerNode {
         // 1. 按 **port index** 查输入（不能用位置下标——`build_inputs` 推送顺序
         //    是 petgraph 边存储序，与 `to_port` 无关；见 ldsc_rg/lcv/mtag 的同样
         //    pattern）。端口布局：0/1=sumstats，2/3=fit1 约束。
-        let sumstats1 = inputs
-            .iter()
-            .find(|i| i.port == 0)
-            .ok_or_else(|| {
-                BivariateMixerError::InvalidInput(
-                    "missing trait1 sumstats input (port 0)".into(),
-                )
-            })?;
-        let sumstats2 = inputs
-            .iter()
-            .find(|i| i.port == 1)
-            .ok_or_else(|| {
-                BivariateMixerError::InvalidInput(
-                    "missing trait2 sumstats input (port 1)".into(),
-                )
-            })?;
-        let fit1_t1 = inputs
-            .iter()
-            .find(|i| i.port == 2)
-            .ok_or_else(|| {
-                BivariateMixerError::InvalidInput(
-                    "missing trait1 fit1 result input (port 2)".into(),
-                )
-            })?;
-        let fit1_t2 = inputs
-            .iter()
-            .find(|i| i.port == 3)
-            .ok_or_else(|| {
-                BivariateMixerError::InvalidInput(
-                    "missing trait2 fit1 result input (port 3)".into(),
-                )
-            })?;
+        let sumstats1 = inputs.iter().find(|i| i.port == 0).ok_or_else(|| {
+            BivariateMixerError::InvalidInput("missing trait1 sumstats input (port 0)".into())
+        })?;
+        let sumstats2 = inputs.iter().find(|i| i.port == 1).ok_or_else(|| {
+            BivariateMixerError::InvalidInput("missing trait2 sumstats input (port 1)".into())
+        })?;
+        let fit1_t1 = inputs.iter().find(|i| i.port == 2).ok_or_else(|| {
+            BivariateMixerError::InvalidInput("missing trait1 fit1 result input (port 2)".into())
+        })?;
+        let fit1_t2 = inputs.iter().find(|i| i.port == 3).ok_or_else(|| {
+            BivariateMixerError::InvalidInput("missing trait2 fit1 result input (port 3)".into())
+        })?;
 
         // 校验两个上游 sumstats 的必需列
         for (i, inp) in [sumstats1, sumstats2].iter().enumerate() {
@@ -712,10 +692,7 @@ fn single_f64(batch: &RecordBatch, name: &str) -> Result<f64, BivariateMixerErro
     )))
 }
 
-fn col_as_string(
-    batch: &RecordBatch,
-    name: &str,
-) -> Result<Vec<String>, BivariateMixerError> {
+fn col_as_string(batch: &RecordBatch, name: &str) -> Result<Vec<String>, BivariateMixerError> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;
@@ -746,10 +723,7 @@ impl F64Col<'_> {
     }
 }
 
-fn col_as_f64<'a>(
-    batch: &'a RecordBatch,
-    name: &str,
-) -> Result<F64Col<'a>, BivariateMixerError> {
+fn col_as_f64<'a>(batch: &'a RecordBatch, name: &str) -> Result<F64Col<'a>, BivariateMixerError> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| BivariateMixerError::InvalidInput(format!("column '{name}' not found")))?;

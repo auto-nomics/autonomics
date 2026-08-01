@@ -22,8 +22,8 @@ use crate::error::{MagmaError, Result};
 use crate::geneinput::{GeneAnnot, SnpPvalData};
 use crate::plink::{BedFile, MISS};
 use crate::stats::{
-    imhof_pvalue, pval_to_chisq1, pval_to_zstat, truncate_pval,
-    DEFAULT_PVAL_TRUNCATE_HIGH, DEFAULT_PVAL_TRUNCATE_LOW,
+    DEFAULT_PVAL_TRUNCATE_HIGH, DEFAULT_PVAL_TRUNCATE_LOW, imhof_pvalue, pval_to_chisq1,
+    pval_to_zstat, truncate_pval,
 };
 
 /// Gene analysis results for one gene.
@@ -117,11 +117,7 @@ pub fn analyze_pval(
         // Determine sample size for this gene
         let n = config.fixed_n.unwrap_or_else(|| {
             // Use median N from matched SNPs if available
-            let mut ns: Vec<i64> = pval_data
-                .snps
-                .values()
-                .filter_map(|(_, n)| *n)
-                .collect();
+            let mut ns: Vec<i64> = pval_data.snps.values().filter_map(|(_, n)| *n).collect();
             if ns.is_empty() {
                 n_indiv as i64
             } else {
@@ -241,7 +237,11 @@ pub fn compute_freqs(geno: &Mat<f64>, n_indiv: usize) -> Vec<f64> {
                 count += 1;
             }
         }
-        freqs[j] = if count > 0 { sum / (2.0 * count as f64) } else { 0.0 };
+        freqs[j] = if count > 0 {
+            sum / (2.0 * count as f64)
+        } else {
+            0.0
+        };
     }
     freqs
 }
@@ -268,7 +268,11 @@ pub fn compute_correlation(geno: &Mat<f64>, freqs: &[f64], n_indiv: usize) -> Ma
                 count += 1;
             }
         }
-        let var = if count > 1 { ss / (count as f64 - 1.0) } else { 1.0 };
+        let var = if count > 1 {
+            ss / (count as f64 - 1.0)
+        } else {
+            1.0
+        };
         let sd = var.sqrt().max(1e-10);
 
         for i in 0..n_indiv {
@@ -384,11 +388,7 @@ pub fn write_genes_raw(results: &[GeneResult], path: &Path) -> Result<()> {
     let f = std::fs::File::create(path).map_err(MagmaError::Io)?;
     let mut w = std::io::BufWriter::new(f);
 
-    writeln!(
-        w,
-        "# model = snpwise_mean\n# version = 1.10-rust"
-    )
-    .map_err(MagmaError::Io)?;
+    writeln!(w, "# model = snpwise_mean\n# version = 1.10-rust").map_err(MagmaError::Io)?;
 
     writeln!(
         w,
@@ -421,14 +421,8 @@ mod tests {
         let dir = test_dir();
         let mut bed = BedFile::open(&dir.join("sim_geno")).unwrap();
         let annot = GeneAnnot::read(&dir.join("annot.genes.annot")).unwrap();
-        let pval_data = SnpPvalData::read(
-            &dir.join("gwas_pval.txt"),
-            "SNP",
-            "P",
-            None,
-            Some(50000),
-        )
-        .unwrap();
+        let pval_data =
+            SnpPvalData::read(&dir.join("gwas_pval.txt"), "SNP", "P", None, Some(50000)).unwrap();
 
         let config = PvalAnalysisConfig {
             fixed_n: Some(50000),

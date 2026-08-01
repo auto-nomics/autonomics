@@ -119,7 +119,10 @@ fn json_to_f64_vec(v: &Value) -> Vec<f64> {
 
 fn assert_close(a: f64, b: f64, tol: f64, ctx: &str) {
     let diff = (a - b).abs();
-    assert!(diff < tol, "{ctx}: Rust={a}, R={b}, |diff|={diff} (tol={tol})");
+    assert!(
+        diff < tol,
+        "{ctx}: Rust={a}, R={b}, |diff|={diff} (tol={tol})"
+    );
 }
 
 // ─── SHom tests ─────────────────────────────────────────────────────────────
@@ -465,7 +468,7 @@ fn empirical_dist_basic() {
 
 #[test]
 fn run_cpassoc_pipeline() {
-    use cpassoc::{run_cpassoc, CpassocConfig};
+    use cpassoc::{CpassocConfig, run_cpassoc};
 
     let config = CpassocConfig {
         sample_size: sample_size2(),

@@ -8,7 +8,7 @@
 //! of simulated SHet statistics (generated from `MVN(0, R)` null draws).
 
 use crate::mvn::mvrnorm;
-use crate::stats::{shet, ShetOptions};
+use crate::stats::{ShetOptions, shet};
 use faer::Mat;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -155,8 +155,16 @@ mod tests {
             .collect();
         let params = fit_shifted_gamma(&stat);
         assert!((params.shape - 2.0).abs() < 0.1, "shape = {}", params.shape);
-        assert!((params.scale - 3.0).abs() < 0.15, "scale = {}", params.scale);
-        assert!((params.shift - 1.0).abs() < 0.15, "shift = {}", params.shift);
+        assert!(
+            (params.scale - 3.0).abs() < 0.15,
+            "scale = {}",
+            params.scale
+        );
+        assert!(
+            (params.shift - 1.0).abs() < 0.15,
+            "shift = {}",
+            params.shift
+        );
         let _ = normal; // suppress unused warning
     }
 }

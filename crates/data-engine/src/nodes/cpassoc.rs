@@ -404,9 +404,7 @@ impl CpassocNode {
         // Build filtered rsid list and Z-score matrix.
         let rsids_filtered: Vec<String> = valid_idx.iter().map(|&i| rsids[i].clone()).collect();
         let rsids = rsids_filtered;
-        let z_matrix = Mat::from_fn(n_valid, k, |row, col| {
-            z_cols[col][valid_idx[row]]
-        });
+        let z_matrix = Mat::from_fn(n_valid, k, |row, col| z_cols[col][valid_idx[row]]);
 
         // 4. Estimate correlation matrix R = cor(Z) on the complete-case data.
         let corr = cpassoc::input::corr_matrix(&z_matrix);
@@ -484,9 +482,7 @@ impl DagNode for CpassocNode {
 
         let ctx = node_ctx.session();
         let batch = Self::run_with_ctx(&ctx, &sorted_inputs, &self.config).await?;
-        let df = ctx
-            .read_batch(batch)
-            .map_err(CpassocNodeError::ReadBatch)?;
+        let df = ctx.read_batch(batch).map_err(CpassocNodeError::ReadBatch)?;
 
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
@@ -503,9 +499,9 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, CpassocN
         .first()
         .ok_or(CpassocNodeError::Cpassoc("extract_f64: no batches".into()))?
         .schema();
-    let idx = schema.index_of(name).map_err(|_| {
-        CpassocNodeError::Cpassoc(format!("missing column '{name}'"))
-    })?;
+    let idx = schema
+        .index_of(name)
+        .map_err(|_| CpassocNodeError::Cpassoc(format!("missing column '{name}'")))?;
     let dtype = schema.field(idx).data_type().clone();
     if !matches!(
         dtype,
@@ -539,9 +535,9 @@ fn extract_string(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, Cp
             "extract_string: no batches".into(),
         ))?
         .schema();
-    let idx = schema.index_of(name).map_err(|_| {
-        CpassocNodeError::Cpassoc(format!("missing column '{name}'"))
-    })?;
+    let idx = schema
+        .index_of(name)
+        .map_err(|_| CpassocNodeError::Cpassoc(format!("missing column '{name}'")))?;
 
     let mut out = Vec::new();
     for batch in batches {
@@ -642,21 +638,17 @@ mod tests {
 
     #[tokio::test]
     async fn e2e_cpassoc_two_traits() {
-        let rsids: Vec<String> = (0..200)
-            .map(|i| format!("rs{}", 1_000_000 + i))
+        let rsids: Vec<String> = (0..200).map(|i| format!("rs{}", 1_000_000 + i)).collect();
+        let z1: Vec<f64> = (0..200)
+            .map(|i| (i as f64 / 50.0 - 2.0).sin() * 3.0)
             .collect();
-        let z1: Vec<f64> = (0..200).map(|i| (i as f64 / 50.0 - 2.0).sin() * 3.0).collect();
         let z2: Vec<f64> = (0..200)
             .map(|i| (i as f64 / 50.0 - 2.0).cos() * 2.5 + 0.5)
             .collect();
 
         let ctx = SessionContext::new();
-        let df1 = ctx
-            .read_batch(sumstats_batch(&z1, &rsids, 1000.0))
-            .unwrap();
-        let df2 = ctx
-            .read_batch(sumstats_batch(&z2, &rsids, 800.0))
-            .unwrap();
+        let df1 = ctx.read_batch(sumstats_batch(&z1, &rsids, 1000.0)).unwrap();
+        let df2 = ctx.read_batch(sumstats_batch(&z2, &rsids, 800.0)).unwrap();
 
         let cfg = CpassocConfig {
             n_sim: 5000,
@@ -727,9 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn e2e_cpassoc_three_traits() {
-        let rsids: Vec<String> = (0..150)
-            .map(|i| format!("rs{}", 2_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..150).map(|i| format!("rs{}", 2_000_000 + i)).collect();
         let z1: Vec<f64> = (0..150).map(|i| (i as f64 * 0.1).sin() * 2.0).collect();
         let z2: Vec<f64> = (0..150)
             .map(|i| (i as f64 * 0.1 + 1.0).sin() * 1.5)
@@ -739,15 +729,9 @@ mod tests {
             .collect();
 
         let ctx = SessionContext::new();
-        let df1 = ctx
-            .read_batch(sumstats_batch(&z1, &rsids, 1000.0))
-            .unwrap();
-        let df2 = ctx
-            .read_batch(sumstats_batch(&z2, &rsids, 1500.0))
-            .unwrap();
-        let df3 = ctx
-            .read_batch(sumstats_batch(&z3, &rsids, 800.0))
-            .unwrap();
+        let df1 = ctx.read_batch(sumstats_batch(&z1, &rsids, 1000.0)).unwrap();
+        let df2 = ctx.read_batch(sumstats_batch(&z2, &rsids, 1500.0)).unwrap();
+        let df3 = ctx.read_batch(sumstats_batch(&z3, &rsids, 800.0)).unwrap();
 
         let cfg = CpassocConfig {
             n_sim: 3000,
@@ -784,15 +768,11 @@ mod tests {
 
     #[tokio::test]
     async fn e2e_cpassoc_single_input_errors() {
-        let rsids: Vec<String> = (0..10)
-            .map(|i| format!("rs{}", 3_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..10).map(|i| format!("rs{}", 3_000_000 + i)).collect();
         let z: Vec<f64> = (0..10).map(|i| i as f64 * 0.1).collect();
 
         let ctx = SessionContext::new();
-        let df = ctx
-            .read_batch(sumstats_batch(&z, &rsids, 1000.0))
-            .unwrap();
+        let df = ctx.read_batch(sumstats_batch(&z, &rsids, 1000.0)).unwrap();
 
         let cfg = CpassocConfig::default();
         let inputs = vec![NodeInput { port: 0, data: df }];
@@ -822,11 +802,7 @@ mod tests {
 
     /// Build a sumstats batch where some Z-scores are null (None).
     /// Null positions are given as row indices.
-    fn sumstats_batch_with_nulls(
-        z: &[Option<f64>],
-        rsids: &[String],
-        n_samp: f64,
-    ) -> RecordBatch {
+    fn sumstats_batch_with_nulls(z: &[Option<f64>], rsids: &[String], n_samp: f64) -> RecordBatch {
         let n: Vec<f64> = vec![n_samp; z.len()];
         let schema = Arc::new(Schema::new(vec![
             Field::new("z", DataType::Float64, true),
@@ -849,9 +825,7 @@ mod tests {
         // 10 SNPs; SNP 3 has null z in trait 1, SNP 7 has null z in trait 2.
         // These should be silently dropped; the remaining 8 SNPs should
         // produce valid results.
-        let rsids: Vec<String> = (0..10)
-            .map(|i| format!("rs{}", 4_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..10).map(|i| format!("rs{}", 4_000_000 + i)).collect();
         let z1: Vec<Option<f64>> = (0..10)
             .map(|i| {
                 if i == 3 {
@@ -923,9 +897,15 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap();
         for i in 0..8 {
-            assert!(shom.value(i).is_finite(), "shom[{i}] not finite after NaN filter");
+            assert!(
+                shom.value(i).is_finite(),
+                "shom[{i}] not finite after NaN filter"
+            );
             assert!(shom.value(i) >= 0.0);
-            assert!(shet.value(i).is_finite(), "shet[{i}] not finite after NaN filter");
+            assert!(
+                shet.value(i).is_finite(),
+                "shet[{i}] not finite after NaN filter"
+            );
             assert!(shet.value(i) >= 0.0);
         }
     }
@@ -951,18 +931,11 @@ mod tests {
             NodeInput { port: 1, data: df2 },
         ];
         let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
-        assert!(
-            result.is_err(),
-            "all-NaN input must error after filtering"
-        );
+        assert!(result.is_err(), "all-NaN input must error after filtering");
     }
 
     /// Build a sumstats batch where the sample-size column has nulls.
-    fn sumstats_batch_null_n(
-        z: &[f64],
-        rsids: &[String],
-        n_vals: &[Option<f64>],
-    ) -> RecordBatch {
+    fn sumstats_batch_null_n(z: &[f64], rsids: &[String], n_vals: &[Option<f64>]) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("z", DataType::Float64, false),
             Field::new("n", DataType::Float64, true),
@@ -983,9 +956,7 @@ mod tests {
     async fn e2e_cpassoc_null_n_first_row_falls_back() {
         // Trait 2 has null n at row 0 but valid n at row 1.
         // The node should fall back to the first valid n (not 0.0 or NaN).
-        let rsids: Vec<String> = (0..5)
-            .map(|i| format!("rs{}", 5_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..5).map(|i| format!("rs{}", 5_000_000 + i)).collect();
         let z1: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let z2: Vec<f64> = vec![0.5, 1.0, 1.5, 2.0, 2.5];
         // n for trait 1: all 1000.0
@@ -1021,16 +992,17 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap();
         for i in 0..5 {
-            assert!(shom.value(i).is_finite(), "shom[{i}] not finite with fallback n");
+            assert!(
+                shom.value(i).is_finite(),
+                "shom[{i}] not finite with fallback n"
+            );
         }
     }
 
     #[tokio::test]
     async fn e2e_cpassoc_all_null_n_errors() {
         // Trait 2 has null n for every row → should error.
-        let rsids: Vec<String> = (0..3)
-            .map(|i| format!("rs{}", 6_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..3).map(|i| format!("rs{}", 6_000_000 + i)).collect();
         let z1: Vec<f64> = vec![1.0, 2.0, 3.0];
         let z2: Vec<f64> = vec![0.5, 1.0, 1.5];
         let n1: Vec<Option<f64>> = vec![Some(1000.0); 3];
@@ -1061,9 +1033,7 @@ mod tests {
     #[tokio::test]
     async fn e2e_cpassoc_zero_n_errors() {
         // Trait 2 has n=0 → should error (weight would be 0).
-        let rsids: Vec<String> = (0..3)
-            .map(|i| format!("rs{}", 7_000_000 + i))
-            .collect();
+        let rsids: Vec<String> = (0..3).map(|i| format!("rs{}", 7_000_000 + i)).collect();
         let z1: Vec<f64> = vec![1.0, 2.0, 3.0];
         let z2: Vec<f64> = vec![0.5, 1.0, 1.5];
         let n1: Vec<Option<f64>> = vec![Some(1000.0); 3];

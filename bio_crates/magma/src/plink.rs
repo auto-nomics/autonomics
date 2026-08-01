@@ -38,7 +38,7 @@ pub struct SnpInfo {
 pub struct IndivInfo {
     pub fid: String,
     pub iid: String,
-    pub gender: i32, // 1=male, 2=female, 0=unknown
+    pub gender: i32,        // 1=male, 2=female, 0=unknown
     pub pheno: Option<f64>, // None if missing/NA
 }
 
@@ -265,7 +265,9 @@ impl BedFile {
                     .seek(SeekFrom::Start(offset as u64))
                     .map_err(MagmaError::Io)?;
                 buf_owned = vec![0u8; self.block_count];
-                self.bed.read_exact(&mut buf_owned).map_err(MagmaError::Io)?;
+                self.bed
+                    .read_exact(&mut buf_owned)
+                    .map_err(MagmaError::Io)?;
                 &buf_owned
             };
             for (j, &code) in buf.iter().enumerate() {
@@ -276,7 +278,7 @@ impl BedFile {
                     }
                     let pair = (code >> (2 * k)) & 3;
                     match pair {
-                        0 => {}                    // hom1: dosage 0
+                        0 => {}                       // hom1: dosage 0
                         3 => counts[snp_out][0] += 2, // hom2: dosage 2
                         2 => counts[snp_out][0] += 1, // het: dosage 1
                         1 => counts[snp_out][1] += 1, // missing
@@ -339,7 +341,9 @@ fn read_fam(path: &Path) -> Result<Vec<IndivInfo>> {
         });
     }
     if indivs.is_empty() {
-        return Err(MagmaError::Input(format!("{path:?}: no individuals in file")));
+        return Err(MagmaError::Input(format!(
+            "{path:?}: no individuals in file"
+        )));
     }
     Ok(indivs)
 }

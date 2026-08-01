@@ -9,6 +9,7 @@ pub mod bivariate_mixer;
 pub mod cpassoc;
 pub mod echo_node;
 pub mod hdl_l;
+pub mod hdl_l_scan;
 pub mod lava;
 pub mod lcv;
 pub mod ldsc_common;

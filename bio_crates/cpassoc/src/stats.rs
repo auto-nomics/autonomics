@@ -128,12 +128,7 @@ pub fn shet(
 ///     S(t) = (W1 · ginv(A) · x1)² / (W1 · ginv(A) · W1)
 ///     track max
 /// ```
-pub fn shet_single(
-    x: &[f64],
-    w: &[f64],
-    corr_matrix: faer::MatRef<f64>,
-    opts: ShetOptions,
-) -> f64 {
+pub fn shet_single(x: &[f64], w: &[f64], corr_matrix: faer::MatRef<f64>, opts: ShetOptions) -> f64 {
     let n = x.len();
     debug_assert_eq!(w.len(), n);
     debug_assert_eq!(corr_matrix.nrows(), n);
@@ -163,9 +158,7 @@ pub fn shet_single(
 
     for &threshold in &cutoffs {
         // index = which(abs(x1) < threshold)  → indices to drop
-        let drop: Vec<usize> = (0..n)
-            .filter(|&i| x[i].abs() < threshold)
-            .collect();
+        let drop: Vec<usize> = (0..n).filter(|&i| x[i].abs() < threshold).collect();
 
         // if (length(index) == N) break
         if drop.len() == n {

@@ -18,12 +18,7 @@ use rand_distr::{Distribution, Normal};
 /// 1. Cholesky-decompose `Sigma = L Lᵀ` (lower-triangular `L`).
 /// 2. Generate `n × K` standard-normal matrix `Z`.
 /// 3. Return `X = 1 · muᵀ + Z · Lᵀ`.
-pub fn mvrnorm<R: Rng + ?Sized>(
-    n: usize,
-    mu: &[f64],
-    sigma: MatRef<f64>,
-    rng: &mut R,
-) -> Mat<f64> {
+pub fn mvrnorm<R: Rng + ?Sized>(n: usize, mu: &[f64], sigma: MatRef<f64>, rng: &mut R) -> Mat<f64> {
     let k = mu.len();
     debug_assert_eq!(sigma.nrows(), k);
     debug_assert_eq!(sigma.ncols(), k);
@@ -82,8 +77,8 @@ fn cholesky_lower(sigma: MatRef<f64>) -> Mat<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_chacha::ChaCha8Rng;
     use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
 
     #[test]
     fn mvrnorm_mean_convergence() {

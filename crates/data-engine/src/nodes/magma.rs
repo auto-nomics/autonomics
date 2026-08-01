@@ -191,10 +191,13 @@ impl DagNode for MagmaAnnotateNode {
         _inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let genes = magma::annotation::read_gene_loc(std::path::Path::new(&self.config.gene_loc)).map_err(MagmaNodeError::from)?;
-        let snps = magma::annotation::read_snp_loc(std::path::Path::new(&self.config.snp_loc)).map_err(MagmaNodeError::from)?;
+        let genes = magma::annotation::read_gene_loc(std::path::Path::new(&self.config.gene_loc))
+            .map_err(MagmaNodeError::from)?;
+        let snps = magma::annotation::read_snp_loc(std::path::Path::new(&self.config.snp_loc))
+            .map_err(MagmaNodeError::from)?;
         let window_bp = (self.config.window_kb * 1000.0) as i64;
-        let annot = magma::annotation::annotate(&genes, &snps, window_bp, window_bp).map_err(MagmaNodeError::from)?;
+        let annot = magma::annotation::annotate(&genes, &snps, window_bp, window_bp)
+            .map_err(MagmaNodeError::from)?;
 
         let batch = build_annot_batch(&annot)?;
         let df = node_ctx
@@ -207,7 +210,9 @@ impl DagNode for MagmaAnnotateNode {
     }
 }
 
-fn build_annot_batch(annot: &magma::annotation::GeneAnnotation) -> Result<RecordBatch, MagmaNodeError> {
+fn build_annot_batch(
+    annot: &magma::annotation::GeneAnnotation,
+) -> Result<RecordBatch, MagmaNodeError> {
     let n = annot.genes.len();
     let mut gene_ids = Vec::with_capacity(n);
     let mut chrs = Vec::with_capacity(n);
@@ -366,7 +371,10 @@ impl DagNode for MagmaGeneNode {
         // Extract rsid, pval, n from the batches
         let rsids = extract_string_col(&batches, &self.config.snp_col)?;
         let pvals = extract_f64_col(&batches, &self.config.pval_col)?;
-        let ns: Vec<Option<i64>> = if batches.iter().any(|b| b.schema().field_with_name(&self.config.n_col).is_ok()) {
+        let ns: Vec<Option<i64>> = if batches
+            .iter()
+            .any(|b| b.schema().field_with_name(&self.config.n_col).is_ok())
+        {
             extract_i64_col(&batches, &self.config.n_col)?
         } else {
             vec![self.config.fixed_n; rsids.len()]
@@ -383,14 +391,17 @@ impl DagNode for MagmaGeneNode {
         let chroms: Vec<u32> = (1..=22).collect();
         let mut bed = magma::plink::BedFile::open_template(REF_PREFIX_TEMPLATE, &chroms)
             .map_err(MagmaNodeError::from)?;
-        let annot = magma::geneinput::GeneAnnot::read(std::path::Path::new(&self.config.gene_annot)).map_err(MagmaNodeError::from)?;
+        let annot =
+            magma::geneinput::GeneAnnot::read(std::path::Path::new(&self.config.gene_annot))
+                .map_err(MagmaNodeError::from)?;
 
         // Run gene analysis
         let config = magma::geneanalysis::PvalAnalysisConfig {
             fixed_n: self.config.fixed_n,
             ..Default::default()
         };
-        let results = magma::geneanalysis::analyze_pval(&mut bed, &annot, &pval_data, &config).map_err(MagmaNodeError::from)?;
+        let results = magma::geneanalysis::analyze_pval(&mut bed, &annot, &pval_data, &config)
+            .map_err(MagmaNodeError::from)?;
 
         // Build output batch
         let batch = build_gene_results_batch(&results)?;
@@ -545,7 +556,8 @@ impl DagNode for MagmaSetNode {
     ) -> Result<PortOutputs, DagError> {
         // Load gene data from .genes.raw file or construct from DataFrame
         let gene_data = if let Some(ref raw_path) = self.config.gene_raw {
-            magma::setanalysis::GeneRawData::read(std::path::Path::new(raw_path)).map_err(MagmaNodeError::from)?
+            magma::setanalysis::GeneRawData::read(std::path::Path::new(raw_path))
+                .map_err(MagmaNodeError::from)?
         } else if !inputs.is_empty() {
             gene_results_to_raw(&inputs[0].data).await?
         } else {
@@ -568,8 +580,10 @@ impl DagNode for MagmaSetNode {
                     &gene_data,
                     self.config.col_gene,
                     self.config.col_set,
-                ).map_err(MagmaNodeError::from)?;
-                magma::setanalysis::analyze_gene_sets(&gene_data, &set_data).map_err(MagmaNodeError::from)?
+                )
+                .map_err(MagmaNodeError::from)?;
+                magma::setanalysis::analyze_gene_sets(&gene_data, &set_data)
+                    .map_err(MagmaNodeError::from)?
             }
             "covar" => {
                 let covar_path = self.config.gene_covar.as_ref().ok_or_else(|| {
@@ -580,8 +594,10 @@ impl DagNode for MagmaSetNode {
                 let covar_data = magma::setanalysis::GeneCovarData::read(
                     std::path::Path::new(covar_path),
                     &gene_data,
-                ).map_err(MagmaNodeError::from)?;
-                magma::setanalysis::analyze_gene_covar(&gene_data, &covar_data).map_err(MagmaNodeError::from)?
+                )
+                .map_err(MagmaNodeError::from)?;
+                magma::setanalysis::analyze_gene_covar(&gene_data, &covar_data)
+                    .map_err(MagmaNodeError::from)?
             }
             other => {
                 return Err(MagmaNodeError::Magma(magma::MagmaError::Input(format!(
@@ -606,7 +622,7 @@ impl DagNode for MagmaSetNode {
 /// This is used when the set node receives gene results from the gene node
 /// instead of a .genes.raw file. Correlations default to 0 (identity matrix).
 async fn gene_results_to_raw(
-    df: &datafusion:: dataframe::DataFrame,
+    df: &datafusion::dataframe::DataFrame,
 ) -> Result<magma::setanalysis::GeneRawData, MagmaNodeError> {
     let batches = df.clone().collect().await.map_err(MagmaNodeError::from)?;
     let gene_ids = extract_string_col(&batches, "gene_id")?;
@@ -769,9 +785,11 @@ impl DagNode for MagmaMetaNode {
             .cohort_files
             .iter()
             .map(|p| magma::setanalysis::GeneRawData::read(std::path::Path::new(p)))
-            .collect::<Result<Vec<_>, _>>().map_err(|e: magma::MagmaError| MagmaNodeError::from(e))?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e: magma::MagmaError| MagmaNodeError::from(e))?;
 
-        let meta = magma::meta::meta_analyze(&cohorts, self.config.weights.as_deref(), None).map_err(MagmaNodeError::from)?;
+        let meta = magma::meta::meta_analyze(&cohorts, self.config.weights.as_deref(), None)
+            .map_err(MagmaNodeError::from)?;
 
         // Build output: convert GeneRawData to GeneResult format
         let results: Vec<magma::geneanalysis::GeneResult> = meta
@@ -810,9 +828,9 @@ fn extract_f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, Magm
         .first()
         .ok_or_else(|| MagmaNodeError::Magma(magma::MagmaError::Input("no batches".into())))?
         .schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'"))))?;
+    let idx = schema.index_of(name).map_err(|_| {
+        MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'")))
+    })?;
 
     let mut out = Vec::new();
     for batch in batches {
@@ -839,9 +857,9 @@ fn extract_string_col(batches: &[RecordBatch], name: &str) -> Result<Vec<String>
         .first()
         .ok_or_else(|| MagmaNodeError::Magma(magma::MagmaError::Input("no batches".into())))?
         .schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'"))))?;
+    let idx = schema.index_of(name).map_err(|_| {
+        MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'")))
+    })?;
 
     let mut out = Vec::new();
     for batch in batches {
@@ -875,9 +893,9 @@ fn extract_i64_col(
         .first()
         .ok_or_else(|| MagmaNodeError::Magma(magma::MagmaError::Input("no batches".into())))?
         .schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'"))))?;
+    let idx = schema.index_of(name).map_err(|_| {
+        MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'")))
+    })?;
 
     let mut out = Vec::new();
     for batch in batches {
@@ -900,9 +918,9 @@ fn extract_i32_col(batches: &[RecordBatch], name: &str) -> Result<Vec<i32>, Magm
         .first()
         .ok_or_else(|| MagmaNodeError::Magma(magma::MagmaError::Input("no batches".into())))?
         .schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'"))))?;
+    let idx = schema.index_of(name).map_err(|_| {
+        MagmaNodeError::Magma(magma::MagmaError::Input(format!("missing column '{name}'")))
+    })?;
 
     let mut out = Vec::new();
     for batch in batches {
@@ -970,7 +988,11 @@ mod tests {
             window_kb: 35.0,
         });
         let res = node
-            .execute(&node_ctx(), &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("annotate should succeed");
 
@@ -987,11 +1009,17 @@ mod tests {
         // Read GWAS p-values
         let pval_data = magma::geneinput::SnpPvalData::read(
             &dir.join("gwas_pval.txt"),
-            "SNP", "P", Some("N"), None,
+            "SNP",
+            "P",
+            Some("N"),
+            None,
         )
         .unwrap();
         let rsids: Vec<String> = pval_data.snps.keys().cloned().collect();
-        let pvals: Vec<f64> = rsids.iter().map(|r| pval_data.snps.get(r).unwrap().0).collect();
+        let pvals: Vec<f64> = rsids
+            .iter()
+            .map(|r| pval_data.snps.get(r).unwrap().0)
+            .collect();
 
         let batch = gwas_batch(rsids, pvals, 50000);
         let df = node_ctx().session().read_batch(batch).unwrap();
@@ -1006,7 +1034,11 @@ mod tests {
         });
 
         let res = node
-            .execute(&node_ctx(), &input, &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &input,
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("gene analysis should succeed");
 
@@ -1035,13 +1067,21 @@ mod tests {
             analysis_type: "set".into(),
             set_annot: Some(dir.join("gene_sets.txt").to_string_lossy().to_string()),
             gene_covar: None,
-            gene_raw: Some(dir.join("gene_pval.genes.raw").to_string_lossy().to_string()),
+            gene_raw: Some(
+                dir.join("gene_pval.genes.raw")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             col_gene: 1,
             col_set: 0,
         });
 
         let res = node
-            .execute(&node_ctx(), &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("set analysis should succeed");
 
@@ -1064,13 +1104,21 @@ mod tests {
             analysis_type: "covar".into(),
             set_annot: None,
             gene_covar: Some(dir.join("gene_covar.txt").to_string_lossy().to_string()),
-            gene_raw: Some(dir.join("gene_pval.genes.raw").to_string_lossy().to_string()),
+            gene_raw: Some(
+                dir.join("gene_pval.genes.raw")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             col_gene: 1,
             col_set: 0,
         });
 
         let res = node
-            .execute(&node_ctx(), &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("covar analysis should succeed");
 
@@ -1082,14 +1130,21 @@ mod tests {
     #[tokio::test]
     async fn e2e_meta_node() {
         let dir = magma_data_dir();
-        let raw_path = dir.join("gene_pval.genes.raw").to_string_lossy().to_string();
+        let raw_path = dir
+            .join("gene_pval.genes.raw")
+            .to_string_lossy()
+            .to_string();
         let mut node = MagmaMetaNode::new(MagmaMetaConfig {
             cohort_files: vec![raw_path.clone(), raw_path],
             weights: None,
         });
 
         let res = node
-            .execute(&node_ctx(), &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("meta analysis should succeed");
 
@@ -1119,11 +1174,17 @@ mod tests {
         // Step 2: Gene analysis (using pre-computed annot.genes.annot)
         let pval_data = magma::geneinput::SnpPvalData::read(
             &dir.join("gwas_pval.txt"),
-            "SNP", "P", Some("N"), None,
+            "SNP",
+            "P",
+            Some("N"),
+            None,
         )
         .unwrap();
         let rsids: Vec<String> = pval_data.snps.keys().cloned().collect();
-        let pvals: Vec<f64> = rsids.iter().map(|r| pval_data.snps.get(r).unwrap().0).collect();
+        let pvals: Vec<f64> = rsids
+            .iter()
+            .map(|r| pval_data.snps.get(r).unwrap().0)
+            .collect();
         let batch = gwas_batch(rsids, pvals, 50000);
         let df = ctx.session().read_batch(batch).unwrap();
 
@@ -1135,7 +1196,11 @@ mod tests {
             fixed_n: Some(50000),
         });
         let gene_res = gene_node
-            .execute(&ctx, &[NodeInput { port: 0, data: df }], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &ctx,
+                &[NodeInput { port: 0, data: df }],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("gene analysis should succeed");
 
@@ -1149,7 +1214,11 @@ mod tests {
             analysis_type: "set".into(),
             set_annot: Some(dir.join("gene_sets.txt").to_string_lossy().to_string()),
             gene_covar: None,
-            gene_raw: Some(dir.join("gene_pval.genes.raw").to_string_lossy().to_string()),
+            gene_raw: Some(
+                dir.join("gene_pval.genes.raw")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             col_gene: 1,
             col_set: 0,
         });

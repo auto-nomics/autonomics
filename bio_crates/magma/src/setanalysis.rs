@@ -108,9 +108,7 @@ impl GeneRawData {
         }
 
         if genes.is_empty() {
-            return Err(MagmaError::Input(format!(
-                "{path:?}: no genes found"
-            )));
+            return Err(MagmaError::Input(format!("{path:?}: no genes found")));
         }
 
         Ok(GeneRawData { genes, corrs })
@@ -155,7 +153,12 @@ impl GeneSetData {
     ///
     /// Format: each row has `set_name  gene1 gene2 gene3 ...` (whitespace/tab separated)
     /// OR column format with `col=2,1` meaning column 2 is gene, column 1 is set.
-    pub fn read(path: &Path, gene_data: &GeneRawData, col_gene: usize, col_set: usize) -> Result<Self> {
+    pub fn read(
+        path: &Path,
+        gene_data: &GeneRawData,
+        col_gene: usize,
+        col_set: usize,
+    ) -> Result<Self> {
         // Build gene ID → index map
         let gene_index: HashMap<&str, usize> = gene_data
             .genes
@@ -243,9 +246,9 @@ impl GeneCovarData {
 
         let content = std::fs::read_to_string(path).map_err(MagmaError::Io)?;
         let mut lines = content.lines();
-        let header = lines.next().ok_or_else(|| {
-            MagmaError::Input(format!("{path:?}: file is empty"))
-        })?;
+        let header = lines
+            .next()
+            .ok_or_else(|| MagmaError::Input(format!("{path:?}: file is empty")))?;
         let headers: Vec<&str> = header.split_whitespace().collect();
         if headers.len() < 2 {
             return Err(MagmaError::Input(format!(
@@ -361,13 +364,7 @@ pub fn analyze_gene_sets(
 
         // Build set indicator vector
         let set_vec: Vec<f64> = (0..n)
-            .map(|i| {
-                if gene_indices.contains(&i) {
-                    1.0
-                } else {
-                    0.0
-                }
-            })
+            .map(|i| if gene_indices.contains(&i) { 1.0 } else { 0.0 })
             .collect();
 
         // Check if set contains all genes (MAGMA discards these)
@@ -495,7 +492,12 @@ fn competitive_regression(
     // Compute residuals and SSR
     // SSR = z'(z - Xβ) = z'z - z'Xβ = z'z - β'X'z
     let ztz: f64 = z.iter().map(|v| v * v).sum();
-    let ssr = ztz - beta.iter().zip(xt_z.iter()).map(|(b, xz)| b * xz).sum::<f64>();
+    let ssr = ztz
+        - beta
+            .iter()
+            .zip(xt_z.iter())
+            .map(|(b, xz)| b * xz)
+            .sum::<f64>();
 
     // Degrees of freedom
     let df = n.saturating_sub(n_params) as f64;
@@ -505,8 +507,12 @@ fn competitive_regression(
     let res_var = ssr / df;
 
     // Standard errors: SE(βⱼ) = √(res_var × (X'R⁻¹X)⁻¹ⱼⱼ)
-    let xt_rinv_x_inv = xt_rinv_x_ref.partial_piv_lu().solve(&Mat::identity(n_params, n_params));
-    let se_var = (res_var * xt_rinv_x_inv[(var_idx, var_idx)]).max(0.0).sqrt();
+    let xt_rinv_x_inv = xt_rinv_x_ref
+        .partial_piv_lu()
+        .solve(&Mat::identity(n_params, n_params));
+    let se_var = (res_var * xt_rinv_x_inv[(var_idx, var_idx)])
+        .max(0.0)
+        .sqrt();
 
     if se_var == 0.0 {
         return Ok(None);
@@ -530,21 +536,13 @@ fn competitive_regression(
         let mean = variable.iter().sum::<f64>() / n as f64;
         let var: f64 = variable.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
         let sd = var.sqrt();
-        if sd > 0.0 {
-            beta_var * sd
-        } else {
-            0.0
-        }
+        if sd > 0.0 { beta_var * sd } else { 0.0 }
     } else {
         // For covars: β_std = β / SD(covariate)
         let mean = variable.iter().sum::<f64>() / n as f64;
         let var: f64 = variable.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
         let sd = var.sqrt();
-        if sd > 0.0 {
-            beta_var / sd
-        } else {
-            0.0
-        }
+        if sd > 0.0 { beta_var / sd } else { 0.0 }
     };
 
     Ok(Some(SetResult {
@@ -599,7 +597,11 @@ fn invert_matrix(m: &Mat<f64>) -> Result<Mat<f64>> {
     }
     if n == 1 {
         let mut inv = Mat::zeros(1, 1);
-        inv[(0, 0)] = if m[(0, 0)] != 0.0 { 1.0 / m[(0, 0)] } else { 0.0 };
+        inv[(0, 0)] = if m[(0, 0)] != 0.0 {
+            1.0 / m[(0, 0)]
+        } else {
+            0.0
+        };
         return Ok(inv);
     }
     let view = m.as_ref();
@@ -637,13 +639,7 @@ fn truncate_covar(vals: &[f64]) -> Vec<f64> {
     let lo = mean - 5.0 * sd;
     let hi = mean + 5.0 * sd;
     vals.iter()
-        .map(|v| {
-            if v.is_nan() {
-                mean
-            } else {
-                v.clamp(lo, hi)
-            }
-        })
+        .map(|v| if v.is_nan() { mean } else { v.clamp(lo, hi) })
         .collect()
 }
 
@@ -742,7 +738,8 @@ mod tests {
         let set_data = GeneSetData::read(
             &test_dir().join("gene_sets.txt"),
             &gene_data,
-            1, 0, // default: col 1 = gene, col 0 = set (for 2-column format)
+            1,
+            0, // default: col 1 = gene, col 0 = set (for 2-column format)
         )
         .unwrap();
 
@@ -750,7 +747,10 @@ mod tests {
 
         // Read golden output
         let golden = std::fs::read_to_string(test_dir().join("gsa_pval.gsa.out")).unwrap();
-        let golden_lines: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#') && !l.starts_with("VARIABLE")).collect();
+        let golden_lines: Vec<&str> = golden
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with("VARIABLE"))
+            .collect();
 
         assert_eq!(results.len(), golden_lines.len(), "result count mismatch");
 
@@ -776,17 +776,17 @@ mod tests {
     #[test]
     fn test_gene_covar_analysis_matches_golden() {
         let gene_data = GeneRawData::read(&test_dir().join("gene_pval.genes.raw")).unwrap();
-        let covar_data = GeneCovarData::read(
-            &test_dir().join("gene_covar.txt"),
-            &gene_data,
-        )
-        .unwrap();
+        let covar_data =
+            GeneCovarData::read(&test_dir().join("gene_covar.txt"), &gene_data).unwrap();
 
         let results = analyze_gene_covar(&gene_data, &covar_data).unwrap();
 
         // Read golden output
         let golden = std::fs::read_to_string(test_dir().join("gprop_pval.gsa.out")).unwrap();
-        let golden_lines: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#') && !l.starts_with("VARIABLE")).collect();
+        let golden_lines: Vec<&str> = golden
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with("VARIABLE"))
+            .collect();
 
         assert_eq!(results.len(), golden_lines.len(), "result count mismatch");
 

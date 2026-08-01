@@ -503,7 +503,10 @@ impl Agent {
             request_id: None,
         };
 
-        tracing::debug!("patching {} orphaned tool_use blocks after cancellation", stub.content.len());
+        tracing::debug!(
+            "patching {} orphaned tool_use blocks after cancellation",
+            stub.content.len()
+        );
         let _ = self.memory.remember(stub);
     }
 
