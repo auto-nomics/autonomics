@@ -123,8 +123,8 @@ pub fn kaplan_meier(time: &[f64], event: &[f64]) -> Result<KmResult> {
         if n_k > d_k {
             cum_var += d_k / (n_k * (n_k - d_k));
         }
-        let se = survival[k] * cum_var.sqrt();
-        std_errors.push(if se.is_nan() { 0.0 } else { se });
+        let se = cum_var.sqrt();
+        std_errors.push(if se.is_finite() { se } else { f64::NAN });
     }
 
     Ok(KmResult {
@@ -231,21 +231,23 @@ pub fn log_rank_test(time: &[f64], event: &[f64], group: &[u64]) -> Result<LogRa
                 // Observed: always count.
                 observed[g] += d_events[g] as f64;
 
-                if n_total > 1 {
+                if n_total > 0 {
                     // Expected: E_g = d_total * n_g / N.
                     let e_g = d_total as f64 * n_at_risk[g] as f64 / n_total as f64;
                     expected[g] += e_g;
 
-                    // Variance/covariance (Mantel-Haenszel).
-                    let factor = d_total as f64 * (n_total - d_total) as f64
-                        / (n_total as f64 * (n_total - 1) as f64);
-                    for h in 0..k {
-                        let delta = if g == h { 1.0 } else { 0.0 };
-                        let cov_gh = factor
-                            * (delta * n_at_risk[g] as f64 / n_total as f64
-                                - n_at_risk[g] as f64 * n_at_risk[h] as f64
-                                    / (n_total as f64).powi(2));
-                        variance[g][h] += cov_gh;
+                    // Variance/covariance only when n > 1 (needs n−1 denominator).
+                    if n_total > 1 {
+                        let factor = d_total as f64 * (n_total - d_total) as f64
+                            / ((n_total - 1) as f64);
+                        for h in 0..k {
+                            let delta = if g == h { 1.0 } else { 0.0 };
+                            let cov_gh = factor
+                                * (delta * n_at_risk[g] as f64 / n_total as f64
+                                    - n_at_risk[g] as f64 * n_at_risk[h] as f64
+                                        / (n_total as f64).powi(2));
+                            variance[g][h] += cov_gh;
+                        }
                     }
                 }
             }

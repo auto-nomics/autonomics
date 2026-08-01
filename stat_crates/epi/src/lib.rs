@@ -11,10 +11,12 @@
 //! | [`lasso`] | LASSO logistic regression (coordinate descent, k-fold CV)      |
 //! | [`wqs`]   | Weighted Quantile Sum regression (constrained opt, bootstrap)  |
 //! | [`survival`] | Kaplan-Meier estimator, log-rank (Mantel-Cox) test          |
+//! | [`mediation`] | Causal mediation analysis (VanderWeele decomposition)     |
 
 pub mod chisq;
 pub mod error;
 pub mod lasso;
+pub mod mediation;
 pub mod rcs;
 pub mod roc;
 pub mod survival;

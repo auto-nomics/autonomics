@@ -36,6 +36,7 @@ use crate::nodes::{
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     logistic_regression::LogisticRegressionNodeFactory,
+    mediation::MediationNodeFactory,
     magma::{
         MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
     },
@@ -48,6 +49,7 @@ use crate::nodes::{
     source_iceberg::IcebergSourceNodeFactory,
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
+    survival::SurvivalNodeFactory,
     test_source::TestSourceFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
     viz::VizNodeFactory,
@@ -181,8 +183,10 @@ impl NodeRegistry {
         registry.register(Box::new(LiabilityNodeFactory {}));
         registry.register(Box::new(LinearRegressionNodeFactory {}));
         registry.register(Box::new(LogisticRegressionNodeFactory {}));
+        registry.register(Box::new(MediationNodeFactory {}));
         registry.register(Box::new(ChiSquareNodeFactory {}));
         registry.register(Box::new(CoxRegressionNodeFactory {}));
+        registry.register(Box::new(SurvivalNodeFactory {}));
         registry.register(Box::new(EpiRcsNodeFactory {}));
         registry.register(Box::new(EpiRocNodeFactory {}));
         registry.register(Box::new(EpiLassoNodeFactory {}));
@@ -299,11 +303,17 @@ mod tests {
             "logistic_regression" => {
                 serde_json::json!({"predictors": ["x"], "outcome": "y"})
             }
+            "mediation" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y"})
+            }
             "chi_square" => {
                 serde_json::json!({"row_column": "group", "col_column": "var"})
             }
             "cox_regression" => {
                 serde_json::json!({"predictors": ["x"], "time_column": "time", "event_column": "event"})
+            }
+            "survival" => {
+                serde_json::json!({"time_column": "time", "event_column": "event"})
             }
             "epi_rcs" => {
                 serde_json::json!({"x_column": "x", "outcome_column": "y"})
