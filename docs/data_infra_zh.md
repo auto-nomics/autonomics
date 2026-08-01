@@ -33,6 +33,12 @@ Ensembl GRCh37 / GRCh38 (参考基因组)
     └──→ [基因注释] reference.grch{37,38}_genes             （结构化 GTF 特征）
               │
               └──→ SNP-基因映射、基因层面分析
+
+dbSNP build 155 (变异目录)
+    │
+    └──→ [变异] reference.dbsnp155   （~7.56 亿变异，双组装坐标）
+              │
+              └──→ rsID ↔ 位置查询（GRCh37 + GRCh38）
 ```
 
 ## 已有文档
@@ -42,6 +48,7 @@ Ensembl GRCh37 / GRCh38 (参考基因组)
 | **LD matrix** | `ld_matrix.eur_chr{1..22}` | [ld_matrix.md](data_infra/ld_matrix.md) | ✅ 已上线 |
 | **LD 子图** | `mixer.eur_subgraph` | [subgraph.md](data_infra/subgraph.md) | ✅ 已上线（待修复 tag 一致性） |
 | **参考基因组** | `reference.grch{37,38}_contigs`, `reference.grch{37,38}_genes` | [reference_genome.md](data_infra/reference_genome.md) | ✅ 已上线 |
+| **dbSNP155** | `reference.dbsnp155` | [reference_genome.md](data_infra/reference_genome.md) | ✅ 已上线 |
 
 ## 待补文档
 
@@ -82,6 +89,15 @@ Ensembl GRCh37 / GRCh38 (参考基因组)
 - **归档**：`aliyun:autonomics-data/reference/grch{37,38}/`
 - **详见**：[reference_genome.md](data_infra/reference_genome.md)
 
+### dbSNP155 变异
+
+- **表**：`iceberg.reference.dbsnp155`
+- **列**：`rsid (int64), chrom (string), pos_37, pos_38, ref_37, ref_38, alt_37, alt_38`
+- **规模**：~7.56 亿变异，25 条染色体
+- **构建**：dbSNP155 Parquet → `sink_dbsnp` → Iceberg（逐染色体追加）
+- **归档**：`aliyun:autonomics-data/reference/dbsnp155/dbSNP155_v0.9.tar`
+- **详见**：[reference_genome.md](data_infra/reference_genome.md)
+
 ### AF 面板（待补）
 
 - **表**：`iceberg.af.eur_af`
@@ -103,4 +119,5 @@ Ensembl GRCh37 / GRCh38 (参考基因组)
 | `lake_cli` | 数据湖查询 / 管理 / 上传 | `src/bin/lake_cli.rs` |
 | `sink_ld_matrix` | LD matrix TSV → Iceberg 入库 | `infra/sink_ld_matrix/` |
 | `ld_matrix.sh` | 1000G VCF → PLINK2 LD 计算 | `infra/thousand_genomes/ld_matrix.sh` |
-| `sink_reference_genome` | GRCh37 FASTA + GTF → Iceberg 入库 | `infra/sink_reference_genome/` |
+| `sink_reference_genome` | GRCh37/GRCh38 FASTA + GTF → Iceberg 入库 | `infra/sink_reference_genome/` |
+| `sink_dbsnp` | dbSNP155 Parquet → Iceberg 入库 | `infra/sink_dbsnp/` |

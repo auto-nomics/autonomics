@@ -131,7 +131,48 @@ SELECT 'GRCh38', SUM(length) FROM reference.grch38_contigs;
 | MAGMA / gene-based analysis | Gene boundaries for gene-set tests |
 | MiXeR / LAVA | Reference coordinates for locus definition |
 | Cross-assembly alignment | Compare gene coordinates between GRCh37 and GRCh38 |
+| dbSNP rsID lookup | Map rsIDs to genomic positions on either assembly |
 | Any SQL tool | Gene/region queries without loading external files |
+
+## dbSNP155 Variant Table
+
+In addition to the gene annotation tables, the data lake contains a
+**dbSNP build 155** variant table with ~756M variants and dual-assembly
+coordinates.
+
+**Table**: `reference.dbsnp155`
+
+| Column   | Type   | Description |
+|----------|--------|-------------|
+| `rsid`   | int64  | dbSNP rs number (numeric part, e.g. `171` = rs171) |
+| `chrom`  | string | Chromosome (1–22, X, Y, MT) |
+| `pos_37` | int32  | GRCh37 position |
+| `pos_38` | int32  | GRCh38 position |
+| `ref_37` | string | GRCh37 reference allele |
+| `ref_38` | string | GRCh38 reference allele |
+| `alt_37` | string | GRCh37 alternate allele(s) |
+| `alt_38` | string | GRCh38 alternate allele(s) |
+
+**Tool**: `infra/sink_dbsnp/main.py`
+
+```bash
+cd infra
+python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
+```
+
+**Scale**: ~756M variants across 25 chromosomes (17 GB source Parquet).
+
+```sql
+-- Cross-assembly coordinate lookup by rsID
+SELECT rsid, chrom, pos_37, pos_38, ref_37, alt_37
+FROM reference.dbsnp155
+WHERE rsid = 171;
+
+-- Count variants per chromosome
+SELECT chrom, COUNT(*) AS n_variants
+FROM reference.dbsnp155
+GROUP BY chrom ORDER BY chrom;
+```
 
 ## OSS Archive
 
@@ -139,10 +180,12 @@ SELECT 'GRCh38', SUM(length) FROM reference.grch38_contigs;
 |----------|------|
 | GRCh37 | `aliyun:autonomics-data/reference/grch37/` |
 | GRCh38 | `aliyun:autonomics-data/reference/grch38/` |
+| dbSNP155 | `aliyun:autonomics-data/reference/dbsnp155/` |
 
 ```bash
 rclone copy aliyun:autonomics-data/reference/grch38/ reference/grch38/ -P
 rclone copy aliyun:autonomics-data/reference/grch37/ reference/grch37/ -P
+rclone copy aliyun:autonomics-data/reference/dbsnp155/dbSNP155_v0.9.tar . -P
 ```
 
 ## Rebuild Conditions

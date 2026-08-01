@@ -14,6 +14,7 @@ resolution-markers = [
 members = [
     "autonomics-infra",
     "datalake",
+    "sink-dbsnp",
     "sink-ldsc-panel",
     "sink-reference-genome",
     "thousand-genomes",
@@ -644,6 +645,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/65/da/4bef7ce7bb989b222
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/23/e84c64ad0e8bc59cd1b2ef98def848deff0ef3456c542afe74d51e9e8c85/s3transfer-0.19.1-py3-none-any.whl", hash = "sha256:d5fd7005ee39307455ad5f310b5ea67f4b1960d7fed5b3671ee50c249de675de", size = 90072, upload-time = "2026-07-10T19:32:03.673Z" },
 ]
+
+[[package]]
+name = "sink-dbsnp"
+version = "0.1.0"
+source = { virtual = "sink_dbsnp" }
+dependencies = [
+    { name = "datalake" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "datalake", editable = "datalake" }]
 
 [[package]]
 name = "sink-ldsc-panel"

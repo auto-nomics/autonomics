@@ -73,6 +73,10 @@ pub struct App {
     /// Timestamp of the last cooperative cancel (Ctrl+C while agent running).
     /// A second Ctrl+C within `FORCE_QUIT_WINDOW` forces an immediate quit.
     cancel_requested_at: Option<Instant>,
+    /// Dirty flag: when true the next render tick will redraw. Set by every
+    /// event branch that mutates state; cleared after drawing. When the agent
+    /// is active, the render tick always draws (animation frames) regardless.
+    dirty: bool,
 }
 
 impl App {
@@ -111,6 +115,7 @@ impl App {
             app_event_tx: crate::app_event_sender::AppEventSender::new(app_event_tx),
             should_quit: false,
             cancel_requested_at: None,
+            dirty: true,
         }
     }
 
@@ -284,17 +289,16 @@ impl App {
     ///
     /// **Design**: state mutation and rendering are strictly separated.
     ///
-    /// - **Event branches** (terminal, agent, app) only mutate state.
-    ///   They never render.
-    /// - **Render tick** fires at a fixed interval (~60 fps) and redraws
-    ///   unconditionally. Ratatui's internal buffer-diff ensures only
-    ///   changed cells are written to the terminal, so idle frames are
-    ///   near-zero cost.
+    /// - **Event branches** (terminal, agent, app) only mutate state and set
+    ///   the `dirty` flag. They never render.
+    /// - **Render tick** fires at a fixed interval (~60 fps) but only redraws
+    ///   when `dirty` is true *or* the agent is active (animation frames).
+    ///   When idle and no events arrive, the loop parks on `select!` and
+    ///   consumes zero CPU.
     ///
-    /// This eliminates all drain/batch logic and the `dirty` flag: events
-    /// between two ticks are naturally coalesced into a single render.
-    /// The first interval tick completes immediately, so the initial frame
-    /// is drawn right away.
+    /// Ratatui's internal buffer-diff ensures only changed cells are written
+    /// to the terminal. The first interval tick completes immediately, so the
+    /// initial frame is drawn right away (the constructor sets `dirty = true`).
     async fn run_loop(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -322,10 +326,27 @@ impl App {
 
                 // ── Terminal input (keys, mouse, paste, resize) ──
                 maybe_event = event_stream.next() => {
-                    if let Some(Ok(event)) = maybe_event {
-                        let delta = self.handle_event(&event);
-                        if delta != 0 {
-                            self.apply_scroll_delta(delta);
+                    match maybe_event {
+                        Some(Ok(event)) => {
+                            let delta = self.handle_event(&event);
+                            if delta != 0 {
+                                self.apply_scroll_delta(delta);
+                            }
+                            // Most terminal events mutate state or at least require
+                            // a redraw (e.g. resize). Setting dirty unconditionally
+                            // is simpler and the worst case is one extra frame.
+                            self.dirty = true;
+                        }
+                        Some(Err(e)) => {
+                            // crossterm read error — log so it's not silently
+                            // swallowed (the old code dropped `Err` entirely).
+                            tracing::warn!(error = %e, "crossterm event read error");
+                        }
+                        None => {
+                            // Stream exhausted (background thread died).
+                            // Recreate immediately.
+                            tracing::warn!("crossterm EventStream ended; recreating");
+                            event_stream = EventStream::new();
                         }
                     }
                 }
@@ -334,6 +355,7 @@ impl App {
                 maybe_agent = self.agent_runtime.recv_event() => {
                     if let Some(event) = maybe_agent {
                         state::apply_event(&mut self.state.agent_tab_state, event);
+                        self.dirty = true;
                     } else {
                         // Agent channel closed → shutdown.
                         self.should_quit = true;
@@ -346,6 +368,7 @@ impl App {
                         Some(event) => self.handle_app_event(event),
                         None => self.should_quit = true,
                     }
+                    self.dirty = true;
                 }
 
                 // ── Fixed-rate render tick ──
@@ -357,7 +380,18 @@ impl App {
                         self.state.agent_tab_state.frame =
                             self.state.agent_tab_state.frame.wrapping_add(1);
                     }
-                    terminal.draw(|f| self.render(f))?;
+
+                    // Only draw when there's something new to show. While the
+                    // agent is active we always draw (animation frames); while
+                    // idle we draw only when an event marked the state dirty.
+                    let agent_active = !matches!(
+                        self.state.agent_tab_state.status,
+                        AgentStatus::Idle
+                    );
+                    if self.dirty || agent_active {
+                        terminal.draw(|f| self.render(f))?;
+                        self.dirty = false;
+                    }
                 }
             }
         }

@@ -12,7 +12,7 @@
 use faer::MatRef;
 
 use crate::error::{HdlError, Result};
-use crate::likelihood::{ll_gcov, ll_gcov_null, ll_univ, ll_univ_null};
+use crate::likelihood::{GcovContext, UnivContext};
 use crate::optimize::{lbfgsb_max, lbfgsb_max_1d};
 use crate::reference::eigen_select_num;
 use crate::stats::{pchisq_sf, qchisq};
@@ -91,6 +91,10 @@ fn cor_complete(x: &[f64], y: &[f64]) -> f64 {
 
 /// Univariate h² MLE with the exact `HDL.L.R` multi-start (lines 548-595).
 ///
+/// Uses [`UnivContext`] for precomputed function evaluation (lam², lam/N,
+/// bstar² are computed once, not per evaluation), with the FD-based L-BFGS-B
+/// optimiser that correctly handles the `lim`-floor non-smoothness.
+///
 /// Returns `(h2, int, ll_alt, ll_null)`.
 #[allow(clippy::too_many_arguments)]
 fn h2_mle(
@@ -106,23 +110,25 @@ fn h2_mle(
     let starting_2 = [1.0_f64, 0.5, 1.5, 0.0];
     let ndeps_values = [1e-5_f64, 1e-8, 1e-16];
 
+    // Build the precomputed context once — avoids recomputing lam², lam/Nref,
+    // lam/N, bstar² on every likelihood evaluation across all 36 × 2 starts.
+    let ctx = UnivContext::new(lam, bstar, n, m, nref, lim);
+
     let mut best = f64::NEG_INFINITY;
     let mut out = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
 
     for &sv1 in &starting_1 {
         for &sv2 in &starting_2 {
             for &nd in &ndeps_values {
-                // alt model: optimise (h2, int)
                 let alt = lbfgsb_max(
-                    |p: &[f64]| ll_univ(p[0], p[1], n, m, nref, lam, bstar, lim),
+                    |p: &[f64]| ctx.ll(p[0], p[1]),
                     &[sv1, sv2],
                     &[0.0, 0.0],
                     &[1.0, 20.0],
                     &[nd, nd * 100.0],
                 )?;
-                // null model: h2 = 0, optimise int
                 let null = lbfgsb_max_1d(
-                    |int: f64| ll_univ_null(int, n, m, nref, lam, bstar, lim),
+                    |int: f64| ctx.ll_null(int),
                     sv2,
                     0.0,
                     20.0,
@@ -144,7 +150,9 @@ fn h2_mle(
 }
 
 /// Conditional genetic-covariance MLE with the exact `HDL.L.R` multi-start
-/// (lines 718-790). Returns `(h12, int, ll_alt, ll_null)`.
+/// (lines 718-790). Uses [`GcovContext`] for precomputed function evaluation.
+///
+/// Returns `(h12, int, ll_alt, ll_null)`.
 #[allow(clippy::too_many_arguments)]
 fn gcov_mle(
     bstar1: &[f64],
@@ -166,6 +174,13 @@ fn gcov_mle(
     let starting_2 = [rho12, 1.0, 0.0];
     let ndeps_values = [1e-5_f64, 1e-8, 1e-16];
 
+    // Build the precomputed context once — lam11_k and lam22_k (functions of
+    // the fixed per-trait MLEs) are the dominant per-component cost; precomputing
+    // them eliminates ~2/3 of the arithmetic from every ll_gcov evaluation.
+    let ctx = GcovContext::new(
+        h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim,
+    );
+
     let mut best = f64::NEG_INFINITY;
     let mut out = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
 
@@ -173,23 +188,14 @@ fn gcov_mle(
         for &sv2 in &starting_2 {
             for &nd in &ndeps_values {
                 let alt = lbfgsb_max(
-                    |p: &[f64]| {
-                        ll_gcov(
-                            p[0], p[1], h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2,
-                            lim,
-                        )
-                    },
+                    |p: &[f64]| ctx.ll(p[0], p[1]),
                     &[sv1, sv2],
                     &[-bound, -20.0],
                     &[bound, 20.0],
                     &[nd, nd * 100.0],
                 )?;
                 let null = lbfgsb_max_1d(
-                    |int: f64| {
-                        ll_gcov_null(
-                            int, h11, h22, m, n1, n2, n0, nref, lam, lam, bstar1, bstar2, lim,
-                        )
-                    },
+                    |int: f64| ctx.ll(0.0, int),
                     sv2,
                     -20.0,
                     20.0,
@@ -316,6 +322,22 @@ pub fn run_locus(
     let denom = (h11 * h22).sqrt();
     let c_cutoff = (-qchisq(1.0 - alpha, 1) / 2.0).exp();
     let n_grid = 10_000usize;
+    // Build the gcov context once — lam11/lam22 are constant across all 10K
+    // grid points; only h12 varies. This eliminates ~2/3 of the per-point work.
+    let ctx_ci = GcovContext::new(
+        &[h11, int_h11],
+        &[h22, int_h22],
+        m_tot,
+        n1,
+        n2,
+        n0,
+        nref,
+        &lam_k,
+        &lam_k,
+        &bstar1_k,
+        &bstar2_k,
+        lim,
+    );
     let mut h12_val = vec![0.0f64; n_grid];
     let mut ll_vals = vec![f64::NEG_INFINITY; n_grid];
     let mut best_idx = 0usize;
@@ -323,22 +345,7 @@ pub fn run_locus(
     for i in 0..n_grid {
         let hv = -denom + (2.0 * denom) * (i as f64) / ((n_grid - 1) as f64);
         h12_val[i] = hv;
-        let lv = ll_gcov(
-            hv,
-            int_h12,
-            &[h11, int_h11],
-            &[h22, int_h22],
-            m_tot,
-            n1,
-            n2,
-            n0,
-            nref,
-            &lam_k,
-            &lam_k,
-            &bstar1_k,
-            &bstar2_k,
-            lim,
-        );
+        let lv = ctx_ci.ll(hv, int_h12);
         ll_vals[i] = lv;
         if lv > best_ll {
             best_ll = lv;

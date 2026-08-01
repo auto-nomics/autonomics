@@ -213,10 +213,6 @@ pub struct BivariateMixerNodeSpec {
     /// extract 的 LD 剪枝阈值（原版 `--r2`，默认 0.8；严格 > 才剪）。
     #[serde(default = "default_extract_r2")]
     pub extract_r2: f64,
-    /// tag 诱导 LD 子图的 Iceberg 表名。默认 `"eur_subgraph"`。
-    /// 设了跳过 fold 的 ld_matrix 扫描，直接查子图表建 CSR。
-    #[serde(default = "default_panel_ld")]
-    pub panel_ld: Option<String>,
 }
 
 fn default_diffevo_repeats() -> usize {
@@ -252,15 +248,17 @@ fn default_extract_subset() -> usize {
 fn default_extract_r2() -> f64 {
     0.8
 }
-fn default_panel_ld() -> Option<String> {
-    Some("eur_subgraph".to_string())
-}
 
 // =====================================================================
 // Node
 // =====================================================================
 
 const BIVARIATE_MIXER_NODE_KIND: &str = "bivariate_mixer";
+
+/// Hardcoded Iceberg table name for the tag-induced LD subgraph panel
+/// (produced by the `precompute_tags` binary). Formerly a spec field
+/// (`panel_ld`), now hardcoded like lava/hdl_l `REF_PREFIX_TEMPLATE`.
+const PANEL_LD_TABLE: &str = "eur_subgraph";
 
 #[derive(Clone)]
 pub struct BivariateMixerNode {
@@ -524,18 +522,12 @@ impl DagNode for BivariateMixerNode {
 
         // 4+5. 选 tag 子集 + 折 LD 成 tag-row CSR。
         //
-        // 两条路径：
-        // - **预计算子图**（`panel_ld` 设定，默认）：直接查 `eur_subgraph` 表（离线
-        //   precompute_tags 产出的 tag 诱导 LD 子图）。表里 `id_a` 永远是 tag、
-        //   `id_b` 是任意 panel 邻居，r²≥0.05 已过滤。tags = DISTINCT id_a ∩ universe，
-        //   LD 边 = (tag→neighbor) 单向——bivariate cost 只调 `ld.row(tag)`，单向即足。
-        //   一趟小表查询替代下面的两趟 ld_matrix 全扫描（extract + fold），CSR 从
-        //   ~2.4GB 预过滤源构建而非 ~12GB 全表。
-        // - **内联 extract + fold**（`panel_ld` 为 None）：运行时扫 ld_matrix 做
-        //   select_tags + tag-row 对称化 CSR。
-        let (tags, ld_triples): (Vec<u32>, Vec<(u32, u32, f64)>) = if let Some(table) =
-            &self.spec.panel_ld
-        {
+        // 直接查 `eur_subgraph` 表（`precompute_tags` 离线产出的 tag 诱导 LD 子图）。
+        // 表里 `id_a` 永远是 tag、`id_b` 是任意 panel 邻居，r²≥0.05 已过滤。
+        // tags = DISTINCT id_a ∩ universe，LD 边 = (tag→neighbor) 单向——
+        // bivariate cost 只调 `ld.row(tag)`，单向即足。
+        let (tags, ld_triples): (Vec<u32>, Vec<(u32, u32, f64)>) = {
+            let table = PANEL_LD_TABLE;
             reporter.info(format!(
                 "fold: loading precomputed tag-induced subgraph ({table})"
             ));
@@ -589,111 +581,6 @@ impl DagNode for BivariateMixerNode {
                 t0.elapsed().as_secs_f64()
             ));
             (tags, edges)
-        } else {
-            // 内联路径：extract（select_tags）+ fold（tag-row 对称 CSR）。
-            let tags: Vec<u32> = if self.spec.extract_enabled {
-                let mut adj_blocks: Vec<(usize, mixer::ld_matrix::LdBlock)> = Vec::new();
-                for (ci, chrom) in self.spec.chromosomes.iter().enumerate() {
-                    let base = chrom_base[ci] as usize;
-                    let n_k = (if ci + 1 < chrom_base.len() {
-                        chrom_base[ci + 1] as usize
-                    } else {
-                        n_snp
-                    }) - base;
-                    if n_k == 0 {
-                        continue;
-                    }
-                    let adj_sql = format!(
-                        "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 > {r2}",
-                        chrom = chrom,
-                        r2 = self.spec.extract_r2,
-                    );
-                    let mut adj_triples: Vec<(u32, u32, f64)> = Vec::new();
-                    let df = BivariateMixerError::df_ctx(
-                        ctx.sql(&adj_sql).await,
-                        "extract adjacency (ld r²>thr)",
-                        Some(*chrom),
-                        Some(&adj_sql),
-                    )?;
-                    let mut stream = BivariateMixerError::df_ctx(
-                        df.execute_stream().await,
-                        "extract adjacency stream",
-                        Some(*chrom),
-                        None,
-                    )?;
-                    while let Some(batch) = BivariateMixerError::df_ctx(
-                        stream.try_next().await,
-                        "extract adjacency batch",
-                        Some(*chrom),
-                        None,
-                    )? {
-                        for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
-                            adj_triples.push(((a as usize - base) as u32, b, r2));
-                            adj_triples.push(((b as usize - base) as u32, a, r2));
-                        })?;
-                    }
-                    adj_blocks.push((base, mixer::ld_matrix::LdBlock::from_coo(&adj_triples, n_k)));
-                }
-                let adj = mixer::ld_matrix::BlockDiagonal::new(adj_blocks);
-                let ec = mixer::extract::ExtractConfig {
-                    maf_min: self.spec.extract_maf,
-                    r2_threshold: self.spec.extract_r2,
-                    subset: self.spec.extract_subset,
-                    seed: self.spec.seed,
-                };
-                mixer::extract::select_tags(&maf_vec, &adj, &ec)
-            } else {
-                (0..n_snp as u32).collect()
-            };
-            let tag_set: std::collections::HashSet<u32> = tags.iter().copied().collect();
-            reporter.info(format!(
-                "extract: {} tags ({}), elapsed {:.2}s",
-                tags.len(),
-                if self.spec.extract_enabled {
-                    "MAF≥min + LD prune + subset"
-                } else {
-                    "all SNPs"
-                },
-                t0.elapsed().as_secs_f64()
-            ));
-
-            // fold：tag-row 对称 CSR，收"≥1 端点是 tag"的对并双向补齐。
-            let mut ld_triples: Vec<(u32, u32, f64)> = Vec::new();
-            for chrom in &self.spec.chromosomes {
-                let ld_sql = format!(
-                    "SELECT id_a, id_b, unphased_r2 FROM iceberg.ld_matrix.eur_chr{chrom} WHERE unphased_r2 >= {r2}",
-                    chrom = chrom,
-                    r2 = self.spec.r2_min,
-                );
-                let df = BivariateMixerError::df_ctx(
-                    ctx.sql(&ld_sql).await,
-                    "LD fold (ld r²≥r2min, tag-row)",
-                    Some(*chrom),
-                    Some(&ld_sql),
-                )?;
-                let mut stream = BivariateMixerError::df_ctx(
-                    df.execute_stream().await,
-                    "LD fold stream",
-                    Some(*chrom),
-                    None,
-                )?;
-                while let Some(batch) = BivariateMixerError::df_ctx(
-                    stream.try_next().await,
-                    "LD fold batch",
-                    Some(*chrom),
-                    None,
-                )? {
-                    for_each_ld_pair(&batch, &rsid_to_idx, |a, b, r2| {
-                        if tag_set.contains(&a) {
-                            ld_triples.push((a, b, r2));
-                        }
-                        if tag_set.contains(&b) {
-                            ld_triples.push((b, a, r2));
-                        }
-                    })?;
-                }
-            }
-            (tags, ld_triples)
         };
 
         // 6. 组装 BivariateData + randprune 权重。
@@ -839,26 +726,6 @@ fn col_as_string(
         })
 }
 
-/// 对一条 LD batch 的每个 pair（两端点都在 universe 内）调用 `emit(global_a, global_b, r2)`。
-/// 不做 r² 过滤——由调用方在闭包里决定。
-fn for_each_ld_pair(
-    batch: &RecordBatch,
-    rsid_to_idx: &HashMap<String, u32>,
-    mut emit: impl FnMut(u32, u32, f64),
-) -> Result<(), BivariateMixerError> {
-    let a_ids = col_as_string(batch, "id_a")?;
-    let b_ids = col_as_string(batch, "id_b")?;
-    let r2s = col_as_f64(batch, "unphased_r2")?;
-    for row in 0..batch.num_rows() {
-        let a = a_ids[row].as_str();
-        let b = b_ids[row].as_str();
-        if let (Some(&ta), Some(&tb)) = (rsid_to_idx.get(a), rsid_to_idx.get(b)) {
-            emit(ta, tb, r2s.value(row));
-        }
-    }
-    Ok(())
-}
-
 /// 读 f64 列的轻量视图：兼容 Iceberg 里常见的 `Float32` 存储（如 `r2`、
 /// `h_a`），按需 `as f64` 提升。调用方仍用 `.value(row)` 取值——零分配。
 ///
@@ -926,7 +793,6 @@ mod tests {
             extract_maf: 0.05,
             extract_subset: 2_000_000,
             extract_r2: 0.8,
-            panel_ld: None,
         };
         let node = BivariateMixerNode::new(spec);
         assert_eq!(node.kind(), "bivariate_mixer");

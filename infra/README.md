@@ -149,3 +149,27 @@ python -m sink_reference_genome.main --assembly grch37 \
 python -m sink_reference_genome.main --assembly grch38 \
     --staging-dir ../reference/grch38 --mode overwrite
 ```
+
+## dbSNP155 Scripts
+
+Located in `infra/sink_dbsnp/`.
+
+Ingests **dbSNP build 155** variant data (~756M variants with dual GRCh37/GRCh38
+coordinates) into `reference.dbsnp155`:
+
+| Column   | Type   | Description |
+|----------|--------|-------------|
+| `rsid`   | int64  | dbSNP rs number |
+| `chrom`  | string | Chromosome |
+| `pos_37` | int32  | GRCh37 position |
+| `pos_38` | int32  | GRCh38 position |
+| `ref_37` / `ref_38` | string | Reference allele per assembly |
+| `alt_37` / `alt_38` | string | Alternate allele(s) per assembly |
+
+```bash
+python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
+
+# Archive tar to OSS
+python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155 \
+    --archive-tar /mnt/disk2/dataset/dbSNP155_v0.9.tar
+```

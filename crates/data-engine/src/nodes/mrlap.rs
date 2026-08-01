@@ -67,10 +67,6 @@ fn result_schema() -> SchemaRef {
 pub struct MrlapSpec {
     pub exposure_name: String,
     pub outcome_name: String,
-    /// Iceberg LD-score panel table (`iceberg.ld_score.<table>`), e.g.
-    /// `ukbb_eur`. Used for both ref_ld and w_ld (single-annotation baseline).
-    #[serde(default = "default_ld_table")]
-    pub ld_table: String,
     /// Block-jackknife block count for the LDSC stage.
     #[serde(default = "default_n_blocks")]
     pub n_blocks: usize,
@@ -87,9 +83,9 @@ pub struct MrlapSpec {
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
-fn default_ld_table() -> String {
-    "ukbb_eur".into()
-}
+/// Hardcoded Iceberg LD-score panel table — same panel as ldsc_hsq / ldsc_rg.
+const LD_TABLE: &str = "1000g_eur";
+
 fn default_n_blocks() -> usize {
     200
 }
@@ -342,7 +338,7 @@ impl DagNode for MrlapNode {
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
         // M = total SNPs in the LD panel.
-        let m = count_panel_snp(&ctx, &self.spec.ld_table).await?;
+        let m = count_panel_snp(&ctx, LD_TABLE).await?;
         let sql = format!(
             r#"SELECT s1."{z}" AS z1, s2."{z}" AS z2,
                       s1."{n}" AS n1, s2."{n}" AS n2,
@@ -354,7 +350,7 @@ impl DagNode for MrlapNode {
             z = IN_Z,
             n = IN_N,
             rsid = IN_RSID,
-            tbl = self.spec.ld_table,
+            tbl = LD_TABLE,
         );
         let joined = ctx
             .sql(&sql)

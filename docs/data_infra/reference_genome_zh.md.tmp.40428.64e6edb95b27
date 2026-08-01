@@ -124,13 +124,12 @@ SELECT 'GRCh38', SUM(length) FROM reference.grch38_contigs;
 | MAGMA / 基因层面分析 | 基因集检验的基因边界 |
 | MiXeR / LAVA | 位点定义的参考坐标 |
 | 跨组装比对 | 比较 GRCh37 与 GRCh38 的基因坐标 |
-| dbSNP rsID 查询 | 按 rsID 查找任一组装的基因组位置 |
+| dbSNP rsID 查询 | 将 rsID 映射到任一组装的基因组位置 |
 | 任意 SQL 工具 | 无需加载外部文件的基因/区域查询 |
 
 ## dbSNP155 变异表
 
-除基因注释表外，数据湖还包含 **dbSNP build 155** 变异表，约 7.56 亿变异，
-同时包含两个组装的坐标。
+除基因注释表外，数据湖还包含 **dbSNP build 155** 变异表，约 7.56 亿变异，含双组装坐标。
 
 **表**: `reference.dbsnp155`
 
@@ -152,7 +151,7 @@ cd infra
 python -m sink_dbsnp.main --data-dir /mnt/disk2/dataset/dbSNP155/v155
 ```
 
-**规模**: ~7.56 亿变异，25 条染色体（源 Parquet 17 GB）。
+**规模**: 约 7.56 亿变异，25 条染色体（源 Parquet 17 GB）。
 
 ```sql
 -- 按 rsID 跨组装坐标查询
@@ -160,7 +159,7 @@ SELECT rsid, chrom, pos_37, pos_38, ref_37, alt_37
 FROM reference.dbsnp155
 WHERE rsid = 171;
 
--- 各染色体变异数
+-- 各染色体变异数量
 SELECT chrom, COUNT(*) AS n_variants
 FROM reference.dbsnp155
 GROUP BY chrom ORDER BY chrom;
@@ -168,16 +167,14 @@ GROUP BY chrom ORDER BY chrom;
 
 ## OSS 归档
 
-| 数据集 | 路径 |
-|--------|------|
+| 组装 | 路径 |
+|------|------|
 | GRCh37 | `aliyun:autonomics-data/reference/grch37/` |
 | GRCh38 | `aliyun:autonomics-data/reference/grch38/` |
-| dbSNP155 | `aliyun:autonomics-data/reference/dbsnp155/` |
 
 ```bash
 rclone copy aliyun:autonomics-data/reference/grch38/ reference/grch38/ -P
 rclone copy aliyun:autonomics-data/reference/grch37/ reference/grch37/ -P
-rclone copy aliyun:autonomics-data/reference/dbsnp155/dbSNP155_v0.9.tar . -P
 ```
 
 ## 重建条件

@@ -18,6 +18,7 @@ members = [
     "thousand_genomes",
     "sink_ldsc_panel",
     "sink_reference_genome",
+    "sink_dbsnp",
 ]
 
 [tool.uv.sources]

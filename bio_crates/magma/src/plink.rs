@@ -133,6 +133,76 @@ impl BedFile {
         self.snps.len()
     }
 
+    /// Open multiple per-chromosome PLINK filesets and merge into a single
+    /// virtual `BedFile`. `template` contains `{N}` which is replaced with
+    /// each chromosome number in `chroms`. All chromosomes must share the
+    /// same individual set (same `.fam`).
+    ///
+    /// The `.bim` SNP lists are concatenated, `.bed` genotype bytes are merged
+    /// (stripping per-file 3-byte magic headers), and a single in-memory
+    /// `bed_cache` is built so `read_snp(global_idx)` works seamlessly across
+    /// chromosomes — matching the behaviour of a single genome-wide PLINK file.
+    pub fn open_template(template: &str, chroms: &[u32]) -> Result<Self> {
+        if chroms.is_empty() {
+            return Err(MagmaError::Input(
+                "open_template: no chromosomes specified".into(),
+            ));
+        }
+
+        let mut indivs = Vec::new();
+        let mut indiv_index = HashMap::new();
+        let mut block_count = 0usize;
+        let mut snps: Vec<SnpInfo> = Vec::new();
+        let mut snp_index: HashMap<String, usize> = HashMap::new();
+        // magic bytes + concatenated genotype blocks (per-file magic stripped)
+        let mut bed_data: Vec<u8> = vec![0x6c, 0x1b, 0x01];
+        let mut bed_handle: Option<File> = None;
+
+        for &chrom in chroms {
+            let prefix = template.replace("{N}", &chrom.to_string());
+            let mut bf = BedFile::open(Path::new(&prefix))?;
+
+            if indivs.is_empty() {
+                indivs = std::mem::take(&mut bf.indivs);
+                indiv_index = std::mem::take(&mut bf.indiv_index);
+                block_count = bf.block_count;
+            } else if bf.indivs.len() != indivs.len() {
+                return Err(MagmaError::Input(format!(
+                    "chromosome {chrom} panel has {} individuals, expected {} \
+                     (all chromosomes must share the same .fam)",
+                    bf.indivs.len(),
+                    indivs.len()
+                )));
+            }
+
+            bf.cache_all()?;
+            if let Some(ref cache) = bf.bed_cache {
+                bed_data.extend_from_slice(&cache[3..]);
+            }
+
+            for s in bf.snps {
+                snp_index.insert(s.rsid.clone(), snps.len());
+                snps.push(s);
+            }
+
+            // Retain the first file handle (struct requires a valid File, but
+            // it is never read when bed_cache is set).
+            if bed_handle.is_none() {
+                bed_handle = Some(bf.bed);
+            }
+        }
+
+        Ok(Self {
+            bed: bed_handle.unwrap(),
+            bed_cache: Some(bed_data),
+            snps,
+            indivs,
+            snp_index,
+            indiv_index,
+            block_count,
+        })
+    }
+
     /// Load the entire `.bed` file into memory. Subsequent `read_snp` calls
     /// will read from this buffer instead of seeking the file handle.
     /// This dramatically improves performance for analyses that read many SNPs.

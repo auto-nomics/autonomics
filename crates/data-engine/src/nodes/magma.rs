@@ -246,8 +246,6 @@ fn build_annot_batch(annot: &magma::annotation::GeneAnnotation) -> Result<Record
 /// Config for the gene analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaGeneConfig {
-    /// PLINK prefix for reference LD panel (path without .bed/.bim/.fam).
-    pub bfile: String,
     /// Path to .genes.annot file.
     pub gene_annot: String,
     /// SNP ID column name in the input GWAS DataFrame. Default: "rsid".
@@ -275,6 +273,11 @@ fn default_n_col() -> String {
 }
 
 const GENE_KIND: &str = "magma_gene";
+
+/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one
+/// `.bed/.bim/.fam` per chromosome). `{N}` is resolved to each chromosome
+/// number at execution time. Same panel as lava / hdl_l nodes.
+const REF_PREFIX_TEMPLATE: &str = "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
 
 fn gene_ports() -> NodePorts {
     NodePorts::new()
@@ -377,7 +380,9 @@ impl DagNode for MagmaGeneNode {
         let pval_data = magma::geneinput::SnpPvalData { snps: snp_pvals };
 
         // Load PLINK + annotation
-        let mut bed = magma::plink::BedFile::open(std::path::Path::new(&self.config.bfile)).map_err(MagmaNodeError::from)?;
+        let chroms: Vec<u32> = (1..=22).collect();
+        let mut bed = magma::plink::BedFile::open_template(REF_PREFIX_TEMPLATE, &chroms)
+            .map_err(MagmaNodeError::from)?;
         let annot = magma::geneinput::GeneAnnot::read(std::path::Path::new(&self.config.gene_annot)).map_err(MagmaNodeError::from)?;
 
         // Run gene analysis
@@ -975,6 +980,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
     async fn e2e_gene_node() {
         let dir = magma_data_dir();
 
@@ -992,7 +998,6 @@ mod tests {
         let input = vec![NodeInput { port: 0, data: df }];
 
         let mut node = MagmaGeneNode::new(MagmaGeneConfig {
-            bfile: dir.join("sim_geno").to_string_lossy().to_string(),
             gene_annot: dir.join("annot.genes.annot").to_string_lossy().to_string(),
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
@@ -1094,6 +1099,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
     async fn e2e_full_pipeline() {
         // Full pipeline: annotate → gene → set
         let dir = magma_data_dir();
@@ -1122,7 +1128,6 @@ mod tests {
         let df = ctx.session().read_batch(batch).unwrap();
 
         let mut gene_node = MagmaGeneNode::new(MagmaGeneConfig {
-            bfile: dir.join("sim_geno").to_string_lossy().to_string(),
             gene_annot: dir.join("annot.genes.annot").to_string_lossy().to_string(),
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
