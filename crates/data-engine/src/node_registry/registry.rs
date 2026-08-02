@@ -278,7 +278,7 @@ mod tests {
             "lcv" => serde_json::json!({"no_blocks": 100}),
             "sldsc" => serde_json::json!({}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
-            "two_sample_mr" => serde_json::json!({"action": 2, "method_list": ["mr_egger_regression"]}),
+            "two_sample_mr" => serde_json::json!({"id_exposure": "exp", "id_outcome": "out", "action": 2, "method_list": ["mr_egger_regression"]}),
             "mrlap" => serde_json::json!({
                 "exposure_name": "exp",
                 "outcome_name": "out"

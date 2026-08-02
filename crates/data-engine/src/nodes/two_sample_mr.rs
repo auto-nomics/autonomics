@@ -3,12 +3,15 @@
 //! Wraps the pure-Rust [`mr`] crate (a port of TwoSampleMR's algorithm API).
 //!
 //! Takes a single upstream `DataFrame` whose rows are **already merged on SNP**
-//! — one record per SNP per `(id_exposure, id_outcome)` pair, carrying both the
-//! exposure and the outcome summary statistics (effect alleles, betas, SEs,
-//! effect allele frequencies). The node runs allele harmonisation
+//! — one record per SNP, carrying both the exposure and the outcome summary
+//! statistics (effect alleles, betas, SEs, effect allele frequencies). The
+//! exposure and outcome trait identifiers (`id_exposure` / `id_outcome`) are
+//! supplied as spec parameters, not as DataFrame columns — they are constant
+//! across the whole run and would otherwise be duplicated once per SNP row.
+//! The node runs allele harmonisation
 //! ([`mr::harmonise::harmonise_data_with`]) and then the main MR dispatch
 //! ([`mr::dispatch::mr`]) over the requested methods, emitting one row per
-//! `(exposure, outcome, method)` estimate.
+//! method estimate.
 //!
 //! The upstream merge-on-SNP is expected to be done upstream (e.g. via a SQL
 //! node); this node deliberately stays single-input.
@@ -76,8 +79,6 @@ impl From<TwoSampleMrNodeError> for DagError {
 /// `DataFrame` must expose exactly these names — enforced by [`input_schema`]
 /// so the DAG rejects mis-shaped edges at `add_edge` time.
 const IN_SNP: &str = "snp";
-const IN_ID_EXP: &str = "id_exposure";
-const IN_ID_OUT: &str = "id_outcome";
 const IN_BETA_EXP: &str = "beta_exposure";
 const IN_BETA_OUT: &str = "beta_outcome";
 const IN_SE_EXP: &str = "se_exposure";
@@ -95,19 +96,72 @@ const IN_EAF_OUT: &str = "eaf_outcome";
 /// convention).
 fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
-        Field::new(IN_SNP, DataType::Utf8, false),
-        Field::new(IN_ID_EXP, DataType::Utf8, false),
-        Field::new(IN_ID_OUT, DataType::Utf8, false),
-        Field::new(IN_BETA_EXP, DataType::Float64, true),
-        Field::new(IN_BETA_OUT, DataType::Float64, true),
-        Field::new(IN_SE_EXP, DataType::Float64, true),
-        Field::new(IN_SE_OUT, DataType::Float64, true),
-        Field::new(IN_EA_EXP, DataType::Utf8, true),
-        Field::new(IN_OA_EXP, DataType::Utf8, true),
-        Field::new(IN_EA_OUT, DataType::Utf8, true),
-        Field::new(IN_OA_OUT, DataType::Utf8, true),
-        Field::new(IN_EAF_EXP, DataType::Float64, true),
-        Field::new(IN_EAF_OUT, DataType::Float64, true),
+        Field::new(IN_SNP, DataType::Utf8, false).with_metadata(std::collections::HashMap::from([
+            (
+                "doc".to_string(),
+                "SNP rsID identifier; join key between exposure and outcome.".to_string(),
+            ),
+        ])),
+        Field::new(IN_BETA_EXP, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Per-allele effect estimate of the SNP on the exposure.".to_string(),
+            )]),
+        ),
+        Field::new(IN_BETA_OUT, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Per-allele effect estimate of the SNP on the outcome.".to_string(),
+            )]),
+        ),
+        Field::new(IN_SE_EXP, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Standard error of the exposure effect estimate.".to_string(),
+            )]),
+        ),
+        Field::new(IN_SE_OUT, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Standard error of the outcome effect estimate.".to_string(),
+            )]),
+        ),
+        Field::new(IN_EA_EXP, DataType::Utf8, true).with_metadata(std::collections::HashMap::from(
+            [(
+                "doc".to_string(),
+                "Effect allele of the SNP in the exposure GWAS.".to_string(),
+            )],
+        )),
+        Field::new(IN_OA_EXP, DataType::Utf8, true).with_metadata(std::collections::HashMap::from(
+            [(
+                "doc".to_string(),
+                "Non-effect allele of the SNP in the exposure GWAS.".to_string(),
+            )],
+        )),
+        Field::new(IN_EA_OUT, DataType::Utf8, true).with_metadata(std::collections::HashMap::from(
+            [(
+                "doc".to_string(),
+                "Effect allele of the SNP in the outcome GWAS.".to_string(),
+            )],
+        )),
+        Field::new(IN_OA_OUT, DataType::Utf8, true).with_metadata(std::collections::HashMap::from(
+            [(
+                "doc".to_string(),
+                "Non-effect allele of the SNP in the outcome GWAS.".to_string(),
+            )],
+        )),
+        Field::new(IN_EAF_EXP, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Effect-allele frequency of the SNP in the exposure sample.".to_string(),
+            )]),
+        ),
+        Field::new(IN_EAF_OUT, DataType::Float64, true).with_metadata(
+            std::collections::HashMap::from([(
+                "doc".to_string(),
+                "Effect-allele frequency of the SNP in the outcome sample.".to_string(),
+            )]),
+        ),
     ]))
 }
 
@@ -149,7 +203,10 @@ fn extract_required_string(
     let idx = column_index(batches, name)?;
     // Validate the type once on the first batch (all batches share the schema).
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
@@ -179,10 +236,13 @@ fn extract_required_string(
             ),
         };
         for v in opt_iter {
-            out.push(v.map(str::to_string).ok_or(TwoSampleMrNodeError::WrongColumnType {
-                name: name.to_string(),
-                dtype: "null".to_string(),
-            })?);
+            out.push(
+                v.map(str::to_string)
+                    .ok_or(TwoSampleMrNodeError::WrongColumnType {
+                        name: name.to_string(),
+                        dtype: "null".to_string(),
+                    })?,
+            );
         }
     }
     Ok(out)
@@ -195,7 +255,10 @@ fn extract_opt_string(
 ) -> Result<Vec<Option<String>>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(TwoSampleMrNodeError::WrongColumnType {
             name: name.to_string(),
             dtype: dtype.to_string(),
@@ -272,7 +335,10 @@ fn extract_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, TwoSampl
 
 /// Extract a numeric column into `Vec<Option<f64>>` (null → `None`). Used for
 /// the optional effect-allele-frequency columns.
-fn extract_opt_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<Option<f64>>, TwoSampleMrNodeError> {
+fn extract_opt_f64(
+    batches: &[RecordBatch],
+    name: &str,
+) -> Result<Vec<Option<f64>>, TwoSampleMrNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
     let is_numeric = matches!(
@@ -434,6 +500,12 @@ fn default_tolerance() -> f64 {
 /// Spec for the MR node, deserialised from the registry-provided JSON.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct TwoSampleMrNodeSpec {
+    /// Exposure trait identifier (e.g. `"ieu-a-2"`). Passed through to every
+    /// output row as `id_exposure`; not expected as a column in the input
+    /// DataFrame (avoids duplicating one string across all SNP rows).
+    pub id_exposure: String,
+    /// Outcome trait identifier (e.g. `"ieu-a-7"`).
+    pub id_outcome: String,
     /// Methods to run, as `mr_method_list()` `obj` names (e.g. `"mr_ivw"`).
     /// Empty (the default) selects the `use_by_default` method set.
     #[serde(default)]
@@ -566,8 +638,6 @@ impl DagNode for TwoSampleMrNode {
 
         // ---- extract columns ----
         let snp = extract_required_string(&batches, IN_SNP)?;
-        let id_exp = extract_required_string(&batches, IN_ID_EXP)?;
-        let id_out = extract_required_string(&batches, IN_ID_OUT)?;
         let beta_exp = extract_f64(&batches, IN_BETA_EXP)?;
         let beta_out = extract_f64(&batches, IN_BETA_OUT)?;
         let se_exp = extract_f64(&batches, IN_SE_EXP)?;
@@ -581,8 +651,6 @@ impl DagNode for TwoSampleMrNode {
 
         let n = snp.len();
         for (name, len) in [
-            (IN_ID_EXP, id_exp.len()),
-            (IN_ID_OUT, id_out.len()),
             (IN_BETA_EXP, beta_exp.len()),
             (IN_BETA_OUT, beta_out.len()),
             (IN_SE_EXP, se_exp.len()),
@@ -609,8 +677,8 @@ impl DagNode for TwoSampleMrNode {
         for i in 0..n {
             hinputs.push(mr::harmonise::HarmoniseInput {
                 snp: snp[i].clone(),
-                id_exposure: id_exp[i].clone(),
-                id_outcome: id_out[i].clone(),
+                id_exposure: self.spec.id_exposure.clone(),
+                id_outcome: self.spec.id_outcome.clone(),
                 beta_exposure: beta_exp[i],
                 beta_outcome: beta_out[i],
                 se_exposure: se_exp[i],
@@ -631,8 +699,8 @@ impl DagNode for TwoSampleMrNode {
         // ---- dispatch mr() ----
         let parameters: mr::Parameters = self.spec.parameters.clone().into();
         let method_refs: Vec<&str> = self.spec.method_list.iter().map(|s| s.as_str()).collect();
-        let rows =
-            mr::dispatch::mr(&harmonised, &parameters, &method_refs).map_err(TwoSampleMrNodeError::Mr)?;
+        let rows = mr::dispatch::mr(&harmonised, &parameters, &method_refs)
+            .map_err(TwoSampleMrNodeError::Mr)?;
 
         // ---- build output batch ----
         let batch = build_result_batch(&rows)?;
@@ -646,7 +714,9 @@ impl DagNode for TwoSampleMrNode {
 }
 
 /// Build the output `RecordBatch` (one row per [`mr::dispatch::MrResultRow`]).
-fn build_result_batch(rows: &[mr::dispatch::MrResultRow]) -> Result<RecordBatch, TwoSampleMrNodeError> {
+fn build_result_batch(
+    rows: &[mr::dispatch::MrResultRow],
+) -> Result<RecordBatch, TwoSampleMrNodeError> {
     let id_exp: Vec<&str> = rows.iter().map(|r| r.id_exposure.as_str()).collect();
     let id_out: Vec<&str> = rows.iter().map(|r| r.id_outcome.as_str()).collect();
     let method: Vec<&str> = rows.iter().map(|r| r.method.as_str()).collect();
@@ -704,8 +774,6 @@ mod tests {
     /// mode to fire.
     fn make_test_input() -> super::super::meta::NodeInput {
         let snp: Vec<&str> = vec!["rs1", "rs2", "rs3", "rs4"];
-        let id_exp: Vec<&str> = vec!["exp"; 4];
-        let id_out: Vec<&str> = vec!["out"; 4];
         let beta_exp = vec![0.10, 0.20, -0.15, 0.05];
         let beta_out = vec![0.045, 0.091, -0.060, 0.022];
         let se_exp = vec![0.01, 0.01, 0.01, 0.01];
@@ -719,8 +787,6 @@ mod tests {
 
         let batch = make_batch(vec![
             (IN_SNP, Arc::new(StringArray::from(snp.clone())) as _),
-            (IN_ID_EXP, Arc::new(StringArray::from(id_exp)) as _),
-            (IN_ID_OUT, Arc::new(StringArray::from(id_out)) as _),
             (IN_BETA_EXP, Arc::new(Float64Array::from(beta_exp)) as _),
             (IN_BETA_OUT, Arc::new(Float64Array::from(beta_out)) as _),
             (IN_SE_EXP, Arc::new(Float64Array::from(se_exp)) as _),
@@ -744,6 +810,8 @@ mod tests {
     #[tokio::test]
     async fn runs_default_methods_and_emits_ivw() {
         let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
+            id_exposure: "exp".to_string(),
+            id_outcome: "out".to_string(),
             method_list: vec![],
             action: default_action(),
             tolerance: default_tolerance(),
@@ -788,6 +856,8 @@ mod tests {
     #[tokio::test]
     async fn respects_explicit_method_list() {
         let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
+            id_exposure: "exp".to_string(),
+            id_outcome: "out".to_string(),
             method_list: vec!["mr_ivw".to_string()],
             action: default_action(),
             tolerance: default_tolerance(),
@@ -821,6 +891,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_invalid_action() {
         let mut node = TwoSampleMrNode::new(TwoSampleMrNodeSpec {
+            id_exposure: "exp".to_string(),
+            id_outcome: "out".to_string(),
             method_list: vec![],
             action: 9,
             tolerance: default_tolerance(),
