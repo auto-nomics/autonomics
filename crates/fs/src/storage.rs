@@ -29,21 +29,31 @@ pub struct OpendalFileStorage {
 impl OpendalFileStorage {
     /// Normalize a user-supplied path to always start with `/` so that
     /// OpenDAL resolves it relative to the configured root (not the process cwd).
-    /// - `"/foo"`           → `"/foo"` (already absolute within the virtual root)
-    /// - `"foo"`            → `"/foo"` (relative → made absolute)
-    /// - `"./foo"`          → `"/foo"` (leading `./` stripped)
-    /// - `"./foo/bar/.."`   → `"/foo/bar/.."` (only the leading `./` is stripped; further normalization is left to OpenDAL)
-    /// - `""`               → `"/"`
+    ///
+    /// Performs lexical `..` resolution with root clamping: `..` at the
+    /// virtual root is silently ignored, so no path can escape the sandbox.
+    /// - `"/foo"`              → `"/foo"`
+    /// - `"foo"`               → `"/foo"`
+    /// - `"./foo"`             → `"/foo"`
+    /// - `"/foo/../bar"`       → `"/bar"`
+    /// - `"/../etc/passwd"`    → `"/etc/passwd"` (clamped — still within virtual root)
+    /// - `"a/../../../b"`      → `"/b"` (clamped)
+    /// - `""`                  → `"/"`
     pub fn normalize_path(path: &str) -> String {
-        let trimmed = path
-            .trim_matches('/')
-            .strip_prefix("./")
-            .unwrap_or(path.trim_matches('/'));
-        let trimmed = trimmed.strip_prefix('.').unwrap_or(trimmed);
-        if trimmed.is_empty() {
+        let mut stack: Vec<&str> = Vec::new();
+        for segment in path.split('/') {
+            match segment {
+                "" | "." => {}                // skip empty and current-dir
+                ".." => {
+                    stack.pop();              // lexical parent; clamps at root
+                }
+                s => stack.push(s),
+            }
+        }
+        if stack.is_empty() {
             "/".to_string()
         } else {
-            format!("/{trimmed}")
+            format!("/{}", stack.join("/"))
         }
     }
 
@@ -465,5 +475,35 @@ mod tests {
     #[test]
     fn normalize_leading_slash_dot_slash() {
         assert_eq!(OpendalFileStorage::normalize_path("/./foo"), "/foo");
+    }
+
+    // ── `..` lexical resolution with root clamping ──
+
+    #[test]
+    fn normalize_dotdot_simple() {
+        assert_eq!(OpendalFileStorage::normalize_path("/foo/../bar"), "/bar");
+    }
+
+    #[test]
+    fn normalize_dotdot_escape_clamped() {
+        // `..` from root is ignored — path stays within virtual root
+        assert_eq!(OpendalFileStorage::normalize_path("/../etc/passwd"), "/etc/passwd");
+    }
+
+    #[test]
+    fn normalize_dotdot_multi_escape_clamped() {
+        assert_eq!(OpendalFileStorage::normalize_path("a/../../../b"), "/b");
+    }
+
+    #[test]
+    fn normalize_dotdot_mixed() {
+        assert_eq!(OpendalFileStorage::normalize_path("/foo/./bar/../baz"), "/foo/baz");
+    }
+
+    #[test]
+    fn normalize_dotdot_only() {
+        assert_eq!(OpendalFileStorage::normalize_path(".."), "/");
+        assert_eq!(OpendalFileStorage::normalize_path("../.."), "/");
+        assert_eq!(OpendalFileStorage::normalize_path("/../../.."), "/");
     }
 }
