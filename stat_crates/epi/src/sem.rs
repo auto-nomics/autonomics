@@ -175,7 +175,7 @@ pub fn cfa(data: &[Vec<f64>], spec: &CfaSpec) -> Result<CfaResult> {
     let mut prev_f = f64::INFINITY;
 
     for iter in 0..max_iter {
-        let (sigma, f_val) = compute_sigma_and_fml(
+        let (_sigma, f_val) = compute_sigma_and_fml(
             &params,
             spec,
             &s,
@@ -280,7 +280,7 @@ pub fn cfa(data: &[Vec<f64>], spec: &CfaSpec) -> Result<CfaResult> {
 
     // SRMR: standardized residual.
     let srmr = {
-        let sigma_inv = inverse(&sigma, p)?;
+        let _sigma_inv = inverse(&sigma, p)?;
         let mut total = 0.0;
         for i in 0..p {
             for j in 0..p {
@@ -472,7 +472,7 @@ fn compute_sigma_and_fml(
     p: usize,
     k: usize,
     _n_free: usize,
-    free_loading_indices: &[(usize, usize)],
+    _free_loading_indices: &[(usize, usize)],
     cov_pairs: &[(usize, usize)],
     log_det_s: f64,
 ) -> (Mat<f64>, f64) {
@@ -743,10 +743,6 @@ mod tests {
             data.push(vec![x0, x1, x2, x3, x4, x5]);
         }
         data
-    }
-
-    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
-        (a - b).abs() <= tol * b.abs().max(1.0)
     }
 
     #[test]

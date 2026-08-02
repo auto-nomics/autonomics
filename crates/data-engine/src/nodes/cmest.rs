@@ -65,21 +65,21 @@ fn build_cmest_batch(
     let n_rows = n_mediators.max(1);
     let n = out.n_obs as i32;
 
-    let mut cde = vec![out.cde; n_rows];
-    let mut nde = vec![out.nde; n_rows];
+    let cde = vec![out.cde; n_rows];
+    let nde = vec![out.nde; n_rows];
     let mut ni = vec![out.nie; n_rows];
-    let mut te = vec![out.te; n_rows];
+    let te = vec![out.te; n_rows];
     let mut pm = vec![out.prop_mediated; n_rows];
-    let mut pe = vec![out.prop_eliminated; n_rows];
-    let mut cde_lo = vec![out.cde_ci.0; n_rows];
-    let mut cde_hi = vec![out.cde_ci.1; n_rows];
-    let mut nde_lo = vec![out.nde_ci.0; n_rows];
-    let mut nde_hi = vec![out.nde_ci.1; n_rows];
-    let mut ni_lo = vec![out.nie_ci.0; n_rows];
-    let mut ni_hi = vec![out.nie_ci.1; n_rows];
-    let mut te_lo = vec![out.te_ci.0; n_rows];
-    let mut te_hi = vec![out.te_ci.1; n_rows];
-    let mut n_obs = vec![n; n_rows];
+    let pe = vec![out.prop_eliminated; n_rows];
+    let cde_lo = vec![out.cde_ci.0; n_rows];
+    let cde_hi = vec![out.cde_ci.1; n_rows];
+    let nde_lo = vec![out.nde_ci.0; n_rows];
+    let nde_hi = vec![out.nde_ci.1; n_rows];
+    let ni_lo = vec![out.nie_ci.0; n_rows];
+    let ni_hi = vec![out.nie_ci.1; n_rows];
+    let te_lo = vec![out.te_ci.0; n_rows];
+    let te_hi = vec![out.te_ci.1; n_rows];
+    let n_obs = vec![n; n_rows];
     let mut weights = vec![1.0_f64; n_rows];
 
     if n_mediators > 1 {

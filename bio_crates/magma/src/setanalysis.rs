@@ -564,7 +564,7 @@ fn competitive_regression(
 /// - inverse MAC, log(inverse MAC)
 /// - sample size, log(sample size) — only for raw data path
 fn compute_internal_covariates(gene_data: &GeneRawData) -> Vec<Vec<f64>> {
-    let n = gene_data.n_genes();
+    let _n = gene_data.n_genes();
     let mut covariates = Vec::new();
 
     // Gene size = NSNPS
@@ -756,7 +756,7 @@ mod tests {
 
         for (i, r) in results.iter().enumerate() {
             let fields: Vec<&str> = golden_lines[i].split_whitespace().collect();
-            let golden_beta: f64 = fields[3].parse().unwrap();
+            let _golden_beta: f64 = fields[3].parse().unwrap();
             let golden_p: f64 = fields[6].parse().unwrap();
 
             // BETA may differ slightly due to internal covariate computation differences.

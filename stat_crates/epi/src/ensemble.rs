@@ -73,10 +73,6 @@ pub enum Node {
 }
 
 impl Tree {
-    fn empty() -> Self {
-        Self { nodes: Vec::new() }
-    }
-
     fn predict(&self, x: &[f64]) -> u64 {
         let mut idx = 0;
         loop {

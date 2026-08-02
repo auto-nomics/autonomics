@@ -662,7 +662,10 @@ async fn clump_instruments(
         ));
     }
 
-    let filtered: Vec<_> = inputs.into_iter().filter(|r| kept.contains(&r.snp)).collect();
+    let filtered: Vec<_> = inputs
+        .into_iter()
+        .filter(|r| kept.contains(&r.snp))
+        .collect();
     Ok(filtered)
 }
 

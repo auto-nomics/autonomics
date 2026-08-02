@@ -44,7 +44,7 @@ fn xval_lca_vs_r_polca() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/xval/lca_data.csv"
     ));
-    let n = rows.len();
+    let _n = rows.len();
     let n_indicators = rows[0].len();
 
     // Organise as indicators[j] = Vec<u64> across all subjects.
@@ -121,7 +121,7 @@ fn xval_rf_vs_r_randomforest() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/xval/rf_data.csv"
     ));
-    let n = rows.len();
+    let _n = rows.len();
     let features: Vec<Vec<f64>> = rows.iter().map(|r| r[..3].to_vec()).collect();
     let labels: Vec<f64> = rows.iter().map(|r| r[3]).collect();
 

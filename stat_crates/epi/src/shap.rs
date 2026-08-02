@@ -137,7 +137,7 @@ fn tree_shap(tree: &Tree, x: &[f64]) -> Vec<f64> {
 
     // Walk from root, accumulating the change at each split.
     let mut idx = 0;
-    let parent_value = node_value(tree, 0);
+    let _parent_value = node_value(tree, 0);
 
     loop {
         match &tree.nodes[idx] {

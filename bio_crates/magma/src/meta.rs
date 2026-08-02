@@ -33,7 +33,7 @@ pub fn merge_raw_files(paths: &[&Path]) -> Result<GeneRawData> {
         // For batch merge, all files should have the same genes.
         // We take the correlation values from whichever file has them.
         for (i, gene) in data.genes.iter().enumerate() {
-            if let Some(existing) = merged.genes.iter().find(|g| g.id == gene.id) {
+            if let Some(_existing) = merged.genes.iter().find(|g| g.id == gene.id) {
                 // Gene already exists — update if this file has more data
                 let idx = merged.genes.iter().position(|g| g.id == gene.id).unwrap();
                 if !data.corrs[i].is_empty() && merged.corrs[idx].is_empty() {

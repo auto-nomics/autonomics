@@ -209,7 +209,7 @@ fn fit_multi(
     let mut alpha1_all = Vec::with_capacity(k); // α₁ for each mediator
     let mut m_under_control_all = Vec::with_capacity(k); // E[M_j | X=0, C=C̄]
 
-    for (j, m_j) in mediators.iter().enumerate() {
+    for (_j, m_j) in mediators.iter().enumerate() {
         let mut preds: Vec<&[f64]> = vec![x];
         for c in covariates {
             preds.push(c);
@@ -554,7 +554,7 @@ pub fn cmest_weighting(
     m: &[f64],
     y: &[f64],
     covariates: &[&[f64]],
-    opts: &CmestOptions,
+    _opts: &CmestOptions,
 ) -> Result<CmestResult> {
     let n = x.len();
     if n == 0 || m.len() != n || y.len() != n {
@@ -661,7 +661,7 @@ pub fn cmest_gformula(
     let y_fit = regression::ols(&y_preds, y, true).map_err(epi_from_stat)?;
 
     // Predict counterfactual M and Y at X=1 and X=0 (all covariates at observed values).
-    let cov_means: Vec<f64> = covariates
+    let _cov_means: Vec<f64> = covariates
         .iter()
         .map(|c| c.iter().sum::<f64>() / n as f64)
         .collect();
@@ -682,7 +682,7 @@ pub fn cmest_gformula(
         let m_x1 = m_x0 + m_fit.coefficients[1];
 
         // Y(X, M) predictions.
-        let cov_term: f64 = covariates
+        let _cov_term: f64 = covariates
             .iter()
             .enumerate()
             .map(|(j, _)| y_fit.coefficients[2 + if opts.interaction { 1 } else { 0 } + j])
