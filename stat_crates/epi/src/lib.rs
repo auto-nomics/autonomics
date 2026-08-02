@@ -19,6 +19,7 @@
 //! | [`ensemble`] | Random Forest classifier (CART + bootstrap + mtry)          |
 //! | [`shap`]   | SHAP feature attribution (Saabas path-dependent for trees)     |
 //! | [`competing_risk`] | CIF (Aalen-Johansen) + Fine-Gray subdistribution hazard  |
+//! | [`multistate`] | Multi-state Markov model (Nelson-Aalen + Aalen-Johansen)  |
 
 pub mod causal;
 pub mod chisq;
@@ -30,6 +31,7 @@ pub mod gbtm;
 pub mod lasso;
 pub mod lca;
 pub mod mediation;
+pub mod multistate;
 pub mod rcs;
 pub mod roc;
 pub mod shap;

@@ -104,3 +104,52 @@ fn xval_cif_vs_r_cuminc() {
     println!("   CIF1+CIF2+S(last) = {:.4}+{:.4}+{:.4} = {:.4}",
         our_cif1_last, our_cif2_last, s_last, total);
 }
+
+// ── MultiState vs CIF cross-check ──────────────────────────────────────────
+// The Aalen-Johansen P(0→k) should match the CIF for cause k.
+
+#[test]
+fn xval_multistate_matches_cif() {
+    let rows = load_csv(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/xval/competing_risk_data.csv"));
+    let time: Vec<f64> = rows.iter().map(|r| r[0]).collect();
+    let event: Vec<f64> = rows.iter().map(|r| r[1]).collect();
+
+    // CIF estimation.
+    let cif = epi::competing_risk::cumulative_incidence(&time, &event)
+        .expect("CIF");
+
+    // Multi-state: all subjects start in state 0, transition to state k (cause k).
+    let n = time.len();
+    let from: Vec<u64> = vec![0; n];
+    let to: Vec<u64> = event.iter().map(|&e| e as u64).collect(); // 0=censored→0, 1→1, 2→2
+
+    let ms = epi::multistate::multistate(&time, &from, &to, 3, None)
+        .expect("multistate");
+
+    // Compare final P(0→1) with CIF1_last, P(0→2) with CIF2_last.
+    let cause1_idx = cif.causes.iter().position(|&c| c == 1).unwrap();
+    let cause2_idx = cif.causes.iter().position(|&c| c == 2).unwrap();
+    let cif1_last = *cif.cif[cause1_idx].last().unwrap();
+    let cif2_last = *cif.cif[cause2_idx].last().unwrap();
+
+    let p_last = ms.p_matrices.last().unwrap();
+    let p01 = p_last[0][1]; // P(0→1)
+    let p02 = p_last[0][2]; // P(0→2)
+
+    assert!(
+        (p01 - cif1_last).abs() < 0.01,
+        "P(0→1)={:.6} vs CIF1_last={:.6}", p01, cif1_last
+    );
+    assert!(
+        (p02 - cif2_last).abs() < 0.01,
+        "P(0→2)={:.6} vs CIF2_last={:.6}", p02, cif2_last
+    );
+
+    // Row stochastic: P(0→0) + P(0→1) + P(0→2) = 1.
+    let row_sum = p_last[0][0] + p01 + p02;
+    assert!((row_sum - 1.0).abs() < 1e-10, "Row 0 sum = {row_sum}");
+
+    println!("✅ MultiState vs CIF: P(0→1)={:.4} (CIF1 {:.4}), P(0→2)={:.4} (CIF2 {:.4})",
+        p01, cif1_last, p02, cif2_last);
+    println!("   P(0→0)={:.4}, row sum={:.4}", p_last[0][0], row_sum);
+}
