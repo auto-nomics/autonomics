@@ -11,6 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 faer.workspace = true
+serde.workspace = true
+schemars.workspace = true
 thiserror.workspace = true
 # Distribution functions (Normal / Student-t / Chi^2 / F) and normal sampling,
 # used to reproduce R's pnorm / pt / pchisq / pf and rnorm to ~1e-9.

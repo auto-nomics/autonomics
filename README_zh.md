@@ -2,12 +2,14 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-`autonomics` 是一个面向**智能体驱动的生物信息学与数据分析**的 Rust 工作空间。分析人员不再依赖脚本和笔记本，而是与 LLM 智能体对话，由智能体构建、运行并检查真实的计算流水线——组装一个由类型化节点组成的 DataFusion DAG，读取基因组格式（VCF / BGEN / PLINK），拟合统计遗传学模型，并将结果持久化到 Iceberg 数据湖。
+`autonomics` 是一个面向**智能体驱动的流行病学与统计遗传学研究**的 Rust 工作空间。分析人员不再依赖脚本和笔记本，而是与 LLM 智能体对话，由智能体构建、运行并检查真实的计算流水线——组装一个由类型化节点组成的 DataFusion DAG，读取基因组格式（VCF / BGEN / PLINK），拟合统计遗传学模型，运行流行病学与临床生物统计分析（因果推断、中介分析、生存分析、回归、混合模型等），并将结果持久化到 Iceberg 数据湖。
+
+与目前主流的面向编码的Agent框架不同，autonomics底层基于Datafusion DAG构建，封装了SQL节点及大量专业分析节点，可以利用Agent的能力高效完成数据查询与变换，效率远超传统的手动分析工作流。
 
 本项目整合了通常彼此分离的四个部分：
 
 - **LLM SDK + 智能体运行时**（`agentik-*`）——兼容 Anthropic 的客户端，支持多服务商、SSE 流式输出和工具/函数调用；其上是处理记忆压缩、生命周期管理和多智能体编排的智能体循环。
-- **DataFusion DAG 引擎**（`data-engine`）——一个类型化、并发调度的节点图，每个步骤变换 `DataFrame`。智能体通过工具调用组装并运行流水线；重计算量的统计遗传学计算（MiXeR、LDSC、MR、LAVA）作为纯 Rust 节点逻辑运行于 [`faer`](https://github.com/sarah-ek/faer) 之上。
+- **DataFusion DAG 引擎**（`data-engine`）——一个类型化、并发调度的节点图，每个步骤变换 `DataFrame`。智能体通过工具调用组装并运行流水线；重计算量任务——统计遗传学（MiXeR、LDSC、MR、LAVA）与流行病学/临床生物统计（因果推断、中介、生存分析、ROC、LASSO、WQS 等）——均作为纯 Rust 节点逻辑运行于 [`faer`](https://github.com/sarah-ek/faer) 之上。
 - **生物信息学 I/O**（`biofusion`、`datalake`）——针对常见基因组格式的 DataFusion 读取器，以及由 Iceberg 支撑、存储 LD 参考面板和预计算充分统计量表的数据湖。
 - **科学数据客户端**（`eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`）——无需离开对话即可从 NCBI、OpenGWAS、GWAS Catalog 和 Open Targets Platform 获取元数据、汇总统计数据与靶点–疾病关联评分。
 
@@ -49,12 +51,19 @@
                                                │  │ ldsc_hsq    │ │
                                                │  │ univariate  │ │
                                                │  │ _mixer      │ │
-                                               │  │ bivariate   │ │
-                                               │  │ _mixer      │ │
+                                               │  │ two_sample  │ │
+                                               │  │ _mr         │ │
+                                               │  │ cox_regress │ │
+                                               │  │ survival    │ │
+                                               │  │ causal      │ │
+                                               │  │ mediation   │ │
+                                               │  │ cmest       │ │
+                                               │  │ epi_roc     │ │
+                                               │  │ epi_rcs     │ │
+                                               │  │ epi_lasso   │ │
+                                               │  │ epi_wqs     │ │
                                                │  │ sink_file   │ │
                                                │  │ viz         │ │
-                                               │  │ open_       │ │
-                                               │  │  targets    │ │
                                                │  │ ...         │ │
                                                │  └─────────────┘ │
                                                └────────┬────────┘
@@ -79,7 +88,7 @@
         └───────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│                    bio_crates (纯算法移植)                         │
+│              bio_crates (统计遗传学算法移植)                        │
 │                                                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐ │
 │  │    mixer     │  │    ldsc      │  │    mr    │  │   lava   │ │
@@ -87,7 +96,34 @@
 │  │ spike & slab │  │ LDSC 回归     │  │ MR 检验  │  │ 局部 rg  │ │
 │  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘ │
 │         │                 │               │              │       │
-│         └─────────────────┴───────────────┴──────────────┘       │
+│  ┌──────┴───────┐  ┌──────┴──────┐  ┌─────┴────┐               │
+│  │    hdl       │  │    mtag     │  │  mrlap   │  ┌──────────┐  │
+│  │  HDL-L       │  │ 多性状 GWAS │  │ 样本重叠 │  │   lcv    │  │
+│  │  局部 rg     │  │             │  │   MR     │  │ 潜在因果 │  │
+│  └──────────────┘  └─────────────┘  └──────────┘  └──────────┘  │
+│  ┌──────────────┐  ┌──────────────┐                               │
+│  │   cpassoc    │  │    magma     │                               │
+│  │ SHom / SHet  │  │ 基因集分析   │                               │
+│  └──────────────┘  └──────────────┘                               │
+│                              │                                    │
+│                         faer (线性代数)                            │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│         stat_crates (流行病学与生物统计)                            │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │                      statkit                              │    │
+│  │  OLS / WLS / logistic / Cox 回归，描述性统计               │    │
+│  └──────────────────────────┬───────────────────────────────┘    │
+│                             │                                     │
+│  ┌──────────────────────────▼───────────────────────────────┐    │
+│  │                        epi                                │    │
+│  │  因果推断 (IPTW/PSM) · 中介分析 · cmest (CMAverse)         │    │
+│  │  生存分析 (KM/log-rank) · 竞争风险 · 多状态模型             │    │
+│  │  ROC/AUC/DeLong · RCS · LASSO · WQS · 卡方检验             │    │
+│  │  CLPM · GBTM · LCA · SEM · 随机森林 + SHAP                 │    │
+│  └──────────────────────────────────────────────────────────┘    │
 │                              │                                    │
 │                         faer (线性代数)                            │
 └──────────────────────────────────────────────────────────────────┘
@@ -113,19 +149,20 @@
 
 智能体从 `agentik-core` 获取工具。数据引擎工具通过通道与一个串行化的 `DataEngineServer` 通信，因此一次对话可以创建、检查、运行和清空数据处理 DAG，而无需直接共享可变的引擎状态。DAG 将数据读入 DataFusion `DataFrame`，对其进行变换，并可将文件输出持久化。
 
-重计算量的统计遗传学计算（MiXeR、LDSC）在 DAG 节点内以纯 Rust 运行。LD 参考数据和预计算的充分统计量存储在 Iceberg 数据湖中；离线 `precompute_tags` 流水线物化了每个 tag 的汇总标量，使运行时拟合永远无需扫描完整 LD 矩阵。
+重计算量任务在 DAG 节点内以纯 Rust 运行。统计遗传学算法（MiXeR、LDSC、MR、LAVA、HDL、MTAG 等）与流行病学/临床生物统计方法（因果推断、中介分析、生存分析、回归、混合模型等）均构建于 `faer` 之上。LD 参考数据和预计算的充分统计量存储在 Iceberg 数据湖中；离线 `precompute_tags` 流水线物化了每个 tag 的汇总标量，使运行时拟合永远无需扫描完整 LD 矩阵。
 
 GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客户端让智能体无需离开对话即可获取元数据、汇总统计数据和靶点–疾病关联评分。大型测试夹具（LD 矩阵、金标准输出）保存在私有 OSS 存储桶中，通过 `rclone` 恢复。
 
 ## 工作空间
 
-| 领域                         | 成员                                                                                                                                        | 职责                                                                                                                                                              |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 智能体平台                   | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                                                 | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                         |
-| 数据分析                     | `data-engine`、`data-engine-tools`、`stat-primitives`、`fs`、`datalake`、`datalake-tools`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、统计量、OpenDAL 文件、Iceberg 存储与查询工具、生物格式导入，以及 R/ggplot2 可视化。                                               |
-| 统计遗传学                   | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mtag`、`mrlap`、`lcv`                                                                               | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MTAG、MRlap 和 LCV 的纯 Rust 移植，基于 `faer`。                |
-| 科学数据客户端               | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                                     | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                       |
-| 用户界面与渲染               | `tui`                                                                                                                                      | 终端智能体 UI。                                                                                                                                                    |
+| 领域               | 成员                                                                                                                    | 职责                                                                                                                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 智能体平台         | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                              | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                                                            |
+| 数据分析           | `data-engine`、`data-engine-tools`、`fs`、`datalake`、`datalake-tools`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、OpenDAL 文件、Iceberg 存储与查询工具、生物格式导入，以及 R/ggplot2 可视化。                                                                                          |
+| 统计遗传学         | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mtag`、`mrlap`、`lcv`、`cpassoc`、`magma`                                        | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MTAG、MRlap、LCV、CPASSOC 和 MAGMA 的纯 Rust 移植，基于 `faer`。                                 |
+| 流行病学与生物统计 | `statkit`、`epi`                                                                                                        | 基础统计（OLS/WLS/logistic/Cox 回归、描述性统计）与高层流行病学方法（因果推断、中介分析、生存分析、ROC、RCS、LASSO、WQS、CLPM、GBTM、LCA、SEM、竞争风险、多状态模型、随机森林 + SHAP），基于 `faer`。 |
+| 科学数据客户端     | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                  | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                                                          |
+| 用户界面与渲染     | `tui`                                                                                                                   | 终端智能体 UI。                                                                                                                                                                                       |
 
 `fixtures/` 包含读取器和集成测试使用的代表性及格式错误的基因组文件。
 
@@ -161,6 +198,10 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo run -p tui
 - [**MiXeR（`mixer`）**](docs/stat-genetics/mixer_zh.md) — 单变量/双变量 spike-and-slab 因果混合模型、充分统计量压缩、DAG 节点流水线。
 - [**LAVA（`lava`）**](docs/stat-genetics/lava_zh.md) — 从 GWAS 汇总统计估计局部遗传相关。
 
+### 流行病学与生物统计
+
+- [**统计与流行病学节点**](docs/sta_epi_nodes_zh.md) — 流行病学与临床生物统计分析的 DAG 节点目录：线性/logistic/Cox 回归、生存分析（KM + log-rank）、因果推断（IPTW/PSM）、因果中介（VanderWeele / CMAverse）、ROC/AUC/DeLong、RCS、LASSO、WQS、卡方检验、荟萃分析。
+
 ### 数据基础设施与可视化
 
 - [**可视化（`visualization`）**](docs/visualization_zh.md) — 通过 R/ggplot2 将 DataFusion 渲染为 PNG（Arrow IPC 桥接、opendal 输出）。
@@ -186,7 +227,6 @@ autonomics/
 │   ├── opengwas/            # OpenGWAS 客户端
 │   ├── gwascatalog-sdk/     # GWAS Catalog 客户端
 │   ├── opentargets/         # Open Targets Platform GraphQL 客户端（靶点–疾病关联）
-│   ├── stat-primitives/     # 描述性统计、分布、回归
 │   ├── runtime/             # Agentik 的同步宿主桥接
 ├── bio_crates/
 │   ├── ldsc/                # 纯 Rust LD Score Regression (h²/rg/cts) 移植
@@ -196,7 +236,13 @@ autonomics/
 │   ├── hdl/                 # 纯 Rust HDL-L 增强局部遗传相关移植
 │   ├── mtag/                # 纯 Rust MTAG（多性状 GWAS）移植
 │   ├── mrlap/               # 纯 Rust MRlap（样本重叠感知 MR）移植
-│   └── lcv/                 # 纯 Rust LCV（潜在因果变量）移植
+│   ├── lcv/                 # 纯 Rust LCV（潜在因果变量）移植
+│   ├── cpassoc/             # 纯 Rust CPASSOC（跨表型荟萃分析）移植
+│   ├── magma/               # 纯 Rust MAGMA（基因集 / 基因属性分析）移植
+├── stat_crates/
+│   ├── statkit/             # 基础统计：OLS/WLS/logistic/Cox 回归、描述性统计
+│   └── epi/                 # 流行病学与临床生物统计：因果推断、中介分析、生存分析、
+│                            #   竞争风险、ROC、RCS、LASSO、WQS、CLPM、GBTM、LCA、SEM、随机森林+SHAP
 ├── fixtures/                # 有效和格式错误的基因组输入夹具
 ├── Cargo.toml               # 工作空间清单
 └── .cargo/config.toml       # 默认 Cargo target 目录
@@ -212,6 +258,8 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p biofusion
 CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p agentik-core
 CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p ldsc
 CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p mr
+CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p epi
+CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p statkit
 ```
 
 部分集成测试调用外部公共 API 或需要服务商凭据。在 CI 或离线环境中运行时，请将这些视为可选。

@@ -45,7 +45,6 @@ use crate::nodes::{
         MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
     },
     mediation::MediationNodeFactory,
-    mr::MrNodeFactory,
     mrlap::MrlapNodeFactory,
     mtag::MtagNodeFactory,
     sink_file::FileSinkNodeFactory,

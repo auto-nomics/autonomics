@@ -2,11 +2,36 @@
 //!
 //! Orients exposure and outcome effect alleles onto the same strand and effect
 //! allele, flipping signs and allele frequencies as needed, and flags
-//! palindromic / ambiguous / incompatible SNPs. Three strictness levels mirror
-//! `action`:
-//! - `1` — assume forward strand (no palindrome inference);
-//! - `2` — infer positive strand via allele frequencies (default);
-//! - `3` — drop all palindromic SNPs.
+//! palindromic / ambiguous / incompatible SNPs.
+//!
+//! # `action` — harmonisation strictness
+//!
+//! Three levels mirror `action` in `harmonise_data(action=…)`, captured by the
+//! [`HarmoniseAction`] enum:
+//! - [`HarmoniseAction::ForwardStrand`] (`1`) — assume forward strand (no
+//!   palindrome inference). Only SNPs whose alleles cannot be reconciled by
+//!   swap / strand-flip are dropped (`mr_keep = !remove`); palindromic SNPs are
+//!   retained.
+//! - [`HarmoniseAction::InferStrand`] (`2`, the default) — infer positive strand
+//!   via allele frequencies. For a palindromic SNP whose exposure and outcome
+//!   EAFs sit on opposite sides of 0.5, `beta_outcome` is sign-flipped and
+//!   `eaf_outcome` complemented (`harmonise_22`); palindromic SNPs whose
+//!   frequency is too close to 0.5 to call are flagged `ambiguous` and dropped
+//!   (`mr_keep = !(remove || ambiguous)`).
+//! - [`HarmoniseAction::ExcludePalindromic`] (`3`) — drop *all* palindromic SNPs
+//!   regardless of frequency (`mr_keep = !(palindromic || remove ||
+//!   ambiguous)`).
+//!
+//! # `tolerance` — allele-frequency band around 0.5
+//!
+//! `tolerance` (default `0.08`, see [`DEFAULT_TOLERANCE`]) is the half-width of
+//! the "uninformative" EAF band centred on 0.5: `[0.5 − tolerance,
+//! 0.5 + tolerance]` (i.e. `[0.42, 0.58]` by default). A SNP whose EAF falls
+//! inside this band is considered **ambiguous** — its strand cannot be reliably
+//! inferred from frequency alone. The same band also drives the `freq_similar`
+//! checks in the `2-1` / `1-2` / `1-1` branches, where two GWAS's EAFs must
+//! agree in direction (both below `minf`, both above `maxf`, or on opposite
+//! sides) for the SNP to be considered unambiguous.
 //!
 //! Alleles use `Option<String>`: `None` is R's `NA`. A missing `other_allele`
 //! selects the `2-1` / `1-2` / `1-1` harmonisation branch exactly as R's
@@ -16,9 +41,28 @@
 // re-assignment style verbatim; allow the resulting dead-store warnings.
 #![allow(unused_assignments)]
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::MrError;
 
 const DEFAULT_TOLERANCE: f64 = 0.08;
+
+/// Harmonisation strictness — mirrors `action` in R's
+/// `harmonise_data(action = …)`.
+///
+/// See the module-level docs for the full semantics of each variant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarmoniseAction {
+    /// Assume forward strand; keep palindromic SNPs (R `action = 1`).
+    ForwardStrand,
+    /// Infer strand from allele frequencies (the default, R `action = 2`).
+    #[default]
+    InferStrand,
+    /// Drop all palindromic SNPs (R `action = 3`).
+    ExcludePalindromic,
+}
 
 /// One exposure/outcome SNP pair to harmonise (already merged on SNP).
 #[derive(Debug, Clone)]
@@ -302,7 +346,7 @@ fn harmonise_22(
     f_a: Option<f64>,
     mut f_b: Option<f64>,
     tolerance: f64,
-    action: u8,
+    action: HarmoniseAction,
 ) -> Row {
     let (mut a1, mut a2, mut b1, mut b2) = (
         a1.to_string(),
@@ -359,7 +403,7 @@ fn harmonise_22(
     let ambig_a = tempfa > minf && tempfa < maxf;
     let ambig_b = tempfb > minf && tempfb < maxf;
 
-    if action == 2 {
+    if action == HarmoniseAction::InferStrand {
         let status2 =
             ((tempfa < 0.5 && tempfb > 0.5) || (tempfa > 0.5 && tempfb < 0.5)) && palindromic;
         let to_swap = status2 && !remove;
@@ -397,7 +441,7 @@ fn harmonise_21(
     f_a: Option<f64>,
     mut f_b: Option<f64>,
     tolerance: f64,
-    _action: u8,
+    _action: HarmoniseAction,
 ) -> Row {
     let (mut a1, mut a2) = (a1.to_string(), a2.to_string());
     let mut b1 = b1.to_string();
@@ -492,7 +536,7 @@ fn harmonise_12(
     mut f_a: Option<f64>,
     mut f_b: Option<f64>,
     tolerance: f64,
-    _action: u8,
+    _action: HarmoniseAction,
 ) -> Row {
     let mut a1 = a1.to_string();
     let (mut b1, mut b2) = (b1.to_string(), b2.to_string());
@@ -582,7 +626,7 @@ fn harmonise_11(
     f_a: Option<f64>,
     f_b: Option<f64>,
     tolerance: f64,
-    _action: u8,
+    _action: HarmoniseAction,
 ) -> Row {
     let a1 = a1.to_string();
     let b1 = b1.to_string();
@@ -614,7 +658,7 @@ fn harmonise_11(
 }
 
 /// Harmonise a single group (one exposure/outcome pair) — `R/harmonise.R:605`.
-fn harmonise_group(rows: &[&HarmoniseInput], tolerance: f64, action: u8) -> Vec<Row> {
+fn harmonise_group(rows: &[&HarmoniseInput], tolerance: f64, action: HarmoniseAction) -> Vec<Row> {
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let a1 = toupper(&r.effect_allele_exposure);
@@ -688,18 +732,36 @@ fn harmonise_group(rows: &[&HarmoniseInput], tolerance: f64, action: u8) -> Vec<
 /// id_outcome)`, harmonised, then `mr_keep` is set from `action` and from
 /// finite-ness of the four MR columns.
 pub fn harmonise_data(inputs: &[HarmoniseInput]) -> Vec<HarmoniseOutput> {
-    harmonise_data_with(inputs, 2, DEFAULT_TOLERANCE)
+    harmonise_data_with(inputs, HarmoniseAction::InferStrand, DEFAULT_TOLERANCE)
 }
 
-/// As [`harmonise_data`] with an explicit `action` (1/2/3) and allele-frequency
-/// `tolerance` (default 0.08).
+/// As [`harmonise_data`] with an explicit [`HarmoniseAction`] and
+/// allele-frequency `tolerance` (default `0.08`).
+///
+/// # Parameters
+///
+/// - `action` — harmonisation strictness. See the module-level docs:
+///   - [`HarmoniseAction::ForwardStrand`] — assume forward strand; keep
+///     palindromic SNPs (`mr_keep = !remove`).
+///   - [`HarmoniseAction::InferStrand`] — infer strand from allele frequencies;
+///     drop ambiguous palindromic SNPs whose EAF is within `tolerance` of 0.5
+///     (`mr_keep = !(remove || ambiguous)`).
+///   - [`HarmoniseAction::ExcludePalindromic`] — drop *all* palindromic SNPs
+///     (`mr_keep = !(palindromic || remove || ambiguous)`).
+///
+/// - `tolerance` — half-width of the uninformative EAF band `[0.5 − tolerance,
+///   0.5 + tolerance]`. SNPs whose EAF falls inside this band cannot have their
+///   strand inferred from frequency and are flagged `ambiguous`. Default
+///   `0.08` → band `[0.42, 0.58]`.
+///
+/// In all actions, `mr_keep` is additionally forced to `false` when any of
+/// `beta_exposure`, `beta_outcome`, `se_exposure`, or `se_outcome` is
+/// non-finite.
 pub fn harmonise_data_with(
     inputs: &[HarmoniseInput],
-    action: u8,
+    action: HarmoniseAction,
     tolerance: f64,
 ) -> Vec<HarmoniseOutput> {
-    assert!(matches!(action, 1..=3), "action must be 1, 2, or 3");
-
     // Group by (id_exposure, id_outcome) preserving first-seen order.
     let mut order: Vec<(String, String)> = Vec::new();
     let mut groups: std::collections::HashMap<(String, String), Vec<usize>> =
@@ -723,10 +785,11 @@ pub fn harmonise_data_with(
                 && r.se_exposure.is_finite()
                 && r.se_outcome.is_finite();
             let mut mr_keep = match action {
-                3 => !(row.palindromic || row.remove || row.ambiguous),
-                2 => !(row.remove || row.ambiguous),
-                1 => !row.remove,
-                _ => unreachable!(),
+                HarmoniseAction::ExcludePalindromic => {
+                    !(row.palindromic || row.remove || row.ambiguous)
+                }
+                HarmoniseAction::InferStrand => !(row.remove || row.ambiguous),
+                HarmoniseAction::ForwardStrand => !row.remove,
             };
             if !finite_betas {
                 mr_keep = false;
@@ -823,7 +886,7 @@ mod tests {
     #[test]
     fn action1_keeps_palindromic() {
         let r = row("rs1", "A", "T", "A", "T", 0.1, 0.2, 0.5, 0.5);
-        let o = &harmonise_data_with(&[r], 1, 0.08)[0];
+        let o = &harmonise_data_with(&[r], HarmoniseAction::ForwardStrand, 0.08)[0];
         assert!(o.mr_keep);
     }
 

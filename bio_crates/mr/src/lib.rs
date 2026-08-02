@@ -33,7 +33,7 @@
 //! | [`kde`]           | `stats::density` (Gaussian kernel)                 | KDE grid for the mode estimator                                     |
 //! | [`utils`]         | `R/add_rsq.r`, `R/query.R`, `R/rucker.R`           | `get_r_from_*`, `effective_n`, `Isq`, `get_se`, …                   |
 //! | [`methods`]       | `R/mr.R`, `R/mr_mode.R`                            | Wald, IVW family, Egger, medians, modes                             |
-//! | [`harmonise`]     | `R/harmonise.R`                                    | allele / effect harmonisation (actions 1/2/3)                       |
+//! | [`harmonise`]     | `R/harmonise.R`                                    | allele / effect harmonisation ([`harmonise::HarmoniseAction`])      |
 //! | [`steiger`]       | `R/steiger.R` + `psych::r.test`                    | Steiger directionality test + sensitivity                           |
 //! | [`heterogeneity`] | `R/heterogeneity.R`                                | Cochran's Q heterogeneity + Egger pleiotropy test                   |
 //! | [`dispatch`]      | `R/mr.R: mr()`                                     | the `mr()` driver, method list, default parameters                  |
