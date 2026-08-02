@@ -60,7 +60,7 @@ pub fn default_tool_set(
     datalake: Arc<Datalake>,
     data_engine_client: Arc<DataEngineClient>,
 ) -> Result<Vec<ToolRegistration>, OpengwasError> {
-    let mut tools = fs::file_base_registrations(file_storage.clone());
+    let mut tools = fs::vbash_registrations(file_storage.clone());
     tools.extend(opengwas_tools(file_storage.clone())?);
     tools.extend(eutils_tools());
     tools.extend(opentargets_tools());

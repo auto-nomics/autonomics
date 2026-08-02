@@ -1,0 +1,402 @@
+//! VFS Bash — structured file operations through OpenDAL, no system shell.
+//!
+//! A single tool (`vfs`) dispatches on an `op` field to one of many pure-Rust
+//! file-operation handlers. Every handler talks directly to the OpenDAL
+//! [`Operator`]; no subprocess is ever spawned.
+
+mod ops;
+mod search;
+
+use std::sync::Arc;
+
+use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use agentik_proc::tool;
+use agentik_sdk::types::ToolResult as AgentToolResult;
+use async_trait::async_trait;
+
+use crate::storage::OpendalFileStorage;
+
+// ────────────────────────── input ──────────────────────────
+
+#[tool(
+    name = "vfs",
+    description = "Virtual filesystem operations through OpenDAL VFS. \
+        All operations execute in pure Rust — no system shell is spawned. \
+        Supported ops: read, cat, ls, cp, mv, rm, mkdir, stat, touch, \
+        write, edit, head, tail, wc, grep, glob, tree. \
+        Unsupported (will error): chmod, chown, ln, pipes, redirects."
+)]
+pub struct VfsBashInput {
+    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|head|tail|wc|grep|glob|tree"]
+    pub op: String,
+    #[desc = "Primary path (file or directory)."]
+    pub path: Option<String>,
+    #[desc = "Source path for cp/mv."]
+    pub src: Option<String>,
+    #[desc = "Destination path for cp/mv."]
+    pub dst: Option<String>,
+    #[desc = "Content to write (for write op)."]
+    pub content: Option<String>,
+    #[desc = "Text to find (for edit op)."]
+    pub old_string: Option<String>,
+    #[desc = "Replacement text (for edit op)."]
+    pub new_string: Option<String>,
+    #[desc = "Replace all occurrences (for edit op). Default false."]
+    pub replace_all: Option<bool>,
+    #[desc = "List recursively (for ls/tree). Default varies by op."]
+    pub recursive: Option<bool>,
+    #[desc = "Regex pattern (for grep) or glob pattern (for glob op)."]
+    pub pattern: Option<String>,
+    #[desc = "Glob filter to narrow grep file candidates, e.g. '*.rs'."]
+    pub glob: Option<String>,
+    #[desc = "Starting line number, 1-indexed (for cat/read/head/tail)."]
+    pub offset: Option<usize>,
+    #[desc = "Max lines to return (for cat/read/head/ls)."]
+    pub limit: Option<usize>,
+}
+
+// ────────────────────────── tool ──────────────────────────
+
+pub struct VfsBashTool {
+    pub storage: Arc<OpendalFileStorage>,
+}
+
+#[async_trait]
+impl ToolFunction for VfsBashTool {
+    type Input = VfsBashInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let op = &self.storage.op;
+
+        match input.op.as_str() {
+            // ── reading ──
+            "read" => ops::op_read(op, input.path.as_deref(), input.offset, input.limit).await,
+            "cat" => ops::op_cat(op, input.path.as_deref(), input.offset, input.limit).await,
+            "head" => ops::op_head(op, input.path.as_deref(), input.limit).await,
+            "tail" => ops::op_tail(op, input.path.as_deref(), input.limit).await,
+
+            // ── writing ──
+            "write" => ops::op_write(op, input.path.as_deref(), input.content.as_deref()).await,
+            "edit" => {
+                ops::op_edit(
+                    op,
+                    input.path.as_deref(),
+                    input.old_string.as_deref(),
+                    input.new_string.as_deref(),
+                    input.replace_all,
+                )
+                .await
+            }
+            "touch" => ops::op_touch(op, input.path.as_deref()).await,
+
+            // ── filesystem ──
+            "ls" => {
+                ops::op_ls(op, input.path.as_deref(), input.recursive, input.limit).await
+            }
+            "stat" => ops::op_stat(op, input.path.as_deref()).await,
+            "mkdir" => ops::op_mkdir(op, input.path.as_deref()).await,
+            "rm" => ops::op_rm(op, input.path.as_deref()).await,
+            "cp" => ops::op_cp(op, input.src.as_deref(), input.dst.as_deref()).await,
+            "mv" => ops::op_mv(op, input.src.as_deref(), input.dst.as_deref()).await,
+            "wc" => ops::op_wc(op, input.path.as_deref()).await,
+            "tree" => {
+                ops::op_tree(op, input.path.as_deref(), input.limit).await
+            }
+
+            // ── search ──
+            "grep" => {
+                search::op_grep(
+                    op,
+                    input.path.as_deref(),
+                    input.pattern.as_deref(),
+                    input.glob.as_deref(),
+                )
+                .await
+            }
+            "glob" => {
+                search::op_glob(op, input.path.as_deref(), input.pattern.as_deref())
+                    .await
+            }
+
+            // ── unsupported ──
+            other => Ok(AgentToolResult::error(format!(
+                "Unknown or unsupported operation '{other}'. \
+                 Supported: read cat ls cp mv rm mkdir stat touch write edit \
+                 head tail wc grep glob tree."
+            ))),
+        }
+    }
+}
+
+// ────────────────────────── registration ──────────────────────────
+
+/// Build the [`ToolRegistration`] for the unified VFS bash tool.
+///
+/// Pass a shared [`OpendalFileStorage`] so the tool reuses the same
+/// OpenDAL operator as the rest of the system.
+pub fn vbash_registrations(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
+    vec![ToolRegistration::from(VfsBashTool { storage })]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentik_sdk::types::ToolResultContent;
+
+    /// Helper: create a `VfsBashTool` backed by a temp directory.
+    fn make_tool() -> VfsBashTool {
+        VfsBashTool {
+            storage: Arc::new(OpendalFileStorage::new_temp()),
+        }
+    }
+
+    /// Helper: create a `VfsBashInput` with only `op` set, rest `None`.
+    fn input(op: &str) -> VfsBashInput {
+        VfsBashInput {
+            op: op.into(),
+            path: None,
+            src: None,
+            dst: None,
+            content: None,
+            old_string: None,
+            new_string: None,
+            replace_all: None,
+            recursive: None,
+            pattern: None,
+            glob: None,
+            offset: None,
+            limit: None,
+        }
+    }
+
+    /// Helper: extract JSON from a successful tool result.
+    fn result_json(result: AgentToolResult) -> serde_json::Value {
+        match result.content {
+            ToolResultContent::Json(v) => v,
+            other => panic!("expected JSON content, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_then_read() {
+        let tool = make_tool();
+        // write
+        let mut w = input("write");
+        w.path = Some("/hello.txt".into());
+        w.content = Some("hello world".into());
+        tool.run(w).await.unwrap();
+
+        // read
+        let mut r = input("read");
+        r.path = Some("/hello.txt".into());
+        let result = tool.run(r).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(content.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn write_then_cat() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/f.txt".into());
+        w.content = Some("line1\nline2\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut c = input("cat");
+        c.path = Some("/f.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(content.contains("line1"));
+        assert!(!content.contains("\tline1")); // no line-number prefix
+    }
+
+    #[tokio::test]
+    async fn cp_and_mv() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/a.txt".into());
+        w.content = Some("data".into());
+        tool.run(w).await.unwrap();
+
+        // cp
+        let mut cp = input("cp");
+        cp.src = Some("/a.txt".into());
+        cp.dst = Some("/b.txt".into());
+        tool.run(cp).await.unwrap();
+
+        // mv b → c
+        let mut mv = input("mv");
+        mv.src = Some("/b.txt".into());
+        mv.dst = Some("/c.txt".into());
+        tool.run(mv).await.unwrap();
+
+        // ls should show a.txt and c.txt
+        let result = tool.run(input("ls")).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<&str> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str())
+            .collect();
+        assert!(names.iter().any(|n| n.contains("a.txt")));
+        assert!(names.iter().any(|n| n.contains("c.txt")));
+        assert!(!names.iter().any(|n| n.contains("b.txt")));
+    }
+
+    #[tokio::test]
+    async fn mkdir_stat_rm() {
+        let tool = make_tool();
+
+        let mut m = input("mkdir");
+        m.path = Some("/mydir".into());
+        tool.run(m).await.unwrap();
+
+        let mut s = input("stat");
+        s.path = Some("/mydir".into());
+        let result = tool.run(s).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["is_dir"], true);
+
+        let mut r = input("rm");
+        r.path = Some("/mydir".into());
+        tool.run(r).await.unwrap();
+
+        // stat should fail
+        let mut s2 = input("stat");
+        s2.path = Some("/mydir".into());
+        let result = tool.run(s2).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn touch_and_edit() {
+        let tool = make_tool();
+        let mut t = input("touch");
+        t.path = Some("/t.txt".into());
+        tool.run(t).await.unwrap();
+
+        let mut w = input("write");
+        w.path = Some("/t.txt".into());
+        w.content = Some("foo bar baz".into());
+        tool.run(w).await.unwrap();
+
+        let mut e = input("edit");
+        e.path = Some("/t.txt".into());
+        e.old_string = Some("bar".into());
+        e.new_string = Some("QUX".into());
+        let result = tool.run(e).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["replacements"], 1);
+
+        let mut c = input("cat");
+        c.path = Some("/t.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert!(json["content"].as_str().unwrap().contains("QUX"));
+    }
+
+    #[tokio::test]
+    async fn head_tail_wc() {
+        let tool = make_tool();
+        let lines: String = (1..=10).map(|i| format!("line{i}\n")).collect();
+        let mut w = input("write");
+        w.path = Some("/nums.txt".into());
+        w.content = Some(lines);
+        tool.run(w).await.unwrap();
+
+        // head 3
+        let mut h = input("head");
+        h.path = Some("/nums.txt".into());
+        h.limit = Some(3);
+        let result = tool.run(h).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["lines_returned"], 3);
+
+        // tail 2
+        let mut t = input("tail");
+        t.path = Some("/nums.txt".into());
+        t.limit = Some(2);
+        let result = tool.run(t).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(content.contains("line10"));
+        assert!(!content.contains("line8"));
+
+        // wc
+        let mut wc = input("wc");
+        wc.path = Some("/nums.txt".into());
+        let result = tool.run(wc).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["lines"], 10);
+    }
+
+    #[tokio::test]
+    async fn grep_finds_content() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/search.txt".into());
+        w.content = Some("hello world\nfoo bar\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut g = input("grep");
+        g.path = Some("/".into());
+        g.pattern = Some("hello".into());
+        let result = tool.run(g).await.unwrap();
+        let json = result_json(result);
+        let matches = json["matches"].as_str().unwrap_or("");
+        assert!(matches.contains("search.txt"));
+        assert!(matches.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn glob_finds_paths() {
+        let tool = make_tool();
+
+        let mut w1 = input("write");
+        w1.path = Some("/a.rs".into());
+        w1.content = Some(String::new());
+        tool.run(w1).await.unwrap();
+
+        let mut w2 = input("write");
+        w2.path = Some("/b.txt".into());
+        w2.content = Some(String::new());
+        tool.run(w2).await.unwrap();
+
+        let mut g = input("glob");
+        g.path = Some("/".into());
+        g.pattern = Some("*.rs".into());
+        let result = tool.run(g).await.unwrap();
+        let json = result_json(result);
+        let paths: Vec<&str> = json["matches"]
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .collect();
+        assert!(paths.iter().any(|p| p.contains("a.rs")));
+        assert!(!paths.iter().any(|p| p.contains("b.txt")));
+    }
+
+    #[tokio::test]
+    async fn unknown_op_errors() {
+        let tool = make_tool();
+        let mut i = input("chmod");
+        i.path = Some("/x".into());
+        let result = tool.run(i).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn path_traversal_clamped() {
+        let tool = make_tool();
+        // /../../../etc/passwd normalizes to /etc/passwd within virtual root
+        // — should NOT find real /etc/passwd
+        let mut s = input("stat");
+        s.path = Some("/../../../etc/passwd".into());
+        let result = tool.run(s).await.unwrap();
+        // Will error because /etc/passwd doesn't exist in the temp dir
+        assert_eq!(result.is_error, Some(true));
+    }
+}
