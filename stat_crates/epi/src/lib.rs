@@ -18,10 +18,12 @@
 //! | [`lca`]   | Latent Class Analysis (EM mixture of Bernoullis)                 |
 //! | [`ensemble`] | Random Forest classifier (CART + bootstrap + mtry)          |
 //! | [`shap`]   | SHAP feature attribution (Saabas path-dependent for trees)     |
+//! | [`competing_risk`] | CIF (Aalen-Johansen) + Fine-Gray subdistribution hazard  |
 
 pub mod causal;
 pub mod chisq;
 pub mod clpm;
+pub mod competing_risk;
 pub mod ensemble;
 pub mod error;
 pub mod gbtm;
