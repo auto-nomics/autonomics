@@ -43,9 +43,9 @@ impl OpendalFileStorage {
         let mut stack: Vec<&str> = Vec::new();
         for segment in path.split('/') {
             match segment {
-                "" | "." => {}                // skip empty and current-dir
+                "" | "." => {} // skip empty and current-dir
                 ".." => {
-                    stack.pop();              // lexical parent; clamps at root
+                    stack.pop(); // lexical parent; clamps at root
                 }
                 s => stack.push(s),
             }
@@ -487,7 +487,10 @@ mod tests {
     #[test]
     fn normalize_dotdot_escape_clamped() {
         // `..` from root is ignored — path stays within virtual root
-        assert_eq!(OpendalFileStorage::normalize_path("/../etc/passwd"), "/etc/passwd");
+        assert_eq!(
+            OpendalFileStorage::normalize_path("/../etc/passwd"),
+            "/etc/passwd"
+        );
     }
 
     #[test]
@@ -497,7 +500,10 @@ mod tests {
 
     #[test]
     fn normalize_dotdot_mixed() {
-        assert_eq!(OpendalFileStorage::normalize_path("/foo/./bar/../baz"), "/foo/baz");
+        assert_eq!(
+            OpendalFileStorage::normalize_path("/foo/./bar/../baz"),
+            "/foo/baz"
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@
 //! This produces local feature contributions for a single prediction. Global
 //! feature importance is the mean of `|SHAPⱼ|` across all samples.
 
-use crate::ensemble::{RfResult, Tree, Node};
+use crate::ensemble::{Node, RfResult, Tree};
 use crate::error::{EpiError, Result};
 
 /// Result of a SHAP analysis.
@@ -95,7 +95,11 @@ pub fn shap_values(
     // ── Global importance: mean |SHAP| ──────────────────────────────────
     let mean_abs: Vec<f64> = (0..p)
         .map(|j| {
-            let sum: f64 = features.iter().enumerate().map(|(i, _)| values[i][j].abs()).sum();
+            let sum: f64 = features
+                .iter()
+                .enumerate()
+                .map(|(i, _)| values[i][j].abs())
+                .sum();
             sum / n as f64
         })
         .collect();
@@ -138,8 +142,17 @@ fn tree_shap(tree: &Tree, x: &[f64]) -> Vec<f64> {
     loop {
         match &tree.nodes[idx] {
             Node::Leaf { .. } => break,
-            Node::Split { feature, threshold, left, right } => {
-                let child_idx = if x[*feature] <= *threshold { *left } else { *right };
+            Node::Split {
+                feature,
+                threshold,
+                left,
+                right,
+            } => {
+                let child_idx = if x[*feature] <= *threshold {
+                    *left
+                } else {
+                    *right
+                };
                 let child_value = node_value(tree, child_idx);
                 let parent_val = node_value(tree, idx);
                 // Attribute the change to this feature.
@@ -193,10 +206,14 @@ mod tests {
     fn shap_efficiency_property() {
         // Σⱼ SHAPⱼ(x) ≈ f(x) − baseline for each sample.
         let (features, labels) = make_data(200, 42);
-        let opts = RfOptions { n_trees: 30, ..Default::default() };
+        let opts = RfOptions {
+            n_trees: 30,
+            ..Default::default()
+        };
         let rf = random_forest(&features, &labels, &opts).unwrap();
 
-        let shap = shap_values(&rf, &features, vec!["x0".into(), "x1".into(), "x2".into()]).unwrap();
+        let shap =
+            shap_values(&rf, &features, vec!["x0".into(), "x1".into(), "x2".into()]).unwrap();
 
         for i in 0..features.len() {
             let pred = crate::ensemble::predict_proba(&rf, &features[i]);
@@ -213,33 +230,52 @@ mod tests {
     fn shap_feature_importance_ranks_informative_first() {
         // Features 0 and 1 are informative; feature 2 is noise.
         let (features, labels) = make_data(300, 42);
-        let opts = RfOptions { n_trees: 50, ..Default::default() };
+        let opts = RfOptions {
+            n_trees: 50,
+            ..Default::default()
+        };
         let rf = random_forest(&features, &labels, &opts).unwrap();
-        let shap = shap_values(&rf, &features, vec!["x0".into(), "x1".into(), "x2".into()]).unwrap();
+        let shap =
+            shap_values(&rf, &features, vec!["x0".into(), "x1".into(), "x2".into()]).unwrap();
 
         assert!(
             shap.mean_abs[0] > shap.mean_abs[2],
             "Feature 0 importance ({:.4}) should exceed feature 2 ({:.4})",
-            shap.mean_abs[0], shap.mean_abs[2]
+            shap.mean_abs[0],
+            shap.mean_abs[2]
         );
         assert!(
             shap.mean_abs[1] > shap.mean_abs[2],
             "Feature 1 importance ({:.4}) should exceed feature 2 ({:.4})",
-            shap.mean_abs[1], shap.mean_abs[2]
+            shap.mean_abs[1],
+            shap.mean_abs[2]
         );
     }
 
     #[test]
     fn shap_baseline_is_mean_prediction() {
         let (features, labels) = make_data(100, 42);
-        let rf = random_forest(&features, &labels, &RfOptions { n_trees: 20, ..Default::default() }).unwrap();
+        let rf = random_forest(
+            &features,
+            &labels,
+            &RfOptions {
+                n_trees: 20,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let shap = shap_values(&rf, &features, vec!["a".into(), "b".into(), "c".into()]).unwrap();
 
-        let mean_pred: f64 = features.iter().map(|x| crate::ensemble::predict_proba(&rf, x)).sum::<f64>() / features.len() as f64;
+        let mean_pred: f64 = features
+            .iter()
+            .map(|x| crate::ensemble::predict_proba(&rf, x))
+            .sum::<f64>()
+            / features.len() as f64;
         assert!(
             (shap.baseline - mean_pred).abs() < 0.15,
             "Baseline {:.4} should be close to mean prediction {:.4}",
-            shap.baseline, mean_pred
+            shap.baseline,
+            mean_pred
         );
     }
 }

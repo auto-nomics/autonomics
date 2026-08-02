@@ -86,7 +86,11 @@ pub fn multistate(
 
     // ── Identify distinct event times ────────────────────────────────────
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut event_times = Vec::new();
     let mut i = 0;
@@ -134,7 +138,9 @@ pub fn multistate(
         let mut n_in_state = vec![0usize; n_states];
         for j in 0..n {
             let et = if entry.is_empty() { 0.0 } else { entry[j] };
-            if et > t { continue; } // not yet entered
+            if et > t {
+                continue;
+            } // not yet entered
 
             if time[j] >= t {
                 // Still in from_state just before t (event hasn't happened yet,
@@ -214,7 +220,9 @@ pub fn multistate(
 /// Identity matrix of size n.
 fn identity(n: usize) -> Vec<Vec<f64>> {
     let mut m = vec![vec![0.0; n]; n];
-    for i in 0..n { m[i][i] = 1.0; }
+    for i in 0..n {
+        m[i][i] = 1.0;
+    }
     m
 }
 
@@ -254,8 +262,16 @@ mod tests {
 
         // P(0→1) at last time should be 1.0 (all transitioned).
         let p = &result.p_matrices.last().unwrap();
-        assert!(approx_eq(p[0][1], 1.0, 1e-10), "P(0→1) should be 1.0, got {}", p[0][1]);
-        assert!(approx_eq(p[0][0], 0.0, 1e-10), "P(0→0) should be 0.0, got {}", p[0][0]);
+        assert!(
+            approx_eq(p[0][1], 1.0, 1e-10),
+            "P(0→1) should be 1.0, got {}",
+            p[0][1]
+        );
+        assert!(
+            approx_eq(p[0][0], 0.0, 1e-10),
+            "P(0→0) should be 0.0, got {}",
+            p[0][0]
+        );
     }
 
     #[test]

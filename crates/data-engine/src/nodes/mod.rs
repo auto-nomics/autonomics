@@ -8,6 +8,7 @@
 pub mod bivariate_mixer;
 pub mod causal;
 pub mod chi_square;
+pub mod cmest;
 pub mod cox_regression;
 pub mod cpassoc;
 pub mod echo_node;

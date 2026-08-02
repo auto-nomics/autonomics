@@ -72,7 +72,11 @@ pub fn cumulative_incidence(time: &[f64], event: &[f64]) -> Result<CifResult> {
 
     // Identify distinct causes.
     let causes: Vec<u64> = {
-        let mut c: Vec<u64> = event.iter().filter(|&&e| e > 0.0).map(|&e| e as u64).collect();
+        let mut c: Vec<u64> = event
+            .iter()
+            .filter(|&&e| e > 0.0)
+            .map(|&e| e as u64)
+            .collect();
         c.sort();
         c.dedup();
         c
@@ -84,7 +88,11 @@ pub fn cumulative_incidence(time: &[f64], event: &[f64]) -> Result<CifResult> {
 
     // Sort by time ascending.
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Identify distinct event times (any cause).
     let mut times = Vec::new();
@@ -95,8 +103,7 @@ pub fn cumulative_incidence(time: &[f64], event: &[f64]) -> Result<CifResult> {
     while i < n {
         let t = time[order[i]];
         let mut group_end = i;
-        while group_end < n
-            && (time[order[group_end]] - t).abs() < f64::EPSILON * t.abs().max(1.0)
+        while group_end < n && (time[order[group_end]] - t).abs() < f64::EPSILON * t.abs().max(1.0)
         {
             group_end += 1;
         }
@@ -137,9 +144,7 @@ pub fn cumulative_incidence(time: &[f64], event: &[f64]) -> Result<CifResult> {
 
     // S(t_{j-1}) = survival before event at time j.
     // For j=0, S(t_{-1}) = 1.0.
-    let s_prev = |j: usize| -> f64 {
-        if j == 0 { 1.0 } else { survival[j - 1] }
-    };
+    let s_prev = |j: usize| -> f64 { if j == 0 { 1.0 } else { survival[j - 1] } };
 
     // Compute CIF for each cause.
     let mut cif: Vec<Vec<f64>> = (0..n_causes).map(|_| Vec::with_capacity(m)).collect();
@@ -226,7 +231,9 @@ pub fn fine_gray(
     }
     let p = predictors.len();
     if p == 0 {
-        return Err(EpiError::Numerical("at least one predictor required".to_string()));
+        return Err(EpiError::Numerical(
+            "at least one predictor required".to_string(),
+        ));
     }
     for pred in predictors.iter() {
         if pred.len() != n {
@@ -237,8 +244,14 @@ pub fn fine_gray(
         }
     }
 
-    let n_events = event.iter().filter(|&&e| e as u64 == cause_of_interest).count();
-    let n_competing = event.iter().filter(|&&e| e > 0.0 && e as u64 != cause_of_interest).count();
+    let n_events = event
+        .iter()
+        .filter(|&&e| e as u64 == cause_of_interest)
+        .count();
+    let n_competing = event
+        .iter()
+        .filter(|&&e| e > 0.0 && e as u64 != cause_of_interest)
+        .count();
     if n_events == 0 {
         return Err(EpiError::Numerical(
             "no events of the cause of interest".to_string(),
@@ -249,7 +262,10 @@ pub fn fine_gray(
     // G(t) = KM treating censored (event=0) as "event" and all real events as censored.
     // (Stored for potential future use in weighting; currently the Fine-Gray
     // approximation uses standard Cox risk sets.)
-    let _censor_time: Vec<f64> = (0..n).filter(|&i| event[i] == 0.0).map(|i| time[i]).collect();
+    let _censor_time: Vec<f64> = (0..n)
+        .filter(|&i| event[i] == 0.0)
+        .map(|i| time[i])
+        .collect();
     let _censor_event: Vec<f64> = (0..n).filter(|&i| event[i] == 0.0).map(|_| 1.0).collect();
 
     // G(t) for each subject's time (for weight computation).
@@ -257,7 +273,9 @@ pub fn fine_gray(
     // We compute G at each event time.
     let g_values = km_curve_at_times(
         &(0..n).map(|i| time[i]).collect::<Vec<_>>(),
-        &(0..n).map(|i| if event[i] == 0.0 { 1.0 } else { 0.0 }).collect::<Vec<_>>(),
+        &(0..n)
+            .map(|i| if event[i] == 0.0 { 1.0 } else { 0.0 })
+            .collect::<Vec<_>>(),
         &(0..n).map(|i| time[i]).collect::<Vec<_>>(),
     );
 
@@ -271,15 +289,26 @@ pub fn fine_gray(
 
     // Sort indices by time descending for risk-set accumulation.
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| time[b].partial_cmp(&time[a]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        time[b]
+            .partial_cmp(&time[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut beta = vec![0.0_f64; p];
     let mut converged = false;
 
     for _iter in 0..MAX_ITER {
         let (score, info, ll) = fg_score_info(
-            time, event, predictors, &beta, &order, p, n,
-            cause_of_interest, &g_values,
+            time,
+            event,
+            predictors,
+            &beta,
+            &order,
+            p,
+            n,
+            cause_of_interest,
+            &g_values,
         )?;
 
         // Newton update with step-halving.
@@ -287,23 +316,40 @@ pub fn fine_gray(
         let u = Mat::from_fn(p, 1, |i, _| score[i]);
         let llt = Llt::new(a.as_ref(), Side::Lower)
             .ok()
-            .ok_or(EpiError::Numerical("singular information matrix".to_string()))?;
+            .ok_or(EpiError::Numerical(
+                "singular information matrix".to_string(),
+            ))?;
         let delta_mat = llt.solve(&u);
         let delta: Vec<f64> = (0..p).map(|i| delta_mat[(i, 0)]).collect();
 
         let mut step = 1.0_f64;
         let beta_trial = loop {
-            let trial = (0..p).map(|i| beta[i] + delta[i] * step).collect::<Vec<_>>();
-            let ll_trial = fg_score_info(time, event, predictors, &trial, &order, p, n, cause_of_interest, &g_values)
-                .map(|(_, _, ll)| ll)
-                .unwrap_or(f64::NEG_INFINITY);
+            let trial = (0..p)
+                .map(|i| beta[i] + delta[i] * step)
+                .collect::<Vec<_>>();
+            let ll_trial = fg_score_info(
+                time,
+                event,
+                predictors,
+                &trial,
+                &order,
+                p,
+                n,
+                cause_of_interest,
+                &g_values,
+            )
+            .map(|(_, _, ll)| ll)
+            .unwrap_or(f64::NEG_INFINITY);
             if ll_trial >= ll || step < 1e-6 {
                 break trial;
             }
             step *= 0.5;
         };
 
-        let max_delta = delta.iter().map(|d| (d * step).abs()).fold(0.0_f64, f64::max);
+        let max_delta = delta
+            .iter()
+            .map(|d| (d * step).abs())
+            .fold(0.0_f64, f64::max);
         beta = beta_trial;
         if max_delta < TOL {
             converged = true;
@@ -312,26 +358,51 @@ pub fn fine_gray(
     }
 
     // ── Final inference ────────────────────────────────────────────────
-    let (_, info, ll) = fg_score_info(time, event, predictors, &beta, &order, p, n, cause_of_interest, &g_values)?;
+    let (_, info, ll) = fg_score_info(
+        time,
+        event,
+        predictors,
+        &beta,
+        &order,
+        p,
+        n,
+        cause_of_interest,
+        &g_values,
+    )?;
     let a = Mat::from_fn(p, p, |i, j| info[i][j]);
     let llt = Llt::new(a.as_ref(), Side::Lower)
         .ok()
-        .ok_or(EpiError::Numerical("singular information matrix".to_string()))?;
+        .ok_or(EpiError::Numerical(
+            "singular information matrix".to_string(),
+        ))?;
     let inv_info = llt.inverse();
 
     let z975 = 1.959963984540054;
     let normal = Normal::new(0.0, 1.0).map_err(|e| EpiError::Numerical(format!("Normal: {e}")))?;
 
     let std_errors: Vec<f64> = (0..p).map(|i| inv_info[(i, i)].max(0.0).sqrt()).collect();
-    let z_stats: Vec<f64> = std_errors.iter().enumerate()
+    let z_stats: Vec<f64> = std_errors
+        .iter()
+        .enumerate()
         .map(|(i, &se)| if se > 0.0 { beta[i] / se } else { f64::NAN })
         .collect();
-    let p_values: Vec<f64> = z_stats.iter()
-        .map(|&z| if z.is_finite() { 2.0 * normal.sf(z.abs()) } else { f64::NAN })
+    let p_values: Vec<f64> = z_stats
+        .iter()
+        .map(|&z| {
+            if z.is_finite() {
+                2.0 * normal.sf(z.abs())
+            } else {
+                f64::NAN
+            }
+        })
         .collect();
     let shr: Vec<f64> = beta.iter().map(|&b| b.exp()).collect();
-    let shr_ci_lower: Vec<f64> = (0..p).map(|i| (beta[i] - z975 * std_errors[i]).exp()).collect();
-    let shr_ci_upper: Vec<f64> = (0..p).map(|i| (beta[i] + z975 * std_errors[i]).exp()).collect();
+    let shr_ci_lower: Vec<f64> = (0..p)
+        .map(|i| (beta[i] - z975 * std_errors[i]).exp())
+        .collect();
+    let shr_ci_upper: Vec<f64> = (0..p)
+        .map(|i| (beta[i] + z975 * std_errors[i]).exp())
+        .collect();
 
     Ok(FineGrayResult {
         coefficients: beta,
@@ -355,7 +426,11 @@ pub fn fine_gray(
 fn km_curve_at_times(time: &[f64], event: &[f64], query_times: &[f64]) -> Vec<f64> {
     let n = time.len();
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| time[a].partial_cmp(&time[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        time[a]
+            .partial_cmp(&time[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut result = Vec::with_capacity(query_times.len());
     for &qt in query_times {
@@ -416,8 +491,7 @@ fn fg_score_info(
 
         // Collect all at this time.
         let mut group_end = i;
-        while group_end < n
-            && (time[order[group_end]] - t).abs() < f64::EPSILON * t.abs().max(1.0)
+        while group_end < n && (time[order[group_end]] - t).abs() < f64::EPSILON * t.abs().max(1.0)
         {
             group_end += 1;
         }
@@ -509,8 +583,13 @@ mod tests {
         assert!(c[0] > 0.0 && c[0] < 1.0);
         // CIF + survival should = 1 at each time (for single cause, CIF = 1 - S).
         for i in 0..c.len() {
-            assert!((c[i] + cif.survival[i] - 1.0).abs() < 1e-10,
-                "CIF + S ≠ 1: {} + {} = {}", c[i], cif.survival[i], c[i] + cif.survival[i]);
+            assert!(
+                (c[i] + cif.survival[i] - 1.0).abs() < 1e-10,
+                "CIF + S ≠ 1: {} + {} = {}",
+                c[i],
+                cif.survival[i],
+                c[i] + cif.survival[i]
+            );
         }
     }
 
@@ -524,7 +603,11 @@ mod tests {
         // CIF1 + CIF2 + survival ≤ 1 at all times.
         for i in 0..cif.times.len() {
             let total = cif.cif[0][i] + cif.cif[1][i] + cif.survival[i];
-            assert!(total <= 1.0 + 1e-10, "CIF1+CIF2+S = {total} > 1 at time {}", cif.times[i]);
+            assert!(
+                total <= 1.0 + 1e-10,
+                "CIF1+CIF2+S = {total} > 1 at time {}",
+                cif.times[i]
+            );
         }
     }
 
@@ -542,28 +625,37 @@ mod tests {
         // CIF of cause 1 should be lower when cause 2 competes.
         let last1 = *cif1.cif[0].last().unwrap();
         let last2 = *cif2.cif[0].last().unwrap();
-        assert!(last2 < last1, "CIF with competing events ({last2}) should be < CIF without ({last1})");
+        assert!(
+            last2 < last1,
+            "CIF with competing events ({last2}) should be < CIF without ({last1})"
+        );
     }
 
     #[test]
     fn fine_gray_runs_with_two_causes() {
         let n = 100;
         // Shuffled times to avoid monotone likelihood.
-        let time = vec![5.0, 12.0, 3.0, 18.0, 8.0, 25.0, 1.0, 15.0, 20.0, 10.0,
-                        7.0, 22.0, 14.0, 2.0, 16.0, 9.0, 30.0, 6.0, 11.0, 28.0,
-                        4.0, 13.0, 24.0, 19.0, 27.0, 17.0, 21.0, 26.0, 23.0, 29.0,
-                        31.0, 40.0, 35.0, 38.0, 33.0, 42.0, 50.0, 37.0, 44.0, 48.0,
-                        34.0, 41.0, 46.0, 39.0, 47.0, 43.0, 45.0, 49.0, 36.0, 32.0,
-                        51.0, 60.0, 55.0, 58.0, 53.0, 62.0, 70.0, 57.0, 64.0, 68.0,
-                        54.0, 61.0, 66.0, 59.0, 67.0, 63.0, 65.0, 69.0, 56.0, 52.0,
-                        71.0, 80.0, 75.0, 78.0, 73.0, 82.0, 90.0, 77.0, 84.0, 88.0,
-                        74.0, 81.0, 86.0, 79.0, 87.0, 83.0, 85.0, 89.0, 76.0, 72.0,
-                        91.0, 100.0, 95.0, 98.0, 93.0, 102.0, 110.0, 97.0, 104.0, 108.0];
-        let event: Vec<f64> = (0..n).map(|i| {
-            if i % 5 == 0 { 0.0 }
-            else if i % 2 == 0 { 1.0 }
-            else { 2.0 }
-        }).collect();
+        let time = vec![
+            5.0, 12.0, 3.0, 18.0, 8.0, 25.0, 1.0, 15.0, 20.0, 10.0, 7.0, 22.0, 14.0, 2.0, 16.0,
+            9.0, 30.0, 6.0, 11.0, 28.0, 4.0, 13.0, 24.0, 19.0, 27.0, 17.0, 21.0, 26.0, 23.0, 29.0,
+            31.0, 40.0, 35.0, 38.0, 33.0, 42.0, 50.0, 37.0, 44.0, 48.0, 34.0, 41.0, 46.0, 39.0,
+            47.0, 43.0, 45.0, 49.0, 36.0, 32.0, 51.0, 60.0, 55.0, 58.0, 53.0, 62.0, 70.0, 57.0,
+            64.0, 68.0, 54.0, 61.0, 66.0, 59.0, 67.0, 63.0, 65.0, 69.0, 56.0, 52.0, 71.0, 80.0,
+            75.0, 78.0, 73.0, 82.0, 90.0, 77.0, 84.0, 88.0, 74.0, 81.0, 86.0, 79.0, 87.0, 83.0,
+            85.0, 89.0, 76.0, 72.0, 91.0, 100.0, 95.0, 98.0, 93.0, 102.0, 110.0, 97.0, 104.0,
+            108.0,
+        ];
+        let event: Vec<f64> = (0..n)
+            .map(|i| {
+                if i % 5 == 0 {
+                    0.0
+                } else if i % 2 == 0 {
+                    1.0
+                } else {
+                    2.0
+                }
+            })
+            .collect();
         let x: Vec<f64> = (0..n).map(|i| (i as f64) * 0.1).collect();
 
         let result = fine_gray(&time, &event, &[&x[..]], 1).unwrap();

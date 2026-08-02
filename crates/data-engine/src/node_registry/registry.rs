@@ -17,6 +17,10 @@ use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
     causal::CausalNodeFactory,
     chi_square::ChiSquareNodeFactory,
+    cmest::{
+        CmestBinaryMNodeFactory, CmestBinaryYNodeFactory, CmestGformulaNodeFactory,
+        CmestMultiNodeFactory, CmestNodeFactory, CmestWeightingNodeFactory,
+    },
     cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
     echo_node::EchoNodeFactory,
@@ -186,6 +190,12 @@ impl NodeRegistry {
         registry.register(Box::new(LogisticRegressionNodeFactory {}));
         registry.register(Box::new(MediationNodeFactory {}));
         registry.register(Box::new(ChiSquareNodeFactory {}));
+        registry.register(Box::new(CmestNodeFactory {}));
+        registry.register(Box::new(CmestMultiNodeFactory {}));
+        registry.register(Box::new(CmestBinaryYNodeFactory {}));
+        registry.register(Box::new(CmestBinaryMNodeFactory {}));
+        registry.register(Box::new(CmestWeightingNodeFactory {}));
+        registry.register(Box::new(CmestGformulaNodeFactory {}));
         registry.register(Box::new(CoxRegressionNodeFactory {}));
         registry.register(Box::new(SurvivalNodeFactory {}));
         registry.register(Box::new(EpiRcsNodeFactory {}));
@@ -310,6 +320,24 @@ mod tests {
             }
             "chi_square" => {
                 serde_json::json!({"row_column": "group", "col_column": "var"})
+            }
+            "cmest" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y"})
+            }
+            "cmest_multi" => {
+                serde_json::json!({"exposure_column": "x", "mediator_columns": ["m1", "m2"], "outcome_column": "y", "covariates": ["c1"]})
+            }
+            "cmest_binary_y" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y"})
+            }
+            "cmest_binary_m" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y"})
+            }
+            "cmest_weighting" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y", "covariates": ["c1"]})
+            }
+            "cmest_gformula" => {
+                serde_json::json!({"exposure_column": "x", "mediator_column": "m", "outcome_column": "y", "covariates": ["c1"]})
             }
             "cox_regression" => {
                 serde_json::json!({"predictors": ["x"], "time_column": "time", "event_column": "event"})

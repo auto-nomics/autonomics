@@ -15,16 +15,23 @@ struct MedData {
 }
 
 fn load_data() -> MedData {
-    let csv = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/xval/mediation_data.csv"))
-        .expect("mediation_data.csv not found");
+    let csv = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/xval/mediation_data.csv"
+    ))
+    .expect("mediation_data.csv not found");
     let mut x = Vec::new();
     let mut m = Vec::new();
     let mut y = Vec::new();
     let mut c1 = Vec::new();
     for (i, line) in csv.lines().enumerate() {
-        if i == 0 { continue; }
+        if i == 0 {
+            continue;
+        }
         let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() < 4 { continue; }
+        if cols.len() < 4 {
+            continue;
+        }
         x.push(cols[0].parse().unwrap());
         m.push(cols[1].parse().unwrap());
         y.push(cols[2].parse().unwrap());
@@ -34,8 +41,11 @@ fn load_data() -> MedData {
 }
 
 fn load_reference() -> Value {
-    let json = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/xval/mediation_reference.json"))
-        .expect("mediation_reference.json not found");
+    let json = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/xval/mediation_reference.json"
+    ))
+    .expect("mediation_reference.json not found");
     serde_json::from_str(&json).expect("invalid JSON")
 }
 
@@ -120,8 +130,16 @@ fn xval_mediation_vs_r_lm() {
         r_pm
     );
 
-    println!("✅ Mediation: α₁={:.4}, β₁={:.4}, β₂={:.4}", result.alpha_x, result.beta_x, result.beta_m);
-    println!("  NDE={:.4} (R {:.4}), NIE={:.4} (R {:.4}), TE={:.4} (R {:.4})",
-        result.nde, r_nde, result.nie, r_nie, result.te, r_te);
-    println!("  Prop mediated={:.4} (R {:.4})", result.prop_mediated, r_pm);
+    println!(
+        "✅ Mediation: α₁={:.4}, β₁={:.4}, β₂={:.4}",
+        result.alpha_x, result.beta_x, result.beta_m
+    );
+    println!(
+        "  NDE={:.4} (R {:.4}), NIE={:.4} (R {:.4}), TE={:.4} (R {:.4})",
+        result.nde, r_nde, result.nie, r_nie, result.te, r_te
+    );
+    println!(
+        "  Prop mediated={:.4} (R {:.4})",
+        result.prop_mediated, r_pm
+    );
 }

@@ -20,10 +20,13 @@
 //! | [`shap`]   | SHAP feature attribution (Saabas path-dependent for trees)     |
 //! | [`competing_risk`] | CIF (Aalen-Johansen) + Fine-Gray subdistribution hazard  |
 //! | [`multistate`] | Multi-state Markov model (Nelson-Aalen + Aalen-Johansen)  |
+//! | [`sem`]    | Structural Equation Modeling (CFA via ML fit function)         |
+//! | [`cmest`]  | CMAverse-compatible causal mediation (Valeri/VanderWeele rb)    |
 
 pub mod causal;
 pub mod chisq;
 pub mod clpm;
+pub mod cmest;
 pub mod competing_risk;
 pub mod ensemble;
 pub mod error;
@@ -34,6 +37,7 @@ pub mod mediation;
 pub mod multistate;
 pub mod rcs;
 pub mod roc;
+pub mod sem;
 pub mod shap;
 pub mod survival;
 pub mod wqs;

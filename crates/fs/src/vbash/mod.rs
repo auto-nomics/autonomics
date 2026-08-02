@@ -90,18 +90,14 @@ impl ToolFunction for VfsBashTool {
             "touch" => ops::op_touch(op, input.path.as_deref()).await,
 
             // ── filesystem ──
-            "ls" => {
-                ops::op_ls(op, input.path.as_deref(), input.recursive, input.limit).await
-            }
+            "ls" => ops::op_ls(op, input.path.as_deref(), input.recursive, input.limit).await,
             "stat" => ops::op_stat(op, input.path.as_deref()).await,
             "mkdir" => ops::op_mkdir(op, input.path.as_deref()).await,
             "rm" => ops::op_rm(op, input.path.as_deref()).await,
             "cp" => ops::op_cp(op, input.src.as_deref(), input.dst.as_deref()).await,
             "mv" => ops::op_mv(op, input.src.as_deref(), input.dst.as_deref()).await,
             "wc" => ops::op_wc(op, input.path.as_deref()).await,
-            "tree" => {
-                ops::op_tree(op, input.path.as_deref(), input.limit).await
-            }
+            "tree" => ops::op_tree(op, input.path.as_deref(), input.limit).await,
 
             // ── search ──
             "grep" => {
@@ -113,10 +109,7 @@ impl ToolFunction for VfsBashTool {
                 )
                 .await
             }
-            "glob" => {
-                search::op_glob(op, input.path.as_deref(), input.pattern.as_deref())
-                    .await
-            }
+            "glob" => search::op_glob(op, input.path.as_deref(), input.pattern.as_deref()).await,
 
             // ── unsupported ──
             other => Ok(AgentToolResult::error(format!(
@@ -370,11 +363,7 @@ mod tests {
         g.pattern = Some("*.rs".into());
         let result = tool.run(g).await.unwrap();
         let json = result_json(result);
-        let paths: Vec<&str> = json["matches"]
-            .as_str()
-            .unwrap_or("")
-            .lines()
-            .collect();
+        let paths: Vec<&str> = json["matches"].as_str().unwrap_or("").lines().collect();
         assert!(paths.iter().any(|p| p.contains("a.rs")));
         assert!(!paths.iter().any(|p| p.contains("b.txt")));
     }

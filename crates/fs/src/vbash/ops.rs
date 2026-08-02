@@ -52,7 +52,11 @@ pub async fn op_cat(
     let raw_path = path.ok_or("missing 'path' for cat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
-    let total_size = op.stat(&vpath).await.map(|m| m.content_length()).unwrap_or(0);
+    let total_size = op
+        .stat(&vpath)
+        .await
+        .map(|m| m.content_length())
+        .unwrap_or(0);
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": raw_path,
@@ -377,7 +381,10 @@ pub async fn op_rm(
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     // delete_with().recursive(true) is the recommended API (remove_all is deprecated).
-    op.delete_with(&vpath).recursive(true).await.map_err(|e| e.to_string())?;
+    op.delete_with(&vpath)
+        .recursive(true)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": raw_path,
@@ -513,7 +520,11 @@ async fn read_text_numbered(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op.stat(vpath).await.map(|m| m.content_length()).unwrap_or(0);
+    let total_size = op
+        .stat(vpath)
+        .await
+        .map(|m| m.content_length())
+        .unwrap_or(0);
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": display_path,
@@ -573,7 +584,11 @@ async fn read_image(
     display_path: &str,
     ext: &str,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op.stat(vpath).await.map(|m| m.content_length()).unwrap_or(0);
+    let total_size = op
+        .stat(vpath)
+        .await
+        .map(|m| m.content_length())
+        .unwrap_or(0);
     if total_size == 0 {
         return Ok(AgentToolResult::error(format!(
             "Image file is empty: {display_path}"
@@ -613,7 +628,11 @@ async fn read_notebook(
     vpath: &str,
     display_path: &str,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op.stat(vpath).await.map(|m| m.content_length()).unwrap_or(0);
+    let total_size = op
+        .stat(vpath)
+        .await
+        .map(|m| m.content_length())
+        .unwrap_or(0);
     if total_size == 0 {
         return Ok(AgentToolResult::error(format!(
             "Notebook file is empty: {display_path}"
@@ -641,7 +660,9 @@ async fn read_notebook(
     let cell_count = cells.map_or(0, |c| c.len());
 
     let mut out = String::new();
-    out.push_str(&format!("Jupyter notebook: {display_path}\n{cell_count} cells\n\n"));
+    out.push_str(&format!(
+        "Jupyter notebook: {display_path}\n{cell_count} cells\n\n"
+    ));
 
     if let Some(cells) = cells {
         for (idx, cell) in cells.iter().enumerate() {

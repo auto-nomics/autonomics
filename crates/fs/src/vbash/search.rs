@@ -108,7 +108,9 @@ pub async fn op_grep(
     let truncated = results.len() >= GREP_MAX_RESULT_LINES;
     let mut out = results.join("\n");
     if truncated {
-        out.push_str(&format!("\n\n(results limited to {GREP_MAX_RESULT_LINES} lines)"));
+        out.push_str(&format!(
+            "\n\n(results limited to {GREP_MAX_RESULT_LINES} lines)"
+        ));
     }
     if out.is_empty() {
         out = "(no matches)".to_string();
@@ -154,10 +156,7 @@ pub async fn op_glob(
 
         let p = entry.path().to_string();
         // Strip the search prefix so the pattern matches relative paths.
-        let rel = p
-            .strip_prefix(prefix)
-            .unwrap_or(&p)
-            .trim_start_matches('/');
+        let rel = p.strip_prefix(prefix).unwrap_or(&p).trim_start_matches('/');
 
         if pat.matches(rel) || pat.matches(&p) {
             matches.push(format!("/{p}"));
@@ -209,9 +208,7 @@ mod tests {
         write_file(&op, "a.txt", "hello world\nfoo bar\n").await;
         write_file(&op, "b.txt", "no match here\n").await;
 
-        let result = op_grep(&op, Some("/"), Some("hello"), None)
-            .await
-            .unwrap();
+        let result = op_grep(&op, Some("/"), Some("hello"), None).await.unwrap();
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("a.txt"));
@@ -260,9 +257,7 @@ mod tests {
         write_file(&op, "src/util.rs", "").await;
         write_file(&op, "README.md", "").await;
 
-        let result = op_glob(&op, Some("/"), Some("**/*.rs"))
-            .await
-            .unwrap();
+        let result = op_glob(&op, Some("/"), Some("**/*.rs")).await.unwrap();
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("main.rs"));
@@ -288,9 +283,7 @@ mod tests {
         write_file(&op, "big.txt", &big).await;
         write_file(&op, "small.txt", "target line\n").await;
 
-        let result = op_grep(&op, Some("/"), Some("target"), None)
-            .await
-            .unwrap();
+        let result = op_grep(&op, Some("/"), Some("target"), None).await.unwrap();
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("small.txt"));

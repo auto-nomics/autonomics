@@ -117,7 +117,11 @@ pub fn lca(indicators: &[Vec<u64>], opts: &LcaOptions) -> Result<LcaResult> {
                     seed = seed
                         .wrapping_mul(6364136223846793005)
                         .wrapping_add(1442695040888963407);
-                    let base = if k > 1 { 0.1 + 0.8 * c as f64 / (k - 1) as f64 } else { 0.5 };
+                    let base = if k > 1 {
+                        0.1 + 0.8 * c as f64 / (k - 1) as f64
+                    } else {
+                        0.5
+                    };
                     let jitter = 0.1 * ((seed >> 33) as f64 / u64::MAX as f64 - 0.5);
                     (base + jitter).max(0.05).min(0.95)
                 })
