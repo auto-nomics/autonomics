@@ -238,8 +238,8 @@ pub fn log_rank_test(time: &[f64], event: &[f64], group: &[u64]) -> Result<LogRa
 
                     // Variance/covariance only when n > 1 (needs n−1 denominator).
                     if n_total > 1 {
-                        let factor = d_total as f64 * (n_total - d_total) as f64
-                            / ((n_total - 1) as f64);
+                        let factor =
+                            d_total as f64 * (n_total - d_total) as f64 / ((n_total - 1) as f64);
                         for h in 0..k {
                             let delta = if g == h { 1.0 } else { 0.0 };
                             let cov_gh = factor

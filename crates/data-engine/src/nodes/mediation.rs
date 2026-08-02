@@ -85,8 +85,12 @@ pub struct MediationNodeSpec {
     pub seed: u64,
 }
 
-fn default_n_boot() -> usize { 1000 }
-fn default_seed() -> u64 { 42 }
+fn default_n_boot() -> usize {
+    1000
+}
+fn default_seed() -> u64 {
+    42
+}
 
 #[derive(Clone)]
 pub struct MediationNode {
@@ -107,8 +111,12 @@ fn port_layout() -> NodePorts {
 }
 
 impl NodeFactory for MediationNodeFactory {
-    fn kind(&self) -> &'static str { "mediation" }
-    fn desc(&self) -> &'static str { "Causal mediation analysis (NDE/NIE/TE decomposition)." }
+    fn kind(&self) -> &'static str {
+        "mediation"
+    }
+    fn desc(&self) -> &'static str {
+        "Causal mediation analysis (NDE/NIE/TE decomposition)."
+    }
     fn doc(&self) -> &'static str {
         "Performs causal mediation analysis via the two-model counterfactual \
         approach (VanderWeele 2015). Fits mediator (M ~ X + C) and outcome \
@@ -116,9 +124,17 @@ impl NodeFactory for MediationNodeFactory {
         effect into natural direct (NDE) and natural indirect (NIE) effects. \
         Bootstrap percentile CIs."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(MediationNodeSpec) }
-    fn ports(&self) -> NodePorts { port_layout() }
-    fn build(&self, spec: serde_json::Value, _node_ctx: NodeCtx) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(MediationNodeSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        port_layout()
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let s: MediationNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(MediationNode {
             meta: port_layout(),
@@ -135,18 +151,42 @@ impl NodeFactory for MediationNodeFactory {
 
 #[async_trait]
 impl DagNode for MediationNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new((*self).clone()) }
-    fn kind(&self) -> &'static str { "mediation" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, node_ctx: &NodeCtx, inputs: &[NodeInput], _reporter: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or(MediationError::Column("no input connected".to_string()))?;
-        let batches = input.data.clone().collect().await.map_err(|e| MediationError::Collect(e.to_string()))?;
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new((*self).clone())
+    }
+    fn kind(&self) -> &'static str {
+        "mediation"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs
+            .first()
+            .ok_or(MediationError::Column("no input connected".to_string()))?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| MediationError::Collect(e.to_string()))?;
 
         let x_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.exposure_column)?;
         let m_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.mediator_column)?;
         let y_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.outcome_column)?;
-        let cov_raw: Vec<Vec<f64>> = self.covariates.iter().map(|c| super::numeric_util::extract_numeric_lenient(&batches, c)).collect::<Result<_, _>>()?;
+        let cov_raw: Vec<Vec<f64>> = self
+            .covariates
+            .iter()
+            .map(|c| super::numeric_util::extract_numeric_lenient(&batches, c))
+            .collect::<Result<_, _>>()?;
 
         // Complete-case filter.
         let n = y_raw.len();
@@ -155,18 +195,30 @@ impl DagNode for MediationNode {
         let mut y = Vec::with_capacity(n);
         let mut cov_filtered: Vec<Vec<f64>> = vec![Vec::with_capacity(n); self.covariates.len()];
         for i in 0..n {
-            if x_raw[i].is_nan() || m_raw[i].is_nan() || y_raw[i].is_nan() || cov_raw.iter().any(|c| c[i].is_nan()) {
+            if x_raw[i].is_nan()
+                || m_raw[i].is_nan()
+                || y_raw[i].is_nan()
+                || cov_raw.iter().any(|c| c[i].is_nan())
+            {
                 continue;
             }
             x.push(x_raw[i]);
             m.push(m_raw[i]);
             y.push(y_raw[i]);
-            for (j, c) in cov_raw.iter().enumerate() { cov_filtered[j].push(c[i]); }
+            for (j, c) in cov_raw.iter().enumerate() {
+                cov_filtered[j].push(c[i]);
+            }
         }
-        if x.is_empty() { return Err(MediationError::Column("no complete-case rows".to_string()).into()); }
+        if x.is_empty() {
+            return Err(MediationError::Column("no complete-case rows".to_string()).into());
+        }
 
         let cov_slices: Vec<&[f64]> = cov_filtered.iter().map(|v| v.as_slice()).collect();
-        let opts = epi::mediation::MediationOptions { n_bootstrap: self.n_bootstrap, seed: self.seed, ..Default::default() };
+        let opts = epi::mediation::MediationOptions {
+            n_bootstrap: self.n_bootstrap,
+            seed: self.seed,
+            ..Default::default()
+        };
         let result = epi::mediation::mediation(&x, &m, &y, &cov_slices, self.interaction, &opts)
             .map_err(|e| MediationError::Fit(e.to_string()))?;
 
@@ -203,10 +255,13 @@ impl DagNode for MediationNode {
                 Arc::new(Float64Array::from(vec![result.beta_m])),
                 Arc::new(Int32Array::from(vec![result.n_obs as i32])),
             ],
-        ).expect("mediation schema");
+        )
+        .expect("mediation schema");
 
         let ctx = node_ctx.session();
-        let df = ctx.read_batch(batch).map_err(|e| MediationError::ReadBatch(e.to_string()))?;
+        let df = ctx
+            .read_batch(batch)
+            .map_err(|e| MediationError::ReadBatch(e.to_string()))?;
         let mut res = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

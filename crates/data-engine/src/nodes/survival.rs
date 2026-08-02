@@ -135,9 +135,9 @@ impl DagNode for SurvivalNode {
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or(SurvivalError::Column(
-            "no input connected".to_string(),
-        ))?;
+        let input = inputs
+            .first()
+            .ok_or(SurvivalError::Column("no input connected".to_string()))?;
         let batches = input
             .data
             .clone()
@@ -203,8 +203,12 @@ impl DagNode for SurvivalNode {
                 Arc::new(Float64Array::from(km.times)),
                 Arc::new(Float64Array::from(km.survival)),
                 Arc::new(Float64Array::from(km.std_error)),
-                Arc::new(Int32Array::from(km.n_at_risk.iter().map(|&v| v as i32).collect::<Vec<_>>())),
-                Arc::new(Int32Array::from(km.n_events.iter().map(|&v| v as i32).collect::<Vec<_>>())),
+                Arc::new(Int32Array::from(
+                    km.n_at_risk.iter().map(|&v| v as i32).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int32Array::from(
+                    km.n_events.iter().map(|&v| v as i32).collect::<Vec<_>>(),
+                )),
             ],
         )
         .expect("km schema");
@@ -237,7 +241,9 @@ impl DagNode for SurvivalNode {
                     Arc::new(Float64Array::from(vec![lr.p_value])),
                     Arc::new(Int32Array::from(vec![lr.n_groups as i32])),
                     Arc::new(Int32Array::from(vec![time.len() as i32])),
-                    Arc::new(Int32Array::from(vec![lr.observed.iter().sum::<f64>() as i32])),
+                    Arc::new(Int32Array::from(vec![
+                        lr.observed.iter().sum::<f64>() as i32
+                    ])),
                 ],
             )
             .expect("log-rank schema");

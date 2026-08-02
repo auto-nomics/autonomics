@@ -15,6 +15,7 @@ use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
+    causal::CausalNodeFactory,
     chi_square::ChiSquareNodeFactory,
     cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
@@ -36,10 +37,10 @@ use crate::nodes::{
     liability::LiabilityNodeFactory,
     linear_regression::LinearRegressionNodeFactory,
     logistic_regression::LogisticRegressionNodeFactory,
-    mediation::MediationNodeFactory,
     magma::{
         MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
     },
+    mediation::MediationNodeFactory,
     mr::MrNodeFactory,
     mrlap::MrlapNodeFactory,
     mtag::MtagNodeFactory,
@@ -204,6 +205,7 @@ impl NodeRegistry {
         registry.register(Box::new(HdlLScanNodeFactory {}));
         registry.register(Box::new(UnivariateMixerNodeFactory {}));
         registry.register(Box::new(BivariateMixerNodeFactory {}));
+        registry.register(Box::new(CausalNodeFactory {}));
         registry.register(Box::new(MtagNodeFactory {}));
         registry.register(Box::new(CpassocNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
@@ -314,6 +316,9 @@ mod tests {
             }
             "survival" => {
                 serde_json::json!({"time_column": "time", "event_column": "event"})
+            }
+            "causal" => {
+                serde_json::json!({"method": "iptw", "treatment_column": "t", "outcome_column": "y", "covariates": ["x"]})
             }
             "epi_rcs" => {
                 serde_json::json!({"x_column": "x", "outcome_column": "y"})

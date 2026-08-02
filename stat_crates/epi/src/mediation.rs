@@ -135,10 +135,7 @@ pub fn mediation(
     }
     for c in covariates.iter() {
         if c.len() != n {
-            return Err(EpiError::DimensionMismatch {
-                a: n,
-                b: c.len(),
-            });
+            return Err(EpiError::DimensionMismatch { a: n, b: c.len() });
         }
     }
 
@@ -254,7 +251,11 @@ fn fit_and_decompose(
     // Index layout: 0=intercept, 1=X, 2=M, [3=X:M if interaction], then covariates.
     let beta_1 = y_fit.coefficients[1]; // β₁ (X direct effect)
     let beta_2 = y_fit.coefficients[2]; // β₂ (M effect)
-    let beta_3 = if interaction { y_fit.coefficients[3] } else { 0.0 };
+    let beta_3 = if interaction {
+        y_fit.coefficients[3]
+    } else {
+        0.0
+    };
 
     // ── Decomposition (VanderWeele 2015) ───────────────────────────────
     // For binary X (control=0, treated=1):
@@ -288,10 +289,7 @@ fn percentile_ci(boot: &[f64]) -> (f64, f64) {
     let n = sorted.len();
     let lo_idx = (0.025 * n as f64).floor() as usize;
     let hi_idx = (0.975 * n as f64).ceil() as usize;
-    (
-        sorted[lo_idx.min(n - 1)],
-        sorted[hi_idx.min(n - 1)],
-    )
+    (sorted[lo_idx.min(n - 1)], sorted[hi_idx.min(n - 1)])
 }
 
 fn epi_from_stat(e: statkit::StatError) -> EpiError {
@@ -315,16 +313,39 @@ mod tests {
         // Expected: NDE = 0, NIE = 0.5, TE = 0.5.
         let n = 200;
         let x: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
-        let m: Vec<f64> = x.iter().enumerate().map(|(i, &xi)| 1.0 + 0.5 * xi + 0.1 * (i as f64 % 7.0 - 3.0)).collect();
+        let m: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 1.0 + 0.5 * xi + 0.1 * (i as f64 % 7.0 - 3.0))
+            .collect();
         let y: Vec<f64> = m.iter().map(|&mi| 2.0 + 1.0 * mi).collect();
 
-        let opts = MediationOptions { n_bootstrap: 100, ..Default::default() };
+        let opts = MediationOptions {
+            n_bootstrap: 100,
+            ..Default::default()
+        };
         let result = mediation(&x, &m, &y, &[], false, &opts).unwrap();
 
-        assert!(approx_eq(result.nde, 0.0, 0.1), "NDE should be ~0, got {}", result.nde);
-        assert!(approx_eq(result.nie, 0.5, 0.1), "NIE should be ~0.5, got {}", result.nie);
-        assert!(approx_eq(result.te, 0.5, 0.1), "TE should be ~0.5, got {}", result.te);
-        assert!(approx_eq(result.prop_mediated, 1.0, 0.2), "Prop mediated should be ~1.0, got {}", result.prop_mediated);
+        assert!(
+            approx_eq(result.nde, 0.0, 0.1),
+            "NDE should be ~0, got {}",
+            result.nde
+        );
+        assert!(
+            approx_eq(result.nie, 0.5, 0.1),
+            "NIE should be ~0.5, got {}",
+            result.nie
+        );
+        assert!(
+            approx_eq(result.te, 0.5, 0.1),
+            "TE should be ~0.5, got {}",
+            result.te
+        );
+        assert!(
+            approx_eq(result.prop_mediated, 1.0, 0.2),
+            "Prop mediated should be ~1.0, got {}",
+            result.prop_mediated
+        );
     }
 
     #[test]
@@ -334,15 +355,36 @@ mod tests {
         // Expected: NDE = 0.3, NIE = 0.4, TE = 0.7.
         let n = 200;
         let x: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
-        let m: Vec<f64> = x.iter().enumerate().map(|(i, &xi)| 0.5 * xi + 0.05 * (i as f64 % 5.0)).collect();
-        let y: Vec<f64> = (0..n).map(|i| 0.3 * x[i] + 0.8 * m[i] + 0.01 * (i as f64 % 3.0)).collect();
+        let m: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 0.5 * xi + 0.05 * (i as f64 % 5.0))
+            .collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| 0.3 * x[i] + 0.8 * m[i] + 0.01 * (i as f64 % 3.0))
+            .collect();
 
-        let opts = MediationOptions { n_bootstrap: 100, ..Default::default() };
+        let opts = MediationOptions {
+            n_bootstrap: 100,
+            ..Default::default()
+        };
         let result = mediation(&x, &m, &y, &[], false, &opts).unwrap();
 
-        assert!(approx_eq(result.nde, 0.3, 0.05), "NDE ~0.3, got {}", result.nde);
-        assert!(approx_eq(result.nie, 0.4, 0.05), "NIE ~0.4, got {}", result.nie);
-        assert!(approx_eq(result.te, 0.7, 0.05), "TE ~0.7, got {}", result.te);
+        assert!(
+            approx_eq(result.nde, 0.3, 0.05),
+            "NDE ~0.3, got {}",
+            result.nde
+        );
+        assert!(
+            approx_eq(result.nie, 0.4, 0.05),
+            "NIE ~0.4, got {}",
+            result.nie
+        );
+        assert!(
+            approx_eq(result.te, 0.7, 0.05),
+            "TE ~0.7, got {}",
+            result.te
+        );
     }
 
     #[test]
@@ -353,23 +395,45 @@ mod tests {
         let n = 200;
         let x: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
         let m: Vec<f64> = (0..n).map(|i| 0.1 * (i as f64 % 10.0)).collect();
-        let y: Vec<f64> = x.iter().zip(&m).map(|(&xi, &mi)| 1.0 * xi + 0.5 * mi).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .zip(&m)
+            .map(|(&xi, &mi)| 1.0 * xi + 0.5 * mi)
+            .collect();
 
-        let opts = MediationOptions { n_bootstrap: 100, ..Default::default() };
+        let opts = MediationOptions {
+            n_bootstrap: 100,
+            ..Default::default()
+        };
         let result = mediation(&x, &m, &y, &[], false, &opts).unwrap();
 
-        assert!(result.nie.abs() < 0.1, "NIE should be ~0, got {}", result.nie);
-        assert!(approx_eq(result.nde, 1.0, 0.1), "NDE ~1.0, got {}", result.nde);
+        assert!(
+            result.nie.abs() < 0.1,
+            "NIE should be ~0, got {}",
+            result.nie
+        );
+        assert!(
+            approx_eq(result.nde, 1.0, 0.1),
+            "NDE ~1.0, got {}",
+            result.nde
+        );
     }
 
     #[test]
     fn bootstrap_cis_bracket_point_estimates() {
         let n = 200;
         let x: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
-        let m: Vec<f64> = x.iter().enumerate().map(|(i, &xi)| 0.5 * xi + 0.05 * (i as f64 % 5.0)).collect();
+        let m: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 0.5 * xi + 0.05 * (i as f64 % 5.0))
+            .collect();
         let y: Vec<f64> = (0..n).map(|i| 0.3 * x[i] + 0.8 * m[i]).collect();
 
-        let opts = MediationOptions { n_bootstrap: 200, ..Default::default() };
+        let opts = MediationOptions {
+            n_bootstrap: 200,
+            ..Default::default()
+        };
         let result = mediation(&x, &m, &y, &[], false, &opts).unwrap();
 
         // Point estimates should be within bootstrap CIs (most of the time).

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
@@ -8,16 +9,39 @@ use futures::StreamExt;
 
 use crate::storage::OpendalFileStorage;
 
+/// Default page size when no explicit `limit` is supplied. Matches
+/// `file_read`'s `DEFAULT_MAX_LINES` so the two tools feel symmetric and
+/// no single tool call can flood the context window with an unbounded
+/// recursive listing.
+const DEFAULT_LIST_LIMIT: usize = 200;
+/// Hard ceiling on a single page. Even if the LLM asks for more, we cap
+/// the response here to keep the tool result well under typical context
+/// budgets (200 entries × ~80 chars ≈ 16 KB JSON, comfortably safe).
+const MAX_LIST_LIMIT: usize = 1000;
+
 #[derive(Debug)]
 #[tool(
     name = "file_list",
-    description = "List entries under a path. Returns names, types (file/dir), and sizes."
+    description = "List entries (files and directories) under a path. \
+        Returns names, types (file/dir), and sizes. Results are sorted by \
+        name for stable pagination. Use `offset` and `limit` to page through \
+        large directories; the response includes `total`, `returned`, and \
+        `has_more` so you can iterate without re-listing. Default page size \
+        is 200; the maximum is 1000 per call. Set `recursive=false` to list \
+        only direct children."
 )]
 pub struct FileListInput {
     #[desc = "Directory path to list. Defaults to \"/\"."]
     pub path: Option<String>,
     #[desc = "List recursively. Defaults to true."]
     pub recursive: Option<bool>,
+    #[desc = "Number of entries to skip from the start of the sorted result \
+        set (0-indexed). Use together with `limit` to page. Defaults to 0."]
+    pub offset: Option<usize>,
+    #[desc = "Maximum number of entries to return in this call. Defaults to \
+        200; capped at 1000. Subsequent pages can be fetched by raising \
+        `offset` by the value of `returned` from the previous call."]
+    pub limit: Option<usize>,
 }
 
 pub struct FileListTool {
@@ -33,7 +57,17 @@ impl ToolFunction for FileListTool {
         let path = OpendalFileStorage::normalize_path(input.path.as_deref().unwrap_or("/"));
         let recursive = input.recursive.unwrap_or(true);
 
-        let items = if recursive {
+        // Resolve and clamp pagination parameters up front so the rest of the
+        // function can treat `offset`/`limit` as resolved `usize` values.
+        // `limit = 0` is allowed (gives a cheap "count only" call returning
+        // `total` + empty `entries`), but is bumped to 1 to keep the response
+        // shape uniform — callers can pass `offset` past `total` if they only
+        // want the count.
+        let offset = input.offset.unwrap_or(0);
+        let limit_raw = input.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+        let limit = limit_raw.clamp(1, MAX_LIST_LIMIT);
+
+        let mut items = if recursive {
             let mut lister = op
                 .lister_with(&path)
                 .recursive(true)
@@ -99,9 +133,45 @@ impl ToolFunction for FileListTool {
             items
         };
 
+        // Sort the entire collected set by entry name so that `offset` is
+        // deterministic across calls. opendal's lister order is not
+        // guaranteed (it's whatever the underlying backend returns), and a
+        // stable order is required for pagination to be useful: otherwise
+        // page N+1 may re-show entries from page N.
+        items.sort_by(|a, b| {
+            let an = a["name"].as_str().unwrap_or("");
+            let bn = b["name"].as_str().unwrap_or("");
+            // Directories first (so `..` / subfolders don't get lost at the
+            // tail of a page), then alphabetical within each group.
+            match (a["is_dir"].as_bool(), b["is_dir"].as_bool()) {
+                (Some(true), Some(false)) => Ordering::Less,
+                (Some(false), Some(true)) => Ordering::Greater,
+                _ => an.cmp(bn),
+            }
+        });
+
+        let total = items.len();
+
+        // Clamp `offset` past the end to a no-op rather than an error so
+        // callers can safely iterate `while has_more { offset += returned }`.
+        let page: Vec<serde_json::Value> = if offset >= total {
+            Vec::new()
+        } else {
+            let end = (offset + limit).min(total);
+            items[offset..end].to_vec()
+        };
+        let returned = page.len();
+        let has_more = offset + returned < total;
+
         Ok(AgentToolResult::success_json(serde_json::json!({
             "path": path,
-            "entries": items,
+            "entries": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "returned": returned,
+            "has_more": has_more,
+            "next_offset": if has_more { Some(offset + returned) } else { Option::<usize>::None },
         })))
     }
 }
@@ -188,6 +258,8 @@ mod tests {
             .run(FileListInput {
                 path: None,
                 recursive: None, // defaults to true
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -207,6 +279,8 @@ mod tests {
             .run(FileListInput {
                 path: None,
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -229,6 +303,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("/root".into()),
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -258,6 +334,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("/top".into()),
                 recursive: Some(false),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -285,6 +363,8 @@ mod tests {
             .run(FileListInput {
                 path: None,
                 recursive: None,
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -314,6 +394,8 @@ mod tests {
             .run(FileListInput {
                 path: None,
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -340,6 +422,8 @@ mod tests {
             .run(FileListInput {
                 path: None,
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -374,6 +458,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("foo.txt".into()),
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -384,6 +470,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("./foo.txt".into()),
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -394,6 +482,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("/".into()),
                 recursive: Some(true),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -415,6 +505,8 @@ mod tests {
             .run(FileListInput {
                 path: Some("/does_not_exist".into()),
                 recursive: Some(false),
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -424,5 +516,204 @@ mod tests {
             entries.is_empty(),
             "expected empty entries for non-existent path, got: {entries:?}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Pagination — offset / limit / window
+    // ---------------------------------------------------------------
+
+    /// Create a tool whose recursive listing contains exactly `count` files,
+    /// named `file000.txt` … `file{count-1}.txt`. Used to validate slicing
+    /// arithmetic without coupling to opendal's traversal quirks.
+    async fn setup_tool_with_n_files(count: usize) -> FileListTool {
+        let mut layout = Vec::with_capacity(count);
+        for i in 0..count {
+            layout.push((format!("file{i:03}.txt"), format!("{i}")));
+        }
+        let refs: Vec<(&str, &str)> = layout
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+        setup_tool(refs).await
+    }
+
+    #[tokio::test]
+    async fn list_default_limit_is_200() {
+        // 250 files > DEFAULT_LIST_LIMIT(200). A bare call (no limit) must
+        // return at most 200 entries, with `total` reflecting all entries
+        // (opendal Fs also emits the "/" root self-entry, so total = 251).
+        let tool = setup_tool_with_n_files(250).await;
+
+        let result = tool
+            .run(FileListInput {
+                path: None,
+                recursive: Some(true),
+                offset: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let json = result_json(result);
+
+        assert_eq!(json["total"], 251);
+        assert_eq!(json["limit"], 200);
+        assert_eq!(json["returned"], 200);
+        assert_eq!(json["offset"], 0);
+        assert_eq!(json["has_more"], true);
+        assert_eq!(json["next_offset"], 200);
+        assert_eq!(json["entries"].as_array().unwrap().len(), 200);
+    }
+
+    #[tokio::test]
+    async fn list_offset_and_limit_returns_slice() {
+        // 250 files, ask for the second page (limit=100). After sorting
+        // (directories first, then files alphabetically), the layout is:
+        //   index 0       → "/"
+        //   index 1..251  → file000.txt .. file249.txt
+        // So `offset=201, limit=100` returns exactly file200..file249
+        // (50 entries), with the trailing "/" still on disk but out of
+        // window.
+        let tool = setup_tool_with_n_files(250).await;
+
+        let result = tool
+            .run(FileListInput {
+                path: None,
+                recursive: Some(true),
+                offset: Some(201),
+                limit: Some(100),
+            })
+            .await
+            .unwrap();
+        let json = result_json(result);
+
+        assert_eq!(json["total"], 251);
+        assert_eq!(json["offset"], 201);
+        assert_eq!(json["limit"], 100);
+        assert_eq!(json["returned"], 50); // last 50 file entries
+        assert_eq!(json["has_more"], false);
+        assert!(json["next_offset"].is_null());
+        assert_eq!(json["entries"].as_array().unwrap().len(), 50);
+
+        // The first and last names in the slice must be file200.txt and
+        // file249.txt respectively.
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["name"], "file200.txt");
+        assert_eq!(entries[entries.len() - 1]["name"], "file249.txt");
+    }
+
+    #[tokio::test]
+    async fn list_offset_past_total_returns_empty_with_metadata() {
+        // Walking past the end must NOT error — return empty entries but
+        // accurate `total` so callers can detect over-shoot.
+        let tool = setup_tool_with_n_files(10).await;
+
+        let result = tool
+            .run(FileListInput {
+                path: None,
+                recursive: Some(true),
+                offset: Some(500),
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+        let json = result_json(result);
+
+        assert_eq!(json["total"], 11); // 10 files + "/" self-entry
+        assert_eq!(json["offset"], 500);
+        assert_eq!(json["returned"], 0);
+        assert_eq!(json["has_more"], false);
+        assert!(json["next_offset"].is_null());
+        assert!(json["entries"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_limit_capped_at_max() {
+        // LLM asks for 9999 — tool must clamp to MAX_LIST_LIMIT (1000) rather
+        // than honouring the request (which would dump the whole storage).
+        let tool = setup_tool_with_n_files(50).await;
+
+        let result = tool
+            .run(FileListInput {
+                path: None,
+                recursive: Some(true),
+                offset: None,
+                limit: Some(9999),
+            })
+            .await
+            .unwrap();
+        let json = result_json(result);
+
+        // Only 51 entries exist in total, so the clamp is moot here — but
+        // the echoed `limit` must reflect the cap, not the requested 9999.
+        assert_eq!(json["total"], 51);
+        assert_eq!(json["limit"], 1000);
+        assert_eq!(json["returned"], 51);
+        assert_eq!(json["has_more"], false);
+    }
+
+    #[tokio::test]
+    async fn list_limit_zero_clamped_to_one() {
+        // limit=0 is meaningless for paging; clamp to 1 so the response
+        // shape is uniform (entries is always an array of ≥0 items).
+        let tool = setup_tool_with_n_files(5).await;
+
+        let result = tool
+            .run(FileListInput {
+                path: None,
+                recursive: Some(true),
+                offset: None,
+                limit: Some(0),
+            })
+            .await
+            .unwrap();
+        let json = result_json(result);
+
+        assert_eq!(json["limit"], 1);
+        assert_eq!(json["returned"], 1);
+        assert_eq!(json["has_more"], true);
+    }
+
+    #[tokio::test]
+    async fn list_iterate_to_end_via_offset() {
+        // Smoke-test the recommended iteration pattern: while has_more,
+        // raise offset by returned. After the loop every entry — files
+        // and the "/" self-entry — must have been visited exactly once,
+        // in deterministic alphabetical order.
+        let tool = setup_tool_with_n_files(7).await;
+        let mut offset: usize = 0;
+        let limit: usize = 3;
+        let mut seen_names: Vec<String> = Vec::new();
+
+        loop {
+            let result = tool
+                .run(FileListInput {
+                    path: None,
+                    recursive: Some(true),
+                    offset: Some(offset),
+                    limit: Some(limit),
+                })
+                .await
+                .unwrap();
+            let json = result_json(result);
+
+            for entry in json["entries"].as_array().unwrap() {
+                seen_names.push(entry["name"].as_str().unwrap().to_string());
+            }
+
+            if !json["has_more"].as_bool().unwrap() {
+                break;
+            }
+            offset = json["next_offset"].as_u64().unwrap() as usize;
+        }
+
+        // 7 files + the "/" self-entry, all sorted by name (directories
+        // come first, then files alphabetically).
+        let file_only: Vec<String> =
+            seen_names.iter().filter(|n| n.as_str() != "/").cloned().collect();
+        let expected_files: Vec<String> =
+            (0..7).map(|i| format!("file{i:03}.txt")).collect();
+        assert_eq!(file_only, expected_files);
+        // "/" was visited exactly once across the whole iteration.
+        assert_eq!(seen_names.iter().filter(|n| n.as_str() == "/").count(), 1);
     }
 }

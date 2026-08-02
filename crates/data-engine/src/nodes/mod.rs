@@ -6,6 +6,7 @@
 //! [`sink_iceberg`].
 
 pub mod bivariate_mixer;
+pub mod causal;
 pub mod chi_square;
 pub mod cox_regression;
 pub mod cpassoc;
@@ -25,8 +26,8 @@ pub mod ldsc_sldsc;
 pub mod liability;
 pub mod linear_regression;
 pub mod logistic_regression;
-pub mod mediation;
 pub mod magma;
+pub mod mediation;
 pub mod meta;
 pub mod mr;
 pub mod mrlap;
