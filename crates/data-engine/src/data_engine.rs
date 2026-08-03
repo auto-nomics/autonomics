@@ -25,8 +25,6 @@ pub struct DataEngine {
     ctx: SessionContext,
     /// Threaded through from the builder; retained for future engine-level
     /// object-store / catalog reconfiguration but not yet read here.
-    runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     datalake: Option<Arc<Datalake>>,
 
     /// The immutable engine ingredients, handed to the DAG scheduler on every
@@ -72,8 +70,6 @@ impl DataEngine {
         );
         Self {
             ctx,
-            runtime_env,
-            iceberg_catalog,
             datalake,
             engine_ctx,
             dag: DAG::default(),
@@ -225,7 +221,7 @@ impl DataEngine {
     /// is attached.
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
         match &self.history {
-            Some(h) => Ok(h.list_refs().await.map_err(|e| Error::Dag(e))?),
+            Some(h) => Ok(h.list_refs().await?),
             None => Ok(vec![]),
         }
     }

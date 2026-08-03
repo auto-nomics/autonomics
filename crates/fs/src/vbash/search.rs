@@ -90,6 +90,12 @@ pub async fn op_grep(
             Err(_) => continue,
         };
         let data = buf.to_vec();
+        // Skip binary files — searching them as text yields garbled matches
+        // (mirrors ripgrep's default behaviour).
+        if super::ops::is_binary(&data) {
+            files_skipped += 1;
+            continue;
+        }
         let content = String::from_utf8_lossy(&data);
 
         for (i, line) in content.lines().enumerate() {
@@ -287,6 +293,26 @@ mod tests {
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("small.txt"));
+        assert_eq!(json["files_skipped"], 1);
+    }
+
+    #[tokio::test]
+    async fn grep_skips_binary_file() {
+        let op = make_op();
+        // Binary file containing the pattern as a literal substring but
+        // with NUL bytes present — should be skipped, not matched.
+        op.write("blob.bin", b"\x00target\x00".to_vec())
+            .await
+            .unwrap();
+        write_file(&op, "real.txt", "target line\n").await;
+
+        let result = op_grep(&op, Some("/"), Some("target"), None)
+            .await
+            .unwrap();
+        let json = json_val(result);
+        let matches = json["matches"].as_str().unwrap();
+        assert!(matches.contains("real.txt"));
+        assert!(!matches.contains("blob.bin"));
         assert_eq!(json["files_skipped"], 1);
     }
 }

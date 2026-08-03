@@ -49,9 +49,11 @@ pub struct VfsBashInput {
     pub pattern: Option<String>,
     #[desc = "Glob filter to narrow grep file candidates, e.g. '*.rs'."]
     pub glob: Option<String>,
-    #[desc = "Starting line number, 1-indexed (for cat/read/head/tail)."]
+    #[desc = "Starting line number, 1-indexed (for cat/read/head/tail), \
+        or number of entries to skip (for ls pagination)."]
     pub offset: Option<usize>,
-    #[desc = "Max lines to return (for cat/read/head/ls)."]
+    #[desc = "Max lines/entries to return (for cat/read/head/tail/ls). \
+        ls defaults to 200; use with offset to page through large listings."]
     pub limit: Option<usize>,
 }
 
@@ -90,7 +92,16 @@ impl ToolFunction for VfsBashTool {
             "touch" => ops::op_touch(op, input.path.as_deref()).await,
 
             // ── filesystem ──
-            "ls" => ops::op_ls(op, input.path.as_deref(), input.recursive, input.limit).await,
+            "ls" => {
+                ops::op_ls(
+                    op,
+                    input.path.as_deref(),
+                    input.recursive,
+                    input.limit,
+                    input.offset,
+                )
+                .await
+            }
             "stat" => ops::op_stat(op, input.path.as_deref()).await,
             "mkdir" => ops::op_mkdir(op, input.path.as_deref()).await,
             "rm" => ops::op_rm(op, input.path.as_deref()).await,
@@ -387,5 +398,173 @@ mod tests {
         let result = tool.run(s).await.unwrap();
         // Will error because /etc/passwd doesn't exist in the temp dir
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn ls_truncates_and_reports_truncated() {
+        let tool = make_tool();
+        // Create 50 files — more than the explicit limit of 10.
+        for i in 0..50 {
+            let mut w = input("write");
+            w.path = Some(format!("/f{i:02}.txt"));
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(10);
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["returned"].as_u64().unwrap(), 10);
+        assert_eq!(json["truncated"], true);
+        assert_eq!(json["next_offset"].as_u64().unwrap(), 11);
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn ls_full_page_reports_not_truncated() {
+        let tool = make_tool();
+        // Create exactly 10 files and ask for 10 — should NOT be truncated.
+        for i in 0..10 {
+            let mut w = input("write");
+            w.path = Some(format!("/g{i:02}.txt"));
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(10);
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["returned"].as_u64().unwrap(), 10);
+        assert_eq!(json["truncated"], false);
+        assert!(json.get("next_offset").is_none());
+    }
+
+    #[tokio::test]
+    async fn ls_offset_pagination() {
+        let tool = make_tool();
+        for i in 0..30 {
+            let mut w = input("write");
+            w.path = Some(format!("/p{i:02}.txt"));
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        // Page 1: offset 0, limit 10
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(10);
+        ls.offset = Some(0);
+        let page1 = result_json(tool.run(ls).await.unwrap());
+        assert_eq!(page1["returned"].as_u64().unwrap(), 10);
+        assert_eq!(page1["truncated"], true);
+
+        // Page 2: offset 10, limit 10
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(10);
+        ls.offset = Some(10);
+        let page2 = result_json(tool.run(ls).await.unwrap());
+        assert_eq!(page2["returned"].as_u64().unwrap(), 10);
+
+        // Pages should not overlap: first entry name of page2 differs from
+        // last entry name of page1.
+        let p1_last = page1["entries"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["name"]
+            .as_str()
+            .unwrap();
+        let p2_first = page2["entries"]
+            .as_array()
+            .unwrap()
+            .first()
+            .unwrap()["name"]
+            .as_str()
+            .unwrap();
+        assert_ne!(p1_last, p2_first);
+
+        // Last page: offset 20, limit 10 — only 10 remain, not truncated.
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(10);
+        ls.offset = Some(20);
+        let page3 = result_json(tool.run(ls).await.unwrap());
+        assert_eq!(page3["returned"].as_u64().unwrap(), 10);
+        assert_eq!(page3["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn read_refuses_binary_nul_bytes() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/blob.bin".into());
+        // NUL bytes are a strong binary signal
+        w.content = Some("AB\x00CD\x00EF".into());
+        tool.run(w).await.unwrap();
+
+        for op_name in ["read", "cat", "head", "tail"] {
+            let mut r = input(op_name);
+            r.path = Some("/blob.bin".into());
+            let result = tool.run(r).await.unwrap();
+            assert_eq!(
+                result.is_error,
+                Some(true),
+                "{op_name} should refuse binary"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_refuses_binary_control_heavy() {
+        let tool = make_tool();
+        // Build bytes that are mostly non-text control chars (no NUL),
+        // exceeding the 30 % threshold but below 100 % to make the
+        // ratio-based path decisive.
+        let mut bytes = Vec::new();
+        for _ in 0..100 {
+            bytes.push(0x01); // SOH — control byte
+        }
+        for _ in 0..50 {
+            bytes.push(b'A'); // printable
+        }
+
+        let mut w = input("write");
+        w.path = Some("/ctrl.bin".into());
+        w.content = Some(String::from_utf8_lossy(&bytes).into_owned());
+        tool.run(w).await.unwrap();
+
+        let mut r = input("read");
+        r.path = Some("/ctrl.bin".into());
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn read_allows_cjk_and_emoji() {
+        let tool = make_tool();
+        // High bytes from valid UTF-8 (CJK + emoji) must not trip the
+        // binary detector.
+        let text = "你好，世界！😀🎉\nline two\n";
+        let mut w = input("write");
+        w.path = Some("/cjk.txt".into());
+        w.content = Some(text.into());
+        tool.run(w).await.unwrap();
+
+        let mut r = input("cat");
+        r.path = Some("/cjk.txt".into());
+        let result = tool.run(r).await.unwrap();
+        let json = result_json(result);
+        assert!(json["content"].as_str().unwrap().contains("你好"));
     }
 }

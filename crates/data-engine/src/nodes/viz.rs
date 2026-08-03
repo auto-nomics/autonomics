@@ -210,7 +210,7 @@ impl DagNode for VizNode {
         // Render the PNG to bytes in a private tempdir (R writes to scratch,
         // never to the caller's filesystem), then upload the bytes into the
         // engine's opendal-virtualized filesystem at the requested path.
-        let png_bytes = visualization::render::render_png_bytes(
+        let (png_bytes, diag) = visualization::render::render_png_bytes(
             &batches,
             &self.r_code,
             self.width,
@@ -219,6 +219,18 @@ impl DagNode for VizNode {
         )
         .await
         .map_err(|source| VizError::Render { source })?;
+
+        // Surface non-fatal R warnings/messages for debugging. These don't
+        // fail the render but are useful diagnostics for the caller.
+        if !diag.warnings.is_empty() || !diag.messages.is_empty() {
+            tracing::debug!(
+                node = "visualization",
+                output = %self.output_path,
+                warnings = diag.warnings.len(),
+                messages = diag.messages.len(),
+                "R render completed with non-fatal diagnostics"
+            );
+        }
 
         let virtual_path = OpendalFileStorage::normalize_path(&self.output_path);
         storage

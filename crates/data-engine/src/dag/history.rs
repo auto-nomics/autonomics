@@ -133,6 +133,7 @@ impl DagHistory {
             .ok_or_else(|| DagError::History("history db path is not valid UTF-8".into()))?;
 
         let db = turso::Builder::new_local(path_str)
+            .experimental_multiprocess_wal(true)
             .build()
             .await
             .map_err(|e| DagError::History(format!("failed to open history database: {e}")))?;
@@ -141,13 +142,9 @@ impl DagHistory {
             DagError::History(format!("failed to connect to history database: {e}"))
         })?;
 
-        // Enable WAL + busy_timeout so multiple processes (e.g. two TUI
-        // instances) can open the same history file without locking each
-        // other out. WAL is persisted in the file; busy_timeout is
-        // per-connection and must be re-applied on every open.
-        conn.pragma_update("journal_mode", "WAL")
-            .await
-            .map_err(|e| DagError::History(format!("set WAL journal_mode: {e}")))?;
+        // `multiprocess_wal` above enables WAL (concurrent readers + writer
+        // across processes); busy_timeout is per-connection, so re-apply on
+        // every open to make contended writes wait instead of erroring.
         conn.pragma_update("busy_timeout", 5000)
             .await
             .map_err(|e| DagError::History(format!("set busy_timeout: {e}")))?;

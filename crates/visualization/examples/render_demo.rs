@@ -40,7 +40,7 @@ async fn main() {
              theme_minimal()
     "#;
 
-    render_png(
+    let diag = render_png(
         std::slice::from_ref(&batch),
         r_code,
         &out,
@@ -53,4 +53,16 @@ async fn main() {
 
     let bytes = std::fs::metadata(&out).expect("output exists").len();
     println!("rendered {bytes} bytes to {}", out.display());
+    if !diag.warnings.is_empty() {
+        println!("R warnings ({}):", diag.warnings.len());
+        for w in &diag.warnings {
+            println!("  • {w}");
+        }
+    }
+    if !diag.messages.is_empty() {
+        println!("R messages ({}):", diag.messages.len());
+        for m in &diag.messages {
+            println!("  • {m}");
+        }
+    }
 }

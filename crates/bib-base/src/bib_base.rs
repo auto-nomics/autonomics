@@ -118,19 +118,20 @@ pub struct BibBase {
 impl BibBase {
     /// Open (or create) a local SQLite database file and run migrations.
     ///
-    /// Enables WAL journal mode and a 5 s busy_timeout so that multiple
+    /// Uses turso's `multiprocess_wal` engine feature so that multiple
     /// processes (e.g. two TUI instances) can open the same file without
-    /// one blocking the other with a `database is locked` error.
+    /// one blocking the other with a `database is locked` error. WAL mode
+    /// is implied by that feature; `busy_timeout` is set per-connection so
+    /// contended writes wait briefly instead of erroring immediately.
     pub async fn open(path: impl AsRef<str>) -> Result<Self> {
         let path = path.as_ref();
-        let db = Builder::new_local(path).build().await?;
-        let conn = db.connect()?;
-        // WAL allows concurrent readers alongside a single writer, and is
-        // persisted in the file header so re-applying is a cheap no-op.
-        // busy_timeout makes a contended connection wait rather than fail
-        // immediately; it is per-connection, so set it every time.
+        let mut builder = Builder::new_local(path);
         if path != ":memory:" {
-            conn.pragma_update("journal_mode", "WAL").await?;
+            builder = builder.experimental_multiprocess_wal(true);
+        }
+        let db = builder.build().await?;
+        let conn = db.connect()?;
+        if path != ":memory:" {
             conn.pragma_update("busy_timeout", 5000).await?;
         }
         let base = Self { conn };

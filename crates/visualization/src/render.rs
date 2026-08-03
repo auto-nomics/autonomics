@@ -6,6 +6,15 @@
 //! subprocess reads them back with `arrow::read_ipc_stream` into a
 //! `data.frame`, runs the caller-supplied ggplot2 code, and saves the PNG.
 //!
+//! ## Diagnostics capture
+//!
+//! The R wrapper wraps the caller's code in `tryCatch` +
+//! `withCallingHandlers` and writes structured diagnostics
+//! (`error`/`warnings`/`messages`/`call_stack`) to `diagnostics.json`. The
+//! script **always exits 0**; the Rust side reads the JSON file to decide
+//! success/failure. This gives callers structured access to non-fatal
+//! warnings/messages even when the render succeeds — see [`Diagnostics`].
+//!
 //! Why a subprocess instead of in-process [`extendr_api`][crate]?  Linking
 //! `libR` would force the *entire* data-engine to depend on R being present at
 //! build- and runtime. Visualization is an optional capability, so the core
@@ -19,7 +28,7 @@ use std::time::Duration;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 
-use crate::error::{Result, VizError};
+use crate::error::{Diagnostics, Result, VizError};
 
 /// Default figure dimensions (inches) and resolution.
 const DEFAULT_WIDTH: f64 = 8.0;
@@ -28,10 +37,14 @@ const DEFAULT_DPI: f64 = 150.0;
 /// Hard cap on a single render before the subprocess is killed.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
-/// Render `batches` to a PNG and return the **bytes**, using the supplied
-/// ggplot2 code. The PNG is produced in a private tempdir and never touches a
-/// caller-chosen path — use this when you want to forward the bytes elsewhere
-/// (e.g. upload into a virtualized object store) rather than write to disk.
+/// Render `batches` to a PNG and return the **bytes** plus R-side
+/// [`Diagnostics`], using the supplied ggplot2 code. The PNG is produced in a
+/// private tempdir and never touches a caller-chosen path — use this when you
+/// want to forward the bytes elsewhere (e.g. upload into a virtualized object
+/// store) rather than write to disk.
+///
+/// The returned `Diagnostics` carry any non-fatal R warnings/messages even on
+/// success, so callers can surface them (e.g. in a node report) for debugging.
 ///
 /// See [`render_png`] for the `r_code` contract (`df` bound, must assign `p`).
 pub async fn render_png_bytes(
@@ -40,7 +53,7 @@ pub async fn render_png_bytes(
     width: Option<f64>,
     height: Option<f64>,
     dpi: Option<f64>,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Diagnostics)> {
     let (ipc, width, height, dpi) = prepare(batches, r_code, width, height, dpi)?;
     run_rscript(&ipc, r_code, width, height, dpi).await
 }
@@ -60,9 +73,8 @@ pub async fn render_png_bytes(
 /// The wrapper then calls `ggsave(output_path, plot = p, ...)` with the given
 /// `width`/`height`/`dpi`.
 ///
-/// `output_path`'s parent directory must exist and be writable. This is a
-/// thin wrapper over [`render_png_bytes`] that writes the returned bytes to
-/// `output_path`.
+/// `output_path`'s parent directory must exist and be writable. Returns the
+/// captured [`Diagnostics`] (warnings/messages from R, even on success).
 pub async fn render_png(
     batches: &[RecordBatch],
     r_code: &str,
@@ -70,10 +82,10 @@ pub async fn render_png(
     width: Option<f64>,
     height: Option<f64>,
     dpi: Option<f64>,
-) -> Result<()> {
-    let bytes = render_png_bytes(batches, r_code, width, height, dpi).await?;
+) -> Result<Diagnostics> {
+    let (bytes, diag) = render_png_bytes(batches, r_code, width, height, dpi).await?;
     std::fs::write(output_path, bytes)?;
-    Ok(())
+    Ok(diag)
 }
 
 /// Shared front-end: validate input, derive the schema, serialize the IPC
@@ -132,41 +144,106 @@ fn resolve_rscript() -> Result<PathBuf> {
 }
 
 /// Write the IPC bytes + a generated R script to a fresh tempdir, invoke
-/// `Rscript`, and return the rendered PNG bytes. The output PNG lives inside
-/// the tempdir (a private scratch path), so the caller's filesystem layout is
-/// never touched — only the returned bytes leave this function.
+/// `Rscript`, and return the rendered PNG bytes plus structured diagnostics.
+/// The output PNG and `diagnostics.json` live inside the tempdir (a private
+/// scratch path), so the caller's filesystem layout is never touched — only
+/// the returned bytes leave this function.
 async fn run_rscript(
     ipc: &[u8],
     r_code: &str,
     width: f64,
     height: f64,
     dpi: f64,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Diagnostics)> {
     let rscript = resolve_rscript()?;
 
     let tmp = tempfile::tempdir()?;
     let data_path = tmp.path().join("data.arrow_stream");
     let out_path = tmp.path().join("out.png");
+    let diag_path = tmp.path().join("diagnostics.json");
     let script_path = tmp.path().join("plot.R");
 
     std::fs::write(&data_path, ipc)?;
 
-    // The R wrapper: load libs, read the IPC stream into `df`, run the
-    // caller's code (which must assign `p`), then save. Paths are injected as
-    // quoted literals to avoid shell/quote injection.
+    // The R wrapper: wrap *everything* (including `library()` calls) in
+    // `tryCatch` + `withCallingHandlers`. Fatal errors land in `.diag$error`,
+    // warnings/messages are accumulated and muffled so they don't abort. The
+    // script always exits 0 — the Rust side reads `diagnostics.json` to
+    // decide success/failure.
+    //
+    // Paths are injected as `r_escape`-d literals to avoid shell/quote
+    // injection. `{{` / `}}` are literal R braces inside the format string.
     let data_lit = r_escape(&data_path.to_string_lossy());
     let out_lit = r_escape(&out_path.to_string_lossy());
-    // `{{` / `}}` are literal braces inside the format string.
+    let diag_lit = r_escape(&diag_path.to_string_lossy());
     let script = format!(
-        r#"library(arrow)
-library(ggplot2)
-df <- as.data.frame(arrow::read_ipc_stream("{data_lit}"))
-{r_code}
-if (!exists("p")) {{
-  stop("plot code must assign the ggplot object to a variable named `p`")
+        r#".diag <- list(
+  error = NULL,
+  warnings = character(0),
+  messages = character(0),
+  call_stack = character(0)
+)
+
+# --- minimal JSON encoder (no jsonlite dependency) ---
+.json_str <- function(s) {{
+  if (is.null(s)) return("null")
+  s <- as.character(s)
+  s <- gsub("\\", "\\\\", s, fixed = TRUE)
+  s <- gsub('"',  '\\"',  s, fixed = TRUE)
+  s <- gsub("\n", "\\n",  s, fixed = TRUE)
+  s <- gsub("\r", "\\r",  s, fixed = TRUE)
+  s <- gsub("\t", "\\t",  s, fixed = TRUE)
+  paste0('"', s, '"')
 }}
-ggsave("{out_lit}", plot = p, device = png,
-       width = {width}, height = {height}, dpi = {dpi}, units = "in")
+.json_arr <- function(v) {{
+  if (is.null(v) || length(v) == 0L) return("[]")
+  paste0("[", paste(vapply(v, .json_str, character(1)), collapse = ","), "]")
+}}
+
+tryCatch(
+  withCallingHandlers({{
+    library(arrow)
+    library(ggplot2)
+    df <- as.data.frame(arrow::read_ipc_stream("{data_lit}"))
+{r_code}
+    if (!exists("p")) {{
+      stop("plot code must assign the ggplot object to a variable named `p`")
+    }}
+    ggsave("{out_lit}", plot = p, device = png,
+           width = {width}, height = {height}, dpi = {dpi}, units = "in")
+  }},
+  warning = function(w) {{
+    .diag$warnings <<- c(.diag$warnings, conditionMessage(w))
+    invokeRestart("muffleWarning")
+  }},
+  message = function(m) {{
+    .diag$messages <<- c(.diag$messages, conditionMessage(m))
+    invokeRestart("muffleMessage")
+  }}),
+  error = function(e) {{
+    .diag$error <<- conditionMessage(e)
+    calls <- sys.calls()
+    if (length(calls) > 0L) {{
+      n <- length(calls)
+      keep <- if (n >= 20L) seq.int(from = n - 19L, to = n) else seq_len(n)
+      .diag$call_stack <<- vapply(
+        calls[keep],
+        function(c) paste(deparse(c), collapse = " "),
+        character(1)
+      )
+    }}
+  }}
+)
+
+# Serialize diagnostics. The script always exits 0 — the Rust side reads this
+# file, not the subprocess exit code.
+.diag_json <- paste0("{{",
+  '"error":',     if (is.null(.diag$error)) "null" else .json_str(.diag$error), ",",
+  '"warnings":',  .json_arr(.diag$warnings),  ",",
+  '"messages":',  .json_arr(.diag$messages),  ",",
+  '"call_stack":', .json_arr(.diag$call_stack),
+"}}")
+cat(.diag_json, file = "{diag_lit}")
 "#
     );
     std::fs::write(&script_path, script)?;
@@ -196,11 +273,26 @@ ggsave("{out_lit}", plot = p, device = png,
         }
     };
 
-    if !output.status.success() {
+    // Read diagnostics.json — the structured source of truth. If the file is
+    // missing or unparseable (shouldn't happen unless R itself is broken), we
+    // fall back to an empty Diagnostics and rely on the exit-code/stderr path.
+    let diag_bytes = std::fs::read(&diag_path).unwrap_or_default();
+    let diagnostics: Diagnostics = if diag_bytes.is_empty() {
+        Diagnostics::default()
+    } else {
+        serde_json::from_slice(&diag_bytes).unwrap_or_default()
+    };
+
+    // Two failure modes:
+    // 1. Non-zero exit — unexpected by design (the script always exits 0).
+    //    Fires on syntax errors in the generated script or R segfaults.
+    // 2. Structured error in diagnostics.json — the normal R failure path.
+    if !output.status.success() || diagnostics.error.is_some() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(VizError::RscriptFailed {
             code: output.status.code().unwrap_or(-1),
             stderr,
+            diagnostics,
         });
     }
 
@@ -212,9 +304,10 @@ ggsave("{out_lit}", plot = p, device = png,
         ));
     }
 
-    // The tempdir (IPC + script + PNG) is removed when `tmp` drops.
+    // The tempdir (IPC + script + PNG + diagnostics) is removed when `tmp`
+    // drops.
     drop(tmp);
-    Ok(bytes)
+    Ok((bytes, diagnostics))
 }
 
 /// Escape a path for safe interpolation into a double-quoted R string literal:
@@ -254,7 +347,7 @@ mod tests {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let code = "p <- ggplot(df, aes(x = x, y = y)) + geom_point() + geom_line()";
 
-        render_png(
+        let diag = render_png(
             &sample_batches(),
             code,
             &out,
@@ -264,6 +357,8 @@ mod tests {
         )
         .await
         .expect("render should succeed");
+
+        assert!(diag.is_ok(), "no fatal error expected: {diag:?}");
 
         let bytes = std::fs::read(&out).expect("read output png");
         assert!(bytes.len() > 100, "PNG too small");
@@ -287,7 +382,8 @@ mod tests {
         let _ = std::fs::remove_file(&out);
     }
 
-    /// Plot code that does not assign `p` surfaces an RscriptFailed error.
+    /// Plot code that does not assign `p` surfaces an RscriptFailed error with
+    /// a structured `diagnostics.error`.
     #[tokio::test]
     async fn test_missing_p_assignment_fails() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
@@ -301,7 +397,103 @@ mod tests {
         )
         .await
         .expect_err("missing p should fail");
-        assert!(matches!(err, VizError::RscriptFailed { .. }));
+        match err {
+            VizError::RscriptFailed { diagnostics, .. } => {
+                let msg = diagnostics
+                    .error
+                    .as_ref()
+                    .expect("diagnostics.error should be set");
+                assert!(
+                    msg.contains("assign")
+                        || msg.contains("p")
+                        || msg.contains("plot code"),
+                    "error message should mention `p` assignment: {msg}"
+                );
+            }
+            other => panic!("expected RscriptFailed, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&out);
+    }
+
+    /// R `warning()` calls are captured as structured diagnostics even though
+    /// the render succeeds. The PNG is still produced.
+    #[tokio::test]
+    async fn test_warning_captured_as_diagnostics() {
+        let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
+        let code = r#"
+            warning("this is a test warning from R")
+            p <- ggplot(df, aes(x = x, y = y)) + geom_point()
+        "#;
+
+        let diag = render_png(&sample_batches(), code, &out, None, None, None)
+            .await
+            .expect("render should succeed despite the warning");
+
+        assert!(diag.is_ok(), "no fatal error: {diag:?}");
+        assert!(
+            diag.warnings
+                .iter()
+                .any(|w| w.contains("test warning")),
+            "warning should be captured in diagnostics: {:?}",
+            diag.warnings
+        );
+
+        let bytes = std::fs::read(&out).expect("png produced despite warning");
+        assert_eq!(&bytes[0..4], &[0x89, b'P', b'N', b'G']);
+        let _ = std::fs::remove_file(&out);
+    }
+
+    /// R `message()` calls are captured as structured diagnostics.
+    #[tokio::test]
+    async fn test_message_captured_as_diagnostics() {
+        let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
+        let code = r#"
+            message("hello from R message()")
+            p <- ggplot(df, aes(x = x, y = y)) + geom_point()
+        "#;
+
+        let diag = render_png(&sample_batches(), code, &out, None, None, None)
+            .await
+            .expect("render should succeed");
+
+        assert!(
+            diag.messages
+                .iter()
+                .any(|m| m.contains("hello from R")),
+            "message should be captured in diagnostics: {:?}",
+            diag.messages
+        );
+        let _ = std::fs::remove_file(&out);
+    }
+
+    /// A fatal R error inside the caller's code produces a structured error in
+    /// diagnostics, plus a populated call_stack.
+    #[tokio::test]
+    async fn test_fatal_error_captured() {
+        let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
+        let code = r#"
+            stop("deliberate fatal error for testing")
+            p <- ggplot(df, aes(x = x, y = y)) + geom_point()
+        "#;
+
+        let err = render_png(&sample_batches(), code, &out, None, None, None)
+            .await
+            .expect_err("fatal error should fail the render");
+
+        match err {
+            VizError::RscriptFailed { diagnostics, .. } => {
+                let msg = diagnostics.error.expect("error should be set");
+                assert!(
+                    msg.contains("deliberate fatal error"),
+                    "error message should match: {msg}"
+                );
+                assert!(
+                    !diagnostics.call_stack.is_empty(),
+                    "call_stack should be populated on fatal error"
+                );
+            }
+            other => panic!("expected RscriptFailed, got {other:?}"),
+        }
         let _ = std::fs::remove_file(&out);
     }
 }

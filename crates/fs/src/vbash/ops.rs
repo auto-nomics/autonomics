@@ -14,6 +14,11 @@ use crate::storage::OpendalFileStorage;
 const DEFAULT_MAX_LINES: usize = 2000;
 /// Image extensions recognised by the `read` op.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+/// Number of leading bytes sampled for binary detection.
+const BINARY_SAMPLE_SIZE: usize = 8192;
+/// A file is treated as binary when more than this fraction of the sampled
+/// bytes are non-text control characters.
+const BINARY_CONTROL_RATIO: f32 = 0.30;
 
 // ══════════════════ reading ops ══════════════════
 
@@ -67,6 +72,9 @@ pub async fn op_cat(
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
+    if is_binary(&bytes) {
+        return Ok(binary_refused(raw_path, bytes.len() as u64));
+    }
     let content = String::from_utf8_lossy(&bytes);
 
     let lines: Vec<&str> = content.lines().collect();
@@ -101,6 +109,9 @@ pub async fn op_head(
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
+    if is_binary(&bytes) {
+        return Ok(binary_refused(raw_path, bytes.len() as u64));
+    }
     let content = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = content.lines().collect();
     let take = n.min(lines.len());
@@ -127,6 +138,9 @@ pub async fn op_tail(
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
+    if is_binary(&bytes) {
+        return Ok(binary_refused(raw_path, bytes.len() as u64));
+    }
     let content = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
@@ -269,16 +283,31 @@ pub async fn op_touch(
 
 // ══════════════════ filesystem ops ══════════════════
 
+/// Default maximum entries returned by `ls` when no explicit `limit` is given.
+///
+/// Kept modest so a single listing does not flood the agent's context
+/// window. Callers may raise it via `limit`, or page with `offset`.
+const DEFAULT_LS_LIMIT: usize = 200;
+
 /// `ls` — list directory entries.
+///
+/// Results are paginated: `offset` entries are skipped, then up to `limit`
+/// entries (default [`DEFAULT_LS_LIMIT`]) are collected. The response
+/// includes a `truncated` flag and a `next_offset` hint so the caller can
+/// continue listing when more entries remain.
 pub async fn op_ls(
     op: &opendal::Operator,
     path: Option<&str>,
     recursive: Option<bool>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let recursive = recursive.unwrap_or(true);
-    let max = limit.unwrap_or(1000);
+    // Treat 0 as "no explicit limit" — the field is optional in the schema
+    // and some callers default-empty rather than omitting it.
+    let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
+    let skip = offset.unwrap_or(0);
 
     let mut lister = if recursive {
         op.lister_with(&vpath).recursive(true).await
@@ -293,9 +322,43 @@ pub async fn op_ls(
     }
     .map_err(|e| e.to_string())?;
 
-    let mut items = Vec::new();
+    // OpenDAL's Fs backend yields the scan root itself as the first entry
+    // (e.g. listing "/" includes "/" as a directory entry). We strip the
+    // trailing slash for comparison so it matches both "/" and "/sub/".
+    let scan_root = vpath.trim_end_matches('/').to_string();
+
+    let mut items: Vec<serde_json::Value> = Vec::with_capacity(max.min(1024));
+    // Track the index of the current entry across the whole stream so we
+    // can implement offset pagination.
+    let mut idx = 0usize;
+    let mut truncated = false;
+
     while let Some(entry) = lister.next().await {
         let entry = entry.map_err(|e| e.to_string())?;
+
+        // Skip the scan-root self-entry (see comment above).
+        let entry_path_raw = entry.path().to_string();
+        if entry.metadata().is_dir()
+            && entry_path_raw.trim_end_matches('/') == scan_root
+        {
+            continue;
+        }
+
+        idx += 1;
+
+        // Skip entries before the requested offset.
+        if idx <= skip {
+            continue;
+        }
+
+        // Stop once we have filled the page. We still report `truncated`
+        // because this entry existed and was refused — there is at least
+        // one more entry beyond the current page.
+        if items.len() >= max {
+            truncated = true;
+            break;
+        }
+
         let entry_path = entry.path().to_string();
         let meta = entry.metadata();
         let is_dir = meta.is_dir();
@@ -313,15 +376,27 @@ pub async fn op_ls(
             "is_dir": is_dir,
             "size": size,
         }));
-        if items.len() >= max {
-            break;
-        }
     }
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
+    // `truncated` is only set inside the loop when an entry was refused
+    // after the page was already full. If the stream ended naturally with
+    // exactly `max` entries, `truncated` stays false — that is the
+    // non-truncated boundary case.
+
+    let returned = items.len();
+    let next_offset = if truncated { Some(skip + returned + 1) } else { None };
+
+    let mut payload = serde_json::json!({
         "path": vpath,
         "entries": items,
-    })))
+        "returned": returned,
+        "truncated": truncated,
+    });
+    if let Some(no) = next_offset {
+        payload["next_offset"] = serde_json::json!(no);
+    }
+
+    Ok(AgentToolResult::success_json(payload))
 }
 
 /// `stat` — file metadata.
@@ -539,6 +614,9 @@ async fn read_text_numbered(
         .await
         .map_err(|e| e.to_string())?;
     let data = buf.to_vec();
+    if is_binary(&data) {
+        return Ok(binary_refused(display_path, total_size));
+    }
     let content = String::from_utf8_lossy(&data);
 
     let lines: Vec<&str> = content.lines().collect();
@@ -726,4 +804,43 @@ fn extract_source(source: &serde_json::Value) -> String {
             .join("");
     }
     String::new()
+}
+
+// ══════════════════ binary detection ══════════════════
+
+/// Heuristic check for whether a byte slice is binary (non-text) data.
+///
+/// Mirrors the approach used by git and ripgrep: sample the leading bytes
+/// and declare binary if either
+/// 1. a NUL byte (`\0`) is present — a strong binary signal, or
+/// 2. more than [`BINARY_CONTROL_RATIO`] of the sampled bytes are
+///    non-text control characters (anything below `0x20` other than the
+///    common whitespace bytes `\t`, `\n`, `\r`, plus `0x7f` DEL).
+///
+/// High bytes (`>= 0x80`) are intentionally ignored so that valid UTF-8
+/// multibyte content (CJK, emoji, etc.) is not misclassified.
+pub(crate) fn is_binary(bytes: &[u8]) -> bool {
+    let sample = &bytes[..bytes.len().min(BINARY_SAMPLE_SIZE)];
+    if sample.is_empty() {
+        return false;
+    }
+    if sample.contains(&0u8) {
+        return true;
+    }
+    let non_text = sample
+        .iter()
+        .filter(|&&b| (b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r') || b == 0x7f)
+        .count();
+    let ratio = non_text as f32 / sample.len() as f32;
+    ratio > BINARY_CONTROL_RATIO
+}
+
+/// Build a structured "refused: binary" tool result so the agent gets a
+/// clear explanation instead of garbled `from_utf8_lossy` output.
+fn binary_refused(display_path: &str, size: u64) -> AgentToolResult {
+    AgentToolResult::error(format!(
+        "Refused to read '{display_path}': the file appears to be binary \
+         ({size} bytes, non-text content detected). Reading it as text would \
+         produce garbled output; use a dedicated tool to inspect binary data."
+    ))
 }
