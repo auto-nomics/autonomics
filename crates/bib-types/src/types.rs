@@ -231,6 +231,8 @@ pub enum IdKind {
     Pmid,
     /// PubMed Central identifier.
     Pmc,
+    /// Embase identifier (accession number / LUI).
+    Embase,
     /// arXiv preprint identifier.
     Arxiv,
     /// Semantic Scholar paper ID.
@@ -248,6 +250,7 @@ impl IdKind {
             Self::Doi => "doi",
             Self::Pmid => "pmid",
             Self::Pmc => "pmc",
+            Self::Embase => "embase",
             Self::Arxiv => "arxiv",
             Self::S2 => "s2",
             Self::OpenAlex => "openalex",
@@ -294,6 +297,8 @@ impl Identifier {
 pub enum ArticleSource {
     /// Imported from NCBI PubMed via E-utilities.
     Pubmed,
+    /// Imported from Embase via the Elsevier Embase API.
+    Embase,
     /// Fetched directly from a DOI resolver (CrossRef, DataCite).
     CrossRef,
     /// Imported from arXiv.

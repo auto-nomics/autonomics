@@ -649,6 +649,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "arxiv"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "bib-types",
+ "quick-xml 0.39.4",
+ "reqwest 0.13.4",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "as-any"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -846,13 +866,23 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bib-base"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arxiv",
+ "async-trait",
  "bib-types",
  "chrono",
+ "eutils",
+ "futures",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tracing",
  "turso",
+ "uuid",
 ]
 
 [[package]]
@@ -2880,6 +2910,25 @@ name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+
+[[package]]
+name = "embase"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "bib-types",
+ "reqwest 0.13.4",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "encoding_rs"
