@@ -597,12 +597,19 @@ fn pval_from_beta_se(beta: f64, se: f64) -> f64 {
 }
 
 /// Extract the set of clumped index-SNP rsIDs from the OpenGWAS `/ld/clump`
-/// JSON response (an array of objects, each with a `"rsid"` string field).
+/// JSON response. The endpoint may return either a flat array of rsID strings
+/// (`["rs1", "rs2"]`) or an array of objects with a `"rsid"` field
+/// (`[{"rsid": "rs1", "chr": "1", …}]`); both shapes are handled.
 fn parse_clumped_rsids(resp: &serde_json::Value) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     if let Some(arr) = resp.as_array() {
-        for row in arr {
-            if let Some(rsid) = row.get("rsid").and_then(|v| v.as_str()) {
+        for elem in arr {
+            // Flat string: "rs12345"
+            if let Some(s) = elem.as_str() {
+                out.insert(s.to_string());
+            }
+            // Object: {"rsid": "rs12345", ...}
+            else if let Some(rsid) = elem.get("rsid").and_then(|v| v.as_str()) {
                 out.insert(rsid.to_string());
             }
         }
@@ -1053,6 +1060,7 @@ mod tests {
 
     #[test]
     fn parse_clumped_rsids_extracts_rsid_field() {
+        // Object format: [{"rsid": "rs1", ...}, ...]
         let resp = serde_json::json!([
             { "rsid": "rs1", "chr": "1", "position": 100 },
             { "rsid": "rs2", "chr": "2", "position": 200 },
@@ -1064,9 +1072,169 @@ mod tests {
     }
 
     #[test]
+    fn parse_clumped_rsids_flat_string_array() {
+        // Flat string format: ["rs1", "rs2"] (the actual OpenGWAS response shape)
+        let resp = serde_json::json!(["rs1558902", "rs10938397"]);
+        let ids = parse_clumped_rsids(&resp);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("rs1558902"));
+        assert!(ids.contains("rs10938397"));
+    }
+
+    #[test]
     fn parse_clumped_rsids_empty_response() {
         let resp = serde_json::json!([]);
         let ids = parse_clumped_rsids(&resp);
         assert!(ids.is_empty());
+    }
+
+    // ---- End-to-end tests (require OPENGWAS_TOKEN + network) ----
+
+    /// Well-known BMI-associated SNPs (mostly in LD on different chromosomes)
+    /// with approximate exposure p-values. Includes several pairs in known LD
+    /// to verify that clumping removes the dependent ones.
+    fn real_bmi_instruments() -> Vec<mr::harmonise::HarmoniseInput> {
+        // (rsid, beta, se) — p-values derived from beta/se inside
+        // clump_instruments. All p-values are well below the default p1=5e-8.
+        let data: &[(&str, f64, f64)] = &[
+            // FTO locus (chr 16) — multiple SNPs in LD, should clump to 1
+            ("rs1558902", 0.090, 0.009), // z=10.0, p ≈ 1e-23
+            ("rs1421085", 0.080, 0.009), // z=8.9,  p ≈ 5e-19, LD with rs1558902
+            ("rs17817449", 0.080, 0.009), // z=8.9, p ≈ 5e-19, LD with rs1558902
+            // GNPDA2 (chr 4) — independent locus
+            ("rs10938397", 0.060, 0.008), // z=7.5, p ≈ 6e-14
+            // MC4R (chr 18) — independent locus
+            ("rs17782313", 0.055, 0.008), // z=6.9, p ≈ 5e-12
+            // TMEM18 (chr 2) — independent locus
+            ("rs6548238", 0.054, 0.008), // z=6.75, p ≈ 1e-11
+        ];
+
+        data.iter()
+            .map(|(rsid, beta, se)| mr::harmonise::HarmoniseInput {
+                snp: rsid.to_string(),
+                id_exposure: "ieu-a-2".to_string(),
+                id_outcome: "ieu-a-7".to_string(),
+                beta_exposure: *beta,
+                beta_outcome: 0.5 * beta,
+                se_exposure: *se,
+                se_outcome: *se,
+                effect_allele_exposure: Some("A".to_string()),
+                other_allele_exposure: Some("G".to_string()),
+                effect_allele_outcome: Some("A".to_string()),
+                other_allele_outcome: Some("G".to_string()),
+                eaf_exposure: Some(0.4),
+                eaf_outcome: Some(0.4),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENGWAS_TOKEN and network access"]
+    async fn e2e_clump_reduces_fto_ld_block() {
+        let inputs = real_bmi_instruments();
+        let n_before = inputs.len();
+        assert_eq!(n_before, 6, "expected 6 input SNPs");
+
+        let cfg = ClumpConfig::default();
+        let clumped = clump_instruments(inputs, &cfg).await.expect("clumping should succeed");
+
+        let n_after = clumped.len();
+        println!("E2E clumping: {n_before} → {n_after} SNPs");
+        for r in &clumped {
+            println!("  kept: {}", r.snp);
+        }
+
+        // The three FTO-locus SNPs (rs1558902, rs1421085, rs17817449) are in
+        // high LD → clumping should retain at most 1 of them.
+        let fto_kept: Vec<_> = clumped
+            .iter()
+            .filter(|r| matches!(r.snp.as_str(), "rs1558902" | "rs1421085" | "rs17817449"))
+            .collect();
+        assert!(
+            fto_kept.len() <= 1,
+            "expected ≤1 FTO-locus SNP after clumping, got {}: {:?}",
+            fto_kept.len(),
+            fto_kept.iter().map(|r| &r.snp).collect::<Vec<_>>()
+        );
+
+        // Total should be strictly fewer than input (at least FTO LD removed).
+        assert!(
+            n_after < n_before,
+            "expected clumping to remove some SNPs ({n_before} → {n_after})"
+        );
+
+        // Should retain at least the independent loci.
+        assert!(
+            n_after >= 3,
+            "expected ≥3 independent loci after clumping, got {n_after}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENGWAS_TOKEN and network access"]
+    async fn e2e_clump_with_relaxed_r2_keeps_more() {
+        let inputs = real_bmi_instruments();
+
+        // Very relaxed r² → almost nothing gets pruned.
+        let cfg = ClumpConfig {
+            r2: 0.99,
+            kb: 10_000,
+            p1: 5e-8,
+            pop: "EUR".to_string(),
+        };
+        let clumped = clump_instruments(inputs, &cfg).await.expect("clumping should succeed");
+        let relaxed_count = clumped.len();
+
+        // Strict default r² → more aggressive pruning.
+        let inputs2 = real_bmi_instruments();
+        let strict = clump_instruments(inputs2, &ClumpConfig::default())
+            .await
+            .expect("clumping should succeed");
+        let strict_count = strict.len();
+
+        println!("E2E r² sweep: relaxed(0.99)={relaxed_count}, strict(0.001)={strict_count}");
+        assert!(
+            relaxed_count >= strict_count,
+            "relaxed r² should retain ≥ SNPs than strict ({relaxed_count} < {strict_count})"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OPENGWAS_TOKEN and network access"]
+    async fn e2e_clump_pop_filter_matters() {
+        // Same SNPs, different populations — the set of retained index SNPs
+        // may differ because LD patterns vary by ancestry.
+        let inputs_eur = real_bmi_instruments();
+        let eur = clump_instruments(
+            inputs_eur,
+            &ClumpConfig {
+                pop: "EUR".to_string(),
+                ..ClumpConfig::default()
+            },
+        )
+        .await
+        .expect("EUR clumping");
+
+        let inputs_afr = real_bmi_instruments();
+        let afr = clump_instruments(
+            inputs_afr,
+            &ClumpConfig {
+                pop: "AFR".to_string(),
+                ..ClumpConfig::default()
+            },
+        )
+        .await
+        .expect("AFR clumping");
+
+        let eur_snps: std::collections::HashSet<_> = eur.iter().map(|r| r.snp.clone()).collect();
+        let afr_snps: std::collections::HashSet<_> = afr.iter().map(|r| r.snp.clone()).collect();
+
+        println!(
+            "E2E pop: EUR kept {:?}, AFR kept {:?}",
+            eur_snps, afr_snps
+        );
+        // Both should succeed and return non-empty results.
+        assert!(!eur_snps.is_empty(), "EUR clumping returned no SNPs");
+        assert!(!afr_snps.is_empty(), "AFR clumping returned no SNPs");
     }
 }

@@ -29,8 +29,7 @@ PANEL="${VCF_ROOT}/integrated_call_samples_v3.20130502.ALL.panel"
 # Default: all 5 super-populations + chr1-22; overridable via env vars / positional args
 ALL_POPS="EUR EAS AFR SAS AMR"
 POPS="${POPS:-${*:-$ALL_POPS}}"
-# CHRS="${CHRS:-$(seq 1 22)}"
-CHRS="22"
+CHRS="${CHRS:-$(seq 1 22)}"
 
 # LD computation parameters (consistent with MiXeR reference)
 MAF_MIN=0.01       # minimum minor allele frequency (statistical power floor at 1000G N=503)

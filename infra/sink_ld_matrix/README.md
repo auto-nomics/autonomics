@@ -1,11 +1,13 @@
 # sink_ld_matrix
 
-Sinks the 1000G LD matrix (zstd-compressed TSV, produced by `infra/ld_matrix.sh`)
-into Apache Iceberg — one table per chromosome under the `ld_matrix` namespace.
+Sinks the 1000G LD matrix (zstd-compressed TSV, produced by
+`infra/thousand_genomes/ld_matrix_unphased_r2.sh`) into Apache Iceberg — one
+table per chromosome under the `ld_matrix` namespace, prefixed by population.
 
 ## Layout
 
-- `iceberg.ld_matrix.eur_chr1` … `eur_chr22` — one Iceberg table per chromosome.
+- `iceberg.ld_matrix.<pop>_chr1` … `<pop>_chr22` — e.g. `eur_chr1`, `eas_chr1`,
+  `afr_chr1`, `sas_chr1`, `amr_chr1`. One Iceberg table per (population, chr).
 
 Each chromosome table has the schema:
 
@@ -39,11 +41,18 @@ rejected by the Iceberg field-name spec, so names are lowercased. `pos_a`/
 ## Run
 
 ```bash
-cargo run -p sink_ld_matrix
+cargo run -p sink_ld_matrix                    # sink all 5 populations (EUR EAS AFR SAS AMR)
+cargo run -p sink_ld_matrix -- EAS             # sink one population
+cargo run -p sink_ld_matrix -- EAS AFR SAS     # sink specific populations
 ```
 
-Output lines: `[start]`, `[done]`/`[skip]`/`[FAIL]` per chromosome, plus a final
-`summary: N written, M skipped, K failed` (exits non-zero if any failed).
+Population names are case-insensitive (normalized to uppercase). The data
+directory is resolved automatically:
+1. Canonical: `unphased_r2/<POP>/ld/` (produced by `ld_matrix_unphased_r2.sh`)
+2. Legacy:    `<pop_lower>/ld/` (original EUR run)
+
+Output lines: `[start]`, `[done]`/`[skip]`/`[FAIL]` per chromosome, plus a
+per-population `summary: N written, M skipped, K failed`.
 
 ### Verify
 

@@ -1,16 +1,19 @@
-//! Sink the 1000G EUR LD matrix (zstd-compressed TSV) into Iceberg.
+//! Sink the 1000G LD matrix (zstd-compressed TSV, produced by
+//! `infra/thousand_genomes/ld_matrix_unphased_r2.sh`) into Iceberg — one table
+//! per chromosome under the `ld_matrix` namespace, named `<pop>_chr<N>`.
 //!
-//! One table per chromosome under the `ld_matrix` namespace, e.g.
-//! `iceberg.ld_matrix.eur_chr22`. Each chromosome is written independently, so
-//! the whole batch fans out across all CPU cores: up to
-//! `available_parallelism()` chromosomes are sunk concurrently, each driving a
-//! single-threaded zstd-decode → parquet-encode pipeline.
+//! Each chromosome is written independently, so the whole batch fans out across
+//! all CPU cores: up to `available_parallelism()` chromosomes are sunk
+//! concurrently, each driving a single-threaded zstd-decode → parquet-encode
+//! pipeline.
 //!
-//! Tables that already exist are skipped (idempotent re-runs). Drop a table
-//! manually to force a rewrite.
+//! Tables that already have a committed snapshot are skipped (idempotent
+//! re-runs). Drop a table manually to force a rewrite.
 //!
 //! Run:
-//!     cargo run -p sink_ld_matrix
+//!     cargo run -p sink_ld_matrix                    # sink all populations
+//!     cargo run -p sink_ld_matrix -- EAS             # sink one population
+//!     cargo run -p sink_ld_matrix -- EAS AFR SAS     # sink specific populations
 
 use std::sync::Arc;
 
@@ -25,7 +28,10 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 const LD_NAMESPACE: &str = "ld_matrix";
-const LD_MATRIX_DATA_PATH: &str = "/mnt/disk2/dataset/1000g_plink/eur/ld/";
+const DATA_ROOT: &str = "/mnt/disk2/dataset/1000g_plink/";
+
+/// All 1000G super-populations.
+const ALL_POPS: &[&str] = &["EUR", "EAS", "AFR", "SAS", "AMR"];
 
 /// Target schema, in source-TSV column order.
 ///
@@ -47,6 +53,23 @@ const TABLE_FIELDS: &[(&str, DataType)] = &[
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Resolve the LD data directory for a population.
+///
+/// Prefers the canonical `unphased_r2/<POP>/ld/` layout (produced by
+/// `ld_matrix_unphased_r2.sh`). Falls back to the legacy `<pop_lower>/ld/`
+/// layout used by the original EUR run.
+fn resolve_data_dir(pop: &str) -> String {
+    let canonical = format!("{DATA_ROOT}unphased_r2/{pop}/ld/");
+    if std::path::Path::new(&canonical).read_dir().is_ok() {
+        return canonical;
+    }
+    let legacy = format!("{DATA_ROOT}{}/ld/", pop.to_lowercase());
+    if std::path::Path::new(&legacy).read_dir().is_ok() {
+        return legacy;
+    }
+    canonical // fall through → discover_chromosomes will report "no files"
+}
+
 /// Build the target Arrow schema (column names assigned positionally).
 fn target_schema() -> Schema {
     Schema::new(
@@ -66,8 +89,8 @@ enum SinkResult {
 
 /// Sink a single chromosome file into `iceberg.ld_matrix.<table>`.
 ///
-/// Skips silently if the table already exists. Each call owns its own
-/// `SessionContext` so concurrent calls never share planner state; the
+/// Skips silently if the table already has committed data. Each call owns its
+/// own `SessionContext` so concurrent calls never share planner state; the
 /// `Datalake` (catalog) handle is shared via `Arc`.
 async fn sink_chromosome(
     datalake: Arc<Datalake>,
@@ -130,18 +153,18 @@ async fn sink_chromosome(
     Ok((table_name, started.elapsed().as_secs_f64()))
 }
 
-/// Discover `1000G.EUR.chr<N>.ld.vcor.zst` files and their table names.
-fn discover_chromosomes(dir: &str) -> Vec<(String, String)> {
-    let prefix = "1000G.EUR.chr";
+/// Discover `1000G.<pop>.chr<N>.ld.vcor.zst` files and their table names.
+fn discover_chromosomes(dir: &str, pop: &str) -> Vec<(String, String)> {
+    let prefix = format!("1000G.{pop}.chr");
     let suffix = ".ld.vcor.zst";
     let mut out: Vec<(u32, String, String)> = std::fs::read_dir(dir)
         .expect("read LD data dir")
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter_map(|name| {
-            let n_str = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            let n_str = name.strip_prefix(&prefix)?.strip_suffix(suffix)?;
             let n: u32 = n_str.parse().ok()?;
-            Some((n, name, format!("eur_chr{n}")))
+            Some((n, name, format!("{}_chr{n}", pop.to_lowercase())))
         })
         .collect();
     out.sort_by_key(|(n, _, _)| *n);
@@ -150,18 +173,21 @@ fn discover_chromosomes(dir: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-#[tokio::main]
-async fn main() -> Result<(), AnyError> {
-    let datalake = Arc::new(Datalake::new());
-    let namespace = NamespaceIdent::from_vec(vec![LD_NAMESPACE.to_string()])?;
+/// Sink all chromosomes for one population.
+async fn sink_population(
+    datalake: Arc<Datalake>,
+    namespace: NamespaceIdent,
+    pop: &str,
+) -> Result<(), AnyError> {
+    let data_dir = resolve_data_dir(pop);
+    let chromosomes = discover_chromosomes(&data_dir, pop);
 
-    let chromosomes = discover_chromosomes(LD_MATRIX_DATA_PATH);
     if chromosomes.is_empty() {
-        return Err(format!("no .zst chromosomes found in {LD_MATRIX_DATA_PATH}").into());
+        eprintln!("[WARN] no .zst files for {pop} in {data_dir}");
+        return Ok(());
     }
 
-    // Concurrency: default to one writer per core. Override with
-    // `SINK_CONCURRENCY=N` (e.g. 2 to be kind to the shared spinning disk).
+    // Concurrency: default to one writer per core.
     let parallelism = std::env::var("SINK_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -171,8 +197,9 @@ async fn main() -> Result<(), AnyError> {
                 .unwrap_or(4)
         });
     let sem = Arc::new(Semaphore::new(parallelism));
+
     println!(
-        "sinking {} chromosomes, concurrency={parallelism}",
+        "[{pop}] sinking {} chromosomes from {data_dir} (concurrency={parallelism})",
         chromosomes.len()
     );
 
@@ -181,28 +208,28 @@ async fn main() -> Result<(), AnyError> {
         let datalake = datalake.clone();
         let namespace = namespace.clone();
         let sem = sem.clone();
+        let pop_label = pop.to_string();
         tasks.spawn(async move {
-            // Wait for a core slot before starting the heavy decode/encode.
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(e) => {
                     return SinkResult::Failed(format!("{table_name}: semaphore closed: {e}"));
                 }
             };
-            println!("[start] {table_name}");
+            println!("[start] {pop_label}/{table_name}");
             match sink_chromosome(datalake, namespace, file_path, table_name.clone()).await {
                 Ok((table, 0.0)) => {
-                    println!("[skip ] {table} (exists)");
+                    println!("[skip ] {pop_label}/{table} (exists)");
                     SinkResult::Skipped
                 }
                 Ok((table, secs)) => {
-                    println!("[done ] {table} in {secs:.1}s");
+                    println!("[done ] {pop_label}/{table} in {secs:.1}s");
                     SinkResult::Written
                 }
                 Err(e) => {
                     let msg = format!("{e}");
-                    eprintln!("[FAIL ] {table_name}: {msg}");
-                    SinkResult::Failed(format!("{table_name}: {msg}"))
+                    eprintln!("[FAIL ] {pop_label}/{table_name}: {msg}");
+                    SinkResult::Failed(format!("{pop_label}/{table_name}: {msg}"))
                 }
             }
         });
@@ -220,14 +247,62 @@ async fn main() -> Result<(), AnyError> {
     }
 
     println!(
-        "\nsummary: {written} written, {skipped} skipped, {} failed",
+        "[{pop}] summary: {written} written, {skipped} skipped, {} failed",
         failed.len()
     );
     for msg in &failed {
         println!("  - {msg}");
     }
     if !failed.is_empty() {
-        return Err(format!("{} chromosome(s) failed", failed.len()).into());
+        return Err(format!("{pop}: {} chromosome(s) failed", failed.len()).into());
     }
     Ok(())
 }
+
+#[tokio::main]
+async fn main() -> Result<(), AnyError> {
+    let pops: Vec<String> = std::env::args()
+        .skip(1) // skip program name
+        .map(|s| s.to_uppercase())
+        .collect();
+    let pops: Vec<&str> = if pops.is_empty() {
+        ALL_POPS.to_vec()
+    } else {
+        pops.iter().map(|s| s.as_str()).collect()
+    };
+
+    let datalake = Arc::new(Datalake::new());
+    let namespace = NamespaceIdent::from_vec(vec![LD_NAMESPACE.to_string()])?;
+
+    let mut errors = Vec::new();
+    for pop in &pops {
+        if let Err(e) = sink_population(datalake.clone(), namespace.clone(), pop).await {
+            errors.push(format!("{e}"));
+        }
+    }
+
+    if !errors.is_empty() {
+        eprintln!("\n{} population(s) had failures:", errors.len());
+        for e in &errors {
+            eprintln!("  - {e}");
+        }
+        return Err(format!("{} population(s) failed", errors.len()).into());
+    }
+    println!("\nAll done: {} population(s) processed", pops.len());
+    Ok(())
+}
+
+// #[tokio::test]
+// async fn test_iceberg() {
+//     let ctx = datalake::Datalake::default().get_ctx().await.unwrap();
+//     // let df = ctx
+//     //     .sql("SELECT * FROM \"iceberg.eqtl.gene_filtered\".ACE")
+//     //     .await
+//     //     .unwrap();
+//     // df.show_limit(10).await.unwrap();
+//     let catalog = datalake::Datalake::default().get_catalog().await.unwrap();
+//     let df = catalog
+//         .load_table(&TableIdent::from_strs(vec!["eqtl", "gene_filtered", "ACE"]).unwrap())
+//         .await
+//         .unwrap();
+// }
