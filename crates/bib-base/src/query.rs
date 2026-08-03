@@ -256,6 +256,242 @@ impl LiteratureSource for ArxivSource {
 }
 
 // ---------------------------------------------------------------------------
+// bioRxiv / medRxiv adapter
+// ---------------------------------------------------------------------------
+
+/// DOI prefix shared by both bioRxiv and medRxiv.
+const BIORXIV_DOI_PREFIX: &str = "10.1101/";
+
+/// [`LiteratureSource`] backed by the bioRxiv details API.
+///
+/// Both bioRxiv and medRxiv share the same API at `api.biorxiv.org` and
+/// the same DOI prefix (`10.1101/`). This adapter handles both servers:
+/// fetch tries `biorxiv` first, then `medrxiv`.
+///
+/// **Limitation**: the bioRxiv API has no keyword-search endpoint, so
+/// [`search`](LiteratureSource::search) always returns an empty batch.
+/// Use [`fetch`](LiteratureSource::fetch) with a DOI, or search via
+/// PubMed (which indexes many preprints) instead.
+pub struct BiorxivSource {
+    client: reqwest::Client,
+}
+
+impl Default for BiorxivSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BiorxivSource {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("autonomics-bib-base")
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        }
+    }
+
+    /// Fetch paper details from one server (`"biorxiv"` or `"medrxiv"`).
+    async fn fetch_from_server(
+        &self,
+        server: &str,
+        doi: &str,
+    ) -> Result<Option<Article>> {
+        let url = format!("https://api.biorxiv.org/details/{server}/{doi}");
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Unknown(format!("bioRxiv API ({server}): {e}")))?;
+
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Unknown(format!("bioRxiv JSON parse: {e}")))?;
+
+        let entry = match json
+            .get("collection")
+            .and_then(|c| c.as_array())
+            .filter(|a| !a.is_empty())
+            .and_then(|a| a.first())
+        {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        Ok(Some(entry_to_article(entry, server)))
+    }
+}
+
+#[async_trait]
+impl LiteratureSource for BiorxivSource {
+    fn name(&self) -> &'static str {
+        "biorxiv"
+    }
+
+    async fn search(
+        &self,
+        _query: &StructuredSearch,
+        _limit: usize,
+    ) -> Result<SourceBatch> {
+        // The bioRxiv public API has no keyword-search endpoint.
+        Ok(SourceBatch {
+            source: self.name().into(),
+            total: 0,
+            articles: vec![],
+        })
+    }
+
+    async fn fetch(&self, id: &str) -> Result<Option<Article>> {
+        // Accept either a bare DOI (`10.1101/...`) or a URL.
+        let doi = id
+            .strip_prefix("https://doi.org/")
+            .or_else(|| id.strip_prefix("http://doi.org/"))
+            .or_else(|| id.strip_prefix("doi:"))
+            .unwrap_or(id);
+
+        // Only handle bioRxiv/medRxiv DOIs.
+        if !doi.starts_with(BIORXIV_DOI_PREFIX) {
+            return Ok(None);
+        }
+
+        // Try biorxiv server first, then medrxiv.
+        for server in &["biorxiv", "medrxiv"] {
+            if let Some(article) = self.fetch_from_server(server, doi).await? {
+                return Ok(Some(article));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Parse a bioRxiv API JSON entry into an [`Article`].
+fn entry_to_article(entry: &serde_json::Value, server: &str) -> Article {
+    use bib_types::convert::{build_article, normalize_doi};
+    use bib_types::{ArticleSource, Author, IdKind, Identifier};
+
+    let doi = str_field(entry, "doi");
+    let title = str_field(entry, "title");
+    let abstract_text = str_field(entry, "abstract");
+    let date = str_field(entry, "date");
+    let category = str_field(entry, "category");
+    let version = str_field(entry, "version");
+
+    // Identifiers: DOI (tagged as biorxiv) + version.
+    let mut identifiers = vec![Identifier::new(IdKind::Biorxiv, &doi)];
+    // Also keep a clean DOI identifier for cross-source dedup.
+    let normalized = normalize_doi(&doi);
+    if !normalized.is_empty() {
+        identifiers.push(Identifier::doi(normalized));
+    }
+
+    // Authors — semicolon-separated: "Smith J;Jones B;"
+    let authors_str = str_field(entry, "authors");
+    let authors: Vec<Author> = authors_str
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|name| parse_biorxiv_author(name))
+        .collect();
+
+    let mut article = build_article(
+        &doi,
+        title.trim(),
+        identifiers,
+        authors,
+        ArticleSource::Biorxiv,
+    );
+
+    article.abstract_text = if abstract_text.is_empty() {
+        None
+    } else {
+        Some(abstract_text)
+    };
+
+    // Parse date "2024-01-15" → (year, month).
+    let (year, month) = parse_biorxiv_date(&date);
+    article.year = year;
+    article.month = month;
+
+    // Category as pub_type + keyword.
+    if !category.is_empty() {
+        article.pub_types.push(category.clone());
+        article.keywords.push(category);
+    }
+
+    // Version as a keyword.
+    if !version.is_empty() {
+        article.keywords.push(format!("v{version}"));
+    }
+
+    // Journal: record the server (bioRxiv or medRxiv).
+    article.journal = Some(format!("{server} preprint"));
+
+    article
+}
+
+/// Parse a bioRxiv author string (typically "Smith J" — last name + initials).
+fn parse_biorxiv_author(name: &str) -> bib_types::Author {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return bib_types::Author {
+            last_name: String::new(),
+            fore_name: None,
+            initials: None,
+            affiliation: None,
+            orcid: None,
+            corresponding: false,
+        };
+    }
+
+    match trimmed.rsplit_once(' ') {
+        Some((given, family)) if !family.is_empty() => {
+            let initials: String = given
+                .split_whitespace()
+                .filter_map(|w| w.chars().next())
+                .collect();
+            bib_types::Author {
+                last_name: family.to_owned(),
+                fore_name: Some(given.to_owned()),
+                initials: if !initials.is_empty() { Some(initials) } else { None },
+                affiliation: None,
+                orcid: None,
+                corresponding: false,
+            }
+        }
+        _ => bib_types::Author {
+            last_name: trimmed.to_owned(),
+            fore_name: None,
+            initials: None,
+            affiliation: None,
+            orcid: None,
+            corresponding: false,
+        },
+    }
+}
+
+/// Parse a bioRxiv date string ("2024-01-15") into (year, month).
+fn parse_biorxiv_date(s: &str) -> (Option<u16>, Option<u8>) {
+    let parts: Vec<&str> = s.split('-').collect();
+    let year = parts.first().and_then(|p| p.parse::<u16>().ok());
+    let month = parts.get(1).and_then(|p| p.parse::<u8>().ok());
+    (year, month)
+}
+
+fn str_field(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned()
+}
+
+// ---------------------------------------------------------------------------
 // LiteratureGateway — multi-source dispatcher
 // ---------------------------------------------------------------------------
 
@@ -311,8 +547,54 @@ impl LiteratureGateway {
         query: &StructuredSearch,
         limit: usize,
     ) -> Vec<SourceBatch> {
-        let futures: Vec<_> = self
+        self.search_subset(&self.sources.iter().collect::<Vec<_>>(), query, limit)
+            .await
+    }
+
+    /// Search a **single** source by name.
+    pub async fn search_from(
+        &self,
+        source_name: &str,
+        query: &StructuredSearch,
+        limit: usize,
+    ) -> Result<SourceBatch> {
+        let source = self
             .sources
+            .iter()
+            .find(|s| s.name() == source_name)
+            .ok_or_else(|| Error::NotFound(format!("source '{source_name}' not registered")))?;
+        source.search(query, limit).await
+    }
+
+    /// Search a **subset** of sources by name, concurrently.
+    ///
+    /// Unrecognised names are silently skipped. If `names` is `None`,
+    /// searches all registered sources (equivalent to [`Self::search`]).
+    pub async fn search_named(
+        &self,
+        names: Option<&[String]>,
+        query: &StructuredSearch,
+        limit: usize,
+    ) -> Vec<SourceBatch> {
+        let selected: Vec<_> = match names {
+            Some(names) => self
+                .sources
+                .iter()
+                .filter(|s| names.iter().any(|n| n == s.name()))
+                .collect(),
+            None => self.sources.iter().collect(),
+        };
+        self.search_subset(&selected, query, limit).await
+    }
+
+    /// Internal: dispatch search to a set of source references concurrently.
+    async fn search_subset(
+        &self,
+        sources: &[&Arc<dyn LiteratureSource>],
+        query: &StructuredSearch,
+        limit: usize,
+    ) -> Vec<SourceBatch> {
+        let futures: Vec<_> = sources
             .iter()
             .map(|s| async { s.search(query, limit).await })
             .collect();
@@ -326,7 +608,7 @@ impl LiteratureGateway {
                 Ok(batch) => Some(batch),
                 Err(e) => {
                     tracing::warn!(
-                        source = self.sources[i].name(),
+                        source = sources[i].name(),
                         error = %e,
                         "literature source search failed"
                     );

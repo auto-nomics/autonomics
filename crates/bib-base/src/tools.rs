@@ -22,18 +22,21 @@ use crate::query::LiteratureGateway;
 
 #[tool(
     name = "lit_search",
-    description = "Search for academic literature across multiple databases concurrently \
-                  (PubMed, arXiv). Provide keywords and optional filters. \
-                  Returns matching articles with metadata (title, authors, year, DOI, abstract). \
+    description = "Search for academic literature. By default searches ALL registered sources \
+                  concurrently (PubMed, arXiv, bioRxiv). Pass `sources` to restrict to specific \
+                  sources only — those will be searched concurrently and the rest skipped entirely. \
                   \
                   \
-        **Keywords**: searched against title + abstract. Use the `keywords_op` field to \
-        control whether ALL keywords must match (AND) or ANY (OR, default). \
+        **Sources**: \"pubmed\" (biomedical), \"arxiv\" (physics/CS/math preprints), \
+        \"biorxiv\" (biology/medicine preprints — keyword search not supported, fetch only). \
+        \
+        **Keywords**: searched against title + abstract. Use `keywords_op` to control \
+        whether ALL keywords must match (AND) or ANY (OR, default). \
         \
         **Examples**: \
-        • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\" — both terms required \
-        • keywords=[\"cancer immunotherapy\"], authors=[\"Smith J\"], year_from=2020 \
-        • title=[\"GWAS\", \"height\"], keywords_op=\"OR\" — either title term"
+        • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\" — search all sources \
+        • keywords=[\"transformer\"], sources=[\"arxiv\"] — only arXiv \
+        • keywords=[\"GWAS\"], sources=[\"pubmed\", \"biorxiv\"] — PubMed + bioRxiv concurrently"
 )]
 pub struct LitSearchInput {
     #[desc = "Topic keywords to search in title/abstract, e.g. [\"CRISPR\", \"gene editing\"]"]
@@ -60,7 +63,8 @@ pub struct LitSearchInput {
     #[desc = "Publication year end (inclusive), e.g. 2024"]
     pub year_to: Option<u16>,
 
-    #[desc = "Sources to search. Options: \"pubmed\", \"arxiv\". Default: all available."]
+    #[desc = "Sources to search (concurrently). Options: \"pubmed\", \"arxiv\", \"biorxiv\". \
+             Default: all registered sources."]
     pub sources: Option<Vec<String>>,
 
     #[desc = "Max results per source (default 10)"]
@@ -96,15 +100,11 @@ impl ToolFunction for LitSearchTool {
 
         let limit = input.limit.unwrap_or(10).clamp(1, 100);
 
-        // Filter sources if the caller specified a subset.
-        let batches = if let Some(ref wanted) = input.sources {
-            let all = self.gateway.search(&sq, limit).await;
-            all.into_iter()
-                .filter(|b| wanted.iter().any(|w| w == &b.source))
-                .collect::<Vec<_>>()
-        } else {
-            self.gateway.search(&sq, limit).await
-        };
+        // Dispatch only to the specified sources (or all if not specified).
+        let batches = self
+            .gateway
+            .search_named(input.sources.as_deref(), &sq, limit)
+            .await;
 
         // Build compact result JSON for the agent.
         let total_articles: usize = batches.iter().map(|b| b.articles.len()).sum();
@@ -285,6 +285,7 @@ fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
 /// Auto-detect the source from the ID format and fetch accordingly.
 ///
 /// Routing priority by ID format:
+/// - bioRxiv/medRxiv DOI (`10.1101/...`) → bioRxiv source → all sources
 /// - DOI (`10.xxx`) → PubMed → all sources
 /// - Numeric (PMID) → PubMed → all sources
 /// - arXiv ID pattern → arXiv → all sources
@@ -295,9 +296,17 @@ pub(crate) async fn auto_fetch(
 ) -> Option<(String, bib_types::Article)> {
     let is_numeric = id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty();
     let is_doi = id.starts_with("10.");
+    let is_biorxiv = id.starts_with("10.1101/");
+
+    if is_biorxiv {
+        // bioRxiv/medRxiv preprint DOI — try bioRxiv source first.
+        if let Some(result) = gateway.fetch_from("biorxiv", id).await.ok().flatten() {
+            return Some(("biorxiv".into(), result));
+        }
+    }
 
     if is_numeric || is_doi {
-        // PMID or DOI → try PubMed first.
+        // PMID or generic DOI → try PubMed first.
         if let Some(result) = gateway.fetch_from("pubmed", id).await.ok().flatten() {
             return Some(("pubmed".into(), result));
         }

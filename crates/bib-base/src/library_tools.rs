@@ -524,6 +524,182 @@ impl ToolFunction for BibRequestFulltextTool {
 }
 
 // ===========================================================================
+// bib_add_note — add annotation to article
+// ===========================================================================
+
+#[tool(
+    name = "bib_add_note",
+    description = "Add a note, highlight, or comment to an article in the library. \
+                  Useful for recording observations, key findings, or critique while \
+                  reading a paper."
+)]
+pub struct BibAddNoteInput {
+    #[desc = "Article ID (from bib_save or bib_search_library)"]
+    pub article_id: String,
+    #[desc = "Annotation type: \"note\", \"highlight\", or \"comment\". Default: note"]
+    pub kind: Option<String>,
+    #[desc = "The annotation content (note text, highlighted excerpt, or comment)"]
+    pub content: String,
+    #[desc = "PDF page number (1-based) if the annotation is anchored to a page"]
+    pub page: Option<u32>,
+}
+
+pub struct BibAddNoteTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibAddNoteTool {
+    type Input = BibAddNoteInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let kind = match input.kind.as_deref().map(|s| s.to_lowercase()).as_deref() {
+            Some("highlight") => bib_types::AnnotationKind::Highlight,
+            Some("comment") => bib_types::AnnotationKind::Comment,
+            _ => bib_types::AnnotationKind::Note,
+        };
+
+        let ann = self
+            .bib
+            .add_annotation(&input.article_id, kind, &input.content, input.page)
+            .await
+            .map_err(box_error)?;
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "annotation_id": ann.id,
+            "article_id": input.article_id,
+            "kind": ann.kind.as_str(),
+            "content": ann.content,
+            "page": ann.page,
+        })))
+    }
+}
+
+// ===========================================================================
+// bib_store_fulltext — agent stores extracted text directly
+// ===========================================================================
+
+#[tool(
+    name = "bib_store_fulltext",
+    description = "Store full-text content for an article directly from text (not file upload). \
+                  Use this when you have the full text available (e.g. from PubMed Central, \
+                  open-access HTML, or pre-extracted text). \
+                  \
+                  This is the agent-side counterpart to the user's `bib upload` CLI command."
+)]
+pub struct BibStoreFulltextInput {
+    #[desc = "Article ID (already in the local library)"]
+    pub article_id: String,
+    #[desc = "The full text content to store"]
+    pub text: String,
+}
+
+pub struct BibStoreFulltextTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibStoreFulltextTool {
+    type Input = BibStoreFulltextInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let text_len = input.text.len();
+        let ft = bib_types::FullText {
+            article_id: input.article_id.clone(),
+            file_path: format!("(agent:{})", input.article_id),
+            file_format: bib_types::FileFormat::Txt,
+            text_content: Some(input.text),
+            source: bib_types::FullTextSource::OpenAccess,
+            file_hash: None,
+            file_size: Some(text_len as i64),
+            uploaded_at: Some(chrono::Utc::now()),
+        };
+
+        self.bib.upsert_fulltext(&ft).await.map_err(box_error)?;
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "stored": true,
+            "article_id": input.article_id,
+            "chars": text_len,
+            "message": "Full text stored. bib_get_article will now return the text.",
+        })))
+    }
+}
+
+// ===========================================================================
+// bib_export — export articles in citation format
+// ===========================================================================
+
+#[tool(
+    name = "bib_export",
+    description = "Export articles from a collection (or the entire library) in a standard \
+                  citation format: BibTeX, RIS, Markdown, or CSL-JSON. \
+                  Useful for generating reference lists for manuscripts or reports."
+)]
+pub struct BibExportInput {
+    #[desc = "Collection ID to export. If omitted, exports entire library."]
+    pub collection_id: Option<String>,
+    #[desc = "Output format: \"bibtex\", \"ris\", \"markdown\", or \"csl_json\". Default: bibtex"]
+    pub format: Option<String>,
+    #[desc = "Maximum articles to export (default 100)"]
+    pub limit: Option<usize>,
+}
+
+pub struct BibExportTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibExportTool {
+    type Input = BibExportInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let format = parse_export_format(input.format.as_deref());
+        let limit = input.limit.unwrap_or(100).clamp(1, 500);
+
+        let articles: Vec<bib_types::Article> = match &input.collection_id {
+            Some(cid) => {
+                let cas = self
+                    .bib
+                    .list_collection_articles(cid, None, None)
+                    .await
+                    .map_err(box_error)?;
+                let mut out = Vec::new();
+                for ca in cas.into_iter().take(limit) {
+                    if let Some(a) = self.bib.get_article(&ca.article_id).await.map_err(box_error)? {
+                        out.push(a);
+                    }
+                }
+                out
+            }
+            None => {
+                let hits = self
+                    .bib
+                    .search_articles("", limit)
+                    .await
+                    .map_err(box_error)?;
+                let mut out = Vec::new();
+                for hit in hits {
+                    if let Some(a) = self.bib.get_article(&hit.article_id).await.map_err(box_error)? {
+                        out.push(a);
+                    }
+                }
+                out
+            }
+        };
+
+        let rendered = crate::export::render_all(&articles, format);
+        let count = articles.len();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "format": format_extension(format),
+            "count": count,
+            "export": rendered,
+        })))
+    }
+}
+
+// ===========================================================================
 // Registration
 // ===========================================================================
 
@@ -543,7 +719,10 @@ pub fn bib_library_registrations(
         R::from(BibListCollectionTool { bib: bib.clone() }),
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
-        R::from(BibRequestFulltextTool { bib }),
+        R::from(BibRequestFulltextTool { bib: bib.clone() }),
+        R::from(BibAddNoteTool { bib: bib.clone() }),
+        R::from(BibStoreFulltextTool { bib: bib.clone() }),
+        R::from(BibExportTool { bib }),
     ]
 }
 
@@ -621,4 +800,19 @@ fn box_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> ToolError {
     ToolError::ExecutionFailed {
         source: Box::new(e),
     }
+}
+
+/// Parse export format string, defaulting to BibTeX.
+fn parse_export_format(s: Option<&str>) -> bib_types::ExportFormat {
+    match s.map(|x| x.to_lowercase()).as_deref() {
+        Some("ris") => bib_types::ExportFormat::Ris,
+        Some("markdown") | Some("md") => bib_types::ExportFormat::Markdown,
+        Some("csl_json") | Some("csljson") | Some("json") => bib_types::ExportFormat::CslJson,
+        _ => bib_types::ExportFormat::Bibtex,
+    }
+}
+
+/// File extension for an export format.
+fn format_extension(format: bib_types::ExportFormat) -> &'static str {
+    format.extension()
 }

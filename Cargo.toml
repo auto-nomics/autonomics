@@ -39,6 +39,7 @@ members = [
   "crates/bib-base",
   "crates/arxiv",
   "crates/embase",
+  "crates/biorxiv",
 ]
 resolver = "3"
 

@@ -235,6 +235,8 @@ pub enum IdKind {
     Embase,
     /// arXiv preprint identifier.
     Arxiv,
+    /// bioRxiv / medRxiv DOI (same DOI namespace, no separate ID).
+    Biorxiv,
     /// Semantic Scholar paper ID.
     S2,
     /// OpenAlex work ID (e.g. `"W1234567890"`).
@@ -252,6 +254,7 @@ impl IdKind {
             Self::Pmc => "pmc",
             Self::Embase => "embase",
             Self::Arxiv => "arxiv",
+            Self::Biorxiv => "biorxiv",
             Self::S2 => "s2",
             Self::OpenAlex => "openalex",
             Self::Other => "other",
@@ -303,6 +306,8 @@ pub enum ArticleSource {
     CrossRef,
     /// Imported from arXiv.
     Arxiv,
+    /// Imported from bioRxiv or medRxiv.
+    Biorxiv,
     /// Imported from Semantic Scholar.
     SemanticScholar,
     /// Imported from the GWAS Catalog (EBI).
@@ -332,6 +337,24 @@ pub enum AnnotationKind {
     Highlight,
     /// A comment or critique.
     Comment,
+}
+
+impl AnnotationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Highlight => "highlight",
+            Self::Comment => "comment",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "highlight" => Self::Highlight,
+            "comment" => Self::Comment,
+            _ => Self::Note,
+        }
+    }
 }
 
 /// A user-created note, highlight, or comment on an article.

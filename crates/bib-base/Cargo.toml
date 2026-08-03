@@ -22,6 +22,8 @@ futures = { workspace = true }
 async-trait.workspace = true
 tracing.workspace = true
 uuid = { version = "1.12", features = ["v4"] }
+pdf-extract = "0.7"
+reqwest = { version = "0.13", features = ["json"] }
 
 # Agent tools
 agentik-core = { path = "../agentik-core" }
