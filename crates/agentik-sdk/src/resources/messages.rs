@@ -41,17 +41,25 @@ impl<'a> MessagesResource<'a> {
     /// # }
     /// ```
     pub async fn create(&self, params: MessageCreateParams) -> Result<Message> {
-        let url = self.client.http_client().build_url("/v1/messages");
+        // Encode via the configured wire protocol. The encoder owns the
+        // endpoint path, body bytes, and any protocol-specific headers; the
+        // HTTP layer (auth, retry) stays unchanged.
+        let wire_req = self.client.wire().encode_request(&params, false)?;
+        let url = self.client.http_client().build_url(&wire_req.endpoint_path);
 
-        let request = self
+        let mut builder = self
             .client
             .http_client()
             .post(&url)
-            .json(&params)
-            .build()
-            .map_err(|e| AnthropicError::Connection {
+            .header("Content-Type", "application/json");
+        for (name, value) in &wire_req.headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = builder.body(wire_req.body.clone()).build().map_err(|e| {
+            AnthropicError::Connection {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         let response = self.client.http_client().send(request).await?;
 
@@ -63,19 +71,9 @@ impl<'a> MessagesResource<'a> {
             AnthropicError::from_status(status, format!("failed to read response body: {e}"))
         })?;
 
-        let mut message: Message = serde_json::from_str(&body).map_err(|e| {
-            AnthropicError::from_status(
-                status,
-                format!(
-                    "failed to parse response as JSON: {e}, body: {}",
-                    body.chars().take(500).collect::<String>()
-                ),
-            )
-        })?;
-
-        message.request_id = request_id;
-
-        Ok(message)
+        self.client
+            .wire()
+            .decode_response(status, &body, request_id)
     }
 
     /// Create a streaming message with Claude
@@ -127,55 +125,86 @@ impl<'a> MessagesResource<'a> {
         // Ensure streaming is enabled
         params.stream = Some(true);
 
+        // Encode once via the wire so we know the endpoint path, body, and
+        // protocol-specific headers. The reconnect closure re-encodes on each
+        // retry (cheap relative to the network round-trip) so the wire stays
+        // the single source of truth for the on-the-wire shape.
+        let wire_req = self.client.wire().encode_request(&params, true)?;
+        // `post_stream` expects the path without a leading slash.
+        let endpoint = wire_req.endpoint_path.trim_start_matches('/').to_string();
+
         // Snapshot everything we need to re-issue the request later from
-        // inside the background task. Cloning the params is cheap relative
-        // to a network round-trip and lets us retry without keeping a
-        // borrow on `&self`.
+        // inside the background task.
         let http_client = self.client.http_client().client().clone();
         let base_url = self.client.config().base_url.clone();
         let api_key = self.client.config().api_key.clone();
         let auth_header = format!("Bearer {}", api_key);
-        let endpoint = "v1/messages".to_string();
-        let params_for_retry = Arc::new(params);
+        let wire_headers = wire_req.headers.clone();
+        let body = wire_req.body.clone();
         let config = Arc::new(config);
 
-        // Build the initial streaming request with proper authentication
-        let stream_builder = StreamRequestBuilder::new(http_client, base_url)
-            .header("Authorization", &auth_header)
-            .header("Content-Type", "application/json")
-            .header("anthropic-version", "2023-06-01")
-            .config((*config).clone());
+        // Build the initial streaming request with proper authentication.
+        // Wire-supplied headers (e.g. `anthropic-version`) augment the auth
+        // headers managed by the stream builder.
+        let mut stream_builder =
+            StreamRequestBuilder::new(http_client.clone(), base_url.clone())
+                .header("Authorization", &auth_header)
+                .header("Content-Type", "application/json")
+                .wire(self.client.wire().clone())
+                .config((*config).clone());
+        for (name, value) in &wire_headers {
+            stream_builder = stream_builder.header(name, value);
+        }
+
+        // The wire produced a raw body; pass it through as a JSON value so
+        // `post_stream` doesn't re-serialise a different shape.
+        let raw_body: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+            AnthropicError::Connection {
+                message: format!("wire body was not valid JSON: {e}"),
+            }
+        })?;
 
         // Make the streaming request to get the real HTTP stream
-        let http_stream = stream_builder
-            .post_stream(&endpoint, params_for_retry.as_ref())
-            .await?;
+        let http_stream = stream_builder.post_stream(&endpoint, &raw_body).await?;
 
         // The reconnect closure re-issues the same request, returning a
         // fresh HttpStreamClient. The background task invokes it whenever
         // the current connection stalls *before* any `MessageStart` event
         // has been observed.
         let reconnect = {
-            let http_client = self.client.http_client().client().clone();
-            let base_url = self.client.config().base_url.clone();
+            let http_client = http_client.clone();
+            let base_url = base_url.clone();
             let auth_header = auth_header.clone();
+            let wire_headers = wire_headers.clone();
+            let wire = self.client.wire().clone();
             let endpoint = endpoint.clone();
-            let params = params_for_retry.clone();
+            let body = body.clone();
             let config = config.clone();
             move || {
                 let http_client = http_client.clone();
                 let base_url = base_url.clone();
                 let auth_header = auth_header.clone();
+                let wire_headers = wire_headers.clone();
+                let wire = wire.clone();
                 let endpoint = endpoint.clone();
-                let params = params.clone();
+                let body = body.clone();
                 let config = config.clone();
                 async move {
-                    let builder = StreamRequestBuilder::new(http_client, base_url)
-                        .header("Authorization", &auth_header)
-                        .header("Content-Type", "application/json")
-                        .header("anthropic-version", "2023-06-01")
-                        .config((*config).clone());
-                    builder.post_stream(&endpoint, params.as_ref()).await
+                    let mut builder =
+                        StreamRequestBuilder::new(http_client, base_url)
+                            .header("Authorization", &auth_header)
+                            .header("Content-Type", "application/json")
+                            .wire(wire)
+                            .config((*config).clone());
+                    for (name, value) in &wire_headers {
+                        builder = builder.header(name, value);
+                    }
+                    let raw: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+                        AnthropicError::Connection {
+                            message: format!("wire body was not valid JSON: {e}"),
+                        }
+                    })?;
+                    builder.post_stream(&endpoint, &raw).await
                 }
             }
         };

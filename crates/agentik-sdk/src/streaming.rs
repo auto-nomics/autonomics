@@ -1233,7 +1233,7 @@ data: {\"type\":\"message_stop\"}\r\n\
 
         // Build a real HttpStreamClient from the first (stalled) response.
         let http_stream =
-            crate::http::streaming::HttpStreamClient::from_response(first_response, config.clone())
+            crate::http::streaming::HttpStreamClient::from_response(first_response, config.clone(), Arc::new(crate::wire::AnthropicWire))
                 .await
                 .expect("from_response should succeed for 200");
 
@@ -1253,7 +1253,7 @@ data: {\"type\":\"message_stop\"}\r\n\
                         message: e.to_string(),
                     }
                 })?;
-                crate::http::streaming::HttpStreamClient::from_response(resp, config).await
+                crate::http::streaming::HttpStreamClient::from_response(resp, config, Arc::new(crate::wire::AnthropicWire)).await
             }
         };
 
@@ -1356,7 +1356,7 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
         };
 
         let http_stream =
-            crate::http::streaming::HttpStreamClient::from_response(response, config.clone())
+            crate::http::streaming::HttpStreamClient::from_response(response, config.clone(), Arc::new(crate::wire::AnthropicWire))
                 .await
                 .unwrap();
 

@@ -112,6 +112,8 @@ impl BatchRequest {
                 tools: None,
                 tool_choice: None,
                 metadata: None,
+                thinking: None,
+                reasoning: None,
             },
         }
     }

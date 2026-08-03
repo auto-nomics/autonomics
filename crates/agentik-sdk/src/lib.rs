@@ -7,6 +7,7 @@ pub mod provider;
 pub mod resources;
 pub mod streaming;
 pub mod tokens;
+pub mod wire;
 pub mod types {
     pub use agentik_types::*;
 }
@@ -20,9 +21,10 @@ pub use agentik_types::{
     FileListParams, FileObject, FileOrder, FilePurpose, FileStatus, FileUploadParams, ImageSource,
     Message, MessageBatch, MessageContent, MessageCreateBuilder, MessageCreateParams, MessageDelta,
     MessageDeltaUsage, MessageParam, MessageStreamEvent, ModelList, ModelListParams, ModelObject,
-    RequestId, Result, Role, ServerTool, StopReason, StorageInfo, TextCitation, ToolChoice,
-    ToolDefinition, ToolDefinitionBuilder, ToolResult, ToolResultContent, ToolUse,
-    ToolValidationError, UploadProgress, Usage, WebSearchParameters,
+    ReasoningConfig, ReasoningEffort, RequestId, Result, Role, ServerTool, StopReason, StorageInfo,
+    TextCitation, ThinkingConfig, ThinkingKind, ToolChoice, ToolDefinition, ToolDefinitionBuilder,
+    ToolResult, ToolResultContent, ToolUse, ToolValidationError, UploadProgress, Usage,
+    WebSearchParameters, anthropic_budget_for_effort,
 };
 pub use client::Anthropic;
 pub use config::{ClientConfig, LogLevel};
@@ -32,6 +34,10 @@ pub use http::{RetryCondition, RetryExecutor, RetryPolicy, RetryResult, api_retr
 pub use resources::{BatchesResource, FilesResource, MessagesResource, ModelsResource};
 pub use streaming::MessageStream;
 pub use tokens::{ModelPrice, ModelUsage, RequestUsage, TokenCounter, UsageStats, UsageSummary};
+pub use wire::{
+    AnthropicWire, OpenAiChatWire, OpenAiResponsesWire, ProtocolFeatures, StreamState,
+    ThinkingSupport, WireProtocol, WireProtocolKind, build_wire, wire_protocol_for_provider,
+};
 
 pub trait ContentBlockParamExt {
     fn image_file(

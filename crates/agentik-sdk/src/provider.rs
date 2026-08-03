@@ -19,6 +19,7 @@ pub mod zai;
 
 use crate::http::auth::AuthMethod;
 use crate::model::{ModelInfo, ProviderType};
+use crate::wire::WireProtocolKind;
 
 /// Implemented by each built-in provider module to expose its preset model
 /// catalogue and default connection endpoint.
@@ -55,5 +56,16 @@ pub trait ProviderPreset {
     /// override this to return [`AuthMethod::Bearer`].
     fn default_auth_method() -> AuthMethod {
         AuthMethod::Anthropic
+    }
+
+    /// Which wire protocol this provider's gateway speaks.
+    ///
+    /// All built-in presets default to [`WireProtocolKind::Anthropic`] since
+    /// every current partner (DeepSeek, MiMo, MiniMax, Moonshot, SenseNova,
+    /// ZAI) exposes an Anthropic-compatible Messages gateway. Providers that
+    /// speak OpenAI Chat Completions or the OpenAI Responses API override this
+    /// to select the matching adapter.
+    fn wire_protocol() -> WireProtocolKind {
+        WireProtocolKind::Anthropic
     }
 }
