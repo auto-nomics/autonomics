@@ -42,6 +42,7 @@ members = [
   "crates/arxiv",
   "crates/embase",
   "crates/biorxiv",
+  "crates/europepmc",
 ]
 resolver = "3"
 

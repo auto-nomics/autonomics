@@ -308,6 +308,8 @@ pub enum ArticleSource {
     Arxiv,
     /// Imported from bioRxiv or medRxiv.
     Biorxiv,
+    /// Imported from Europe PMC.
+    EuropePmc,
     /// Imported from Semantic Scholar.
     SemanticScholar,
     /// Imported from the GWAS Catalog (EBI).
