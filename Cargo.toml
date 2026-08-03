@@ -37,6 +37,8 @@ members = [
 
   "stat_crates/statkit",
   "stat_crates/epi",
+
+  "bio_crates/susie",
 ]
 resolver = "3"
 

@@ -40,6 +40,7 @@ pub mod source_file;
 pub mod source_iceberg;
 pub mod source_opentargets;
 pub mod sql_node;
+pub mod susie_rss;
 pub mod survival;
 pub mod test_source;
 pub mod two_sample_mr;
@@ -76,6 +77,7 @@ pub use source_opentargets::{
     OpentargetsSearchNode, OpentargetsSearchNodeFactory, OpentargetsSearchSpec,
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
+pub use susie_rss::{SusieRssNode, SusieRssNodeFactory, SusieRssSpec};
 pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
 pub use two_sample_mr::{
     TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrNodeSpec, TwoSampleMrParameters,
