@@ -3124,6 +3124,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "europepmc"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "bib-types",
+ "reqwest 0.13.4",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "eutils"
 version = "0.1.0"
 dependencies = [
