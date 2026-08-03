@@ -212,7 +212,23 @@ impl DataEngine {
 
     /// Switch the engine's history ref to an existing ref name.
     /// Does **not** clear or modify the in-memory DAG.
-    pub fn switch_dag_ref(&mut self, name: &str) -> Result<()> {
+    ///
+    /// Validates that the ref exists in the history store — rejects unknown
+    /// names so a typo doesn't silently point the engine at a non-existent
+    /// lineage.
+    pub async fn switch_dag_ref(&mut self, name: &str) -> Result<()> {
+        if let Some(history) = &self.history {
+            let head = history
+                .ref_head(name)
+                .await
+                .map_err(|e| Error::Dag(e))?;
+            if head.is_none() {
+                return Err(Error::Custom(format!(
+                    "ref '{name}' does not exist. Use new_dag_ref to create it, \
+                     or list_dag_refs to see available refs."
+                )));
+            }
+        }
         self.history_ref = name.to_string();
         Ok(())
     }

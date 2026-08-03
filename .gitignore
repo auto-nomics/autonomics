@@ -3,6 +3,8 @@
 target
 *.db
 *.db-wal
+*.db-shm
+*.db-tshm
 .history
 
 # TUI logs and runtime artefacts

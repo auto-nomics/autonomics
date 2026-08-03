@@ -15,6 +15,11 @@ use bib_types::{FileFormat, FullText, FullTextSource};
 
 impl BibBase {
     /// Insert or replace a full-text record.
+    ///
+    /// As a side effect, all `collection_articles` rows referencing this
+    /// article have their `fetch_status` promoted to `fulltext_available`.
+    /// Without this sync, collection-level status stays stale at
+    /// `metadata_only` even after a full text is stored.
     pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
         let conn = self.conn();
         conn.execute(
@@ -34,6 +39,17 @@ impl BibBase {
             ],
         )
         .await?;
+
+        // Sync collection_articles.fetch_status so collection listings
+        // reflect the true full-text availability.
+        conn.execute(
+            "UPDATE collection_articles \
+             SET fetch_status = 'fulltext_available' \
+             WHERE article_id = ?1 AND fetch_status != 'fulltext_available'",
+            turso::params![ft.article_id.clone()],
+        )
+        .await?;
+
         Ok(())
     }
 

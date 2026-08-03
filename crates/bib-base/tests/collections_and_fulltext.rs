@@ -3,8 +3,8 @@
 
 use bib_base::BibBase;
 use bib_types::{
-    AddedBy, Article, ArticleRole, ArticleSource, Author, Collection, CollectionStatus,
-    FetchStatus, FileFormat, FullText, FullTextSource, IdKind, Identifier,
+    AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
+    CollectionStatus, FetchStatus, FileFormat, FullText, FullTextSource, IdKind, Identifier,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,6 +261,53 @@ async fn collection_article_ids_hydrated() {
     assert_eq!(col.article_ids, vec!["a1", "a2"]);
 }
 
+#[tokio::test]
+async fn list_collections_hydrates_article_counts() {
+    // Regression: list_collections used to skip hydrating article_ids,
+    // so every collection reported n_articles = 0 even though the
+    // association rows were correctly persisted. This made it look like
+    // articles vanished from collections after a TUI restart.
+    let db = BibBase::open_in_memory().await.unwrap();
+
+    db.upsert_collection(&Collection::new("c1", "One article"))
+        .await
+        .unwrap();
+    db.upsert_collection(&Collection::new("c2", "Two articles"))
+        .await
+        .unwrap();
+    db.upsert_collection(&Collection::new("c3", "Empty"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "First"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a2", "Second"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a3", "Third"))
+        .await
+        .unwrap();
+
+    db.add_to_collection("c1", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    db.add_to_collection("c2", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    db.add_to_collection("c2", "a2", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    // a3 is saved but not in any collection — must not leak into counts.
+
+    let mut cols = db.list_collections(None).await.unwrap();
+    cols.sort_by_key(|c| c.id.clone());
+
+    assert_eq!(cols.len(), 3);
+    assert_eq!(cols[0].article_ids, vec!["a1"]); // c1
+    assert_eq!(cols[1].article_ids, vec!["a1", "a2"]); // c2
+    assert!(cols[2].article_ids.is_empty()); // c3
+}
+
 // ---------------------------------------------------------------------------
 // Full-text requests
 // ---------------------------------------------------------------------------
@@ -356,6 +403,147 @@ async fn fulltext_crud() {
     db.delete_fulltext("a1").await.unwrap();
     assert!(!db.has_fulltext("a1").await.unwrap());
     assert!(db.get_fulltext("a1").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn upsert_fulltext_syncs_collection_fetch_status() {
+    // Regression: storing a full text promoted the fulltexts row but
+    // never updated collection_articles.fetch_status, leaving collection
+    // listings stuck at metadata_only.
+    let db = BibBase::open_in_memory().await.unwrap();
+
+    db.upsert_collection(&Collection::new("c1", "Investigation"))
+        .await
+        .unwrap();
+    db.upsert_collection(&Collection::new("c2", "Other collection"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "Paper"))
+        .await
+        .unwrap();
+
+    // Add to both collections — default fetch_status is metadata_only.
+    db.add_to_collection("c1", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    db.add_to_collection("c2", "a1", ArticleRole::Background, AddedBy::Agent, None)
+        .await
+        .unwrap();
+
+    let cas = db.list_collection_articles("c1", None, None).await.unwrap();
+    assert_eq!(cas[0].fetch_status, FetchStatus::MetadataOnly);
+
+    // Store a full text.
+    let ft = FullText {
+        article_id: "a1".into(),
+        file_path: "/articles/a1.pdf".into(),
+        file_format: FileFormat::Pdf,
+        text_content: Some("Body text.".into()),
+        source: FullTextSource::UserUpload,
+        file_hash: None,
+        file_size: None,
+        uploaded_at: None,
+    };
+    db.upsert_fulltext(&ft).await.unwrap();
+
+    // Both collections should now show fulltext_available.
+    for cid in &["c1", "c2"] {
+        let cas = db.list_collection_articles(cid, None, None).await.unwrap();
+        assert_eq!(
+            cas[0].fetch_status,
+            FetchStatus::FulltextAvailable,
+            "collection {cid} should reflect fulltext availability"
+        );
+    }
+}
+
+#[tokio::test]
+async fn re_add_to_collection_preserves_note() {
+    // Regression: calling add_to_collection again with note=None used to
+    // overwrite the existing note with NULL — silent data loss. Also
+    // verifies that the outcome correctly distinguishes insert/update.
+    use bib_base::collections::CollectionAddOutcome;
+
+    let db = BibBase::open_in_memory().await.unwrap();
+
+    db.upsert_collection(&Collection::new("c1", "Investigation"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "Paper"))
+        .await
+        .unwrap();
+
+    // First add with a note → Inserted.
+    let outcome = db
+        .add_to_collection(
+            "c1",
+            "a1",
+            ArticleRole::Referenced,
+            AddedBy::Agent,
+            Some("Important context for this paper."),
+        )
+        .await
+        .unwrap();
+    assert!(outcome.was_inserted());
+
+    let cas = db.list_collection_articles("c1", None, None).await.unwrap();
+    assert_eq!(cas[0].note.as_deref(), Some("Important context for this paper."));
+
+    // Re-add without a note — should NOT clobber the existing note.
+    // Role changes, note does not.
+    let outcome = db
+        .add_to_collection("c1", "a1", ArticleRole::Cited, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    match &outcome {
+        CollectionAddOutcome::Updated {
+            previous_role,
+            role_changed,
+            note_changed,
+            ..
+        } => {
+            assert_eq!(*previous_role, ArticleRole::Referenced);
+            assert!(*role_changed, "role should have changed");
+            assert!(!*note_changed, "note should NOT have changed (None passed)");
+        }
+        other => panic!("expected Updated, got {other:?}"),
+    }
+
+    let cas = db.list_collection_articles("c1", None, None).await.unwrap();
+    assert_eq!(
+        cas[0].note.as_deref(),
+        Some("Important context for this paper."),
+        "note must survive a re-add with note=None"
+    );
+    assert_eq!(cas[0].role, ArticleRole::Cited);
+
+    // Re-add with identical role and no note → noop.
+    let outcome = db
+        .add_to_collection("c1", "a1", ArticleRole::Cited, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    assert!(outcome.was_noop(), "identical re-add should be a noop");
+
+    // Re-add with a new explicit note — this SHOULD overwrite.
+    let outcome = db
+        .add_to_collection(
+            "c1",
+            "a1",
+            ArticleRole::Cited,
+            AddedBy::Agent,
+            Some("Updated context."),
+        )
+        .await
+        .unwrap();
+    match &outcome {
+        CollectionAddOutcome::Updated { note_changed, .. } => {
+            assert!(*note_changed, "explicit note should flag as changed");
+        }
+        other => panic!("expected Updated, got {other:?}"),
+    }
+
+    let cas = db.list_collection_articles("c1", None, None).await.unwrap();
+    assert_eq!(cas[0].note.as_deref(), Some("Updated context."));
 }
 
 // ---------------------------------------------------------------------------
@@ -474,4 +662,43 @@ async fn search_title_ranks_first() {
     // Abstract match (rank 1) second.
     assert_eq!(hits[1].article_id, "a1");
     assert_eq!(hits[1].score, 1.0);
+}
+
+#[tokio::test]
+async fn search_finds_annotation_content() {
+    // Regression: annotations were persisted by bib_add_note but never
+    // reachable through search_articles — a note about "PRS" on an article
+    // whose title/abstract/fulltext don't mention PRS was invisible.
+    let db = BibBase::open_in_memory().await.unwrap();
+
+    let mut a1 = sample_article("a1", "Statistical methods in genetics");
+    a1.abstract_text = Some("A survey of regression-based approaches.".into());
+    db.upsert_article(&a1).await.unwrap();
+
+    // Before annotation: searching for "polygenic risk score" misses.
+    let hits = db.search_articles("polygenic risk score", 10).await.unwrap();
+    assert!(hits.is_empty());
+
+    // Add a note mentioning PRS.
+    db.add_annotation(
+        "a1",
+        AnnotationKind::Note,
+        "This paper is relevant to polygenic risk score (PRS) benchmarking.",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Now the annotation content is searchable.
+    let hits = db.search_articles("polygenic risk score", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].article_id, "a1");
+    assert!(
+        hits[0]
+            .snippet
+            .to_lowercase()
+            .contains("polygenic risk score"),
+        "snippet should come from annotation: {}",
+        hits[0].snippet
+    );
 }

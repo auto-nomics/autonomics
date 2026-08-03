@@ -122,22 +122,28 @@ impl LiteratureSource for PubmedSource {
             });
         }
 
-        // 3. ESummary for metadata.
+        // 3. EFetch (MEDLINE) for full metadata **including abstracts**.
+        //    ESummary is lighter but omits abstracts entirely — every
+        //    article came back with abstract_text = None, making stored
+        //    records unusable for reading or snippet search.
         let id_str = search_resp.result.id_list.join(",");
-        let summary_json = self
+        let medline = self
             .client
-            .esummary(&eutils::types::ESummaryRequest {
+            .efetch(&eutils::types::EFetchRequest {
                 db: "pubmed".into(),
                 id: id_str,
+                rettype: Some("medline".into()),
+                retmode: Some("text".into()),
                 retmax: Some(limit as u32),
                 retstart: None,
-                version: Some("2.0".into()),
+                web_env: None,
+                query_key: None,
             })
             .await
-            .map_err(|e| Error::Unknown(format!("ESummary: {e}")))?;
+            .map_err(|e| Error::Unknown(format!("EFetch: {e}")))?;
 
         // 4. Convert to Articles.
-        let articles = eutils::esummary_to_articles(&summary_json);
+        let articles = eutils::medline_to_articles(&medline);
 
         Ok(SourceBatch {
             source: self.name().into(),
@@ -182,19 +188,22 @@ impl LiteratureSource for PubmedSource {
             }
         };
 
-        let json = self
+        let medline = self
             .client
-            .esummary(&eutils::types::ESummaryRequest {
+            .efetch(&eutils::types::EFetchRequest {
                 db: "pubmed".into(),
                 id: pmid,
+                rettype: Some("medline".into()),
+                retmode: Some("text".into()),
                 retmax: Some(1),
                 retstart: None,
-                version: Some("2.0".into()),
+                web_env: None,
+                query_key: None,
             })
             .await
-            .map_err(|e| Error::Unknown(format!("ESummary: {e}")))?;
+            .map_err(|e| Error::Unknown(format!("EFetch: {e}")))?;
 
-        let articles = eutils::esummary_to_articles(&json);
+        let articles = eutils::medline_to_articles(&medline);
         Ok(articles.into_iter().next())
     }
 }

@@ -137,7 +137,18 @@ async fn pubmed_fetch_by_pmid() {
     assert_eq!(source, "pubmed");
     assert!(!article.title.is_empty());
 
-    println!("✅ Fetched: {}", article.title);
+    // EFetch (MEDLINE) must populate the abstract — ESummary never did.
+    assert!(
+        article.abstract_text.is_some(),
+        "abstract must be populated by EFetch, got None for '{}'",
+        article.title
+    );
+    assert!(
+        article.abstract_text.as_deref().unwrap().len() > 50,
+        "abstract should be a real paragraph, not a stub"
+    );
+
+    println!("✅ Fetched: {} (abstract: {} chars)", article.title, article.abstract_text.as_deref().unwrap().len());
 }
 
 #[tokio::test]
@@ -152,13 +163,16 @@ async fn bib_save_batch_mixed_ids() {
     use agentik_core::tools::ToolFunction;
     use agentik_sdk::types::ToolResultContent;
     use bib_base::library_tools::{BibSaveInput, BibSaveTool};
+    use europepmc::EuropePmcClient;
 
-    let tool = BibSaveTool { bib, gateway };
+    let epmc = Arc::new(EuropePmcClient::new());
+    let tool = BibSaveTool { bib, gateway, epmc };
 
     // Mix of real PMIDs — these are stable PubMed records.
     let input = BibSaveInput {
         ids: vec!["37658030".into(), "37506997".into()],
         source: None,
+        fetch_fulltext: Some(false),
     };
 
     let result = tool.run(input).await.unwrap();
@@ -189,6 +203,7 @@ async fn bib_save_batch_mixed_ids() {
     let input2 = BibSaveInput {
         ids: vec!["37658030".into(), "37506997".into()],
         source: None,
+        fetch_fulltext: Some(false),
     };
     let result2 = tool.run(input2).await.unwrap();
     let json2 = match result2.content {

@@ -13,6 +13,48 @@ use bib_types::{
 };
 
 // ---------------------------------------------------------------------------
+// Outcome type
+// ---------------------------------------------------------------------------
+
+/// What happened when associating an article with a collection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectionAddOutcome {
+    /// A new `collection_articles` row was inserted.
+    Inserted,
+    /// The pair already existed; the row was updated in place.
+    Updated {
+        /// The role before this call.
+        previous_role: ArticleRole,
+        /// The note before this call (may be `None`).
+        previous_note: Option<String>,
+        /// Whether this call actually changed the role.
+        role_changed: bool,
+        /// Whether this call actually changed the note.
+        note_changed: bool,
+    },
+}
+
+impl CollectionAddOutcome {
+    /// `true` for [`Self::Inserted`].
+    pub fn was_inserted(&self) -> bool {
+        matches!(self, Self::Inserted)
+    }
+
+    /// `true` when nothing changed (existing row, same role, note
+    /// preserved or identical).
+    pub fn was_noop(&self) -> bool {
+        match self {
+            Self::Inserted => false,
+            Self::Updated {
+                role_changed,
+                note_changed,
+                ..
+            } => !role_changed && !note_changed,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Collection CRUD
 // ---------------------------------------------------------------------------
 
@@ -71,9 +113,9 @@ impl BibBase {
 
     /// List collections, optionally filtered by status.
     ///
-    /// `article_ids` are **not** hydrated for list queries (use
-    /// [`Self::get_collection`] for the full hydration of a single
-    /// collection).
+    /// Each collection's `article_ids` are batch-hydrated in position order
+    /// via a single extra query, so `article_ids.len()` gives the correct
+    /// article count without an N+1 pattern.
     pub async fn list_collections(
         &self,
         status: Option<CollectionStatus>,
@@ -107,6 +149,41 @@ impl BibBase {
             col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
             out.push(col);
         }
+        drop(rows);
+
+        // Batch-hydrate article_ids for all collections in one query,
+        // grouped in Rust. Without this, callers that display article
+        // counts (e.g. `bib_list_collection`'s list-all path) would see 0
+        // for every collection — the data is in the DB but never reaches
+        // the user, which looks like a persistence bug on restart.
+        if !out.is_empty() {
+            let ids: Vec<&str> = out.iter().map(|c| c.id.as_str()).collect();
+            let placeholders = (0..ids.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT collection_id, article_id FROM collection_articles \
+                 WHERE collection_id IN ({placeholders}) ORDER BY collection_id, position"
+            );
+            let params: Vec<Value> = ids.into_iter().map(|s| Value::Text(s.to_owned())).collect();
+            let mut ca_rows = conn.query(sql, turso::params_from_iter(params)).await?;
+            // Index into `out` by collection id for O(1) assignment.
+            // Owns the id strings so the map doesn't borrow `out`.
+            let mut idx: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::with_capacity(out.len());
+            for (i, c) in out.iter().enumerate() {
+                idx.insert(c.id.clone(), i);
+            }
+            while let Some(row) = ca_rows.next().await? {
+                let cid = row.get::<String>(0)?;
+                let aid = row.get::<String>(1)?;
+                if let Some(&i) = idx.get(&cid) {
+                    out[i].article_ids.push(aid);
+                }
+            }
+        }
+
         Ok(out)
     }
 
@@ -133,9 +210,16 @@ impl BibBase {
     // Collection ↔ Article association
     // -----------------------------------------------------------------------
 
-    /// Associate an article with a collection. If the association already
-    /// exists, its `role`, `added_by`, and `note` are updated; `position`
-    /// is only assigned on first insert (MAX + 1).
+    /// Associate an article with a collection.
+    ///
+    /// - **New pair** → inserts a row at `position = MAX + 1`.
+    /// - **Existing pair** → updates `role`/`added_by` and overwrites
+    ///   `note` only when the caller passes a non-`None` value (`None`
+    ///   preserves the existing note). `position` is never changed.
+    ///
+    /// Returns [`CollectionAddOutcome`] so callers (e.g. the
+    /// `bib_add_to_collection` tool) can distinguish a fresh insert from
+    /// a silent overwrite and surface that to the user.
     pub async fn add_to_collection(
         &self,
         collection_id: &str,
@@ -143,67 +227,89 @@ impl BibBase {
         role: ArticleRole,
         added_by: AddedBy,
         note: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<CollectionAddOutcome> {
         let conn = self.conn();
 
-        // Compute next position only if the row doesn't exist yet.
-        let exists = {
+        // Fetch the existing row (if any) so we can report what changed.
+        let existing = {
             let mut rows = conn
                 .query(
-                    "SELECT 1 FROM collection_articles \
+                    "SELECT role, note FROM collection_articles \
                      WHERE collection_id = ?1 AND article_id = ?2",
                     turso::params![collection_id, article_id],
                 )
                 .await?;
-            rows.next().await?.is_some()
+            if let Some(row) = rows.next().await? {
+                Some((
+                    ArticleRole::from_str(&row.get::<String>(0)?),
+                    opt_string(row.get_value(1)?),
+                ))
+            } else {
+                None
+            }
         };
 
-        if exists {
-            conn.execute(
-                "UPDATE collection_articles \
-                 SET role = ?1, added_by = ?2, note = ?3 \
-                 WHERE collection_id = ?4 AND article_id = ?5",
-                turso::params![
-                    role.as_str(),
-                    added_by.as_str(),
-                    note.map(|s| s.to_owned()),
-                    collection_id,
-                    article_id,
-                ],
-            )
-            .await?;
-        } else {
-            let mut pos_rows = conn
-                .query(
-                    "SELECT COALESCE(MAX(position), -1) + 1 \
-                     FROM collection_articles WHERE collection_id = ?1",
-                    turso::params![collection_id],
+        match existing {
+            None => {
+                let mut pos_rows = conn
+                    .query(
+                        "SELECT COALESCE(MAX(position), -1) + 1 \
+                         FROM collection_articles WHERE collection_id = ?1",
+                        turso::params![collection_id],
+                    )
+                    .await?;
+                let position = pos_rows
+                    .next()
+                    .await?
+                    .ok_or_else(|| Error::Unknown("MAX(position) returned no rows".into()))?
+                    .get::<i64>(0)? as i32;
+
+                conn.execute(
+                    "INSERT INTO collection_articles \
+                     (collection_id, article_id, position, role, fetch_status, added_by, note, added_at) \
+                     VALUES (?1, ?2, ?3, ?4, 'metadata_only', ?5, ?6, ?7)",
+                    turso::params![
+                        collection_id,
+                        article_id,
+                        position as i64,
+                        role.as_str(),
+                        added_by.as_str(),
+                        note.map(|s| s.to_owned()),
+                        Utc::now().to_rfc3339(),
+                    ],
                 )
                 .await?;
-            let position = pos_rows
-                .next()
-                .await?
-                .ok_or_else(|| Error::Unknown("MAX(position) returned no rows".into()))?
-                .get::<i64>(0)? as i32;
 
-            conn.execute(
-                "INSERT INTO collection_articles \
-                 (collection_id, article_id, position, role, fetch_status, added_by, note, added_at) \
-                 VALUES (?1, ?2, ?3, ?4, 'metadata_only', ?5, ?6, ?7)",
-                turso::params![
-                    collection_id,
-                    article_id,
-                    position as i64,
-                    role.as_str(),
-                    added_by.as_str(),
-                    note.map(|s| s.to_owned()),
-                    Utc::now().to_rfc3339(),
-                ],
-            )
-            .await?;
+                Ok(CollectionAddOutcome::Inserted)
+            }
+            Some((prev_role, prev_note)) => {
+                // Preserve note when caller passes None; overwrite only
+                // with an explicit new value.
+                let note_changed = note.is_some() && note != prev_note.as_deref();
+                let role_changed = prev_role != role;
+
+                conn.execute(
+                    "UPDATE collection_articles \
+                     SET role = ?1, added_by = ?2, note = COALESCE(?3, note) \
+                     WHERE collection_id = ?4 AND article_id = ?5",
+                    turso::params![
+                        role.as_str(),
+                        added_by.as_str(),
+                        note.map(|s| s.to_owned()),
+                        collection_id,
+                        article_id,
+                    ],
+                )
+                .await?;
+
+                Ok(CollectionAddOutcome::Updated {
+                    previous_role: prev_role,
+                    previous_note: prev_note,
+                    role_changed,
+                    note_changed,
+                })
+            }
         }
-
-        Ok(())
     }
 
     /// Remove an article from a collection.

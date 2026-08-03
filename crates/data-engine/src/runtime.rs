@@ -72,7 +72,7 @@ impl DataEngineServer {
                 let _ = reply.send(res);
             }
             DataEngineCmd::SwitchDagRef { name, reply } => {
-                let _ = reply.send(self.engine.switch_dag_ref(&name));
+                let _ = reply.send(self.engine.switch_dag_ref(&name).await);
             }
             DataEngineCmd::ListDagRefs { reply } => {
                 let _ = reply.send(self.engine.list_dag_refs().await);

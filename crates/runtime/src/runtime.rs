@@ -7,6 +7,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use data_engine::data_engine::DataEngine;
+use data_engine::dag::DagHistory;
 use data_engine::runtime::spawn_with_engine;
 use datalake::Datalake;
 use fs::OpendalFileStorage;
@@ -192,6 +193,30 @@ impl AgentRuntime {
                 .register_iceberg()
                 .await?
                 .build();
+
+            // Attach DAG history store for snapshot persistence.
+            // Default path: .autonomics/dag-history.db (created on first run).
+            let history_dir = std::path::Path::new(".autonomics");
+            let _ = std::fs::create_dir_all(history_dir);
+            let history_db = history_dir.join("dag-history.db");
+            let engine = match DagHistory::open(&history_db).await {
+                Ok(history) => {
+                    eprintln!(
+                        "[runtime] DAG history store opened: {}",
+                        history_db.display()
+                    );
+                    engine.with_history(history)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[runtime] WARNING: failed to open DAG history store at {}: {e}. \
+                         History/ref tools will be disabled.",
+                        history_db.display()
+                    );
+                    engine
+                }
+            };
+
             let (data_engine_client, engine_handle) = spawn_with_engine(engine);
 
             let datalake = Arc::new(Datalake::new());

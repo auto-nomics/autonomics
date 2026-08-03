@@ -364,9 +364,10 @@ impl BibBase {
     // Search — LIKE-based full-text search
     // -----------------------------------------------------------------------
 
-    /// Search across article titles, abstracts, and stored full-text
-    /// content. Returns results ordered by match priority:
-    /// title matches first, then abstract, then full-text body.
+    /// Search across article titles, abstracts, stored full-text
+    /// content, **and user annotations** (notes/highlights/comments).
+    /// Returns results ordered by match priority:
+    /// title matches first, then abstract, then annotations, then full-text body.
     ///
     /// Uses SQL `LIKE` (case-insensitive for ASCII). Snippets are extracted
     /// in Rust from the first matching field.
@@ -376,16 +377,23 @@ impl BibBase {
         let mut rows = conn
             .query(
                 "SELECT a.id, a.title, a.abstract, f.text_content, \
+                        (SELECT an.content FROM annotations an \
+                         WHERE an.article_id = a.id AND an.content LIKE ?1 \
+                         ORDER BY an.created_at LIMIT 1) AS annotation_hit, \
                  CASE \
                      WHEN a.title LIKE ?1 THEN 0 \
                      WHEN COALESCE(a.abstract, '') LIKE ?1 THEN 1 \
-                     ELSE 2 \
+                     WHEN EXISTS (SELECT 1 FROM annotations an2 \
+                                  WHERE an2.article_id = a.id AND an2.content LIKE ?1) THEN 2 \
+                     ELSE 3 \
                  END AS rank \
                  FROM articles a \
                  LEFT JOIN fulltexts f ON f.article_id = a.id \
                  WHERE a.title LIKE ?1 \
                     OR COALESCE(a.abstract, '') LIKE ?1 \
                     OR COALESCE(f.text_content, '') LIKE ?1 \
+                    OR EXISTS (SELECT 1 FROM annotations an3 \
+                               WHERE an3.article_id = a.id AND an3.content LIKE ?1) \
                  ORDER BY rank \
                  LIMIT ?2",
                 turso::params![pattern, limit as i64],
@@ -398,10 +406,16 @@ impl BibBase {
             let title = row.get::<String>(1)?;
             let abstract_text = opt_string(row.get_value(2)?);
             let fulltext = opt_string(row.get_value(3)?);
-            let rank = row.get::<i64>(4)?;
+            let annotation = opt_string(row.get_value(4)?);
+            let rank = row.get::<i64>(5)?;
 
-            let snippet =
-                extract_snippet(query, &title, abstract_text.as_deref(), fulltext.as_deref());
+            let snippet = extract_snippet(
+                query,
+                &title,
+                abstract_text.as_deref(),
+                fulltext.as_deref(),
+                annotation.as_deref(),
+            );
 
             hits.push(SearchHit {
                 article_id,
@@ -416,18 +430,22 @@ impl BibBase {
 
 /// Extract a context snippet around the first occurrence of `query` in
 /// the available text fields. Tries title first, then abstract, then
-/// full-text body.
+/// annotations, then full-text body.
 fn extract_snippet(
     query: &str,
     title: &str,
     abstract_text: Option<&str>,
     fulltext: Option<&str>,
+    annotation: Option<&str>,
 ) -> String {
     const SNIPPET_RADIUS: usize = 80;
 
     let query_lower = query.to_ascii_lowercase();
 
-    for text in [Some(title), abstract_text, fulltext].into_iter().flatten() {
+    for text in [Some(title), abstract_text, annotation, fulltext]
+        .into_iter()
+        .flatten()
+    {
         let text_lower = text.to_ascii_lowercase();
         if let Some(pos) = text_lower.find(&query_lower) {
             let start = pos.saturating_sub(SNIPPET_RADIUS);

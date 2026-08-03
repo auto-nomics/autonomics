@@ -27,6 +27,7 @@ use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind};
 use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
+use crate::collections::CollectionAddOutcome;
 use crate::oa_fetch::try_fetch_fulltext_with;
 use crate::query::LiteratureGateway;
 use crate::tools::auto_fetch;
@@ -322,6 +323,13 @@ impl ToolFunction for BibCreateCollectionTool {
     description = "Add an article (already saved via bib_save) to a collection with a \
                   semantic role describing why it's included. \
                   \
+                  If the article is already in the collection, the existing entry is \
+                  updated (not duplicated). The response distinguishes the two cases: \
+                  `action:\"inserted\"` for a new entry, `action:\"updated\"` with \
+                  `previous_role` / `previous_note` and `role_changed` / `note_changed` \
+                  flags for an overwrite. Pass `note=null` (omit the field) to preserve \
+                  the existing note; pass an explicit note to overwrite it. \
+                  \
                   Roles: \
                   • \"requested\" — you actively need this paper for your investigation \
                   • \"referenced\" — supporting context \
@@ -350,7 +358,8 @@ impl ToolFunction for BibAddToCollectionTool {
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let role = parse_role(input.role.as_deref());
 
-        self.bib
+        let outcome = self
+            .bib
             .add_to_collection(
                 &input.collection_id,
                 &input.article_id,
@@ -361,12 +370,68 @@ impl ToolFunction for BibAddToCollectionTool {
             .await
             .map_err(box_error)?;
 
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "added": true,
-            "collection_id": input.collection_id,
-            "article_id": input.article_id,
-            "role": role.as_str(),
-        })))
+        let json = match &outcome {
+            CollectionAddOutcome::Inserted => serde_json::json!({
+                "action": "inserted",
+                "added": true,
+                "collection_id": input.collection_id,
+                "article_id": input.article_id,
+                "role": role.as_str(),
+                "note": input.note,
+            }),
+            CollectionAddOutcome::Updated {
+                previous_role,
+                previous_note,
+                role_changed,
+                note_changed,
+            } => {
+                let message = if outcome.was_noop() {
+                    format!(
+                        "Article '{}' is already in collection '{}' \
+                         (role: {}, note preserved) — no changes.",
+                        input.article_id, input.collection_id, role.as_str()
+                    )
+                } else {
+                    let mut parts = Vec::new();
+                    if *role_changed {
+                        parts.push(format!(
+                            "role: {} → {}",
+                            previous_role.as_str(),
+                            role.as_str()
+                        ));
+                    }
+                    if *note_changed {
+                        parts.push(format!(
+                            "note: '{}' → '{}'",
+                            previous_note.as_deref().unwrap_or("(none)"),
+                            input.note.as_deref().unwrap_or("(none)")
+                        ));
+                    }
+                    format!(
+                        "Article '{}' was already in collection '{}' — updated {}.",
+                        input.article_id,
+                        input.collection_id,
+                        parts.join(", ")
+                    )
+                };
+
+                serde_json::json!({
+                    "action": "updated",
+                    "added": true,
+                    "collection_id": input.collection_id,
+                    "article_id": input.article_id,
+                    "role": role.as_str(),
+                    "note": input.note.as_deref().or(previous_note.as_deref()),
+                    "previous_role": previous_role.as_str(),
+                    "previous_note": previous_note,
+                    "role_changed": role_changed,
+                    "note_changed": note_changed,
+                    "message": message,
+                })
+            }
+        };
+
+        Ok(AgentToolResult::success_json(json))
     }
 }
 
@@ -491,8 +556,9 @@ impl ToolFunction for BibListCollectionTool {
 #[tool(
     name = "bib_search_library",
     description = "Search the local library for articles by keyword. Searches across \
-                  titles, abstracts, and stored full-text content. Returns relevance-ranked \
-                  results with snippets. \
+                  titles, abstracts, stored full-text content, **and user annotations** \
+                  (notes/highlights/comments added via bib_add_note). \
+                  Returns relevance-ranked results with snippets. \
                   \
                   Use this to find articles you've already saved (via bib_save). \
                   For searching external databases, use lit_search instead."
@@ -546,12 +612,13 @@ impl ToolFunction for BibSearchLibraryTool {
 #[tool(
     name = "bib_get_article",
     description = "Retrieve a full article from the local library, including metadata \
-                  (title, authors, abstract, journal, identifiers) and stored full text \
-                  if available. \
+                  (title, authors, abstract, journal, identifiers), stored full text \
+                  if available, and all user annotations (notes/highlights/comments). \
                   \
                   The article must have been saved via `bib_save` first. \
                   If full text has not been uploaded, the `has_fulltext` field will be false \
-                  and `fulltext` will be null."
+                  and `fulltext` will be null. Annotations added via `bib_add_note` \
+                  are returned in the `annotations` array."
 )]
 pub struct BibGetArticleInput {
     #[desc = "Article ID (from bib_save or bib_search_library results)"]
@@ -583,6 +650,18 @@ impl ToolFunction for BibGetArticleTool {
             })?;
 
         let include_ft = input.include_fulltext.unwrap_or(true);
+
+        // `has_fulltext` must reflect the true DB state regardless of
+        // whether the caller asked for the content. Previously it was
+        // derived from `fulltext.is_some()`, so `include_fulltext=false`
+        // falsely reported `has_fulltext:false` for articles that did
+        // have a full text.
+        let has_fulltext = self
+            .bib
+            .has_fulltext(&input.article_id)
+            .await
+            .map_err(box_error)?;
+
         let fulltext = if include_ft {
             self.bib
                 .get_fulltext(&input.article_id)
@@ -591,9 +670,16 @@ impl ToolFunction for BibGetArticleTool {
         } else {
             None
         };
-
-        let has_fulltext = fulltext.is_some();
         let text_content = fulltext.as_ref().and_then(|ft| ft.text_content.clone());
+
+        // Annotations (notes/highlights/comments) — without this the
+        // write path (bib_add_note) is a data black hole: annotations are
+        // persisted but never reachable through any read tool.
+        let annotations = self
+            .bib
+            .list_annotations(&input.article_id)
+            .await
+            .map_err(box_error)?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "article_id": article.id,
@@ -616,6 +702,14 @@ impl ToolFunction for BibGetArticleTool {
             "has_fulltext": has_fulltext,
             "fulltext_source": fulltext.as_ref().map(|ft| ft.source.as_str()),
             "fulltext": text_content,
+            "annotations": annotations.iter().map(|a| serde_json::json!({
+                "id": a.id,
+                "kind": a.kind.as_str(),
+                "content": a.content,
+                "page": a.page,
+                "created_at": a.created_at.map(|t| t.to_rfc3339()),
+            })).collect::<Vec<_>>(),
+            "n_annotations": annotations.len(),
         })))
     }
 }
