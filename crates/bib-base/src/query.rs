@@ -513,6 +513,23 @@ impl LiteratureGateway {
         }
     }
 
+    /// Create a gateway pre-loaded with all built-in literature sources:
+    /// PubMed (via NCBI E-utilities), arXiv, and bioRxiv/medRxiv.
+    ///
+    /// This is the constructor most callers want. Use [`new`](Self::new)
+    /// plus [`with_source`](Self::with_source) only when you need a custom
+    /// source set.
+    pub fn with_default_sources() -> Self {
+        Self::new()
+            .with_source(Arc::new(PubmedSource::new(Arc::new(
+                eutils::EutilsClient::from_env(),
+            ))))
+            .with_source(Arc::new(ArxivSource::new(Arc::new(
+                arxiv::ArxivClient::new(),
+            ))))
+            .with_source(Arc::new(BiorxivSource::new()))
+    }
+
     /// Register a source.
     pub fn with_source(mut self, source: Arc<dyn LiteratureSource>) -> Self {
         self.sources.push(source);

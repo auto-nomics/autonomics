@@ -181,6 +181,34 @@ pub struct RunReport {
     pub errors: HashMap<NodeId, DagError>,
 }
 
+impl Serialize for RunReport {
+    fn serialize<S: serde::ser::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = serializer.serialize_struct("RunReport", 4)?;
+        st.serialize_field("ok", &self.ok)?;
+        st.serialize_field("nodes", &self.nodes)?;
+
+        // Convert hashbrown HashMaps to std HashMaps for serialization.
+        let statuses: std::collections::HashMap<&str, RuntimeStatus> = self
+            .statuses
+            .iter()
+            .map(|(k, v)| (k.as_str(), *v))
+            .collect();
+        st.serialize_field("statuses", &statuses)?;
+
+        let errors: std::collections::HashMap<&str, DagErrorReport> = self
+            .errors
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.to_report()))
+            .collect();
+        st.serialize_field("errors", &errors)?;
+        st.end()
+    }
+}
+
 impl RunReport {
     pub fn status(&self, id: &str) -> Option<RuntimeStatus> {
         self.statuses.get(id).copied()

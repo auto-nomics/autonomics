@@ -32,6 +32,14 @@ pub use library_tools::bib_all_registrations;
 pub use query::{
     ArxivSource, BiorxivSource, LiteratureGateway, LiteratureSource, PubmedSource, SourceBatch,
 };
+
+/// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
+///
+/// Re-exported so callers don't need to import the `query` module just to
+/// get the default source set.
+pub fn default_gateway() -> LiteratureGateway {
+    LiteratureGateway::with_default_sources()
+}
 pub use tools::{LitFetchTool, LitSearchTool, bib_query_registrations};
 
 // Re-export bib-types for convenience so downstream code can import

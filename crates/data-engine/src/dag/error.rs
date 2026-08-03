@@ -76,6 +76,10 @@ pub enum DagError {
         to: String,
         to_port: u8,
     },
+
+    /// A snapshot / history operation failed (DB I/O, serialization, etc.).
+    #[error("history: {0}")]
+    History(String),
 }
 
 /// Maximum number of characters retained in an agent-facing error message.
@@ -154,6 +158,7 @@ impl DagError {
                 "edge_not_found",
                 format!("no edge from `{from}.{from_port}` to `{to}.{to_port}`"),
             ),
+            Self::History(msg) => ("history", msg.clone()),
         };
         super::runtime::DagErrorReport {
             kind: kind.into(),

@@ -67,6 +67,40 @@ impl DataEngineServer {
             DataEngineCmd::ClearDag { reply } => {
                 let _ = reply.send(self.engine.clear_dag().map(|_| ()));
             }
+            DataEngineCmd::NewDagRef { name, reply } => {
+                let res = self.engine.new_dag_ref(&name).await;
+                let _ = reply.send(res);
+            }
+            DataEngineCmd::SwitchDagRef { name, reply } => {
+                let _ = reply.send(self.engine.switch_dag_ref(&name));
+            }
+            DataEngineCmd::ListDagRefs { reply } => {
+                let _ = reply.send(self.engine.list_dag_refs().await);
+            }
+            DataEngineCmd::DagLog {
+                ref_name,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(self.engine.dag_log(ref_name.as_deref(), limit).await);
+            }
+            DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
+                let _ = reply.send(self.engine.checkout_dag(&snapshot_id).await);
+            }
+            DataEngineCmd::BranchFromSnapshot {
+                snapshot_id,
+                ref_name,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.engine
+                        .branch_from_snapshot(&snapshot_id, &ref_name)
+                        .await,
+                );
+            }
+            DataEngineCmd::GetDagRef { reply } => {
+                let _ = reply.send(Ok(self.engine.history_ref().to_string()));
+            }
             DataEngineCmd::GetNodeSpec { kind, reply } => {
                 let _ = reply.send(self.engine.get_node_spec(&kind));
             }
@@ -269,6 +303,105 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::ClearDag { reply: reply_tx }, reply_rx)
             .await
+    }
+
+    /// Clear the in-memory DAG and switch to a new history ref. Replaces the
+    /// old `clear_dag` — instead of wiping state without trace, it starts a
+    /// new independent snapshot lineage.
+    pub async fn new_dag_ref(&self, name: String) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::NewDagRef {
+                name,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Switch the engine's history ref to an existing ref.
+    pub async fn switch_dag_ref(&self, name: String) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::SwitchDagRef {
+                name,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// List all history refs.
+    pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::ListDagRefs { reply: reply_tx },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Show snapshot lineage for a ref (None = current ref).
+    pub async fn dag_log(
+        &self,
+        ref_name: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<crate::dag::Snapshot>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::DagLog {
+                ref_name,
+                limit,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Load a snapshot's DAG into memory without moving the ref.
+    /// Short-hash prefixes are accepted.
+    pub async fn checkout_dag(&self, snapshot_id: String) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::CheckoutDag {
+                snapshot_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Create a new ref from a snapshot, switch to it, and load its DAG.
+    /// Short-hash prefixes are accepted.
+    pub async fn branch_from_snapshot(
+        &self,
+        snapshot_id: String,
+        ref_name: String,
+    ) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::BranchFromSnapshot {
+                snapshot_id,
+                ref_name,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Query the current history ref name.
+    pub async fn get_dag_ref(&self) -> Result<String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetDagRef { reply: reply_tx },
+            reply_rx,
+        )
+        .await
     }
 
     pub async fn get_node_ports(&self, kind: String) -> Result<crate::nodes::meta::NodePorts> {

@@ -26,6 +26,9 @@ pub enum RuntimeError {
 
     #[error("OpenGWAS setup failed: {0}")]
     Opengwas(#[from] opengwas::OpengwasError),
+
+    #[error("tool assembly failed: {0}")]
+    ToolAssembly(#[from] crate::tools::DefaultToolSetError),
 }
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
@@ -197,7 +200,8 @@ impl AgentRuntime {
                 file_storage,
                 datalake,
                 Arc::new(data_engine_client),
-            )?;
+            )
+            .await?;
 
             let mut agent = Agent::builder()
                 .with_model(model)

@@ -103,7 +103,14 @@ fn cite_key(article: &Article) -> String {
         .title
         .split_whitespace()
         .next()
-        .map(|w| w.to_lowercase())
+        .map(|w| {
+            // Keep only alphanumeric characters so trailing punctuation
+            // (e.g. "Tutorial:" → "tutorial") doesn't leak into the key.
+            w.to_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| "untitled".into());
     format!("{author_part}{year_part}{title_part}")
@@ -317,6 +324,20 @@ mod tests {
         let mut no_author = Article::new("x", "Hello World");
         no_author.year = Some(2020);
         assert_eq!(cite_key(&no_author), "anon2020hello");
+
+        // Trailing punctuation in the title's first word (e.g. "Tutorial:")
+        // must not leak into the cite key.
+        let mut titled = Article::new("x", "Tutorial: A Guide to GWAS");
+        titled.authors.push(bib_types::Author {
+            last_name: "Choi".into(),
+            fore_name: None,
+            initials: Some("M".into()),
+            affiliation: None,
+            orcid: None,
+            corresponding: false,
+        });
+        titled.year = Some(2020);
+        assert_eq!(cite_key(&titled), "choi2020tutorial");
     }
 
     #[test]

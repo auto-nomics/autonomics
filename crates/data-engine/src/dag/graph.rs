@@ -68,6 +68,10 @@ pub struct DAG {
     pub statuses: HashMap<NodeId, RuntimeStatus>,
     outputs: HashMap<NodeId, PortOutputs>,
     errors: HashMap<NodeId, DagError>,
+    /// Retained `(kind, spec)` per node, populated via [`Self::add_node_with_spec`]
+    /// / [`Self::replace_node_with_spec`]. Enables manifest export for
+    /// snapshot persistence without modifying the `DagNode` trait.
+    specs: HashMap<NodeId, (String, serde_json::Value)>,
 }
 
 impl DAG {
@@ -89,6 +93,7 @@ impl DAG {
         self.statuses.clear();
         self.outputs.clear();
         self.errors.clear();
+        self.specs.clear();
     }
 
     /// Reset all node statuses to [`RuntimeStatus::Pending`], preparing for a
@@ -516,6 +521,20 @@ impl DAG {
         Ok(())
     }
 
+    /// Like [`Self::add_node`] but also retains the `(kind, spec)` pair so the
+    /// node can be serialized into a manifest for snapshot persistence.
+    pub fn add_node_with_spec(
+        &mut self,
+        id: NodeId,
+        node: Box<dyn DagNode>,
+        kind: String,
+        spec: serde_json::Value,
+    ) -> Result<()> {
+        self.add_node(id.clone(), node)?;
+        self.specs.insert(id, (kind, spec));
+        Ok(())
+    }
+
     /// Add an edge from `from`'s `from_port` output port to `to`'s `to_port`
     /// input port. Enforces the strict 1:1 rule on declared input ports at
     /// insertion time (does not defer to [`Self::validate`]).
@@ -607,6 +626,7 @@ impl DAG {
         }
         self.statuses.remove(id);
         self.outputs.remove(id);
+        self.specs.remove(id);
         Ok(())
     }
 
@@ -1006,6 +1026,56 @@ impl DAG {
     /// Render DAG topology into dot code
     pub fn to_dot(&self) -> String {
         format!("{:?}", Dot::with_config(&self.graph, &[]))
+    }
+
+    /// Like [`Self::replace_node`] but also updates the retained spec, so the
+    /// manifest stays in sync after an `update_node` operation.
+    pub fn replace_node_with_spec(
+        &mut self,
+        id: &str,
+        new_node: Box<dyn DagNode>,
+        kind: String,
+        spec: serde_json::Value,
+    ) -> Result<()> {
+        self.replace_node(id, new_node)?;
+        self.specs.insert(id.to_string(), (kind, spec));
+        Ok(())
+    }
+
+    /// Export the current DAG topology + node specs as a serializable manifest
+    /// for snapshot persistence. Nodes without a retained spec are omitted
+    /// (they were added via the raw [`Self::add_node`] path, not through the
+    /// registry).
+    pub fn to_manifest(&self) -> super::history::DagManifest {
+        let mut nodes = Vec::new();
+        for (id, (kind, spec)) in &self.specs {
+            nodes.push(super::history::NodeEntry {
+                id: id.clone(),
+                kind: kind.clone(),
+                spec: spec.clone(),
+            });
+        }
+
+        let mut edges = Vec::new();
+        for edge in self.graph.edge_references() {
+            let from = &self.graph[edge.source()];
+            let to = &self.graph[edge.target()];
+            let label = edge.weight();
+            edges.push(super::history::EdgeEntry {
+                from: from.clone(),
+                from_port: label.from_port,
+                to: to.clone(),
+                to_port: label.to_port,
+            });
+        }
+
+        super::history::DagManifest { nodes, edges }
+    }
+
+    /// Whether a spec has been retained for `id` (i.e. the node was added via
+    /// [`Self::add_node_with_spec`] or [`Self::replace_node_with_spec`]).
+    pub fn has_spec(&self, id: &str) -> bool {
+        self.specs.contains_key(id)
     }
 }
 

@@ -92,7 +92,16 @@ pub fn to_entrez(sq: &StructuredSearch) -> Result<String> {
     }
 
     if let Some(yr) = &sq.year_range {
-        clauses.push(format!("{}:{}[Year]", yr.from, yr.to));
+        // Use [dp] (date-publication) range syntax, NOT [Year].
+        // PubMed's [Year] field does not support `from:to` ranges:
+        // `2023:2024[Year]` is silently misinterpreted as a literal
+        // match, returning only a handful of anomalous results.
+        // The [dp] field with `YYYY/MM/DD:YYYY/MM/DD` is the correct
+        // Entrez syntax for date-range filtering.
+        clauses.push(format!(
+            "{}/01/01:{}/12/31[dp]",
+            yr.from, yr.to
+        ));
     }
 
     if clauses.is_empty() {
@@ -296,7 +305,7 @@ mod tests {
         };
         assert_eq!(
             to_entrez(&sq).unwrap(),
-            r#"cancer[Title/Abstract] AND 2020:2024[Year]"#
+            r#"cancer[Title/Abstract] AND 2020/01/01:2024/12/31[dp]"#
         );
     }
 
@@ -309,7 +318,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(to_entrez(&sq).unwrap(), "2024:2024[Year]");
+        assert_eq!(to_entrez(&sq).unwrap(), "2024/01/01:2024/12/31[dp]");
     }
 
     #[test]

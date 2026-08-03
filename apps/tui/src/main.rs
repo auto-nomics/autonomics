@@ -13,7 +13,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 use opengwas::OpengwasClient;
 use tui::app::App;
 
-fn init_logging() -> color_eyre::Result<()> {
+fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     let log_dir = PathBuf::from("logs");
@@ -30,32 +30,57 @@ fn init_logging() -> color_eyre::Result<()> {
     // Retain the previously-installed hook so it can be re-invoked once the
     // TUI's own panic handling is finalised; currently we log only.
     let _default = panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        tracing::error!(
-            target: "panic",
-            payload = %info,           // "panicked at src/...: xxx"
-            backtrace = %bt,
-            "thread panicked"
-        );
-        // _default(info); // 保留默认行为(打到 stderr)
-    }));
+    if nocapture {
+        // In nocapture mode: log the panic AND print to stderr (default hook).
+        std::panic::set_hook(Box::new(move |info| {
+            let bt = std::backtrace::Backtrace::force_capture();
+            tracing::error!(
+                target: "panic",
+                payload = %info,
+                backtrace = %bt,
+                "thread panicked"
+            );
+            // Re-invoke the default hook so the panic message is visible on stderr.
+            _default(info);
+        }));
+    } else {
+        std::panic::set_hook(Box::new(move |info| {
+            let bt = std::backtrace::Backtrace::force_capture();
+            tracing::error!(
+                target: "panic",
+                payload = %info,
+                backtrace = %bt,
+                "thread panicked"
+            );
+            // _default(info); // 保留默认行为(打到 stderr)
+        }));
+    }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("autonomics_tui=debug,agentik_core=debug,agentik_sdk=debug")
-        }))
-        .with_writer(file_writer)
-        .with_ansi(false)
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("autonomics_tui=debug,agentik_core=debug,agentik_sdk=debug")
+    });
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(nocapture) // ANSI colors only when writing to a terminal
         .with_target(false)
         .with_file(true)
         .with_line_number(true)
         .with_span_events(FmtSpan::NONE)
-        .with_timer(timer)
-        .init();
+        .with_timer(timer);
+
+    if nocapture {
+        // Write to BOTH the log file and stderr so all output is visible
+        // in the terminal during debugging.
+        subscriber
+            .with_writer(file_writer.and(std::io::stderr))
+            .init();
+    } else {
+        subscriber.with_writer(file_writer).init();
+    }
 
     tracing::info!(
-        "logging initialized — logs directory: {}",
+        "logging initialized — logs directory: {} (nocapture: {nocapture})",
         log_dir.display()
     );
     Ok(())
@@ -94,6 +119,11 @@ struct TuiArgs {
     /// Optional path to a TUI configuration file.
     #[arg(long, short, value_name = "PATH")]
     config: Option<PathBuf>,
+
+    /// Disable output capture: tracing logs and panics are written to stderr
+    /// in addition to the log file. Use this for debugging startup failures.
+    #[arg(long)]
+    nocapture: bool,
 }
 
 #[derive(Debug, Args)]
@@ -483,7 +513,7 @@ async fn run_bib_list(db: &bib_base::BibBase, args: ListArgs) -> color_eyre::Res
         return Ok(());
     }
 
-    println!("{:<20} {:<6} {:<10} {}", "ID", "Year", "DOI", "Title");
+    println!("{:<20} {:<6} {:<10}Title", "ID", "Year", "DOI");
     println!("{:-<80}", "");
 
     for hit in &hits {
@@ -564,12 +594,23 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
 }
 
 fn main() -> color_eyre::Result<()> {
-    init_logging()?;
-
+    // Parse CLI first so we can read --nocapture before init_logging.
     let cli = Cli::parse();
+
+    // Determine nocapture: true if any subcommand (or the default Tui) has it.
+    let nocapture = match &cli.command {
+        Some(Command::Tui(args)) => args.nocapture,
+        _ => false,
+    };
+
+    init_logging(nocapture)?;
+
     match cli
         .command
-        .unwrap_or(Command::Tui(TuiArgs { config: None }))
+        .unwrap_or(Command::Tui(TuiArgs {
+            config: None,
+            nocapture: false,
+        }))
     {
         Command::Tui(args) => run_tui(args),
         Command::Cache(cache) => match cache.action {

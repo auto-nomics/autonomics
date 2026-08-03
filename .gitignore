@@ -2,6 +2,7 @@
 .env
 target
 *.db
+*.db-wal
 .history
 
 # TUI logs and runtime artefacts

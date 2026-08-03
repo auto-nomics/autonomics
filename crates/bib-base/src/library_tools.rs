@@ -30,24 +30,29 @@ use crate::query::LiteratureGateway;
 use crate::tools::auto_fetch;
 
 // ===========================================================================
-// bib_save — fetch from external source and store in local library
+// bib_save — fetch from external source and store in local library (batch)
 // ===========================================================================
 
 #[tool(
     name = "bib_save",
-    description = "Save an article to the local library by fetching its metadata from \
-                  the appropriate external source (PubMed, arXiv). \
+    description = "Save one or more articles to the local library by fetching their \
+                  metadata from the appropriate external source (PubMed, arXiv). \
                   \
-                  If the article is already in the library (matched by DOI or PMID), \
-                  returns the cached record without re-fetching. \
+                  Pass a list of IDs — each is fetched concurrently and stored. \
+                  Articles already in the library (matched by DOI or PMID) are \
+                  returned as cached without re-fetching. \
                   \
                   Use this after `lit_search` or `lit_fetch` to persist articles you \
-                  want to keep. Pass the same ID you found in search results."
+                  want to keep. Pass the same IDs you found in search results. \
+                  \
+                  **Examples**: \
+                  • ids=[\"37658030\"] — save a single PMID \
+                  • ids=[\"37658030\", \"10.1038/s41586-023-06236-2\", \"2401.00001\"] — batch"
 )]
 pub struct BibSaveInput {
-    #[desc = "Article identifier: PMID, DOI, or arXiv ID (same ID you got from lit_search/lit_fetch)"]
-    pub id: String,
-    #[desc = "Force a specific source: \"pubmed\" or \"arxiv\". Default: auto-detect from ID format."]
+    #[desc = "One or more article identifiers: PMIDs, DOIs, or arXiv IDs (same IDs you got from lit_search/lit_fetch)"]
+    pub ids: Vec<String>,
+    #[desc = "Force a specific source for ALL ids: \"pubmed\" or \"arxiv\". Default: auto-detect each ID from its format."]
     pub source: Option<String>,
 }
 
@@ -56,67 +61,155 @@ pub struct BibSaveTool {
     pub gateway: Arc<LiteratureGateway>,
 }
 
+/// Result of saving a single article within a batch.
+#[derive(serde::Serialize)]
+struct SaveResult {
+    id: String,
+    saved: bool,
+    cached: bool,
+    article_id: Option<String>,
+    source: Option<String>,
+    title: Option<String>,
+    doi: Option<String>,
+    pmid: Option<String>,
+    year: Option<u16>,
+    error: Option<String>,
+}
+
 #[async_trait]
 impl ToolFunction for BibSaveTool {
     type Input = BibSaveInput;
 
     fn timeout_seconds(&self) -> u64 {
-        60
+        // Generous timeout for batch fetches — each ID may require a network
+        // round-trip to PubMed/arXiv. Capped at the agentik maximum.
+        300
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let id = input.id.trim();
+        if input.ids.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "at least one article ID is required".into(),
+            });
+        }
 
+        // Process each ID concurrently.
+        let futures: Vec<_> = input
+            .ids
+            .iter()
+            .map(|id| self.save_one(id.trim(), input.source.as_deref()))
+            .collect();
+        let results = futures::future::join_all(futures).await;
+
+        let total = results.len();
+        let saved = results.iter().filter(|r| r.saved && !r.cached).count();
+        let cached = results.iter().filter(|r| r.cached).count();
+        let failed = results.iter().filter(|r| !r.saved).count();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "total": total,
+            "saved": saved,
+            "cached": cached,
+            "failed": failed,
+            "results": results,
+            "message": format!(
+                "{saved} saved, {cached} cached, {failed} failed out of {total} articles."
+            ),
+        })))
+    }
+}
+
+impl BibSaveTool {
+    /// Fetch + upsert a single article. Never errors — failures are captured
+    /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
+    async fn save_one(
+        &self,
+        id: &str,
+        source_override: Option<&str>,
+    ) -> SaveResult {
         // 1. Check if already in local library.
-        let kind = detect_id_kind(id);
-        if let Some(kind) = kind {
-            if let Some(existing) = self
-                .bib
-                .find_by_identifier(kind, id)
-                .await
-                .map_err(box_error)?
-            {
-                return Ok(AgentToolResult::success_json(serde_json::json!({
-                    "saved": true,
-                    "cached": true,
-                    "article_id": existing.id,
-                    "title": existing.title,
-                    "doi": existing.doi(),
-                    "pmid": existing.pmid(),
-                    "message": "Article already in library.",
-                })));
+        if let Some(kind) = detect_id_kind(id) {
+            if let Ok(Some(existing)) = self.bib.find_by_identifier(kind, id).await {
+                let doi = existing.doi().map(str::to_owned);
+                let pmid = existing.pmid().map(str::to_owned);
+                return SaveResult {
+                    id: id.into(),
+                    saved: true,
+                    cached: true,
+                    article_id: Some(existing.id),
+                    source: None,
+                    title: Some(existing.title),
+                    doi,
+                    pmid,
+                    year: existing.year,
+                    error: None,
+                };
             }
         }
 
         // 2. Fetch from external source.
-        let fetched = if let Some(ref source) = input.source {
+        let fetched = if let Some(source) = source_override {
             self.gateway
                 .fetch_from(source, id)
                 .await
-                .map_err(box_error)?
-                .map(|article| (source.clone(), article))
+                .ok()
+                .flatten()
+                .map(|article| (source.into(), article))
         } else {
             auto_fetch(&self.gateway, id).await
         };
 
-        let (source_name, article) = fetched.ok_or_else(|| ToolError::ExecutionFailed {
-            source: format!("Article '{id}' not found in any source").into(),
-        })?;
+        let (source_name, article) = match fetched {
+            Some(x) => x,
+            None => {
+                return SaveResult {
+                    id: id.into(),
+                    saved: false,
+                    cached: false,
+                    article_id: None,
+                    source: None,
+                    title: None,
+                    doi: None,
+                    pmid: None,
+                    year: None,
+                    error: Some(format!("Article '{id}' not found in any source")),
+                };
+            }
+        };
 
         // 3. Upsert to local DB.
-        self.bib.upsert_article(&article).await.map_err(box_error)?;
+        let article_id = article.id.clone();
+        let title = article.title.clone();
+        let doi = article.doi().map(str::to_owned);
+        let pmid = article.pmid().map(str::to_owned);
+        let year = article.year;
 
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "saved": true,
-            "cached": false,
-            "article_id": article.id,
-            "source": source_name,
-            "title": article.title,
-            "doi": article.doi(),
-            "pmid": article.pmid(),
-            "year": article.year,
-            "message": "Article saved to library.",
-        })))
+        match self.bib.upsert_article(&article).await {
+            Ok(()) => SaveResult {
+                id: id.into(),
+                saved: true,
+                cached: false,
+                article_id: Some(article_id),
+                source: Some(source_name),
+                title: Some(title),
+                doi,
+                pmid,
+                year,
+                error: None,
+            },
+            Err(e) => SaveResult {
+                id: id.into(),
+                saved: false,
+                cached: false,
+                article_id: None,
+                source: Some(source_name),
+                title: Some(title),
+                doi,
+                pmid,
+                year,
+                error: Some(format!("Database error: {e}")),
+            },
+        }
     }
 }
 
@@ -571,57 +664,6 @@ impl ToolFunction for BibAddNoteTool {
 }
 
 // ===========================================================================
-// bib_store_fulltext — agent stores extracted text directly
-// ===========================================================================
-
-#[tool(
-    name = "bib_store_fulltext",
-    description = "Store full-text content for an article directly from text (not file upload). \
-                  Use this when you have the full text available (e.g. from PubMed Central, \
-                  open-access HTML, or pre-extracted text). \
-                  \
-                  This is the agent-side counterpart to the user's `bib upload` CLI command."
-)]
-pub struct BibStoreFulltextInput {
-    #[desc = "Article ID (already in the local library)"]
-    pub article_id: String,
-    #[desc = "The full text content to store"]
-    pub text: String,
-}
-
-pub struct BibStoreFulltextTool {
-    pub bib: Arc<BibBase>,
-}
-
-#[async_trait]
-impl ToolFunction for BibStoreFulltextTool {
-    type Input = BibStoreFulltextInput;
-
-    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let text_len = input.text.len();
-        let ft = bib_types::FullText {
-            article_id: input.article_id.clone(),
-            file_path: format!("(agent:{})", input.article_id),
-            file_format: bib_types::FileFormat::Txt,
-            text_content: Some(input.text),
-            source: bib_types::FullTextSource::OpenAccess,
-            file_hash: None,
-            file_size: Some(text_len as i64),
-            uploaded_at: Some(chrono::Utc::now()),
-        };
-
-        self.bib.upsert_fulltext(&ft).await.map_err(box_error)?;
-
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "stored": true,
-            "article_id": input.article_id,
-            "chars": text_len,
-            "message": "Full text stored. bib_get_article will now return the text.",
-        })))
-    }
-}
-
-// ===========================================================================
 // bib_export — export articles in citation format
 // ===========================================================================
 
@@ -729,7 +771,6 @@ pub fn bib_library_registrations(
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool { bib: bib.clone() }),
-        R::from(BibStoreFulltextTool { bib: bib.clone() }),
         R::from(BibExportTool { bib }),
     ]
 }

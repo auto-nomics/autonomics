@@ -44,6 +44,8 @@ faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }
 statrs = "0.18"
+turso.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 datalake = { path = "../datalake" }

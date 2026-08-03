@@ -1,13 +1,18 @@
 mod add_edge_tool;
 mod add_node_tool;
-mod clear_dag_tool;
+mod branch_from_snapshot_tool;
+mod checkout_dag_tool;
+mod dag_history_log_tool;
 mod get_node_doc_tool;
 mod get_node_ports_tool;
 mod get_node_spec_tool;
 mod get_output_tool;
+mod list_dag_refs_tool;
 mod list_node_factories_tool;
+mod new_dag_ref_tool;
 mod remove_node_tool;
 mod run_dag_tool;
+mod switch_dag_ref_tool;
 mod update_node_tool;
 mod view_dag_tool;
 
@@ -69,20 +74,29 @@ impl From<ExecError> for ToolError {
 /// generic `add_node` tool (kind + JSON spec).
 pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
     vec![
+        // ── node discovery ────────────────────────────────────────────────
         ToolRegistration::from(list_node_factories_tool::ListNodeFactoriesTool::new(
             client.clone(),
         )),
         ToolRegistration::from(get_node_spec_tool::GetNodeSpecTool::new(client.clone())),
         ToolRegistration::from(get_node_ports_tool::GetNodePortsTool::new(client.clone())),
         ToolRegistration::from(get_node_doc_tool::GetNodeDocTool::new(client.clone())),
+        // ── DAG building ──────────────────────────────────────────────────
         ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
         ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),
         ToolRegistration::from(add_edge_tool::AddEdgeTool::new(client.clone())),
+        ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
+        // ── DAG execution & inspection ────────────────────────────────────
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),
         ToolRegistration::from(get_output_tool::GetOutputTool::new(client.clone())),
-        ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
         ToolRegistration::from(view_dag_tool::ViewDagTool::new(client.clone())),
-        ToolRegistration::from(clear_dag_tool::ClearDagTool::new(client)),
+        // ── history / ref management ──────────────────────────────────────
+        ToolRegistration::from(new_dag_ref_tool::NewDagRefTool::new(client.clone())),
+        ToolRegistration::from(switch_dag_ref_tool::SwitchDagRefTool::new(client.clone())),
+        ToolRegistration::from(list_dag_refs_tool::ListDagRefsTool::new(client.clone())),
+        ToolRegistration::from(dag_history_log_tool::DagHistoryLogTool::new(client.clone())),
+        ToolRegistration::from(checkout_dag_tool::CheckoutDagTool::new(client.clone())),
+        ToolRegistration::from(branch_from_snapshot_tool::BranchFromSnapshotTool::new(client)),
     ]
 }
 

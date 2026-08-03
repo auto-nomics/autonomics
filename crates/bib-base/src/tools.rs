@@ -277,7 +277,16 @@ fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
         affiliation: None,
         year_range: match (input.year_from, input.year_to) {
             (Some(from), Some(to)) => Some(YearRange { from, to }),
-            (Some(y), None) | (None, Some(y)) => Some(YearRange { from: y, to: y }),
+            // Only start given → open-ended upper bound (current era).
+            (Some(from), None) => Some(YearRange {
+                from,
+                to: 3000,
+            }),
+            // Only end given → open-ended lower bound (start of modern indexing).
+            (None, Some(to)) => Some(YearRange {
+                from: 1900,
+                to,
+            }),
             (None, None) => None,
         },
     }

@@ -41,6 +41,41 @@ pub enum DataEngineCmd {
     ClearDag {
         reply: oneshot::Sender<EngineResult<()>>,
     },
+    /// Clear the in-memory DAG and switch to a new history ref.
+    NewDagRef {
+        name: String,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
+    /// Switch the engine's history ref to an existing ref.
+    SwitchDagRef {
+        name: String,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
+    /// List all history refs.
+    ListDagRefs {
+        reply: oneshot::Sender<EngineResult<Vec<(String, String, bool)>>>,
+    },
+    /// Show snapshot lineage for a ref.
+    DagLog {
+        ref_name: Option<String>,
+        limit: usize,
+        reply: oneshot::Sender<EngineResult<Vec<crate::dag::Snapshot>>>,
+    },
+    /// Load a snapshot's DAG into memory without moving the ref.
+    CheckoutDag {
+        snapshot_id: String,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
+    /// Create a new ref from a snapshot + switch + load its DAG.
+    BranchFromSnapshot {
+        snapshot_id: String,
+        ref_name: String,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
+    /// Query the current history ref name.
+    GetDagRef {
+        reply: oneshot::Sender<EngineResult<String>>,
+    },
     GetNodeSpec {
         kind: String,
         reply: oneshot::Sender<EngineResult<schemars::Schema>>,

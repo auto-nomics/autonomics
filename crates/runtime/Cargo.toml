@@ -10,7 +10,6 @@ description = "Sync-to-async bridge for running an agentik agent from a sync con
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 opengwas = { path = "../opengwas" }
-eutils = { path = "../eutils" }
 opentargets = { path = "../opentargets" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
@@ -18,6 +17,7 @@ data-engine-tools = { path = "../data-engine-tools" }
 datalake = { path = "../datalake" }
 datalake-tools = { path = "../datalake-tools" }
 fs = { path = "../fs" }
+bib-base = { path = "../bib-base" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }

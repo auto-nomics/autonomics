@@ -1957,6 +1957,7 @@ dependencies = [
  "async-trait",
  "biofusion",
  "blake3",
+ "chrono",
  "cpassoc",
  "datafusion",
  "datalake",
@@ -1990,6 +1991,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "turso",
  "visualization",
 ]
 
@@ -7587,11 +7589,11 @@ dependencies = [
  "agentik-core",
  "agentik-sdk",
  "arc-swap",
+ "bib-base",
  "data-engine",
  "data-engine-tools",
  "datalake",
  "datalake-tools",
- "eutils",
  "fs",
  "gwascatalog-sdk",
  "opengwas",

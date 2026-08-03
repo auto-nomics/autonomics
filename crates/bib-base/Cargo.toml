@@ -33,3 +33,10 @@ schemars.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Enables live-API end-to-end tests (require network connectivity).
+e2e = []
+
+[dev-dependencies]
+tokio = { workspace = true }

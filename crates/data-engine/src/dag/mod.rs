@@ -10,6 +10,7 @@
 
 pub mod error;
 pub mod graph;
+pub mod history;
 pub mod node_event;
 pub mod runtime;
 pub mod utils;
@@ -20,4 +21,5 @@ pub use crate::nodes::{DagNode, NodeId, NodeInput, NodePorts};
 
 pub use error::DagError;
 pub use graph::DAG;
+pub use history::{DagHistory, DagManifest, Snapshot};
 pub use runtime::{RunReport, RuntimeStatus, SchedulerConfig};

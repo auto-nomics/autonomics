@@ -7,7 +7,7 @@ use datafusion::{
 };
 use fs::OpendalFileStorage;
 
-use crate::dag::{DAG, DagError, RunReport, SchedulerConfig};
+use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -25,13 +25,10 @@ pub struct DataEngine {
     ctx: SessionContext,
     /// Threaded through from the builder; retained for future engine-level
     /// object-store / catalog reconfiguration but not yet read here.
-    #[allow(dead_code)]
     runtime_env: Arc<RuntimeEnv>,
-    #[allow(dead_code)]
     iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     datalake: Option<Arc<Datalake>>,
-    #[allow(dead_code)]
-    opendal: Option<Arc<OpendalFileStorage>>,
+
     /// The immutable engine ingredients, handed to the DAG scheduler on every
     /// `run` so each node `execute` can build a fresh isolated `SessionContext`
     /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
@@ -40,6 +37,13 @@ pub struct DataEngine {
     dag: DAG,
     node_registry: NodeRegistry,
     config: SchedulerConfig,
+    /// Optional DAG history store. When `Some`, every `run()` automatically
+    /// commits a snapshot of the current DAG manifest + run report.
+    history: Option<DagHistory>,
+    /// The history ref that [`Self::run`] commits to (default `"main"`).
+    /// Switch via [`Self::set_history_ref`] to isolate unrelated analysis
+    /// tasks into independent snapshot lineages.
+    history_ref: String,
 }
 
 impl DataEngine {
@@ -71,11 +75,12 @@ impl DataEngine {
             runtime_env,
             iceberg_catalog,
             datalake,
-            opendal,
             engine_ctx,
             dag: DAG::default(),
             node_registry,
             config: SchedulerConfig::default(),
+            history: None,
+            history_ref: "main".to_string(),
         }
     }
 
@@ -128,8 +133,9 @@ impl DataEngine {
         kind: &str,
         spec: serde_json::Value,
     ) -> Result<()> {
-        let node = self.node_registry.build_node(kind, spec)?;
-        self.dag.add_node(node_id.into(), node)?;
+        let node = self.node_registry.build_node(kind, spec.clone())?;
+        self.dag
+            .add_node_with_spec(node_id.into(), node, kind.to_string(), spec)?;
         Ok(())
     }
 
@@ -178,8 +184,8 @@ impl DataEngine {
             .ok_or_else(|| Error::Dag(DagError::UnknownNode(id.clone())))?
             .kind()
             .to_string();
-        let node = self.node_registry.build_node(&kind, spec)?;
-        self.dag.replace_node(&id, node)?;
+        let node = self.node_registry.build_node(&kind, spec.clone())?;
+        self.dag.replace_node_with_spec(&id, node, kind, spec)?;
         Ok(())
     }
 
@@ -190,6 +196,155 @@ impl DataEngine {
     /// Clear all nodes, edges, and runtime state — start fresh.
     pub fn clear_dag(&mut self) -> Result<()> {
         self.dag.clear();
+        Ok(())
+    }
+
+    // ── history / ref management ───────────────────────────────────────────
+
+    /// Create a new analysis ref: clears the in-memory DAG and switches the
+    /// engine's history ref to `name`. If a history store is attached, the
+    /// ref is created in the database (the first `run()` will create a root
+    /// snapshot).
+    ///
+    /// This is the replacement for the old `clear_dag` — instead of wiping
+    /// state without trace, it starts a new independent lineage.
+    pub async fn new_dag_ref(&mut self, name: &str) -> Result<()> {
+        self.dag.clear();
+        self.history_ref = name.to_string();
+        Ok(())
+    }
+
+    /// Switch the engine's history ref to an existing ref name.
+    /// Does **not** clear or modify the in-memory DAG.
+    pub fn switch_dag_ref(&mut self, name: &str) -> Result<()> {
+        self.history_ref = name.to_string();
+        Ok(())
+    }
+
+    /// List all refs in the history store. Returns `Ok(vec![])` if no history
+    /// is attached.
+    pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
+        match &self.history {
+            Some(h) => Ok(h
+                .list_refs()
+                .await
+                .map_err(|e| Error::Dag(e))?),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Show the snapshot lineage for a ref (default: current ref).
+    /// Returns snapshots newest-first.
+    pub async fn dag_log(
+        &self,
+        ref_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::dag::Snapshot>> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        let r = ref_name.unwrap_or(&self.history_ref);
+        history
+            .log(r, limit)
+            .await
+            .map_err(|e| Error::Dag(e))
+    }
+
+    /// Load a historical snapshot's DAG into memory **without** moving the
+    /// history ref.
+    ///
+    /// Clears the current DAG, rebuilds every node + edge from the snapshot's
+    /// manifest. The ref stays where it is — subsequent `run()` calls commit
+    /// with the current ref head as parent (just like a normal run).
+    ///
+    /// This is the equivalent of `git checkout <commit>`: you inspect and
+    /// work from a historical state, but the branch pointer doesn't move.
+    /// Short-hash prefixes are accepted.
+    pub async fn checkout_dag(&mut self, snapshot_id: &str) -> Result<()> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+
+        let snap = history
+            .resolve_snapshot(snapshot_id)
+            .await
+            .map_err(|e| Error::Dag(e))?
+            .ok_or_else(|| Error::Custom(format!("snapshot '{snapshot_id}' not found")))?;
+
+        let manifest = snap
+            .manifest()
+            .map_err(|e| Error::Custom(format!("manifest deserialization: {e}")))?;
+
+        self.rebuild_dag_from_manifest(&manifest)?;
+
+        Ok(())
+    }
+
+    /// Create a new ref diverging from an arbitrary snapshot, switch the
+    /// engine to it, and load that snapshot's DAG into memory.
+    ///
+    /// This is the equivalent of `git checkout -b <branch> <commit>`: you
+    /// start a new independent lineage from a historical point without
+    /// affecting the original ref. Short-hash prefixes are accepted.
+    pub async fn branch_from_snapshot(
+        &mut self,
+        snapshot_id: &str,
+        new_ref_name: &str,
+    ) -> Result<()> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+
+        // Create the new ref pointing at the resolved snapshot.
+        history
+            .branch_from_snapshot(new_ref_name, snapshot_id)
+            .await
+            .map_err(|e| Error::Dag(e))?;
+
+        // Switch the engine to the new ref.
+        self.history_ref = new_ref_name.to_string();
+
+        // Load the snapshot's DAG into memory.
+        let snap = history
+            .resolve_snapshot(snapshot_id)
+            .await
+            .map_err(|e| Error::Dag(e))?
+            .ok_or_else(|| Error::Custom(format!("snapshot '{snapshot_id}' not found")))?;
+
+        let manifest = snap
+            .manifest()
+            .map_err(|e| Error::Custom(format!("manifest deserialization: {e}")))?;
+
+        self.rebuild_dag_from_manifest(&manifest)?;
+
+        Ok(())
+    }
+
+    /// Internal helper: clear the DAG and rebuild nodes + edges from a
+    /// manifest.
+    fn rebuild_dag_from_manifest(
+        &mut self,
+        manifest: &crate::dag::DagManifest,
+    ) -> Result<()> {
+        self.dag.clear();
+        for entry in &manifest.nodes {
+            let node = self
+                .node_registry
+                .build_node(&entry.kind, entry.spec.clone())?;
+            self.dag.add_node_with_spec(
+                entry.id.clone(),
+                node,
+                entry.kind.clone(),
+                entry.spec.clone(),
+            )?;
+        }
+        for edge in &manifest.edges {
+            self.dag
+                .add_edge(edge.from.clone(), edge.to.clone(), edge.from_port, edge.to_port)?;
+        }
         Ok(())
     }
 
@@ -239,9 +394,64 @@ impl DataEngine {
         self
     }
 
+    /// Attach a DAG history store. After this, every [`Self::run`] /
+    /// [`Self::run_with_events`] will automatically commit a snapshot
+    /// (manifest + run report) to the history database.
+    pub fn with_history(mut self, history: DagHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
+
+    /// Set the history ref name for this engine instance (builder style).
+    ///
+    /// Every [`Self::run`] will commit snapshots under this ref, forming an
+    /// independent lineage. Use different ref names for unrelated analysis
+    /// tasks to keep their histories separate.
+    pub fn with_history_ref(mut self, ref_name: impl Into<String>) -> Self {
+        self.history_ref = ref_name.into();
+        self
+    }
+
+    /// Switch the history ref at runtime.
+    ///
+    /// Subsequent [`Self::run`] calls will commit to the new ref. If the ref
+    /// does not exist yet, the first commit creates it (as a root snapshot).
+    /// The in-memory DAG is **not** affected — call [`Self::clear_dag`] and
+    /// rebuild if you want to start a fresh DAG topology.
+    ///
+    /// Returns the previous ref name.
+    pub fn set_history_ref(&mut self, ref_name: impl Into<String>) -> String {
+        let old = std::mem::replace(&mut self.history_ref, ref_name.into());
+        old
+    }
+
+    /// The current history ref name that [`Self::run`] commits to.
+    pub fn history_ref(&self) -> &str {
+        &self.history_ref
+    }
+
+    /// Borrow the history store (if attached) for direct queries — e.g.
+    /// `log`, `refs`, `get_snapshot`.
+    pub fn history(&self) -> Option<&DagHistory> {
+        self.history.as_ref()
+    }
+
     /// Validate and run every node of the DAG.
+    ///
+    /// If a [`DagHistory`] is attached ([`Self::with_history`]), a snapshot
+    /// manifest is captured *before* execution and committed with the
+    /// [`RunReport`] *after* execution under the current history ref
+    /// ([`Self::history_ref`]).
     pub async fn run(&mut self) -> Result<RunReport> {
-        Ok(self.dag.run(&self.config, &self.engine_ctx, None).await?)
+        let manifest = self.dag.to_manifest();
+        let report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
+
+        if let Some(history) = &self.history {
+            let _ = history
+                .commit(&self.history_ref, &manifest, Some(&report), "auto-snapshot after run")
+                .await;
+        }
+        Ok(report)
     }
 
     /// Like [`run`](Self::run) but also streams lightweight per-node events
@@ -251,10 +461,18 @@ impl DataEngine {
         &mut self,
         event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
     ) -> Result<RunReport> {
-        Ok(self
+        let manifest = self.dag.to_manifest();
+        let report = self
             .dag
             .run(&self.config, &self.engine_ctx, Some(event_sink))
-            .await?)
+            .await?;
+
+        if let Some(history) = &self.history {
+            let _ = history
+                .commit(&self.history_ref, &manifest, Some(&report), "auto-snapshot after run")
+                .await;
+        }
+        Ok(report)
     }
 
     pub async fn get_output(

@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use agentik_core::tools::ToolRegistration;
+use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
 use datalake::Datalake;
-use eutils::EutilsClient;
 use fs::OpendalFileStorage;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
@@ -23,12 +23,6 @@ pub fn opengwas_tools(
 ) -> Result<Vec<ToolRegistration>, OpengwasError> {
     let opengwas = Arc::new(OpengwasClient::new(None)?);
     Ok(opengwas::opengwas_registrations(opengwas, file_storage))
-}
-
-/// NCBI E-utilities tools (PubMed, Entrez).
-pub fn eutils_tools() -> Vec<ToolRegistration> {
-    let eutils = Arc::new(EutilsClient::from_env());
-    eutils::eutils_registrations(eutils)
 }
 
 /// Open Targets Platform tools (target/disease/drug associations, search).
@@ -50,22 +44,53 @@ pub fn datalake_tools(datalake: Arc<Datalake>) -> Vec<ToolRegistration> {
     datalake_tools::registrations(datalake)
 }
 
-/// The complete default tool set: File + OpenGWAS + E-utilities + Open Targets
-/// + GWAS Catalog + DataLake + DataEngine.
+/// Default on-disk location for the bibliography database, mirroring the
+/// TUI's `bib` subcommand default (`--db bib.db`). Overridable via the
+/// `AUTONOMICS_BIB_DB` environment variable.
+pub const DEFAULT_BIB_DB: &str = "bib.db";
+
+/// Bibliography tools: literature search/fetch (`lit_search`, `lit_fetch`)
+/// plus library management (`bib_save`, `bib_create_collection`, …, `bib_export`).
+///
+/// `db_path` selects the libSQL file backing [`BibBase`]; pass
+/// [`DEFAULT_BIB_DB`] for the conventional location.
+pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>, bib_base::Error> {
+    let bib = Arc::new(BibBase::open(db_path).await?);
+    let gateway = Arc::new(LiteratureGateway::with_default_sources());
+    Ok(bib_base::bib_all_registrations(bib, gateway))
+}
+
+/// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,
+/// otherwise [`DEFAULT_BIB_DB`].
+pub fn resolve_bib_db_path() -> String {
+    std::env::var("AUTONOMICS_BIB_DB").unwrap_or_else(|_| DEFAULT_BIB_DB.to_string())
+}
+
+/// The complete default tool set: File + OpenGWAS + Open Targets
+/// + GWAS Catalog + DataLake + DataEngine + Bibliography.
 ///
 /// Pass a shared [`OpendalFileStorage`] used by both the fs tools
 /// and the OpenGWAS download tool.
-pub fn default_tool_set(
+pub async fn default_tool_set(
     file_storage: Arc<OpendalFileStorage>,
     datalake: Arc<Datalake>,
     data_engine_client: Arc<DataEngineClient>,
-) -> Result<Vec<ToolRegistration>, OpengwasError> {
+) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
     let mut tools = fs::vbash_registrations(file_storage.clone());
     tools.extend(opengwas_tools(file_storage.clone())?);
-    tools.extend(eutils_tools());
     tools.extend(opentargets_tools());
     tools.extend(gwascatalog_tools(file_storage));
     tools.extend(datalake_tools(datalake.clone()));
     tools.extend(data_engine_tools::registrations(data_engine_client));
+    tools.extend(bib_tools(&resolve_bib_db_path()).await?);
     Ok(tools)
+}
+
+/// Errors that can arise while assembling the default tool set.
+#[derive(thiserror::Error, Debug)]
+pub enum DefaultToolSetError {
+    #[error(transparent)]
+    Opengwas(#[from] OpengwasError),
+    #[error(transparent)]
+    Bib(#[from] bib_base::Error),
 }
