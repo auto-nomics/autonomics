@@ -150,6 +150,7 @@ impl<'a> MessagesResource<'a> {
             StreamRequestBuilder::new(http_client.clone(), base_url.clone())
                 .header("Authorization", &auth_header)
                 .header("Content-Type", "application/json")
+                .wire(self.client.wire().clone())
                 .config((*config).clone());
         for (name, value) in &wire_headers {
             stream_builder = stream_builder.header(name, value);
@@ -175,6 +176,7 @@ impl<'a> MessagesResource<'a> {
             let base_url = base_url.clone();
             let auth_header = auth_header.clone();
             let wire_headers = wire_headers.clone();
+            let wire = self.client.wire().clone();
             let endpoint = endpoint.clone();
             let body = body.clone();
             let config = config.clone();
@@ -183,6 +185,7 @@ impl<'a> MessagesResource<'a> {
                 let base_url = base_url.clone();
                 let auth_header = auth_header.clone();
                 let wire_headers = wire_headers.clone();
+                let wire = wire.clone();
                 let endpoint = endpoint.clone();
                 let body = body.clone();
                 let config = config.clone();
@@ -191,6 +194,7 @@ impl<'a> MessagesResource<'a> {
                         StreamRequestBuilder::new(http_client, base_url)
                             .header("Authorization", &auth_header)
                             .header("Content-Type", "application/json")
+                            .wire(wire)
                             .config((*config).clone());
                     for (name, value) in &wire_headers {
                         builder = builder.header(name, value);

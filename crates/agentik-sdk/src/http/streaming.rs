@@ -6,12 +6,13 @@
 use futures::{Stream, TryStreamExt};
 use pin_project::pin_project;
 use reqwest::Response;
-use serde_json;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio_stream::StreamExt;
 
 use crate::types::{AnthropicError, MessageStreamEvent, Result};
+use crate::wire::{AnthropicWire, StreamState, WireProtocol};
 
 /// Configuration for SSE streaming requests.
 #[derive(Debug, Clone)]
@@ -62,7 +63,11 @@ impl HttpStreamClient {
     ///
     /// This method takes a reqwest Response (which should be from a streaming endpoint)
     /// and converts it into a stream of MessageStreamEvent objects.
-    pub async fn from_response(response: Response, config: StreamConfig) -> Result<Self> {
+    pub async fn from_response(
+        response: Response,
+        config: StreamConfig,
+        wire: Arc<dyn WireProtocol>,
+    ) -> Result<Self> {
         let request_id = response
             .headers()
             .get("request-id")
@@ -70,7 +75,7 @@ impl HttpStreamClient {
             .map(|s| s.to_string());
 
         // Convert the HTTP response into an SSE stream
-        let event_stream = Self::create_event_stream(response).await?;
+        let event_stream = Self::create_event_stream(response, wire).await?;
 
         Ok(Self {
             event_stream: Box::pin(event_stream),
@@ -81,8 +86,13 @@ impl HttpStreamClient {
     }
 
     /// Create a stream of MessageStreamEvent from an HTTP response.
+    ///
+    /// The raw SSE events are delegated to the wire protocol's
+    /// [`WireProtocol::adapt_sse_event`] adapter, which translates them into
+    /// the canonical Anthropic-shaped event stream.
     async fn create_event_stream(
         response: Response,
+        wire: Arc<dyn WireProtocol>,
     ) -> Result<impl Stream<Item = Result<MessageStreamEvent>>> {
         // Check that we got a successful response
         if !response.status().is_success() {
@@ -137,9 +147,14 @@ impl HttpStreamClient {
             );
         });
 
+        // Per-stream adapter state (used by OpenAI wires to track tool-call
+        // accumulation; unused by AnthropicWire since Anthropic SSE is
+        // self-describing).
+        let mut state = StreamState::default();
+
         let sse_stream = byte_stream
             .eventsource()
-            .map(|result| -> Result<Option<MessageStreamEvent>> {
+            .map(move |result| -> Result<Option<MessageStreamEvent>> {
                 // The eventsource-stream crate wraps every body error as
                 // `Transport error: ...` — losing the original reqwest
                 // error type and source chain. Unwrap it here so we can
@@ -161,119 +176,10 @@ impl HttpStreamClient {
                 }
                 match result {
                     Ok(event) => {
-                        // Parse the SSE event data based on event type.
-                        // `Ok(None)` means "skip this event" (e.g. ping or
-                        // unknown event type); `Ok(Some(_))` yields an event;
-                        // `Err(_)` is propagated.
-                        match event.event.as_str() {
-                            // Anthropic API format: the `event` field is
-                            // "message" and the full MessageStreamEvent is
-                            // in the `data` payload.
-                            "message" | "" => {
-                                match serde_json::from_str::<MessageStreamEvent>(&event.data) {
-                                    Ok(stream_event) => Ok(Some(stream_event)),
-                                    Err(e) => Err(AnthropicError::StreamError(
-                                        format!("Failed to parse SSE event: {}", e)
-                                    )),
-                                }
-                            }
-                            // Handle custom gateway format (event type IS the message event type)
-                            "message_start" => {
-                                // Parse the message data - handle both direct and nested formats
-                                match serde_json::from_str::<crate::types::Message>(&event.data) {
-                                    Ok(message) => Ok(Some(MessageStreamEvent::MessageStart { message })),
-                                    Err(_) => {
-                                        // Try parsing as a wrapped message (custom gateway format)
-                                        match serde_json::from_str::<serde_json::Value>(&event.data) {
-                                            Ok(value) => {
-                                                if let Some(message_value) = value.get("message") {
-                                                    match serde_json::from_value::<crate::types::Message>(message_value.clone()) {
-                                                        Ok(message) => Ok(Some(MessageStreamEvent::MessageStart { message })),
-                                                        Err(e) => Err(AnthropicError::StreamError(
-                                                            format!("Failed to parse nested message: {}", e)
-                                                        )),
-                                                    }
-                                                } else {
-                                                    Err(AnthropicError::StreamError(
-                                                        "message_start event missing message field".to_string()
-                                                    ))
-                                                }
-                                            }
-                                            Err(e) => Err(AnthropicError::StreamError(
-                                                format!("Failed to parse message_start as JSON: {}", e)
-                                            )),
-                                        }
-                                    }
-                                }
-                            }
-                            "content_block_start" => {
-                                // Parse as a generic JSON value first to extract index and content_block
-                                match serde_json::from_str::<serde_json::Value>(&event.data) {
-                                    Ok(value) => {
-                                        let index = value["index"].as_u64().unwrap_or(0) as usize;
-                                        match serde_json::from_value::<crate::types::ContentBlock>(value["content_block"].clone()) {
-                                            Ok(content_block) => Ok(Some(MessageStreamEvent::ContentBlockStart { content_block, index })),
-                                            Err(e) => Err(AnthropicError::StreamError(
-                                                format!("Failed to parse content_block in content_block_start: {}", e)
-                                            )),
-                                        }
-                                    }
-                                    Err(e) => Err(AnthropicError::StreamError(
-                                        format!("Failed to parse content_block_start event: {}", e)
-                                    )),
-                                }
-                            }
-                            "content_block_delta" => {
-                                // Parse as a generic JSON value first to extract index and delta
-                                match serde_json::from_str::<serde_json::Value>(&event.data) {
-                                    Ok(value) => {
-                                        let index = value["index"].as_u64().unwrap_or(0) as usize;
-                                        match serde_json::from_value::<crate::types::ContentBlockDelta>(value["delta"].clone()) {
-                                            Ok(delta) => Ok(Some(MessageStreamEvent::ContentBlockDelta { delta, index })),
-                                            Err(e) => Err(AnthropicError::StreamError(
-                                                format!("Failed to parse delta in content_block_delta: {}", e)
-                                            )),
-                                        }
-                                    }
-                                    Err(e) => Err(AnthropicError::StreamError(
-                                        format!("Failed to parse content_block_delta event: {}", e)
-                                    )),
-                                }
-                            }
-                            "content_block_stop" => {
-                                // Parse as a generic JSON value to extract index
-                                match serde_json::from_str::<serde_json::Value>(&event.data) {
-                                    Ok(value) => {
-                                        let index = value["index"].as_u64().unwrap_or(0) as usize;
-                                        Ok(Some(MessageStreamEvent::ContentBlockStop { index }))
-                                    }
-                                    Err(e) => Err(AnthropicError::StreamError(
-                                        format!("Failed to parse content_block_stop event: {}", e)
-                                    )),
-                                }
-                            }
-                            "message_delta" => {
-                                // Parse as a generic JSON value to extract delta and usage
-                                match serde_json::from_str::<serde_json::Value>(&event.data) {
-                                    Ok(value) => {
-                                        let delta = serde_json::from_value::<crate::types::MessageDelta>(value["delta"].clone())
-                                            .map_err(|e| AnthropicError::StreamError(format!("Failed to parse delta: {}", e)))?;
-                                        let usage = serde_json::from_value::<crate::types::MessageDeltaUsage>(value["usage"].clone())
-                                            .map_err(|e| AnthropicError::StreamError(format!("Failed to parse usage: {}", e)))?;
-                                        Ok(Some(MessageStreamEvent::MessageDelta { delta, usage }))
-                                    }
-                                    Err(e) => Err(AnthropicError::StreamError(
-                                        format!("Failed to parse message_delta event: {}", e)
-                                    )),
-                                }
-                            }
-                            "message_stop" => {
-                                // Message stop doesn't need data parsing
-                                Ok(Some(MessageStreamEvent::MessageStop))
-                            }
-                            // Handle other event types (incl. "ping"): skip silently
-                            _ => Ok(None),
-                        }
+                        // Delegate parsing to the wire protocol adapter.
+                        // `Ok(None)` means "skip this event"; `Ok(Some(_))`
+                        // yields a canonical MessageStreamEvent.
+                        wire.adapt_sse_event(event.event.as_str(), &event.data, &mut state)
                     }
                     Err(e) => Err(AnthropicError::StreamError(
                         format!("SSE stream error: {}", e)
@@ -342,7 +248,7 @@ impl Stream for HttpStreamClient {
 }
 
 /// Builder for creating HTTP streaming requests.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamRequestBuilder {
     /// HTTP client for making requests
     client: reqwest::Client,
@@ -352,6 +258,9 @@ pub struct StreamRequestBuilder {
     headers: reqwest::header::HeaderMap,
     /// Stream configuration
     config: StreamConfig,
+    /// Wire protocol used to adapt SSE events. Defaults to
+    /// [`AnthropicWire`] for backward compatibility.
+    wire: Arc<dyn WireProtocol>,
     /// When true, replace the client's per-request `timeout` with
     /// `Duration::MAX` for this stream. Streaming bodies are open-ended
     /// (the server can trickle events indefinitely), so the global
@@ -362,19 +271,45 @@ pub struct StreamRequestBuilder {
     disable_request_timeout: bool,
 }
 
+impl std::fmt::Debug for StreamRequestBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamRequestBuilder")
+            .field("base_url", &self.base_url)
+            .field("config", &self.config)
+            .field("wire_id", &self.wire.id())
+            .field("disable_request_timeout", &self.disable_request_timeout)
+            .finish()
+    }
+}
+
 impl StreamRequestBuilder {
     /// Create a new stream request builder.
+    ///
+    /// Defaults to [`AnthropicWire`] for SSE event adaptation; supply a
+    /// different protocol via [`.wire(...)`](Self::wire) for OpenAI
+    /// endpoints.
     pub fn new(client: reqwest::Client, base_url: String) -> Self {
         Self {
             client,
             base_url,
             headers: reqwest::header::HeaderMap::new(),
             config: StreamConfig::default(),
+            wire: Arc::new(AnthropicWire),
             // Streams are open-ended by design; rely on per-chunk idle
             // timeouts (`StreamConfig::event_timeout`) instead of the
             // client's overall request timeout.
             disable_request_timeout: true,
         }
+    }
+
+    /// Set the wire protocol used to adapt SSE events from the stream.
+    ///
+    /// Must match the protocol the endpoint speaks; otherwise the adapter
+    /// will fail to parse the event stream.
+    #[must_use]
+    pub fn wire(mut self, wire: Arc<dyn WireProtocol>) -> Self {
+        self.wire = wire;
+        self
     }
 
     /// Override the default behaviour of disabling the per-request
@@ -500,7 +435,7 @@ impl StreamRequestBuilder {
             );
         }
 
-        HttpStreamClient::from_response(response, self.config).await
+        HttpStreamClient::from_response(response, self.config, self.wire.clone()).await
     }
 }
 

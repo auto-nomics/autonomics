@@ -22,13 +22,16 @@
 //! this IR and the on-the-wire JSON.
 
 pub mod anthropic;
+pub mod openai;
 
 pub use anthropic::AnthropicWire;
+pub use openai::{OpenAiChatWire, OpenAiResponsesWire};
 
 use crate::model::ProviderType;
-use crate::types::errors::{AnthropicError, Result};
+use crate::types::errors::Result;
 use crate::types::messages::{Message, MessageCreateParams};
 use crate::types::shared::RequestId;
+use crate::types::streaming::MessageStreamEvent;
 
 /// Identifies a wire protocol on a [`ProviderType`] / `ProviderConfig`.
 ///
@@ -123,6 +126,59 @@ pub struct WireRequest {
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
+/// Mutable per-stream state used by [`WireProtocol::adapt_sse_event`].
+///
+/// Anthropic SSE events are self-describing (each carries its own block index),
+/// so [`AnthropicWire`] barely touches this struct. The OpenAI adapters, by
+/// contrast, drive a state machine over it: OpenAI's chunk stream doesn't
+/// annotate block starts/stops, so the adapter must synthesise the
+/// Anthropic-shaped `ContentBlockStart`/`ContentBlockDelta`/`ContentBlockStop`
+/// events from the raw delta stream and track which Anthropic-side block index
+/// corresponds to which OpenAI tool-call index.
+#[derive(Debug, Default)]
+pub struct StreamState {
+    /// The model name seen on the first chunk, used to fill in the synthesised
+    /// `MessageStart.message.model` field on protocols that don't send a
+    /// top-level message header (OpenAI Chat / Responses).
+    pub model: Option<String>,
+    /// The response id seen on the first chunk, used for `MessageStart.message.id`.
+    pub response_id: Option<String>,
+    /// Whether the `MessageStart` event has already been emitted.
+    pub started: bool,
+    /// Whether the text content block (Anthropic index 0) has been opened.
+    pub text_block_open: bool,
+    /// Mapping from OpenAI tool-call index → Anthropic block index + accumulator.
+    /// OpenAI streams tool-call arguments as incremental string fragments that
+    /// must be re-emitted as `ContentBlockDelta::InputJsonDelta`.
+    pub tool_calls: std::collections::BTreeMap<u32, ToolCallSlot>,
+    /// The next Anthropic-side block index to assign (text=0, tools=1..).
+    pub next_block_index: usize,
+    /// Accumulated stop reason, emitted in the final `MessageDelta`.
+    pub stop_reason: Option<crate::types::StopReason>,
+    /// Accumulated usage, emitted in the final `MessageDelta`.
+    pub usage: Option<crate::types::Usage>,
+    /// Blocks accumulated by the adapter so the synthesised `MessageStop`
+    /// / `MessageStart` can carry a consistent snapshot.
+    pub blocks: Vec<crate::types::ContentBlock>,
+}
+
+/// Per-tool-call slot tracked while streaming OpenAI tool-call deltas.
+#[derive(Debug, Default)]
+pub struct ToolCallSlot {
+    /// Anthropic-side content-block index assigned to this tool call.
+    pub block_index: usize,
+    /// OpenAI-side tool-call id (set on the first delta that carries it).
+    pub id: String,
+    /// Function name (set on the first delta that carries it).
+    pub name: String,
+    /// Accumulated argument fragments (the raw JSON string so far).
+    pub arguments: String,
+    /// Whether a `ContentBlockStart` has been emitted for this slot.
+    pub block_started: bool,
+    /// Whether a `ContentBlockStop` has been emitted for this slot.
+    pub block_stopped: bool,
+}
+
 /// Trait abstracting a wire protocol for message requests.
 ///
 /// All encode/decode methods are synchronous: they only transform bytes, never
@@ -157,29 +213,39 @@ pub trait WireProtocol: Send + Sync {
         body: &str,
         request_id: Option<RequestId>,
     ) -> Result<Message>;
+
+    /// Translate one raw SSE event into zero or more canonical
+    /// [`MessageStreamEvent`]s.
+    ///
+    /// `event_type` is the SSE `event:` field (empty for OpenAI Chat, which
+    /// doesn't name its events); `data` is the raw `data:` payload (already
+    /// stripped of the `data: ` prefix by the SSE parser). `state` carries
+    /// per-stream accumulator state so protocols that lack self-describing
+    /// events (OpenAI) can synthesise the Anthropic-shaped block start/stop
+    /// sequence.
+    ///
+    /// Returning `Ok(None)` skips the event (e.g. Anthropic `ping`, OpenAI
+    /// `[DONE]` sentinel — though the latter typically triggers `MessageStop`).
+    fn adapt_sse_event(
+        &self,
+        event_type: &str,
+        data: &str,
+        state: &mut StreamState,
+    ) -> Result<Option<MessageStreamEvent>>;
 }
 
 /// Build the [`WireProtocol`] impl matching a [`WireProtocolKind`].
 ///
-/// Returns [`AnthropicError::Connection`] with a clear message for the
-/// not-yet-wired OpenAI variants, so callers can detect the gap at runtime
-/// rather than at compile time.
-///
 /// # Errors
 ///
-/// - [`AnthropicError::Connection`] if `kind` is an unimplemented variant.
+/// Currently always returns `Ok`; the match is exhaustive over the three
+/// implemented variants. The `Result` is retained so future variants can
+/// signal unsupported kinds without breaking the call site.
 pub fn build_wire(kind: WireProtocolKind) -> Result<std::sync::Arc<dyn WireProtocol>> {
     match kind {
         WireProtocolKind::Anthropic => Ok(std::sync::Arc::new(AnthropicWire)),
-        WireProtocolKind::OpenaiChat | WireProtocolKind::OpenaiResponses => {
-            Err(AnthropicError::Connection {
-                message: format!(
-                    "wire protocol `{kind}` is not yet implemented; the OpenAI adapters \
-                     ship in a subsequent milestone — use `{}` for now",
-                    WireProtocolKind::Anthropic
-                ),
-            })
-        }
+        WireProtocolKind::OpenaiChat => Ok(std::sync::Arc::new(OpenAiChatWire)),
+        WireProtocolKind::OpenaiResponses => Ok(std::sync::Arc::new(OpenAiResponsesWire)),
     }
 }
 
@@ -270,15 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn build_wire_returns_anthropic() {
-        let wire = build_wire(WireProtocolKind::Anthropic).unwrap();
-        assert_eq!(wire.id(), "anthropic");
-    }
-
-    #[test]
-    fn build_wire_rejects_unimplemented_variants() {
-        assert!(build_wire(WireProtocolKind::OpenaiChat).is_err());
-        assert!(build_wire(WireProtocolKind::OpenaiResponses).is_err());
+    fn build_wire_returns_each_protocol() {
+        let w = build_wire(WireProtocolKind::Anthropic).unwrap();
+        assert_eq!(w.id(), "anthropic");
+        let w = build_wire(WireProtocolKind::OpenaiChat).unwrap();
+        assert_eq!(w.id(), "openai_chat");
+        let w = build_wire(WireProtocolKind::OpenaiResponses).unwrap();
+        assert_eq!(w.id(), "openai_responses");
     }
 
     #[test]

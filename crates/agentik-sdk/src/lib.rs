@@ -35,8 +35,8 @@ pub use resources::{BatchesResource, FilesResource, MessagesResource, ModelsReso
 pub use streaming::MessageStream;
 pub use tokens::{ModelPrice, ModelUsage, RequestUsage, TokenCounter, UsageStats, UsageSummary};
 pub use wire::{
-    AnthropicWire, ProtocolFeatures, ThinkingSupport, WireProtocol, WireProtocolKind,
-    build_wire, wire_protocol_for_provider,
+    AnthropicWire, OpenAiChatWire, OpenAiResponsesWire, ProtocolFeatures, StreamState,
+    ThinkingSupport, WireProtocol, WireProtocolKind, build_wire, wire_protocol_for_provider,
 };
 
 pub trait ContentBlockParamExt {
