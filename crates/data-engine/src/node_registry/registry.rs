@@ -54,6 +54,7 @@ use crate::nodes::{
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
     survival::SurvivalNodeFactory,
+    susie_rss::SusieRssNodeFactory,
     test_source::TestSourceFactory,
     two_sample_mr::TwoSampleMrNodeFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
@@ -221,6 +222,7 @@ impl NodeRegistry {
         registry.register(Box::new(VizNodeFactory {}));
         registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
         registry.register(Box::new(OpentargetsSearchNodeFactory {}));
+        registry.register(Box::new(SusieRssNodeFactory {}));
         registry.register(Box::new(MagmaAnnotateNodeFactory {}));
         registry.register(Box::new(MagmaGeneNodeFactory {}));
         registry.register(Box::new(MagmaSetNodeFactory {}));
@@ -365,6 +367,7 @@ mod tests {
             "magma_set" => serde_json::json!({}),
             "magma_meta" => serde_json::json!({"cohort_files": ["c.genes.raw"]}),
             "cpassoc" => serde_json::json!({}),
+            "susie_rss" => serde_json::json!({"l": 10, "estimate_prior_method": "optim"}),
             "hdl_l_scan" => serde_json::json!({
                 "chr": 22, "scan_start": 1, "scan_stop": 2,
                 "window_size": 1, "step": 1,
