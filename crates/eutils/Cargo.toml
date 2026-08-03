@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Async Rust SDK for NCBI Entrez Programming Utilities (E-utilities) with agent tools for PubMed and other Entrez databases."
 
 [dependencies]
+bib-types = { path = "../bib-types" }
 schemars.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
