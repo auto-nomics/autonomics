@@ -18,6 +18,20 @@ pub struct ModelInfo {
     pub supports_function_calling: bool,
     pub supports_streaming: bool,
     pub supports_thinking: bool,
+    /// Whether extended thinking / reasoning is **actively enabled** for
+    /// requests using this model. Distinct from `supports_thinking` (a
+    /// capability declaration): a model may support thinking but have it
+    /// turned off by default. When both `supports_thinking` and
+    /// `thinking_enabled` are true, the request layer injects a
+    /// [`ThinkingConfig`](agentik_types::ThinkingConfig) into the outgoing
+    /// request.
+    #[serde(default)]
+    pub thinking_enabled: bool,
+    /// Optional token budget for the thinking phase. When `None`, the
+    /// request layer derives a sensible default from `max_output_tokens`
+    /// (half of `max_output_tokens`, clamped to ≥1024).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
     pub input_token_price: f64,
     pub output_token_price: f64,
 }
@@ -33,6 +47,8 @@ impl Default for ModelInfo {
             supports_function_calling: false,
             supports_streaming: false,
             supports_thinking: false,
+            thinking_enabled: false,
+            thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
         }
@@ -50,6 +66,8 @@ impl std::fmt::Debug for ModelInfo {
             .field("supports_function_calling", &self.supports_function_calling)
             .field("supports_streaming", &self.supports_streaming)
             .field("supports_thinking", &self.supports_thinking)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .field("thinking_budget", &self.thinking_budget)
             .field("input_token_price", &self.input_token_price)
             .field("output_token_price", &self.output_token_price)
             .finish()
@@ -72,6 +90,8 @@ impl PartialEq for ModelInfo {
             && self.supports_function_calling == other.supports_function_calling
             && self.supports_streaming == other.supports_streaming
             && self.supports_thinking == other.supports_thinking
+            && self.thinking_enabled == other.thinking_enabled
+            && self.thinking_budget == other.thinking_budget
             && self.input_token_price == other.input_token_price
             && self.output_token_price == other.output_token_price
     }
@@ -105,6 +125,8 @@ pub struct ModelInfoBuilder {
     supports_function_calling: bool,
     supports_streaming: bool,
     supports_thinking: bool,
+    thinking_enabled: bool,
+    thinking_budget: Option<u32>,
     input_token_price: f64,
     output_token_price: f64,
 }
@@ -120,6 +142,8 @@ impl ModelInfoBuilder {
             supports_function_calling: false,
             supports_streaming: false,
             supports_thinking: false,
+            thinking_enabled: false,
+            thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
         }
@@ -145,6 +169,15 @@ impl ModelInfoBuilder {
         self
     }
 
+    /// Enable extended thinking for this model preset, optionally with a
+    /// custom token budget. When omitted, the request layer derives a default
+    /// from `max_output_tokens`.
+    pub fn thinking_enabled(mut self, budget: Option<u32>) -> Self {
+        self.thinking_enabled = true;
+        self.thinking_budget = budget;
+        self
+    }
+
     pub fn pricing(mut self, input: f64, output: f64) -> Self {
         self.input_token_price = input;
         self.output_token_price = output;
@@ -166,6 +199,8 @@ impl ModelInfoBuilder {
             supports_function_calling: self.supports_function_calling,
             supports_streaming: self.supports_streaming,
             supports_thinking: self.supports_thinking,
+            thinking_enabled: self.thinking_enabled,
+            thinking_budget: self.thinking_budget,
             input_token_price: self.input_token_price,
             output_token_price: self.output_token_price,
         }
