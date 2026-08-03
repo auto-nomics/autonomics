@@ -1,0 +1,60 @@
+//! Async Rust SDK for the [Elsevier Embase API](
+//! https://nonprod-devportal.elsevier.com/embase_apis.html).
+//!
+//! This crate provides:
+//!
+//! - **`EmbaseClient`** — an async HTTP client for the Embase Search and
+//!   Retrieval APIs (search by query, retrieve by DOI / PII / PMID / Embase
+//!   accession number / LUI).
+//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
+//!   Embase search and retrieval capabilities to an agentik agent.
+//!
+//! # Quick start (SDK only)
+//!
+//! ```no_run
+//! use embase::{EmbaseClient, types::SearchRequest};
+//!
+//! # async fn run() -> embase::error::Result<()> {
+//! let client = EmbaseClient::from_env();
+//! let resp = client
+//!     .search(&SearchRequest::new("'heart attack':ti,ab AND aspirin:ti,ab"))
+//!     .await?;
+//! println!("{} results", resp.total_results);
+//! for entry in &resp.entry {
+//!     println!("  {} — {}", entry.doi.as_deref().unwrap_or(""), entry.title);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Wiring tools into an agent
+//!
+//! ```no_run,ignore
+//! use embase::{EmbaseClient, embase_registrations};
+//! use std::sync::Arc;
+//!
+//! let client = Arc::new(EmbaseClient::from_env());
+//! let tools = embase_registrations(client);
+//! // pass `tools` to Agent::builder().with_tools(tools)
+//! ```
+//!
+//! # Environment variables
+//!
+//! | Variable          | Default          | Description                              |
+//! |-------------------|------------------|------------------------------------------|
+//! | `EMBASE_API_KEY`  | *(none)*         | Elsevier API key (required)              |
+//! | `EMBASE_INSTTOKEN`| *(none)*         | Institution token (optional)             |
+//! | `EMBASE_AUTHTOKEN`| *(none)*         | OAuth bearer token for user entitlements |
+
+pub mod client;
+pub mod convert;
+pub mod error;
+pub mod format;
+pub mod query;
+pub mod tools;
+pub mod types;
+
+pub use client::EmbaseClient;
+pub use convert::search_results_to_articles;
+pub use error::EmbaseError;
+pub use tools::embase_registrations;

@@ -45,11 +45,14 @@
 //! | `EUTILS_API_KEY`| *(none)*         | API key for elevated rate limits   |
 
 pub mod client;
+pub mod convert;
 pub mod error;
 pub mod format;
+pub mod query;
 pub mod tools;
 pub mod types;
 
 pub use client::EutilsClient;
+pub use convert::{esummary_to_articles, medline_to_articles};
 pub use error::EutilsError;
 pub use tools::eutils_registrations;
