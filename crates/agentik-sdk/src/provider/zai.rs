@@ -78,6 +78,7 @@ impl ZaiProvider {
             ModelInfoBuilder::new(MODEL_GLM_5_2)
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.40, 4.40)
                 .build(),
             // ── Previous flagship: GLM-5.1 — 200K context ────────────────

@@ -172,8 +172,8 @@ fn inject_thinking(
     });
     // Set both forms: Anthropic wires read `thinking`, OpenAI wires read
     // `reasoning`. Each wire picks the one it understands and ignores the
-    // other.
+    // other. Use the strongest effort level available.
     builder
         .thinking(agentik_types::ThinkingConfig::enabled(budget))
-        .reasoning_effort(agentik_types::ReasoningEffort::High)
+        .reasoning_effort(agentik_types::ReasoningEffort::Max)
 }
