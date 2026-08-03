@@ -110,10 +110,7 @@ fn format_entry_preview(entry: &BiorxivEntry, out: &mut String) {
 
     // Date + version
     if !entry.date.is_empty() {
-        out.push_str(&format!(
-            "**Date:** {} (v{})\n",
-            entry.date, entry.version
-        ));
+        out.push_str(&format!("**Date:** {} (v{})\n", entry.date, entry.version));
     }
 
     // Published DOI

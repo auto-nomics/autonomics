@@ -10,9 +10,7 @@ mod common;
 #[common::serial]
 async fn retrieve_by_doi() -> TestResult {
     let client = common::test_client();
-    let resp = client
-        .retrieve_by_doi("10.1016/j.cell.2024.01.001")
-        .await?;
+    let resp = client.retrieve_by_doi("10.1016/j.cell.2024.01.001").await?;
 
     assert!(!resp.entry.title.is_empty());
 

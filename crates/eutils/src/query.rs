@@ -66,14 +66,30 @@ pub fn to_entrez(sq: &StructuredSearch) -> Result<String> {
     // Each multi-term field is filtered to drop blank entries, then rendered
     // as a single parenthesised clause. Empty fields contribute nothing.
     if let Some(t) = filtered(&sq.keywords) {
-        clauses.push(group(&t, "Title/Abstract", sq.keywords_op.unwrap_or_default()));
+        clauses.push(group(
+            &t,
+            "Title/Abstract",
+            sq.keywords_op.unwrap_or_default(),
+        ));
     }
-    if let Some(t) = filtered(&sq.title)             { clauses.push(group(&t, "Title",            BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.authors)           { clauses.push(group(&t, "Author",           BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.mesh)              { clauses.push(group(&t, "MeSH",             BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.journal)           { clauses.push(group(&t, "Journal",          BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.publication_types) { clauses.push(group(&t, "Publication Type", BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.affiliation)       { clauses.push(group(&t, "Affiliation",      BoolOp::Or)); }
+    if let Some(t) = filtered(&sq.title) {
+        clauses.push(group(&t, "Title", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.authors) {
+        clauses.push(group(&t, "Author", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.mesh) {
+        clauses.push(group(&t, "MeSH", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.journal) {
+        clauses.push(group(&t, "Journal", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.publication_types) {
+        clauses.push(group(&t, "Publication Type", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.affiliation) {
+        clauses.push(group(&t, "Affiliation", BoolOp::Or));
+    }
 
     if let Some(yr) = &sq.year_range {
         clauses.push(format!("{}:{}[Year]", yr.from, yr.to));
@@ -230,10 +246,7 @@ mod tests {
             title: kw(&["BRCA1", "BRCA2"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_entrez(&sq).unwrap(),
-            r#"(BRCA1[Title] OR BRCA2[Title])"#
-        );
+        assert_eq!(to_entrez(&sq).unwrap(), r#"(BRCA1[Title] OR BRCA2[Title])"#);
     }
 
     #[test]
@@ -275,7 +288,10 @@ mod tests {
     fn year_range_emits_entrez_range() {
         let sq = StructuredSearch {
             keywords: kw(&["cancer"]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         assert_eq!(
@@ -287,7 +303,10 @@ mod tests {
     #[test]
     fn year_range_single_year() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2024,
+            }),
             ..Default::default()
         };
         assert_eq!(to_entrez(&sq).unwrap(), "2024:2024[Year]");
@@ -296,7 +315,10 @@ mod tests {
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_entrez(&sq).unwrap_err();

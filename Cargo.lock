@@ -2985,18 +2985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epi"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "serde_json",
- "statkit",
- "statrs",
- "thiserror 2.0.19",
-
-[[package]]
 name = "env_filter"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3014,6 +3002,19 @@ checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
 dependencies = [
  "env_filter",
  "log",
+]
+
+[[package]]
+name = "epi"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "serde_json",
+ "statkit",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

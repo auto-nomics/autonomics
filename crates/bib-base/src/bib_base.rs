@@ -8,9 +8,7 @@
 use turso::{Builder, Connection, Value};
 
 use crate::error::{Error, Result};
-use bib_types::{
-    Article, ArticleSource, Author, CollectionStatus, IdKind, Identifier, SearchHit,
-};
+use bib_types::{Article, ArticleSource, Author, CollectionStatus, IdKind, Identifier, SearchHit};
 
 // ---------------------------------------------------------------------------
 // Schema — single source of truth for DDL
@@ -248,10 +246,7 @@ impl BibBase {
             None => return Ok(None),
         };
 
-        let mut article = Article::new(
-            row.get::<String>(0)?,
-            row.get::<String>(1)?,
-        );
+        let mut article = Article::new(row.get::<String>(0)?, row.get::<String>(1)?);
         article.abstract_text = opt_string(row.get_value(2)?);
         article.year = opt_int(row.get_value(3)?).map(|y| y as u16);
         article.month = opt_int(row.get_value(4)?).map(|m| m as u8);
@@ -306,18 +301,16 @@ impl BibBase {
                 "openalex" => IdKind::OpenAlex,
                 _ => IdKind::Other,
             };
-            article.identifiers.push(Identifier::new(kind, id_row.get::<String>(1)?));
+            article
+                .identifiers
+                .push(Identifier::new(kind, id_row.get::<String>(1)?));
         }
 
         Ok(Some(article))
     }
 
     /// Find an article by an external identifier (DOI, PMID, …).
-    pub async fn find_by_identifier(
-        &self,
-        kind: IdKind,
-        value: &str,
-    ) -> Result<Option<Article>> {
+    pub async fn find_by_identifier(&self, kind: IdKind, value: &str) -> Result<Option<Article>> {
         let conn = self.conn();
         let mut rows = conn
             .query(
@@ -363,11 +356,7 @@ impl BibBase {
     ///
     /// Uses SQL `LIKE` (case-insensitive for ASCII). Snippets are extracted
     /// in Rust from the first matching field.
-    pub async fn search_articles(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SearchHit>> {
+    pub async fn search_articles(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         let pattern = format!("%{query}%");
         let conn = self.conn();
         let mut rows = conn
@@ -397,12 +386,8 @@ impl BibBase {
             let fulltext = opt_string(row.get_value(3)?);
             let rank = row.get::<i64>(4)?;
 
-            let snippet = extract_snippet(
-                query,
-                &title,
-                abstract_text.as_deref(),
-                fulltext.as_deref(),
-            );
+            let snippet =
+                extract_snippet(query, &title, abstract_text.as_deref(), fulltext.as_deref());
 
             hits.push(SearchHit {
                 article_id,

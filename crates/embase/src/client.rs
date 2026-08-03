@@ -48,11 +48,7 @@ impl EmbaseClient {
     /// * `api_key`     – Elsevier API key (required).
     /// * `inst_token`  – Optional institution token.
     /// * `auth_token`  – Optional OAuth bearer token for user-based entitlements.
-    pub fn new(
-        api_key: &str,
-        inst_token: Option<&str>,
-        auth_token: Option<&str>,
-    ) -> Self {
+    pub fn new(api_key: &str, inst_token: Option<&str>, auth_token: Option<&str>) -> Self {
         Self {
             client: Client::new(),
             api_key: api_key.to_owned(),
@@ -71,8 +67,7 @@ impl EmbaseClient {
     ///
     /// Returns [`EmbaseError::MissingApiKey`] if `EMBASE_API_KEY` is unset.
     pub fn from_env() -> Self {
-        let api_key = std::env::var("EMBASE_API_KEY")
-            .unwrap_or_default();
+        let api_key = std::env::var("EMBASE_API_KEY").unwrap_or_default();
         let inst_token = std::env::var("EMBASE_INSTTOKEN").ok();
         let auth_token = std::env::var("EMBASE_AUTHTOKEN").ok();
         Self {
@@ -175,12 +170,13 @@ impl EmbaseClient {
     ///
     /// This is the generic backend used by all the `retrieve_by_*` methods.
     /// You normally won't call this directly — use the convenience wrappers.
-    pub async fn retrieve(
-        &self,
-        id_type: RetrievalId,
-        id: &str,
-    ) -> Result<RetrievalResponse> {
-        let url = format!("{}/{}/{}", BASE_URL, id_type.path_segment(), urlencoding(id));
+    pub async fn retrieve(&self, id_type: RetrievalId, id: &str) -> Result<RetrievalResponse> {
+        let url = format!(
+            "{}/{}/{}",
+            BASE_URL,
+            id_type.path_segment(),
+            urlencoding(id)
+        );
         let v = self.get_json(&url).await?;
         serde_json::from_value(v).map_err(Into::into)
     }

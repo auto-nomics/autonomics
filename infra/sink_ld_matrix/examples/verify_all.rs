@@ -47,6 +47,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  ── {pop}: {count} chromosomes, {pop_total} rows\n");
         grand_total += pop_total;
     }
-    println!("GRAND TOTAL across {} populations: {} rows", pops.len(), grand_total);
+    println!(
+        "GRAND TOTAL across {} populations: {} rows",
+        pops.len(),
+        grand_total
+    );
     Ok(())
 }

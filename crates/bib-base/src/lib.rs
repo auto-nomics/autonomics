@@ -29,8 +29,10 @@ pub use error::{Error, Result};
 pub use export::{render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};
 pub use library_tools::bib_all_registrations;
-pub use query::{ArxivSource, BiorxivSource, LiteratureGateway, LiteratureSource, PubmedSource, SourceBatch};
-pub use tools::{bib_query_registrations, LitFetchTool, LitSearchTool};
+pub use query::{
+    ArxivSource, BiorxivSource, LiteratureGateway, LiteratureSource, PubmedSource, SourceBatch,
+};
+pub use tools::{LitFetchTool, LitSearchTool, bib_query_registrations};
 
 // Re-export bib-types for convenience so downstream code can import
 // types and storage from a single crate.

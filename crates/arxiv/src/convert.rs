@@ -11,8 +11,8 @@
 //! We use `quick-xml`'s streaming reader, matching on local tag names
 //! (ignoring namespace prefixes) for robustness.
 
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use bib_types::convert::{build_article, normalize_doi};
 use bib_types::{Article, ArticleSource, Author, IdKind, Identifier};
@@ -171,9 +171,7 @@ fn parse_entry(reader: &mut Reader<&[u8]>) -> Result<ArxivEntry> {
                 text_buf.clear();
             }
             Ok(Event::Eof) => {
-                return Err(ArxivError::Xml(
-                    "unexpected EOF inside <entry>".to_string(),
-                ));
+                return Err(ArxivError::Xml("unexpected EOF inside <entry>".to_string()));
             }
             Err(e) => {
                 return Err(ArxivError::Xml(format!("entry parse error: {e}")));
@@ -277,10 +275,7 @@ fn process_link(
 }
 
 /// Extract the `term` attribute from a `<category>` element.
-fn process_category(
-    e: &quick_xml::events::BytesStart,
-    categories: &mut Vec<String>,
-) {
+fn process_category(e: &quick_xml::events::BytesStart, categories: &mut Vec<String>) {
     for attr in e.attributes().flatten() {
         if local_name(attr.key.into_inner()) == "term" {
             categories.push(decode_xml_text(&attr.value));
@@ -493,7 +488,10 @@ fn extract_arxiv_id(id_text: &str) -> String {
         }
     }
     // Error entry URL — preserve the "api/errors" sentinel for detection.
-    for prefix in &["http://arxiv.org/api/errors#", "https://arxiv.org/api/errors#"] {
+    for prefix in &[
+        "http://arxiv.org/api/errors#",
+        "https://arxiv.org/api/errors#",
+    ] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             return format!("api/errors#{rest}");
         }
@@ -589,7 +587,12 @@ mod tests {
             e.title,
             "Attention Is All You Need: A Comprehensive Survey of Transformer Architectures"
         );
-        assert!(e.summary.as_ref().unwrap().contains("transformer architectures"));
+        assert!(
+            e.summary
+                .as_ref()
+                .unwrap()
+                .contains("transformer architectures")
+        );
         assert_eq!(e.authors.len(), 2);
         assert_eq!(e.authors[0].name, "Ashish Vaswani");
         assert_eq!(e.authors[0].affiliation.as_deref(), Some("Google Brain"));
@@ -629,7 +632,10 @@ mod tests {
         let a = &articles[0];
         assert_eq!(a.identifier(IdKind::Arxiv), Some("2401.12345v2"));
         assert_eq!(a.doi(), Some("10.1000/test"));
-        assert_eq!(a.title, "Attention Is All You Need: A Comprehensive Survey of Transformer Architectures");
+        assert_eq!(
+            a.title,
+            "Attention Is All You Need: A Comprehensive Survey of Transformer Architectures"
+        );
         assert_eq!(a.authors.len(), 2);
         assert_eq!(a.authors[0].last_name, "Vaswani");
         assert_eq!(a.authors[0].fore_name.as_deref(), Some("Ashish"));
@@ -664,8 +670,14 @@ mod tests {
 
     #[test]
     fn parse_iso_date_basic() {
-        assert_eq!(parse_iso_date("2024-01-15T00:00:00Z"), (Some(2024), Some(1)));
-        assert_eq!(parse_iso_date("2023-12-31T23:59:59Z"), (Some(2023), Some(12)));
+        assert_eq!(
+            parse_iso_date("2024-01-15T00:00:00Z"),
+            (Some(2024), Some(1))
+        );
+        assert_eq!(
+            parse_iso_date("2023-12-31T23:59:59Z"),
+            (Some(2023), Some(12))
+        );
         assert_eq!(parse_iso_date("garbage"), (None, None));
     }
 

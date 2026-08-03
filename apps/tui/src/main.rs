@@ -315,21 +315,17 @@ async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
 
 async fn run_bib_upload(db: &bib_base::BibBase, args: UploadArgs) -> color_eyre::Result<()> {
     // 1. Verify article exists.
-    let article = db
-        .get_article(&args.article_id)
-        .await?
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "Article '{}' not found in library. \
+    let article = db.get_article(&args.article_id).await?.ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "Article '{}' not found in library. \
                  Use bib_save to add the article first.",
-                args.article_id,
-            )
-        })?;
+            args.article_id,
+        )
+    })?;
 
     // 2. Read the file.
-    let content = std::fs::read(&args.pdf).map_err(|e| {
-        color_eyre::eyre::eyre!("Failed to read '{}': {e}", args.pdf.display())
-    })?;
+    let content = std::fs::read(&args.pdf)
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to read '{}': {e}", args.pdf.display()))?;
     let file_size = content.len() as i64;
 
     // 3. Detect format from extension.
@@ -362,23 +358,22 @@ async fn run_bib_upload(db: &bib_base::BibBase, args: UploadArgs) -> color_eyre:
 
     // 6. Update fetch_status if collection context provided.
     if let Some(ref cid) = args.collection_id {
-        db.update_fetch_status(cid, &args.article_id, bib_base::FetchStatus::FulltextAvailable)
-            .await?;
+        db.update_fetch_status(
+            cid,
+            &args.article_id,
+            bib_base::FetchStatus::FulltextAvailable,
+        )
+        .await?;
         println!(
             "✓ Full text uploaded for '{}' ({} bytes, {} chars extracted)\n  \
              Collection '{}' status → fulltext_available",
-            article.title,
-            file_size,
-            text_len,
-            cid
+            article.title, file_size, text_len, cid
         );
     } else {
         println!(
             "✓ Full text uploaded for '{}' ({} bytes, {} chars extracted)\n  \
              Tip: use --collection-id to also update the fetch_status.",
-            article.title,
-            file_size,
-            text_len
+            article.title, file_size, text_len
         );
     }
 
@@ -422,7 +417,9 @@ async fn run_bib_requests(db: &bib_base::BibBase, args: RequestsArgs) -> color_e
         println!();
     }
 
-    println!("To upload: autonomics-tui bib upload --pdf <file> --article-id <id> --collection-id <id>");
+    println!(
+        "To upload: autonomics-tui bib upload --pdf <file> --article-id <id> --collection-id <id>"
+    );
     Ok(())
 }
 
@@ -491,8 +488,15 @@ async fn run_bib_list(db: &bib_base::BibBase, args: ListArgs) -> color_eyre::Res
 
     for hit in &hits {
         let article = db.get_article(&hit.article_id).await.ok().flatten();
-        let year = article.as_ref().and_then(|a| a.year).map(|y| y.to_string()).unwrap_or_default();
-        let doi = article.as_ref().and_then(|a| a.doi().map(String::from)).unwrap_or_default();
+        let year = article
+            .as_ref()
+            .and_then(|a| a.year)
+            .map(|y| y.to_string())
+            .unwrap_or_default();
+        let doi = article
+            .as_ref()
+            .and_then(|a| a.doi().map(String::from))
+            .unwrap_or_default();
         let title = &hit.title;
         println!("{:<20} {:<6} {:<10} {}", hit.article_id, year, doi, title);
     }
@@ -544,7 +548,12 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
     match &args.output {
         Some(path) => {
             std::fs::write(path, &rendered)?;
-            println!("Exported {} articles to {} ({})", articles.len(), path.display(), format.extension());
+            println!(
+                "Exported {} articles to {} ({})",
+                articles.len(),
+                path.display(),
+                format.extension()
+            );
         }
         None => {
             println!("{}", rendered);

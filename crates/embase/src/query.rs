@@ -85,12 +85,24 @@ pub fn to_embase(sq: &StructuredSearch) -> Result<String> {
     if let Some(t) = filtered(&sq.keywords) {
         clauses.push(group(&t, "ti,ab", sq.keywords_op.unwrap_or_default()));
     }
-    if let Some(t) = filtered(&sq.title)             { clauses.push(group(&t, "ti",  BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.authors)           { clauses.push(group(&t, "au",  BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.mesh)              { clauses.push(group(&t, "de",  BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.journal)           { clauses.push(group(&t, "ta",  BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.publication_types) { clauses.push(group(&t, "dt",  BoolOp::Or)); }
-    if let Some(t) = filtered(&sq.affiliation)       { clauses.push(group(&t, "af",  BoolOp::Or)); }
+    if let Some(t) = filtered(&sq.title) {
+        clauses.push(group(&t, "ti", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.authors) {
+        clauses.push(group(&t, "au", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.mesh) {
+        clauses.push(group(&t, "de", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.journal) {
+        clauses.push(group(&t, "ta", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.publication_types) {
+        clauses.push(group(&t, "dt", BoolOp::Or));
+    }
+    if let Some(t) = filtered(&sq.affiliation) {
+        clauses.push(group(&t, "af", BoolOp::Or));
+    }
 
     if let Some(yr) = &sq.year_range {
         clauses.push(format!("{}:{}:py", yr.from, yr.to));
@@ -195,10 +207,7 @@ mod tests {
             keywords: kw(&["cancer", "neoplasm"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "(cancer:ti,ab OR neoplasm:ti,ab)"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "(cancer:ti,ab OR neoplasm:ti,ab)");
     }
 
     #[test]
@@ -208,10 +217,7 @@ mod tests {
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "(CRISPR:ti,ab AND review:ti,ab)"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "(CRISPR:ti,ab AND review:ti,ab)");
     }
 
     // ----- multi-field -----
@@ -236,10 +242,7 @@ mod tests {
             title: kw(&["BRCA1", "BRCA2"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "(BRCA1:ti OR BRCA2:ti)"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "(BRCA1:ti OR BRCA2:ti)");
     }
 
     #[test]
@@ -257,10 +260,7 @@ mod tests {
             journal: kw(&["Nature", "Science"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "(Nature:ta OR Science:ta)"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "(Nature:ta OR Science:ta)");
     }
 
     #[test]
@@ -269,10 +269,7 @@ mod tests {
             affiliation: kw(&["Harvard Medical School"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "'Harvard Medical School':af"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "'Harvard Medical School':af");
     }
 
     // ----- year range -----
@@ -281,19 +278,22 @@ mod tests {
     fn year_range_emits_embase_range() {
         let sq = StructuredSearch {
             keywords: kw(&["cancer"]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
-        assert_eq!(
-            to_embase(&sq).unwrap(),
-            "cancer:ti,ab AND 2020:2024:py"
-        );
+        assert_eq!(to_embase(&sq).unwrap(), "cancer:ti,ab AND 2020:2024:py");
     }
 
     #[test]
     fn year_range_single_year() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2024,
+            }),
             ..Default::default()
         };
         assert_eq!(to_embase(&sq).unwrap(), "2024:2024:py");
@@ -302,7 +302,10 @@ mod tests {
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_embase(&sq).unwrap_err();

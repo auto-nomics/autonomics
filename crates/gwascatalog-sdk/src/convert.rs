@@ -147,7 +147,7 @@ fn strip_orcid_url(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rest::{PublicationAuthor};
+    use crate::rest::PublicationAuthor;
     use crate::search::SearchDoc;
 
     #[test]
@@ -172,10 +172,7 @@ mod tests {
         assert_eq!(a.authors.len(), 1);
         assert_eq!(a.authors[0].last_name, "Smith");
         assert_eq!(a.authors[0].initials.as_deref(), Some("JA"));
-        assert_eq!(
-            a.authors[0].orcid.as_deref(),
-            Some("0000-0002-1825-0097")
-        );
+        assert_eq!(a.authors[0].orcid.as_deref(), Some("0000-0002-1825-0097"));
     }
 
     #[test]
@@ -220,6 +217,9 @@ mod tests {
             strip_orcid_url("https://orcid.org/0000-0002-1825-0097"),
             "0000-0002-1825-0097"
         );
-        assert_eq!(strip_orcid_url("0000-0002-1825-0097"), "0000-0002-1825-0097");
+        assert_eq!(
+            strip_orcid_url("0000-0002-1825-0097"),
+            "0000-0002-1825-0097"
+        );
     }
 }

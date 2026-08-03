@@ -73,10 +73,7 @@ impl BibBase {
     /// Delete an annotation by ID.
     pub async fn delete_annotation(&self, id: &str) -> Result<()> {
         self.conn()
-            .execute(
-                "DELETE FROM annotations WHERE id = ?1",
-                turso::params![id],
-            )
+            .execute("DELETE FROM annotations WHERE id = ?1", turso::params![id])
             .await?;
         Ok(())
     }

@@ -198,10 +198,7 @@ mod tests {
             keywords: kw(&["cancer", "tumor"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_arxiv(&sq).unwrap(),
-            r#"(all:cancer OR all:tumor)"#
-        );
+        assert_eq!(to_arxiv(&sq).unwrap(), r#"(all:cancer OR all:tumor)"#);
     }
 
     #[test]
@@ -211,10 +208,7 @@ mod tests {
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
-        assert_eq!(
-            to_arxiv(&sq).unwrap(),
-            r#"(all:CRISPR AND all:review)"#
-        );
+        assert_eq!(to_arxiv(&sq).unwrap(), r#"(all:CRISPR AND all:review)"#);
     }
 
     #[test]
@@ -237,10 +231,7 @@ mod tests {
             authors: kw(&["Smith"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_arxiv(&sq).unwrap(),
-            r#"all:CRISPR AND au:Smith"#
-        );
+        assert_eq!(to_arxiv(&sq).unwrap(), r#"all:CRISPR AND au:Smith"#);
     }
 
     #[test]
@@ -249,10 +240,7 @@ mod tests {
             title: kw(&["BRCA1", "BRCA2"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_arxiv(&sq).unwrap(),
-            r#"(ti:BRCA1 OR ti:BRCA2)"#
-        );
+        assert_eq!(to_arxiv(&sq).unwrap(), r#"(ti:BRCA1 OR ti:BRCA2)"#);
     }
 
     #[test]
@@ -261,10 +249,7 @@ mod tests {
             authors: kw(&["Hinton", "LeCun"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_arxiv(&sq).unwrap(),
-            r#"(au:Hinton OR au:LeCun)"#
-        );
+        assert_eq!(to_arxiv(&sq).unwrap(), r#"(au:Hinton OR au:LeCun)"#);
     }
 
     #[test]
@@ -291,7 +276,10 @@ mod tests {
     fn year_range_emits_date_filter() {
         let sq = StructuredSearch {
             keywords: kw(&["cancer"]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let result = to_arxiv(&sq).unwrap();
@@ -301,18 +289,26 @@ mod tests {
     #[test]
     fn year_range_single_year() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2024,
+            }),
             ..Default::default()
         };
-        assert!(to_arxiv(&sq)
-            .unwrap()
-            .contains("submittedDate:[202401010000+TO+202412312359]"));
+        assert!(
+            to_arxiv(&sq)
+                .unwrap()
+                .contains("submittedDate:[202401010000+TO+202412312359]")
+        );
     }
 
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_arxiv(&sq).unwrap_err();

@@ -132,10 +132,7 @@ where
             if trimmed.is_empty() {
                 Ok(None)
             } else {
-                trimmed
-                    .parse::<u64>()
-                    .map(Some)
-                    .map_err(de::Error::custom)
+                trimmed.parse::<u64>().map(Some).map_err(de::Error::custom)
             }
         }
         None => Ok(None),

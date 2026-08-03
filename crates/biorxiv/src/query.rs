@@ -74,10 +74,7 @@ impl BiorxivQuery {
 #[derive(Debug, Clone)]
 pub enum Filter {
     /// Match any/all terms against title + abstract.
-    Keywords {
-        terms: Vec<String>,
-        op: BoolOp,
-    },
+    Keywords { terms: Vec<String>, op: BoolOp },
     /// Match any term against title only.
     Title(Vec<String>),
     /// Match any author name against the authors string.
@@ -107,15 +104,9 @@ impl Filter {
 /// Evaluate a list of terms against a haystack using the given boolean op.
 fn evaluate_terms(terms: &[String], op: &BoolOp, hay: &str) -> bool {
     match op {
-        BoolOp::And => terms
-            .iter()
-            .all(|t| hay.contains(&t.to_ascii_lowercase())),
-        BoolOp::Not => terms
-            .iter()
-            .all(|t| !hay.contains(&t.to_ascii_lowercase())),
-        BoolOp::Or => terms
-            .iter()
-            .any(|t| hay.contains(&t.to_ascii_lowercase())),
+        BoolOp::And => terms.iter().all(|t| hay.contains(&t.to_ascii_lowercase())),
+        BoolOp::Not => terms.iter().all(|t| !hay.contains(&t.to_ascii_lowercase())),
+        BoolOp::Or => terms.iter().any(|t| hay.contains(&t.to_ascii_lowercase())),
     }
 }
 
@@ -220,7 +211,10 @@ mod tests {
     #[test]
     fn year_range_to_interval() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2023, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2023,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let q = to_biorxiv(sq, Server::Medrxiv).unwrap();
@@ -320,7 +314,10 @@ mod tests {
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_biorxiv(sq, Server::Medrxiv).unwrap_err();

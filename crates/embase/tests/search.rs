@@ -33,7 +33,10 @@ async fn search_structured_query() -> TestResult {
     let sq = StructuredSearch {
         keywords: Some(vec!["CRISPR".into(), "gene editing".into()]),
         keywords_op: Some(BoolOp::Or),
-        year_range: Some(YearRange { from: 2020, to: 2024 }),
+        year_range: Some(YearRange {
+            from: 2020,
+            to: 2024,
+        }),
         ..Default::default()
     };
     let query = embase::query::to_embase(&sq)?;
@@ -95,10 +98,16 @@ async fn search_pagination() -> TestResult {
     assert_eq!(resp2.entry.len(), 5);
 
     // Pages should not overlap (compare identifiers)
-    let ids1: std::collections::HashSet<&str> =
-        resp1.entry.iter().filter_map(|e| e.identifier.as_deref()).collect();
-    let ids2: std::collections::HashSet<&str> =
-        resp2.entry.iter().filter_map(|e| e.identifier.as_deref()).collect();
+    let ids1: std::collections::HashSet<&str> = resp1
+        .entry
+        .iter()
+        .filter_map(|e| e.identifier.as_deref())
+        .collect();
+    let ids2: std::collections::HashSet<&str> = resp2
+        .entry
+        .iter()
+        .filter_map(|e| e.identifier.as_deref())
+        .collect();
     assert!(
         ids1.intersection(&ids2).count() == 0,
         "pages should not overlap"

@@ -56,10 +56,7 @@ impl BibBase {
             None => return Ok(None),
         };
 
-        let mut col = Collection::new(
-            row.get::<String>(0)?,
-            row.get::<String>(1)?,
-        );
+        let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
         col.description = opt_string(row.get_value(2)?);
         col.tags = parse_json_col(&opt_string(row.get_value(3)?));
         col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
@@ -83,10 +80,14 @@ impl BibBase {
     ) -> Result<Vec<Collection>> {
         let conn = self.conn();
         let sql = match status {
-            Some(_) => "SELECT id, name, description, tags, status, created_at, updated_at \
-                        FROM collections WHERE status = ?1 ORDER BY updated_at DESC",
-            None => "SELECT id, name, description, tags, status, created_at, updated_at \
-                     FROM collections ORDER BY updated_at DESC",
+            Some(_) => {
+                "SELECT id, name, description, tags, status, created_at, updated_at \
+                        FROM collections WHERE status = ?1 ORDER BY updated_at DESC"
+            }
+            None => {
+                "SELECT id, name, description, tags, status, created_at, updated_at \
+                     FROM collections ORDER BY updated_at DESC"
+            }
         };
 
         let mut rows = if let Some(s) = status {
@@ -97,10 +98,7 @@ impl BibBase {
 
         let mut out = Vec::new();
         while let Some(row) = rows.next().await? {
-            let mut col = Collection::new(
-                row.get::<String>(0)?,
-                row.get::<String>(1)?,
-            );
+            let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
             col.description = opt_string(row.get_value(2)?);
             col.tags = parse_json_col(&opt_string(row.get_value(3)?));
             col.status =
@@ -113,11 +111,7 @@ impl BibBase {
     }
 
     /// Update the status of a collection.
-    pub async fn update_collection_status(
-        &self,
-        id: &str,
-        status: CollectionStatus,
-    ) -> Result<()> {
+    pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
         let conn = self.conn();
         conn.execute(
             "UPDATE collections SET status = ?1, updated_at = ?2 WHERE id = ?3",
@@ -130,10 +124,7 @@ impl BibBase {
     /// Delete a collection (FK CASCADE removes `collection_articles` rows).
     pub async fn delete_collection(&self, id: &str) -> Result<()> {
         self.conn()
-            .execute(
-                "DELETE FROM collections WHERE id = ?1",
-                turso::params![id],
-            )
+            .execute("DELETE FROM collections WHERE id = ?1", turso::params![id])
             .await?;
         Ok(())
     }

@@ -52,11 +52,7 @@ pub fn search_entry_to_article(entry: &SearchEntry) -> Article {
     let doi = entry.doi.as_deref().filter(|d| !d.is_empty());
     let doi_from_id = entry.identifier.as_deref().and_then(|id| {
         let d = id.strip_prefix("doi:")?.trim();
-        if d.is_empty() {
-            None
-        } else {
-            Some(d)
-        }
+        if d.is_empty() { None } else { Some(d) }
     });
 
     let mut identifiers: Vec<Identifier> = Vec::new();
@@ -168,7 +164,10 @@ fn parse_cover_date(s: &str) -> (Option<u16>, Option<u8>) {
     // ISO format: YYYY-MM-DD or YYYY-MM
     let parts: Vec<&str> = trimmed.split('-').collect();
     let year = parts.first().and_then(|p| p.parse::<u16>().ok());
-    let month = parts.get(1).and_then(|p| p.parse::<u8>().ok()).filter(|m| *m >= 1 && *m <= 12);
+    let month = parts
+        .get(1)
+        .and_then(|p| p.parse::<u8>().ok())
+        .filter(|m| *m >= 1 && *m <= 12);
     (year, month)
 }
 
@@ -215,10 +214,7 @@ mod tests {
 
         let article = search_entry_to_article(&entry);
         assert_eq!(article.title, "A Great Paper");
-        assert_eq!(
-            article.doi(),
-            Some("10.1016/test.embase.2024.123")
-        );
+        assert_eq!(article.doi(), Some("10.1016/test.embase.2024.123"));
         assert_eq!(article.authors.len(), 1);
         assert_eq!(article.authors[0].last_name, "Smith");
         assert_eq!(article.journal.as_deref(), Some("Nature"));
@@ -267,10 +263,7 @@ mod tests {
             ..Default::default()
         };
         let article = search_entry_to_article(&entry);
-        assert_eq!(
-            article.identifier(IdKind::Embase),
-            Some("62849213")
-        );
+        assert_eq!(article.identifier(IdKind::Embase), Some("62849213"));
     }
 
     #[test]

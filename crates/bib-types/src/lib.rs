@@ -18,7 +18,7 @@ pub mod types;
 
 pub use query::{BoolOp, StructuredSearch, YearRange};
 pub use types::{
-    AddedBy, Annotation, AnnotationKind, Article, ArticleRole, ArticleSource, Author,
-    Collection, CollectionArticle, CollectionStatus, ExportFormat, FetchStatus, FileFormat,
-    FullText, FullTextSource, IdKind, Identifier, LibraryEntry, Reference, SearchHit,
+    AddedBy, Annotation, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
+    CollectionArticle, CollectionStatus, ExportFormat, FetchStatus, FileFormat, FullText,
+    FullTextSource, IdKind, Identifier, LibraryEntry, Reference, SearchHit,
 };

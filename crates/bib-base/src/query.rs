@@ -17,8 +17,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
 
-use bib_types::query::StructuredSearch;
 use bib_types::Article;
+use bib_types::query::StructuredSearch;
 
 use crate::error::{Error, Result};
 
@@ -226,10 +226,7 @@ impl LiteratureSource for ArxivSource {
 
         let resp = self
             .client
-            .search(
-                &arxiv::types::SearchRequest::new(term)
-                    .max_results(limit as u32),
-            )
+            .search(&arxiv::types::SearchRequest::new(term).max_results(limit as u32))
             .await
             .map_err(|e| Error::Unknown(format!("arxiv search: {e}")))?;
 
@@ -293,11 +290,7 @@ impl BiorxivSource {
     }
 
     /// Fetch paper details from one server (`"biorxiv"` or `"medrxiv"`).
-    async fn fetch_from_server(
-        &self,
-        server: &str,
-        doi: &str,
-    ) -> Result<Option<Article>> {
+    async fn fetch_from_server(&self, server: &str, doi: &str) -> Result<Option<Article>> {
         let url = format!("https://api.biorxiv.org/details/{server}/{doi}");
         let resp = self
             .client
@@ -335,11 +328,7 @@ impl LiteratureSource for BiorxivSource {
         "biorxiv"
     }
 
-    async fn search(
-        &self,
-        _query: &StructuredSearch,
-        _limit: usize,
-    ) -> Result<SourceBatch> {
+    async fn search(&self, _query: &StructuredSearch, _limit: usize) -> Result<SourceBatch> {
         // The bioRxiv public API has no keyword-search endpoint.
         Ok(SourceBatch {
             source: self.name().into(),
@@ -459,7 +448,11 @@ fn parse_biorxiv_author(name: &str) -> bib_types::Author {
             bib_types::Author {
                 last_name: family.to_owned(),
                 fore_name: Some(given.to_owned()),
-                initials: if !initials.is_empty() { Some(initials) } else { None },
+                initials: if !initials.is_empty() {
+                    Some(initials)
+                } else {
+                    None
+                },
                 affiliation: None,
                 orcid: None,
                 corresponding: false,
@@ -485,10 +478,7 @@ fn parse_biorxiv_date(s: &str) -> (Option<u16>, Option<u8>) {
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> String {
-    v.get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned()
+    v.get(key).and_then(|v| v.as_str()).unwrap_or("").to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +508,9 @@ pub struct LiteratureGateway {
 impl LiteratureGateway {
     /// Create an empty gateway (no sources).
     pub fn new() -> Self {
-        Self { sources: Vec::new() }
+        Self {
+            sources: Vec::new(),
+        }
     }
 
     /// Register a source.
@@ -542,11 +534,7 @@ impl LiteratureGateway {
     /// Each source's results are returned as a separate [`SourceBatch`].
     /// Sources that error are logged and skipped — one failing source
     /// does not abort the others.
-    pub async fn search(
-        &self,
-        query: &StructuredSearch,
-        limit: usize,
-    ) -> Vec<SourceBatch> {
+    pub async fn search(&self, query: &StructuredSearch, limit: usize) -> Vec<SourceBatch> {
         self.search_subset(&self.sources.iter().collect::<Vec<_>>(), query, limit)
             .await
     }

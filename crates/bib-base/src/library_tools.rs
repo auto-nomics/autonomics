@@ -23,9 +23,7 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
-use bib_types::{
-    AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind,
-};
+use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind};
 
 use crate::bib_base::BibBase;
 use crate::query::LiteratureGateway;
@@ -106,10 +104,7 @@ impl ToolFunction for BibSaveTool {
         })?;
 
         // 3. Upsert to local DB.
-        self.bib
-            .upsert_article(&article)
-            .await
-            .map_err(box_error)?;
+        self.bib.upsert_article(&article).await.map_err(box_error)?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "saved": true,
@@ -157,10 +152,7 @@ impl ToolFunction for BibCreateCollectionTool {
         let mut col = bib_types::Collection::new(&id, &input.name);
         col.description = input.description;
 
-        self.bib
-            .upsert_collection(&col)
-            .await
-            .map_err(box_error)?;
+        self.bib.upsert_collection(&col).await.map_err(box_error)?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "collection_id": id,
@@ -263,11 +255,7 @@ impl ToolFunction for BibListCollectionTool {
         match input.collection_id {
             None => {
                 // List all collections.
-                let collections = self
-                    .bib
-                    .list_collections(None)
-                    .await
-                    .map_err(box_error)?;
+                let collections = self.bib.list_collections(None).await.map_err(box_error)?;
 
                 let items: Vec<serde_json::Value> = collections
                     .iter()
@@ -305,7 +293,11 @@ impl ToolFunction for BibListCollectionTool {
                 // Enrich with article metadata from local DB.
                 let mut items = Vec::with_capacity(articles.len());
                 for ca in &articles {
-                    let article = self.bib.get_article(&ca.article_id).await.map_err(box_error)?;
+                    let article = self
+                        .bib
+                        .get_article(&ca.article_id)
+                        .await
+                        .map_err(box_error)?;
                     let entry = match article {
                         Some(a) => serde_json::json!({
                             "article_id": ca.article_id,
@@ -442,7 +434,10 @@ impl ToolFunction for BibGetArticleTool {
 
         let include_ft = input.include_fulltext.unwrap_or(true);
         let fulltext = if include_ft {
-            self.bib.get_fulltext(&input.article_id).await.map_err(box_error)?
+            self.bib
+                .get_fulltext(&input.article_id)
+                .await
+                .map_err(box_error)?
         } else {
             None
         };
@@ -666,7 +661,12 @@ impl ToolFunction for BibExportTool {
                     .map_err(box_error)?;
                 let mut out = Vec::new();
                 for ca in cas.into_iter().take(limit) {
-                    if let Some(a) = self.bib.get_article(&ca.article_id).await.map_err(box_error)? {
+                    if let Some(a) = self
+                        .bib
+                        .get_article(&ca.article_id)
+                        .await
+                        .map_err(box_error)?
+                    {
                         out.push(a);
                     }
                 }
@@ -680,7 +680,12 @@ impl ToolFunction for BibExportTool {
                     .map_err(box_error)?;
                 let mut out = Vec::new();
                 for hit in hits {
-                    if let Some(a) = self.bib.get_article(&hit.article_id).await.map_err(box_error)? {
+                    if let Some(a) = self
+                        .bib
+                        .get_article(&hit.article_id)
+                        .await
+                        .map_err(box_error)?
+                    {
                         out.push(a);
                     }
                 }
@@ -713,7 +718,10 @@ pub fn bib_library_registrations(
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     vec![
-        R::from(BibSaveTool { bib: bib.clone(), gateway: gateway.clone() }),
+        R::from(BibSaveTool {
+            bib: bib.clone(),
+            gateway: gateway.clone(),
+        }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
         R::from(BibListCollectionTool { bib: bib.clone() }),

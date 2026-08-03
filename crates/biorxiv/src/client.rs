@@ -120,11 +120,7 @@ impl BiorxivClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn details_by_doi(
-        &self,
-        server: Server,
-        doi: &str,
-    ) -> Result<DetailsResponse> {
+    pub async fn details_by_doi(&self, server: Server, doi: &str) -> Result<DetailsResponse> {
         let url = format!(
             "{base}/details/{server}/{doi}/na/json",
             base = BASE_URL,
@@ -177,12 +173,9 @@ impl BiorxivClient {
     }
 
     /// Fetch the *N* most recent papers from the given server.
-    pub async fn details_recent(
-        &self,
-        server: Server,
-        n: u32,
-    ) -> Result<DetailsResponse> {
-        self.details_by_interval(server, &Interval::Recent(n), 0).await
+    pub async fn details_recent(&self, server: Server, n: u32) -> Result<DetailsResponse> {
+        self.details_by_interval(server, &Interval::Recent(n), 0)
+            .await
     }
 
     /// Fetch papers posted within the last *N* days.
@@ -208,12 +201,8 @@ impl BiorxivClient {
         to: chrono::NaiveDate,
         cursor: u32,
     ) -> Result<DetailsResponse> {
-        self.details_by_interval(
-            server,
-            &Interval::DateRange { from, to },
-            cursor,
-        )
-        .await
+        self.details_by_interval(server, &Interval::DateRange { from, to }, cursor)
+            .await
     }
 
     /// Fetch **all** papers in an interval, auto-paginating until exhausted
@@ -243,9 +232,7 @@ impl BiorxivClient {
         let mut total = None;
 
         loop {
-            let resp = self
-                .details_by_interval(server, interval, cursor)
-                .await?;
+            let resp = self.details_by_interval(server, interval, cursor).await?;
 
             // Capture total from the first page.
             if total.is_none() {
@@ -301,10 +288,7 @@ impl BiorxivClient {
         to: chrono::NaiveDate,
         cursor: u32,
     ) -> Result<PubResponse> {
-        let url = format!(
-            "{base}/pub/{from}/{to}/{cursor}",
-            base = BASE_URL,
-        );
+        let url = format!("{base}/pub/{from}/{to}/{cursor}", base = BASE_URL,);
         self.get(&url).await
     }
 }

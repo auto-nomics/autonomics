@@ -11,10 +11,7 @@ use crate::types::{ArxivEntry, SearchResponse};
 pub fn format_search(resp: &SearchResponse) -> String {
     let mut out = String::with_capacity(4096);
 
-    out.push_str(&format!(
-        "**{}** results found",
-        resp.total_results
-    ));
+    out.push_str(&format!("**{}** results found", resp.total_results));
     if resp.entries.len() < resp.total_results as usize {
         out.push_str(&format!(" (showing {})", resp.entries.len()));
     }
@@ -51,10 +48,7 @@ pub fn format_entries_full(entries: &[ArxivEntry]) -> String {
 // ---------------------------------------------------------------------------
 
 fn format_entry_preview(entry: &ArxivEntry, out: &mut String) {
-    out.push_str(&format!(
-        "### [arXiv:{}] {}\n",
-        entry.arxiv_id, entry.title
-    ));
+    out.push_str(&format!("### [arXiv:{}] {}\n", entry.arxiv_id, entry.title));
 
     // Authors (first 5, then "et al.")
     let names: Vec<&str> = entry.authors.iter().map(|a| a.name.as_str()).collect();
@@ -93,10 +87,7 @@ fn format_entry_preview(entry: &ArxivEntry, out: &mut String) {
 }
 
 fn format_entry_full(entry: &ArxivEntry, out: &mut String) {
-    out.push_str(&format!(
-        "### [arXiv:{}] {}\n",
-        entry.arxiv_id, entry.title
-    ));
+    out.push_str(&format!("### [arXiv:{}] {}\n", entry.arxiv_id, entry.title));
 
     // Authors with affiliations
     if !entry.authors.is_empty() {

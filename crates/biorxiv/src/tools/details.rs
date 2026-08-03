@@ -101,14 +101,16 @@ impl ToolFunction for BiorxivDetailsTool {
                 .client
                 .details_by_date(
                     server,
-                    chrono::NaiveDate::parse_from_str(&dr.from, "%Y-%m-%d")
-                        .map_err(|e| ToolError::ValidationFailed {
+                    chrono::NaiveDate::parse_from_str(&dr.from, "%Y-%m-%d").map_err(|e| {
+                        ToolError::ValidationFailed {
                             message: format!("invalid 'from' date: {e}"),
-                        })?,
-                    chrono::NaiveDate::parse_from_str(&dr.to, "%Y-%m-%d")
-                        .map_err(|e| ToolError::ValidationFailed {
+                        }
+                    })?,
+                    chrono::NaiveDate::parse_from_str(&dr.to, "%Y-%m-%d").map_err(|e| {
+                        ToolError::ValidationFailed {
                             message: format!("invalid 'to' date: {e}"),
-                        })?,
+                        }
+                    })?,
                     cursor,
                 )
                 .await

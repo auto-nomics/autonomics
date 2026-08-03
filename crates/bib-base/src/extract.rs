@@ -112,12 +112,11 @@ impl TextExtractor for SimpleExtractor {
             FileFormat::Pdf => {
                 // PDF extraction is CPU-bound — run on the blocking pool.
                 let owned = content.to_vec();
-                let text = tokio::task::spawn_blocking(move || {
-                    pdf_extract::extract_text_from_mem(&owned)
-                })
-                .await
-                .map_err(|e| Error::Unknown(format!("extraction task panicked: {e}")))?
-                .map_err(|e| Error::Unknown(format!("PDF extraction failed: {e}")))?;
+                let text =
+                    tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&owned))
+                        .await
+                        .map_err(|e| Error::Unknown(format!("extraction task panicked: {e}")))?
+                        .map_err(|e| Error::Unknown(format!("PDF extraction failed: {e}")))?;
 
                 Ok(ExtractedText {
                     text: normalize_whitespace(&text),
@@ -174,7 +173,10 @@ mod tests {
     #[tokio::test]
     async fn extract_txt() {
         let ext = SimpleExtractor::new();
-        let result = ext.extract(b"Hello, world!", FileFormat::Txt).await.unwrap();
+        let result = ext
+            .extract(b"Hello, world!", FileFormat::Txt)
+            .await
+            .unwrap();
         assert_eq!(result.text, "Hello, world!");
     }
 

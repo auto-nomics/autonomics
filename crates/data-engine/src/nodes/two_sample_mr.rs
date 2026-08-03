@@ -1098,8 +1098,8 @@ mod tests {
         // clump_instruments. All p-values are well below the default p1=5e-8.
         let data: &[(&str, f64, f64)] = &[
             // FTO locus (chr 16) — multiple SNPs in LD, should clump to 1
-            ("rs1558902", 0.090, 0.009), // z=10.0, p ≈ 1e-23
-            ("rs1421085", 0.080, 0.009), // z=8.9,  p ≈ 5e-19, LD with rs1558902
+            ("rs1558902", 0.090, 0.009),  // z=10.0, p ≈ 1e-23
+            ("rs1421085", 0.080, 0.009),  // z=8.9,  p ≈ 5e-19, LD with rs1558902
             ("rs17817449", 0.080, 0.009), // z=8.9, p ≈ 5e-19, LD with rs1558902
             // GNPDA2 (chr 4) — independent locus
             ("rs10938397", 0.060, 0.008), // z=7.5, p ≈ 6e-14
@@ -1136,7 +1136,9 @@ mod tests {
         assert_eq!(n_before, 6, "expected 6 input SNPs");
 
         let cfg = ClumpConfig::default();
-        let clumped = clump_instruments(inputs, &cfg).await.expect("clumping should succeed");
+        let clumped = clump_instruments(inputs, &cfg)
+            .await
+            .expect("clumping should succeed");
 
         let n_after = clumped.len();
         println!("E2E clumping: {n_before} → {n_after} SNPs");
@@ -1182,7 +1184,9 @@ mod tests {
             p1: 5e-8,
             pop: "EUR".to_string(),
         };
-        let clumped = clump_instruments(inputs, &cfg).await.expect("clumping should succeed");
+        let clumped = clump_instruments(inputs, &cfg)
+            .await
+            .expect("clumping should succeed");
         let relaxed_count = clumped.len();
 
         // Strict default r² → more aggressive pruning.
@@ -1229,10 +1233,7 @@ mod tests {
         let eur_snps: std::collections::HashSet<_> = eur.iter().map(|r| r.snp.clone()).collect();
         let afr_snps: std::collections::HashSet<_> = afr.iter().map(|r| r.snp.clone()).collect();
 
-        println!(
-            "E2E pop: EUR kept {:?}, AFR kept {:?}",
-            eur_snps, afr_snps
-        );
+        println!("E2E pop: EUR kept {:?}, AFR kept {:?}", eur_snps, afr_snps);
         // Both should succeed and return non-empty results.
         assert!(!eur_snps.is_empty(), "EUR clumping returned no SNPs");
         assert!(!afr_snps.is_empty(), "AFR clumping returned no SNPs");

@@ -12,7 +12,9 @@ pub fn render(article: &Article, format: ExportFormat) -> String {
         ExportFormat::Bibtex => to_bibtex(article),
         ExportFormat::Ris => to_ris(article),
         ExportFormat::Markdown => to_markdown(article),
-        ExportFormat::CslJson => serde_json::to_string_pretty(&to_csl_json(article)).unwrap_or_default(),
+        ExportFormat::CslJson => {
+            serde_json::to_string_pretty(&to_csl_json(article)).unwrap_or_default()
+        }
     }
 }
 
@@ -44,12 +46,10 @@ pub fn to_bibtex(article: &Article) -> String {
         let names: Vec<String> = article
             .authors
             .iter()
-            .map(|a| {
-                match (&a.fore_name, &a.initials) {
-                    (Some(f), _) => format!("{f} {}", a.last_name),
-                    (None, Some(i)) => format!("{} {}", a.last_name, i),
-                    (None, None) => a.last_name.clone(),
-                }
+            .map(|a| match (&a.fore_name, &a.initials) {
+                (Some(f), _) => format!("{f} {}", a.last_name),
+                (None, Some(i)) => format!("{} {}", a.last_name, i),
+                (None, None) => a.last_name.clone(),
             })
             .collect();
         lines.push(format!("  author = {{{}}},", names.join(" and ")));
@@ -95,7 +95,10 @@ fn cite_key(article: &Article) -> String {
         .first()
         .map(|a| a.last_name.to_lowercase().replace(' ', ""))
         .unwrap_or_else(|| "anon".into());
-    let year_part = article.year.map(|y| y.to_string()).unwrap_or_else(|| "nd".into());
+    let year_part = article
+        .year
+        .map(|y| y.to_string())
+        .unwrap_or_else(|| "nd".into());
     let title_part = article
         .title
         .split_whitespace()
@@ -177,7 +180,10 @@ pub fn to_markdown(article: &Article) -> String {
         _ => format!("{} et al.", article.authors[0].display_name()),
     };
 
-    let year = article.year.map(|y| y.to_string()).unwrap_or_else(|| "n.d.".into());
+    let year = article
+        .year
+        .map(|y| y.to_string())
+        .unwrap_or_else(|| "n.d.".into());
 
     let mut out = format!("- {author_str} ({year}). {}.", article.title);
 
@@ -265,7 +271,8 @@ mod tests {
         a.issue = Some("3".into());
         a.pages = Some("100-110".into());
         a.abstract_text = Some("We describe a novel method.".into());
-        a.identifiers.push(bib_types::Identifier::doi("10.1000/test"));
+        a.identifiers
+            .push(bib_types::Identifier::doi("10.1000/test"));
         a.identifiers.push(bib_types::Identifier::pmid("30124452"));
         a.source = ArticleSource::Pubmed;
         a

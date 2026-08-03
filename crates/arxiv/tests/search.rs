@@ -12,7 +12,10 @@ async fn search_basic_query() -> TestResult {
         .search(&SearchRequest::new("cat:cs.LG AND ti:transformer").max_results(5))
         .await?;
 
-    assert!(resp.total_results > 0, "expected results for transformer search");
+    assert!(
+        resp.total_results > 0,
+        "expected results for transformer search"
+    );
     assert!(!resp.entries.is_empty());
     assert!(resp.entries.len() <= 5);
 

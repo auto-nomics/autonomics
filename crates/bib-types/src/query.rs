@@ -145,7 +145,10 @@ mod tests {
         let sq = StructuredSearch {
             keywords: Some(vec!["a".into(), "b".into()]),
             keywords_op: Some(BoolOp::And),
-            year_range: Some(YearRange { from: 2018, to: 2023 }),
+            year_range: Some(YearRange {
+                from: 2018,
+                to: 2023,
+            }),
             ..Default::default()
         };
         let json = serde_json::to_string(&sq).unwrap();

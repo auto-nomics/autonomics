@@ -135,8 +135,7 @@ impl ArxivClient {
             params.push(("sortOrder", so.as_str().to_owned()));
         }
 
-        let ref_params: Vec<(&str, &str)> =
-            params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let ref_params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let xml = self.get_atom(&ref_params).await?;
 
         crate::convert::parse_feed(&xml)
@@ -175,8 +174,7 @@ impl ArxivClient {
             params.push(("start", n.to_string()));
         }
 
-        let ref_params: Vec<(&str, &str)> =
-            params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let ref_params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let xml = self.get_atom(&ref_params).await?;
 
         let resp = crate::convert::parse_feed(&xml)?;

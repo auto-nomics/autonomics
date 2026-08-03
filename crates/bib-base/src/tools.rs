@@ -193,9 +193,7 @@ impl ToolFunction for LitFetchTool {
                 .gateway
                 .fetch_from(source, &input.id)
                 .await
-                .map_err(|e| ToolError::ExecutionFailed {
-                    source: e.into(),
-                })?;
+                .map_err(|e| ToolError::ExecutionFailed { source: e.into() })?;
             article.map(|a| (source.clone(), a))
         } else {
             // Auto-detect: try the most likely source first.
@@ -263,11 +261,14 @@ pub fn bib_query_registrations(gateway: Arc<LiteratureGateway>) -> Vec<ToolRegis
 fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
     StructuredSearch {
         keywords: input.keywords.clone(),
-        keywords_op: input.keywords_op.as_deref().and_then(|s| match s.to_uppercase().as_str() {
-            "AND" => Some(BoolOp::And),
-            "NOT" => Some(BoolOp::Not),
-            _ => Some(BoolOp::Or),
-        }),
+        keywords_op: input
+            .keywords_op
+            .as_deref()
+            .and_then(|s| match s.to_uppercase().as_str() {
+                "AND" => Some(BoolOp::And),
+                "NOT" => Some(BoolOp::Not),
+                _ => Some(BoolOp::Or),
+            }),
         title: input.title.clone(),
         authors: input.authors.clone(),
         mesh: None,

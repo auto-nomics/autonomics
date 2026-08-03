@@ -1,4 +1,4 @@
-use arxiv::{ArxivClient, types::FetchRequest, atom_to_articles};
+use arxiv::{ArxivClient, atom_to_articles, types::FetchRequest};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod common;

@@ -3,8 +3,8 @@
 
 use bib_base::BibBase;
 use bib_types::{
-    AddedBy, Article, ArticleRole, ArticleSource, Author, Collection,
-    CollectionStatus, FetchStatus, FileFormat, FullText, FullTextSource, IdKind, Identifier,
+    AddedBy, Article, ArticleRole, ArticleSource, Author, Collection, CollectionStatus,
+    FetchStatus, FileFormat, FullText, FullTextSource, IdKind, Identifier,
 };
 
 // ---------------------------------------------------------------------------
@@ -21,7 +21,8 @@ fn sample_article(id: &str, title: &str) -> Article {
         orcid: None,
         corresponding: false,
     });
-    art.identifiers.push(Identifier::doi(format!("10.1000/{id}")));
+    art.identifiers
+        .push(Identifier::doi(format!("10.1000/{id}")));
     art.identifiers.push(Identifier::pmid(format!("100{id}")));
     art.abstract_text = Some("A paper about CRISPR gene editing and off-target effects.".into());
     art.year = Some(2024);
@@ -44,9 +45,16 @@ async fn collection_crud() {
     col.tags = vec!["eQTL".into(), "coloc".into()];
     db.upsert_collection(&col).await.unwrap();
 
-    let loaded = db.get_collection("col-1").await.unwrap().expect("not found");
+    let loaded = db
+        .get_collection("col-1")
+        .await
+        .unwrap()
+        .expect("not found");
     assert_eq!(loaded.name, "eQTL colocalization");
-    assert_eq!(loaded.description.as_deref(), Some("Investigation of colocalization methods"));
+    assert_eq!(
+        loaded.description.as_deref(),
+        Some("Investigation of colocalization methods")
+    );
     assert_eq!(loaded.tags, vec!["eQTL", "coloc"]);
     assert_eq!(loaded.status, CollectionStatus::Active);
     assert!(loaded.article_ids.is_empty());
@@ -78,12 +86,18 @@ async fn collection_list_with_filter() {
     assert_eq!(all.len(), 3);
 
     // Only active.
-    let active = db.list_collections(Some(CollectionStatus::Active)).await.unwrap();
+    let active = db
+        .list_collections(Some(CollectionStatus::Active))
+        .await
+        .unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].id, "c1");
 
     // Only completed.
-    let completed = db.list_collections(Some(CollectionStatus::Completed)).await.unwrap();
+    let completed = db
+        .list_collections(Some(CollectionStatus::Completed))
+        .await
+        .unwrap();
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].id, "c2");
 }
@@ -92,8 +106,12 @@ async fn collection_list_with_filter() {
 async fn collection_delete_cascades() {
     let db = BibBase::open_in_memory().await.unwrap();
 
-    db.upsert_collection(&Collection::new("c1", "Test")).await.unwrap();
-    db.upsert_article(&sample_article("a1", "Paper")).await.unwrap();
+    db.upsert_collection(&Collection::new("c1", "Test"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "Paper"))
+        .await
+        .unwrap();
     db.add_to_collection("c1", "a1", ArticleRole::Requested, AddedBy::Agent, None)
         .await
         .unwrap();
@@ -113,14 +131,28 @@ async fn collection_delete_cascades() {
 async fn add_and_list_collection_articles() {
     let db = BibBase::open_in_memory().await.unwrap();
 
-    db.upsert_collection(&Collection::new("c1", "Investigation")).await.unwrap();
-    db.upsert_article(&sample_article("a1", "Paper one")).await.unwrap();
-    db.upsert_article(&sample_article("a2", "Paper two")).await.unwrap();
-    db.upsert_article(&sample_article("a3", "Background paper")).await.unwrap();
-
-    db.add_to_collection("c1", "a1", ArticleRole::Requested, AddedBy::Agent, Some("Key method"))
+    db.upsert_collection(&Collection::new("c1", "Investigation"))
         .await
         .unwrap();
+    db.upsert_article(&sample_article("a1", "Paper one"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a2", "Paper two"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a3", "Background paper"))
+        .await
+        .unwrap();
+
+    db.add_to_collection(
+        "c1",
+        "a1",
+        ArticleRole::Requested,
+        AddedBy::Agent,
+        Some("Key method"),
+    )
+    .await
+    .unwrap();
     db.add_to_collection("c1", "a2", ArticleRole::Referenced, AddedBy::Agent, None)
         .await
         .unwrap();
@@ -166,20 +198,40 @@ async fn add_and_list_collection_articles() {
 async fn add_to_collection_is_idempotent() {
     let db = BibBase::open_in_memory().await.unwrap();
 
-    db.upsert_collection(&Collection::new("c1", "Test")).await.unwrap();
-    db.upsert_article(&sample_article("a1", "Paper")).await.unwrap();
+    db.upsert_collection(&Collection::new("c1", "Test"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "Paper"))
+        .await
+        .unwrap();
 
-    db.add_to_collection("c1", "a1", ArticleRole::Requested, AddedBy::Agent, Some("first note"))
-        .await
-        .unwrap();
-    db.add_to_collection("c1", "a1", ArticleRole::Cited, AddedBy::User, Some("updated note"))
-        .await
-        .unwrap();
+    db.add_to_collection(
+        "c1",
+        "a1",
+        ArticleRole::Requested,
+        AddedBy::Agent,
+        Some("first note"),
+    )
+    .await
+    .unwrap();
+    db.add_to_collection(
+        "c1",
+        "a1",
+        ArticleRole::Cited,
+        AddedBy::User,
+        Some("updated note"),
+    )
+    .await
+    .unwrap();
 
     let articles = db.list_collection_articles("c1", None, None).await.unwrap();
     assert_eq!(articles.len(), 1, "should not duplicate");
     assert_eq!(articles[0].role, ArticleRole::Cited, "role should update");
-    assert_eq!(articles[0].added_by, AddedBy::User, "added_by should update");
+    assert_eq!(
+        articles[0].added_by,
+        AddedBy::User,
+        "added_by should update"
+    );
     assert_eq!(articles[0].note.as_deref(), Some("updated note"));
     assert_eq!(articles[0].position, 0, "position should not change");
 }
@@ -188,9 +240,15 @@ async fn add_to_collection_is_idempotent() {
 async fn collection_article_ids_hydrated() {
     let db = BibBase::open_in_memory().await.unwrap();
 
-    db.upsert_collection(&Collection::new("c1", "Test")).await.unwrap();
-    db.upsert_article(&sample_article("a1", "First")).await.unwrap();
-    db.upsert_article(&sample_article("a2", "Second")).await.unwrap();
+    db.upsert_collection(&Collection::new("c1", "Test"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "First"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a2", "Second"))
+        .await
+        .unwrap();
 
     db.add_to_collection("c1", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
         .await
@@ -211,9 +269,15 @@ async fn collection_article_ids_hydrated() {
 async fn fulltext_request_lifecycle() {
     let db = BibBase::open_in_memory().await.unwrap();
 
-    db.upsert_collection(&Collection::new("c1", "Investigation")).await.unwrap();
-    db.upsert_article(&sample_article("a1", "Needs full text")).await.unwrap();
-    db.upsert_article(&sample_article("a2", "Also needs full text")).await.unwrap();
+    db.upsert_collection(&Collection::new("c1", "Investigation"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a1", "Needs full text"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a2", "Also needs full text"))
+        .await
+        .unwrap();
 
     db.add_to_collection("c1", "a1", ArticleRole::Requested, AddedBy::Agent, None)
         .await
@@ -261,7 +325,9 @@ async fn fulltext_request_lifecycle() {
 #[tokio::test]
 async fn fulltext_crud() {
     let db = BibBase::open_in_memory().await.unwrap();
-    db.upsert_article(&sample_article("a1", "Paper with full text")).await.unwrap();
+    db.upsert_article(&sample_article("a1", "Paper with full text"))
+        .await
+        .unwrap();
 
     assert!(!db.has_fulltext("a1").await.unwrap());
 
@@ -315,7 +381,11 @@ async fn search_basic() {
 
     // Search for "CRISPR".
     let hits = db.search_articles("CRISPR", 10).await.unwrap();
-    assert!(hits.len() >= 2, "should find at least 2 CRISPR articles, got {}", hits.len());
+    assert!(
+        hits.len() >= 2,
+        "should find at least 2 CRISPR articles, got {}",
+        hits.len()
+    );
 
     // All hits should mention CRISPR in title or snippet.
     for hit in &hits {
@@ -343,7 +413,10 @@ async fn search_with_fulltext() {
     db.upsert_article(&a1).await.unwrap();
 
     // Initially, searching for content only in full text should miss.
-    let hits = db.search_articles("deep neural network architecture", 10).await.unwrap();
+    let hits = db
+        .search_articles("deep neural network architecture", 10)
+        .await
+        .unwrap();
     assert!(hits.is_empty());
 
     // Upload full text with the relevant content.
@@ -364,11 +437,19 @@ async fn search_with_fulltext() {
     db.upsert_fulltext(&ft).await.unwrap();
 
     // Now the full text content is searchable.
-    let hits = db.search_articles("deep neural network architecture", 10).await.unwrap();
+    let hits = db
+        .search_articles("deep neural network architecture", 10)
+        .await
+        .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].article_id, "a1");
     // Snippet should contain the matched text.
-    assert!(hits[0].snippet.to_lowercase().contains("deep neural network"));
+    assert!(
+        hits[0]
+            .snippet
+            .to_lowercase()
+            .contains("deep neural network")
+    );
 }
 
 #[tokio::test]

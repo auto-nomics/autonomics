@@ -29,7 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("── {pop} ──");
         let mut pop_rows: i64 = 0;
         let mut pop_with_data = 0usize;
-        for t in tables.iter().filter(|t| t.name.starts_with(&format!("{pop}_chr"))) {
+        for t in tables
+            .iter()
+            .filter(|t| t.name.starts_with(&format!("{pop}_chr")))
+        {
             let table = catalog.load_table(t).await?;
             let md = table.metadata();
             let n_snaps = md.snapshots().count();

@@ -11,9 +11,11 @@ pub fn format_search(resp: &SearchResponse) -> String {
     // Check for API-level error.
     if let Some(ref err) = resp.error {
         if let Some(ref detail) = err.detail {
-            return format!("**Embase API error** (status: {}): {}\n",
+            return format!(
+                "**Embase API error** (status: {}): {}\n",
                 err.status.as_deref().unwrap_or("?"),
-                detail);
+                detail
+            );
         }
     }
 
@@ -30,7 +32,11 @@ pub fn format_search(resp: &SearchResponse) -> String {
     }
 
     for (i, entry) in resp.entry.iter().enumerate() {
-        out.push_str(&format!("### {}. {}\n", i + 1, entry_title_or_fallback(entry)));
+        out.push_str(&format!(
+            "### {}. {}\n",
+            i + 1,
+            entry_title_or_fallback(entry)
+        ));
 
         // Authors
         if let Some(ref creator) = entry.creator {
@@ -120,8 +126,16 @@ pub fn format_retrieval(entry: &SearchEntry) -> String {
     if let Some(ref name) = entry.publication_name {
         if !name.is_empty() {
             let mut parts: Vec<String> = Vec::new();
-            if let Some(ref v) = entry.volume { if !v.is_empty() { parts.push(v.clone()); } }
-            if let Some(ref iss) = entry.issue_identifier { if !iss.is_empty() { parts.push(format!("({})", iss)); } }
+            if let Some(ref v) = entry.volume {
+                if !v.is_empty() {
+                    parts.push(v.clone());
+                }
+            }
+            if let Some(ref iss) = entry.issue_identifier {
+                if !iss.is_empty() {
+                    parts.push(format!("({})", iss));
+                }
+            }
             if parts.is_empty() {
                 out.push_str(&format!("**Journal:** {}\n", name));
             } else {

@@ -96,12 +96,9 @@ pub fn entries_to_articles(entries: &[BiorxivEntry]) -> Vec<Article> {
 /// When fetching by DOI, the API returns all posted versions. This helper
 /// selects the latest.
 pub fn latest_version(entries: &[BiorxivEntry]) -> Option<&BiorxivEntry> {
-    entries.iter().max_by_key(|e| {
-        e.version
-            .trim()
-            .parse::<u32>()
-            .unwrap_or(0)
-    })
+    entries
+        .iter()
+        .max_by_key(|e| e.version.trim().parse::<u32>().unwrap_or(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +151,8 @@ fn parse_single_author(
         .collect();
 
     // Match corresponding author by last name (case-insensitive).
-    let is_corresponding = corresponding_last.map_or(false, |cl| {
-        last_name.eq_ignore_ascii_case(cl)
-    });
+    let is_corresponding =
+        corresponding_last.map_or(false, |cl| last_name.eq_ignore_ascii_case(cl));
 
     Author {
         last_name: last_name.to_owned(),
@@ -167,7 +163,9 @@ fn parse_single_author(
             Some(initials)
         },
         affiliation: if is_corresponding {
-            institution.filter(|s| !s.is_empty() && *s != "NA").map(|s| s.to_owned())
+            institution
+                .filter(|s| !s.is_empty() && *s != "NA")
+                .map(|s| s.to_owned())
         } else {
             None
         },
@@ -179,9 +177,7 @@ fn parse_single_author(
 /// Extract the family name from a full display name like `"Oliver J. Watson"`.
 /// Convention: the last whitespace-separated token is the family name.
 fn extract_last_name_from_full(name: &str) -> &str {
-    name.split_whitespace()
-        .last()
-        .unwrap_or(name)
+    name.split_whitespace().last().unwrap_or(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,9 +212,7 @@ mod tests {
             title: "Global risk of pfhrp2/3 gene deletions".into(),
             authors: "Watson, O. J.; Tran, T. N.-A.; Zupko, R. J.".into(),
             author_corresponding: Some("Oliver J. Watson".into()),
-            author_corresponding_institution: Some(
-                "Imperial College London".into(),
-            ),
+            author_corresponding_institution: Some("Imperial College London".into()),
             date: "2024-01-01".into(),
             version: "3".into(),
             article_type: "new_result".into(),
@@ -234,11 +228,8 @@ mod tests {
 
     #[test]
     fn parse_authors_basic() {
-        let authors = parse_biorxiv_authors(
-            "Watson, O. J.; Tran, T. N.-A.; Zupko, R. J.",
-            None,
-            None,
-        );
+        let authors =
+            parse_biorxiv_authors("Watson, O. J.; Tran, T. N.-A.; Zupko, R. J.", None, None);
         assert_eq!(authors.len(), 3);
 
         assert_eq!(authors[0].last_name, "Watson");
@@ -283,10 +274,7 @@ mod tests {
         let article = entry_to_article(&entry);
 
         assert_eq!(article.title, "Global risk of pfhrp2/3 gene deletions");
-        assert_eq!(
-            article.doi(),
-            Some("10.1101/2023.10.21.23297352")
-        );
+        assert_eq!(article.doi(), Some("10.1101/2023.10.21.23297352"));
         assert_eq!(
             article.identifier(IdKind::Biorxiv),
             Some("10.1101/2023.10.21.23297352")
@@ -296,7 +284,11 @@ mod tests {
         assert_eq!(article.year, Some(2024));
         assert_eq!(article.month, Some(1));
         assert_eq!(article.source, ArticleSource::Biorxiv);
-        assert!(article.pub_types.contains(&"infectious diseases".to_owned()));
+        assert!(
+            article
+                .pub_types
+                .contains(&"infectious diseases".to_owned())
+        );
         assert!(article.pub_types.contains(&"new_result".to_owned()));
         assert!(article.abstract_text.as_ref().unwrap().contains("pfhrp2"));
     }

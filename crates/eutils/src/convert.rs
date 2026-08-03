@@ -96,7 +96,11 @@ fn parse_esummary_doc(pmid: &str, doc: &Value) -> Article {
     let elo = str_field(doc, "elocationid");
     let doi_from_elocation = if elo.starts_with("doi:") {
         let d = elo.strip_prefix("doi:").unwrap_or(&elo).trim();
-        if !d.is_empty() { Some(d.to_owned()) } else { None }
+        if !d.is_empty() {
+            Some(d.to_owned())
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -336,7 +340,10 @@ fn parse_medline_fields(block: &str) -> Vec<(String, String)> {
             // New field: "TAG - value" (tag is 2-4 chars, then " - ")
             let tag_part = line[..4].trim_end();
             let rest = &line[4..];
-            let val = rest.strip_prefix(" - ").or_else(|| rest.strip_prefix("- ")).unwrap_or(rest);
+            let val = rest
+                .strip_prefix(" - ")
+                .or_else(|| rest.strip_prefix("- "))
+                .unwrap_or(rest);
             flush(&mut current_tag, &mut current_val, &mut fields);
             current_tag = Some(tag_part.to_owned());
             current_val = val.trim().to_owned();
@@ -456,7 +463,10 @@ mod tests {
         assert_eq!(a.issue.as_deref(), Some("2"));
         assert_eq!(a.year, Some(2024));
         assert_eq!(a.month, Some(1));
-        assert_eq!(a.abstract_text.as_deref(), Some("This is the abstract text."));
+        assert_eq!(
+            a.abstract_text.as_deref(),
+            Some("This is the abstract text.")
+        );
         assert!(a.pub_types.contains(&"Journal Article".to_owned()));
         assert_eq!(a.source, ArticleSource::Pubmed);
     }

@@ -66,8 +66,7 @@ impl ToolFunction for BiorxivSearchTool {
         let max_results = input.max_results.unwrap_or(300);
 
         // Translate the structured search into an interval + client-side filters.
-        let query = crate::query::to_biorxiv(input.structured, server)
-            .map_err(super::json_err)?;
+        let query = crate::query::to_biorxiv(input.structured, server).map_err(super::json_err)?;
 
         // Fetch all papers in the interval (auto-paginating up to max_results).
         let resp = self

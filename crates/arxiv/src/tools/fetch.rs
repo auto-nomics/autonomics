@@ -49,8 +49,6 @@ impl ToolFunction for ArxivFetchTool {
         // Also convert to typed Articles for programmatic use.
         let _articles = atom_to_articles(&resp.entries);
 
-        Ok(AgentToolResult::success(format_entries_full(
-            &resp.entries,
-        )))
+        Ok(AgentToolResult::success(format_entries_full(&resp.entries)))
     }
 }
