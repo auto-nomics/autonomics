@@ -5,11 +5,16 @@ pub mod files_api;
 pub mod lifecycle;
 pub mod messages;
 pub mod models_api;
+pub mod reasoning;
 pub mod shared;
 pub mod streaming;
 pub mod tools;
 
 pub use errors::{AnthropicError, Result};
+pub use reasoning::{
+    ReasoningConfig, ReasoningEffort, ThinkingConfig, ThinkingKind,
+    anthropic_budget_for_effort,
+};
 pub use shared::{HasRequestId, RequestId, ServerToolUsage, Usage};
 
 pub use messages::{

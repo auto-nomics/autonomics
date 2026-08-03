@@ -8,6 +8,7 @@ use crate::provider::{
     ProviderPreset, deepseek::DeepseekProvider, mimo::MimoProvider, minimax::MinimaxProvider,
     moonshot::MoonshotProvider, sensenova::SensenovaProvider, zai::ZaiProvider,
 };
+use crate::wire::WireProtocolKind;
 
 /// Returns preset models for a known [`ProviderType`], or `None` for
 /// [`ProviderType::Custom(_)`](ProviderType::Custom) (which has no baked-in
@@ -63,6 +64,25 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
         ProviderType::Sensenova => SensenovaProvider::default_auth_method(),
         ProviderType::Zai => ZaiProvider::default_auth_method(),
         ProviderType::Custom(_) => AuthMethod::Anthropic,
+    }
+}
+
+/// Returns the [`WireProtocolKind`] advertised by a known provider type.
+///
+/// All built-in presets currently return [`WireProtocolKind::Anthropic`]; the
+/// hook exists so future OpenAI-native presets (OpenAI itself, Ollama,
+/// LMStudio, Groq, …) can declare [`WireProtocolKind::OpenaiChat`] or
+/// [`WireProtocolKind::OpenaiResponses`] without touching call sites. Custom
+/// providers fall back to the Anthropic-compatible wire.
+pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
+    match provider_type {
+        ProviderType::Deepseek => DeepseekProvider::wire_protocol(),
+        ProviderType::Mimo => MimoProvider::wire_protocol(),
+        ProviderType::Minimax => MinimaxProvider::wire_protocol(),
+        ProviderType::Moonshot => MoonshotProvider::wire_protocol(),
+        ProviderType::Sensenova => SensenovaProvider::wire_protocol(),
+        ProviderType::Zai => ZaiProvider::wire_protocol(),
+        ProviderType::Custom(_) => WireProtocolKind::Anthropic,
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::reasoning::{ReasoningConfig, ReasoningEffort, ThinkingConfig};
 use crate::shared::{RequestId, Usage};
 use crate::tools::{ToolChoice, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -154,6 +155,18 @@ pub struct MessageCreateParams {
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::HashMap<String, String>>,
+    /// Anthropic-style extended-thinking configuration
+    /// (`thinking: { type: "enabled", budget_tokens: N }`). Emitted verbatim
+    /// on the Anthropic Messages wire; translated or dropped by other wire
+    /// protocols. See [`crate::reasoning`] for cross-protocol guidance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+    /// Protocol-neutral reasoning configuration
+    /// (budget or effort). Emitted as `reasoning_effort`/`reasoning` on
+    /// OpenAI wires; translated to a thinking budget on Anthropic wires when
+    /// no `thinking` is also set. See [`crate::reasoning`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +235,8 @@ impl MessageCreateBuilder {
                 tools: None,
                 tool_choice: None,
                 metadata: None,
+                thinking: None,
+                reasoning: None,
             },
         }
     }
@@ -296,6 +311,35 @@ impl MessageCreateBuilder {
     #[must_use]
     pub fn metadata(mut self, metadata: std::collections::HashMap<String, String>) -> Self {
         self.params.metadata = Some(metadata);
+        self
+    }
+
+    /// Configure extended thinking with an Anthropic-style token budget.
+    ///
+    /// On the Anthropic wire this emits `thinking: { type: "enabled",
+    /// budget_tokens: N }`; other wires translate it as best they can.
+    /// See [`crate::reasoning`] for cross-protocol semantics.
+    #[must_use]
+    pub fn thinking(mut self, thinking: ThinkingConfig) -> Self {
+        self.params.thinking = Some(thinking);
+        self
+    }
+
+    /// Configure reasoning with a protocol-neutral [`ReasoningConfig`].
+    ///
+    /// The active wire protocol picks the appropriate on-the-wire shape.
+    #[must_use]
+    pub fn reasoning(mut self, reasoning: ReasoningConfig) -> Self {
+        self.params.reasoning = Some(reasoning);
+        self
+    }
+
+    /// Convenience: set [`ReasoningConfig::Effort`] at the given level.
+    ///
+    /// Equivalent to `.reasoning(ReasoningConfig::from_effort(effort))`.
+    #[must_use]
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.params.reasoning = Some(ReasoningConfig::from_effort(effort));
         self
     }
 
