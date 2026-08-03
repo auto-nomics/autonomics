@@ -6,10 +6,10 @@
 //! `get_objective.default`, `check_convergence.default`, `update_model_variance`,
 //! `trim_null_effects`, `ibss_finalize`.
 
+use crate::SusieError;
 use crate::cs;
 use crate::data::{PriorMethod, RssData};
 use crate::ser;
-use crate::SusieError;
 use faer::Mat;
 
 // ─── output fit ──────────────────────────────────────────────────────────────
@@ -165,16 +165,10 @@ fn br_row(xtx: &Mat<f64>, b_row: &[f64]) -> Vec<f64> {
 ///   residuals = Xty - XtXr_without_l
 fn compute_residuals(data: &RssData, model: &Model, l: usize) -> (Vec<f64>, Vec<f64>) {
     let p = data.p;
-    let am: Vec<f64> = (0..p)
-        .map(|j| model.alpha[l][j] * model.mu[l][j])
-        .collect();
+    let am: Vec<f64> = (0..p).map(|j| model.alpha[l][j] * model.mu[l][j]).collect();
     let r_am = xtx_vec(&data.xtx, &am);
-    let xtxr_without_l: Vec<f64> = (0..p)
-        .map(|j| model.xtxr[j] - r_am[j])
-        .collect();
-    let residuals: Vec<f64> = (0..p)
-        .map(|j| data.xty[j] - xtxr_without_l[j])
-        .collect();
+    let xtxr_without_l: Vec<f64> = (0..p).map(|j| model.xtxr[j] - r_am[j]).collect();
+    let residuals: Vec<f64> = (0..p).map(|j| data.xty[j] - xtxr_without_l[j]).collect();
     (residuals, xtxr_without_l)
 }
 
@@ -196,9 +190,7 @@ fn get_er2(data: &RssData, model: &Model) -> f64 {
         .collect();
 
     // betabar = colSums(B)  (Σ_l alpha[l,j]*mu[l,j])
-    let betabar: Vec<f64> = (0..p)
-        .map(|j| (0..l).map(|ll| b[ll][j]).sum())
-        .collect();
+    let betabar: Vec<f64> = (0..p).map(|j| (0..l).map(|ll| b[ll][j]).sum()).collect();
 
     // betabar' * XtX * betabar
     let r_betabar = xtx_vec(&data.xtx, &betabar);
@@ -364,9 +356,7 @@ fn single_effect_update(data: &RssData, params: &SusieParams, model: &mut Model,
         .map(|j| model.alpha[l][j] * model.mu[l][j])
         .collect();
     let r_am = xtx_vec(&data.xtx, &am);
-    model.xtxr = (0..data.p)
-        .map(|j| fitted_without_l[j] + r_am[j])
-        .collect();
+    model.xtxr = (0..data.p).map(|j| fitted_without_l[j] + r_am[j]).collect();
 }
 
 // ─── trim_null_effects ───────────────────────────────────────────────────────

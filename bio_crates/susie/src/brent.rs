@@ -64,10 +64,7 @@ where
             e = d;
 
             // Check acceptability of the parabolic step
-            if p.abs() < 0.5 * q2 * etemp.abs()
-                && p > q2 * (a - x)
-                && p < q2 * (b - x)
-            {
+            if p.abs() < 0.5 * q2 * etemp.abs() && p > q2 * (a - x) && p < q2 * (b - x) {
                 d = p / q2;
                 let u: f64 = x + d;
                 if (u - a) < tol2 || (b - u) < tol2 {

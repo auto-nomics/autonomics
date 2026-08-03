@@ -84,9 +84,7 @@ pub enum VizError {
     /// generated script, segfault, …) **or** the structured diagnostics
     /// reported a fatal R error. Carries the parsed `diagnostics` when the
     /// JSON file was written, plus the raw `stderr` as a fallback.
-    #[error(
-        "Rscript failed (exit code {code}):\n{stderr}\n--- diagnostics ---\n{diagnostics}"
-    )]
+    #[error("Rscript failed (exit code {code}):\n{stderr}\n--- diagnostics ---\n{diagnostics}")]
     RscriptFailed {
         code: i32,
         stderr: String,

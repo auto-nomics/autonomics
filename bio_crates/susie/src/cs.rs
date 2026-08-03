@@ -42,11 +42,7 @@ pub struct CredibleSets {
 /// 3. Compute purity (min/mean/median |corr|).
 /// 4. Filter by min_abs_corr and/or median_abs_corr (OR-linked).
 /// 5. Order by purity.
-pub fn compute_cs(
-    alpha: &[Vec<f64>],
-    xtx: &Mat<f64>,
-    params: &SusieParams,
-) -> CredibleSets {
+pub fn compute_cs(alpha: &[Vec<f64>], xtx: &Mat<f64>, params: &SusieParams) -> CredibleSets {
     let coverage = params.coverage;
     let min_abs_corr = params.min_abs_corr;
     let median_abs_corr = params.median_abs_corr;
@@ -62,8 +58,7 @@ pub fn compute_cs(
 
         let p = alpha_l.len();
         // Sort variables by alpha descending
-        let mut idx: Vec<(usize, f64)> =
-            (0..p).map(|j| (j, alpha_l[j])).collect();
+        let mut idx: Vec<(usize, f64)> = (0..p).map(|j| (j, alpha_l[j])).collect();
         idx.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Accumulate until coverage
@@ -137,7 +132,9 @@ pub fn compute_cs(
         } else {
             b.3.median_abs_corr
         };
-        key_b.partial_cmp(&key_a).unwrap_or(std::cmp::Ordering::Equal)
+        key_b
+            .partial_cmp(&key_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let _ = prior_tol;

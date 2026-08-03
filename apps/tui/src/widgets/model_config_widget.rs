@@ -231,7 +231,13 @@ impl ModelConfigState {
                     let idx = base_url_presets
                         .iter()
                         .position(|u| u == cur)
-                        .map(|i| if i == 0 { base_url_presets.len() - 1 } else { i - 1 })
+                        .map(|i| {
+                            if i == 0 {
+                                base_url_presets.len() - 1
+                            } else {
+                                i - 1
+                            }
+                        })
                         .unwrap_or(0);
                     base_url.set_text(&base_url_presets[idx]);
                     consumed(ConfigCommand::None)
@@ -262,8 +268,7 @@ impl ModelConfigState {
                     ) {
                         let key_val = api_key.text().trim().to_string();
                         let url_val = base_url.text().trim().to_string();
-                        if let Some(p) =
-                            self.providers.iter_mut().find(|p| p.name == provider_name)
+                        if let Some(p) = self.providers.iter_mut().find(|p| p.name == provider_name)
                         {
                             p.api_key = if key_val.is_empty() {
                                 None
@@ -622,17 +627,19 @@ fn render_config_panel(
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
-        .title_bottom(Line::from(
-            "[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel",
-        )
-        .alignment(Alignment::Center));
+        .title_bottom(
+            Line::from("[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel")
+                .alignment(Alignment::Center),
+        );
     let inner = block.inner(area);
     block.render(area, buf);
 
     let provider = providers.iter().find(|p| p.name == provider_name);
 
     let label_style = Style::default().fg(Color::Cyan);
-    let focused_label_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let focused_label_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
     let value_style = Style::default().fg(Color::White);
     let dim_style = Style::default().fg(Color::DarkGray);
 
@@ -683,11 +690,13 @@ fn render_config_panel(
 
     let api_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if focused_field == ConfigField::ApiKey {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        }));
+        .border_style(
+            Style::default().fg(if focused_field == ConfigField::ApiKey {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        );
     let api_inner = api_block.inner(rows[4]);
     api_block.render(rows[4], buf);
     if api_inner.width > 0 && api_inner.height > 0 {
@@ -719,11 +728,13 @@ fn render_config_panel(
 
     let url_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if focused_field == ConfigField::BaseUrl {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        }));
+        .border_style(
+            Style::default().fg(if focused_field == ConfigField::BaseUrl {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        );
     let url_inner = url_block.inner(rows[7]);
     url_block.render(rows[7], buf);
     if url_inner.width > 0 && url_inner.height > 0 {
@@ -768,14 +779,11 @@ pub fn build_catalog(
                 .into_iter()
                 .map(|s| s.to_string())
                 .collect();
-            let default_url = preset_urls
-                .first()
-                .cloned()
-                .unwrap_or_else(|| {
-                    registry::default_base_url(&provider_type)
-                        .unwrap_or("")
-                        .to_string()
-                });
+            let default_url = preset_urls.first().cloned().unwrap_or_else(|| {
+                registry::default_base_url(&provider_type)
+                    .unwrap_or("")
+                    .to_string()
+            });
 
             // Match this provider against the DB rows.
             let db_match = db_providers

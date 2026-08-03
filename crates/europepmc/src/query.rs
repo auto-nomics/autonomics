@@ -285,7 +285,10 @@ mod tests {
             affiliation: kw(&["Harvard Medical School"]),
             ..Default::default()
         };
-        assert_eq!(to_europepmc(&sq).unwrap(), r#"AFF:"Harvard Medical School""#);
+        assert_eq!(
+            to_europepmc(&sq).unwrap(),
+            r#"AFF:"Harvard Medical School""#
+        );
     }
 
     // ----- multi-field -----
@@ -327,10 +330,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(
-            to_europepmc(&sq).unwrap(),
-            "(PUB_YEAR:[2024 TO 2024])"
-        );
+        assert_eq!(to_europepmc(&sq).unwrap(), "(PUB_YEAR:[2024 TO 2024])");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 mod common;
 
-use europepmc::{types::*, EuropePmcClient};
+use europepmc::{EuropePmcClient, types::*};
 
 #[tokio::test]
 #[serial_test::serial]
@@ -19,8 +19,14 @@ async fn article_by_pmid() {
     let r = resp.result.as_ref().unwrap();
     assert!(!r.title.is_empty());
     assert_eq!(r.source, "MED");
-    assert!(r.abstract_text.is_some(), "core article should have abstract");
-    assert!(r.author_list.is_some(), "core article should have author list");
+    assert!(
+        r.abstract_text.is_some(),
+        "core article should have abstract"
+    );
+    assert!(
+        r.author_list.is_some(),
+        "core article should have author list"
+    );
     assert!(
         r.pub_type_list.is_some(),
         "core article should have pub type list"
@@ -34,10 +40,7 @@ async fn article_by_doi_via_search() {
     // We use search with DOI: prefix as a workaround.
     let client = common::client();
     let resp = client
-        .search(
-            &SearchRequest::new("DOI:10.1038/nature12345")
-                .result_type(ResultType::Lite),
-        )
+        .search(&SearchRequest::new("DOI:10.1038/nature12345").result_type(ResultType::Lite))
         .await
         .expect("search by DOI should succeed");
 

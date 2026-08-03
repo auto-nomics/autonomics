@@ -27,9 +27,7 @@ pub fn format_search(resp: &SearchResponse) -> String {
 
     // Include pagination hint.
     if let Some(ref cursor) = resp.next_cursor_mark {
-        out.push_str(&format!(
-            "_Next page cursor:_ `{cursor}`\n\n"
-        ));
+        out.push_str(&format!("_Next page cursor:_ `{cursor}`\n\n"));
     }
 
     out.trim_end().to_string()

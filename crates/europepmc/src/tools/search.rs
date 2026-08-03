@@ -103,11 +103,7 @@ impl ToolFunction for EuropePmcSearchTool {
             sort: input.sort,
         };
 
-        let result = self
-            .client
-            .search(&req)
-            .await
-            .map_err(super::json_err)?;
+        let result = self.client.search(&req).await.map_err(super::json_err)?;
 
         Ok(AgentToolResult::success(format_search(&result)))
     }

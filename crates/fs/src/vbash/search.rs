@@ -306,9 +306,7 @@ mod tests {
             .unwrap();
         write_file(&op, "real.txt", "target line\n").await;
 
-        let result = op_grep(&op, Some("/"), Some("target"), None)
-            .await
-            .unwrap();
+        let result = op_grep(&op, Some("/"), Some("target"), None).await.unwrap();
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("real.txt"));

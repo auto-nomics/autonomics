@@ -404,9 +404,7 @@ mod tests {
                     .as_ref()
                     .expect("diagnostics.error should be set");
                 assert!(
-                    msg.contains("assign")
-                        || msg.contains("p")
-                        || msg.contains("plot code"),
+                    msg.contains("assign") || msg.contains("p") || msg.contains("plot code"),
                     "error message should mention `p` assignment: {msg}"
                 );
             }
@@ -431,9 +429,7 @@ mod tests {
 
         assert!(diag.is_ok(), "no fatal error: {diag:?}");
         assert!(
-            diag.warnings
-                .iter()
-                .any(|w| w.contains("test warning")),
+            diag.warnings.iter().any(|w| w.contains("test warning")),
             "warning should be captured in diagnostics: {:?}",
             diag.warnings
         );
@@ -457,9 +453,7 @@ mod tests {
             .expect("render should succeed");
 
         assert!(
-            diag.messages
-                .iter()
-                .any(|m| m.contains("hello from R")),
+            diag.messages.iter().any(|m| m.contains("hello from R")),
             "message should be captured in diagnostics: {:?}",
             diag.messages
         );

@@ -477,18 +477,10 @@ mod tests {
 
         // Pages should not overlap: first entry name of page2 differs from
         // last entry name of page1.
-        let p1_last = page1["entries"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()["name"]
+        let p1_last = page1["entries"].as_array().unwrap().last().unwrap()["name"]
             .as_str()
             .unwrap();
-        let p2_first = page2["entries"]
-            .as_array()
-            .unwrap()
-            .first()
-            .unwrap()["name"]
+        let p2_first = page2["entries"].as_array().unwrap().first().unwrap()["name"]
             .as_str()
             .unwrap();
         assert_ne!(p1_last, p2_first);

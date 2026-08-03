@@ -25,7 +25,9 @@ mod helpers {
     use crate::error::EuropePmcError;
 
     pub(crate) fn json_err(e: EuropePmcError) -> ToolError {
-        ToolError::ExecutionFailed { source: Box::new(e) }
+        ToolError::ExecutionFailed {
+            source: Box::new(e),
+        }
     }
 }
 

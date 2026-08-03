@@ -82,11 +82,11 @@ fn output_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("snp", DataType::Utf8, false),
         Field::new("pip", DataType::Float64, false),
-        Field::new("cs", DataType::Int64, false),  // 0 = not in CS, 1-based CS index
-        Field::new("alpha", DataType::Float64, true),  // max alpha across effects
+        Field::new("cs", DataType::Int64, false), // 0 = not in CS, 1-based CS index
+        Field::new("alpha", DataType::Float64, true), // max alpha across effects
         Field::new("mu", DataType::Float64, true),
         Field::new("mu2", DataType::Float64, true),
-        Field::new("lbf", DataType::Float64, true),  // per-variant log Bayes factor (top effect)
+        Field::new("lbf", DataType::Float64, true), // per-variant log Bayes factor (top effect)
     ]))
 }
 
@@ -134,17 +134,39 @@ pub struct SusieRssSpec {
     pub max_iter: usize,
 }
 
-fn default_l() -> usize { 10 }
-fn default_method() -> String { "optim".into() }
-fn default_false() -> bool { false }
-fn default_true() -> bool { true }
-fn default_coverage() -> f64 { 0.95 }
-fn default_min_abs_corr() -> f64 { 0.5 }
-fn default_spv() -> f64 { 0.2 }
-fn default_z_method() -> String { "wald".into() }
-fn default_r2_min() -> f64 { 0.0 }
-fn default_check_null_threshold() -> f64 { 0.0 }
-fn default_max_iter() -> usize { 100 }
+fn default_l() -> usize {
+    10
+}
+fn default_method() -> String {
+    "optim".into()
+}
+fn default_false() -> bool {
+    false
+}
+fn default_true() -> bool {
+    true
+}
+fn default_coverage() -> f64 {
+    0.95
+}
+fn default_min_abs_corr() -> f64 {
+    0.5
+}
+fn default_spv() -> f64 {
+    0.2
+}
+fn default_z_method() -> String {
+    "wald".into()
+}
+fn default_r2_min() -> f64 {
+    0.0
+}
+fn default_check_null_threshold() -> f64 {
+    0.0
+}
+fn default_max_iter() -> usize {
+    100
+}
 
 // ─── node ────────────────────────────────────────────────────────────────────
 
@@ -229,7 +251,11 @@ fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<i64>> {
     for b in batches {
         let col = b.column_by_name(name)?;
         for i in 0..col.len() {
-            out.push(if col.is_null(i) { 0 } else { arr_i64(col.as_ref(), i) });
+            out.push(if col.is_null(i) {
+                0
+            } else {
+                arr_i64(col.as_ref(), i)
+            });
         }
     }
     Some(out)
@@ -267,12 +293,16 @@ fn arr_i64(arr: &dyn Array, i: usize) -> i64 {
 }
 
 async fn collect_input_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, DagError> {
-    let batches: Vec<RecordBatch> = input.data.clone().collect().await.map_err(|e| {
-        DagError::NodeError {
-            node_type: NODE_KIND.into(),
-            msg: format!("collect failed: {e}"),
-        }
-    })?;
+    let batches: Vec<RecordBatch> =
+        input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: NODE_KIND.into(),
+                msg: format!("collect failed: {e}"),
+            })?;
     if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
         return Err(SusieNodeError::EmptyInput.into());
     }
@@ -330,7 +360,11 @@ async fn load_ld_pairs(
             // Only keep pairs where at least one endpoint is in our SNP set.
             // The other endpoint may or may not be in the set.
             if snp_set.contains(&a) || snp_set.contains(&b) {
-                pairs.push(LdPair { id_a: a, id_b: b, r2 });
+                pairs.push(LdPair {
+                    id_a: a,
+                    id_b: b,
+                    r2,
+                });
             }
         }
     }
@@ -345,11 +379,7 @@ async fn load_ld_pairs(
 /// The sign approximation uses z-score concordance: if two variants have the
 /// same z-score sign, they are positively correlated; opposite signs imply
 /// negative correlation.
-fn build_corr_matrix(
-    snps: &[String],
-    z: &[f64],
-    pairs: &[LdPair],
-) -> Mat<f64> {
+fn build_corr_matrix(snps: &[String], z: &[f64], pairs: &[LdPair]) -> Mat<f64> {
     let p = snps.len();
     let mut r = Mat::zeros(p, p);
 
@@ -436,9 +466,7 @@ impl DagNode for SusieRssNode {
         let n = self.spec.n.or_else(|| {
             n_col.as_ref().and_then(|col| {
                 // Use the first non-NAN n value
-                col.iter()
-                    .find(|&&v| !v.is_nan() && v > 1.0)
-                    .copied()
+                col.iter().find(|&&v| !v.is_nan() && v > 1.0).copied()
             })
         });
 
@@ -646,8 +674,16 @@ mod tests {
         let snps = vec!["rs1".into(), "rs2".into(), "rs3".into()];
         let z = vec![5.0, 4.0, -3.0];
         let pairs = vec![
-            LdPair { id_a: "rs1".into(), id_b: "rs2".into(), r2: 0.81 },
-            LdPair { id_a: "rs1".into(), id_b: "rs3".into(), r2: 0.64 },
+            LdPair {
+                id_a: "rs1".into(),
+                id_b: "rs2".into(),
+                r2: 0.81,
+            },
+            LdPair {
+                id_a: "rs1".into(),
+                id_b: "rs3".into(),
+                r2: 0.64,
+            },
         ];
         let r = build_corr_matrix(&snps, &z, &pairs);
         // rs1-rs2: same sign → positive correlation

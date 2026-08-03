@@ -5,8 +5,8 @@
 
 mod common;
 
-use europepmc::{types::*, EuropePmcClient, query::to_europepmc};
 use bib_types::query::{BoolOp, StructuredSearch, YearRange};
+use europepmc::{EuropePmcClient, query::to_europepmc, types::*};
 
 #[tokio::test]
 #[serial_test::serial]
@@ -46,7 +46,10 @@ async fn search_core_has_abstract_and_authors() {
         "core should have structured author list"
     );
     let authors = r.author_list.as_ref().unwrap();
-    assert!(!authors.authors.is_empty(), "should have at least one author");
+    assert!(
+        !authors.authors.is_empty(),
+        "should have at least one author"
+    );
 }
 
 #[tokio::test]
@@ -70,8 +73,18 @@ async fn search_with_cursor_pagination() {
         .expect("second page");
 
     // The second page should return different IDs than the first.
-    let first_ids: Vec<&str> = first.result_list.results.iter().map(|r| r.id.as_str()).collect();
-    let second_ids: Vec<&str> = second.result_list.results.iter().map(|r| r.id.as_str()).collect();
+    let first_ids: Vec<&str> = first
+        .result_list
+        .results
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
+    let second_ids: Vec<&str> = second
+        .result_list
+        .results
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect();
     assert!(
         first_ids != second_ids,
         "second page should have different IDs"
@@ -107,8 +120,7 @@ async fn search_idlist_result_type() {
     let client = common::client();
     let resp = client
         .search(
-            &SearchRequest::new("DOI:10.1007/s11033-026-12527-x")
-                .result_type(ResultType::Idlist),
+            &SearchRequest::new("DOI:10.1007/s11033-026-12527-x").result_type(ResultType::Idlist),
         )
         .await
         .expect("idlist search should succeed");
@@ -140,6 +152,9 @@ async fn search_sort_by_cited() {
         .map(|r| r.cited_by_count.unwrap_or(0))
         .collect();
     if counts.len() >= 2 {
-        assert!(counts[0] >= counts[1], "results should be sorted by cited desc");
+        assert!(
+            counts[0] >= counts[1],
+            "results should be sorted by cited desc"
+        );
     }
 }

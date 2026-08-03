@@ -436,9 +436,7 @@ impl App {
                 }
                 // Insert paste into the focused textarea when in Config mode.
                 if matches!(self.state.main_tab_state, MainTabState::ConfigTab) {
-                    use crate::widgets::model_config_widget::{
-                        ConfigField, ProviderPanelState,
-                    };
+                    use crate::widgets::model_config_widget::{ConfigField, ProviderPanelState};
                     if let ProviderPanelState::Config {
                         api_key,
                         base_url,

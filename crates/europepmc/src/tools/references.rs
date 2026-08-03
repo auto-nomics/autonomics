@@ -43,10 +43,7 @@ impl ToolFunction for EuropePmcReferencesTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let source = input
-            .source
-            .as_deref()
-            .unwrap_or("MED");
+        let source = input.source.as_deref().unwrap_or("MED");
 
         let resp = self
             .client

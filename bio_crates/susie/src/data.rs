@@ -218,11 +218,7 @@ pub fn build_rss_data(
         let xty_s: Vec<f64> = (0..p).map(|j| xty[j] / csd[j]).collect();
         (xtx_s, xty_s, csd)
     } else {
-        (
-            xtx_raw,
-            xty,
-            (0..p).map(|_| 1.0).collect::<Vec<_>>(),
-        )
+        (xtx_raw, xty, (0..p).map(|_| 1.0).collect::<Vec<_>>())
     };
 
     // predictor_weights = diag(XtX) = attr(XtX, "d")
@@ -319,7 +315,10 @@ fn resolve_z(
     }
 
     if let Some(z) = &input.z {
-        let z_clean: Vec<f64> = z.iter().map(|&v| if v.is_nan() { 0.0 } else { v }).collect();
+        let z_clean: Vec<f64> = z
+            .iter()
+            .map(|&v| if v.is_nan() { 0.0 } else { v })
+            .collect();
         return Ok((z_clean, None, None));
     }
 
@@ -403,13 +402,9 @@ fn working_quantities(
         let adj = pve_adj;
         let vy = var_y.unwrap_or(1.0);
         // XtXdiag_j = var_y * adj_j / shat_j²
-        let xtxdiag: Vec<f64> = (0..p)
-            .map(|j| vy * adj[j] / (s[j] * s[j]))
-            .collect();
+        let xtxdiag: Vec<f64> = (0..p).map(|j| vy * adj[j] / (s[j] * s[j])).collect();
         // Xty_j = z_j * sqrt(adj_j) * var_y / shat_j
-        let xty: Vec<f64> = (0..p)
-            .map(|j| z[j] * adj[j].sqrt() * vy / s[j])
-            .collect();
+        let xty: Vec<f64> = (0..p).map(|j| z[j] * adj[j].sqrt() * vy / s[j]).collect();
         return (xty, yty, n, scaled_prior_variance, Some(xtxdiag));
     }
 

@@ -338,9 +338,7 @@ pub async fn op_ls(
 
         // Skip the scan-root self-entry (see comment above).
         let entry_path_raw = entry.path().to_string();
-        if entry.metadata().is_dir()
-            && entry_path_raw.trim_end_matches('/') == scan_root
-        {
+        if entry.metadata().is_dir() && entry_path_raw.trim_end_matches('/') == scan_root {
             continue;
         }
 
@@ -384,7 +382,11 @@ pub async fn op_ls(
     // non-truncated boundary case.
 
     let returned = items.len();
-    let next_offset = if truncated { Some(skip + returned + 1) } else { None };
+    let next_offset = if truncated {
+        Some(skip + returned + 1)
+    } else {
+        None
+    };
 
     let mut payload = serde_json::json!({
         "path": vpath,

@@ -24,7 +24,9 @@ async fn make_node_ctx(dk: &Arc<Datalake>) -> NodeCtx {
     let ctx = dk.get_ctx().await.expect("无法连 Iceberg 数据湖");
     NodeCtx {
         runtime_env: ctx.runtime_env(),
-        iceberg_catalog: Some(Arc::new(dk.get_provider().await.expect("datalake provider"))),
+        iceberg_catalog: Some(Arc::new(
+            dk.get_provider().await.expect("datalake provider"),
+        )),
         datalake: dk.clone(),
         opendal: None,
     }
@@ -142,10 +144,7 @@ async fn susie_rss_node_runs_on_iceberg_chr22() {
     eprintln!("输出行数: {total_rows}, 最大 PIP: {max_pip:.4}, CS 内 SNP 数: {n_in_cs}");
 
     // 5. 断言。
-    assert_eq!(
-        total_rows, n_in as usize,
-        "输出行数应等于输入 SNP 数"
-    );
+    assert_eq!(total_rows, n_in as usize, "输出行数应等于输入 SNP 数");
     // 至少有一些信号（PIP > 0.01 的 SNP 存在）
     assert!(
         max_pip > 0.0,
@@ -234,10 +233,7 @@ async fn susie_rss_node_synthetic() {
         .await;
 
     // 没有 Iceberg catalog → 应该失败，且错误信息包含 "ld_matrix" 或 catalog 问题
-    assert!(
-        result.is_err(),
-        "无 Iceberg LD 表时应该失败"
-    );
+    assert!(result.is_err(), "无 Iceberg LD 表时应该失败");
     let err_msg = result.unwrap_err().to_string();
     eprintln!("预期的错误: {err_msg}");
     assert!(

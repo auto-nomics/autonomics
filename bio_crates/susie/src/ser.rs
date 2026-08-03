@@ -15,7 +15,7 @@
 
 use crate::brent::brent_minimize;
 use crate::data::PriorMethod;
-use crate::{log_sum_exp, EPS, SQRT_EPS};
+use crate::{EPS, SQRT_EPS, log_sum_exp};
 
 /// Per-variable SER statistics (betahat, shat2).
 pub struct SerStats {
@@ -50,18 +50,12 @@ pub struct SerResult {
 /// Mirrors `compute_ser_statistics.ss`:
 ///   betahat_j = residuals_j / predictor_weights_j
 ///   shat2_j   = sigma2 / predictor_weights_j
-pub fn compute_ser_stats(
-    residuals: &[f64],
-    sigma2: f64,
-    predictor_weights: &[f64],
-) -> SerStats {
+pub fn compute_ser_stats(residuals: &[f64], sigma2: f64, predictor_weights: &[f64]) -> SerStats {
     let p = residuals.len();
     let betahat: Vec<f64> = (0..p)
         .map(|j| residuals[j] / predictor_weights[j])
         .collect();
-    let shat2: Vec<f64> = (0..p)
-        .map(|j| sigma2 / predictor_weights[j])
-        .collect();
+    let shat2: Vec<f64> = (0..p).map(|j| sigma2 / predictor_weights[j]).collect();
 
     // optim_init = log(max(betahat² - shat2, 1)) on log scale
     let init_val: f64 = betahat
@@ -94,8 +88,7 @@ pub fn gaussian_ser_lbf(betahat: &[f64], shat2: &[f64], v: f64) -> Vec<f64> {
                 return 0.0;
             }
             let s_safe = s.max(EPS);
-            -0.5 * (1.0 + v / s_safe).ln()
-                + 0.5 * b * b * v / (s_safe * (v + s_safe))
+            -0.5 * (1.0 + v / s_safe).ln() + 0.5 * b * b * v / (s_safe * (v + s_safe))
         })
         .collect()
 }
@@ -177,12 +170,7 @@ pub fn gaussian_ser_posterior_e_loglik(
 /// Model-level lbf for a given V (used by the optimizer).
 ///
 /// `lbf_model = logSumExp(gaussian_ser_lbf(betahat, shat2, V) + log(pi))`
-fn lbf_model_at_v(
-    stats: &SerStats,
-    v: f64,
-    prior_weights: &[f64],
-    shat2: &[f64],
-) -> f64 {
+fn lbf_model_at_v(stats: &SerStats, v: f64, prior_weights: &[f64], shat2: &[f64]) -> f64 {
     let mut lbf = gaussian_ser_lbf(&stats.betahat, &stats.shat2, v);
     // lbf_stabilization: infinite shat2 → lbf=0, lpo=prior
     let mut lpo = vec![0.0; lbf.len()];
@@ -236,8 +224,7 @@ pub fn single_effect_regression(
     let (mu, mu2) = gaussian_ser_moments(&stats.betahat, &stats.shat2, v);
 
     // KL = -lbf_model + E_q[loglik]
-    let e_loglik =
-        gaussian_ser_posterior_e_loglik(&alpha, &mu, &mu2, &stats.betahat, &stats.shat2);
+    let e_loglik = gaussian_ser_posterior_e_loglik(&alpha, &mu, &mu2, &stats.betahat, &stats.shat2);
     let kl = -lbf_model + e_loglik;
 
     // ── post-loglik prior hook: EM update using just-computed alpha/mu2 ──

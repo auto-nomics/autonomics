@@ -21,7 +21,7 @@
 use bib_types::convert::{build_article, normalize_doi};
 use bib_types::{Article, ArticleSource, Author, IdKind, Identifier};
 
-use crate::types::{SearchResult, SearchResponse};
+use crate::types::{SearchResponse, SearchResult};
 
 // ---------------------------------------------------------------------------
 // SearchResponse → Vec<Article>
@@ -184,10 +184,7 @@ fn author_detail_to_author(a: &crate::types::AuthorDetail) -> Author {
         .filter(|s| !s.is_empty());
 
     Author {
-        last_name: a
-            .last_name
-            .clone()
-            .unwrap_or_else(|| a.full_name.clone()),
+        last_name: a.last_name.clone().unwrap_or_else(|| a.full_name.clone()),
         fore_name: a.first_name.clone(),
         initials: a.initials.clone(),
         affiliation,
@@ -209,12 +206,7 @@ fn parse_author_string(s: &str) -> Vec<Author> {
                 Some((given, family)) if !family.is_empty() => Author {
                     last_name: family.to_owned(),
                     fore_name: Some(given.to_owned()),
-                    initials: Some(
-                        given
-                            .chars()
-                            .filter(|c| c.is_ascii_uppercase())
-                            .collect(),
-                    ),
+                    initials: Some(given.chars().filter(|c| c.is_ascii_uppercase()).collect()),
                     affiliation: None,
                     orcid: None,
                     corresponding: false,
@@ -376,7 +368,10 @@ mod tests {
         assert_eq!(article.essn.as_deref(), Some("1476-4687"));
         assert_eq!(article.year, Some(2024));
         assert_eq!(article.month, Some(3));
-        assert_eq!(article.abstract_text.as_deref(), Some("This is a great abstract."));
+        assert_eq!(
+            article.abstract_text.as_deref(),
+            Some("This is a great abstract.")
+        );
         assert!(article.pub_types.contains(&"Journal Article".to_owned()));
         assert!(article.pub_types.contains(&"Review".to_owned()));
         assert!(article.keywords.contains(&"Neoplasms".to_owned()));

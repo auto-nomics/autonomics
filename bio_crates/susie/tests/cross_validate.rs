@@ -16,9 +16,7 @@ fn flex_f64<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
     match &v {
         serde_json::Value::Number(n) => Ok(n.as_f64().unwrap_or(f64::NAN)),
-        serde_json::Value::Array(a) if a.len() == 1 => {
-            Ok(a[0].as_f64().unwrap_or(f64::NAN))
-        }
+        serde_json::Value::Array(a) if a.len() == 1 => Ok(a[0].as_f64().unwrap_or(f64::NAN)),
         _ => Ok(f64::NAN),
     }
 }
@@ -38,9 +36,10 @@ fn flex_vec_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
     match v {
         serde_json::Value::Number(n) => Ok(vec![n.as_f64().unwrap_or(f64::NAN)]),
-        serde_json::Value::Array(a) => {
-            Ok(a.into_iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect())
-        }
+        serde_json::Value::Array(a) => Ok(a
+            .into_iter()
+            .map(|x| x.as_f64().unwrap_or(f64::NAN))
+            .collect()),
         _ => Ok(vec![]),
     }
 }
@@ -59,16 +58,21 @@ fn flex_vec2_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<f64>>, D::Er
                     // Already 2D
                     Ok(a.into_iter()
                         .map(|row| match row {
-                            serde_json::Value::Array(vals) => {
-                                vals.into_iter().map(|v| v.as_f64().unwrap_or(f64::NAN)).collect()
-                            }
+                            serde_json::Value::Array(vals) => vals
+                                .into_iter()
+                                .map(|v| v.as_f64().unwrap_or(f64::NAN))
+                                .collect(),
                             _ => vec![],
                         })
                         .collect())
                 }
                 serde_json::Value::Number(_) => {
                     // 1D array → wrap as single row
-                    Ok(vec![a.into_iter().map(|v| v.as_f64().unwrap_or(f64::NAN)).collect()])
+                    Ok(vec![
+                        a.into_iter()
+                            .map(|v| v.as_f64().unwrap_or(f64::NAN))
+                            .collect(),
+                    ])
                 }
                 _ => Ok(vec![]),
             }
@@ -135,8 +139,8 @@ fn load_golden(name: &str) -> GoldenPayload {
     // Fixtures live at <workspace>/fixtures/golden/.
     let manifest = env!("CARGO_MANIFEST_DIR");
     let path = format!("{}/../../fixtures/golden/{}.json", manifest, name);
-    let data = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
+    let data =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Cannot read {}: {}", path, e));
     serde_json::from_str(&data).unwrap_or_else(|e| panic!("Cannot parse {}: {}", path, e))
 }
 
@@ -200,9 +204,7 @@ fn build_input(g: &GoldenPayload) -> susie::RssInput {
     }
 
     // Parse args for overrides
-    let jnum = |key: &str| -> Option<f64> {
-        args.get(key).and_then(json_scalar)
-    };
+    let jnum = |key: &str| -> Option<f64> { args.get(key).and_then(json_scalar) };
     let jbool = |key: &str| -> Option<bool> {
         match args.get(key) {
             Some(serde_json::Value::Bool(b)) => Some(*b),
@@ -312,19 +314,48 @@ fn assert_fit_close(name: &str, fit: &susie::SusieFit, golden: &GoldenFit) {
 
     eprintln!(
         "  {:<30} α={:.2e} μ={:.2e} μ²={:.2e} V={:.2e} lbf={:.2e} KL={:.2e} σ²={:.2e} pip={:.2e} elbo={:.2e} (R:{:.4} Rust:{:.4})",
-        name, d_alpha, d_mu, d_mu2, d_v, d_lbf, d_kl, d_sigma2, d_pip, d_elbo, elbo_golden, elbo_rust
+        name,
+        d_alpha,
+        d_mu,
+        d_mu2,
+        d_v,
+        d_lbf,
+        d_kl,
+        d_sigma2,
+        d_pip,
+        d_elbo,
+        elbo_golden,
+        elbo_rust
     );
 
-    assert!(d_alpha < TOL, "{}: alpha diff {:.2e} >= {}", name, d_alpha, TOL);
+    assert!(
+        d_alpha < TOL,
+        "{}: alpha diff {:.2e} >= {}",
+        name,
+        d_alpha,
+        TOL
+    );
     // V/lbf/KL: allow up to 0.2 difference (null-threshold boundary sensitivity)
     assert!(d_v < 0.2, "{}: V diff {:.2e} >= 0.2", name, d_v);
     assert!(d_lbf < 0.2, "{}: lbf diff {:.2e} >= 0.2", name, d_lbf);
     assert!(d_kl < 0.2, "{}: KL diff {:.2e} >= 0.2", name, d_kl);
-    assert!(d_sigma2 < TOL, "{}: sigma2 diff {:.2e} >= {}", name, d_sigma2, TOL);
+    assert!(
+        d_sigma2 < TOL,
+        "{}: sigma2 diff {:.2e} >= {}",
+        name,
+        d_sigma2,
+        TOL
+    );
     assert!(d_pip < TOL, "{}: pip diff {:.2e} >= {}", name, d_pip, TOL);
     // elbo: allow small relative error for null-threshold boundary effects
     let elbo_tol = (elbo_golden.abs() * 1e-3).max(TOL);
-    assert!(d_elbo < elbo_tol, "{}: elbo diff {:.2e} >= {:.2e}", name, d_elbo, elbo_tol);
+    assert!(
+        d_elbo < elbo_tol,
+        "{}: elbo diff {:.2e} >= {:.2e}",
+        name,
+        d_elbo,
+        elbo_tol
+    );
 }
 
 // ─── test runner ─────────────────────────────────────────────────────────────
@@ -343,65 +374,127 @@ mod tests {
     use super::*;
 
     #[test]
-    fn z_n_optim() { run_golden("z_n_optim"); }
+    fn z_n_optim() {
+        run_golden("z_n_optim");
+    }
     #[test]
-    fn z_n_simple() { run_golden("z_n_simple"); }
+    fn z_n_simple() {
+        run_golden("z_n_simple");
+    }
     #[test]
-    fn z_n_EM() { run_golden("z_n_EM"); }
+    fn z_n_EM() {
+        run_golden("z_n_EM");
+    }
     #[test]
-    fn z_non_optim() { run_golden("z_non_optim"); }
+    fn z_non_optim() {
+        run_golden("z_non_optim");
+    }
     #[test]
-    fn z_non_simple() { run_golden("z_non_simple"); }
+    fn z_non_simple() {
+        run_golden("z_non_simple");
+    }
     #[test]
-    fn z_non_EM() { run_golden("z_non_EM"); }
+    fn z_non_EM() {
+        run_golden("z_non_EM");
+    }
     #[test]
-    fn L1_optim() { run_golden("L1_optim"); }
+    fn L1_optim() {
+        run_golden("L1_optim");
+    }
     #[test]
-    fn L5_optim() { run_golden("L5_optim"); }
+    fn L5_optim() {
+        run_golden("L5_optim");
+    }
     #[test]
-    fn L1_EM() { run_golden("L1_EM"); }
+    fn L1_EM() {
+        run_golden("L1_EM");
+    }
     #[test]
-    fn L5_EM() { run_golden("L5_EM"); }
+    fn L5_EM() {
+        run_golden("L5_EM");
+    }
     #[test]
-    fn L1_simple() { run_golden("L1_simple"); }
+    fn L1_simple() {
+        run_golden("L1_simple");
+    }
     #[test]
-    fn L5_simple() { run_golden("L5_simple"); }
+    fn L5_simple() {
+        run_golden("L5_simple");
+    }
     #[test]
-    fn fixV_optim() { run_golden("fixV_optim"); }
+    fn fixV_optim() {
+        run_golden("fixV_optim");
+    }
     #[test]
-    fn fixV_simple() { run_golden("fixV_simple"); }
+    fn fixV_simple() {
+        run_golden("fixV_simple");
+    }
     #[test]
-    fn estR_var_optim() { run_golden("estR_var_optim"); }
+    fn estR_var_optim() {
+        run_golden("estR_var_optim");
+    }
     #[test]
-    fn estR_var_simple() { run_golden("estR_var_simple"); }
+    fn estR_var_simple() {
+        run_golden("estR_var_simple");
+    }
     #[test]
-    fn fixR_var_optim() { run_golden("fixR_var_optim"); }
+    fn fixR_var_optim() {
+        run_golden("fixR_var_optim");
+    }
     #[test]
-    fn fixR_var_simple() { run_golden("fixR_var_simple"); }
+    fn fixR_var_simple() {
+        run_golden("fixR_var_simple");
+    }
     #[test]
-    fn scaleV05_optim() { run_golden("scaleV05_optim"); }
+    fn scaleV05_optim() {
+        run_golden("scaleV05_optim");
+    }
     #[test]
-    fn scaleV05_simple() { run_golden("scaleV05_simple"); }
+    fn scaleV05_simple() {
+        run_golden("scaleV05_simple");
+    }
     #[test]
-    fn cov99_optim() { run_golden("cov99_optim"); }
+    fn cov99_optim() {
+        run_golden("cov99_optim");
+    }
     #[test]
-    fn cov99_simple() { run_golden("cov99_simple"); }
+    fn cov99_simple() {
+        run_golden("cov99_simple");
+    }
     #[test]
-    fn mincorr07_optim() { run_golden("mincorr07_optim"); }
+    fn mincorr07_optim() {
+        run_golden("mincorr07_optim");
+    }
     #[test]
-    fn mincorr07_simple() { run_golden("mincorr07_simple"); }
+    fn mincorr07_simple() {
+        run_golden("mincorr07_simple");
+    }
     #[test]
-    fn nullthresh_optim() { run_golden("nullthresh_optim"); }
+    fn nullthresh_optim() {
+        run_golden("nullthresh_optim");
+    }
     #[test]
-    fn nullthresh_simple() { run_golden("nullthresh_simple"); }
+    fn nullthresh_simple() {
+        run_golden("nullthresh_simple");
+    }
     #[test]
-    fn nullW_optim() { run_golden("nullW_optim"); }
+    fn nullW_optim() {
+        run_golden("nullW_optim");
+    }
     #[test]
-    fn nullW_simple() { run_golden("nullW_simple"); }
+    fn nullW_simple() {
+        run_golden("nullW_simple");
+    }
     #[test]
-    fn zscore_score() { run_golden("zscore_score"); }
+    fn zscore_score() {
+        run_golden("zscore_score");
+    }
     #[test]
-    fn bhat_shat_optim() { run_golden("bhat_shat_optim"); }
+    fn bhat_shat_optim() {
+        run_golden("bhat_shat_optim");
+    }
     #[test]
-    fn bhat_shat_simple() { run_golden("bhat_shat_simple"); }
+    fn bhat_shat_simple() {
+        run_golden("bhat_shat_simple");
+    }
 }
