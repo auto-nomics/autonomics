@@ -141,14 +141,14 @@ impl App {
         // Parse "provider_name:model_name"
         let (provider_name, model_name) = active.split_once(':')?;
 
-        // Look up provider credentials from DB (only api_key matters —
-        // base_url always comes from the registry so code updates take
-        // effect without needing to re-write the DB).
-        let api_key: String = conn
+        // Look up provider credentials + selected base_url from the DB.
+        // base_url is user-selectable in the config panel (one of the
+        // registry presets or a custom URL) and is what we bind at runtime.
+        let (api_key, db_base_url): (String, String) = conn
             .query_row(
-                "SELECT api_key FROM providers WHERE name = ?1",
+                "SELECT api_key, base_url FROM providers WHERE name = ?1",
                 [provider_name],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok()?;
 
@@ -156,11 +156,16 @@ impl App {
             return None;
         }
 
-        // Look up model info + base_url from the built-in catalog.
+        // Look up model info from the built-in catalog.
         let provider_type = ProviderType::from(provider_name);
-        let base_url = registry::default_base_url(&provider_type)
-            .unwrap_or("")
-            .to_string();
+        // Use the DB-stored base_url when present, else the registry default.
+        let base_url = if db_base_url.is_empty() {
+            registry::default_base_url(&provider_type)
+                .unwrap_or("")
+                .to_string()
+        } else {
+            db_base_url
+        };
         let auth_method = registry::default_auth_method(&provider_type);
         let preset_models = registry::preset_models(&provider_type)?;
         let mut model_info = preset_models
@@ -429,13 +434,22 @@ impl App {
                         ts.input.insert_str(s);
                     }
                 }
-                // Insert paste into the api_key textarea when in Config mode.
+                // Insert paste into the focused textarea when in Config mode.
                 if matches!(self.state.main_tab_state, MainTabState::ConfigTab) {
-                    use crate::widgets::model_config_widget::ProviderPanelState;
-                    if let ProviderPanelState::Config { textarea, .. } =
-                        &mut self.state.model_config_state.provider_panel_state
+                    use crate::widgets::model_config_widget::{
+                        ConfigField, ProviderPanelState,
+                    };
+                    if let ProviderPanelState::Config {
+                        api_key,
+                        base_url,
+                        focused_field,
+                        ..
+                    } = &mut self.state.model_config_state.provider_panel_state
                     {
-                        textarea.insert_str(s);
+                        match *focused_field {
+                            ConfigField::ApiKey => api_key.insert_str(s),
+                            ConfigField::BaseUrl => base_url.insert_str(s),
+                        }
                     }
                 }
                 0
@@ -836,8 +850,9 @@ impl App {
             ConfigCommand::SaveProvider {
                 provider_name,
                 api_key,
+                base_url,
             } => {
-                self.save_provider_config(&provider_name, &api_key);
+                self.save_provider_config(&provider_name, &api_key, &base_url);
             }
             ConfigCommand::SelectModel {
                 provider_name,
@@ -879,8 +894,8 @@ impl App {
         }
     }
 
-    /// Insert or update a provider's api_key in the database.
-    fn save_provider_config(&self, provider_name: &str, api_key: &str) {
+    /// Insert or update a provider's api_key and base_url in the database.
+    fn save_provider_config(&self, provider_name: &str, api_key: &str, base_url: &str) {
         // Look up the built-in provider to get its type and default base_url.
         let provider = self
             .state
@@ -895,7 +910,13 @@ impl App {
         };
 
         let provider_type = provider.provider_type.as_str().to_string();
-        let base_url = provider.base_url.clone();
+        // Prefer the user-supplied base_url; fall back to the provider default
+        // (the registry's first preset endpoint) when the field is empty.
+        let base_url = if base_url.is_empty() {
+            provider.selected_base_url.clone()
+        } else {
+            base_url.to_string()
+        };
         // Resolve the default auth method from the registry for this provider.
         let auth_str =
             match agentik_sdk::provider::registry::default_auth_method(&provider.provider_type) {

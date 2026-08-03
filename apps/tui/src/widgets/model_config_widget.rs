@@ -1,9 +1,9 @@
 //! Model selection widget: a **tree view** of built-in provider catalogues.
 //!
 //! Providers and models are **built-in** (from `agentik_sdk::provider::registry`).
-//! The database only stores credentials (api_key / base_url override) — if a
-//! provider has a row in the `providers` table with a non-empty `api_key`, it
-//! is "configured" and its models become selectable.
+//! The database stores credentials (api_key) and the chosen base_url override.
+//! If a provider has a row in the `providers` table with a non-empty `api_key`,
+//! it is "configured" and its models become selectable.
 //!
 //! **Tree layout**:
 //! ```text
@@ -13,6 +13,12 @@
 //! ▶ mimo ✓                    ← configured, collapsed
 //! ── minimax ✗                ← unconfigured (bottom, not expandable)
 //! ```
+//!
+//! **Config panel**: when the user presses `e` on a provider row, a
+//! credential editor opens on the right pane with two fields —
+//! **API Key** and **Base URL** — switchable via `Tab`. Within the Base URL
+//! field, `Up`/`Down` cycle through the provider's preset endpoints (leaving
+//! the textarea free for custom URL entry).
 //!
 //! **Data flow**: App builds [`ModelConfigState`] from the SDK registry +
 //! DB credentials. The widget only reads this state.
@@ -37,10 +43,11 @@ use crate::xai_textarea::{TextArea, TextAreaState};
 /// external resources like DB access).
 #[derive(Debug)]
 pub enum ConfigCommand {
-    /// Persist the api_key for `provider_name` to the database.
+    /// Persist the api_key and base_url for `provider_name` to the database.
     SaveProvider {
         provider_name: String,
         api_key: String,
+        base_url: String,
     },
     /// Persist and activate the selected model.
     SelectModel {
@@ -58,8 +65,12 @@ pub struct CatalogProvider {
     pub provider_type: ProviderType,
     /// Display name derived from the provider type (e.g. `"deepseek"`).
     pub name: String,
-    /// Default base URL from the built-in preset.
-    pub base_url: String,
+    /// All known base URL endpoints for this provider (default first).
+    /// Source: [`registry::known_base_urls`].
+    pub base_urls: Vec<String>,
+    /// Currently selected base URL — either a DB-stored override or the
+    /// provider default. Drawn from the DB on `build_catalog`.
+    pub selected_base_url: String,
     /// Built-in model catalogue for this provider.
     pub models: Vec<ModelInfo>,
     /// Whether the user has configured credentials for this provider.
@@ -81,14 +92,29 @@ enum FlatItem {
     Model(usize, usize),
 }
 
+/// Which input field in the config panel currently has focus.
+#[derive(Default, PartialEq, Eq, Copy, Clone)]
+pub enum ConfigField {
+    #[default]
+    ApiKey,
+    BaseUrl,
+}
+
 #[derive(Default)]
 pub enum ProviderPanelState {
     #[default]
     Preview,
     Config {
         provider_name: String,
-        textarea: TextArea,
-        textarea_state: TextAreaState,
+        api_key: TextArea,
+        api_key_state: TextAreaState,
+        base_url: TextArea,
+        base_url_state: TextAreaState,
+        /// All preset URLs for this provider — cycled with `Up`/`Down` while
+        /// the Base URL field is focused.
+        base_url_presets: Vec<String>,
+        /// Which of the two fields is currently being typed into.
+        focused_field: ConfigField,
     },
 }
 
@@ -159,8 +185,10 @@ impl ModelConfigState {
     /// Handle keys and return any command the App should execute.
     ///
     /// - **Preview mode**: navigation, expand/collapse, select model, `e` to edit.
-    /// - **Config mode**: typing into the api_key field, Esc to cancel, Enter
-    ///   to confirm (returns `SaveProvider` command for DB persistence).
+    /// - **Config mode**: typing into the focused field (API Key or Base URL),
+    ///   `Tab` to switch focus, `Up`/`Down` on the Base URL field to cycle
+    ///   through preset endpoints, Esc to cancel, Enter to confirm (returns
+    ///   `SaveProvider` command for DB persistence).
     ///
     /// Returns `ConfigCommand::None` for unrecognized keys so the caller
     /// (App) can handle keys like `r` (reload) that need DB access.
@@ -173,26 +201,69 @@ impl ModelConfigState {
             cc
         };
 
-        // ── Config mode: all keys go to the textarea (except Esc/Enter) ──
-        if let ProviderPanelState::Config { textarea, .. } = &mut self.provider_panel_state {
+        // ── Config mode ──
+        if let ProviderPanelState::Config {
+            api_key,
+            base_url,
+            base_url_presets,
+            focused_field,
+            ..
+        } = &mut self.provider_panel_state
+        {
             return match key.code {
                 KeyCode::Esc => {
                     self.provider_panel_state = ProviderPanelState::Preview;
                     consumed(ConfigCommand::None)
                 }
+                // Tab / BackTab: switch focus between the two fields.
+                KeyCode::Tab | KeyCode::BackTab => {
+                    *focused_field = match *focused_field {
+                        ConfigField::ApiKey => ConfigField::BaseUrl,
+                        ConfigField::BaseUrl => ConfigField::ApiKey,
+                    };
+                    consumed(ConfigCommand::None)
+                }
+                // Up/Down on Base URL field: cycle preset endpoints.
+                KeyCode::Up
+                    if *focused_field == ConfigField::BaseUrl && !base_url_presets.is_empty() =>
+                {
+                    let cur = base_url.text();
+                    let idx = base_url_presets
+                        .iter()
+                        .position(|u| u == cur)
+                        .map(|i| if i == 0 { base_url_presets.len() - 1 } else { i - 1 })
+                        .unwrap_or(0);
+                    base_url.set_text(&base_url_presets[idx]);
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Down
+                    if *focused_field == ConfigField::BaseUrl && !base_url_presets.is_empty() =>
+                {
+                    let cur = base_url.text();
+                    let idx = base_url_presets
+                        .iter()
+                        .position(|u| u == cur)
+                        .map(|i| (i + 1) % base_url_presets.len())
+                        .unwrap_or(0);
+                    base_url.set_text(&base_url_presets[idx]);
+                    consumed(ConfigCommand::None)
+                }
                 KeyCode::Enter => {
-                    // Confirm: write the entered api_key back to the provider entry.
+                    // Confirm: write the entered values back to the provider entry.
                     let mut command = ConfigCommand::None;
                     if let ProviderPanelState::Config {
                         provider_name,
-                        textarea,
+                        api_key,
+                        base_url,
                         ..
                     } = std::mem::replace(
                         &mut self.provider_panel_state,
                         ProviderPanelState::Preview,
                     ) {
-                        let key_val = textarea.text().trim().to_string();
-                        if let Some(p) = self.providers.iter_mut().find(|p| p.name == provider_name)
+                        let key_val = api_key.text().trim().to_string();
+                        let url_val = base_url.text().trim().to_string();
+                        if let Some(p) =
+                            self.providers.iter_mut().find(|p| p.name == provider_name)
                         {
                             p.api_key = if key_val.is_empty() {
                                 None
@@ -201,17 +272,25 @@ impl ModelConfigState {
                             };
                             p.configured = p.api_key.is_some();
                             p.expanded = p.configured;
+                            if !url_val.is_empty() {
+                                p.selected_base_url = url_val.clone();
+                            }
                         }
                         // Ask App to persist to DB.
                         command = ConfigCommand::SaveProvider {
                             provider_name,
                             api_key: key_val,
+                            base_url: url_val,
                         };
                     }
                     consumed(command)
                 }
                 _ => {
-                    textarea.input(key);
+                    // Forward to the focused textarea.
+                    match *focused_field {
+                        ConfigField::ApiKey => api_key.input(key),
+                        ConfigField::BaseUrl => base_url.input(key),
+                    }
                     consumed(ConfigCommand::None)
                 }
             };
@@ -255,14 +334,20 @@ impl ModelConfigState {
                 if let Some(FlatItem::Provider(pi)) = flat.get(self.cursor) {
                     let pi = *pi;
                     let provider = &self.providers[pi];
-                    let mut textarea = TextArea::new();
+                    let mut api_key_ta = TextArea::new();
                     if let Some(ref key) = provider.api_key {
-                        textarea.set_text(key);
+                        api_key_ta.set_text(key);
                     }
+                    let mut base_url_ta = TextArea::new();
+                    base_url_ta.set_text(&provider.selected_base_url);
                     self.provider_panel_state = ProviderPanelState::Config {
                         provider_name: provider.name.clone(),
-                        textarea,
-                        textarea_state: TextAreaState::default(),
+                        api_key: api_key_ta,
+                        api_key_state: TextAreaState::default(),
+                        base_url: base_url_ta,
+                        base_url_state: TextAreaState::default(),
+                        base_url_presets: provider.base_urls.clone(),
+                        focused_field: ConfigField::ApiKey,
                     };
                 }
                 consumed(ConfigCommand::None)
@@ -294,16 +379,24 @@ impl StatefulWidgetRef for ModelConfigWidget {
             }
             ProviderPanelState::Config {
                 provider_name,
-                textarea,
-                textarea_state,
+                api_key,
+                api_key_state,
+                base_url,
+                base_url_state,
+                base_url_presets,
+                focused_field,
             } => {
                 render_config_panel(
                     chunks[1],
                     buf,
                     &state.providers,
                     provider_name,
-                    textarea,
-                    textarea_state,
+                    api_key,
+                    api_key_state,
+                    base_url,
+                    base_url_state,
+                    base_url_presets,
+                    *focused_field,
                 );
             }
         }
@@ -438,7 +531,11 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
             vec![
                 Line::from(vec![label("Provider"), val(p.name.clone())]),
                 Line::from(vec![label("Type"), dim(format!("{:?}", p.provider_type))]),
-                Line::from(vec![label("Base URL"), dim(p.base_url.clone())]),
+                Line::from(vec![label("Base URL"), dim(p.selected_base_url.clone())]),
+                Line::from(vec![
+                    label("Endpoints"),
+                    dim(format!("{}", p.base_urls.len())),
+                ]),
                 Line::from(vec![
                     label("Status"),
                     if p.configured {
@@ -503,13 +600,18 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 
 // ── Config panel (provider credential editor) ──────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_config_panel(
     area: Rect,
     buf: &mut Buffer,
     providers: &[CatalogProvider],
     provider_name: &str,
-    textarea: &TextArea,
-    textarea_state: &mut TextAreaState,
+    api_key: &TextArea,
+    api_key_state: &mut TextAreaState,
+    base_url: &TextArea,
+    base_url_state: &mut TextAreaState,
+    base_url_presets: &[String],
+    focused_field: ConfigField,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -520,26 +622,33 @@ fn render_config_panel(
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
-        .title_bottom(Line::from("[Enter] save  [Esc] cancel").alignment(Alignment::Center));
+        .title_bottom(Line::from(
+            "[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel",
+        )
+        .alignment(Alignment::Center));
     let inner = block.inner(area);
     block.render(area, buf);
 
     let provider = providers.iter().find(|p| p.name == provider_name);
 
     let label_style = Style::default().fg(Color::Cyan);
+    let focused_label_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
     let value_style = Style::default().fg(Color::White);
     let dim_style = Style::default().fg(Color::DarkGray);
 
-    // Rows: read-only info (3) + gap + API Key label + textarea input + spacer
+    // Rows: Provider + Type + blank + API Key label + api_key textarea +
+    //       blank + Base URL label + base_url textarea + spacer.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Provider
             Constraint::Length(1), // Type
-            Constraint::Length(1), // Base URL
             Constraint::Length(1), // blank
             Constraint::Length(1), // API Key label
-            Constraint::Length(3), // textarea (bordered box)
+            Constraint::Length(3), // api_key textarea (bordered box)
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // Base URL label
+            Constraint::Length(3), // base_url textarea (bordered box)
             Constraint::Min(0),    // spacer
         ])
         .split(inner);
@@ -559,30 +668,66 @@ fn render_config_panel(
     ]))
     .render(rows[1], buf);
 
-    let base_url = provider.map(|p| p.base_url.as_str()).unwrap_or("");
+    // ── API Key field ──
+    let api_label_style = if focused_field == ConfigField::ApiKey {
+        focused_label_style
+    } else {
+        label_style
+    };
     Paragraph::new(Line::from(vec![
-        Span::styled(" Base URL       : ", label_style),
-        Span::styled(base_url.to_string(), dim_style),
+        Span::styled(" API Key        :", api_label_style),
+        Span::raw(" "),
+        Span::styled("(required)", dim_style),
     ]))
-    .render(rows[2], buf);
+    .render(rows[3], buf);
 
-    // API Key label
-    Paragraph::new(Line::from(vec![Span::styled(
-        " API Key        :",
-        label_style,
-    )]))
-    .render(rows[4], buf);
-
-    // Textarea: render into a bordered sub-area inside rows[5].
-    let ta_block = Block::default()
+    let api_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let ta_inner = ta_block.inner(rows[5]);
-    ta_block.render(rows[5], buf);
+        .border_style(Style::default().fg(if focused_field == ConfigField::ApiKey {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        }));
+    let api_inner = api_block.inner(rows[4]);
+    api_block.render(rows[4], buf);
+    if api_inner.width > 0 && api_inner.height > 0 {
+        api_key.render_ref(api_inner, buf, api_key_state);
+    }
 
-    if ta_inner.width > 0 && ta_inner.height > 0 {
-        let ta_ref: &TextArea = textarea;
-        ta_ref.render_ref(ta_inner, buf, textarea_state);
+    // ── Base URL field ──
+    // Compose a preset indicator: "[i/N preset]" if the textarea text matches
+    // a known preset, otherwise "[custom]".
+    let cur_url = base_url.text();
+    let preset_tag = if cur_url.is_empty() {
+        "(empty)".to_string()
+    } else if let Some(idx) = base_url_presets.iter().position(|u| u == cur_url) {
+        format!("[{}/{} preset]", idx + 1, base_url_presets.len())
+    } else {
+        "[custom]".to_string()
+    };
+    let url_label_style = if focused_field == ConfigField::BaseUrl {
+        focused_label_style
+    } else {
+        label_style
+    };
+    Paragraph::new(Line::from(vec![
+        Span::styled(" Base URL       :", url_label_style),
+        Span::raw(" "),
+        Span::styled(preset_tag, dim_style),
+    ]))
+    .render(rows[6], buf);
+
+    let url_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if focused_field == ConfigField::BaseUrl {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        }));
+    let url_inner = url_block.inner(rows[7]);
+    url_block.render(rows[7], buf);
+    if url_inner.width > 0 && url_inner.height > 0 {
+        base_url.render_ref(url_inner, buf, base_url_state);
     }
 }
 
@@ -599,8 +744,13 @@ fn yn(b: bool) -> String {
 /// Build the full provider catalogue from the SDK registry, marking each
 /// provider's configured state based on the DB rows passed in.
 ///
-/// `db_providers` is a map of `provider_type` string → `(api_key, base_url_override)`.
-/// Providers present in this map with a non-empty `api_key` are "configured".
+/// `db_providers` is a map of `provider_type` string →
+/// `(api_key, base_url_override)`. Providers present in this map with a
+/// non-empty `api_key` are "configured".
+///
+/// The selected base URL is the DB-stored override when present, otherwise
+/// the provider default. The full list of preset endpoints
+/// ([`registry::known_base_urls`]) is exposed for switching in the editor.
 ///
 /// The result is sorted: configured providers first (alphabetical), then
 /// unconfigured (alphabetical). Configured providers start expanded.
@@ -614,13 +764,20 @@ pub fn build_catalog(
         .map(|type_str| {
             let provider_type = ProviderType::from(type_str);
             let models = registry::preset_models(&provider_type).unwrap_or_default();
-            let base_url = registry::default_base_url(&provider_type)
-                .unwrap_or("")
-                .to_string();
+            let preset_urls: Vec<String> = registry::known_base_urls(&provider_type)
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            let default_url = preset_urls
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    registry::default_base_url(&provider_type)
+                        .unwrap_or("")
+                        .to_string()
+                });
 
-            // Check DB for configuration (only api_key matters — base_url
-            // always comes from the registry so code updates take effect
-            // without needing to re-write the DB).
+            // Match this provider against the DB rows.
             let db_match = db_providers
                 .iter()
                 .find(|(pt, _, _)| pt.eq_ignore_ascii_case(type_str));
@@ -628,11 +785,22 @@ pub fn build_catalog(
                 Some((_, key, _)) if !key.is_empty() => (true, Some(key.clone())),
                 _ => (false, None),
             };
+            // Selected base URL: DB override if non-empty, else the default.
+            let selected_base_url = db_match
+                .and_then(|(_, _, url)| {
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url.clone())
+                    }
+                })
+                .unwrap_or(default_url);
 
             CatalogProvider {
                 name: type_str.to_string(),
                 provider_type,
-                base_url,
+                base_urls: preset_urls,
+                selected_base_url,
                 models,
                 configured,
                 api_key,

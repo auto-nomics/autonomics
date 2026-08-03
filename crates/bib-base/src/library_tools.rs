@@ -24,8 +24,10 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind};
+use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
+use crate::oa_fetch::try_fetch_fulltext_with;
 use crate::query::LiteratureGateway;
 use crate::tools::auto_fetch;
 
@@ -42,6 +44,13 @@ use crate::tools::auto_fetch;
                   Articles already in the library (matched by DOI or PMID) are \
                   returned as cached without re-fetching. \
                   \
+                  After saving the metadata, each newly stored article is \
+                  **automatically checked for an open-access full text** on \
+                  Europe PMC. When a full text is available it is downloaded \
+                  (JATS XML → plain text) and stored alongside the article, so \
+                  `bib_get_article` can return it immediately. Set \
+                  `fetch_fulltext=false` to skip this step. \
+                  \
                   Use this after `lit_search` or `lit_fetch` to persist articles you \
                   want to keep. Pass the same IDs you found in search results. \
                   \
@@ -54,11 +63,17 @@ pub struct BibSaveInput {
     pub ids: Vec<String>,
     #[desc = "Force a specific source for ALL ids: \"pubmed\" or \"arxiv\". Default: auto-detect each ID from its format."]
     pub source: Option<String>,
+    #[desc = "Attempt to download open-access full text from Europe PMC after saving. Default: true"]
+    pub fetch_fulltext: Option<bool>,
 }
 
 pub struct BibSaveTool {
     pub bib: Arc<BibBase>,
     pub gateway: Arc<LiteratureGateway>,
+    /// Europe PMC client used for best-effort OA full-text auto-fetch.
+    /// Defaults to [`EuropePmcClient::new`] when constructed via
+    /// [`bib_library_registrations`].
+    pub epmc: Arc<EuropePmcClient>,
 }
 
 /// Result of saving a single article within a batch.
@@ -73,6 +88,8 @@ struct SaveResult {
     doi: Option<String>,
     pmid: Option<String>,
     year: Option<u16>,
+    #[serde(default)]
+    fulltext_fetched: bool,
     error: Option<String>,
 }
 
@@ -93,11 +110,13 @@ impl ToolFunction for BibSaveTool {
             });
         }
 
+        let want_fulltext = input.fetch_fulltext.unwrap_or(true);
+
         // Process each ID concurrently.
         let futures: Vec<_> = input
             .ids
             .iter()
-            .map(|id| self.save_one(id.trim(), input.source.as_deref()))
+            .map(|id| self.save_one(id.trim(), input.source.as_deref(), want_fulltext))
             .collect();
         let results = futures::future::join_all(futures).await;
 
@@ -105,15 +124,19 @@ impl ToolFunction for BibSaveTool {
         let saved = results.iter().filter(|r| r.saved && !r.cached).count();
         let cached = results.iter().filter(|r| r.cached).count();
         let failed = results.iter().filter(|r| !r.saved).count();
+        let oa_count = results.iter().filter(|r| r.fulltext_fetched).count();
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "total": total,
             "saved": saved,
             "cached": cached,
             "failed": failed,
+            "oa_fulltext_fetched": oa_count,
             "results": results,
             "message": format!(
-                "{saved} saved, {cached} cached, {failed} failed out of {total} articles."
+                "{saved} saved, {cached} cached, {failed} failed \
+                 ({oa_count} OA full texts fetched from Europe PMC) \
+                 out of {total} articles."
             ),
         })))
     }
@@ -122,12 +145,16 @@ impl ToolFunction for BibSaveTool {
 impl BibSaveTool {
     /// Fetch + upsert a single article. Never errors — failures are captured
     /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
-    async fn save_one(&self, id: &str, source_override: Option<&str>) -> SaveResult {
+    async fn save_one(&self, id: &str, source_override: Option<&str>, want_fulltext: bool) -> SaveResult {
         // 1. Check if already in local library.
         if let Some(kind) = detect_id_kind(id) {
             if let Ok(Some(existing)) = self.bib.find_by_identifier(kind, id).await {
                 let doi = existing.doi().map(str::to_owned);
                 let pmid = existing.pmid().map(str::to_owned);
+
+                // If cached and already has full text, report it.
+                let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
+
                 return SaveResult {
                     id: id.into(),
                     saved: true,
@@ -138,6 +165,7 @@ impl BibSaveTool {
                     doi,
                     pmid,
                     year: existing.year,
+                    fulltext_fetched: has_ft,
                     error: None,
                 };
             }
@@ -168,6 +196,7 @@ impl BibSaveTool {
                     doi: None,
                     pmid: None,
                     year: None,
+                    fulltext_fetched: false,
                     error: Some(format!("Article '{id}' not found in any source")),
                 };
             }
@@ -181,18 +210,28 @@ impl BibSaveTool {
         let year = article.year;
 
         match self.bib.upsert_article(&article).await {
-            Ok(()) => SaveResult {
-                id: id.into(),
-                saved: true,
-                cached: false,
-                article_id: Some(article_id),
-                source: Some(source_name),
-                title: Some(title),
-                doi,
-                pmid,
-                year,
-                error: None,
-            },
+            Ok(()) => {
+                // 4. Best-effort OA full-text fetch from Europe PMC.
+                let ft_fetched = if want_fulltext {
+                    self.try_fetch_oa_fulltext(&article).await
+                } else {
+                    false
+                };
+
+                SaveResult {
+                    id: id.into(),
+                    saved: true,
+                    cached: false,
+                    article_id: Some(article_id),
+                    source: Some(source_name),
+                    title: Some(title),
+                    doi,
+                    pmid,
+                    year,
+                    fulltext_fetched: ft_fetched,
+                    error: None,
+                }
+            }
             Err(e) => SaveResult {
                 id: id.into(),
                 saved: false,
@@ -203,8 +242,25 @@ impl BibSaveTool {
                 doi,
                 pmid,
                 year,
+                fulltext_fetched: false,
                 error: Some(format!("Database error: {e}")),
             },
+        }
+    }
+
+    /// Attempt to fetch an open-access full text for `article` from Europe PMC
+    /// and store it. Returns `true` on success.
+    async fn try_fetch_oa_fulltext(&self, article: &bib_types::Article) -> bool {
+        let ft = match try_fetch_fulltext_with(&self.epmc, article).await {
+            Some(ft) => ft,
+            None => return false,
+        };
+        match self.bib.upsert_fulltext(&ft).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(article_id = %article.id, error = %e, "failed to store OA full text");
+                false
+            }
         }
     }
 }
@@ -755,10 +811,12 @@ pub fn bib_library_registrations(
     gateway: Arc<LiteratureGateway>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
+    let epmc = Arc::new(EuropePmcClient::new());
     vec![
         R::from(BibSaveTool {
             bib: bib.clone(),
             gateway: gateway.clone(),
+            epmc,
         }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),

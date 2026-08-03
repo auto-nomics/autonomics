@@ -38,6 +38,20 @@ pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
     }
 }
 
+/// Returns all known base URLs for a known provider type (default first).
+/// Returns an empty vec for [`ProviderType::Custom(_)`](ProviderType::Custom).
+pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
+    match provider_type {
+        ProviderType::Deepseek => DeepseekProvider::known_base_urls(),
+        ProviderType::Mimo => MimoProvider::known_base_urls(),
+        ProviderType::Minimax => MinimaxProvider::known_base_urls(),
+        ProviderType::Moonshot => MoonshotProvider::known_base_urls(),
+        ProviderType::Sensenova => SensenovaProvider::known_base_urls(),
+        ProviderType::Zai => ZaiProvider::known_base_urls(),
+        ProviderType::Custom(_) => Vec::new(),
+    }
+}
+
 /// Returns the default authentication method for a known provider type.
 /// Falls back to [`AuthMethod::Anthropic`] for custom providers.
 pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {

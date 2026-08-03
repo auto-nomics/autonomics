@@ -58,6 +58,16 @@ impl ProviderPreset for MimoProvider {
         // Default to the China token-plan endpoint.
         MimoEndpoint::default().base_url()
     }
+    fn known_base_urls() -> Vec<&'static str> {
+        // Token-plan China is the default; offer all four regional endpoints
+        // plus the general API gateway.
+        vec![
+            MimoEndpoint::TokenPlan(TokenPlanRegion::China).base_url(),
+            MimoEndpoint::Api.base_url(),
+            MimoEndpoint::TokenPlan(TokenPlanRegion::Eur).base_url(),
+            MimoEndpoint::TokenPlan(TokenPlanRegion::Sgp).base_url(),
+        ]
+    }
 }
 
 impl MimoProvider {

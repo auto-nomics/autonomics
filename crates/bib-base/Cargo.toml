@@ -25,6 +25,9 @@ uuid = { version = "1.12", features = ["v4"] }
 pdf-extract = "0.7"
 reqwest = { version = "0.13", features = ["json"] }
 
+# Europe PMC open-access full-text auto-fetch
+europepmc = { path = "../europepmc" }
+
 # Agent tools
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }

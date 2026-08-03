@@ -882,6 +882,7 @@ dependencies = [
  "async-trait",
  "bib-types",
  "chrono",
+ "europepmc",
  "eutils",
  "futures",
  "pdf-extract",

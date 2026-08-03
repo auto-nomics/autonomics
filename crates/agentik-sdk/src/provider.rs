@@ -38,6 +38,17 @@ pub trait ProviderPreset {
     /// (e.g. minimax).
     fn default_base_url() -> &'static str;
 
+    /// All known base URL endpoints for this provider type.
+    ///
+    /// The first entry is always the default (same as
+    /// [`default_base_url`](Self::default_base_url)); subsequent entries are
+    /// alternative endpoints the user may switch between (e.g. regional
+    /// gateways). Providers with a single endpoint inherit the default
+    /// implementation, which returns just the default URL.
+    fn known_base_urls() -> Vec<&'static str> {
+        vec![Self::default_base_url()]
+    }
+
     /// Default authentication method for this provider type.
     /// Most Anthropic-compatible endpoints use [`AuthMethod::Anthropic`]
     /// (`x-api-key` header). Providers whose gateway requires a Bearer token
