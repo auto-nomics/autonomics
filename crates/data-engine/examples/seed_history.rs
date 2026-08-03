@@ -71,8 +71,18 @@ async fn main() {
             },
         ],
         edges: vec![
-            EdgeEntry { from: "src".into(), from_port: 0, to: "agg".into(), to_port: 0 },
-            EdgeEntry { from: "agg".into(), from_port: 0, to: "out".into(), to_port: 0 },
+            EdgeEntry {
+                from: "src".into(),
+                from_port: 0,
+                to: "agg".into(),
+                to_port: 0,
+            },
+            EdgeEntry {
+                from: "agg".into(),
+                from_port: 0,
+                to: "out".into(),
+                to_port: 0,
+            },
         ],
     };
     let id3 = history

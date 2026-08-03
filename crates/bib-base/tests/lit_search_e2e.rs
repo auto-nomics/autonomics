@@ -14,10 +14,9 @@ use bib_base::query::{LiteratureGateway, PubmedSource};
 use bib_types::query::{BoolOp, StructuredSearch, YearRange};
 
 fn pubmed_gateway() -> LiteratureGateway {
-    LiteratureGateway::new()
-        .with_source(Arc::new(PubmedSource::new(Arc::new(
-            eutils::EutilsClient::from_env(),
-        ))))
+    LiteratureGateway::new().with_source(Arc::new(PubmedSource::new(Arc::new(
+        eutils::EutilsClient::from_env(),
+    ))))
 }
 
 #[tokio::test]

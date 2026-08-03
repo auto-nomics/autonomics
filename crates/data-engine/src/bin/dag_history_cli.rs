@@ -29,8 +29,8 @@
 
 use std::collections::HashMap as StdHashMap;
 
-use data_engine::dag::history::{DagHistory, DagManifest, Snapshot};
 use data_engine::dag::DagError;
+use data_engine::dag::history::{DagHistory, DagManifest, Snapshot};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, BoxErr>;
@@ -78,10 +78,7 @@ fn parse_args() -> Args {
         match raw[i].as_str() {
             "--db" => {
                 i += 1;
-                db_path = raw
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| usage());
+                db_path = raw.get(i).cloned().unwrap_or_else(|| usage());
             }
             "-h" | "--help" => usage(),
             other => positional.push(other.to_string()),
@@ -127,10 +124,7 @@ async fn cmd_log(history: &DagHistory, rest: &[String]) -> Result<()> {
         .unwrap_or("20");
     let limit: usize = limit_str.parse().unwrap_or(20);
 
-    let snapshots = history
-        .log(ref_name, limit)
-        .await
-        .map_err(err_to_box)?;
+    let snapshots = history.log(ref_name, limit).await.map_err(err_to_box)?;
 
     if snapshots.is_empty() {
         println!("（ref '{ref_name}' 没有快照）");
@@ -174,12 +168,22 @@ async fn cmd_show(history: &DagHistory, rest: &[String]) -> Result<()> {
     let snap = snap.ok_or_else(|| BoxErr::from(format!("快照 '{id}' 不存在")))?;
 
     println!("Snapshot:       {}", snap.id);
-    println!("Parent:         {}", snap.parent_id.as_deref().unwrap_or("(root)"));
+    println!(
+        "Parent:         {}",
+        snap.parent_id.as_deref().unwrap_or("(root)")
+    );
     println!("Manifest hash:  {}", snap.manifest_hash);
     println!("Timestamp:      {}", snap.timestamp);
     println!("Message:        {}", snap.message);
     println!("Engine version: {}", snap.engine_version);
-    println!("Run report:     {}", if snap.run_report_json.is_some() { "有" } else { "无" });
+    println!(
+        "Run report:     {}",
+        if snap.run_report_json.is_some() {
+            "有"
+        } else {
+            "无"
+        }
+    );
 
     // Manifest 概要
     if let Ok(manifest) = snap.manifest() {
@@ -190,7 +194,10 @@ async fn cmd_show(history: &DagHistory, rest: &[String]) -> Result<()> {
         }
         println!("  边: {} 条", manifest.edges.len());
         for e in &manifest.edges {
-            println!("    • {}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port);
+            println!(
+                "    • {}.[{}] → {}.[{}]",
+                e.from, e.from_port, e.to, e.to_port
+            );
         }
     }
     Ok(())
@@ -200,17 +207,18 @@ async fn cmd_show(history: &DagHistory, rest: &[String]) -> Result<()> {
 async fn cmd_head(history: &DagHistory, rest: &[String]) -> Result<()> {
     let (ref_name, _) = extract_flag(rest, "--ref", DEFAULT_REF);
 
-    let snap = history
-        .ref_head(ref_name)
-        .await
-        .map_err(err_to_box)?;
+    let snap = history.ref_head(ref_name).await.map_err(err_to_box)?;
 
     match snap {
         Some(s) => {
             println!("ref '{ref_name}' → {}", s.id);
             println!("  消息:     {}", s.message);
             println!("  时间:     {}", s.timestamp);
-            println!("  manifest: {} (短: {})", s.manifest_hash, short(&s.manifest_hash));
+            println!(
+                "  manifest: {} (短: {})",
+                s.manifest_hash,
+                short(&s.manifest_hash)
+            );
             println!("  parent:   {}", s.parent_id.as_deref().unwrap_or("(root)"));
         }
         None => {
@@ -274,8 +282,12 @@ async fn cmd_diff(history: &DagHistory, rest: &[String]) -> Result<()> {
         .await?
         .ok_or_else(|| BoxErr::from(format!("快照 '{new_id}' 不存在")))?;
 
-    let old_m = old_snap.manifest().map_err(|e| BoxErr::from(e.to_string()))?;
-    let new_m = new_snap.manifest().map_err(|e| BoxErr::from(e.to_string()))?;
+    let old_m = old_snap
+        .manifest()
+        .map_err(|e| BoxErr::from(e.to_string()))?;
+    let new_m = new_snap
+        .manifest()
+        .map_err(|e| BoxErr::from(e.to_string()))?;
 
     diff_manifests(&old_m, &new_m);
     Ok(())
@@ -288,10 +300,7 @@ async fn cmd_branch(history: &DagHistory, rest: &[String]) -> Result<()> {
         .first()
         .ok_or_else(|| BoxErr::from("branch 需要 <name>"))?;
 
-    history
-        .branch(name, from_ref)
-        .await
-        .map_err(err_to_box)?;
+    history.branch(name, from_ref).await.map_err(err_to_box)?;
 
     println!("已创建分支 '{name}' ← {from_ref}");
     Ok(())
@@ -313,7 +322,11 @@ async fn cmd_restore(history: &DagHistory, rest: &[String]) -> Result<()> {
         .await
         .map_err(err_to_box)?;
 
-    println!("ref '{ref_name}' 已回退到 {} ({})", short(&snap.id), snap.message);
+    println!(
+        "ref '{ref_name}' 已回退到 {} ({})",
+        short(&snap.id),
+        snap.message
+    );
     Ok(())
 }
 
@@ -327,10 +340,7 @@ fn err_to_box(e: DagError) -> BoxErr {
 }
 
 /// 解析快照 id（支持短 hash 前缀匹配）。
-async fn resolve_snapshot(
-    history: &DagHistory,
-    id_or_prefix: &str,
-) -> Result<Option<Snapshot>> {
+async fn resolve_snapshot(history: &DagHistory, id_or_prefix: &str) -> Result<Option<Snapshot>> {
     // 先尝试精确匹配
     if let Ok(Some(snap)) = history.get_snapshot(id_or_prefix).await {
         return Ok(Some(snap));
@@ -364,16 +374,10 @@ async fn resolve_snapshot(
 
 /// 对比两个 manifest 并打印差异。
 fn diff_manifests(old: &DagManifest, new: &DagManifest) {
-    let old_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> = old
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), n))
-        .collect();
-    let new_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> = new
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), n))
-        .collect();
+    let old_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> =
+        old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let new_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> =
+        new.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     let old_edges: std::collections::HashSet<String> = old
         .edges
@@ -408,10 +412,20 @@ fn diff_manifests(old: &DagManifest, new: &DagManifest) {
             if old_n.kind != n.kind || old_n.spec != n.spec {
                 println!("  ~ node {} ({})", n.id, n.kind);
                 // 简要显示 spec 变化
-                let old_keys: std::collections::HashSet<&str> =
-                    old_n.spec.as_object().iter().flat_map(|m| m.keys()).map(|s| s.as_str()).collect();
-                let new_keys: std::collections::HashSet<&str> =
-                    n.spec.as_object().iter().flat_map(|m| m.keys()).map(|s| s.as_str()).collect();
+                let old_keys: std::collections::HashSet<&str> = old_n
+                    .spec
+                    .as_object()
+                    .iter()
+                    .flat_map(|m| m.keys())
+                    .map(|s| s.as_str())
+                    .collect();
+                let new_keys: std::collections::HashSet<&str> = n
+                    .spec
+                    .as_object()
+                    .iter()
+                    .flat_map(|m| m.keys())
+                    .map(|s| s.as_str())
+                    .collect();
                 for k in new_keys.difference(&old_keys) {
                     println!("      + {k}");
                 }

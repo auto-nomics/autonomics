@@ -605,13 +605,10 @@ fn main() -> color_eyre::Result<()> {
 
     init_logging(nocapture)?;
 
-    match cli
-        .command
-        .unwrap_or(Command::Tui(TuiArgs {
-            config: None,
-            nocapture: false,
-        }))
-    {
+    match cli.command.unwrap_or(Command::Tui(TuiArgs {
+        config: None,
+        nocapture: false,
+    })) {
         Command::Tui(args) => run_tui(args),
         Command::Cache(cache) => match cache.action {
             CacheAction::RefreshOpengwas(args) => run_refresh_opengwas(args),

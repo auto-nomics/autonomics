@@ -336,11 +336,8 @@ impl DataEngineClient {
     /// List all history refs.
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ListDagRefs { reply: reply_tx },
-            reply_rx,
-        )
-        .await
+        self.request(DataEngineCmd::ListDagRefs { reply: reply_tx }, reply_rx)
+            .await
     }
 
     /// Show snapshot lineage for a ref (None = current ref).
@@ -377,11 +374,7 @@ impl DataEngineClient {
 
     /// Create a new ref from a snapshot, switch to it, and load its DAG.
     /// Short-hash prefixes are accepted.
-    pub async fn branch_from_snapshot(
-        &self,
-        snapshot_id: String,
-        ref_name: String,
-    ) -> Result<()> {
+    pub async fn branch_from_snapshot(&self, snapshot_id: String, ref_name: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::BranchFromSnapshot {
@@ -397,11 +390,8 @@ impl DataEngineClient {
     /// Query the current history ref name.
     pub async fn get_dag_ref(&self) -> Result<String> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetDagRef { reply: reply_tx },
-            reply_rx,
-        )
-        .await
+        self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
+            .await
     }
 
     pub async fn get_node_ports(&self, kind: String) -> Result<crate::nodes::meta::NodePorts> {

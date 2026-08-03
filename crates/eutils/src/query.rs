@@ -98,10 +98,7 @@ pub fn to_entrez(sq: &StructuredSearch) -> Result<String> {
         // match, returning only a handful of anomalous results.
         // The [dp] field with `YYYY/MM/DD:YYYY/MM/DD` is the correct
         // Entrez syntax for date-range filtering.
-        clauses.push(format!(
-            "{}/01/01:{}/12/31[dp]",
-            yr.from, yr.to
-        ));
+        clauses.push(format!("{}/01/01:{}/12/31[dp]", yr.from, yr.to));
     }
 
     if clauses.is_empty() {

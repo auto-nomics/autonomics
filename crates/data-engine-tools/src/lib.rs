@@ -96,7 +96,9 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(list_dag_refs_tool::ListDagRefsTool::new(client.clone())),
         ToolRegistration::from(dag_history_log_tool::DagHistoryLogTool::new(client.clone())),
         ToolRegistration::from(checkout_dag_tool::CheckoutDagTool::new(client.clone())),
-        ToolRegistration::from(branch_from_snapshot_tool::BranchFromSnapshotTool::new(client)),
+        ToolRegistration::from(branch_from_snapshot_tool::BranchFromSnapshotTool::new(
+            client,
+        )),
     ]
 }
 

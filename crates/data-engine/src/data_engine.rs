@@ -225,10 +225,7 @@ impl DataEngine {
     /// is attached.
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
         match &self.history {
-            Some(h) => Ok(h
-                .list_refs()
-                .await
-                .map_err(|e| Error::Dag(e))?),
+            Some(h) => Ok(h.list_refs().await.map_err(|e| Error::Dag(e))?),
             None => Ok(vec![]),
         }
     }
@@ -245,10 +242,7 @@ impl DataEngine {
             .as_ref()
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
         let r = ref_name.unwrap_or(&self.history_ref);
-        history
-            .log(r, limit)
-            .await
-            .map_err(|e| Error::Dag(e))
+        history.log(r, limit).await.map_err(|e| Error::Dag(e))
     }
 
     /// Load a historical snapshot's DAG into memory **without** moving the
@@ -325,10 +319,7 @@ impl DataEngine {
 
     /// Internal helper: clear the DAG and rebuild nodes + edges from a
     /// manifest.
-    fn rebuild_dag_from_manifest(
-        &mut self,
-        manifest: &crate::dag::DagManifest,
-    ) -> Result<()> {
+    fn rebuild_dag_from_manifest(&mut self, manifest: &crate::dag::DagManifest) -> Result<()> {
         self.dag.clear();
         for entry in &manifest.nodes {
             let node = self
@@ -342,8 +333,12 @@ impl DataEngine {
             )?;
         }
         for edge in &manifest.edges {
-            self.dag
-                .add_edge(edge.from.clone(), edge.to.clone(), edge.from_port, edge.to_port)?;
+            self.dag.add_edge(
+                edge.from.clone(),
+                edge.to.clone(),
+                edge.from_port,
+                edge.to_port,
+            )?;
         }
         Ok(())
     }
@@ -448,7 +443,12 @@ impl DataEngine {
 
         if let Some(history) = &self.history {
             let _ = history
-                .commit(&self.history_ref, &manifest, Some(&report), "auto-snapshot after run")
+                .commit(
+                    &self.history_ref,
+                    &manifest,
+                    Some(&report),
+                    "auto-snapshot after run",
+                )
                 .await;
         }
         Ok(report)
@@ -469,7 +469,12 @@ impl DataEngine {
 
         if let Some(history) = &self.history {
             let _ = history
-                .commit(&self.history_ref, &manifest, Some(&report), "auto-snapshot after run")
+                .commit(
+                    &self.history_ref,
+                    &manifest,
+                    Some(&report),
+                    "auto-snapshot after run",
+                )
                 .await;
         }
         Ok(report)

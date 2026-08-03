@@ -122,11 +122,7 @@ impl ToolFunction for BibSaveTool {
 impl BibSaveTool {
     /// Fetch + upsert a single article. Never errors — failures are captured
     /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
-    async fn save_one(
-        &self,
-        id: &str,
-        source_override: Option<&str>,
-    ) -> SaveResult {
+    async fn save_one(&self, id: &str, source_override: Option<&str>) -> SaveResult {
         // 1. Check if already in local library.
         if let Some(kind) = detect_id_kind(id) {
             if let Ok(Some(existing)) = self.bib.find_by_identifier(kind, id).await {

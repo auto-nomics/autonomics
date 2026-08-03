@@ -34,7 +34,9 @@ impl ToolFunction for ListDagRefsTool {
         let refs = self.client.list_dag_refs().await.map_err(ExecError::from)?;
 
         if refs.is_empty() {
-            return Ok(ToolResult::success("No history refs found (no history store attached)."));
+            return Ok(ToolResult::success(
+                "No history refs found (no history store attached).",
+            ));
         }
 
         let current_ref = self.client.get_dag_ref().await.map_err(ExecError::from)?;
