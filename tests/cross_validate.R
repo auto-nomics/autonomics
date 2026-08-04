@@ -135,3 +135,86 @@ if (test_name == "epi_roc") {
     data.table::fwrite(ref, file.path(out_dir, "epi_roc_reference.csv"))
     cat("OK epi_roc\n")
 }
+
+# ── survival (Kaplan-Meier) ────────────────────────────────────────────────
+if (test_name == "survival") {
+    n <- 200
+    time <- rexp(n, rate = 0.1 * exp(rnorm(n, 0, 0.5)))
+    event <- ifelse(time < 10, 1, 0)
+    time <- pmin(time, 10)
+    df <- data.frame(time = time, event = event)
+    data_path <- file.path(out_dir, "survival_data.csv")
+    data.table::fwrite(df, data_path)
+
+    fit <- survival::survfit(Surv(time, event) ~ 1, data = df)
+    smry <- summary(fit)
+    ref <- data.frame(
+        time = smry$time,
+        survival = smry$surv,
+        std_error = smry$std.err,
+        n_at_risk = smry$n.risk,
+        n_events = smry$n.event
+    )
+    data.table::fwrite(ref, file.path(out_dir, "survival_reference.csv"))
+    cat("OK survival\n")
+}
+
+# ── epi_lasso ──────────────────────────────────────────────────────────────
+if (test_name == "epi_lasso") {
+    n <- 150
+    p <- 5
+    X <- matrix(rnorm(n * p), n, p)
+    colnames(X) <- paste0("x", 1:p)
+    beta_true <- c(1.5, 0, -0.8, 0, 0.6)
+    y <- as.numeric(X %*% beta_true + rnorm(n, sd = 0.5))
+    df <- as.data.frame(cbind(X, y = y))
+    data_path <- file.path(out_dir, "epi_lasso_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    x_mat <- as.matrix(df[, paste0("x", 1:p)])
+    y_vec <- df$y
+    cv_fit <- glmnet::cv.glmnet(x_mat, y_vec, alpha = 1, nfolds = 5, nlambda = 50)
+    ref <- data.frame(
+        feature = paste0("x", 1:p),
+        coef_min = as.numeric(coef(cv_fit, s = "lambda.min")[-1]),
+        coef_1se = as.numeric(coef(cv_fit, s = "lambda.1se")[-1]),
+        lambda_min = cv_fit$lambda.min,
+        lambda_1se = cv_fit$lambda.1se
+    )
+    data.table::fwrite(ref, file.path(out_dir, "epi_lasso_reference.csv"))
+    cat("OK epi_lasso\n")
+}
+
+# ── liability ──────────────────────────────────────────────────────────────
+if (test_name == "liability") {
+    # Liability takes an LDSC h² summary as input. We create a synthetic one.
+    h2 <- 0.25
+    h2_se <- 0.02
+    samp_prev <- 0.5
+    pop_prev <- 0.01
+    df <- data.frame(
+        h2 = h2, h2_se = h2_se,
+        intercept = 1.0, intercept_se = 0.01,
+        ratio = 0.1, ratio_se = 0.05,
+        mean_chisq = 1.1, lambda_gc = 1.05, n_snp = 500000,
+        coef = "[0.1]", coef_se = "[0.01]"
+    )
+    data_path <- file.path(out_dir, "liability_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference: liability-threshold conversion
+    K <- pop_prev
+    P <- samp_prev
+    z <- qnorm(1 - K)
+    factor <- K^2 * (1 - K)^2 / (P * (1 - P) * dnorm(z)^2)
+    ref <- data.frame(
+        h2 = h2,
+        h2_se = h2_se,
+        h2_liab = h2 * factor,
+        h2_se_liab = h2_se * factor,
+        factor = factor
+    )
+    data.table::fwrite(ref, file.path(out_dir, "liability_reference.csv"))
+    cat("OK liability\n")
+}

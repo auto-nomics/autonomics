@@ -183,7 +183,14 @@ impl NodeFactory for EpiLassoNodeFactory {
                 "{cv_fit} <- cv.glmnet({x_mat}, {y_vec}, alpha = 1, nfolds = {}, nlambda = {})",
                 s.cv_folds, s.n_lambda
             ),
-            format!("{out} <- coef({cv_fit}, s = \"lambda.min\")"),
+            format!("{out} <- data.frame("),
+            format!("  feature = colnames({x_mat}),"),
+            format!("  coef_min = as.numeric(coef({cv_fit}, s = \"lambda.min\")[-1]),"),
+            format!("  coef_1se = as.numeric(coef({cv_fit}, s = \"lambda.1se\")[-1]),"),
+            format!("  lambda_min = {cv_fit}$lambda.min,"),
+            format!("  lambda_1se = {cv_fit}$lambda.1se"),
+            format!(")"),
+            format!("# NOTE: bootstrap_freq not generated in R reference"),
             format!("print({out})"),
         ];
         Ok(crate::codegen::NodeCodegen::simple(code, out))

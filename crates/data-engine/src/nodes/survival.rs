@@ -127,13 +127,25 @@ impl NodeFactory for SurvivalNodeFactory {
             None => format!("Surv({}, {}) ~ 1", s.time_column, s.event_column),
         };
         let fit_var = ctx.fresh_var("surv_fit");
-        let input = input_0(ctx);
-        let code = vec![
+        let smry_var = ctx.fresh_var("surv_smry");
+        let input = input_0(ctx).to_string();
+        let has_group = s.group_column.is_some();
+        let mut code = vec![
             format!("# Kaplan-Meier survival analysis"),
             format!("{fit_var} <- survfit(as.formula(\"{formula}\"), data = {input})"),
-            format!("{out} <- summary({fit_var})"),
-            format!("print({out})"),
+            format!("{smry_var} <- summary({fit_var})"),
+            format!("{out} <- data.frame("),
+            format!("  time = {smry_var}$time,"),
+            format!("  survival = {smry_var}$surv,"),
+            format!("  std_error = {smry_var}$std.err,"),
+            format!("  n_at_risk = {smry_var}$n.risk,"),
+            format!("  n_events = {smry_var}$n.event"),
+            format!(")"),
         ];
+        if has_group {
+            code.push(format!("# NOTE: group-stratified KM; log-rank test omitted in codegen"));
+        }
+        code.push(format!("print(head({out}))"));
         Ok(crate::codegen::NodeCodegen::simple(code, out))
     }
 
