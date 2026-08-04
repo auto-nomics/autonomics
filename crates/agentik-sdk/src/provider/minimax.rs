@@ -49,18 +49,21 @@ impl MinimaxProvider {
             ModelInfoBuilder::new(MODEL_MINIMAX_M3)
                 .context(1_000_000, 524_288)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.30, 1.20)
                 .build(),
             // ── Flagship: M2.7 — multimodal, 1M context ──────────────────
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_7)
                 .context(1_000_000, 131_072)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.0, 4.0)
                 .build(),
             // Highspeed variant: same multimodal capabilities, faster output.
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_7_HIGHSPEED)
                 .context(1_000_000, 131_072)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.0, 8.0)
                 .build(),
             // ── Performance: M2.5 — SOTA coding & agentic, 205K context ───
@@ -68,6 +71,7 @@ impl MinimaxProvider {
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_5)
                 .context(204_800, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.30, 1.20)
                 .build(),
             // Highspeed variant: same quality, ~100 TPS output, higher
@@ -75,20 +79,24 @@ impl MinimaxProvider {
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_5_HIGHSPEED)
                 .context(204_800, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.30, 2.40)
                 .build(),
             // ── Coding: M2.1 — strong multilingual programming ───────────
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_1)
                 .context(204_800, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.30, 1.20)
                 .build(),
             ModelInfoBuilder::new(MODEL_MINIMAX_M2_1_HIGHSPEED)
                 .context(204_800, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.30, 2.40)
                 .build(),
             // ── Budget: M2 — efficient coding & agent workflows ──────────
+            // No thinking capability on the budget tier.
             ModelInfoBuilder::new(MODEL_MINIMAX_M2)
                 .context(204_800, 131_072)
                 .capabilities(false, true, true, false)
