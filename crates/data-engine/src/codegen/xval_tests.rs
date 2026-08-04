@@ -946,3 +946,406 @@ fn mrpresso_codegen_xval() {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fine-Gray (`fine_gray`) and cumulative incidence (`cuminc`) cross-validation.
+//
+// Layer 2 (codegen): compile the DAG to R, run the generated script with
+// `Rscript`, and diff its edge CSVs against the reference CSVs produced by
+// `tests/cross_validate.R` calling the real `cmprsk` package.
+//
+// Layer 3 (closure): execute the Rust *node* through the DAG engine and diff
+// both of its output ports against the same reference — proving the Rust node,
+// the generated R, and the reference R all agree.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Generate the synthetic data + reference CSVs for the cmprsk codegen tests.
+fn cmprsk_xval_data(test_name: &str) {
+    // The generator lives at the repo root (CARGO_MANIFEST_DIR = crates/data-engine).
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/cross_validate.R");
+    let _ = std::process::Command::new("Rscript")
+        .arg(script)
+        .arg(test_name)
+        .arg(XVAL_DIR)
+        .status();
+}
+
+/// Read a CSV into a Vec of (name, Vec<f64>) numeric columns, preserving
+/// nothing but numeric data (logical columns become 0/1).
+fn read_numeric_csv(path: &str) -> Vec<(String, Vec<f64>)> {
+    let mut rdr = csv::Reader::from_path(path).expect("open csv");
+    let headers = rdr.headers().unwrap().clone();
+    let names: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    let mut cols: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
+    for rec in rdr.records() {
+        let rec = rec.unwrap();
+        for (i, field) in rec.iter().enumerate() {
+            let parsed: Result<f64, _> = field.parse();
+            cols[i].push(parsed.unwrap_or(f64::NAN));
+        }
+    }
+    names.into_iter().zip(cols).collect()
+}
+
+/// Compare all shared numeric columns of two CSVs, aligning by the first
+/// string column (`term`/`group`+`cause`) when present, else by row order.
+/// Returns the max absolute difference across all compared cells.
+fn max_csv_diff(gen_path: &str, ref_path: &str) -> f64 {
+    use std::collections::HashMap;
+
+    let gen_cols = read_numeric_csv(gen_path);
+    let ref_cols = read_numeric_csv(ref_path);
+    let gen_by: HashMap<String, Vec<f64>> = gen_cols.into_iter().collect();
+    let rf_by: HashMap<String, Vec<f64>> = ref_cols.into_iter().collect();
+
+    let mut worst = 0.0_f64;
+    for (name, gen_vals) in &gen_by {
+        let Some(rf_vals) = rf_by.get(name) else { continue };
+        if gen_vals.len() != rf_vals.len() {
+            // fall back to comparing min length
+        }
+        let n = gen_vals.len().min(rf_vals.len());
+        for i in 0..n {
+            let (a, b) = (gen_vals[i], rf_vals[i]);
+            if a.is_nan() && b.is_nan() {
+                continue;
+            }
+            let d = (a - b).abs() / b.abs().max(1.0);
+            if d > worst {
+                worst = d;
+            }
+        }
+    }
+    worst
+}
+
+/// Layer 2 + 3 for the `fine_gray` / `fine_gray_tf` node.
+#[test]
+#[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
+fn fine_gray_node_vs_r() {
+    cmprsk_xval_data("fine_gray");
+    let data_csv = format!("{XVAL_DIR}/fine_gray_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("reference data missing; run: Rscript tests/cross_validate.R fine_gray {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "fg".into(),
+                kind: "fine_gray".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "covariates": ["x1", "x2", "x3"],
+                    "cengroup_column": "cengroup",
+                    "failcode": 1, "cencode": 0, "gtol": 1e-6, "maxiter": 10,
+                    "variance": true
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "fg".into(),
+            to_port: 0,
+        }],
+    };
+
+    // ── Layer 2: compile to R, run via Rscript, diff the port-0 edge CSV ──
+    let script = compile_and_write(manifest.clone(), "fine_gray");
+    assert!(script.source.contains("cmprsk::crr("), "must call crr()");
+    assert!(script.source.contains("failcode = 1"), "failcode");
+    assert!(script.source.contains("cencode = 0"), "cencode");
+    assert!(script.source.contains("cengroup = "), "cengroup");
+    assert!(script.source.contains("library(cmprsk)"));
+
+    run_generated_script("fine_gray");
+
+    let diff0 = max_csv_diff(
+        &format!("{XVAL_DIR}/_edge_fg_0.csv"),
+        &format!("{XVAL_DIR}/fine_gray_reference.csv"),
+    );
+    eprintln!("fine_gray codegen port-0 max rel diff: {diff0:.3e}");
+    assert!(diff0 < 1e-6, "generated R port 0 diverged: {diff0:.3e}");
+
+    let diff1 = max_csv_diff(
+        &format!("{XVAL_DIR}/_edge_fg_1.csv"),
+        &format!("{XVAL_DIR}/fine_gray_reference_1.csv"),
+    );
+    eprintln!("fine_gray codegen port-1 max rel diff: {diff1:.3e}");
+    assert!(diff1 < 1e-9, "generated R port 1 diverged: {diff1:.3e}");
+
+    // ── Layer 3: execute the Rust node, compare both ports to reference ──
+    let (node_diff0, node_diff1) = run_fine_gray_node(&data_csv, &manifest, "fine_gray");
+    eprintln!("fine_gray node port-0 max rel diff: {node_diff0:.3e}");
+    eprintln!("fine_gray node port-1 max rel diff: {node_diff1:.3e}");
+    assert!(node_diff0 < 1e-6, "Rust node port 0 diverged: {node_diff0:.3e}");
+    assert!(node_diff1 < 1e-9, "Rust node port 1 diverged: {node_diff1:.3e}");
+}
+
+/// Layer 2 + 3 for the `fine_gray` node with a time-interacted covariate.
+#[test]
+#[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
+fn fine_gray_tf_node_vs_r() {
+    cmprsk_xval_data("fine_gray_tf");
+    let data_csv = format!("{XVAL_DIR}/fine_gray_tf_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "fg_tf".into(),
+                kind: "fine_gray".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "covariates": ["x1", "x2"],
+                    "tv_covariates": ["x1"],
+                    "time_functions": ["square"],
+                    "failcode": 1, "cencode": 0, "variance": true
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "fg_tf".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest.clone(), "fine_gray_tf");
+    assert!(script.source.contains("tf = function(uft) cbind(uft^2)"), "tf closure");
+    assert!(script.source.contains("cov2 = "), "cov2");
+    run_generated_script("fine_gray_tf");
+
+    let diff0 = max_csv_diff(
+        &format!("{XVAL_DIR}/_edge_fg_tf_0.csv"),
+        &format!("{XVAL_DIR}/fine_gray_tf_reference.csv"),
+    );
+    eprintln!("fine_gray_tf codegen port-0 max rel diff: {diff0:.3e}");
+    assert!(diff0 < 1e-6, "generated R (tf) port 0 diverged: {diff0:.3e}");
+
+    let (node_diff0, _) = run_fine_gray_node(&data_csv, &manifest, "fine_gray_tf");
+    eprintln!("fine_gray_tf node port-0 max rel diff: {node_diff0:.3e}");
+    assert!(node_diff0 < 1e-6, "Rust node (tf) port 0 diverged: {node_diff0:.3e}");
+}
+
+/// Layer 2 + 3 for the `cuminc` node.
+#[test]
+#[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
+fn cuminc_node_vs_r() {
+    cmprsk_xval_data("cuminc");
+    let data_csv = format!("{XVAL_DIR}/cuminc_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "ci".into(),
+                kind: "cuminc".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "group_column": "group",
+                    "cencode": 0
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "ci".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest.clone(), "cuminc");
+    assert!(script.source.contains("cmprsk::cuminc("), "must call cuminc()");
+    assert!(script.source.contains("group = "), "group");
+    run_generated_script("cuminc");
+
+    // port 0 = curves
+    let diff0 = max_csv_diff(
+        &format!("{XVAL_DIR}/_edge_ci_0.csv"),
+        &format!("{XVAL_DIR}/cuminc_reference_0.csv"),
+    );
+    eprintln!("cuminc codegen port-0 (curves) max rel diff: {diff0:.3e}");
+    assert!(diff0 < 1e-6, "generated R cuminc curves diverged: {diff0:.3e}");
+
+    // port 1 = Gray's tests
+    let diff1 = max_csv_diff(
+        &format!("{XVAL_DIR}/_edge_ci_1.csv"),
+        &format!("{XVAL_DIR}/cuminc_reference_1.csv"),
+    );
+    eprintln!("cuminc codegen port-1 (tests) max rel diff: {diff1:.3e}");
+    assert!(diff1 < 1e-6, "generated R cuminc tests diverged: {diff1:.3e}");
+
+    // ── Layer 3: run the Rust node ──
+    let (node_diff0, node_diff1) = run_cuminc_node(&data_csv, &manifest);
+    eprintln!("cuminc node port-0 max rel diff: {node_diff0:.3e}");
+    eprintln!("cuminc node port-1 max rel diff: {node_diff1:.3e}");
+    assert!(node_diff0 < 1e-6, "Rust node cuminc curves diverged: {node_diff0:.3e}");
+    assert!(node_diff1 < 1e-6, "Rust node cuminc tests diverged: {node_diff1:.3e}");
+}
+
+/// Run a generated R script in the xval dir and wait for it to finish.
+fn run_generated_script(test_name: &str) {
+    let r_path = format!("{XVAL_DIR}/{test_name}_generated.R");
+    let out = std::process::Command::new("Rscript")
+        .current_dir(XVAL_DIR)
+        .arg(&r_path)
+        .output()
+        .expect("Rscript runs");
+    if !out.status.success() {
+        eprintln!(
+            "Rscript failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        panic!("generated R script failed to run");
+    }
+}
+
+/// Execute a `fine_gray` node through the DAG engine and diff both ports.
+fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f64, f64) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv(data_csv, datafusion::prelude::CsvReadOptions::new())
+            .await
+            .expect("read data csv");
+
+        let node_ctx = crate::node_registry::registry::NodeCtx {
+            runtime_env: ctx.runtime_env(),
+            iceberg_catalog: None,
+            datalake: Arc::new(Datalake::default()),
+            opendal: None,
+        };
+
+        // Build the node through the factory so spec validation runs.
+        let registry = test_registry();
+        let factory = registry.get_factory("fine_gray").expect("factory");
+        let spec = manifest
+            .nodes
+            .iter()
+            .find(|n| n.kind == "fine_gray")
+            .map(|n| n.spec.clone())
+            .expect("fine_gray spec");
+        let mut node = factory
+            .build(spec, node_ctx.clone())
+            .expect("build fine_gray node");
+
+        let input = crate::nodes::meta::NodeInput { port: 0, data: df };
+        let outputs = node
+            .execute(&node_ctx, &[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .expect("fine_gray execute");
+
+        // Write both ports to CSV for comparison (stem-isolated filenames so
+        // parallel `#[ignore]` tests don't clobber each other).
+        let port0 = outputs.get(&0).cloned().unwrap();
+        let port1 = outputs.get(&1).cloned().unwrap();
+        write_df_csv(port0, &format!("{XVAL_DIR}/_node_{stem}_0.csv")).await;
+        write_df_csv(port1, &format!("{XVAL_DIR}/_node_{stem}_1.csv")).await;
+    });
+
+    let d0 = max_csv_diff(
+        &format!("{XVAL_DIR}/_node_{stem}_0.csv"),
+        &format!("{XVAL_DIR}/{stem}_reference.csv"),
+    );
+    let d1 = max_csv_diff(
+        &format!("{XVAL_DIR}/_node_{stem}_1.csv"),
+        &format!("{XVAL_DIR}/{stem}_reference_1.csv"),
+    );
+    (d0, d1)
+}
+
+/// Execute a `cuminc` node through the DAG engine and diff both ports.
+fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv(data_csv, datafusion::prelude::CsvReadOptions::new())
+            .await
+            .expect("read data csv");
+
+        let node_ctx = crate::node_registry::registry::NodeCtx {
+            runtime_env: ctx.runtime_env(),
+            iceberg_catalog: None,
+            datalake: Arc::new(Datalake::default()),
+            opendal: None,
+        };
+
+        let registry = test_registry();
+        let factory = registry.get_factory("cuminc").expect("factory");
+        let spec = serde_json::json!({
+            "time_column": "time",
+            "status_column": "fstatus",
+            "group_column": "group",
+            "cencode": 0
+        });
+        let mut node = factory
+            .build(spec, node_ctx.clone())
+            .expect("build cuminc node");
+
+        let input = crate::nodes::meta::NodeInput { port: 0, data: df };
+        let outputs = node
+            .execute(&node_ctx, &[input], &crate::dag::node_event::NodeReporter::noop())
+            .await
+            .expect("cuminc execute");
+
+        let port0 = outputs.get(&0).cloned().unwrap();
+        let port1 = outputs.get(&1).cloned().unwrap();
+        write_df_csv(port0, &format!("{XVAL_DIR}/_node_ci_0.csv")).await;
+        write_df_csv(port1, &format!("{XVAL_DIR}/_node_ci_1.csv")).await;
+    });
+
+    let d0 = max_csv_diff(
+        &format!("{XVAL_DIR}/_node_ci_0.csv"),
+        &format!("{XVAL_DIR}/cuminc_reference_0.csv"),
+    );
+    let d1 = max_csv_diff(
+        &format!("{XVAL_DIR}/_node_ci_1.csv"),
+        &format!("{XVAL_DIR}/cuminc_reference_1.csv"),
+    );
+    (d0, d1)
+}
+
+/// Materialise a DataFrame to a CSV file (drop-in for comparing node output
+/// against the reference CSVs).
+async fn write_df_csv(df: datafusion::dataframe::DataFrame, path: &str) {
+    use datafusion::common::config::CsvOptions;
+    use datafusion::dataframe::DataFrameWriteOptions;
+    df.write_csv(
+        path,
+        DataFrameWriteOptions::new().with_single_file_output(true),
+        None::<CsvOptions>,
+    )
+    .await
+    .expect("write csv");
+}

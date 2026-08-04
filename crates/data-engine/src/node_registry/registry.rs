@@ -24,12 +24,14 @@ use crate::nodes::{
     },
     cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
+    cuminc::CumincNodeFactory,
     echo_node::EchoNodeFactory,
     evalue::EvalueNodeFactory,
     epi_lasso::EpiLassoNodeFactory,
     epi_rcs::EpiRcsNodeFactory,
     epi_roc::EpiRocNodeFactory,
     epi_wqs::EpiWqsNodeFactory,
+    fine_gray::FineGrayNodeFactory,
     hdl_l::HdlLNodeFactory,
     hdl_l_scan::HdlLScanNodeFactory,
     lava::{
@@ -240,6 +242,8 @@ impl NodeRegistry {
         registry.register(Box::new(CmestWeightingNodeFactory {}));
         registry.register(Box::new(CmestGformulaNodeFactory {}));
         registry.register(Box::new(CoxRegressionNodeFactory {}));
+        registry.register(Box::new(FineGrayNodeFactory {}));
+        registry.register(Box::new(CumincNodeFactory {}));
         registry.register(Box::new(SurvivalNodeFactory {}));
         registry.register(Box::new(EpiRcsNodeFactory {}));
         registry.register(Box::new(EpiRocNodeFactory {}));
@@ -428,7 +432,7 @@ mod tests {
             "sldsc" => serde_json::json!({}),
             "liability" => serde_json::json!({"samp_prev": 0.5, "pop_prev": 0.01}),
             "two_sample_mr" => {
-                serde_json::json!({"id_exposure": "exp", "id_outcome": "out", "action": 2, "method_list": ["mr_egger_regression"]})
+                serde_json::json!({"id_exposure": "exp", "id_outcome": "out", "action": "infer_strand", "method_list": ["mr_egger_regression"]})
             }
             "mrlap" => serde_json::json!({
                 "exposure_name": "exp",
@@ -460,6 +464,15 @@ mod tests {
             "source_opentargets_search" => serde_json::json!({"query": "BRCA1"}),
             "univariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
             "bivariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
+            "fine_gray" => {
+                serde_json::json!({"time_column": "time", "status_column": "fstatus", "covariates": ["x1"]})
+            }
+            "cuminc" => {
+                serde_json::json!({"time_column": "time", "status_column": "fstatus"})
+            }
+            "evalue" => {
+                serde_json::json!({"measure": "RR", "est": 0.8, "lo": 0.7, "hi": 0.9, "true_val": 1.0})
+            }
             other => panic!("no fixture spec for kind '{other}'"),
         }
     }

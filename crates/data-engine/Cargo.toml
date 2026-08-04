@@ -44,6 +44,7 @@ mrpresso = { path = "../../bio_crates/mrpresso" }
 statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
 hypothesize = { path = "../../stat_crates/hypothesize" }
+cmprsk = { path = "../../stat_crates/cmprsk" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }
@@ -56,3 +57,4 @@ datalake = { path = "../datalake" }
 iceberg.workspace = true
 arrow-buffer.workspace = true
 tempfile = "3"
+csv = "1"
