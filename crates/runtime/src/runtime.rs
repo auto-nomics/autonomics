@@ -3,6 +3,8 @@ use std::sync::Arc;
 use agentik_core::Agent;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
+use agentik_core::storage::{AgentStorage, restore_memory};
+use agentik_core::TursoAgentStorage;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
@@ -32,6 +34,9 @@ pub enum RuntimeError {
 
     #[error("tool assembly failed: {0}")]
     ToolAssembly(#[from] crate::tools::DefaultToolSetError),
+
+    #[error("agent storage error: {0}")]
+    Storage(#[from] agentik_core::storage::StorageError),
 }
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
@@ -43,6 +48,8 @@ pub struct AgentRuntime {
     /// Handle for the spawned agent task, so we can abort it on forced shutdown.
     agent_handle: tokio::task::JoinHandle<()>,
     cancel_token: CancellationToken,
+    /// Shared storage handle (when persistence is enabled).
+    storage: Option<Arc<dyn AgentStorage>>,
 }
 
 impl AgentRuntime {
@@ -60,6 +67,11 @@ impl AgentRuntime {
     /// This is the primary entry point for multi-agent setups — each agent
     /// gets its own `RuntimeConfig` with independent storage, DBs, prompts,
     /// and feature flags.
+    ///
+    /// When `config.agent_db` points to an existing database with a
+    /// registered agent, the agent's memory is automatically restored from
+    /// the latest snapshot + WAL replay. Otherwise a fresh agent is created
+    /// and registered.
     pub fn with_config(
         runtime: &tokio::runtime::Runtime,
         model: Arc<ArcSwapOption<Model>>,
@@ -76,7 +88,7 @@ impl AgentRuntime {
 
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
 
-        let (internal_tx, engine_handle, agent_handle) = runtime.block_on(async {
+        let (internal_tx, engine_handle, agent_handle, storage) = runtime.block_on(async {
             // ── DataEngine ───────────────────────────────────────────────
             let mut engine_builder =
                 DataEngine::builder().register_opendal_fs(file_storage.clone())?;
@@ -125,16 +137,58 @@ impl AgentRuntime {
             )
             .await?;
 
-            // ── Agent ────────────────────────────────────────────────────
-            let mut agent = Agent::builder()
+            // ── Agent storage (persistence) ──────────────────────────────
+            let storage: Option<Arc<dyn AgentStorage>> =
+                match TursoAgentStorage::open(&config.agent_db).await {
+                    Ok(s) => {
+                        eprintln!(
+                            "[runtime] agent storage opened: {}",
+                            config.agent_db.display()
+                        );
+                        Some(Arc::new(s))
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[runtime] WARNING: agent storage at {} failed: {e}. \
+                             Persistence disabled.",
+                            config.agent_db.display()
+                        );
+                        None
+                    }
+                };
+
+            // ── Restore or create agent ──────────────────────────────────
+            let config_json = serde_json::to_value(&config).unwrap_or_default();
+
+            let mut builder = Agent::builder()
                 .with_model(model)
                 .with_agent_event_tx(event_tx)
+                .with_name(&config.name)
+                .with_config_json(config_json)
                 .with_system_prompt_identity(&config.agent_identity)
                 .with_system_prompt_section(config.system_prompt_or_default())
                 .with_tools(tool_list)
-                .with_cancel_token(cancel_token.clone())
-                .build()
-                .await?;
+                .with_cancel_token(cancel_token.clone());
+
+            if let Some(ref storage) = storage {
+                builder = builder.with_storage(storage.clone());
+
+                // Try to restore from existing registry.
+                if let Ok(Some(record)) = storage.get_agent_by_name(&config.name).await {
+                    eprintln!(
+                        "[runtime] restoring agent {} from storage (id={})",
+                        config.name, record.id
+                    );
+                    builder = builder.with_id(record.id);
+
+                    if let Ok(memory) = restore_memory(storage.as_ref(), record.id).await {
+                        builder = builder.with_memory(memory);
+                        eprintln!("[runtime] memory restored from snapshot + WAL");
+                    }
+                }
+            }
+
+            let mut agent = builder.build().await?;
 
             let tx = agent.internal_event_tx();
 
@@ -142,7 +196,7 @@ impl AgentRuntime {
                 agent.run().await;
             });
 
-            Ok::<_, RuntimeError>((tx, engine_handle, agent_handle))
+            Ok::<_, RuntimeError>((tx, engine_handle, agent_handle, storage))
         })?;
 
         Ok(Self {
@@ -151,6 +205,7 @@ impl AgentRuntime {
             _engine_handle: engine_handle,
             agent_handle,
             cancel_token,
+            storage,
         })
     }
 
@@ -164,9 +219,6 @@ impl AgentRuntime {
 
     pub fn cancel(&mut self) {
         self.cancel_token.cancel();
-        // Create a fresh token for the next session.  CancellationToken is
-        // one-shot, so without this every subsequent session would see
-        // `is_cancelled() == true` and abort immediately.
         let new_token = CancellationToken::new();
         let _ = self
             .internal_tx
@@ -175,8 +227,7 @@ impl AgentRuntime {
     }
 
     /// Force-stop the agent: abort the background task and drop the event
-    /// channel so the TUI can exit immediately.  Used when the user
-    /// double-presses Ctrl+C (cooperative cancel didn't take effect).
+    /// channel so the TUI can exit immediately.
     pub fn shutdown(&mut self) {
         let _ = self.internal_tx.send(InternalEvent::Shutdown);
         self.agent_handle.abort();
@@ -189,5 +240,10 @@ impl AgentRuntime {
     /// Async receive: suspends until an agent event arrives (or the channel closes).
     pub async fn recv_event(&mut self) -> Option<AgentEvent> {
         self.event_rx.recv().await
+    }
+
+    /// Returns the shared storage handle, if persistence is enabled.
+    pub fn storage(&self) -> Option<&Arc<dyn AgentStorage>> {
+        self.storage.as_ref()
     }
 }

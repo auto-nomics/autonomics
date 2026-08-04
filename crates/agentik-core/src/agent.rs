@@ -33,7 +33,7 @@ use crate::{
     lifecycle::AgentLifecycle,
     memory::Memory,
     skill::SharedSkillRuntime,
-    storage::{AgentSnapshot, AgentSnapshotStorage},
+    storage::{AgentRecord, AgentSnapshot, AgentStorage, PersistOp},
     tools::{ToolRegistration, Toolset},
 };
 
@@ -75,12 +75,14 @@ pub enum InternalEvent {
 
 pub struct Agent {
     pub(crate) id: Uuid,
+    pub(crate) name: String,
+    pub(crate) config_json: serde_json::Value,
     pub(crate) model: Arc<ArcSwapOption<Model>>,
     pub(crate) memory: Memory,
     pub(crate) lifecycle: AgentLifecycle,
     pub(crate) toolset: Toolset,
     pub(crate) config: AgentConfig,
-    pub(crate) storage: Option<Arc<dyn AgentSnapshotStorage>>,
+    pub(crate) storage: Option<Arc<dyn AgentStorage>>,
     pub(crate) token_budget: TokenBudget,
     pub(crate) context_provider: Option<Arc<dyn ContextProvider>>,
     pub(crate) system_prompt_section: Option<String>,
@@ -114,6 +116,11 @@ impl Agent {
     /// Returns the agent's unique ID.
     pub fn id(&self) -> Uuid {
         self.id
+    }
+
+    /// Returns the agent's name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns a clone of the internal event sender.
@@ -287,6 +294,28 @@ impl Agent {
             .take()
             .expect("internal_event_rx already consumed by a prior run()");
 
+        // ── Persistence bootstrap ────────────────────────────
+        // Register the agent in the registry and start a background WAL
+        // worker that drains messages from the persist channel.
+        if let Some(storage) = self.storage.clone() {
+            let now = chrono::Utc::now().timestamp_millis();
+            let _ = storage
+                .as_ref()
+                .upsert_agent(AgentRecord {
+                    id: self.id,
+                    name: self.name.clone(),
+                    config_json: self.config_json.clone(),
+                    created_at: now,
+                    last_active: now,
+                })
+                .await;
+
+            let (persist_tx, persist_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistOp>();
+            self.memory.persist_tx = Some(persist_tx);
+            tokio::spawn(persist_worker(persist_rx, storage));
+        }
+
         loop {
             let event = match rx.recv().await {
                 Some(e) => e,
@@ -321,6 +350,14 @@ impl Agent {
             "🤖 Agent started".into(),
         ));
         let cancelled = self.cancel_token.clone();
+
+        // ── Start a new persisted session ────────────────────
+        let session_id = Uuid::new_v4();
+        if let Some(storage) = &self.storage {
+            let _ = storage.start_session(self.id, session_id).await;
+            let _ = storage.touch_agent(self.id).await;
+        }
+        self.memory.current_session = Some(session_id);
 
         let mut iteration = 0;
         let mut consecutive_retries = 0;
@@ -454,6 +491,15 @@ impl Agent {
         } else if !self.lifecycle.is_running() {
             self.lifecycle.set_idle();
         }
+
+        // ── End persisted session ─────────────────────────────
+        // The snapshot taken here also serves as the WAL checkpoint:
+        // during recovery, only messages with ts > snapshot.ts are
+        // replayed, avoiding double-counting.
+        if let Some(storage) = &self.storage {
+            let _ = storage.end_session(session_id).await;
+        }
+        self.memory.current_session = None;
     }
 
     /// After a mid-workflow cancellation, the last assistant message may
@@ -864,6 +910,36 @@ impl TokenBudget {
         let reserve = max_output_tokens.max(COMPACTION_BUFFER_TOKENS);
         let usable = context_length.saturating_sub(reserve);
         total >= usable
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Persistence worker
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Background task that drains [`PersistOp`]s from the channel and writes
+/// them to storage. Spawned once by [`Agent::run()` and lives for the
+/// agent's lifetime. Never panics — individual op failures are logged and
+/// swallowed so a transient DB error doesn't kill the WAL.
+async fn persist_worker(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<PersistOp>,
+    storage: Arc<dyn AgentStorage>,
+) {
+    while let Some(op) = rx.recv().await {
+        let result = match op {
+            PersistOp::StartSession { agent_id, session_id } => {
+                storage.start_session(agent_id, session_id).await
+            }
+            PersistOp::AppendMessage { session_id, message } => {
+                storage.append_message(session_id, &message).await
+            }
+            PersistOp::EndSession { session_id } => {
+                storage.end_session(session_id).await
+            }
+        };
+        if let Err(e) = result {
+            tracing::warn!("persist op failed (non-fatal): {e}");
+        }
     }
 }
 

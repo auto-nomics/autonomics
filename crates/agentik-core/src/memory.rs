@@ -1,10 +1,12 @@
 pub mod error;
 
 use crate::message_ext::AgentMessageExt;
+use crate::storage::PersistOp;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, Message};
 use agentik_sdk::types::{Role, ToolDefinition};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::prompt::compact;
 use error::{Error, Result};
@@ -33,6 +35,18 @@ const CHARS_PER_TOKEN: usize = 4;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Memory {
     pub items: Vec<MemoryItem>,
+
+    /// When set, each `remember()` call also pushes an `AppendMessage` op
+    /// through this channel. The background persist worker drains it and
+    /// writes to the session log (WAL). `#[serde(skip)]` ensures snapshots
+    /// don't serialize live channel handles.
+    #[serde(skip)]
+    pub persist_tx: Option<tokio::sync::mpsc::UnboundedSender<PersistOp>>,
+
+    /// The active session ID for WAL writes. `None` when persistence is
+    /// disabled or between sessions.
+    #[serde(skip)]
+    pub current_session: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -418,6 +432,8 @@ impl Memory {
     pub fn new() -> Self {
         Self {
             items: vec![MemoryItem::default()],
+            persist_tx: None,
+            current_session: None,
         }
     }
 
@@ -438,9 +454,24 @@ impl Memory {
     }
 
     pub fn remember(&mut self, message: Message) -> Result<()> {
-        let mem_itemt = self.items.last_mut().ok_or(Error::EmptyMemoryItem)?;
+        // Clone the message for the WAL before it is consumed by add_message.
+        let for_persist = if self.persist_tx.is_some() && self.current_session.is_some() {
+            Some(message.clone())
+        } else {
+            None
+        };
 
-        mem_itemt.add_message(message)?;
+        let mem_item = self.items.last_mut().ok_or(Error::EmptyMemoryItem)?;
+        mem_item.add_message(message)?;
+
+        if let (Some(tx), Some(sid), Some(msg)) =
+            (&self.persist_tx, self.current_session, for_persist)
+        {
+            let _ = tx.send(PersistOp::AppendMessage {
+                session_id: sid,
+                message: msg,
+            });
+        }
 
         Ok(())
     }

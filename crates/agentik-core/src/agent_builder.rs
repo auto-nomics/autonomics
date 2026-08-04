@@ -9,7 +9,7 @@ use crate::agent::{Agent, AgentConfig, TokenBudget};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
 use crate::skill::{self, Skill};
-use crate::storage::AgentSnapshotStorage;
+use crate::storage::AgentStorage;
 use crate::tools::ToolRegistration;
 use crate::{lifecycle::AgentLifecycle, memory::Memory, tools::Toolset};
 use agentik_sdk::types::messages::Message;
@@ -19,13 +19,17 @@ pub struct AgentBuilder {
     initial_messages: Vec<Message>,
     context_provider: Option<Arc<dyn ContextProvider>>,
     config: AgentConfig,
-    storage: Option<Arc<dyn AgentSnapshotStorage>>,
+    storage: Option<Arc<dyn AgentStorage>>,
     tools: Vec<ToolRegistration>,
     system_prompt_section: Option<String>,
     system_prompt_identity: Option<String>,
     agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
     /// Stable agent UUID. If `None`, a fresh v4 UUID is generated at build time.
     id: Option<Uuid>,
+    /// Human-readable name for the agent (used in the registry).
+    name: Option<String>,
+    /// Opaque configuration JSON persisted to the registry (e.g. RuntimeConfig).
+    config_json: Option<serde_json::Value>,
     /// Pre-built memory (used to restore from a snapshot). When set, overrides
     /// `initial_messages`.
     memory: Option<Memory>,
@@ -42,11 +46,13 @@ impl Clone for AgentBuilder {
             context_provider: self.context_provider.clone(),
             config: self.config.clone(),
             storage: self.storage.clone(),
-            tools: Vec::new(), // ToolRegistration is not Clone; re-register if needed
+            tools: Vec::new(),
             system_prompt_section: self.system_prompt_section.clone(),
             system_prompt_identity: self.system_prompt_identity.clone(),
             agent_event_tx: self.agent_event_tx.clone(),
             id: self.id,
+            name: self.name.clone(),
+            config_json: self.config_json.clone(),
             memory: self.memory.clone(),
             skill: self.skill.clone(),
             cancel_token: self.cancel_token.clone(),
@@ -67,6 +73,8 @@ impl AgentBuilder {
             system_prompt_identity: None,
             agent_event_tx: None,
             id: None,
+            name: None,
+            config_json: None,
             memory: None,
             skill: None,
             cancel_token: None,
@@ -83,54 +91,41 @@ impl AgentBuilder {
         self
     }
 
-    /// Set initial messages to seed the agent's memory at build time.
     pub fn with_initial_messages(mut self, messages: Vec<Message>) -> Self {
         self.initial_messages = messages;
         self
     }
 
-    /// Set an optional context provider for dynamic context injection.
     pub fn with_context_provider(mut self, provider: Arc<dyn ContextProvider>) -> Self {
         self.context_provider = Some(provider);
         self
     }
 
-    pub fn with_storage(mut self, storage: Arc<dyn AgentSnapshotStorage>) -> Self {
+    pub fn with_storage(mut self, storage: Arc<dyn AgentStorage>) -> Self {
         self.storage = Some(storage);
         self
     }
 
-    /// Register additional tools on the agent (beyond the built-in lifecycle tools).
     pub fn with_tools(mut self, tools: Vec<ToolRegistration>) -> Self {
         self.tools = tools;
         self
     }
 
-    /// Attach a skill workflow to the agent.
-    ///
-    /// At build time this constructs a [`SkillRuntime`](crate::skill::SkillRuntime)
-    /// and registers the `update_todo` tool. While running, the agent is
-    /// constrained to the current step's `allowed_tools` each turn, the
-    /// step's todo progress is injected into the system prompt, and the
-    /// workflow auto-advances once every todo in a step is completed.
     pub fn with_skill(mut self, skill: Skill) -> Self {
         self.skill = Some(skill);
         self
     }
 
-    /// Set a static extra section for the system prompt.
     pub fn with_system_prompt_section(mut self, section: impl Into<String>) -> Self {
         self.system_prompt_section = Some(section.into());
         self
     }
 
-    /// Set the agent identity line for the system prompt (e.g. "You are a biomedical research assistant.").
     pub fn with_system_prompt_identity(mut self, identity: impl Into<String>) -> Self {
         self.system_prompt_identity = Some(identity.into());
         self
     }
 
-    /// Wire an event channel for streaming `AgentEvent`s to external observers (e.g. a TUI).
     pub fn with_agent_event_tx(
         mut self,
         tx: tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>,
@@ -139,15 +134,25 @@ impl AgentBuilder {
         self
     }
 
-    /// Override the agent's UUID. By default a fresh v4 UUID is generated.
-    /// Use a stable id to persist an agent's identity across restarts.
     pub fn with_id(mut self, id: Uuid) -> Self {
         self.id = Some(id);
         self
     }
 
-    /// Provide a pre-built `Memory` (e.g. restored from a snapshot).
-    /// When set, overrides `initial_messages`.
+    /// Set the human-readable agent name (used in the persistence registry).
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the opaque config JSON persisted to the registry (e.g. serialized
+    /// `RuntimeConfig`). Used by the `runtime` crate to persist/restore agent
+    /// configuration across process restarts.
+    pub fn with_config_json(mut self, config_json: serde_json::Value) -> Self {
+        self.config_json = Some(config_json);
+        self
+    }
+
     pub fn with_memory(mut self, memory: Memory) -> Self {
         self.memory = Some(memory);
         self
@@ -161,25 +166,18 @@ impl AgentBuilder {
     pub async fn build(mut self) -> Result<Agent, AgentError> {
         let model = self.model.clone();
 
-        // Instantiate the skill runtime (if any) and its `update_todo` tool.
         let skill_runtime = self.skill.take().map(skill::instantiate);
 
-        // Internal event channel — tx is handed to the external runtime,
-        // rx is consumed once by Agent::run().
         let (internal_event_tx, internal_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Register the toolset: caller-supplied external tools and
-        // background-task tools.
         let mut toolset = Toolset::new(self.agent_event_tx.clone());
         toolset.register_all(self.tools)?;
         toolset.register_all(crate::tools::task_registrations(toolset.tasks_handle()))?;
 
-        // Register the skill's todo tool so the agent can drive progress.
         if let Some((_, todo_reg)) = &skill_runtime {
             toolset.register(todo_reg.clone())?;
         }
 
-        // Memory: prefer restored snapshot memory, otherwise seed from initial messages.
         let memory = if let Some(memory) = self.memory {
             memory
         } else {
@@ -190,11 +188,12 @@ impl AgentBuilder {
             memory
         };
 
-        // CancellationToken
         let cancel_token = self.cancel_token.unwrap_or_default();
 
         Ok(Agent {
             id: self.id.unwrap_or_else(Uuid::new_v4),
+            name: self.name.unwrap_or_else(|| "agent".to_string()),
+            config_json: self.config_json.unwrap_or(serde_json::json!({})),
             model,
             memory,
             toolset,

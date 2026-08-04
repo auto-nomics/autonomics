@@ -84,7 +84,6 @@ dependencies = [
  "dotenvy",
  "futures",
  "regex",
- "rusqlite",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -93,6 +92,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "turso",
  "uuid",
 ]
 
@@ -7587,6 +7587,8 @@ dependencies = [
  "gwascatalog-sdk",
  "opengwas",
  "opentargets",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",

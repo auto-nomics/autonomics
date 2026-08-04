@@ -34,6 +34,9 @@
 
 use std::path::PathBuf;
 
+// serde derives are used on RuntimeConfig / RuntimeConfigBuilder for agent
+// persistence — they are serialised into the `agents` registry table.
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -51,6 +54,9 @@ const DEFAULT_STATE_DIR: &str = ".autonomics";
 
 /// Default DAG history SQLite filename (relative to `state_dir`).
 const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
+
+/// Default agent persistence database filename (relative to `state_dir`).
+const DEFAULT_AGENT_DB: &str = "agent.db";
 
 /// Default bibliography database path.
 ///
@@ -97,7 +103,7 @@ pub const ENV_OPENGWAS_CACHE_DIR: &str = "OPENGWAS_CACHE_DIR";
 /// Built via [`RuntimeConfig::builder()`] (or [`RuntimeConfig::default()`]
 /// for the current hard-coded defaults) and consumed by
 /// [`AgentRuntime::with_config`](crate::AgentRuntime::with_config).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeConfig {
     /// Human-readable name for this runtime instance (useful in multi-agent
     /// setups and log messages).
@@ -119,6 +125,11 @@ pub struct RuntimeConfig {
 
     /// Path to the TUI / application SQLite database (model config, settings).
     pub app_db_path: PathBuf,
+
+    /// Path to the agent persistence database (Turso/SQLite). Stores agent
+    /// registry, session logs (WAL), and memory snapshots for cross-process
+    /// recovery.
+    pub agent_db: PathBuf,
 
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
@@ -200,6 +211,10 @@ impl RuntimeConfig {
             .or_else(|| env_path(ENV_APP_DB))
             .unwrap_or_else(|| PathBuf::from(DEFAULT_APP_DB));
 
+        let agent_db = base
+            .and_then(|b| b.agent_db.clone())
+            .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
+
         let name = base
             .and_then(|b| b.name.clone())
             .unwrap_or_else(|| "default".to_string());
@@ -230,6 +245,7 @@ impl RuntimeConfig {
             dag_history_db,
             bib_db_path,
             app_db_path,
+            agent_db,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,
@@ -445,7 +461,7 @@ impl RuntimeConfig {
 /// Every method is optional; unset fields fall through to environment
 /// variables and then hard-coded defaults. Call [`build`](Self::build) to
 /// produce a fully resolved [`RuntimeConfig`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeConfigBuilder {
     pub(crate) name: Option<String>,
     pub(crate) data_dir: Option<PathBuf>,
@@ -453,6 +469,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) dag_history_db: Option<PathBuf>,
     pub(crate) bib_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
+    pub(crate) agent_db: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -504,6 +521,12 @@ impl RuntimeConfigBuilder {
     /// Path to the TUI / application SQLite database.
     pub fn app_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.app_db_path = Some(path.into());
+        self
+    }
+
+    /// Path to the agent persistence database (Turso/SQLite).
+    pub fn agent_db(mut self, path: impl Into<PathBuf>) -> Self {
+        self.agent_db = Some(path.into());
         self
     }
 

@@ -11,6 +11,7 @@ pub mod message_ext;
 pub mod prompt;
 pub mod skill;
 pub mod storage;
+pub use storage::turso_storage::TursoAgentStorage;
 pub mod testing;
 pub mod tools;
 

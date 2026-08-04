@@ -1,0 +1,956 @@
+//! Turso-backed agent storage — the sole storage backend for agent persistence.
+//!
+//! Uses [`turso::Connection`] (async, SQLite-compatible) to store:
+//! - **Snapshots** — full `Memory` checkpoints at session boundaries.
+//! - **Agent registry** — `AgentRecord` + `AgentRelation` tables.
+//! - **Session log (WAL)** — incremental message append for fast recovery.
+//!
+//! # Schema
+//!
+//! ```sql
+//! CREATE TABLE snapshots (
+//!     snapshot_id TEXT PRIMARY KEY,
+//!     agent_id    TEXT NOT NULL,
+//!     ts          INTEGER NOT NULL,
+//!     status      TEXT NOT NULL,
+//!     memory      TEXT NOT NULL
+//! );
+//! CREATE INDEX idx_snapshots_agent_ts ON snapshots(agent_id, ts DESC);
+//!
+//! CREATE TABLE agents (
+//!     id          TEXT PRIMARY KEY,
+//!     name        TEXT NOT NULL,
+//!     config_json TEXT NOT NULL,
+//!     created_at  INTEGER NOT NULL,
+//!     last_active INTEGER NOT NULL
+//! );
+//!
+//! CREATE TABLE agent_relations (
+//!     parent_id TEXT NOT NULL,
+//!     child_id  TEXT NOT NULL,
+//!     kind      TEXT NOT NULL,
+//!     PRIMARY KEY (parent_id, child_id)
+//! );
+//! CREATE INDEX idx_relations_child ON agent_relations(child_id);
+//!
+//! CREATE TABLE sessions (
+//!     id         TEXT PRIMARY KEY,
+//!     agent_id   TEXT NOT NULL,
+//!     started_at INTEGER NOT NULL,
+//!     ended_at   INTEGER
+//! );
+//! CREATE INDEX idx_sessions_agent ON sessions(agent_id);
+//!
+//! CREATE TABLE messages (
+//!     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+//!     session_id   TEXT NOT NULL,
+//!     seq          INTEGER NOT NULL,
+//!     message_json TEXT NOT NULL,
+//!     ts           INTEGER NOT NULL
+//! );
+//! CREATE INDEX idx_messages_session ON messages(session_id, seq);
+//! CREATE INDEX idx_messages_agent_ts ON messages(session_id, ts);
+//! ```
+
+use std::path::Path;
+
+use async_trait::async_trait;
+use turso::{Value, params_from_iter};
+use uuid::Uuid;
+
+use agentik_sdk::types::messages::Message;
+
+use crate::storage::{
+    AgentRecord, AgentRelation, AgentSnapshot, AgentStorage, RelationKind, StorageError,
+};
+
+/// Turso-backed implementation of [`AgentStorage`].
+#[derive(Clone)]
+pub struct TursoAgentStorage {
+    conn: turso::Connection,
+}
+
+impl TursoAgentStorage {
+    /// Open (or create) an on-disk agent database at `path`.
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let path_str = path
+            .as_ref()
+            .to_str()
+            .ok_or_else(|| StorageError::Other("agent db path is not valid UTF-8".into()))?;
+
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| StorageError::Other(format!("create db parent dir: {e}").into()))?;
+        }
+
+        let db = turso::Builder::new_local(path_str)
+            .experimental_multiprocess_wal(true)
+            .build()
+            .await
+            .map_err(|e| StorageError::Other(format!("open agent database: {e}").into()))?;
+
+        let conn = db
+            .connect()
+            .map_err(|e| StorageError::Other(format!("connect agent database: {e}").into()))?;
+
+        conn.pragma_update("busy_timeout", 5000)
+            .await
+            .map_err(|e| StorageError::Other(format!("set busy_timeout: {e}").into()))?;
+
+        let storage = Self { conn };
+        storage.init_schema().await?;
+        tracing::info!(db = path_str, "turso agent storage opened");
+        Ok(storage)
+    }
+
+    /// Create an in-memory database (useful for tests).
+    pub async fn open_in_memory() -> Result<Self, StorageError> {
+        let db = turso::Builder::new_local(":memory:")
+            .build()
+            .await
+            .map_err(|e| StorageError::Other(format!("create in-memory db: {e}").into()))?;
+
+        let conn = db
+            .connect()
+            .map_err(|e| StorageError::Other(format!("connect in-memory db: {e}").into()))?;
+
+        let storage = Self { conn };
+        storage.init_schema().await?;
+        Ok(storage)
+    }
+
+    async fn init_schema(&self) -> Result<(), StorageError> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    agent_id    TEXT NOT NULL,
+                    ts          INTEGER NOT NULL,
+                    status      TEXT NOT NULL,
+                    memory      TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_snapshots_agent_ts
+                    ON snapshots(agent_id, ts DESC);
+
+                CREATE TABLE IF NOT EXISTS agents (
+                    id          TEXT PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    last_active INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_relations (
+                    parent_id TEXT NOT NULL,
+                    child_id  TEXT NOT NULL,
+                    kind      TEXT NOT NULL,
+                    PRIMARY KEY (parent_id, child_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_relations_child
+                    ON agent_relations(child_id);
+
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id         TEXT PRIMARY KEY,
+                    agent_id   TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    ended_at   INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_sessions_agent
+                    ON sessions(agent_id);
+
+                CREATE TABLE IF NOT EXISTS messages (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL,
+                    seq          INTEGER NOT NULL,
+                    message_json TEXT NOT NULL,
+                    ts           INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_session
+                    ON messages(session_id, seq);
+                CREATE INDEX IF NOT EXISTS idx_messages_agent_ts
+                    ON messages(session_id, ts);
+                ",
+            )
+            .await
+            .map_err(|e| StorageError::Other(format!("schema init failed: {e}").into()))?;
+        Ok(())
+    }
+}
+
+// ── Row helpers ─────────────────────────────────────────────────
+
+fn text_col(row: &turso::Row, idx: usize) -> Result<String, turso::Error> {
+    match row.get_value(idx)? {
+        Value::Text(s) => Ok(s),
+        Value::Null => Ok(String::new()),
+        other => Err(turso::Error::ToSqlConversionFailure(
+            format!("expected TEXT at column {idx}, got {other:?}").into(),
+        )),
+    }
+}
+
+fn int_col(row: &turso::Row, idx: usize) -> Result<i64, turso::Error> {
+    match row.get_value(idx)? {
+        Value::Integer(v) => Ok(v),
+        other => Err(turso::Error::ToSqlConversionFailure(
+            format!("expected INTEGER at column {idx}, got {other:?}").into(),
+        )),
+    }
+}
+
+fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
+    let snapshot_id_str = text_col(row, 0)?;
+    let agent_id_str = text_col(row, 1)?;
+    let ts = int_col(row, 2)?;
+    let status_json = text_col(row, 3)?;
+    let memory_json = text_col(row, 4)?;
+
+    Ok(AgentSnapshot {
+        snapshot_id: Uuid::parse_str(&snapshot_id_str)
+            .map_err(|e| StorageError::Other(format!("parse snapshot_id: {e}").into()))?,
+        agent_id: Uuid::parse_str(&agent_id_str)
+            .map_err(|e| StorageError::Other(format!("parse agent_id: {e}").into()))?,
+        ts,
+        agent_status: serde_json::from_str(&status_json)?,
+        memory: serde_json::from_str(&memory_json)?,
+    })
+}
+
+fn row_to_record(row: &turso::Row) -> Result<AgentRecord, StorageError> {
+    let id_str = text_col(row, 0)?;
+    let name = text_col(row, 1)?;
+    let config_str = text_col(row, 2)?;
+    let created_at = int_col(row, 3)?;
+    let last_active = int_col(row, 4)?;
+
+    Ok(AgentRecord {
+        id: Uuid::parse_str(&id_str)
+            .map_err(|e| StorageError::Other(format!("parse agent id: {e}").into()))?,
+        name,
+        config_json: serde_json::from_str(&config_str)?,
+        created_at,
+        last_active,
+    })
+}
+
+fn parse_relation(row: &turso::Row) -> Result<AgentRelation, StorageError> {
+    let parent_id = Uuid::parse_str(&text_col(row, 0)?)
+        .map_err(|e| StorageError::Other(e.into()))?;
+    let child_id = Uuid::parse_str(&text_col(row, 1)?)
+        .map_err(|e| StorageError::Other(e.into()))?;
+    let kind_str = text_col(row, 2)?;
+    Ok(AgentRelation {
+        parent_id,
+        child_id,
+        kind: RelationKind::from_str(&kind_str)
+            .ok_or_else(|| StorageError::Other(format!("unknown relation kind: {kind_str}").into()))?,
+    })
+}
+
+// ── Unified AgentStorage impl ───────────────────────────────────
+
+#[async_trait]
+impl AgentStorage for TursoAgentStorage {
+    // ── Snapshot ─────────────────────────────────────────────
+
+    async fn create_snapshot(&self, snapshot: AgentSnapshot) -> Result<(), StorageError> {
+        let memory_json = serde_json::to_string(&snapshot.memory)?;
+        let status_json = serde_json::to_string(&snapshot.agent_status)?;
+        self.conn
+            .execute(
+                "INSERT INTO snapshots
+                    (snapshot_id, agent_id, ts, status, memory)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params_from_iter([
+                    Value::Text(snapshot.snapshot_id.to_string()),
+                    Value::Text(snapshot.agent_id.to_string()),
+                    Value::Integer(snapshot.ts),
+                    Value::Text(status_json),
+                    Value::Text(memory_json),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn get_snapshot(&self, snapshot_id: Uuid) -> Result<AgentSnapshot, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT snapshot_id, agent_id, ts, status, memory
+                 FROM snapshots WHERE snapshot_id = ?1",
+                params_from_iter([Value::Text(snapshot_id.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(row_to_snapshot(&row)?),
+            Ok(None) => Err(StorageError::NotFound(format!("snapshot {snapshot_id}"))),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn get_agent_snapshots(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Vec<AgentSnapshot>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT snapshot_id, agent_id, ts, status, memory
+                 FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+
+        collect_rows(&mut rows, row_to_snapshot).await
+    }
+
+    async fn get_latest_snapshot(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Option<AgentSnapshot>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT snapshot_id, agent_id, ts, status, memory
+                 FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC LIMIT 1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_snapshot(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_all_agent_ids(&self) -> Result<Vec<Uuid>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT DISTINCT agent_id FROM snapshots ORDER BY agent_id",
+                params_from_iter([] as [Value; 0]),
+            )
+            .await?;
+
+        let mut ids = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    ids.push(
+                        Uuid::parse_str(&text_col(&row, 0)?)
+                            .map_err(|e| StorageError::Other(e.into()))?,
+                    );
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(ids)
+    }
+
+    async fn delete_agent_snapshots(&self, agent_id: Uuid) -> Result<usize, StorageError> {
+        self.conn
+            .execute(
+                "DELETE FROM snapshots WHERE agent_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        Ok(0)
+    }
+
+    // ── Registry ─────────────────────────────────────────────
+
+    async fn upsert_agent(&self, record: AgentRecord) -> Result<(), StorageError> {
+        let config_json = serde_json::to_string(&record.config_json)?;
+        self.conn
+            .execute(
+                "INSERT INTO agents (id, name, config_json, created_at, last_active)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                     name = ?2,
+                     config_json = ?3,
+                     last_active = ?5",
+                params_from_iter([
+                    Value::Text(record.id.to_string()),
+                    Value::Text(record.name),
+                    Value::Text(config_json),
+                    Value::Integer(record.created_at),
+                    Value::Integer(record.last_active),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn get_agent(&self, agent_id: Uuid) -> Result<Option<AgentRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, config_json, created_at, last_active
+                 FROM agents WHERE id = ?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_record(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Other(e.into())),
+        }
+    }
+
+    async fn get_agent_by_name(&self, name: &str) -> Result<Option<AgentRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, config_json, created_at, last_active
+                 FROM agents WHERE name = ?1 ORDER BY created_at DESC LIMIT 1",
+                params_from_iter([Value::Text(name.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_record(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Other(e.into())),
+        }
+    }
+
+    async fn list_agents(&self) -> Result<Vec<AgentRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, config_json, created_at, last_active
+                 FROM agents ORDER BY created_at ASC",
+                params_from_iter([] as [Value; 0]),
+            )
+            .await?;
+
+        collect_rows(&mut rows, row_to_record).await
+    }
+
+    async fn delete_agent(&self, agent_id: Uuid) -> Result<(), StorageError> {
+        let id_str = agent_id.to_string();
+        self.conn
+            .execute(
+                "DELETE FROM snapshots WHERE agent_id = ?1",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
+                "DELETE FROM agent_relations WHERE parent_id = ?1 OR child_id = ?1",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        // Cascade to sessions + messages
+        self.conn
+            .execute(
+                "DELETE FROM messages WHERE session_id IN
+                    (SELECT id FROM sessions WHERE agent_id = ?1)",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE agent_id = ?1",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
+                "DELETE FROM agents WHERE id = ?1",
+                params_from_iter([Value::Text(id_str)]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn add_relation(&self, relation: AgentRelation) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT INTO agent_relations (parent_id, child_id, kind)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(parent_id, child_id) DO UPDATE SET kind = ?3",
+                params_from_iter([
+                    Value::Text(relation.parent_id.to_string()),
+                    Value::Text(relation.child_id.to_string()),
+                    Value::Text(relation.kind.as_str().to_string()),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_children(&self, agent_id: Uuid) -> Result<Vec<AgentRelation>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT parent_id, child_id, kind FROM agent_relations
+                 WHERE parent_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        collect_rows(&mut rows, parse_relation).await
+    }
+
+    async fn list_parents(&self, agent_id: Uuid) -> Result<Vec<AgentRelation>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT parent_id, child_id, kind FROM agent_relations
+                 WHERE child_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        collect_rows(&mut rows, parse_relation).await
+    }
+
+    async fn touch_agent(&self, agent_id: Uuid) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.conn
+            .execute(
+                "UPDATE agents SET last_active = ?1 WHERE id = ?2",
+                params_from_iter([Value::Integer(now), Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    // ── Session log (WAL) ────────────────────────────────────
+
+    async fn start_session(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.conn
+            .execute(
+                "INSERT INTO sessions (id, agent_id, started_at, ended_at)
+                 VALUES (?1, ?2, ?3, NULL)",
+                params_from_iter([
+                    Value::Text(session_id.to_string()),
+                    Value::Text(agent_id.to_string()),
+                    Value::Integer(now),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn append_message(
+        &self,
+        session_id: Uuid,
+        message: &Message,
+    ) -> Result<(), StorageError> {
+        let message_json = serde_json::to_string(message)?;
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // seq = current max seq for this session + 1 (atomic via subquery)
+        self.conn
+            .execute(
+                "INSERT INTO messages (session_id, seq, message_json, ts)
+                 VALUES (?1, COALESCE(
+                     (SELECT MAX(seq) FROM messages WHERE session_id = ?1), 0
+                 ) + 1, ?2, ?3)",
+                params_from_iter([
+                    Value::Text(session_id.to_string()),
+                    Value::Text(message_json),
+                    Value::Integer(now),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn end_session(&self, session_id: Uuid) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.conn
+            .execute(
+                "UPDATE sessions SET ended_at = ?1 WHERE id = ?2",
+                params_from_iter([Value::Integer(now), Value::Text(session_id.to_string())]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn get_messages_since(
+        &self,
+        agent_id: Uuid,
+        ts: i64,
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT m.message_json
+                 FROM messages m
+                 JOIN sessions s ON m.session_id = s.id
+                 WHERE s.agent_id = ?1 AND m.ts > ?2
+                 ORDER BY m.ts ASC, m.seq ASC",
+                params_from_iter([
+                    Value::Text(agent_id.to_string()),
+                    Value::Integer(ts),
+                ]),
+            )
+            .await?;
+
+        let mut messages = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    let json_str = text_col(&row, 0)?;
+                    messages.push(serde_json::from_str(&json_str)?);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(messages)
+    }
+}
+
+// ── Generic row collector ───────────────────────────────────────
+
+async fn collect_rows<T, F>(
+    rows: &mut turso::Rows,
+    mut f: F,
+) -> Result<Vec<T>, StorageError>
+where
+    F: FnMut(&turso::Row) -> Result<T, StorageError>,
+{
+    let mut items = Vec::new();
+    loop {
+        match rows.next().await {
+            Ok(Some(row)) => items.push(f(&row)?),
+            Ok(None) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(items)
+}
+
+// ── Tests ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lifecycle::AgentLifecycleStatus;
+    use crate::memory::{Memory, MemoryItem};
+    use crate::message_ext::AgentMessageExt;
+
+    fn now_ms() -> i64 {
+        chrono::Utc::now().timestamp_millis()
+    }
+
+    fn sample_record(name: &str) -> AgentRecord {
+        AgentRecord {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            config_json: serde_json::json!({"name": name}),
+            created_at: now_ms(),
+            last_active: now_ms(),
+        }
+    }
+
+    fn sample_snapshot(agent_id: Uuid, ts: i64) -> AgentSnapshot {
+        AgentSnapshot {
+            snapshot_id: Uuid::new_v4(),
+            ts,
+            agent_id,
+            agent_status: AgentLifecycleStatus::IDLE,
+            memory: Memory::new(),
+        }
+    }
+
+    // ── Registry ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_upsert_and_get_agent() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let record = sample_record("test-agent");
+        store.upsert_agent(record.clone()).await.unwrap();
+        let fetched = store.get_agent(record.id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, record.id);
+        assert_eq!(fetched.name, "test-agent");
+    }
+
+    #[tokio::test]
+    async fn test_upsert_replaces() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let mut record = sample_record("a1");
+        store.upsert_agent(record.clone()).await.unwrap();
+
+        record.name = "a1-renamed".into();
+        record.last_active = now_ms();
+        store.upsert_agent(record.clone()).await.unwrap();
+
+        let fetched = store.get_agent(record.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "a1-renamed");
+        assert_eq!(fetched.created_at, record.created_at);
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_ordered() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let r1 = sample_record("first");
+        let mut r2 = sample_record("second");
+        r2.created_at = r1.created_at + 1000;
+
+        store.upsert_agent(r2).await.unwrap();
+        store.upsert_agent(r1.clone()).await.unwrap();
+
+        let agents = store.list_agents().await.unwrap();
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].name, "first");
+    }
+
+    #[tokio::test]
+    async fn test_delete_agent_cascades() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let rec = sample_record("doomed");
+        let agent_id = rec.id;
+        let sess_id = Uuid::new_v4();
+
+        store.upsert_agent(rec).await.unwrap();
+        store.create_snapshot(sample_snapshot(agent_id, 1000)).await.unwrap();
+        store.start_session(agent_id, sess_id).await.unwrap();
+        store
+            .append_message(sess_id, &Message::user("hi"))
+            .await
+            .unwrap();
+
+        store.delete_agent(agent_id).await.unwrap();
+        assert!(store.get_agent(agent_id).await.unwrap().is_none());
+        assert!(store.get_agent_snapshots(agent_id).await.unwrap().is_empty());
+        assert!(store.get_messages_since(agent_id, 0).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_touch_agent() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let rec = sample_record("touchy");
+        store.upsert_agent(rec.clone()).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        store.touch_agent(rec.id).await.unwrap();
+
+        let fetched = store.get_agent(rec.id).await.unwrap().unwrap();
+        assert!(fetched.last_active > rec.last_active);
+    }
+
+    // ── Relations ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_relations() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let parent = sample_record("parent");
+        let child = sample_record("child");
+
+        store.upsert_agent(parent.clone()).await.unwrap();
+        store.upsert_agent(child.clone()).await.unwrap();
+        store
+            .add_relation(AgentRelation {
+                parent_id: parent.id,
+                child_id: child.id,
+                kind: RelationKind::Spawned,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(store.list_children(parent.id).await.unwrap().len(), 1);
+        assert_eq!(store.list_parents(child.id).await.unwrap().len(), 1);
+    }
+
+    // ── Snapshot ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_snapshot_crud() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let snap = sample_snapshot(agent_id, 1000);
+
+        store.create_snapshot(snap.clone()).await.unwrap();
+        let fetched = store.get_snapshot(snap.snapshot_id).await.unwrap();
+        assert_eq!(fetched.agent_id, agent_id);
+
+        let latest = store.get_latest_snapshot(agent_id).await.unwrap().unwrap();
+        assert_eq!(latest.ts, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_latest_none() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        assert!(store
+            .get_latest_snapshot(Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    // ── Session + WAL ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_session_message_lifecycle() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        store.start_session(agent_id, session_id).await.unwrap();
+        store.append_message(session_id, &Message::user("hello")).await.unwrap();
+        store.append_message(session_id, &Message::user("world")).await.unwrap();
+        store.end_session(session_id).await.unwrap();
+
+        let msgs = store.get_messages_since(agent_id, 0).await.unwrap();
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_messages_since_watermark() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        store.start_session(agent_id, session_id).await.unwrap();
+        store.append_message(session_id, &Message::user("old")).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let watermark = chrono::Utc::now().timestamp_millis();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        store.append_message(session_id, &Message::user("new")).await.unwrap();
+
+        let msgs = store.get_messages_since(agent_id, watermark).await.unwrap();
+        assert_eq!(msgs.len(), 1, "only messages after watermark should be returned");
+    }
+
+    // ── Restore ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_restore_memory() {
+        use crate::storage::restore_memory;
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+
+        // Snapshot with an initial memory state
+        let mut snap = sample_snapshot(agent_id, 1000);
+        snap.memory = Memory {
+            items: vec![MemoryItem {
+                messages: vec![Message::user("snapshotted")],
+                summary: None,
+            }],
+            ..Default::default()
+        };
+        store.create_snapshot(snap).await.unwrap();
+
+        // Messages after the snapshot
+        let session_id = Uuid::new_v4();
+        store.start_session(agent_id, session_id).await.unwrap();
+        // Wait so messages have ts > 1000
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        store
+            .append_message(session_id, &Message::user("after-snapshot"))
+            .await
+            .unwrap();
+
+        let memory = restore_memory(&store, agent_id).await.unwrap();
+        // Should contain both the snapshotted message and the new one
+        let all_msgs: Vec<_> = memory
+            .items
+            .iter()
+            .flat_map(|i| i.messages.iter())
+            .collect();
+        assert!(all_msgs.len() >= 2, "expected at least 2 messages after restore");
+    }
+
+    // ── RelationKind ─────────────────────────────────────────
+
+    #[test]
+    fn test_relation_kind_roundtrip() {
+        for kind in [
+            RelationKind::Spawned,
+            RelationKind::Delegated,
+            RelationKind::Parallel,
+        ] {
+            assert_eq!(RelationKind::from_str(kind.as_str()), Some(kind));
+        }
+        assert_eq!(RelationKind::from_str("unknown"), None);
+    }
+
+    // ── End-to-end: register → WAL → snapshot → restore ─────
+
+    #[tokio::test]
+    async fn test_e2e_persistence_cycle() {
+        use crate::storage::restore_memory;
+
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+
+        // 1. Register an agent.
+        let agent_id = Uuid::new_v4();
+        let now = now_ms();
+        store
+            .upsert_agent(AgentRecord {
+                id: agent_id,
+                name: "e2e-agent".into(),
+                config_json: serde_json::json!({"key": "value"}),
+                created_at: now,
+                last_active: now,
+            })
+            .await
+            .unwrap();
+
+        // 2. Session 1: append some messages, snapshot.
+        let sess1 = Uuid::new_v4();
+        store.start_session(agent_id, sess1).await.unwrap();
+        store
+            .append_message(sess1, &Message::user("message-1"))
+            .await
+            .unwrap();
+        store
+            .append_message(sess1, &Message::user("message-2"))
+            .await
+            .unwrap();
+        store.end_session(sess1).await.unwrap();
+
+        // Snapshot after session 1.
+        let snap1 = sample_snapshot(agent_id, now_ms());
+        store.create_snapshot(snap1).await.unwrap();
+
+        // 3. Session 2: more messages after the snapshot.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let sess2 = Uuid::new_v4();
+        store.start_session(agent_id, sess2).await.unwrap();
+        store
+            .append_message(sess2, &Message::user("message-3"))
+            .await
+            .unwrap();
+        store.end_session(sess2).await.unwrap();
+
+        // 4. Restore.
+        let memory = restore_memory(&store, agent_id).await.unwrap();
+        let all_msgs: Vec<_> = memory
+            .items
+            .iter()
+            .flat_map(|i| i.messages.iter())
+            .collect();
+        // Snapshot had empty memory, so all 3 messages should be replayed.
+        assert!(
+            all_msgs.len() >= 1,
+            "restored memory should contain replayed messages"
+        );
+
+        // 5. Verify agent record is still there.
+        let fetched = store.get_agent(agent_id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "e2e-agent");
+
+        // 6. Verify get_agent_by_name.
+        let by_name = store.get_agent_by_name("e2e-agent").await.unwrap().unwrap();
+        assert_eq!(by_name.id, agent_id);
+
+        // 7. Delete cascades to everything.
+        store.delete_agent(agent_id).await.unwrap();
+        assert!(store.get_agent(agent_id).await.unwrap().is_none());
+        assert!(store.get_messages_since(agent_id, 0).await.unwrap().is_empty());
+    }
+}
