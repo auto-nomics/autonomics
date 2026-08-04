@@ -780,3 +780,169 @@ fn evalue_md_xval() {
         rust,
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// MR-PRESSO — codegen_r cross-validation
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Load the SummaryStats fixture (E1_effect / E2_effect / Y_effect) into the
+/// form `mrpresso::MrpressoInput` needs, matching how the DAG node extracts it.
+fn mrpresso_fixture_input(seed: u32) -> mrpresso::MrpressoInput {
+    let csv = format!(
+        "{}/../../bio_crates/mrpresso/tests/summary_stats_headers.csv",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut e1 = Vec::new();
+    let mut e1_se = Vec::new();
+    let mut y = Vec::new();
+    let mut y_se = Vec::new();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    for (line_idx, line) in text.lines().enumerate() {
+        if line_idx == 0 {
+            continue; // header
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let f: Vec<f64> = line.split(',').map(|s| s.parse::<f64>().unwrap()).collect();
+        e1.push(f[0]);
+        e1_se.push(f[1]);
+        y.push(f[6]);
+        y_se.push(f[7]);
+    }
+    mrpresso::MrpressoInput {
+        beta_outcome: y,
+        beta_exposure: vec![e1],
+        sd_outcome: y_se,
+        sd_exposure: vec![e1_se],
+        outlier_test: true,
+        distortion_test: true,
+        signif_threshold: 0.05,
+        nb_distribution: 1000,
+        seed,
+        row_labels: None,
+    }
+}
+
+/// Cross-validate the `mrpresso` node's codegen_r: compile a DAG that loads
+/// the SummaryStats fixture and runs MR-PRESSO, execute the generated R, and
+/// compare the global-test numbers to the Rust node's computation.
+#[test]
+#[ignore = "requires R + MRPRESSO package; run with DIFFTESTS=1"]
+fn mrpresso_codegen_xval() {
+    let data_csv = format!("{XVAL_DIR}/mrpresso_data.csv");
+    std::fs::create_dir_all(XVAL_DIR).unwrap();
+    std::fs::copy(
+        format!(
+            "{}/../../bio_crates/mrpresso/tests/summary_stats_headers.csv",
+            env!("CARGO_MANIFEST_DIR")
+        ),
+        &data_csv,
+    )
+    .unwrap();
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "mrp".into(),
+                kind: "mrpresso".into(),
+                spec: serde_json::json!({
+                    "beta_outcome": "Y_effect",
+                    "sd_outcome": "Y_se",
+                    "beta_exposure": ["E1_effect"],
+                    "sd_exposure": ["E1_se"],
+                    "outlier_test": true,
+                    "distortion_test": true,
+                    "signif_threshold": 0.05,
+                    "nb_distribution": 1000,
+                    "seed": 123
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "mrp".into(),
+            to_port: 0,
+        }],
+    };
+
+    // ── Rust reference (the node's underlying computation) ──
+    let rust = mrpresso::mr_presso(&mrpresso_fixture_input(123)).unwrap();
+    let rust_rss = rust.global.rss_obs;
+    let rust_p = rust.global.pvalue;
+
+    // ── Compile to R and extract the global test ──
+    let script = compile_and_write(manifest, "mrpresso");
+    assert!(script.source.contains("mr_presso("));
+    assert!(script.source.contains("library(MRPRESSO)"));
+
+    // Keep edge-materialising fwrite(src, ...) calls; drop only the final
+    // fwrite(mrp, ...) which would try to serialise the list result, plus the
+    // default print().
+    let r_script = script
+        .source
+        .lines()
+        .filter(|l| !l.contains("fwrite(mrp") && !l.contains("print("))
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let r_script = format!(
+        "{r_script}\n\
+         gt <- mrp[['MR-PRESSO results']][['Global Test']]\n\
+         cat('RSS', format(gt$RSSobs, digits=17), '\\n')\n\
+         cat('PVAL', as.character(gt$Pvalue), '\\n')\n"
+    );
+    let r_path = format!("{XVAL_DIR}/mrpresso_codegen_run.R");
+    std::fs::write(&r_path, &r_script).unwrap();
+
+    let output = std::process::Command::new("Rscript").arg(&r_path).output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut r_rss = None;
+            let mut r_p = None;
+            for line in stdout.lines() {
+                if let Some(v) = line.strip_prefix("RSS ") {
+                    r_rss = v.trim().parse::<f64>().ok();
+                }
+                if let Some(v) = line.strip_prefix("PVAL ") {
+                    // R formats a raw p-value of 0 as "<1/nb".
+                    let s = v.trim();
+                    r_p = if s.starts_with('<') {
+                        Some(0.0)
+                    } else {
+                        s.parse::<f64>().ok()
+                    };
+                }
+            }
+            let (r_rss, r_p) = (r_rss.unwrap(), r_p.unwrap());
+            assert!(
+                (r_rss - rust_rss).abs() < 1e-6,
+                "mrpresso codegen global RSSobs: Rust={rust_rss} R={r_rss}"
+            );
+            assert!(
+                (r_p - rust_p).abs() < 1e-12,
+                "mrpresso codegen global Pvalue: Rust={rust_p} R={r_p}"
+            );
+            eprintln!(
+                "✓ mrpresso codegen: RSSobs Rust={rust_rss:.6} R={r_rss:.6}; Pvalue Rust={rust_p} R={r_p}"
+            );
+        }
+        Ok(out) => {
+            panic!(
+                "mrpresso codegen: Rscript failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Err(_) => {
+            eprintln!("Rscript not found; skipping mrpresso codegen xval");
+        }
+    }
+}

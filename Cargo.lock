@@ -1952,6 +1952,7 @@ dependencies = [
  "mixer",
  "mr",
  "mrlap",
+ "mrpresso",
  "mtag",
  "nanoid",
  "opengwas",
@@ -5420,6 +5421,18 @@ dependencies = [
  "rand_chacha 0.9.0",
  "rand_distr 0.5.1",
  "rayon",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "mrpresso"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
  "serde_json",
  "statrs",
  "thiserror 2.0.19",
