@@ -1079,6 +1079,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bkmr"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1954,6 +1966,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "biofusion",
+ "bkmr",
  "blake3",
  "chrono",
  "cmprsk",

@@ -6,6 +6,7 @@
 //! [`sink_iceberg`].
 
 pub mod bivariate_mixer;
+pub mod bkmr;
 pub mod causal;
 pub mod chi_square;
 pub mod cmest;
@@ -64,6 +65,7 @@ pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
 pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
 pub use coloc::{ColocAbfConfig, ColocAbfNode, ColocAbfNodeFactory, DatasetSpec as ColocDatasetSpec};
+pub use bkmr::{BkmrConfig, BkmrNode, BkmrNodeFactory};
 pub use evalue::{EvalueConfig, EvalueNode, EvalueNodeFactory};
 pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};
 pub use lava::{
