@@ -268,6 +268,12 @@ fn golden_source_file_csv_r() {
         "should call fread"
     );
     assert!(script.skipped_nodes.is_empty());
+
+    // Even a standalone source node writes its output as an edge CSV.
+    assert!(
+        script.source.contains("fwrite(src, \"_edge_src_0.csv\")"),
+        "source should write edge CSV for its output port"
+    );
 }
 
 #[test]
@@ -331,6 +337,16 @@ fn golden_sink_file_r() {
         script.source.contains("\"/tmp/out.csv\""),
         "should write to out.csv"
     );
+
+    // Edge CSV: source writes edge, sink reads it.
+    assert!(
+        script.source.contains("fwrite(src, \"_edge_src_0.csv\")"),
+        "source should write edge CSV"
+    );
+    assert!(
+        script.source.contains("src <- fread(\"_edge_src_0.csv\")"),
+        "sink should read edge CSV"
+    );
 }
 
 #[test]
@@ -369,6 +385,16 @@ fn golden_sql_node_r() {
     assert!(
         script.packages.contains(&"sqldf".to_string()),
         "should list sqldf package"
+    );
+
+    // Edge CSV I/O: source writes, sql reads.
+    assert!(
+        script.source.contains("fwrite(src, \"_edge_src_0.csv\")"),
+        "source should write edge CSV"
+    );
+    assert!(
+        script.source.contains("src <- fread(\"_edge_src_0.csv\")"),
+        "sql node should read edge CSV"
     );
 }
 
@@ -409,6 +435,16 @@ fn golden_ldsc_hsq_r() {
     assert!(
         script.source.contains("--n-blocks"),
         "should pass n_blocks parameter"
+    );
+
+    // Edge CSV I/O.
+    assert!(
+        script.source.contains("fwrite(sumstats, \"_edge_sumstats_0.csv\")"),
+        "sumstats should write edge CSV"
+    );
+    assert!(
+        script.source.contains("sumstats <- fread(\"_edge_sumstats_0.csv\")"),
+        "ldsc should read edge CSV"
     );
 }
 

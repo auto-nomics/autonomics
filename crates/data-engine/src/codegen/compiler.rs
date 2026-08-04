@@ -1,5 +1,11 @@
 //! DAG-level compiler that walks the topological order of a [`DagManifest`]
 //! and delegates to each node factory's codegen method.
+//!
+//! Each edge in the DAG becomes a CSV file: the upstream node writes its
+//! output to `_edge_{node}_{port}.csv` and the downstream node reads it back
+//! via `fread()`. This makes every node a self-contained data-processing
+//! unit — the generated script can be interrupted and resumed at any node,
+//! and intermediate results are inspectable on disk.
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,10 +32,22 @@ pub struct CompiledScript {
     pub warnings: Vec<String>,
 }
 
+// ── edge-file naming ───────────────────────────────────────────────────────
+
+/// CSV filename for the data flowing along edge (from_node, from_port).
+fn edge_file(from_node: &str, from_port: u8) -> String {
+    format!("_edge_{}_{from_port}.csv", sanitize_var_name(from_node))
+}
+
 // ── compiler ────────────────────────────────────────────────────────────────
 
 /// Compiles a [`DagManifest`] into R or Python source code by delegating to
 /// each registered node factory's codegen method.
+///
+/// Each edge is materialised as a CSV file: the upstream node's output is
+/// written with `fwrite()` and the downstream node reads it with `fread()`.
+/// This guarantees the generated script is composed of independent,
+/// resumable steps.
 pub struct DagCompiler<'a> {
     pub registry: &'a NodeRegistry,
 }
@@ -58,6 +76,14 @@ impl DagCompiler<'_> {
             manifest.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         // 3. Walk in topo order
+        //
+        // port_vars maps (node_id, output_port) → the R variable name the
+        // node assigns.  The compiler wraps each node's code with:
+        //   fread() at the top (one per input port, reading the upstream edge CSV)
+        //   fwrite() at the bottom (one per output port, writing the edge CSV)
+        //
+        // Node codegen_r implementations are unaware of CSV I/O — they still
+        // see variable names in `input_vars` and assign to `output_var`.
         let mut port_vars: HashMap<(String, u8), String> = HashMap::new();
         let mut body: Vec<String> = Vec::new();
         let mut all_packages: Vec<String> = Vec::new();
@@ -75,37 +101,42 @@ impl DagCompiler<'_> {
                 .get_factory(&entry.kind)
                 .map_err(|e| CodegenError::Topology(e.to_string()))?;
 
-            // Determine input variable names
+            // ── resolve input variable names + their edge CSV files ──────
             let ports = factory.ports();
-            let input_vars: Vec<String> = if ports.is_fixed_input() {
-                // Fixed input: iterate declared input ports
+
+            // Each element: (input_var_name, Option<edge_csv_path>)
+            // When the edge exists, the compiler will prepend a fread() for it.
+            let input_specs: Vec<(String, Option<String>)> = if ports.is_fixed_input() {
                 let n_inputs = ports.input_ports().len();
                 (0..n_inputs as u8)
-                    .map(
-                        |port_idx| match incoming.get(&(entry.id.as_str(), port_idx)) {
-                            Some((from_node, from_port)) => port_vars
-                                .get(&((*from_node).to_string(), *from_port))
-                                .cloned()
-                                .unwrap_or_else(|| format!("__missing_input_{port_idx}")),
-                            None => format!("__missing_input_{port_idx}"),
-                        },
-                    )
+                    .map(|port_idx| {
+                        match incoming.get(&(entry.id.as_str(), port_idx)) {
+                            Some((from_node, from_port)) => {
+                                let var = sanitize_var_name(from_node);
+                                let csv = edge_file(from_node, *from_port);
+                                (var, Some(csv))
+                            }
+                            None => (format!("__missing_input_{port_idx}"), None),
+                        }
+                    })
                     .collect()
             } else {
                 // Variadic: collect all incoming edges in declaration order.
-                // Port index is implied by edge order (0, 1, 2, ...).
                 manifest
                     .edges
                     .iter()
                     .filter(|e| e.to == entry.id)
                     .map(|e| {
-                        port_vars
-                            .get(&(e.from.clone(), e.from_port))
-                            .cloned()
-                            .unwrap_or_else(|| "__missing_input".to_string())
+                        let var = sanitize_var_name(&e.from);
+                        let csv = edge_file(&e.from, e.from_port);
+                        (var, Some(csv))
                     })
                     .collect()
             };
+
+            // The variable names the node codegen will see
+            let input_vars: Vec<String> =
+                input_specs.iter().map(|(v, _)| v.clone()).collect();
 
             // Pre-allocate output variable name
             let output_var = sanitize_var_name(&entry.id);
@@ -138,12 +169,30 @@ impl DagCompiler<'_> {
                         port_vars.insert((entry.id.clone(), port_idx as u8), var.clone());
                     }
 
-                    // Section header
+                    // ── assemble this node's code block ───────────────────
                     body.push(String::new());
                     body.push(format!(
                         "# ── {}: {} ──────────────────────────────────",
                         entry.id, entry.kind
                     ));
+
+                    // Inject fread() for each connected input edge
+                    for (input_var, csv) in &input_specs {
+                        if let Some(csv) = csv {
+                            match target {
+                                CodegenTarget::R => {
+                                    body.push(format!(
+                                        r#"{input_var} <- fread("{csv}")"#
+                                    ));
+                                }
+                                CodegenTarget::Python => {
+                                    body.push(format!(
+                                        r#"{input_var} = pd.read_csv("{csv}")"#
+                                    ));
+                                }
+                            }
+                        }
+                    }
 
                     // Collect # NOTE: warnings
                     for line in &node_cg.code {
@@ -152,6 +201,23 @@ impl DagCompiler<'_> {
                         }
                     }
                     body.extend(node_cg.code);
+
+                    // Inject fwrite() for each output port
+                    for (port_idx, out_var) in node_cg.output_vars.iter().enumerate() {
+                        let csv = edge_file(&entry.id, port_idx as u8);
+                        match target {
+                            CodegenTarget::R => {
+                                body.push(format!(
+                                    r#"fwrite({out_var}, "{csv}")"#
+                                ));
+                            }
+                            CodegenTarget::Python => {
+                                body.push(format!(
+                                    r#"{out_var}.to_csv("{csv}", index = False)"#
+                                ));
+                            }
+                        }
+                    }
 
                     // Collect packages
                     for pkg in factory.r_packages() {
