@@ -290,6 +290,57 @@ impl NodeFactory for MtagNodeFactory {
         let node = MtagNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let cfg = parse_spec::<MtagConfig>(spec, "mtag")?;
+        let out = ctx.output_var.to_string();
+        let n_traits = ctx.input_vars.len();
+        let _input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let tmp_dir = ctx.fresh_var("mtag_dir");
+        let result = ctx.fresh_var("mtag_result");
+        let mut flags = String::new();
+        if cfg.numerical_omega {
+            flags.push_str(" --omega-num");
+        }
+        if cfg.perfect_gencov {
+            flags.push_str(" --perfect-gencov");
+        }
+        if cfg.equal_h2 {
+            flags.push_str(" --equal-h2");
+        }
+        if cfg.std_betas {
+            flags.push_str(" --std-betas");
+        }
+        let code = vec![
+            format!("# Multi-Trait Analysis of GWAS (MTAG) — {n_traits} trait(s)"),
+            format!("# NOTE: MTAG is a Python package; this generates the CLI call"),
+            format!("# Each input sumstats must be written to a temp file first"),
+            format!("{tmp_dir} <- tempfile()"),
+            format!("dir.create({tmp_dir})"),
+            format!("# Write each trait's sumstats to {tmp_dir}/trait_N.txt"),
+            format!(
+                "{result} <- system2(\"python\", c(\"-m\", \"mtag\", \"--input\", {tmp_dir}, \"--output\", {tmp_dir}, \"--n-blocks\", \"{}\"{flags}), stdout = TRUE, stderr = TRUE)",
+                cfg.n_blocks
+            ),
+            format!("cat({result}, sep = \"\\n\")"),
+            format!("# NOTE: Read MTAG output files from {tmp_dir}"),
+            format!("{out} <- list()"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
+    }
 }
 
 impl MtagNode {

@@ -146,6 +146,38 @@ impl NodeFactory for EpiRcsNodeFactory {
             n_grid_points: s.n_grid_points,
         }))
     }
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<EpiRcsNodeSpec>(spec, "epi_rcs")?;
+        let out = ctx.output_var.to_string();
+        let fit = ctx.fresh_var("rcs_fit");
+        let input = input_0(ctx).to_string();
+        let covars = if s.covariates.is_empty() {
+            String::new()
+        } else {
+            format!(" + {}", s.covariates.join(" + "))
+        };
+        let code = vec![
+            format!("# Restricted cubic splines ({} knots)", s.n_knots),
+            format!("ddist <- datadist({input})"),
+            format!("options(datadist = 'ddist')"),
+            format!(
+                "{fit} <- ols({} ~ rcs({}, {}){}*, data = {input})",
+                s.outcome_column, s.x_column, s.n_knots, covars
+            ),
+            format!("{out} <- summary({fit})"),
+            format!("print({out})"),
+            format!("# NOTE: options(datadist='ddist') should be set before plotting Predict()"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["rms".into()]
+    }
 }
 
 #[async_trait]

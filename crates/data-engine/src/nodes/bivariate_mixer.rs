@@ -323,6 +323,54 @@ impl NodeFactory for BivariateMixerNodeFactory {
         let node = BivariateMixerNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<BivariateMixerNodeSpec>(spec, "bivariate_mixer")?;
+        let input1 = ctx
+            .input_vars
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_0".into());
+        let input2 = ctx
+            .input_vars
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_1".into());
+        let out = ctx.output_var.to_string();
+        let chrs = s
+            .chromosomes
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sampling_flag = if s.sampling { " --sampling" } else { "" };
+        let code = vec![
+            format!("# MiXeR bivariate analysis"),
+            format!("# Chromosomes: {chrs}"),
+            format!("# NOTE: MiXeR is a C++ tool; this generates the CLI call"),
+            format!("tmp1 <- tempfile(fileext = \".txt\")"),
+            format!("tmp2 <- tempfile(fileext = \".txt\")"),
+            format!("data.table::fwrite({input1}, tmp1, sep = \"\\t\")"),
+            format!("data.table::fwrite({input2}, tmp2, sep = \"\\t\")"),
+            format!("system2(\"mixer\", c("),
+            format!("  \"fit2\","),
+            format!("  \"--sumstats1\", tmp1,"),
+            format!("  \"--sumstats2\", tmp2,"),
+            format!("  \"--chr\", \"{chrs}\","),
+            format!("  \"--r2-min\", \"{}\",", s.r2_min),
+            format!("  \"--diffevo-repeats\", \"{}\",", s.diffevo_repeats),
+            format!("  \"--k-max\", \"{}\",", s.k_max),
+            format!("  \"--seed\", \"{}\"{sampling_flag}", s.seed),
+            format!("))"),
+            format!("# NOTE: Output .fit2.json contains the bivariate mixture parameters"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 #[async_trait]

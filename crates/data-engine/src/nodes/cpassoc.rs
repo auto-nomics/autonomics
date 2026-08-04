@@ -268,6 +268,49 @@ impl NodeFactory for CpassocNodeFactory {
         let node = CpassocNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let cfg = parse_spec::<CpassocConfig>(spec, "cpassoc")?;
+        let out = ctx.output_var.to_string();
+        let input = ctx.fresh_var("sumstats");
+        let input_var = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let code = vec![
+            format!("# CPASSOC: Cross-Phenotype Association"),
+            format!("# correct mode: {} (1=SHom, 2=SHet, 3=both)", cfg.correct),
+            format!("{input} <- {input_var}"),
+            format!("set.seed({})", cfg.seed),
+            format!("# NOTE: CPASSOC requires per-trait Z-scores and sample sizes"),
+            format!("# Format: data.frame with snp, z_trait1, ..., n_trait1, ..."),
+            format!("{out} <- CPASSOC::cpassoc("),
+            format!("  sumstats = {input},"),
+            format!("  n_sim = {},", cfg.n_sim),
+            format!("  correct = {},", cfg.correct),
+            format!(
+                "  all_possible = {},",
+                if cfg.is_all_possible { "TRUE" } else { "FALSE" }
+            ),
+            format!(
+                "  cutoff = seq({}, {}, {})",
+                cfg.start_cutoff, cfg.end_cutoff, cfg.cutoff_step
+            ),
+            format!(")"),
+            format!("print(head({out}))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["CPASSOC".into()]
+    }
 }
 
 impl CpassocNode {

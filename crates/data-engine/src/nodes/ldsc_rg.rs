@@ -263,6 +263,59 @@ impl NodeFactory for LdscRgNodeFactory {
         let node = LdscRgNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let cfg = parse_spec::<LdscRgConfig>(spec, "ldsc_rg")?;
+        let out = ctx.output_var.to_string();
+        let input1 = ctx
+            .input_vars
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_0".into());
+        let input2 = ctx
+            .input_vars
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_1".into());
+        let s1 = ctx.fresh_var("sumstats1");
+        let s2 = ctx.fresh_var("sumstats2");
+        let tmp1 = ctx.fresh_var("tmp1");
+        let tmp2 = ctx.fresh_var("tmp2");
+        let result = ctx.fresh_var("rg_result");
+        let mut intercept_flags = String::new();
+        if let Some(v) = cfg.intercept_hsq1 {
+            intercept_flags.push_str(&format!(" --intercept-h2 {v}"));
+        }
+        if let Some(v) = cfg.two_step {
+            intercept_flags.push_str(&format!(" --two-step {v}"));
+        }
+        let code = vec![
+            format!("# LDSC genetic correlation estimation"),
+            format!("{s1} <- data.frame(rsid = {input1}$rsid, Z = {input1}$z, N = {input1}$n)"),
+            format!("{s2} <- data.frame(rsid = {input2}$rsid, Z = {input2}$z, N = {input2}$n)"),
+            format!("{tmp1} <- tempfile(fileext = \".sumstats\")"),
+            format!("{tmp2} <- tempfile(fileext = \".sumstats\")"),
+            format!("data.table::fwrite({s1}, {tmp1}, sep = \"\\t\")"),
+            format!("data.table::fwrite({s2}, {tmp2}, sep = \"\\t\")"),
+            format!("\"# NOTE: ldsc.py --rg call:\""),
+            format!(
+                "{result} <- system2(\"ldsc.py\", c(\"--rg\", {tmp1}, \",\", {tmp2}, \"--ref-ld\", \"baselineLD.\", \"--w-ld\", \"weights.\", \"--n-blocks\", \"{}\"{intercept_flags}), stdout = TRUE, stderr = TRUE)",
+                cfg.n_blocks
+            ),
+            format!("cat({result}, sep = \"\\n\")"),
+            format!("{out} <- list(rg = NA_real_, rg_se = NA_real_)"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
+    }
 }
 
 impl LdscRgNode {

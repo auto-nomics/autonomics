@@ -160,6 +160,29 @@ impl NodeFactory for MagmaAnnotateNodeFactory {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaAnnotateNode::new(config)))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        _ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<MagmaAnnotateConfig>(spec, "magma_annotate")?;
+        let out = "magma_annotate_result";
+        let code = vec![
+            format!("# MAGMA gene annotation"),
+            format!("system2(\"magma\", c("),
+            format!(
+                "  \"--annotate\", \"--window\", \"--snp-loc\", \"{}\",",
+                s.snp_loc
+            ),
+            format!("  \"--gene-loc\", \"{}\",", s.gene_loc),
+            format!("  \"--out\", \"magma_annotation\""),
+            format!("))"),
+            format!("# NOTE: Output written to magma_annotation.genes.annot"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 impl MagmaAnnotateNode {
@@ -325,6 +348,39 @@ impl NodeFactory for MagmaGeneNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaGeneNode::new(config)))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<MagmaGeneConfig>(spec, "magma_gene")?;
+        let input = input_0(ctx).to_string();
+        let out = ctx.output_var.to_string();
+        let n_args = match &s.fixed_n {
+            Some(n) => format!(" --sample-n {}", n),
+            None => format!(" --n-col {}", s.n_col),
+        };
+        let code = vec![
+            format!("# MAGMA gene-level analysis"),
+            format!("# Write sumstats to temp file first"),
+            format!("tmp_sumstats <- tempfile(fileext = \".sumstats\")"),
+            format!("data.table::fwrite({input}, tmp_sumstats, sep = \"\\t\")"),
+            format!("system2(\"magma\", c("),
+            format!("  \"--gene-results\", \"{}\",", s.gene_annot),
+            format!("  \"--bfile\", \"<plink_bed_prefix>\","),
+            format!(
+                "  \"--pval\", tmp_sumstats, usecols=\"{} {}\",",
+                s.snp_col, s.pval_col
+            ),
+            format!("  \"{n_args}\","),
+            format!("  \"--out\", \"{out}\""),
+            format!("))"),
+            format!("# NOTE: Output in {out}.genes.raw and {out}.genes.out"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -522,6 +578,29 @@ impl NodeFactory for MagmaSetNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaSetNode::new(config)))
+    }
+
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!("# MAGMA gene-set analysis"),
+            format!("# Input: {input} (gene-level results)"),
+            format!("system2(\"magma\", c("),
+            format!("  \"--gene-results\", \"<gene_raw_file>\","),
+            format!("  \"--set-annot\", \"<set_annotation_file>\","),
+            format!("  \"--out\", \"{out}\""),
+            format!("))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -741,6 +820,30 @@ impl NodeFactory for MagmaMetaNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaMetaNode::new(config)))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<MagmaMetaConfig>(spec, "magma_meta")?;
+        let out = ctx.output_var.to_string();
+        let cohort_files = s
+            .cohort_files
+            .iter()
+            .map(|f| format!("\"{f}\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let code = vec![
+            format!("# MAGMA meta-analysis"),
+            format!("system2(\"magma\", c("),
+            format!("  \"--meta\", {cohort_files},"),
+            format!("  \"--out\", \"{out}\""),
+            format!("))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
     }
 }
 

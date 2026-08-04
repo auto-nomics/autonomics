@@ -313,6 +313,63 @@ impl NodeFactory for HdlLScanNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(HdlLScanNode::new(serde_json::from_value(spec)?)))
     }
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<HdlLScanSpec>(spec, "hdl_l_scan")?;
+        let input1 = ctx
+            .input_vars
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_0".into());
+        let input2 = ctx
+            .input_vars
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_1".into());
+        let out = ctx.output_var.to_string();
+        let n_windows = (s.scan_stop - s.scan_start) / s.step.max(1);
+        let code = vec![
+            format!(
+                "# HDL-L Scan: local rg across chr{}:{}-{} (window={}, step={})",
+                s.chr, s.scan_start, s.scan_stop, s.window_size, s.step
+            ),
+            format!(
+                "# ~{} windows; traits: {} vs {}",
+                n_windows, s.trait1_name, s.trait2_name
+            ),
+            format!("{out} <- list()"),
+            format!(
+                "for (start_pos in seq({}, {}, {})) {{",
+                s.scan_start, s.scan_stop, s.step
+            ),
+            format!("  stop_pos <- start_pos + {}", s.window_size),
+            format!("  res <- HDL::HDL.analysis("),
+            format!("    trait1_sumstats = {input1},"),
+            format!("    trait2_sumstats = {input2},"),
+            format!("    trait1.name = \"{}\",", s.trait1_name),
+            format!("    trait2.name = \"{}\",", s.trait2_name),
+            format!("    chr = {},", s.chr),
+            format!("    start = start_pos,"),
+            format!("    stop = stop_pos,"),
+            format!("    n0 = {},", s.n0),
+            format!("    nref = {}", s.nref),
+            format!("  )"),
+            format!(
+                "  {out}[[length({out}) + 1]] <- c(start = start_pos, stop = stop_pos, rg = res$rg, p = res$p)"
+            ),
+            format!("}}"),
+            format!("{out} <- do.call(rbind, {out})"),
+            format!("print(head({out}))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["HDL".into()]
+    }
 }
 
 #[async_trait]

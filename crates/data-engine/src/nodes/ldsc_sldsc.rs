@@ -255,6 +255,42 @@ impl NodeFactory for LdscSldscNodeFactory {
         let node = LdscSldscNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let cfg = parse_spec::<LdscSldscConfig>(spec, "sldsc")?;
+        let out = ctx.output_var.to_string();
+        let input = input_0(ctx).to_string();
+        let s = ctx.fresh_var("sumstats");
+        let tmp = ctx.fresh_var("tmp_file");
+        let result = ctx.fresh_var("sldsc_result");
+        let intercept_flag = cfg
+            .intercept
+            .map(|v| format!(" --intercept-h2 {v}"))
+            .unwrap_or_default();
+        let code = vec![
+            format!("# Stratified LD Score Regression"),
+            format!("{s} <- data.frame(rsid = {input}$rsid, Z = {input}$z, N = {input}$n)"),
+            format!("{tmp} <- tempfile(fileext = \".sumstats\")"),
+            format!("data.table::fwrite({s}, {tmp}, sep = \"\\t\")"),
+            format!("# NOTE: S-LDSC requires stratified LD score files per annotation"),
+            format!(
+                "{result} <- system2(\"ldsc.py\", c(\"--h2\", {tmp}, \"--ref-ld\", \"baselineLD.\", \"--w-ld\", \"weights.\", \"--n-blocks\", \"{}\"{intercept_flag}), stdout = TRUE, stderr = TRUE)",
+                cfg.n_blocks
+            ),
+            format!("cat({result}, sep = \"\\n\")"),
+            format!("{out} <- list(coef = NA, coef_se = NA)"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
+    }
 }
 
 impl LdscSldscNode {

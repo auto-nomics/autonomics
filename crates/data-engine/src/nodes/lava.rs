@@ -473,6 +473,32 @@ impl NodeFactory for LavaLocusNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaLocusNode::new(serde_json::from_value(spec)?)))
     }
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let kind = self.kind();
+        let r_func = "process.locus";
+        let code = vec![
+            format!("# LAVA {kind} ({r_func})"),
+            format!("# NOTE: Requires LAVA input object prepared from sumstats + LD reference"),
+            format!("# See: https://github.com/josefin-werme/lava"),
+            format!("# Input variable '{input}' must be a lava input object"),
+            format!("{out} <- lava::{r_func}(input = {input})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["lava".into()]
+    }
 }
 
 #[async_trait]
@@ -779,6 +805,32 @@ impl NodeFactory for LavaUnivNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaUnivNode::new(serde_json::from_value(spec)?)))
     }
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let kind = self.kind();
+        let r_func = "univariate.test";
+        let code = vec![
+            format!("# LAVA {kind} ({r_func})"),
+            format!("# NOTE: Requires LAVA input object prepared from sumstats + LD reference"),
+            format!("# See: https://github.com/josefin-werme/lava"),
+            format!("# Input variable '{input}' must be a lava input object"),
+            format!("{out} <- lava::{r_func}(input = {input})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["lava".into()]
+    }
 }
 #[async_trait]
 impl DagNode for LavaUnivNode {
@@ -933,6 +985,32 @@ impl NodeFactory for LavaBivarNodeFactory {
         _ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaBivarNode::new(serde_json::from_value(spec)?)))
+    }
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let kind = self.kind();
+        let r_func = "bivariate.test";
+        let code = vec![
+            format!("# LAVA {kind} ({r_func})"),
+            format!("# NOTE: Requires LAVA input object prepared from sumstats + LD reference"),
+            format!("# See: https://github.com/josefin-werme/lava"),
+            format!("# Input variable '{input}' must be a lava input object"),
+            format!("{out} <- lava::{r_func}(input = {input})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["lava".into()]
     }
 }
 #[async_trait]
@@ -1114,6 +1192,32 @@ impl NodeFactory for LavaPcorNodeFactory {
         _ctx: NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaPcorNode::new(serde_json::from_value(spec)?)))
+    }
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let kind = self.kind();
+        let r_func = "partial.cor";
+        let code = vec![
+            format!("# LAVA {kind} ({r_func})"),
+            format!("# NOTE: Requires LAVA input object prepared from sumstats + LD reference"),
+            format!("# See: https://github.com/josefin-werme/lava"),
+            format!("# Input variable '{input}' must be a lava input object"),
+            format!("{out} <- lava::{r_func}(input = {input})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["lava".into()]
     }
 }
 #[async_trait]
@@ -1298,6 +1402,32 @@ impl NodeFactory for LavaMultiregNodeFactory {
         Ok(Box::new(LavaMultiregNode::new(serde_json::from_value(
             spec,
         )?)))
+    }
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        let input = ctx
+            .input_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "__missing_input".into());
+        let out = ctx.output_var.to_string();
+        let kind = self.kind();
+        let r_func = "multivariate.regression";
+        let code = vec![
+            format!("# LAVA {kind} ({r_func})"),
+            format!("# NOTE: Requires LAVA input object prepared from sumstats + LD reference"),
+            format!("# See: https://github.com/josefin-werme/lava"),
+            format!("# Input variable '{input}' must be a lava input object"),
+            format!("{out} <- lava::{r_func}(input = {input})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["lava".into()]
     }
 }
 #[async_trait]

@@ -282,6 +282,42 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         let node = UnivariateMixerNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<UnivariateMixerNodeSpec>(spec, "univariate_mixer")?;
+        let input = input_0(ctx).to_string();
+        let out = ctx.output_var.to_string();
+        let chrs = s
+            .chromosomes
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let code = vec![
+            format!("# MiXeR univariate analysis"),
+            format!("# Chromosomes: {chrs}"),
+            format!("# NOTE: MiXeR is a C++ tool; this generates the CLI call"),
+            format!("# Input sumstats: {input}"),
+            format!("tmp_sumstats <- tempfile(fileext = \".txt\")"),
+            format!("data.table::fwrite({input}, tmp_sumstats, sep = \"\\t\")"),
+            format!("system2(\"mixer\", c("),
+            format!("  \"fit1\","),
+            format!("  \"--sumstats\", tmp_sumstats,"),
+            format!("  \"--chr\", \"{chrs}\","),
+            format!("  \"--r2-min\", \"{}\",", s.r2_min),
+            format!("  \"--diffevo-repeats\", \"{}\",", s.diffevo_repeats),
+            format!("  \"--seed\", \"{}\",", s.seed),
+            format!("  \"--out\", \"{out}\""),
+            format!("))"),
+            format!("# NOTE: Output .fit1.json contains the mixture model parameters"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 #[async_trait]

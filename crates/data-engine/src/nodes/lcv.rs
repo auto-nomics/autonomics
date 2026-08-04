@@ -246,6 +246,54 @@ impl NodeFactory for LcvNodeFactory {
         let node = LcvNode::new(config);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let cfg = parse_spec::<LcvConfig>(spec, "lcv")?;
+        let out = ctx.output_var.to_string();
+        let input1 = ctx
+            .input_vars
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_0".into());
+        let input2 = ctx
+            .input_vars
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_1".into());
+        let ldsc_fit = ctx.fresh_var("ldsc_fit");
+        let gcp = ctx.fresh_var("gcp");
+        let code = vec![
+            format!("# Latent Causal Variable (LCV) analysis"),
+            format!("# Input 1: {input1}, Input 2: {input2}"),
+            format!("# NOTE: LCV requires LDSC estimates of h2 and genetic covariance first"),
+            format!(
+                "{ldsc_fit} <- ldsc::estimate_rg({input1}, {input2}, n_blocks = {}{})",
+                cfg.no_blocks,
+                if cfg.ldsc_intercept {
+                    ""
+                } else {
+                    ", intercept = FALSE"
+                }
+            ),
+            format!("# Estimate genetic causality proportion (gcp)"),
+            format!(
+                "{gcp} <- lcv::estimate_gcp({ldsc_fit}, intercept12 = {})",
+                cfg.intercept12
+            ),
+            format!("{out} <- {gcp}"),
+            format!("cat(\"GCP:\", {out}$gcp, \"p-value:\", {out}$p_value, \"\\n\")"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["LDSC".into()]
+    }
 }
 
 impl LcvNode {

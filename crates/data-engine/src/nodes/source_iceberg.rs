@@ -81,6 +81,28 @@ impl NodeFactory for IcebergSourceNodeFactory {
         let node = IcebergSourceNode::new(node_spec.ident);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<IcebergSourceNodeSpec>(spec, "source_iceberg")?;
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!(
+                "# NOTE: Iceberg table '{}' cannot be read directly from R.",
+                s.ident
+            ),
+            format!("# Pre-export to CSV/Parquet and replace the line below:"),
+            format!(
+                r#"stop("export iceberg table '{}' to a file before running this script")"#,
+                s.ident
+            ),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 #[async_trait]

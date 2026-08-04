@@ -216,6 +216,44 @@ impl NodeFactory for SusieRssNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(SusieRssNode::new(serde_json::from_value(spec)?)))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<SusieRssSpec>(spec, "susie_rss")?;
+        let out = ctx.output_var.to_string();
+        let z = ctx.fresh_var("z_scores");
+        let r_mat = ctx.fresh_var("ref_ld");
+        let input = input_0(ctx).to_string();
+        let n_arg = s.n.map(|v| format!(", n = {v}")).unwrap_or_default();
+        let code = vec![
+            format!("# SuSiE fine-mapping via summary statistics"),
+            format!("{z} <- {input}$z"),
+            format!("# NOTE: ref LD matrix R must be provided separately"),
+            format!("# {r_mat} <- <load LD correlation matrix for this region>"),
+            format!(
+                "{out} <- susie_rss(z = {z}, R = {r_mat}, L = {}, estimate_prior_method = \"{}\", estimate_residual_variance = {}, estimate_prior_variance = {}, coverage = {}, min_abs_corr = {}, scaled_prior_variance = {}, z_method = \"{}\"{n_arg}, max_iter = {})",
+                s.l,
+                s.estimate_prior_method,
+                s.estimate_residual_variance,
+                s.estimate_prior_variance,
+                s.coverage,
+                s.min_abs_corr,
+                s.scaled_prior_variance,
+                s.z_method,
+                s.max_iter
+            ),
+            format!("print(summary({out}))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["susieR".into()]
+    }
 }
 
 // ─── column extractors ───────────────────────────────────────────────────────

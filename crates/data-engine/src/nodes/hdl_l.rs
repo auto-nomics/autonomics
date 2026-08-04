@@ -159,6 +159,47 @@ impl NodeFactory for HdlLNodeFactory {
     ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(HdlLNode::new(serde_json::from_value(spec)?)))
     }
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<HdlLSpec>(spec, "hdl_l")?;
+        let input1 = ctx
+            .input_vars
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_0".into());
+        let input2 = ctx
+            .input_vars
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "__missing_input_1".into());
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!("# HDL-L: Local genetic correlation"),
+            format!("# Region: chr{}:{}-{}", s.chr, s.start, s.stop),
+            format!("# Traits: {} vs {}", s.trait1_name, s.trait2_name),
+            format!("# NOTE: HDL requires preprocessed sumstats + LD reference"),
+            format!("{out} <- HDL::HDL.analysis("),
+            format!("  trait1_sumstats = {input1},"),
+            format!("  trait2_sumstats = {input2},"),
+            format!("  trait1.name = \"{}\",", s.trait1_name),
+            format!("  trait2.name = \"{}\",", s.trait2_name),
+            format!("  chr = {},", s.chr),
+            format!("  start = {},", s.start),
+            format!("  stop = {},", s.stop),
+            format!("  n0 = {},", s.n0),
+            format!("  nref = {}", s.nref),
+            format!(")"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["HDL".into()]
+    }
 }
 
 // ---- arrow column helpers (local; match lava::nodes conventions) ----

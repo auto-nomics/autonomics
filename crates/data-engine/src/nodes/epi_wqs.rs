@@ -168,6 +168,47 @@ impl NodeFactory for EpiWqsNodeFactory {
             seed: s.seed,
         }))
     }
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<EpiWqsNodeSpec>(spec, "epi_wqs")?;
+        let out = ctx.output_var.to_string();
+        let wqs_fit = ctx.fresh_var("wqs_fit");
+        let input = input_0(ctx).to_string();
+        let exp_cols = s.exposures.iter().map(|c| c.clone()).collect::<Vec<_>>();
+        let covars = if s.covariates.is_empty() {
+            String::new()
+        } else {
+            format!(" + {}", s.covariates.join(" + "))
+        };
+        let exp_str = s.exposures.join(" + ");
+        let code = vec![
+            format!("# Weighted Quantile Sum regression"),
+            format!("set.seed({})", s.seed),
+            format!(
+                "{wqs_fit} <- gwqs({} ~ wqs({}, q = {}){}, data = {input}, mix_name = c({}), b = {}, validation = 0, b1_pos = TRUE, pl = 10, family = gaussian)",
+                s.outcome_column,
+                exp_str,
+                s.n_quantiles,
+                covars,
+                exp_cols
+                    .iter()
+                    .map(|c| format!("\"{c}\""))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                s.n_bootstrap
+            ),
+            format!("{out} <- summary({wqs_fit})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["gWQS".into()]
+    }
 }
 
 #[async_trait]

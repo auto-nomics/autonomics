@@ -153,6 +153,44 @@ impl NodeFactory for EpiLassoNodeFactory {
             seed: s.seed,
         }))
     }
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<EpiLassoNodeSpec>(spec, "epi_lasso")?;
+        let out = ctx.output_var.to_string();
+        let cv_fit = ctx.fresh_var("cv_fit");
+        let x_mat = ctx.fresh_var("x_mat");
+        let y_vec = ctx.fresh_var("y_vec");
+        let input = input_0(ctx).to_string();
+        let x_cols = s
+            .predictors
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let code = vec![
+            format!(
+                "# LASSO regression ({}-fold CV, {} lambdas)",
+                s.cv_folds, s.n_lambda
+            ),
+            format!("{x_mat} <- as.matrix({input}[, c({x_cols})])"),
+            format!("{y_vec} <- {input}${}", s.outcome_column),
+            format!("set.seed({})", s.seed),
+            format!(
+                "{cv_fit} <- cv.glmnet({x_mat}, {y_vec}, alpha = 1, nfolds = {}, nlambda = {})",
+                s.cv_folds, s.n_lambda
+            ),
+            format!("{out} <- coef({cv_fit}, s = \"lambda.min\")"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["glmnet".into()]
+    }
 }
 
 #[async_trait]

@@ -157,6 +157,36 @@ impl NodeFactory for OpentargetsAssociationsNodeFactory {
             spec: node_spec,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<OpentargetsAssociationsSpec>(spec, "source_opentargets_associations")?;
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!(
+                "# Open Targets Platform: fetch associations for target '{}'",
+                s.id
+            ),
+            format!("# NOTE: Uses the Open Targets GraphQL API via httr"),
+            format!("{out} <- httr::content(httr::POST("),
+            format!("  \"https://api.platform.opentargets.org/api/v4/graphql\","),
+            format!(
+                "  body = list(query = '{{associations(ensgId:\"{}\"){{score target{{id approvedSymbol}}}}}}'),",
+                s.id
+            ),
+            format!("  encode = \"json\""),
+            format!("))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["httr".into()]
+    }
 }
 
 #[async_trait]
@@ -439,6 +469,32 @@ impl NodeFactory for OpentargetsSearchNodeFactory {
             meta: search_port_layout(),
             spec: node_spec,
         }))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<OpentargetsSearchSpec>(spec, "source_opentargets_search")?;
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!("# Open Targets Platform: search for '{}'", s.query),
+            format!("{out} <- httr::content(httr::POST("),
+            format!("  \"https://api.platform.opentargets.org/api/v4/graphql\","),
+            format!(
+                "  body = list(query = '{{search(queryString:\"{}\"){{hits{{id name entity score}}}}}}'),",
+                s.query
+            ),
+            format!("  encode = \"json\""),
+            format!("))"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["httr".into()]
     }
 }
 

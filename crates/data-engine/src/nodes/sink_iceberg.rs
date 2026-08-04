@@ -213,6 +213,30 @@ impl NodeFactory for IcebergSinkNodeFactory {
         let node = IcebergSinkNode::new(node_spec.ident, node_spec.mode, node_ctx.datalake);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<IcebergSinkNodeSpec>(spec, "sink_iceberg")?;
+        let input = input_0(ctx).to_string();
+        let code = vec![
+            format!(
+                "# NOTE: Cannot write to Iceberg table '{}' from R.",
+                s.ident
+            ),
+            format!("# Write to a local file and import separately:"),
+            format!(r#"fwrite({input}, "iceberg_export.csv")"#),
+            format!("# Then import iceberg_export.csv into table '{}'", s.ident),
+        ];
+        Ok(crate::codegen::NodeCodegen {
+            code,
+            output_vars: vec![],
+            extra_packages: vec![],
+        })
+    }
 }
 
 #[async_trait]
