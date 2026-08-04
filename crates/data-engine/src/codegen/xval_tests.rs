@@ -1453,3 +1453,204 @@ fn coloc_abf() {
     assert!(script.source.contains("type = \"quant\""));
     assert!(script.source.contains("type = \"cc\""));
 }
+
+// ── mvmr (multivariable MR) ───────────────────────────────────────────────
+
+/// Codegen smoke test: compile an mvmr DAG and verify the generated R calls
+/// the MVMR package functions correctly.
+#[test]
+#[ignore = "requires R + MVMR; run with DIFFTESTS=1"]
+fn mvmr_codegen_smoke() {
+    let data_csv = format!("{XVAL_DIR}/mvmr_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mvmr {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "mvmr".into(),
+                kind: "mvmr".into(),
+                spec: serde_json::json!({
+                    "beta_yg": "beta_yg",
+                    "sebeta_yg": "se_yg",
+                    "beta_xg": ["bx1", "bx2"],
+                    "sebeta_xg": ["sex1", "sex2"],
+                    "label_column": "snp",
+                    "gencov": 0.0,
+                    "strength": true,
+                    "strhet": true,
+                    "pleiotropy": true
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "mvmr".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mvmr_codegen_smoke");
+    assert!(script.source.contains("library(MVMR)"));
+    assert!(script.source.contains("format_mvmr("));
+    assert!(script.source.contains("ivw_mvmr("));
+    assert!(script.source.contains("strength_mvmr("));
+    assert!(script.source.contains("strhet_mvmr("));
+    assert!(script.source.contains("pleiotropy_mvmr("));
+}
+
+/// Full codegen cross-validation: compile an mvmr DAG, run the generated R,
+/// and compare the IVW coefficients to the Rust node output.
+#[test]
+#[ignore = "requires R + MVMR; run with DIFFTESTS=1"]
+fn mvmr_codegen_xval() {
+    let data_csv = format!("{XVAL_DIR}/mvmr_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mvmr {XVAL_DIR}");
+        return;
+    }
+
+    // ── Compile DAG to R ──
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "mvmr".into(),
+                kind: "mvmr".into(),
+                spec: serde_json::json!({
+                    "beta_yg": "beta_yg",
+                    "sebeta_yg": "se_yg",
+                    "beta_xg": ["bx1", "bx2"],
+                    "sebeta_xg": ["sex1", "sex2"],
+                    "label_column": "snp",
+                    "gencov": 0.0,
+                    "strength": false,
+                    "strhet": false,
+                    "pleiotropy": false
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "mvmr".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mvmr_codegen_xval");
+
+    // ── Run Rscript: extract IVW estimates from the generated R ──
+    // The generated R writes the result CSV. We modify the script to also
+    // emit the IVW estimates as parseable numbers, delimited by markers so
+    // we can extract them cleanly from the noisy stdout.
+    let r_script = format!(
+        "{}\n# Extract IVW estimates for comparison\nivw_df <- mvmr[mvmr$section == \"ivw\", ]\ncat(\"__EST_START__\\n\")\ncat(ivw_df$estimate, sep=\"\\n\")\ncat(\"\\n__EST_END__\\n\")\n",
+        script.source
+    );
+    let r_path = format!("{XVAL_DIR}/mvmr_codegen_xval_run.R");
+    std::fs::write(&r_path, &r_script).unwrap();
+
+    let output = std::process::Command::new("Rscript").arg(&r_path).output();
+
+    let r_estimates: Vec<f64> = match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Extract only the lines between __EST_START__ and __EST_END__.
+            let mut in_block = false;
+            let mut vals = Vec::new();
+            for line in stdout.lines() {
+                if line.contains("__EST_START__") {
+                    in_block = true;
+                    continue;
+                }
+                if line.contains("__EST_END__") {
+                    break;
+                }
+                if in_block {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let v: f64 = trimmed.parse().unwrap_or(f64::NAN);
+                    vals.push(v);
+                }
+            }
+            vals
+        }
+        Ok(out) => {
+            panic!(
+                "mvmr_codegen_xval: Rscript failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Err(_) => {
+            eprintln!("Rscript not found; skipping mvmr_codegen_xval");
+            return;
+        }
+    };
+
+    // ── Rust node output ──
+    // Build a simple MVMR input from a known dataset and compute IVW.
+    // The test data CSV was generated by cross_validate.R.
+    let csv_text = std::fs::read_to_string(&data_csv).unwrap();
+    let mut beta_yg = Vec::new();
+    let mut se_yg = Vec::new();
+    let mut bx1 = Vec::new();
+    let mut bx2 = Vec::new();
+    let mut sex1 = Vec::new();
+    let mut sex2 = Vec::new();
+    let mut header = true;
+    for line in csv_text.lines() {
+        if header {
+            header = false;
+            continue;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(',').collect();
+        bx1.push(f[1].parse().unwrap());
+        bx2.push(f[2].parse().unwrap());
+        beta_yg.push(f[3].parse().unwrap());
+        sex1.push(f[4].parse().unwrap());
+        sex2.push(f[5].parse().unwrap());
+        se_yg.push(f[6].parse().unwrap());
+    }
+
+    let input = mvmr::MvmrInput {
+        beta_yg,
+        sebeta_yg: se_yg,
+        beta_xg: vec![bx1, bx2],
+        sebeta_xg: vec![sex1, sex2],
+        snp: vec![],
+    };
+    let ivw = mvmr::ivw_mvmr(&input).unwrap();
+
+    // ── Compare ──
+    assert_eq!(
+        r_estimates.len(),
+        ivw.estimate.len(),
+        "estimate count mismatch"
+    );
+    for (i, (r_val, rust_val)) in r_estimates.iter().zip(ivw.estimate.iter()).enumerate() {
+        assert!(
+            (r_val - rust_val).abs() < 1e-6,
+            "✗ mvmr ivw[{i}]: R={r_val} vs Rust={rust_val}"
+        );
+        eprintln!("✓ mvmr ivw[{i}]: R={r_val:.10} Rust={rust_val:.10}");
+    }
+}

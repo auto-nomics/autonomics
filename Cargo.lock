@@ -1981,6 +1981,7 @@ dependencies = [
  "mrlap",
  "mrpresso",
  "mtag",
+ "mvmr",
  "nanoid",
  "opengwas",
  "opentargets",
@@ -5488,6 +5489,16 @@ name = "murmurhash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
+
+[[package]]
+name = "mvmr"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "nalgebra"

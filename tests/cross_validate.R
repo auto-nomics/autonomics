@@ -487,3 +487,41 @@ if (test_name == "cuminc") {
     data.table::fwrite(tests, file.path(out_dir, "cuminc_reference_1.csv"))
     cat("OK cuminc\n")
 }
+
+# ── mvmr (multivariable MR) ────────────────────────────────────────────────
+if (test_name == "mvmr") {
+    set.seed(42)
+    n <- 200
+    # Two correlated exposure effects on instruments
+    bx1 <- rnorm(n, mean = 0.1, sd = 0.05)
+    bx2 <- rnorm(n, mean = 0.05, sd = 0.03) + 0.3 * bx1
+    sex1 <- runif(n, 0.01, 0.03)
+    sex2 <- runif(n, 0.01, 0.03)
+    # Outcome effect: causal effect of bx1=0.3, bx2=0.5, plus noise
+    beta_yg <- 0.3 * bx1 + 0.5 * bx2 + rnorm(n, sd = 0.01)
+    se_yg <- runif(n, 0.01, 0.03)
+    snp <- paste0("rs", 1:n)
+    df <- data.frame(snp = snp, bx1 = bx1, bx2 = bx2, beta_yg = beta_yg,
+                     sex1 = sex1, sex2 = sex2, se_yg = se_yg)
+    data_path <- file.path(out_dir, "mvmr_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference: IVW MVMR
+    r_input <- MVMR::format_mvmr(
+        BXGs = df[, c("bx1", "bx2")],
+        BYG = df$beta_yg,
+        seBXGs = df[, c("sex1", "sex2")],
+        seBYG = df$se_yg,
+        RSID = df$snp
+    )
+    ivw_res <- MVMR::ivw_mvmr(r_input)
+    ref <- data.frame(
+        exposure = paste0("exposure", 1:nrow(ivw_res)),
+        estimate = ivw_res[, 1],
+        se = ivw_res[, 2],
+        t_stat = ivw_res[, 3],
+        pvalue = ivw_res[, 4]
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mvmr_reference.csv"))
+    cat("OK mvmr\n")
+}
