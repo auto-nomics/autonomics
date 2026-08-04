@@ -45,6 +45,7 @@ statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
 hypothesize = { path = "../../stat_crates/hypothesize" }
 cmprsk = { path = "../../stat_crates/cmprsk" }
+survey = { path = "../../stat_crates/survey" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }

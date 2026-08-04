@@ -50,6 +50,13 @@ pub mod susie_rss;
 pub mod two_sample_mr;
 pub mod univariate_mixer;
 pub mod viz;
+pub mod survey_common;
+pub mod survey_describe;
+pub mod survey_model;
+pub mod survey_calibrate;
+pub mod survey_test;
+pub mod survey_survival;
+pub mod survey_utility;
 
 pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
 pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
@@ -91,3 +98,20 @@ pub use univariate_mixer::{
     UnivariateMixerNode, UnivariateMixerNodeFactory, UnivariateMixerNodeSpec,
 };
 pub use viz::{VizNode, VizNodeFactory, VizNodeSpec};
+
+// Survey-package nodes (stub + codegen_r phase; Rust execute TBD).
+pub use survey_calibrate::{
+    CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory,
+};
+pub use survey_common::{SurveyDesignSpec, SurveyStubNode};
+pub use survey_describe::{
+    SvyMeanFactory, SvyQuantileFactory, SvyRatioFactory, SvyTableFactory, SvyTotalFactory,
+    SvyVarFactory,
+};
+pub use survey_model::{
+    SvyCoxphFactory, SvyGlmFactory, SvyIvregFactory, SvyLoglinFactory, SvyMleFactory,
+    SvyNlsFactory, SvyOlrFactory, SvySurvregFactory,
+};
+pub use survey_survival::{SvyKmFactory, SvyLogrankFactory};
+pub use survey_test::{SvyChisqFactory, SvyCiPropFactory, SvyRankTestFactory, SvyTtestFactory};
+pub use survey_utility::{RegTermTestFactory, SvyByFactory, SvyContrastFactory, SvyStandardizeFactory};

@@ -748,3 +748,195 @@ fn golden_cuminc_no_group_omits_tests() {
     );
     assert!(script.source.contains("character(0)"), "empty tests table");
 }
+
+// =====================================================================
+// Survey-package nodes
+// =====================================================================
+
+#[test]
+fn golden_svymean_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "data".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/nhanes.csv"}),
+            },
+            NodeEntry {
+                id: "mean".into(),
+                kind: "svymean".into(),
+                spec: serde_json::json!({
+                    "design": {"ids": ["psu"], "strata": ["stratum"], "weights": "wt", "nest": true},
+                    "variables": ["bp", "bmi"],
+                    "na_rm": true
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "data".into(),
+            from_port: 0,
+            to: "mean".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(
+        script.source.contains("library(survey)"),
+        "should include library(survey), got:\n{}",
+        script.source
+    );
+    assert!(
+        script.source.contains("svydesign(ids = ~psu"),
+        "should build svydesign with ids"
+    );
+    assert!(
+        script.source.contains("strata = ~stratum"),
+        "should include strata"
+    );
+    assert!(
+        script.source.contains("weights = ~wt"),
+        "should include weights"
+    );
+    assert!(
+        script.source.contains("nest = TRUE"),
+        "should include nest = TRUE"
+    );
+    assert!(
+        script.source.contains("svymean(~bp + bmi,"),
+        "should call svymean with the right formula"
+    );
+    assert!(
+        script.source.contains("na.rm = TRUE"),
+        "should pass na.rm = TRUE"
+    );
+    assert!(script.skipped_nodes.is_empty());
+}
+
+#[test]
+fn golden_svyglm_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "data".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/api.csv"}),
+            },
+            NodeEntry {
+                id: "model".into(),
+                kind: "svyglm".into(),
+                spec: serde_json::json!({
+                    "design": {"ids": ["dnum"], "weights": "pw"},
+                    "response": "api00",
+                    "predictors": ["meals", "ell"],
+                    "family": "gaussian",
+                    "std_errors": "Bell-McCaffrey"
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "data".into(),
+            from_port: 0,
+            to: "model".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(
+        script.source.contains("svyglm(api00 ~ meals + ell,"),
+        "should build svyglm with the right formula, got:\n{}",
+        script.source
+    );
+    assert!(
+        script.source.contains("family = gaussian()"),
+        "should pass family = gaussian()"
+    );
+    assert!(
+        script.source.contains("std.errors = \"Bell-McCaffrey\""),
+        "should pass Bell-McCaffrey SE option"
+    );
+    assert!(
+        script.source.contains("print(summary("),
+        "should print summary"
+    );
+}
+
+#[test]
+fn golden_calibrate_chain_r() {
+    // A calibration chain: source → calibrate → svymean
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "data".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/survey.csv"}),
+            },
+            NodeEntry {
+                id: "cal".into(),
+                kind: "calibrate".into(),
+                spec: serde_json::json!({
+                    "design": {"ids": ["psu"], "weights": "wt"},
+                    "variables": ["age_group", "sex"],
+                    "population_totals": [100.0, 200.0, 150.0, 250.0]
+                }),
+            },
+            NodeEntry {
+                id: "mean".into(),
+                kind: "svymean".into(),
+                spec: serde_json::json!({
+                    "design": {"ids": ["psu"], "weights": "calibrated_weight"},
+                    "variables": ["income"]
+                }),
+            },
+        ],
+        edges: vec![
+            EdgeEntry {
+                from: "data".into(),
+                from_port: 0,
+                to: "cal".into(),
+                to_port: 0,
+            },
+            EdgeEntry {
+                from: "cal".into(),
+                from_port: 0,
+                to: "mean".into(),
+                to_port: 0,
+            },
+        ],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(
+        script.source.contains("calibrate("),
+        "should call calibrate(), got:\n{}",
+        script.source
+    );
+    assert!(
+        script
+            .source
+            .contains("weights("),
+        "should extract calibrated weights"
+    );
+    assert!(
+        script.source.contains("calibrated_weight"),
+        "should name the weight column"
+    );
+    // The downstream svymean should use the calibrated weight column.
+    assert!(
+        script.source.contains("weights = ~calibrated_weight"),
+        "downstream svymean should reference calibrated_weight"
+    );
+}

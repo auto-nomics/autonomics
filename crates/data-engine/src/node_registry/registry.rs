@@ -26,11 +26,11 @@ use crate::nodes::{
     cpassoc::CpassocNodeFactory,
     cuminc::CumincNodeFactory,
     echo_node::EchoNodeFactory,
-    evalue::EvalueNodeFactory,
     epi_lasso::EpiLassoNodeFactory,
     epi_rcs::EpiRcsNodeFactory,
     epi_roc::EpiRocNodeFactory,
     epi_wqs::EpiWqsNodeFactory,
+    evalue::EvalueNodeFactory,
     fine_gray::FineGrayNodeFactory,
     hdl_l::HdlLNodeFactory,
     hdl_l_scan::HdlLScanNodeFactory,
@@ -58,6 +58,18 @@ use crate::nodes::{
     source_iceberg::IcebergSourceNodeFactory,
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
+    survey_calibrate::{CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory},
+    survey_describe::{
+        SvyMeanFactory, SvyQuantileFactory, SvyRatioFactory, SvyTableFactory, SvyTotalFactory,
+        SvyVarFactory,
+    },
+    survey_model::{
+        SvyCoxphFactory, SvyGlmFactory, SvyIvregFactory, SvyLoglinFactory, SvyMleFactory,
+        SvyNlsFactory, SvyOlrFactory, SvySurvregFactory,
+    },
+    survey_survival::{SvyKmFactory, SvyLogrankFactory},
+    survey_test::{SvyChisqFactory, SvyCiPropFactory, SvyRankTestFactory, SvyTtestFactory},
+    survey_utility::{RegTermTestFactory, SvyByFactory, SvyContrastFactory, SvyStandardizeFactory},
     survival::SurvivalNodeFactory,
     susie_rss::SusieRssNodeFactory,
     two_sample_mr::TwoSampleMrNodeFactory,
@@ -275,6 +287,35 @@ impl NodeRegistry {
         registry.register(Box::new(MagmaSetNodeFactory {}));
         registry.register(Box::new(MagmaMetaNodeFactory {}));
         crate::nodes::hypothesize::register_all(&mut registry);
+        // ── survey-package nodes ───────────────────────────────────────────
+        registry.register(Box::new(SvyMeanFactory {}));
+        registry.register(Box::new(SvyTotalFactory {}));
+        registry.register(Box::new(SvyVarFactory {}));
+        registry.register(Box::new(SvyRatioFactory {}));
+        registry.register(Box::new(SvyTableFactory {}));
+        registry.register(Box::new(SvyQuantileFactory {}));
+        registry.register(Box::new(SvyGlmFactory {}));
+        registry.register(Box::new(SvyCoxphFactory {}));
+        registry.register(Box::new(SvySurvregFactory {}));
+        registry.register(Box::new(SvyOlrFactory {}));
+        registry.register(Box::new(SvyLoglinFactory {}));
+        registry.register(Box::new(SvyMleFactory {}));
+        registry.register(Box::new(SvyNlsFactory {}));
+        registry.register(Box::new(SvyIvregFactory {}));
+        registry.register(Box::new(PostStratifyFactory {}));
+        registry.register(Box::new(RakeFactory {}));
+        registry.register(Box::new(CalibrateFactory {}));
+        registry.register(Box::new(TrimWeightsFactory {}));
+        registry.register(Box::new(SvyTtestFactory {}));
+        registry.register(Box::new(SvyRankTestFactory {}));
+        registry.register(Box::new(SvyChisqFactory {}));
+        registry.register(Box::new(SvyCiPropFactory {}));
+        registry.register(Box::new(SvyKmFactory {}));
+        registry.register(Box::new(SvyLogrankFactory {}));
+        registry.register(Box::new(SvyByFactory {}));
+        registry.register(Box::new(SvyContrastFactory {}));
+        registry.register(Box::new(SvyStandardizeFactory {}));
+        registry.register(Box::new(RegTermTestFactory {}));
         registry
     }
 
@@ -473,6 +514,146 @@ mod tests {
             "evalue" => {
                 serde_json::json!({"measure": "RR", "est": 0.8, "lo": 0.7, "hi": 0.9, "true_val": 1.0})
             }
+            // ── survey nodes ──
+            "svymean" => serde_json::json!({
+                "design": {"ids": ["psu"], "weights": "wt"},
+                "variables": ["y"]
+            }),
+            "svytotal" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["y"]
+            }),
+            "svyvar" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["y"]
+            }),
+            "svyratio" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "numerator": "n",
+                "denominator": "d"
+            }),
+            "svytable" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["a", "b"]
+            }),
+            "svyquantile" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["y"],
+                "quantiles": [0.5]
+            }),
+            "svyglm" => serde_json::json!({
+                "design": {"ids": ["psu"], "weights": "wt"},
+                "response": "y",
+                "predictors": ["x1", "x2"]
+            }),
+            "svycoxph" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "time_column": "t",
+                "event_column": "e",
+                "predictors": ["x1"]
+            }),
+            "svysurvreg" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "time_column": "t",
+                "event_column": "e",
+                "predictors": ["x1"]
+            }),
+            "svyolr" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "response": "grade",
+                "predictors": ["x1"]
+            }),
+            "svyloglin" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["a", "b"]
+            }),
+            "svymle" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "loglik_fn": "ll",
+                "start": "a = 0",
+                "response": "y",
+                "predictors": ["x"]
+            }),
+            "svynls" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "formula": "y ~ x",
+                "start": "a = 0"
+            }),
+            "svyivreg" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "response": "y",
+                "endogenous": ["x1"],
+                "instruments": ["z1"]
+            }),
+            "post_stratify" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "strata": ["s"],
+                "population": {"A": 100, "B": 200}
+            }),
+            "rake" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "margins": [{"variable": "sex", "population": {"M": 100, "F": 110}}]
+            }),
+            "calibrate" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["x"],
+                "population_totals": [100.0]
+            }),
+            "trim_weights" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "upper": 5.0
+            }),
+            "svyttest" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "response": "y",
+                "group": "g"
+            }),
+            "svyranktest" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "response": "y",
+                "group": "g"
+            }),
+            "svychisq" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "row_var": "a",
+                "col_var": "b"
+            }),
+            "svyciprop" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variable": "p"
+            }),
+            "svykm" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "time_column": "t",
+                "event_column": "e"
+            }),
+            "svylogrank" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "time_column": "t",
+                "event_column": "e",
+                "group": "g"
+            }),
+            "svyby" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["y"],
+                "by": ["region"]
+            }),
+            "svycontrast" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "variables": ["a", "b"],
+                "contrasts": [{"name": "diff", "expr": "a - b"}]
+            }),
+            "svystandardize" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "by": ["age"],
+                "population": {"young": 0.5, "old": 0.5}
+            }),
+            "reg_term_test" => serde_json::json!({
+                "design": {"ids": ["psu"]},
+                "response": "y",
+                "predictors": ["x1", "x2"],
+                "test_terms": ["x2"]
+            }),
             other => panic!("no fixture spec for kind '{other}'"),
         }
     }

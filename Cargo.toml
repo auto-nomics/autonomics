@@ -38,6 +38,7 @@ members = [
   "stat_crates/epi",
   "stat_crates/hypothesize",
   "stat_crates/cmprsk",
+  "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
   "crates/arxiv",
