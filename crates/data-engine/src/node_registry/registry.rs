@@ -26,6 +26,7 @@ use crate::nodes::{
     cpassoc::CpassocNodeFactory,
     cuminc::CumincNodeFactory,
     echo_node::EchoNodeFactory,
+    coloc::ColocAbfNodeFactory,
     epi_lasso::EpiLassoNodeFactory,
     epi_rcs::EpiRcsNodeFactory,
     epi_roc::EpiRocNodeFactory,
@@ -262,6 +263,7 @@ impl NodeRegistry {
         registry.register(Box::new(EpiLassoNodeFactory {}));
         registry.register(Box::new(EpiWqsNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
+        registry.register(Box::new(ColocAbfNodeFactory {}));
         registry.register(Box::new(EvalueNodeFactory {}));
         registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));

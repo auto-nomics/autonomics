@@ -48,6 +48,7 @@ members = [
   "bio_crates/susie",
   "bio_crates/evalue",
   "bio_crates/mrpresso",
+  "bio_crates/coloc",
 ]
 resolver = "3"
 

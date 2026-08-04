@@ -41,6 +41,7 @@ magma = { path = "../../bio_crates/magma" }
 susie = { path = "../../bio_crates/susie" }
 evalue = { path = "../../bio_crates/evalue" }
 mrpresso = { path = "../../bio_crates/mrpresso" }
+coloc = { path = "../../bio_crates/coloc" }
 statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
 hypothesize = { path = "../../stat_crates/hypothesize" }
