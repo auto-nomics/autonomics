@@ -3,6 +3,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::dag::RunReport;
 use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
+use crate::dag::runtime::RuntimeStatus;
 use crate::error::Result as EngineResult;
 use schemars;
 
@@ -32,6 +33,12 @@ pub enum DataEngineCmd {
     GetOutput {
         id: String,
         reply: oneshot::Sender<EngineResult<Option<PortOutputs>>>,
+    },
+    /// Query a node's runtime status. Returns `None` if the DAG has never
+    /// been run (no status entry exists for the node).
+    GetNodeStatus {
+        id: String,
+        reply: oneshot::Sender<EngineResult<Option<RuntimeStatus>>>,
     },
     RemoveNode {
         id: String,

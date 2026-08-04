@@ -260,10 +260,42 @@ impl ToolFunction for GetOutputTool {
             .await
             .map_err(ExecError::from)?
         else {
-            return Ok(ToolResult::error(format!(
-                "no output found for node '{}'",
-                input.id
-            )));
+            // No output cached for this node. Determine *why* so the agent
+            // gets an actionable hint rather than a bare "not found".
+            let status = self
+                .client
+                .node_status(input.id.clone())
+                .await
+                .map_err(ExecError::from)?;
+
+            let hint = match status {
+                None => format!(
+                    "Node '{}' has no output. The DAG has not been run yet — \
+                     call the `run_dag` tool to execute it first, then retry \
+                     `get_output`.",
+                    input.id
+                ),
+                Some(data_engine::dag::runtime::RuntimeStatus::Failed) => format!(
+                    "Node '{}' has no output because it failed during the last \
+                     DAG run. Check the run report for error details, fix the \
+                     issue, then re-run the DAG with `run_dag`.",
+                    input.id
+                ),
+                Some(data_engine::dag::runtime::RuntimeStatus::Skipped) => format!(
+                    "Node '{}' was skipped because an upstream node failed. \
+                     Resolve the upstream failure, then re-run the DAG with \
+                     `run_dag`.",
+                    input.id
+                ),
+                Some(other) => format!(
+                    "Node '{}' has no output (current status: {:?}). Wait for \
+                     the DAG run to complete or re-run it with `run_dag`, then \
+                     retry `get_output`.",
+                    input.id, other
+                ),
+            };
+
+            return Ok(ToolResult::error(hint));
         };
 
         let offset = input.offset.unwrap_or(0);

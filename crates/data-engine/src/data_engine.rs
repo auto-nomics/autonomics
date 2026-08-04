@@ -609,6 +609,12 @@ impl DataEngine {
     ) -> Option<crate::dag::graph::PortOutputs> {
         self.dag.output(node_id.into().as_ref())
     }
+
+    /// Query a node's runtime status. Returns `None` when the DAG has never
+    /// been run (no status entry exists for the node).
+    pub fn node_status(&self, node_id: &str) -> Option<crate::dag::runtime::RuntimeStatus> {
+        self.dag.status(node_id)
+    }
 }
 
 pub struct DataEngineBuilder {

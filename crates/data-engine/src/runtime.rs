@@ -63,6 +63,9 @@ impl DataEngineServer {
             DataEngineCmd::GetOutput { id, reply } => {
                 let _ = reply.send(Ok(self.engine.get_output(id).await));
             }
+            DataEngineCmd::GetNodeStatus { id, reply } => {
+                let _ = reply.send(Ok(self.engine.node_status(&id)));
+            }
             DataEngineCmd::RemoveNode { id, reply } => {
                 let _ = reply.send(self.engine.remove_node(id).map(|_| ()));
             }
@@ -244,6 +247,23 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::GetOutput {
+                id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Query a node's runtime status. Returns `Ok(None)` when the DAG has
+    /// never been run.
+    pub async fn node_status(
+        &self,
+        id: String,
+    ) -> Result<Option<crate::dag::runtime::RuntimeStatus>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetNodeStatus {
                 id,
                 reply: reply_tx,
             },

@@ -4,7 +4,6 @@ members = [
   "crates/agentik-types",
   "crates/agentik-core",
   "crates/agentik-proc",
-  "crates/agentik-tools",
   "crates/gwascatalog-sdk",
   "crates/data-engine",
   "apps/tui",
