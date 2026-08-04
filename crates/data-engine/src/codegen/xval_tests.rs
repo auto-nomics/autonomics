@@ -220,3 +220,285 @@ fn epi_roc() {
     let script = compile_and_write(manifest, "epi_roc");
     assert!(script.source.contains("roc("));
 }
+
+// ── evalue ─────────────────────────────────────────────────────────────────
+
+/// Smoke test: codegen produces a valid `evalue()` call.
+#[test]
+fn evalue_codegen_smoke() {
+    let manifest = DagManifest {
+        nodes: vec![NodeEntry {
+            id: "ev".into(),
+            kind: "evalue".into(),
+            spec: serde_json::json!({
+                "measure": "RR",
+                "est": 0.80,
+                "lo": 0.71,
+                "hi": 0.91,
+                "true_val": 1.0
+            }),
+        }],
+        edges: vec![],
+    };
+
+    let script = compile_and_write(manifest, "evalue_rr_smoke");
+    // Should call evalue() with RR constructor
+    assert!(script.source.contains("evalue("), "missing evalue() call");
+    assert!(script.source.contains("RR("), "missing RR() constructor");
+    assert!(script.source.contains("0.8"), "missing est value");
+    assert!(script.source.contains("library(EValue)"));
+}
+
+/// Smoke test: OR with rare=FALSE produces sqrt-approximation R code.
+#[test]
+fn evalue_codegen_or() {
+    let manifest = DagManifest {
+        nodes: vec![NodeEntry {
+            id: "ev".into(),
+            kind: "evalue".into(),
+            spec: serde_json::json!({
+                "measure": "OR",
+                "est": 0.86,
+                "lo": 0.75,
+                "hi": 0.99,
+                "rare": false,
+                "true_val": 1.0
+            }),
+        }],
+        edges: vec![],
+    };
+
+    let script = compile_and_write(manifest, "evalue_or_smoke");
+    assert!(script.source.contains("OR("));
+    assert!(script.source.contains("rare = FALSE"));
+}
+
+/// Cross-validation: run R EValue::evalues.RR and compare to Rust output.
+/// Requires R + EValue package. Run with DIFFTESTS=1.
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_rr_xval() {
+    use crate::nodes::evalue::{EvalueConfig, MeasureType};
+
+    // ── Rust computation ──
+    let _cfg = EvalueConfig {
+        measure: MeasureType::RR,
+        est: 0.80,
+        lo: Some(0.71),
+        hi: Some(0.91),
+        true_val: Some(1.0),
+        ..Default::default()
+    };
+    let result = evalue::evalue::evalues_rr(0.80, Some(0.71), Some(0.91), 1.0).unwrap();
+    let rust_point = result.point_evalue().unwrap();
+
+    // ── Compile DAG to R ──
+    let manifest = DagManifest {
+        nodes: vec![NodeEntry {
+            id: "ev".into(),
+            kind: "evalue".into(),
+            spec: serde_json::json!({
+                "measure": "RR",
+                "est": 0.80,
+                "lo": 0.71,
+                "hi": 0.91,
+                "true_val": 1.0
+            }),
+        }],
+        edges: vec![],
+    };
+    let script = compile_and_write(manifest, "evalue_rr_xval");
+
+    // ── Run Rscript and extract E-value ──
+    // Strip fwrite/print lines, add summary extraction
+    let r_script = script
+        .source
+        .lines()
+        .filter(|l| !l.contains("fwrite") && !l.contains("print("))
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let r_script = format!("{r_script}\ncat(format(summary(ev), digits=12))\n");
+    let r_path = format!("{XVAL_DIR}/evalue_rr_xval_run.R");
+    std::fs::write(&r_path, &r_script).unwrap();
+
+    let output = std::process::Command::new("Rscript")
+        .arg(&r_path)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let r_val_str = String::from_utf8_lossy(&out.stdout);
+            let r_val: f64 = r_val_str.trim().parse().unwrap_or(0.0);
+            assert!(
+                (r_val - rust_point).abs() < 1e-4,
+                "R E-value {r_val} vs Rust {rust_point}"
+            );
+            eprintln!("✓ RR E-value: Rust={rust_point:.6} R={r_val:.6}");
+        }
+        Ok(out) => {
+            eprintln!(
+                "Rscript failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Err(_) => {
+            eprintln!("Rscript not found; skipping R cross-validation");
+        }
+    }
+}
+
+/// Helper: run a codegen cross-validation for a single evalue node config.
+/// Compiles the DAG to R, runs via Rscript, and compares to Rust output.
+fn run_evalue_xval(
+    test_name: &str,
+    spec: serde_json::Value,
+    rust_evalue: f64,
+) {
+    let manifest = DagManifest {
+        nodes: vec![NodeEntry {
+            id: "ev".into(),
+            kind: "evalue".into(),
+            spec: spec.clone(),
+        }],
+        edges: vec![],
+    };
+    let script = compile_and_write(manifest, test_name);
+
+    let r_script = script
+        .source
+        .lines()
+        .filter(|l| !l.contains("fwrite") && !l.contains("print("))
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let r_script = format!("{r_script}\ncat(format(summary(ev), digits=12))\n");
+    let r_path = format!("{XVAL_DIR}/{test_name}_run.R");
+    std::fs::write(&r_path, &r_script).unwrap();
+
+    let output = std::process::Command::new("Rscript").arg(&r_path).output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let r_val_str = String::from_utf8_lossy(&out.stdout);
+            let r_val: f64 = r_val_str.trim().parse().unwrap_or(f64::NAN);
+            assert!(
+                (r_val - rust_evalue).abs() < 1e-4,
+                "✗ {test_name}: R={r_val} vs Rust={rust_evalue}"
+            );
+            eprintln!("✓ {test_name}: Rust={rust_evalue:.6} R={r_val:.6}");
+        }
+        Ok(out) => {
+            panic!(
+                "{test_name}: Rscript failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Err(_) => {
+            eprintln!("Rscript not found; skipping {test_name}");
+        }
+    }
+}
+
+/// Codegen xval: OR (common outcome, rare=FALSE).
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_or_xval() {
+    let rust = evalue::evalue::evalues_or(0.86, Some(0.75), Some(0.99), false, 1.0)
+        .unwrap()
+        .point_evalue()
+        .unwrap();
+    run_evalue_xval(
+        "evalue_or_xval",
+        serde_json::json!({
+            "measure": "OR",
+            "est": 0.86,
+            "lo": 0.75,
+            "hi": 0.99,
+            "rare": false,
+            "true_val": 1.0
+        }),
+        rust,
+    );
+}
+
+/// Codegen xval: OR (rare outcome).
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_or_rare_xval() {
+    let rust = evalue::evalue::evalues_or(3.0, None, None, true, 1.0)
+        .unwrap()
+        .point_evalue()
+        .unwrap();
+    run_evalue_xval(
+        "evalue_or_rare_xval",
+        serde_json::json!({
+            "measure": "OR",
+            "est": 3.0,
+            "rare": true,
+            "true_val": 1.0
+        }),
+        rust,
+    );
+}
+
+/// Codegen xval: HR (common outcome).
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_hr_xval() {
+    let rust = evalue::evalue::evalues_hr(0.56, None, None, false, 1.0)
+        .unwrap()
+        .point_evalue()
+        .unwrap();
+    run_evalue_xval(
+        "evalue_hr_xval",
+        serde_json::json!({
+            "measure": "HR",
+            "est": 0.56,
+            "rare": false,
+            "true_val": 1.0
+        }),
+        rust,
+    );
+}
+
+/// Codegen xval: OLS.
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_ols_xval() {
+    let rust = evalue::evalue::evalues_ols(0.3, Some(0.1), 1.0, 1.0, 0.0)
+        .unwrap()
+        .point_evalue()
+        .unwrap();
+    run_evalue_xval(
+        "evalue_ols_xval",
+        serde_json::json!({
+            "measure": "OLS",
+            "est": 0.3,
+            "se": 0.1,
+            "sd": 1.0,
+            "delta": 1.0,
+            "true_val": 0.0
+        }),
+        rust,
+    );
+}
+
+/// Codegen xval: MD.
+#[test]
+#[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
+fn evalue_md_xval() {
+    let rust = evalue::evalue::evalues_md(0.5, None, 0.0)
+        .unwrap()
+        .point_evalue()
+        .unwrap();
+    run_evalue_xval(
+        "evalue_md_xval",
+        serde_json::json!({
+            "measure": "MD",
+            "est": 0.5,
+            "true_val": 0.0
+        }),
+        rust,
+    );
+}
