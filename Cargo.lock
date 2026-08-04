@@ -1968,6 +1968,7 @@ dependencies = [
  "fs",
  "futures",
  "hdl",
+ "hypothesize",
  "iceberg",
  "iceberg-catalog-rest",
  "lava",
@@ -4169,6 +4170,18 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
+]
+
+[[package]]
+name = "hypothesize"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

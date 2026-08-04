@@ -41,6 +41,7 @@ magma = { path = "../../bio_crates/magma" }
 susie = { path = "../../bio_crates/susie" }
 statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
+hypothesize = { path = "../../stat_crates/hypothesize" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }

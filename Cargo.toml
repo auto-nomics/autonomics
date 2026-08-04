@@ -37,6 +37,7 @@ members = [
 
   "stat_crates/statkit",
   "stat_crates/epi",
+  "stat_crates/hypothesize",
   "crates/bib-types",
   "crates/bib-base",
   "crates/arxiv",
