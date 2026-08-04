@@ -1,7 +1,9 @@
 //! Tool assembly functions for the default agent configuration.
 //!
 //! Each function returns a [`Vec<ToolRegistration>`]. Compose them
-//! to build custom tool sets.
+//! to build custom tool sets, or use [`tool_set_from_config`] to let a
+//! [`RuntimeConfig`](crate::config::RuntimeConfig) decide which tools to
+//! enable.
 
 use std::sync::Arc;
 
@@ -14,6 +16,8 @@ use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
 use opentargets::OpenTargetsClient;
 
+use crate::config::RuntimeConfig;
+
 /// OpenGWAS tools (GWAS catalog lookup).
 ///
 /// Returns [`OpengwasError`] if the OpenGWAS client cannot be constructed
@@ -21,7 +25,16 @@ use opentargets::OpenTargetsClient;
 pub fn opengwas_tools(
     file_storage: Arc<OpendalFileStorage>,
 ) -> Result<Vec<ToolRegistration>, OpengwasError> {
-    let opengwas = Arc::new(OpengwasClient::new(None)?);
+    opengwas_tools_with_token(file_storage, None)
+}
+
+/// OpenGWAS tools with an explicit API token. Pass `None` to read from
+/// the `OPENGWAS_TOKEN` env var (same as [`opengwas_tools`]).
+pub fn opengwas_tools_with_token(
+    file_storage: Arc<OpendalFileStorage>,
+    token: Option<&str>,
+) -> Result<Vec<ToolRegistration>, OpengwasError> {
+    let opengwas = Arc::new(OpengwasClient::new(token)?);
     Ok(opengwas::opengwas_registrations(opengwas, file_storage))
 }
 
@@ -71,18 +84,63 @@ pub fn resolve_bib_db_path() -> String {
 ///
 /// Pass a shared [`OpendalFileStorage`] used by both the fs tools
 /// and the OpenGWAS download tool.
+///
+/// **Note**: prefer [`tool_set_from_config`] for new code — it respects
+/// per-agent feature flags and token overrides.
 pub async fn default_tool_set(
     file_storage: Arc<OpendalFileStorage>,
     datalake: Arc<Datalake>,
     data_engine_client: Arc<DataEngineClient>,
 ) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
+    let cfg = RuntimeConfig::default();
+    tool_set_from_config(file_storage, datalake, data_engine_client, &cfg).await
+}
+
+/// Build a tool set from a [`RuntimeConfig`], enabling/disabling each
+/// tool group according to the config's feature flags and using the
+/// config's token overrides.
+pub async fn tool_set_from_config(
+    file_storage: Arc<OpendalFileStorage>,
+    datalake: Arc<Datalake>,
+    data_engine_client: Arc<DataEngineClient>,
+    config: &RuntimeConfig,
+) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
+    // Filesystem / shell tools — always enabled.
     let mut tools = fs::vbash_registrations(file_storage.clone());
-    tools.extend(opengwas_tools(file_storage.clone())?);
-    tools.extend(opentargets_tools());
-    tools.extend(gwascatalog_tools(file_storage));
+
+    if config.enable_opengwas {
+        match opengwas_tools_with_token(file_storage.clone(), config.opengwas_token.as_deref()) {
+            Ok(opengwas) => tools.extend(opengwas),
+            Err(e) => {
+                eprintln!(
+                    "[runtime] WARNING: OpenGWAS tools disabled (token error): {e}"
+                );
+            }
+        }
+    }
+
+    if config.enable_opentargets {
+        tools.extend(opentargets_tools());
+    }
+
+    if config.enable_gwascatalog {
+        tools.extend(gwascatalog_tools(file_storage));
+    }
+
     tools.extend(datalake_tools(datalake.clone()));
     tools.extend(data_engine_tools::registrations(data_engine_client));
-    tools.extend(bib_tools(&resolve_bib_db_path()).await?);
+
+    if config.enable_bibliography {
+        match bib_tools(&config.bib_db_path.to_string_lossy()).await {
+            Ok(bib) => tools.extend(bib),
+            Err(e) => {
+                eprintln!(
+                    "[runtime] WARNING: bibliography tools disabled: {e}"
+                );
+            }
+        }
+    }
+
     Ok(tools)
 }
 

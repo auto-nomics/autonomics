@@ -1,0 +1,684 @@
+//! Configuration for [`AgentRuntime`](crate::AgentRuntime).
+//!
+//! Every hard-coded path, env-var override, and prompt string that was
+//! previously scattered across `runtime.rs` / `tools.rs` / `app.rs` is
+//! collected here so that multiple independent agent runtimes — each with
+//! its own storage root, history DB, bibliography, prompts, etc. — can be
+//! instantiated side-by-side in a future multi-agent system.
+//!
+//! ## Construction
+//!
+//! ```ignore
+//! use runtime::config::RuntimeConfig;
+//!
+//! // Defaults — same behaviour as before.
+//! let cfg = RuntimeConfig::default();
+//!
+//! // Customised for a specific agent.
+//! let cfg = RuntimeConfig::builder()
+//!     .name("literature-agent")
+//!     .data_dir("/data/agents/lit")
+//!     .opengwas_token_env("OPENGWAS_TOKEN_LIT")
+//!     .build();
+//! ```
+//!
+//! ## Precedence
+//!
+//! For every field the resolution order is:
+//! 1. Explicitly set on the builder (`Builder::build()` copies it verbatim).
+//! 2. Environment variable named on the field's doc comment.
+//! 3. Hard-coded default.
+//!
+//! `RuntimeConfig::resolve()` performs step 2→3; the builder performs
+//! step 1 by letting the caller override the *entire* resolved config.
+
+use std::path::PathBuf;
+
+// ---------------------------------------------------------------------------
+// Defaults
+// ---------------------------------------------------------------------------
+
+/// Default file-storage root — files downloaded by agent tools (OpenGWAS
+/// summary stats, GWAS Catalog data, etc.) land here.
+///
+/// Override via builder `.data_dir(…)` or env `AUTONOMICS_DATA_DIR`.
+const DEFAULT_DATA_DIR: &str = "/mnt/disk3/test";
+
+/// Default directory for agent-internal databases (DAG history).
+///
+/// Override via builder `.state_dir(…)` or env `AUTONOMICS_STATE_DIR`.
+const DEFAULT_STATE_DIR: &str = ".autonomics";
+
+/// Default DAG history SQLite filename (relative to `state_dir`).
+const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
+
+/// Default bibliography database path.
+///
+/// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
+const DEFAULT_BIB_DB: &str = "bib.db";
+
+/// Default TUI application database (model config, settings, etc.).
+///
+/// Override via builder `.app_db_path(…)` or env `AUTONOMICS_APP_DB`.
+const DEFAULT_APP_DB: &str = "phloem.db";
+
+/// Default agent identity string.
+const DEFAULT_AGENT_IDENTITY: &str = "You are a biomedical research assistant \
+     specializing in genomics, GWAS analysis, and literature mining.";
+
+// ---------------------------------------------------------------------------
+// Environment variable names
+// ---------------------------------------------------------------------------
+
+/// Env var overriding the file-storage root.
+pub const ENV_DATA_DIR: &str = "AUTONOMICS_DATA_DIR";
+
+/// Env var overriding the internal-state directory.
+pub const ENV_STATE_DIR: &str = "AUTONOMICS_STATE_DIR";
+
+/// Env var overriding the bibliography DB path.
+pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
+
+/// Env var overriding the TUI application DB path.
+pub const ENV_APP_DB: &str = "AUTONOMICS_APP_DB";
+
+/// Env var supplying the OpenGWAS API token.
+pub const ENV_OPENGWAS_TOKEN: &str = "OPENGWAS_TOKEN";
+
+/// Env var overriding the OpenGWAS on-disk cache directory.
+pub const ENV_OPENGWAS_CACHE_DIR: &str = "OPENGWAS_CACHE_DIR";
+
+// ---------------------------------------------------------------------------
+// RuntimeConfig
+// ---------------------------------------------------------------------------
+
+/// Fully resolved configuration for a single agent runtime.
+///
+/// Built via [`RuntimeConfig::builder()`] (or [`RuntimeConfig::default()`]
+/// for the current hard-coded defaults) and consumed by
+/// [`AgentRuntime::with_config`](crate::AgentRuntime::with_config).
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    /// Human-readable name for this runtime instance (useful in multi-agent
+    /// setups and log messages).
+    pub name: String,
+
+    // ── Storage ───────────────────────────────────────────────────────
+    /// Root directory for the virtual file system exposed to agent tools
+    /// (downloads, scratch files, artifacts).
+    pub data_dir: PathBuf,
+
+    /// Directory for agent-internal state (DAG history DB, etc.).
+    pub state_dir: PathBuf,
+
+    /// Path to the DAG history SQLite database.
+    pub dag_history_db: PathBuf,
+
+    /// Path to the bibliography SQLite database.
+    pub bib_db_path: PathBuf,
+
+    /// Path to the TUI / application SQLite database (model config, settings).
+    pub app_db_path: PathBuf,
+
+    // ── External service credentials ──────────────────────────────────
+    /// OpenGWAS API token. If `None`, the runtime attempts to read it from
+    /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
+    pub opengwas_token: Option<String>,
+
+    /// OpenGWAS on-disk cache directory override. If `None`, the opengwas
+    /// crate's own resolution logic is used (env → `$HOME/.cache/opengwas`
+    /// → temp dir).
+    pub opengwas_cache_dir: Option<PathBuf>,
+
+    // ── Prompts ───────────────────────────────────────────────────────
+    /// Short identity string prepended to the system prompt.
+    pub agent_identity: String,
+
+    /// Long-form system prompt section describing the agent's competencies
+    /// and behavioral guidelines. If `None`, the built-in default
+    /// ([`DEFAULT_SYSTEM_PROMPT`]) is used.
+    pub system_prompt: Option<String>,
+
+    // ── Feature flags ─────────────────────────────────────────────────
+    /// Whether to enable the Iceberg data lake integration.
+    pub enable_iceberg: bool,
+
+    /// Whether to enable DAG history persistence (snapshots / refs).
+    pub enable_dag_history: bool,
+
+    /// Whether to enable bibliography tools (lit_search, bib_*, etc.).
+    pub enable_bibliography: bool,
+
+    /// Whether to enable OpenGWAS tools. Requires a valid token.
+    pub enable_opengwas: bool,
+
+    /// Whether to enable Open Targets Platform tools.
+    pub enable_opentargets: bool,
+
+    /// Whether to enable GWAS Catalog tools.
+    pub enable_gwascatalog: bool,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self::resolve(None)
+    }
+}
+
+impl RuntimeConfig {
+    /// Create a new [`RuntimeConfigBuilder`].
+    pub fn builder() -> RuntimeConfigBuilder {
+        RuntimeConfigBuilder::new()
+    }
+
+    /// Resolve all fields from environment variables + defaults.
+    ///
+    /// Pass `base` to overlay explicit values from a partially-filled
+    /// builder; pass `None` for the pure env+default resolution.
+    fn resolve(base: Option<&RuntimeConfigBuilder>) -> Self {
+        let data_dir = base
+            .and_then(|b| b.data_dir.clone())
+            .or_else(|| env_path(ENV_DATA_DIR))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR));
+
+        let state_dir = base
+            .and_then(|b| b.state_dir.clone())
+            .or_else(|| env_path(ENV_STATE_DIR))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+
+        let dag_history_db = base
+            .and_then(|b| b.dag_history_db.clone())
+            .unwrap_or_else(|| state_dir.join(DEFAULT_DAG_HISTORY_DB));
+
+        let bib_db_path = base
+            .and_then(|b| b.bib_db_path.clone())
+            .or_else(|| env_path(ENV_BIB_DB))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_BIB_DB));
+
+        let app_db_path = base
+            .and_then(|b| b.app_db_path.clone())
+            .or_else(|| env_path(ENV_APP_DB))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_APP_DB));
+
+        let name = base
+            .and_then(|b| b.name.clone())
+            .unwrap_or_else(|| "default".to_string());
+
+        let opengwas_token = base
+            .and_then(|b| b.opengwas_token.clone())
+            .or_else(|| std::env::var(ENV_OPENGWAS_TOKEN).ok());
+
+        let opengwas_cache_dir = base
+            .and_then(|b| b.opengwas_cache_dir.clone())
+            .or_else(|| env_path(ENV_OPENGWAS_CACHE_DIR));
+
+        let agent_identity = base
+            .and_then(|b| b.agent_identity.clone())
+            .unwrap_or_else(|| DEFAULT_AGENT_IDENTITY.to_string());
+
+        let system_prompt = base.and_then(|b| b.system_prompt.clone());
+
+        let resolve_flag = |b: Option<&RuntimeConfigBuilder>,
+                            getter: fn(&RuntimeConfigBuilder) -> Option<bool>,
+                            default: bool| {
+            b.and_then(getter).unwrap_or(default)
+        };
+
+        Self {
+            name,
+            data_dir,
+            state_dir,
+            dag_history_db,
+            bib_db_path,
+            app_db_path,
+            opengwas_token,
+            opengwas_cache_dir,
+            agent_identity,
+            system_prompt,
+            enable_iceberg: resolve_flag(base, |b| b.enable_iceberg, true),
+            enable_dag_history: resolve_flag(base, |b| b.enable_dag_history, true),
+            enable_bibliography: resolve_flag(base, |b| b.enable_bibliography, true),
+            enable_opengwas: resolve_flag(base, |b| b.enable_opengwas, true),
+            enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
+            enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
+        }
+    }
+}
+
+/// The system prompt returned by [`RuntimeConfig::system_prompt_or_default`].
+pub fn default_system_prompt() -> &'static str {
+    DEFAULT_SYSTEM_PROMPT
+}
+
+/// Built-in default system prompt. Extracted from the original `const SYSTEM_PROMPT`
+/// in `runtime.rs`.
+const DEFAULT_SYSTEM_PROMPT: &str = r#"\
+## Core Competencies
+
+You are a biomedical research assistant with expertise in genomics, GWAS analysis, \
+and literature mining. You have direct access to specialized tools — use them \
+proactively rather than answering from memory alone.
+
+### Literature & Evidence
+- Search PubMed, fetch full article records, retrieve summaries, and find related articles.
+- Always verify claims against primary literature when possible.
+
+### Genomics & GWAS (OpenGWAS API)
+- Search GWAS datasets by trait or keyword, inspect metadata, download summary statistics.
+- Perform variant lookups (by rsID or chr:pos), extract associations, run PheWAS, \
+  LD clumping, and compute LD matrices.
+- Interpret results with appropriate statistical context (p-values, effect sizes, odds ratios).
+
+### Target–Disease Evidence (Open Targets Platform)
+- Query the Open Targets Platform for genes, diseases, drugs, studies, and variants.
+- Look up target/disease associations, associated diseases for a target (and vice versa), \
+  drug info, GWAS study metadata, and variant records.
+- Use `opentargets_search` for free-text discovery across all entity types.
+
+### GWAS Catalog (EBI)
+- Search curated GWAS Catalog studies, associations, EFO traits, SNPs, and unpublished \
+  submissions (`gwascatalog_*` tools).
+- Use `gwascatalog_search` first for cross-resource discovery (Solr full-text across studies, \
+  variants, traits, genes, publications).
+- Use `gwascatalog_summary_*` tools for per-variant harmonised summary statistics (effect sizes, \
+  alleles, p-values) — distinct from the curated REST resources.
+
+### Data Pipeline (DAG Engine)
+- Build and execute data processing pipelines: add data sources, apply SQL transforms, \
+  connect nodes into a DAG, run the pipeline, and retrieve output.
+
+- Use this when a task requires multi-step data processing or transformation.
+
+- **Build incrementally, layer by layer — never construct the full DAG in one shot.** \
+  Start with just the data source node, run_dag, and inspect the output columns to \
+  understand what you have. Then add the next processing node (a SQL transform, a filter, \
+  an analysis), wire it, run again, and verify the output matches expectations before \
+  extending further. Repeat until the pipeline reaches the final analysis. \
+  This feedback loop catches schema mismatches, wrong column names, and type errors \
+  early — a single-shot full-DAG construction fails silently and wastes time debugging.
+
+- **Inspect ports before wiring**: every node kind declares typed input/output ports. \
+  `list_node_factories` returns lightweight metadata (kind + short description) only. \
+  To see the full port layout (port count, variadic flag, per-port column schema), \
+  call `get_node_ports` with the chosen `kind`. Read the downstream node's input \
+  port schema BEFORE writing the transform that feeds it. The downstream port's \
+  required columns and types are a contract, not a suggestion. \
+  Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
+  configuration parameters, and `get_node_doc` for detailed usage documentation.
+
+- **Transform to match the consuming port**: data flowing along an edge MUST conform to the \
+  downstream node's input port schema. If the upstream output does not already match, insert \
+  a dedicated SQL transform node between them that projects, casts, renames, or extracts \
+  subfields so its output is exactly what the downstream port expects. Do not connect a \
+  node's output to a downstream input hoping it will work — verify column names, types, \
+  and struct shape first, and reshape explicitly. \
+  Examples: an `ldsc` input port requires columns `z: Float64, n: Float64, rsid: Utf8` — \
+  if upstream exposes `beta`, `se`, `n`, `rsid`, add a SQL node computing \
+  "z" = beta / se and selecting exactly `rsid, "z", "n"`. A VCF emits an `info` Struct column; \
+  extract subfields with `get_field(info, 'ES')` in the transform, never rely on a List \
+  column where a Struct is required. Reserve exactly the required column names and types.
+
+### DAG Version Control (History & Refs)
+
+Every `run_dag` call **automatically saves a snapshot** of the full pipeline (all nodes, \
+edges, specs) plus the run report to a local history database. Snapshots are organized \
+into **refs** (branches) — each ref is an independent lineage.
+
+- **Always provide a `commit_message`** when calling `run_dag`. A descriptive message \
+  like "LDSC h² with 200 blocks on BMI" makes it easy to find past runs later via \
+  `dag_history_log`.
+
+- **One analysis = one ref.** When starting a new, unrelated analysis pipeline, call \
+  `new_dag_ref` with a descriptive name (e.g. "gwas-bmi", "epi-charls") instead of \
+  building on top of the previous pipeline. This keeps histories cleanly separated. \
+  The old pipeline's snapshots are preserved — switch back anytime with `switch_dag_ref`.
+
+- **Reviewing history.** Use `dag_history_log` to see past snapshots in the current ref, \
+  and `list_dag_refs` to see all analysis lineages. The `*` marker shows the active ref.
+
+- **Recovering past work.** `checkout_dag` loads a historical snapshot's pipeline into \
+  memory without changing the ref (like `git checkout`). `branch_from_snapshot` creates \
+  a new ref from any historical snapshot (like `git checkout -b`), letting you explore \
+  an alternative direction from that point.
+
+### SQL Conventions
+All SQL in this system runs on Apache DataFusion. The following rules apply to \
+every SQL string you write — whether in `add_sql_node`, `add_source` (Iceberg paths), \
+or any other tool that accepts SQL.
+
+- **Double-quote all column names**: DataFusion normalizes unquoted identifiers to \
+  lowercase by default (`enable_ident_normalization = true`). Always wrap column \
+  names (and any identifier whose case matters) with double quotes. \
+  Wrong: `SELECT Z, N FROM port_0`  —  Z and N become `z`, `n` silently. \
+  Right: `SELECT "Z", "N" FROM port_0`  —  case is preserved exactly.
+
+- **Table naming in SQL nodes**: in `add_sql_node`, upstream data is registered as tables \
+  named `port_N` where N is the input port index (0-based). For single-input nodes the \
+  table is `port_0`. Never use the upstream node's id — always use `port_N`. \
+  Example: a filter node receiving one input → `SELECT * FROM port_0 WHERE x > 1`. \
+  A two-input join node → `SELECT * FROM port_0 JOIN port_1 ON port_0.id = port_1.id`.
+
+- **Cast to double precision with `DOUBLE`, never `FLOAT64`**: DataFusion's SQL parser \
+  uses SQL-standard type names. The 64-bit floating type is `DOUBLE`; `FLOAT64` is an \
+  Arrow/Rust type name and is NOT valid SQL — `CAST(x AS FLOAT64)` will error with a \
+  parse/type failure. Always write `CAST(x AS DOUBLE)` (or `TRY_CAST(x AS DOUBLE)` to \
+  coerce non-numeric strings to NULL instead of failing). \
+  Wrong: `CAST("Z" AS FLOAT64)`  —  parser error. \
+  Right: `CAST("Z" AS DOUBLE)`. \
+  The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, \
+  `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).
+
+### Data Persistence (Iceberg Data Lake)
+- **Prefer the Iceberg data lake for any intermediate or derived data** that needs to \
+persist beyond a single DAG run — transformed datasets, analysis results, reference \
+tables, snapshots, or any table you may re-query later.
+- Writing to Iceberg keeps data queryable (SQL, DataFusion), versioned (snapshots), \
+and immediately consumable by downstream pipeline nodes — far better than ad-hoc \
+CSV/Parquet files scattered on the local filesystem.
+- Use the filesystem only for ephemeral scratch files, downloaded raw artifacts \
+that have not yet been ingested, or small human-readable summaries meant for \
+immediate inspection.
+
+### Data Infrastructure
+
+The Iceberg data lake (`reference` namespace) contains reusable reference panels:
+
+- **GRCh37/GRCh38 gene annotation** — `reference.grch{37,38}_genes`: structured \
+  Ensembl GTF (gene, transcript, exon, CDS, UTR). Columns include `contig`, \
+  `feature`, `start`, `end_pos`, `strand`, `gene_id`, `gene_name`, `gene_biotype`, \
+  `transcript_id`. Use `end_pos` (not `end`) for the end coordinate. \
+  Query `WHERE feature = 'gene'` for gene boundaries.
+- **GRCh37/GRCh38 contig metadata** — `reference.grch{37,38}_contigs`: \
+  `contig, length, md5` per chromosome (1–22, X, Y, MT).
+- **dbSNP155 variants** — `reference.dbsnp155` (~928M rows): every variant has \
+  both GRCh37 and GRCh38 coordinates. Columns: `rsid` (int64), `chrom`, \
+  `pos_37`, `pos_38`, `ref_37`, `ref_38`, `alt_37`, `alt_38`. \
+  Use `WHERE rsid = <number>` for rsID→position lookup. \
+  **Caution**: this table has ~928M rows — always use filters (`chrom`, `rsid`, \
+  position range); never scan the full table.
+
+### General
+- Read, write, and manage files on the local filesystem.
+- Break complex research questions into sequential tool calls; explain your reasoning.
+
+## Guidelines
+- Cite PMID(s) when referencing literature.
+- Report quantitative results with appropriate precision and confidence intervals when available.
+- If a tool call fails, diagnose the error and retry with corrected parameters before asking the user."#;
+
+impl RuntimeConfig {
+    /// Return the system prompt, falling back to the built-in default.
+    pub fn system_prompt_or_default(&self) -> &str {
+        self.system_prompt.as_deref().unwrap_or(DEFAULT_SYSTEM_PROMPT)
+    }
+
+    /// Return a display-friendly summary for logging.
+    pub fn summary(&self) -> String {
+        format!(
+            "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
+             dag_history_db: {}, bib_db: {}, app_db: {}, \
+             iceberg: {}, dag_history: {}, bib: {}, opengwas: {}, \
+             opentargets: {}, gwascatalog: {} }}",
+            self.name,
+            self.data_dir.display(),
+            self.state_dir.display(),
+            self.dag_history_db.display(),
+            self.bib_db_path.display(),
+            self.app_db_path.display(),
+            self.enable_iceberg,
+            self.enable_dag_history,
+            self.enable_bibliography,
+            self.enable_opengwas,
+            self.enable_opentargets,
+            self.enable_gwascatalog,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Builder
+// ---------------------------------------------------------------------------
+
+/// Builder for [`RuntimeConfig`].
+///
+/// Every method is optional; unset fields fall through to environment
+/// variables and then hard-coded defaults. Call [`build`](Self::build) to
+/// produce a fully resolved [`RuntimeConfig`].
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeConfigBuilder {
+    pub(crate) name: Option<String>,
+    pub(crate) data_dir: Option<PathBuf>,
+    pub(crate) state_dir: Option<PathBuf>,
+    pub(crate) dag_history_db: Option<PathBuf>,
+    pub(crate) bib_db_path: Option<PathBuf>,
+    pub(crate) app_db_path: Option<PathBuf>,
+    pub(crate) opengwas_token: Option<String>,
+    pub(crate) opengwas_cache_dir: Option<PathBuf>,
+    pub(crate) agent_identity: Option<String>,
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) enable_iceberg: Option<bool>,
+    pub(crate) enable_dag_history: Option<bool>,
+    pub(crate) enable_bibliography: Option<bool>,
+    pub(crate) enable_opengwas: Option<bool>,
+    pub(crate) enable_opentargets: Option<bool>,
+    pub(crate) enable_gwascatalog: Option<bool>,
+}
+
+impl RuntimeConfigBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Human-readable name for this runtime instance.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Root directory for the virtual file system exposed to agent tools.
+    pub fn data_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Directory for agent-internal state (DAG history DB, etc.).
+    pub fn state_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.state_dir = Some(dir.into());
+        self
+    }
+
+    /// Explicit path to the DAG history SQLite database (overrides
+    /// `state_dir/dag-history.db`).
+    pub fn dag_history_db(mut self, path: impl Into<PathBuf>) -> Self {
+        self.dag_history_db = Some(path.into());
+        self
+    }
+
+    /// Path to the bibliography SQLite database.
+    pub fn bib_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.bib_db_path = Some(path.into());
+        self
+    }
+
+    /// Path to the TUI / application SQLite database.
+    pub fn app_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.app_db_path = Some(path.into());
+        self
+    }
+
+    /// OpenGWAS API token. If not set, `OPENGWAS_TOKEN` env var is used.
+    pub fn opengwas_token(mut self, token: impl Into<String>) -> Self {
+        self.opengwas_token = Some(token.into());
+        self
+    }
+
+    /// OpenGWAS on-disk cache directory override.
+    pub fn opengwas_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.opengwas_cache_dir = Some(dir.into());
+        self
+    }
+
+    /// Short identity string prepended to the system prompt.
+    pub fn agent_identity(mut self, identity: impl Into<String>) -> Self {
+        self.agent_identity = Some(identity.into());
+        self
+    }
+
+    /// Custom system prompt section. Pass `None` to use the built-in default.
+    pub fn system_prompt(mut self, prompt: Option<String>) -> Self {
+        self.system_prompt = prompt;
+        self
+    }
+
+    /// Enable or disable the Iceberg data lake integration.
+    pub fn enable_iceberg(mut self, enabled: bool) -> Self {
+        self.enable_iceberg = Some(enabled);
+        self
+    }
+
+    /// Enable or disable DAG history persistence.
+    pub fn enable_dag_history(mut self, enabled: bool) -> Self {
+        self.enable_dag_history = Some(enabled);
+        self
+    }
+
+    /// Enable or disable bibliography tools.
+    pub fn enable_bibliography(mut self, enabled: bool) -> Self {
+        self.enable_bibliography = Some(enabled);
+        self
+    }
+
+    /// Enable or disable OpenGWAS tools.
+    pub fn enable_opengwas(mut self, enabled: bool) -> Self {
+        self.enable_opengwas = Some(enabled);
+        self
+    }
+
+    /// Enable or disable Open Targets Platform tools.
+    pub fn enable_opentargets(mut self, enabled: bool) -> Self {
+        self.enable_opentargets = Some(enabled);
+        self
+    }
+
+    /// Enable or disable GWAS Catalog tools.
+    pub fn enable_gwascatalog(mut self, enabled: bool) -> Self {
+        self.enable_gwascatalog = Some(enabled);
+        self
+    }
+
+    /// Resolve into a fully-resolved [`RuntimeConfig`].
+    pub fn build(self) -> RuntimeConfig {
+        RuntimeConfig::resolve(Some(&self))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Read a non-empty env var as a [`PathBuf`].
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults() {
+        let cfg = RuntimeConfig::default();
+        assert_eq!(cfg.name, "default");
+        assert_eq!(cfg.data_dir, PathBuf::from(DEFAULT_DATA_DIR));
+        assert_eq!(cfg.state_dir, PathBuf::from(DEFAULT_STATE_DIR));
+        assert_eq!(
+            cfg.dag_history_db,
+            PathBuf::from(DEFAULT_STATE_DIR).join(DEFAULT_DAG_HISTORY_DB)
+        );
+        assert_eq!(cfg.bib_db_path, PathBuf::from(DEFAULT_BIB_DB));
+        assert_eq!(cfg.app_db_path, PathBuf::from(DEFAULT_APP_DB));
+        assert!(cfg.enable_iceberg);
+        assert!(cfg.enable_dag_history);
+        assert!(cfg.enable_bibliography);
+        assert!(cfg.enable_opengwas);
+        assert!(cfg.enable_opentargets);
+        assert!(cfg.enable_gwascatalog);
+    }
+
+    #[test]
+    fn builder_overrides() {
+        let cfg = RuntimeConfig::builder()
+            .name("test-agent")
+            .data_dir("/tmp/test-data")
+            .state_dir("/tmp/test-state")
+            .dag_history_db("/tmp/custom-history.db")
+            .bib_db_path("/tmp/custom-bib.db")
+            .app_db_path("/tmp/custom-app.db")
+            .opengwas_token("secret-token")
+            .agent_identity("Custom agent")
+            .system_prompt(Some("Custom prompt".to_string()))
+            .enable_iceberg(false)
+            .enable_dag_history(false)
+            .enable_opengwas(false)
+            .build();
+
+        assert_eq!(cfg.name, "test-agent");
+        assert_eq!(cfg.data_dir, PathBuf::from("/tmp/test-data"));
+        assert_eq!(cfg.state_dir, PathBuf::from("/tmp/test-state"));
+        assert_eq!(cfg.dag_history_db, PathBuf::from("/tmp/custom-history.db"));
+        assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
+        assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
+        assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
+        assert_eq!(cfg.agent_identity, "Custom agent");
+        assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
+        assert!(!cfg.enable_iceberg);
+        assert!(!cfg.enable_dag_history);
+        assert!(!cfg.enable_opengwas);
+        // Flags not touched → still true
+        assert!(cfg.enable_bibliography);
+        assert!(cfg.enable_opentargets);
+        assert!(cfg.enable_gwascatalog);
+    }
+
+    #[test]
+    fn system_prompt_fallback() {
+        let cfg = RuntimeConfig::default();
+        assert!(cfg.system_prompt.is_none());
+        assert!(cfg.system_prompt_or_default().contains("Core Competencies"));
+
+        let cfg = RuntimeConfig::builder()
+            .system_prompt(Some("short".to_string()))
+            .build();
+        assert_eq!(cfg.system_prompt_or_default(), "short");
+    }
+
+    #[test]
+    fn env_data_dir_override() {
+        // SAFETY: single-threaded test, no other code reads this env var concurrently.
+        unsafe {
+            std::env::set_var(ENV_DATA_DIR, "/tmp/env-data");
+        }
+        let cfg = RuntimeConfig::default();
+        assert_eq!(cfg.data_dir, PathBuf::from("/tmp/env-data"));
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR);
+        }
+    }
+
+    #[test]
+    fn builder_takes_precedence_over_env() {
+        // SAFETY: single-threaded test, no other code reads this env var concurrently.
+        unsafe {
+            std::env::set_var(ENV_DATA_DIR, "/tmp/env-data");
+        }
+        let cfg = RuntimeConfig::builder()
+            .data_dir("/tmp/explicit-data")
+            .build();
+        assert_eq!(cfg.data_dir, PathBuf::from("/tmp/explicit-data"));
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR);
+        }
+    }
+}
