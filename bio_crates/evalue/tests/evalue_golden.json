@@ -1,0 +1,81 @@
+{
+  "rr_leukemia": {
+    "point_rr": 0.8,
+    "lower_rr": 0.71,
+    "upper_rr": 0.91,
+    "point_e": 1.809016994375,
+    "lower_e": "NA",
+    "upper_e": 1.428571428571
+  },
+  "rr_point_only": {
+    "point_rr": 3.5,
+    "point_e": 6.45803989155
+  },
+  "rr_non_null": {
+    "point_e": 2
+  },
+  "or_common": {
+    "point_rr": 0.9273618495496,
+    "point_e": 1.368952861092
+  },
+  "or_rare": {
+    "point_rr": 3,
+    "point_e": 5.449489742783
+  },
+  "hr_common": {
+    "point_rr": 0.670083951663,
+    "point_e": 2.349531257322
+  },
+  "hr_rare": {
+    "point_rr": 0.56,
+    "point_e": 2.970223139413
+  },
+  "md_basic": {
+    "point_rr": 1.576173383034,
+    "point_e": 2.529141981861
+  },
+  "ols_basic": {
+    "point_rr": 1.313900244825,
+    "point_e": 1.956110185986
+  },
+  "smoking": {
+    "point_rr": 10.729780358581,
+    "point_e": 20.947334184463
+  },
+  "rd_smoking": {
+    "est_evalue": 20.947334184463,
+    "lower_evalue": 15.957026125545
+  },
+  "multi_confounding": {
+    "point_e": 6.458039894933
+  },
+  "multi_sel_general": {
+    "point_e": 2.179581575013
+  },
+  "multi_sel_selected": {
+    "point_e": 8.870136966347
+  },
+  "multi_sel_incr": {
+    "point_e": 1.809020244221
+  },
+  "multi_sel_su": {
+    "point_e": 2.302172327335
+  },
+  "multi_conf_sel": {
+    "point_e": 2.053465811493
+  },
+  "multi_conf_sel_misclass": {
+    "point_e": 1.594924774635
+  },
+  "bound_confounding": 1.333333333333,
+  "bound_conf_sel_incr": 2.4,
+  "svalues_zika": {
+    "point_e": 16.58416436151
+  },
+  "svalues_obesity": {
+    "point_e": 2.366025403784
+  },
+  "svalues_endometrial": {
+    "point_e": 5.208695652174
+  }
+}

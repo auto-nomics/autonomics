@@ -12,6 +12,7 @@ pub mod cmest;
 pub mod cox_regression;
 pub mod cpassoc;
 pub mod echo_node;
+pub mod evalue;
 pub mod epi_lasso;
 pub mod epi_rcs;
 pub mod epi_roc;
@@ -50,6 +51,7 @@ pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, Bivaria
 pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
 pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
+pub use evalue::{EvalueConfig, EvalueNode, EvalueNodeFactory};
 pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};
 pub use lava::{
     LavaBivarNode, LavaBivarNodeFactory, LavaLocusNode, LavaLocusNodeFactory, LavaMultiregNode,

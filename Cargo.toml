@@ -44,6 +44,7 @@ members = [
   "crates/biorxiv",
   "crates/europepmc",
   "bio_crates/susie",
+  "bio_crates/evalue",
 ]
 resolver = "3"
 
