@@ -218,3 +218,60 @@ if (test_name == "liability") {
     data.table::fwrite(ref, file.path(out_dir, "liability_reference.csv"))
     cat("OK liability\n")
 }
+
+# ── causal (PSM) ───────────────────────────────────────────────────────────
+if (test_name == "causal_psm") {
+    n <- 300
+    age <- rnorm(n, 50, 10)
+    female <- rbinom(n, 1, 0.5)
+    # Treatment propensity depends on covariates
+    ps <- plogis(-1 + 0.05 * age + 0.5 * female)
+    treat <- rbinom(n, 1, ps)
+    # Outcome depends on treatment + covariates (true ATT = 2.0)
+    y <- 10 + 2 * treat + 0.1 * age + 3 * female + rnorm(n, sd = 2)
+    df <- data.frame(treat = treat, y = y, age = age, female = female)
+    data_path <- file.path(out_dir, "causal_psm_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference: MatchIt PSM
+    m <- MatchIt::matchit(treat ~ age + female, data = df, method = "nearest")
+    md <- MatchIt::match.data(m)
+    fit <- lm(y ~ treat, data = md)
+    smry <- summary(fit)
+    ref <- data.frame(
+        att = coef(fit)["treat"],
+        att_se = smry$coefficients["treat", "Std. Error"],
+        n_treated = sum(md$treat == 1),
+        n_obs = nrow(md)
+    )
+    data.table::fwrite(ref, file.path(out_dir, "causal_psm_reference.csv"))
+    cat("OK causal_psm\n")
+}
+
+# ── causal (IPTW) ──────────────────────────────────────────────────────────
+if (test_name == "causal_iptw") {
+    n <- 300
+    age <- rnorm(n, 50, 10)
+    female <- rbinom(n, 1, 0.5)
+    ps <- plogis(-1 + 0.05 * age + 0.5 * female)
+    treat <- rbinom(n, 1, ps)
+    y <- 10 + 2 * treat + 0.1 * age + 3 * female + rnorm(n, sd = 2)
+    df <- data.frame(treat = treat, y = y, age = age, female = female)
+    data_path <- file.path(out_dir, "causal_iptw_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference: IPTW
+    ps_model <- glm(treat ~ age + female, data = df, family = binomial)
+    ps_score <- predict(ps_model, type = "response")
+    ipw <- ifelse(treat == 1, 1/ps_score, 1/(1-ps_score))
+    fit <- lm(y ~ treat, data = df, weights = ipw)
+    smry <- summary(fit)
+    ref <- data.frame(
+        ate = coef(fit)["treat"],
+        ate_se = smry$coefficients["treat", "Std. Error"],
+        n_treated = sum(treat == 1),
+        n_obs = n
+    )
+    data.table::fwrite(ref, file.path(out_dir, "causal_iptw_reference.csv"))
+    cat("OK causal_iptw\n")
+}

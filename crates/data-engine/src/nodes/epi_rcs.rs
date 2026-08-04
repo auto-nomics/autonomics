@@ -14,8 +14,10 @@
 //! | `n_knots`        | Int32   | Number of knots used                    |
 //! | `n_obs`          | Int32   | Number of observations                   |
 //!
-//! A second output port carries the spline curve (log-odds at each grid point)
-//! for plotting. Columns: `x` (Float64), `log_odds` (Float64).
+//! A second output port carries the spline curve (log-odds, OR, and 95% CI
+//! bands at each grid point) for plotting.
+//! Columns: `x` (Float64), `log_odds` (Float64), `or` (Float64),
+//! `or_lower` (Float64), `or_upper` (Float64).
 
 use std::sync::Arc;
 
@@ -166,7 +168,7 @@ impl NodeFactory for EpiRcsNodeFactory {
             format!("ddist <- datadist({input})"),
             format!("options(datadist = 'ddist')"),
             format!(
-                "{fit} <- ols({} ~ rcs({}, {}){}*, data = {input})",
+                "{fit} <- lrm({} ~ rcs({}, {}){}, data = {input}, x=TRUE)",
                 s.outcome_column, s.x_column, s.n_knots, covars
             ),
             format!("{out} <- summary({fit})"),
@@ -257,6 +259,24 @@ impl DagNode for EpiRcsNode {
         let result = epi::rcs::rcs_logistic(&x, &y_u64, self.n_knots, &cov_slices)
             .map_err(|e| EpiRcsError::Fit(e.to_string()))?;
 
+        // --- Shared derived values for both output ports ---
+        let x_min = x.iter().copied().fold(f64::INFINITY, f64::min);
+        let x_max = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let cov_means: Vec<f64> = cov_filtered
+            .iter()
+            .map(|c| c.iter().sum::<f64>() / c.len() as f64)
+            .collect();
+
+        // Peak risk threshold identification (brute-force grid search).
+        let peak_x = epi::rcs::find_peak_risk(
+            &result.spline_fit,
+            &result.knots,
+            &cov_means,
+            x_min,
+            x_max,
+            1000,
+        );
+
         // --- Output port 0: test statistics ---
         let stats_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -264,6 +284,7 @@ impl DagNode for EpiRcsNode {
                 Field::new("df_nonlinear", DataType::Int32, false),
                 Field::new("p_nonlinear", DataType::Float64, false),
                 Field::new("p_overall", DataType::Float64, false),
+                Field::new("peak_x", DataType::Float64, false),
                 Field::new("n_knots", DataType::Int32, false),
                 Field::new("n_obs", DataType::Int32, false),
             ])),
@@ -272,6 +293,7 @@ impl DagNode for EpiRcsNode {
                 Arc::new(Int32Array::from(vec![result.df_nonlinear as i32])),
                 Arc::new(Float64Array::from(vec![result.p_nonlinear])),
                 Arc::new(Float64Array::from(vec![result.p_overall])),
+                Arc::new(Float64Array::from(vec![peak_x])),
                 Arc::new(Int32Array::from(vec![result.knots.len() as i32])),
                 Arc::new(Int32Array::from(vec![x.len() as i32])),
             ],
@@ -279,36 +301,51 @@ impl DagNode for EpiRcsNode {
         .expect("rcs stats schema");
 
         // --- Output port 1: fitted curve ---
-        let x_min = x.iter().copied().fold(f64::INFINITY, f64::min);
-        let x_max = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let cov_means: Vec<f64> = cov_filtered
-            .iter()
-            .map(|c| c.iter().sum::<f64>() / c.len() as f64)
-            .collect();
-
         let step = if self.n_grid_points > 0 {
             (x_max - x_min) / self.n_grid_points as f64
         } else {
             0.0
         };
-        let curve_x: Vec<f64> = (0..=self.n_grid_points)
-            .map(|i| x_min + i as f64 * step)
-            .collect();
-        let curve_y: Vec<f64> = curve_x
-            .iter()
-            .map(|&xv| {
-                epi::rcs::predict_log_odds(&result.spline_fit, &result.knots, xv, &cov_means)
+
+        /// 95% CI z-quantile.
+        const Z_975: f64 = 1.959963984540054;
+
+        let curve_data: Vec<(f64, f64, f64, f64, f64)> = (0..=self.n_grid_points)
+            .map(|i| {
+                let xv = x_min + i as f64 * step;
+                let (eta, se) = epi::rcs::predict_log_odds_with_se(
+                    &result.spline_fit,
+                    &result.knots,
+                    xv,
+                    &cov_means,
+                );
+                let or = eta.exp();
+                let or_lower = (eta - Z_975 * se).exp();
+                let or_upper = (eta + Z_975 * se).exp();
+                (xv, eta, or, or_lower, or_upper)
             })
             .collect();
+
+        let curve_x: Vec<f64> = curve_data.iter().map(|&(x, _, _, _, _)| x).collect();
+        let curve_log_odds: Vec<f64> = curve_data.iter().map(|&(_, lo, _, _, _)| lo).collect();
+        let curve_or: Vec<f64> = curve_data.iter().map(|&(_, _, or, _, _)| or).collect();
+        let curve_or_lo: Vec<f64> = curve_data.iter().map(|&(_, _, _, lo, _)| lo).collect();
+        let curve_or_hi: Vec<f64> = curve_data.iter().map(|&(_, _, _, _, hi)| hi).collect();
 
         let curve_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("x", DataType::Float64, false),
                 Field::new("log_odds", DataType::Float64, false),
+                Field::new("or", DataType::Float64, false),
+                Field::new("or_lower", DataType::Float64, false),
+                Field::new("or_upper", DataType::Float64, false),
             ])),
             vec![
                 Arc::new(Float64Array::from(curve_x)),
-                Arc::new(Float64Array::from(curve_y)),
+                Arc::new(Float64Array::from(curve_log_odds)),
+                Arc::new(Float64Array::from(curve_or)),
+                Arc::new(Float64Array::from(curve_or_lo)),
+                Arc::new(Float64Array::from(curve_or_hi)),
             ],
         )
         .expect("rcs curve schema");

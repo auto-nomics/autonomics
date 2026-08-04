@@ -54,6 +54,9 @@ pub struct LogisticResult {
     pub n_obs: usize,
     /// Number of estimated parameters.
     pub n_params: usize,
+    /// Covariance matrix of coefficients, (XᵀWX)⁻¹, stored row-major
+    /// (p×p flat). Used for prediction standard errors (e.g. RCS CI bands).
+    pub covariance: Vec<f64>,
     /// Whether IRLS converged within `max_iter`.
     pub converged: bool,
     /// Number of iterations actually performed.
@@ -253,6 +256,7 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
         pseudo_r_squared: pseudo_r2,
         n_obs: n,
         n_params: p,
+        covariance: (0..(p * p)).map(|idx| inv_mat[(idx / p, idx % p)]).collect(),
         converged,
         n_iter,
     })

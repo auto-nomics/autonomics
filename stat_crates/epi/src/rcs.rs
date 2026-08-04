@@ -161,14 +161,16 @@ pub fn rcs_logistic(
     let lr_stat = 2.0 * (spline_fit.log_likelihood - linear_fit.log_likelihood);
     let chi2 = ChiSquared::new(df_nonlinear as f64)
         .map_err(|e| EpiError::Numerical(format!("ChiSquared: {e}")))?;
-    let p_nonlinear = 1.0 - chi2.cdf(lr_stat.max(0.0));
+    // Use survival function (sf = 1 − CDF) to avoid catastrophic cancellation
+    // when the test statistic is large — `1.0 − cdf(large)` rounds to 0.0.
+    let p_nonlinear = chi2.sf(lr_stat.max(0.0));
 
     // Overall association: spline model vs null (intercept-only).
     let lr_overall = 2.0 * (spline_fit.log_likelihood - spline_fit.null_log_likelihood);
     let df_overall = spline_fit.n_params - 1; // exclude intercept
     let chi2_overall = ChiSquared::new(df_overall as f64)
         .map_err(|e| EpiError::Numerical(format!("ChiSquared: {e}")))?;
-    let p_overall = 1.0 - chi2_overall.cdf(lr_overall.max(0.0));
+    let p_overall = chi2_overall.sf(lr_overall.max(0.0));
 
     Ok(RcsResult {
         spline_fit,
@@ -207,7 +209,48 @@ pub fn predict_log_odds(
     eta
 }
 
-/// Find the x value corresponding to the peak OR (highest risk) within a range,
+/// Predict log-odds (linear predictor η) **and its standard error** from an
+/// RCS fit at a given `x` value (covariates held at their means).
+///
+/// The SE is computed as `sqrt(X₀ᵀ V X₀)` where `V = (XᵀWX)⁻¹` is the
+/// coefficient covariance matrix and `X₀` is the design vector at `x₀`.
+///
+/// Returns `(eta, se)`.
+pub fn predict_log_odds_with_se(
+    fit: &LogisticResult,
+    knots: &[f64],
+    x: f64,
+    covariate_means: &[f64],
+) -> (f64, f64) {
+    let basis = rcs_basis(&[x], knots);
+    let p = fit.coefficients.len();
+
+    // Build design vector X₀: [1, x, basis₁, basis₂, …, cov₁, cov₂, …].
+    let mut x0 = vec![1.0, x];
+    for col in &basis {
+        x0.push(col[0]);
+    }
+    for &cm in covariate_means {
+        x0.push(cm);
+    }
+    x0.truncate(p); // match fitted parameter count
+
+    // η = X₀ᵀ β
+    let eta = (0..x0.len()).map(|i| x0[i] * fit.coefficients[i]).sum::<f64>();
+
+    // SE(η) = sqrt(X₀ᵀ V X₀) using the flat row-major covariance matrix.
+    let cov = &fit.covariance;
+    let mut var = 0.0_f64;
+    for i in 0..x0.len() {
+        for j in 0..x0.len() {
+            var += x0[i] * cov[i * p + j] * x0[j];
+        }
+    }
+    let se = var.max(0.0).sqrt();
+    (eta, se)
+}
+
+
 /// via brute-force search over `n_points` samples.
 ///
 /// The paper reports the highest risk at approximately 5.2 hours for the >60

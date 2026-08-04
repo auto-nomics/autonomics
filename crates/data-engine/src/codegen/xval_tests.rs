@@ -336,3 +336,89 @@ fn liability() {
     assert!(script.source.contains("qnorm"));
     assert!(script.source.contains("h2_liab"));
 }
+
+// ── causal (PSM) ───────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + MatchIt; run with DIFFTESTS=1"]
+fn causal_psm() {
+    let data_csv = format!("{XVAL_DIR}/causal_psm_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R causal_psm {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "psm".into(),
+                kind: "causal".into(),
+                spec: serde_json::json!({
+                    "method": "psm",
+                    "treatment_column": "treat",
+                    "outcome_column": "y",
+                    "covariates": ["age", "female"],
+                    "n_bootstrap": 200,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "psm".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "causal_psm");
+    assert!(script.source.contains("matchit"));
+}
+
+// ── causal (IPTW) ──────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R; run with DIFFTESTS=1"]
+fn causal_iptw() {
+    let data_csv = format!("{XVAL_DIR}/causal_iptw_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R causal_iptw {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "iptw".into(),
+                kind: "causal".into(),
+                spec: serde_json::json!({
+                    "method": "iptw",
+                    "treatment_column": "treat",
+                    "outcome_column": "y",
+                    "covariates": ["age", "female"],
+                    "n_bootstrap": 200,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "iptw".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "causal_iptw");
+    assert!(script.source.contains("weights = "));
+}
