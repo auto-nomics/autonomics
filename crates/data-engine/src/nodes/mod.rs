@@ -42,7 +42,6 @@ pub mod source_opentargets;
 pub mod sql_node;
 pub mod survival;
 pub mod susie_rss;
-pub mod test_source;
 pub mod two_sample_mr;
 pub mod univariate_mixer;
 pub mod viz;
@@ -78,7 +77,6 @@ pub use source_opentargets::{
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use susie_rss::{SusieRssNode, SusieRssNodeFactory, SusieRssSpec};
-pub use test_source::{TestSourceFactory, TestSourceNode, TestSourceSpec};
 pub use two_sample_mr::{
     TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrNodeSpec, TwoSampleMrParameters,
 };

@@ -17,6 +17,7 @@ use thiserror::Error;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
+    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory},
 };
@@ -239,6 +240,86 @@ impl NodeFactory for LdscHsqNodeFactory {
         let config: LdscHsqConfig = serde_json::from_value(spec)?;
         let node = LdscHsqNode::new(config);
         Ok(Box::new(node))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        let cfg: LdscHsqConfig =
+            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
+                kind: "ldsc".into(),
+                source: e,
+            })?;
+
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
+        let out = ctx.output_var.to_string();
+
+        // Prepare sumstats in LDSC-compatible format
+        let ldsc_df = ctx.fresh_var("ldsc_input");
+        let mut code = vec![
+            format!("# Prepare LDSC input from upstream data"),
+            format!("{ldsc_df} <- data.frame("),
+            format!("  rsid = {input}$rsid,"),
+            format!("  Z = {input}$z,"),
+            format!("  N = {input}$n"),
+            format!(")"),
+        ];
+
+        // Run h² estimation via LDSC command-line (the canonical path)
+        // NOTE: The R ecosystem typically calls LDSC via system2() since the
+        // reference implementation is Python. This generated code assumes
+        // ldsc.py is on PATH.
+        let tmp_sumstats = ctx.fresh_var("ldsc_sumstats");
+        let tmp_result = ctx.fresh_var("ldsc_result");
+        code.push(format!("# Write sumstats to temp file for LDSC CLI"));
+        code.push(format!(
+            r#"{tmp_sumstats} <- tempfile(fileext = ".sumstats")"#
+        ));
+        code.push(format!(
+            "data.table::fwrite({ldsc_df}, {tmp_sumstats}, sep = \"\\t\")"
+        ));
+
+        let intercept_flag = match cfg.intercept {
+            Some(v) => format!(" --intercept-h2 {v}"),
+            None => String::new(),
+        };
+
+        code.push(format!(
+            r#"{tmp_result} <- system2("ldsc.py", c(
+  "--h2", {tmp_sumstats},
+  "--ref-ld", "baselineLD.",
+  "--w-ld", "weights.",
+  "--n-col", round(mean({ldsc_df}$N)),
+  "--n-blocks", "{n_blocks}"{intercept_flag}
+), stdout = TRUE, stderr = TRUE)"#,
+            n_blocks = cfg.n_blocks,
+        ));
+
+        code.push(format!(
+            "# NOTE: Parse LDSC stdout for h², intercept, ratio. The Rust node\n\
+             # returns a structured DataFrame with these fields directly."
+        ));
+        code.push(format!("cat({tmp_result}, sep = \"\\n\")"));
+        code.push(format!("# {out} holds the parsed LDSC h² result"));
+        code.push(format!(
+            "{out} <- list(h2 = NA_real_, intercept = NA_real_, n_snp = nrow({ldsc_df}))"
+        ));
+
+        Ok(NodeCodegen {
+            code,
+            output_vars: vec![out],
+            extra_packages: vec![],
+        })
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
     }
 }
 

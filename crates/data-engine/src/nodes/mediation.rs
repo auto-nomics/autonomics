@@ -147,6 +147,55 @@ impl NodeFactory for MediationNodeFactory {
             seed: s.seed,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<MediationNodeSpec>(spec, "mediation")?;
+        let out = ctx.output_var.to_string();
+        let covars = if s.covariates.is_empty() {
+            String::new()
+        } else {
+            format!(" + {}", s.covariates.join(" + "))
+        };
+        let m_model = ctx.fresh_var("model_m");
+        let y_model = ctx.fresh_var("model_y");
+        let med = ctx.fresh_var("med_result");
+        let input = input_0(ctx);
+        let code = vec![
+            format!("# Mediation analysis"),
+            format!(
+                "# Mediator model: {} ~ {}{}",
+                s.mediator_column, s.exposure_column, covars
+            ),
+            format!(
+                "{m_model} <- lm({} ~ {}{}, data = {input})",
+                s.mediator_column, s.exposure_column, covars
+            ),
+            format!(
+                "# Outcome model: {} ~ {} + {}{}",
+                s.outcome_column, s.exposure_column, s.mediator_column, covars
+            ),
+            format!(
+                "{y_model} <- lm({} ~ {} + {}{}, data = {input})",
+                s.outcome_column, s.exposure_column, s.mediator_column, covars
+            ),
+            format!(
+                "{med} <- mediate({m_model}, {y_model}, treat = \"{}\", mediator = \"{}\", boot = TRUE, sims = {})",
+                s.exposure_column, s.mediator_column, s.n_bootstrap
+            ),
+            format!("{out} <- summary({med})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["mediation".into()]
+    }
 }
 
 #[async_trait]

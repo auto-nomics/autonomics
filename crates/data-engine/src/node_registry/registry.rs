@@ -11,6 +11,7 @@ use datalake::Datalake;
 use serde::Serialize;
 
 use super::error::{Error, Result};
+use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
@@ -55,7 +56,6 @@ use crate::nodes::{
     sql_node::SqlNodeFactory,
     survival::SurvivalNodeFactory,
     susie_rss::SusieRssNodeFactory,
-    test_source::TestSourceFactory,
     two_sample_mr::TwoSampleMrNodeFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
     viz::VizNodeFactory,
@@ -95,6 +95,46 @@ pub trait NodeFactory: Send + Sync {
     /// instantiating a node (mirrors [`NodeFactory::spec_schema`]).
     fn ports(&self) -> NodePorts;
     fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> Result<Box<dyn DagNode>>;
+
+    // ── reverse-compilation (codegen) ────────────────────────────────────
+    //
+    // Default implementations return `NotSupported`, so existing factories
+    // compile unchanged. Override per-kind to enable R/Python codegen.
+
+    /// Compile this node kind's spec into R code that calls the original
+    /// reference R package.
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        _ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        Err(CodegenError::NotSupported {
+            kind: self.kind().to_string(),
+            target: CodegenTarget::R,
+        })
+    }
+
+    /// Compile this node kind's spec into Python code.
+    fn codegen_python(
+        &self,
+        _spec: &serde_json::Value,
+        _ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        Err(CodegenError::NotSupported {
+            kind: self.kind().to_string(),
+            target: CodegenTarget::Python,
+        })
+    }
+
+    /// R packages this node's generated code requires (e.g. `["TwoSampleMR"]`).
+    fn r_packages(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Python packages this node's generated code requires.
+    fn python_packages(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Ingredients for building an isolated [`SessionContext`] per node execution.
@@ -204,7 +244,6 @@ impl NodeRegistry {
         registry.register(Box::new(EpiLassoNodeFactory {}));
         registry.register(Box::new(EpiWqsNodeFactory {}));
         registry.register(Box::new(EchoNodeFactory {}));
-        registry.register(Box::new(TestSourceFactory {}));
         registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));
         registry.register(Box::new(LavaLocusNodeFactory {}));
@@ -272,6 +311,11 @@ impl NodeRegistry {
     /// Return the JSON Schema that validates [`kind`]'s node spec.
     pub fn get_node_spec(&self, node_kind: &str) -> Result<schemars::Schema> {
         Ok(self.get_node_factory(node_kind)?.spec_schema())
+    }
+
+    /// Look up a node factory by kind string. Used by the DAG compiler.
+    pub fn get_factory(&self, kind: &str) -> Result<&dyn NodeFactory> {
+        self.get_node_factory(kind)
     }
 
     pub fn get_node_ports(&self, node_kind: &str) -> Result<NodePorts> {
@@ -405,7 +449,6 @@ mod tests {
                 "r_code": "p <- ggplot(df, aes(x = x, y = y)) + geom_point()"
             }),
             "echo" => serde_json::json!({}),
-            "test_source" => serde_json::json!({"dataset": "iris"}),
             "source_opentargets_associations" => {
                 serde_json::json!({"id": "ENSG00000012048"})
             }

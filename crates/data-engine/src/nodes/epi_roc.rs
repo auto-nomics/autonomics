@@ -134,6 +134,44 @@ impl NodeFactory for EpiRocNodeFactory {
             seed: s.seed,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<EpiRocNodeSpec>(spec, "epi_roc")?;
+        let out = ctx.output_var.to_string();
+        // Pre-allocate all fresh vars before borrowing ctx via input_0.
+        let roc1 = ctx.fresh_var("roc1");
+        let roc2 = ctx.fresh_var("roc2");
+        let input = input_0(ctx).to_string();
+        let mut code = vec![
+            format!("# ROC analysis"),
+            format!(
+                "{roc1} <- roc({input}${}, {input}${}, quiet = TRUE)",
+                s.label_column, s.score1_column
+            ),
+            format!("cat(\"AUC ({}):\", auc({roc1}), \"\\n\")", s.score1_column),
+        ];
+        if let Some(s2) = &s.score2_column {
+            code.push(format!(
+                "{roc2} <- roc({input}${}, {input}${}, quiet = TRUE)",
+                s.label_column, s2
+            ));
+            code.push(format!("cat(\"AUC ({}):\", auc({roc2}), \"\\n\")", s2));
+            code.push(format!("{out} <- roc.test({roc1}, {roc2})"));
+        } else {
+            code.push(format!("{out} <- ci.auc({roc1})"));
+        }
+        code.push(format!("print({out})"));
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["pROC".into()]
+    }
 }
 
 #[async_trait]

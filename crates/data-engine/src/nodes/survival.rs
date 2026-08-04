@@ -113,6 +113,33 @@ impl NodeFactory for SurvivalNodeFactory {
             group_column: s.group_column,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<SurvivalNodeSpec>(spec, "survival")?;
+        let out = ctx.output_var.to_string();
+        let formula = match &s.group_column {
+            Some(g) => format!("Surv({}, {}) ~ {}", s.time_column, s.event_column, g),
+            None => format!("Surv({}, {}) ~ 1", s.time_column, s.event_column),
+        };
+        let fit_var = ctx.fresh_var("surv_fit");
+        let input = input_0(ctx);
+        let code = vec![
+            format!("# Kaplan-Meier survival analysis"),
+            format!("{fit_var} <- survfit(as.formula(\"{formula}\"), data = {input})"),
+            format!("{out} <- summary({fit_var})"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["survival".into()]
+    }
 }
 
 #[async_trait]

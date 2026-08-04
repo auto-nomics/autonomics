@@ -130,6 +130,29 @@ impl NodeFactory for CoxRegressionNodeFactory {
             event_column: s.event_column,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<CoxRegressionNodeSpec>(spec, "cox_regression")?;
+        let input = input_0(ctx);
+        let out = ctx.output_var.to_string();
+        let preds = s.predictors.join(" + ");
+        let formula = format!("Surv({}, {}) ~ {}", s.time_column, s.event_column, preds);
+        let code = vec![
+            format!("# Cox proportional hazards regression"),
+            format!("{out} <- summary(coxph({formula}, data = {input}))"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["survival".into()]
+    }
 }
 
 #[async_trait]

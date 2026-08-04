@@ -268,6 +268,24 @@ impl NodeFactory for LinearRegressionNodeFactory {
             LinearRegressionNode::new(node_spec.x_columns, node_spec.y_column, node_spec.intercept);
         Ok(Box::new(node))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<LinearRegressionNodeSpec>(spec, "linear_regression")?;
+        let input = input_0(ctx);
+        let out = ctx.output_var.to_string();
+        let formula = r_formula(&s.y_column, &s.x_columns, s.intercept);
+        let code = vec![
+            format!("# Linear regression: {formula}"),
+            format!("{out} <- summary(lm({formula}, data = {input}))"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 #[async_trait]

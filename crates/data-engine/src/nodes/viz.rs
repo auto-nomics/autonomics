@@ -153,6 +153,37 @@ impl crate::node_registry::registry::NodeFactory for VizNodeFactory {
         let node_spec: VizNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(VizNode::new(node_spec, node_ctx.opendal.clone())))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<VizNodeSpec>(spec, "visualization")?;
+        let input = input_0(ctx);
+        let width = s.width.unwrap_or(7.0);
+        let height = s.height.unwrap_or(5.0);
+        let dpi = s.dpi.unwrap_or(300.0);
+        let code = vec![
+            format!("# Visualization via ggplot2"),
+            format!("df <- {input}"),
+            s.r_code.clone(),
+            format!(
+                "ggsave(\"{}\", plot = p, width = {}, height = {}, dpi = {})",
+                s.output_path, width, height, dpi
+            ),
+        ];
+        Ok(crate::codegen::NodeCodegen {
+            code,
+            output_vars: vec![], // viz has no output port
+            extra_packages: vec![],
+        })
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["ggplot2".into()]
+    }
 }
 
 #[async_trait]

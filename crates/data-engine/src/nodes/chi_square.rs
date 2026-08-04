@@ -118,6 +118,26 @@ impl NodeFactory for ChiSquareNodeFactory {
             col_column: s.col_column,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<ChiSquareNodeSpec>(spec, "chi_square")?;
+        let input = input_0(ctx);
+        let out = ctx.output_var.to_string();
+        let code = vec![
+            format!("# Chi-square test"),
+            format!(
+                "{out} <- chisq.test(table({input}${}, {input}${}))",
+                s.row_column, s.col_column
+            ),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 #[async_trait]

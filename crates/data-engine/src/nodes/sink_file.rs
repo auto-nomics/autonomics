@@ -18,6 +18,7 @@ use super::meta::{DagNode, NodeInput, NodePorts};
 use super::sink_common::SinkMode;
 use super::source_file::normalize_path;
 use crate::{
+    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::DagError,
     dag::graph::PortOutputs,
     node_registry::registry::{NodeCtx, NodeFactory},
@@ -180,6 +181,40 @@ impl NodeFactory for FileSinkNodeFactory {
         let node_spec: FileSinkNodeSpec = serde_json::from_value(spec)?;
         let node = FileSinkNode::new(node_spec.path, node_spec.format, node_spec.mode);
         Ok(Box::new(node))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        let node_spec: FileSinkNodeSpec =
+            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
+                kind: "sink_file".into(),
+                source: e,
+            })?;
+
+        let path = &node_spec.path;
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
+        let write_call = match node_spec.format {
+            WriteFormat::Csv => format!(r#"fwrite({input}, "{path}")"#),
+            WriteFormat::Parquet => format!(r#"write_parquet({input}, "{path}")"#),
+        };
+
+        // Sink has no output ports — return empty output_vars.
+        Ok(NodeCodegen {
+            code: vec![write_call],
+            output_vars: vec![],
+            extra_packages: vec![],
+        })
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
     }
 }
 

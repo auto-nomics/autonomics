@@ -25,6 +25,8 @@ pub enum DataEngineCmd {
         /// progress / log / finished) out of the actor as the run progresses.
         /// `None` for the non-streaming path.
         event_tx: Option<mpsc::Sender<NodeEvent>>,
+        /// Commit message for the history snapshot. If `None`, a default is used.
+        commit_message: Option<String>,
         reply: oneshot::Sender<EngineResult<RunReport>>,
     },
     GetOutput {
@@ -72,6 +74,17 @@ pub enum DataEngineCmd {
         ref_name: String,
         reply: oneshot::Sender<EngineResult<()>>,
     },
+    /// Fetch a single snapshot (manifest + run report + metadata).
+    GetSnapshot {
+        snapshot_id: String,
+        reply: oneshot::Sender<EngineResult<Option<crate::dag::Snapshot>>>,
+    },
+    /// Diff two snapshots' manifests.
+    DiffSnapshots {
+        old_id: String,
+        new_id: String,
+        reply: oneshot::Sender<EngineResult<String>>,
+    },
     /// Query the current history ref name.
     GetDagRef {
         reply: oneshot::Sender<EngineResult<String>>,
@@ -95,5 +108,10 @@ pub enum DataEngineCmd {
     GetNodeDoc {
         kind: String,
         reply: oneshot::Sender<EngineResult<String>>,
+    },
+    /// Reverse-compile the current DAG to R or Python source code.
+    CompileDag {
+        target: crate::codegen::CodegenTarget,
+        reply: oneshot::Sender<EngineResult<crate::codegen::CompiledScript>>,
     },
 }

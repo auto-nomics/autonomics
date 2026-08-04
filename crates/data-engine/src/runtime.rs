@@ -48,7 +48,12 @@ impl DataEngineServer {
                 };
                 let _ = reply.send(res);
             }
-            DataEngineCmd::RunDag { event_tx, reply } => {
+            DataEngineCmd::RunDag {
+                event_tx,
+                commit_message,
+                reply,
+            } => {
+                self.engine.set_commit_message(commit_message);
                 let res = match event_tx {
                     Some(sink) => self.engine.run_with_events(sink).await,
                     None => self.engine.run().await,
@@ -101,6 +106,16 @@ impl DataEngineServer {
             DataEngineCmd::GetDagRef { reply } => {
                 let _ = reply.send(Ok(self.engine.history_ref().to_string()));
             }
+            DataEngineCmd::GetSnapshot { snapshot_id, reply } => {
+                let _ = reply.send(self.engine.get_snapshot(&snapshot_id).await);
+            }
+            DataEngineCmd::DiffSnapshots {
+                old_id,
+                new_id,
+                reply,
+            } => {
+                let _ = reply.send(self.engine.diff_snapshots(&old_id, &new_id).await);
+            }
             DataEngineCmd::GetNodeSpec { kind, reply } => {
                 let _ = reply.send(self.engine.get_node_spec(&kind));
             }
@@ -123,6 +138,9 @@ impl DataEngineServer {
             }
             DataEngineCmd::GetNodeDoc { kind, reply } => {
                 let _ = reply.send(self.engine.get_node_doc(&kind));
+            }
+            DataEngineCmd::CompileDag { target, reply } => {
+                let _ = reply.send(self.engine.compile_dag(target));
             }
         }
     }
@@ -191,6 +209,7 @@ impl DataEngineClient {
         self.request(
             DataEngineCmd::RunDag {
                 event_tx: None,
+                commit_message: None,
                 reply: reply_tx,
             },
             reply_rx,
@@ -206,6 +225,7 @@ impl DataEngineClient {
     /// may be dropped on a full channel — they never affect the run's outcome.
     pub fn run_dag_stream(
         &self,
+        commit_message: Option<String>,
     ) -> (
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
         tokio::sync::oneshot::Receiver<crate::error::Result<crate::dag::RunReport>>,
@@ -214,6 +234,7 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let _ = self.tx.send(DataEngineCmd::RunDag {
             event_tx: Some(event_tx),
+            commit_message,
             reply: reply_tx,
         });
         (event_rx, reply_rx)
@@ -247,6 +268,22 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::ViewDag { reply: reply_tx }, reply_rx)
             .await
+    }
+
+    /// Reverse-compile the current DAG into R or Python source code.
+    pub async fn compile_dag(
+        &self,
+        target: crate::codegen::CodegenTarget,
+    ) -> Result<crate::codegen::CompiledScript> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::CompileDag {
+                target,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
     }
 
     pub async fn list_node_factories(&self) -> Result<Vec<crate::node_registry::NodeInfo>> {
@@ -392,6 +429,33 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
             .await
+    }
+
+    /// Fetch a single snapshot by id or short-hash prefix.
+    pub async fn get_snapshot(&self, snapshot_id: String) -> Result<Option<crate::dag::Snapshot>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetSnapshot {
+                snapshot_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Diff two snapshots' manifests.
+    pub async fn diff_snapshots(&self, old_id: String, new_id: String) -> Result<String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::DiffSnapshots {
+                old_id,
+                new_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
     }
 
     pub async fn get_node_ports(&self, kind: String) -> Result<crate::nodes::meta::NodePorts> {

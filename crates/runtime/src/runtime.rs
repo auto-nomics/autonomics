@@ -6,8 +6,8 @@ use agentik_core::error::AgentError;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
-use data_engine::data_engine::DataEngine;
 use data_engine::dag::DagHistory;
+use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
 use datalake::Datalake;
 use fs::OpendalFileStorage;
@@ -101,6 +101,29 @@ proactively rather than answering from memory alone.
   "z" = beta / se and selecting exactly `rsid, "z", "n"`. A VCF emits an `info` Struct column; \
   extract subfields with `get_field(info, 'ES')` in the transform, never rely on a List \
   column where a Struct is required. Reserve exactly the required column names and types.
+
+### DAG Version Control (History & Refs)
+
+Every `run_dag` call **automatically saves a snapshot** of the full pipeline (all nodes, \
+edges, specs) plus the run report to a local history database. Snapshots are organized \
+into **refs** (branches) — each ref is an independent lineage.
+
+- **Always provide a `commit_message`** when calling `run_dag`. A descriptive message \
+  like "LDSC h² with 200 blocks on BMI" makes it easy to find past runs later via \
+  `dag_history_log`.
+
+- **One analysis = one ref.** When starting a new, unrelated analysis pipeline, call \
+  `new_dag_ref` with a descriptive name (e.g. "gwas-bmi", "epi-charls") instead of \
+  building on top of the previous pipeline. This keeps histories cleanly separated. \
+  The old pipeline's snapshots are preserved — switch back anytime with `switch_dag_ref`.
+
+- **Reviewing history.** Use `dag_history_log` to see past snapshots in the current ref, \
+  and `list_dag_refs` to see all analysis lineages. The `*` marker shows the active ref.
+
+- **Recovering past work.** `checkout_dag` loads a historical snapshot's pipeline into \
+  memory without changing the ref (like `git checkout`). `branch_from_snapshot` creates \
+  a new ref from any historical snapshot (like `git checkout -b`), letting you explore \
+  an alternative direction from that point.
 
 ### SQL Conventions
 All SQL in this system runs on Apache DataFusion. The following rules apply to \

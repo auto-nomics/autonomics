@@ -21,6 +21,7 @@ use thiserror::Error;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
 use crate::{
+    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory},
 };
@@ -184,6 +185,57 @@ impl NodeFactory for FileSourceNodeFactory {
         let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
         let node = FileSourceNode::new(node_spec.path, node_spec.format);
         Ok(Box::new(node))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        let node_spec: FileSourceNodeSpec =
+            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
+                kind: "source_file".into(),
+                source: e,
+            })?;
+
+        let path = &node_spec.path;
+        let fmt = node_spec
+            .format
+            .or_else(|| FileFormat::from_path(path))
+            .unwrap_or(FileFormat::Csv);
+
+        let out = ctx.output_var.to_string();
+        let read_call = match fmt {
+            FileFormat::Csv | FileFormat::Tsv => {
+                format!(r#"{out} <- fread("{path}")"#)
+            }
+            FileFormat::Parquet => {
+                format!(r#"{out} <- read_parquet("{path}")"#)
+            }
+            FileFormat::Vcf => {
+                format!(
+                    r#"# NOTE: R codegen for VCF uses vcfR::read.vcfR
+{out} <- vcfR::read.vcfR("{path}", verbose = FALSE)"#
+                )
+            }
+            FileFormat::Bed => {
+                format!(r#"{out} <- read.table("{path}", sep = "\t", header = FALSE)"#)
+            }
+            _ => {
+                // Fallback: comment + placeholder
+                format!(
+                    "# NOTE: R codegen for {fmt:?} format not yet implemented — \
+                     read the file manually"
+                )
+            }
+        };
+
+        let code = vec![read_call];
+        Ok(NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
     }
 }
 

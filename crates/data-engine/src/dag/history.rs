@@ -349,6 +349,12 @@ impl DagHistory {
 
     /// Create a new branch pointing at the current head of `from_ref`.
     pub async fn branch(&self, name: &str, from_ref: &str) -> Result<(), DagError> {
+        if self.ref_head(name).await?.is_some() {
+            return Err(DagError::History(format!(
+                "ref '{name}' already exists. Use a different name."
+            )));
+        }
+
         let head = self
             .ref_head(from_ref)
             .await?
@@ -357,9 +363,7 @@ impl DagHistory {
         self.conn
             .execute(
                 "INSERT INTO refs (name, snapshot_id, pinned)
-                 VALUES (?1, ?2, 0)
-                 ON CONFLICT(name) DO UPDATE SET snapshot_id = ?2
-                 WHERE pinned = 0",
+                 VALUES (?1, ?2, 0)",
                 params_from_iter([Value::Text(name.to_string()), Value::Text(head.id.clone())]),
             )
             .await
@@ -377,6 +381,14 @@ impl DagHistory {
         name: &str,
         snapshot_id_or_prefix: &str,
     ) -> Result<(), DagError> {
+        // Reject if the ref name already exists — never silently overwrite.
+        if self.ref_head(name).await?.is_some() {
+            return Err(DagError::History(format!(
+                "ref '{name}' already exists. Use a different name, or \
+                 switch_dag_ref to activate it."
+            )));
+        }
+
         let snap = self
             .resolve_snapshot(snapshot_id_or_prefix)
             .await?
@@ -387,9 +399,7 @@ impl DagHistory {
         self.conn
             .execute(
                 "INSERT INTO refs (name, snapshot_id, pinned)
-                 VALUES (?1, ?2, 0)
-                 ON CONFLICT(name) DO UPDATE SET snapshot_id = ?2
-                 WHERE pinned = 0",
+                 VALUES (?1, ?2, 0)",
                 params_from_iter([Value::Text(name.to_string()), Value::Text(snap.id.clone())]),
             )
             .await

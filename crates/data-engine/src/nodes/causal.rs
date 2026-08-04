@@ -113,6 +113,74 @@ impl NodeFactory for CausalNodeFactory {
             spec: s,
         }))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<CausalNodeSpec>(spec, "causal")?;
+        let out = ctx.output_var.to_string();
+        let covars = s.covariates.join(" + ");
+        let ps_model = ctx.fresh_var("ps_model");
+        let ps_score = ctx.fresh_var("ps_score");
+        let weight_var = ctx.fresh_var("ipw");
+        let input = input_0(ctx);
+        let code = match s.method.as_str() {
+            "iptw" | "ipw" => vec![
+                format!("# Causal inference via IPTW"),
+                format!(
+                    "# Propensity score model: {t} ~ {c}",
+                    t = s.treatment_column,
+                    c = covars
+                ),
+                format!(
+                    "{ps_model} <- glm({t} ~ {c}, data = {input}, family = binomial)",
+                    t = s.treatment_column,
+                    c = covars
+                ),
+                format!("{ps_score} <- predict({ps_model}, type = \"response\")"),
+                format!(
+                    "{weight_var} <- ifelse({input}${t} == 1, 1/{ps_score}, 1/(1-{ps_score}))",
+                    t = s.treatment_column
+                ),
+                format!(
+                    "{out} <- svm({y} ~ {t}, data = {input}, weights = {weight_var})",
+                    y = s.outcome_column,
+                    t = s.treatment_column
+                ),
+                format!("# NOTE: Consider using survey::svyglm for proper SE estimation"),
+            ],
+            "psm" | "matching" => vec![
+                format!("# Causal inference via propensity score matching"),
+                format!(
+                    "{ps_model} <- glm({t} ~ {c}, data = {input}, family = binomial)",
+                    t = s.treatment_column,
+                    c = covars
+                ),
+                format!("{ps_score} <- predict({ps_model}, type = \"response\")"),
+                format!(
+                    "matched <- matchit({t} ~ {c}, data = {input}, method = \"nearest\")",
+                    t = s.treatment_column,
+                    c = covars
+                ),
+                format!(
+                    "{out} <- summary(lm({y} ~ {t}, data = match.data(matched)))",
+                    y = s.outcome_column,
+                    t = s.treatment_column
+                ),
+            ],
+            other => vec![format!(
+                "# NOTE: causal method '{other}' not yet mapped to R codegen"
+            )],
+        };
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["MatchIt".into(), "survey".into()]
+    }
 }
 
 #[async_trait]

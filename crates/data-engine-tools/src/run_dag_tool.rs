@@ -17,9 +17,19 @@ use crate::ExecError;
     description = "Execute the current DAG pipeline. All nodes are validated \
                   and run according to their dependency order. Returns a \
                   detailed report with per-node status, type, output schema, \
-                  row counts, timing, sink paths, and error/skip details."
+                  row counts, timing, sink paths, and error/skip details. \
+                  A snapshot of the DAG is automatically committed to the \
+                  history store — provide a descriptive commit message for \
+                  easy retrieval via dag_history_log."
 )]
-pub struct RunDagInput {}
+pub struct RunDagInput {
+    /// A short, human-readable description of what this run does (e.g. \
+    /// "initial LDSC h² on BMI", "added sex covariate"). Stored as the \
+    /// snapshot message so dag_history_log shows meaningful entries. \
+    /// If omitted, a generic default is used.
+    #[serde(default)]
+    pub commit_message: Option<String>,
+}
 
 pub struct RunDagTool {
     client: Arc<DataEngineClient>,
@@ -150,9 +160,10 @@ impl ToolFunction for RunDagTool {
         60 * 60
     }
 
-    async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         // Non-streaming path (used when called directly, not via the toolset).
         let report = self.client.run_dag().await.map_err(ExecError::from)?;
+        let _ = input; // commit_message only used in streaming path
         Ok(ToolResult::success_json(build_report_json(report)))
     }
 
@@ -165,11 +176,9 @@ impl ToolFunction for RunDagTool {
         input: Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        // `RunDagInput` carries no parameters; validate it parses (mirrors the
-        // default `execute` deserialize contract we bypass by overriding here).
-        let _ = serde_json::from_value::<Self::Input>(input)?;
+        let parsed = serde_json::from_value::<Self::Input>(input)?;
 
-        let (mut event_rx, reply_rx) = self.client.run_dag_stream();
+        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message);
         // Pin the reply future so it can be polled across loop iterations.
         tokio::pin!(reply_rx);
 

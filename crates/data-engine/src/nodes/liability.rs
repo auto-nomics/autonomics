@@ -191,6 +191,35 @@ impl NodeFactory for LiabilityNodeFactory {
         let cfg: LiabilityConfig = serde_json::from_value(spec)?;
         Ok(Box::new(LiabilityNode::new(cfg)))
     }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut crate::codegen::CodegenCtx,
+    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        use crate::codegen::helpers::*;
+        let s = parse_spec::<LiabilityConfig>(spec, "liability")?;
+        let input = input_0(ctx);
+        let out = ctx.output_var.to_string();
+        // Liability-threshold conversion factor
+        let code = vec![
+            format!(
+                "# Liability-scale conversion (samp_prev={}, pop_prev={})",
+                s.samp_prev, s.pop_prev
+            ),
+            format!("{{"),
+            format!("  P <- {}  # sample prevalence", s.samp_prev),
+            format!("  K <- {}  # population prevalence", s.pop_prev),
+            format!("  z <- qnorm(1 - K)"),
+            format!("  factor <- K^2 * (1 - K)^2 / (P * (1 - P) * dnorm(z)^2)"),
+            format!("  {out} <- {input}"),
+            format!("  {out}$h2_liab <- {out}$h2 * factor"),
+            format!("  {out}$h2_se_liab <- {out}$h2_se * factor"),
+            format!("}}"),
+            format!("print({out})"),
+        ];
+        Ok(crate::codegen::NodeCodegen::simple(code, out))
+    }
 }
 
 impl LiabilityNode {

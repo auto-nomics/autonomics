@@ -42,6 +42,10 @@ pub struct DataEngine {
     /// Switch via [`Self::set_history_ref`] to isolate unrelated analysis
     /// tasks into independent snapshot lineages.
     history_ref: String,
+    /// Optional commit message for the next snapshot. Set via
+    /// [`Self::set_commit_message`] before `run()`. Consumed (cleared) on
+    /// each `run()` — falls back to a default when `None`.
+    pending_commit_message: Option<String>,
 }
 
 impl DataEngine {
@@ -77,6 +81,7 @@ impl DataEngine {
             config: SchedulerConfig::default(),
             history: None,
             history_ref: "main".to_string(),
+            pending_commit_message: None,
         }
     }
 
@@ -189,6 +194,19 @@ impl DataEngine {
         Ok(self.dag.to_dot())
     }
 
+    /// Reverse-compile the current DAG into R or Python source code.
+    pub fn compile_dag(
+        &self,
+        target: crate::codegen::CodegenTarget,
+    ) -> Result<crate::codegen::CompiledScript> {
+        let compiler = crate::codegen::DagCompiler {
+            registry: &self.node_registry,
+        };
+        compiler
+            .compile_dag(&self.dag, target)
+            .map_err(|e| Error::Custom(e.to_string()))
+    }
+
     /// Clear all nodes, edges, and runtime state — start fresh.
     pub fn clear_dag(&mut self) -> Result<()> {
         self.dag.clear();
@@ -205,30 +223,56 @@ impl DataEngine {
     /// This is the replacement for the old `clear_dag` — instead of wiping
     /// state without trace, it starts a new independent lineage.
     pub async fn new_dag_ref(&mut self, name: &str) -> Result<()> {
+        // Reject if the ref already exists.
+        if let Some(history) = &self.history {
+            if history
+                .ref_head(name)
+                .await
+                .map_err(|e| Error::Dag(e))?
+                .is_some()
+            {
+                return Err(Error::Custom(format!(
+                    "ref '{name}' already exists. Use switch_dag_ref to activate it, \
+                     or branch_from_snapshot to create a new lineage from a snapshot."
+                )));
+            }
+        }
         self.dag.clear();
         self.history_ref = name.to_string();
         Ok(())
     }
 
-    /// Switch the engine's history ref to an existing ref name.
-    /// Does **not** clear or modify the in-memory DAG.
+    /// Switch the engine's history ref to an existing ref name **and load
+    /// that ref's head snapshot into memory**.
     ///
-    /// Validates that the ref exists in the history store — rejects unknown
-    /// names so a typo doesn't silently point the engine at a non-existent
-    /// lineage.
+    /// This ensures the in-memory DAG matches the target ref's latest state,
+    /// preventing cross-ref contamination where a stale workspace from ref A
+    /// gets committed to ref B.
+    ///
+    /// Rejects unknown ref names.
     pub async fn switch_dag_ref(&mut self, name: &str) -> Result<()> {
-        if let Some(history) = &self.history {
-            let head = history
-                .ref_head(name)
-                .await
-                .map_err(|e| Error::Dag(e))?;
-            if head.is_none() {
-                return Err(Error::Custom(format!(
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+
+        let head = history
+            .ref_head(name)
+            .await
+            .map_err(|e| Error::Dag(e))?
+            .ok_or_else(|| {
+                Error::Custom(format!(
                     "ref '{name}' does not exist. Use new_dag_ref to create it, \
                      or list_dag_refs to see available refs."
-                )));
-            }
-        }
+                ))
+            })?;
+
+        // Load the ref's head snapshot into the in-memory DAG so the workspace
+        // matches the lineage the user just switched to.
+        let manifest = head
+            .manifest()
+            .map_err(|e| Error::Custom(format!("manifest deserialization: {e}")))?;
+        self.rebuild_dag_from_manifest(&manifest)?;
         self.history_ref = name.to_string();
         Ok(())
     }
@@ -236,10 +280,17 @@ impl DataEngine {
     /// List all refs in the history store. Returns `Ok(vec![])` if no history
     /// is attached.
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
-        match &self.history {
-            Some(h) => Ok(h.list_refs().await?),
-            None => Ok(vec![]),
+        let mut refs = match &self.history {
+            Some(h) => h.list_refs().await.map_err(|e| Error::Dag(e))?,
+            None => vec![],
+        };
+        // Include the current ref even if it has no snapshots yet (just created
+        // via new_dag_ref, never run). Shows with an empty snapshot id.
+        let current_exists = refs.iter().any(|(name, _, _)| name == &self.history_ref);
+        if !current_exists {
+            refs.push((self.history_ref.clone(), String::new(), false));
         }
+        Ok(refs)
     }
 
     /// Show the snapshot lineage for a ref (default: current ref).
@@ -255,6 +306,46 @@ impl DataEngine {
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
         let r = ref_name.unwrap_or(&self.history_ref);
         history.log(r, limit).await.map_err(|e| Error::Dag(e))
+    }
+
+    /// Fetch a single snapshot by id or short-hash prefix.
+    pub async fn get_snapshot(&self, snapshot_id: &str) -> Result<Option<crate::dag::Snapshot>> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        history
+            .resolve_snapshot(snapshot_id)
+            .await
+            .map_err(|e| Error::Dag(e))
+    }
+
+    /// Diff two snapshots' manifests. Returns a textual diff.
+    pub async fn diff_snapshots(&self, old_id: &str, new_id: &str) -> Result<String> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+
+        let old_snap = history
+            .resolve_snapshot(old_id)
+            .await
+            .map_err(|e| Error::Dag(e))?
+            .ok_or_else(|| Error::Custom(format!("snapshot '{old_id}' not found")))?;
+        let new_snap = history
+            .resolve_snapshot(new_id)
+            .await
+            .map_err(|e| Error::Dag(e))?
+            .ok_or_else(|| Error::Custom(format!("snapshot '{new_id}' not found")))?;
+
+        let old_m = old_snap
+            .manifest()
+            .map_err(|e| Error::Custom(e.to_string()))?;
+        let new_m = new_snap
+            .manifest()
+            .map_err(|e| Error::Custom(e.to_string()))?;
+
+        Ok(format_manifest_diff(&old_m, &new_m))
     }
 
     /// Load a historical snapshot's DAG into memory **without** moving the
@@ -437,6 +528,12 @@ impl DataEngine {
         &self.history_ref
     }
 
+    /// Set the commit message for the next `run()` snapshot. Consumed on the
+    /// next run — if not called, a default message is used.
+    pub fn set_commit_message(&mut self, message: Option<String>) {
+        self.pending_commit_message = message;
+    }
+
     /// Borrow the history store (if attached) for direct queries — e.g.
     /// `log`, `refs`, `get_snapshot`.
     pub fn history(&self) -> Option<&DagHistory> {
@@ -451,17 +548,25 @@ impl DataEngine {
     /// ([`Self::history_ref`]).
     pub async fn run(&mut self) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
+        let manifest_hash = manifest.content_hash();
         let report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
 
         if let Some(history) = &self.history {
-            let _ = history
-                .commit(
-                    &self.history_ref,
-                    &manifest,
-                    Some(&report),
-                    "auto-snapshot after run",
-                )
-                .await;
+            // Skip snapshot if the manifest hasn't changed since the current
+            // ref head — avoids redundant snapshots for identical re-runs.
+            let skip = match history.ref_head(&self.history_ref).await {
+                Ok(Some(head)) => head.manifest_hash == manifest_hash,
+                _ => false,
+            };
+            if !skip {
+                let msg = self
+                    .pending_commit_message
+                    .take()
+                    .unwrap_or_else(|| "auto-snapshot after run".to_string());
+                let _ = history
+                    .commit(&self.history_ref, &manifest, Some(&report), &msg)
+                    .await;
+            }
         }
         Ok(report)
     }
@@ -474,20 +579,26 @@ impl DataEngine {
         event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
     ) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
+        let manifest_hash = manifest.content_hash();
         let report = self
             .dag
             .run(&self.config, &self.engine_ctx, Some(event_sink))
             .await?;
 
         if let Some(history) = &self.history {
-            let _ = history
-                .commit(
-                    &self.history_ref,
-                    &manifest,
-                    Some(&report),
-                    "auto-snapshot after run",
-                )
-                .await;
+            let skip = match history.ref_head(&self.history_ref).await {
+                Ok(Some(head)) => head.manifest_hash == manifest_hash,
+                _ => false,
+            };
+            if !skip {
+                let msg = self
+                    .pending_commit_message
+                    .take()
+                    .unwrap_or_else(|| "auto-snapshot after run".to_string());
+                let _ = history
+                    .commit(&self.history_ref, &manifest, Some(&report), &msg)
+                    .await;
+            }
         }
         Ok(report)
     }
@@ -557,6 +668,66 @@ impl DataEngineBuilder {
             self.opendal,
         )
     }
+}
+
+/// Produce a human-readable diff between two manifests.
+fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagManifest) -> String {
+    use std::collections::{HashMap as StdHashMap, HashSet};
+
+    let old_nodes: StdHashMap<&str, &crate::dag::history::NodeEntry> =
+        old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let new_nodes: StdHashMap<&str, &crate::dag::history::NodeEntry> =
+        new.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    let old_edges: HashSet<String> = old
+        .edges
+        .iter()
+        .map(|e| format!("{}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port))
+        .collect();
+    let new_edges: HashSet<String> = new
+        .edges
+        .iter()
+        .map(|e| format!("{}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port))
+        .collect();
+
+    let mut out = String::new();
+    let mut changes = 0;
+
+    for n in &new.nodes {
+        if !old_nodes.contains_key(n.id.as_str()) {
+            out.push_str(&format!("  + node {} ({})\n", n.id, n.kind));
+            changes += 1;
+        }
+    }
+    for n in &old.nodes {
+        if !new_nodes.contains_key(n.id.as_str()) {
+            out.push_str(&format!("  - node {} ({})\n", n.id, n.kind));
+            changes += 1;
+        }
+    }
+    for n in &new.nodes {
+        if let Some(old_n) = old_nodes.get(n.id.as_str()) {
+            if old_n.kind != n.kind || old_n.spec != n.spec {
+                out.push_str(&format!("  ~ node {} ({})\n", n.id, n.kind));
+                changes += 1;
+            }
+        }
+    }
+    for e in new_edges.difference(&old_edges) {
+        out.push_str(&format!("  + edge {e}\n"));
+        changes += 1;
+    }
+    for e in old_edges.difference(&new_edges) {
+        out.push_str(&format!("  - edge {e}\n"));
+        changes += 1;
+    }
+
+    if changes == 0 {
+        out.push_str("(no changes)");
+    } else {
+        out.push_str(&format!("\n{changes} change(s)"));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1131,7 +1302,6 @@ mod tests {
             "ldsc",
             "linear_regression",
             "echo",
-            "test_source",
             "two_sample_mr",
         ] {
             assert!(
@@ -1154,7 +1324,6 @@ mod tests {
             "ldsc",
             "linear_regression",
             "echo",
-            "test_source",
             "two_sample_mr",
         ] {
             let schema = engine
@@ -1347,20 +1516,6 @@ mod tests {
         let report = engine.run().await.expect("run should succeed");
         assert!(report.ok);
         assert_eq!(report.status("lr"), Some(RuntimeStatus::Success));
-    }
-
-    /// test_source node: creates with spec, returns Iris dataset.
-    #[tokio::test]
-    async fn registry_test_source_node_runs() {
-        let mut engine = DataEngine::builder().build();
-
-        engine
-            .add_node_from_registry("m", "test_source", serde_json::json!({"dataset": "iris"}))
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("m"), Some(RuntimeStatus::Success));
     }
 
     /// Multiple registry-created nodes wired together end-to-end.

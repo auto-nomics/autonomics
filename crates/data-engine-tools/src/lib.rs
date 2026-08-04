@@ -2,7 +2,9 @@ mod add_edge_tool;
 mod add_node_tool;
 mod branch_from_snapshot_tool;
 mod checkout_dag_tool;
+mod compile_dag_tool;
 mod dag_history_log_tool;
+mod diff_snapshots_tool;
 mod get_node_doc_tool;
 mod get_node_ports_tool;
 mod get_node_spec_tool;
@@ -12,6 +14,7 @@ mod list_node_factories_tool;
 mod new_dag_ref_tool;
 mod remove_node_tool;
 mod run_dag_tool;
+mod show_snapshot_tool;
 mod switch_dag_ref_tool;
 mod update_node_tool;
 mod view_dag_tool;
@@ -90,12 +93,15 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),
         ToolRegistration::from(get_output_tool::GetOutputTool::new(client.clone())),
         ToolRegistration::from(view_dag_tool::ViewDagTool::new(client.clone())),
+        ToolRegistration::from(compile_dag_tool::CompileDagTool::new(client.clone())),
         // ── history / ref management ──────────────────────────────────────
         ToolRegistration::from(new_dag_ref_tool::NewDagRefTool::new(client.clone())),
         ToolRegistration::from(switch_dag_ref_tool::SwitchDagRefTool::new(client.clone())),
         ToolRegistration::from(list_dag_refs_tool::ListDagRefsTool::new(client.clone())),
         ToolRegistration::from(dag_history_log_tool::DagHistoryLogTool::new(client.clone())),
         ToolRegistration::from(checkout_dag_tool::CheckoutDagTool::new(client.clone())),
+        ToolRegistration::from(show_snapshot_tool::ShowSnapshotTool::new(client.clone())),
+        ToolRegistration::from(diff_snapshots_tool::DiffSnapshotsTool::new(client.clone())),
         ToolRegistration::from(branch_from_snapshot_tool::BranchFromSnapshotTool::new(
             client,
         )),

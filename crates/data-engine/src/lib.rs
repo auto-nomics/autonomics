@@ -1,3 +1,4 @@
+pub mod codegen;
 pub mod dag;
 pub mod data_engine;
 pub mod dataset;

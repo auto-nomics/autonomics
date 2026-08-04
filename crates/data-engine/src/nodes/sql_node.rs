@@ -7,6 +7,7 @@ use thiserror::Error;
 use super::meta::{DagNode, NodeInput, NodePorts};
 
 use crate::{
+    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     node_registry::registry::{NodeCtx, NodeFactory},
 };
@@ -89,6 +90,43 @@ impl NodeFactory for SqlNodeFactory {
         let node_spec: SqlNodeSpec = serde_json::from_value(spec)?;
         let sql_node = SqlNode::new(node_spec.sql_query);
         Ok(Box::new(sql_node))
+    }
+
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        let node_spec: SqlNodeSpec =
+            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
+                kind: "sql".into(),
+                source: e,
+            })?;
+
+        let out = ctx.output_var.to_string();
+        let mut code = vec!["# SQL node — replicating query via sqldf".to_string()];
+
+        // Alias each input variable as port_N so sqldf can resolve table names.
+        for (i, input_var) in ctx.input_vars.iter().enumerate() {
+            code.push(format!("port_{i} <- {input_var}"));
+        }
+
+        // Escape double quotes in the SQL for embedding in an R string.
+        let escaped = node_spec
+            .sql_query
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        code.push(format!(r#"{out} <- sqldf("{escaped}")"#));
+
+        Ok(NodeCodegen {
+            code,
+            output_vars: vec![out],
+            extra_packages: vec!["sqldf".into()],
+        })
+    }
+
+    fn r_packages(&self) -> Vec<String> {
+        vec!["data.table".into()]
     }
 }
 
