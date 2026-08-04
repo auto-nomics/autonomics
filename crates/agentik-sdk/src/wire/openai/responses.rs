@@ -20,11 +20,11 @@ use crate::types::shared::{RequestId, Usage};
 use crate::types::streaming::{ContentBlockDelta, MessageStreamEvent};
 use crate::types::{ContentBlock, StopReason};
 use crate::wire::openai::{
-    OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value,
-    translate_message, translate_tool_choice,
+    OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value, translate_message,
+    translate_tool_choice,
 };
 use crate::wire::{ProtocolFeatures, StreamState, WireProtocol, WireRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Endpoint path for the Responses API.
 pub const ENDPOINT_PATH: &str = "/v1/responses";
@@ -49,11 +49,7 @@ impl WireProtocol for OpenAiResponsesWire {
         OPENAI_FEATURES
     }
 
-    fn encode_request(
-        &self,
-        params: &MessageCreateParams,
-        streaming: bool,
-    ) -> Result<WireRequest> {
+    fn encode_request(&self, params: &MessageCreateParams, streaming: bool) -> Result<WireRequest> {
         // Build the `input` array. Responses uses typed items, not
         // role-tagged messages, but role+content message items still appear
         // as `{"type":"message","role":…,"content":[…]}`.
@@ -193,8 +189,15 @@ impl WireProtocol for OpenAiResponsesWire {
             return Err(AnthropicError::from_status(status, body.to_string()));
         }
         let value = parse_json(body)?;
-        let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let model = value.get("model").and_then(|v| v.as_str()).map(str::to_string);
+        let id = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let model = value
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         let mut content: Vec<ContentBlock> = Vec::new();
         let mut stop_reason: Option<StopReason> = None;
@@ -207,12 +210,9 @@ impl WireProtocol for OpenAiResponsesWire {
             for item in output {
                 match item.get("type").and_then(|t| t.as_str()) {
                     Some("message") => {
-                        if let Some(parts) =
-                            item.get("content").and_then(|c| c.as_array())
-                        {
+                        if let Some(parts) = item.get("content").and_then(|c| c.as_array()) {
                             for part in parts {
-                                if part.get("type").and_then(|t| t.as_str())
-                                    == Some("output_text")
+                                if part.get("type").and_then(|t| t.as_str()) == Some("output_text")
                                 {
                                     let text = part
                                         .get("text")
@@ -237,10 +237,11 @@ impl WireProtocol for OpenAiResponsesWire {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let arguments_str =
-                            item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
-                        let input: Value =
-                            serde_json::from_str(arguments_str).unwrap_or(json!({}));
+                        let arguments_str = item
+                            .get("arguments")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("{}");
+                        let input: Value = serde_json::from_str(arguments_str).unwrap_or(json!({}));
                         content.push(ContentBlock::ToolUse {
                             id: call_id,
                             name,
@@ -249,13 +250,9 @@ impl WireProtocol for OpenAiResponsesWire {
                         stop_reason = Some(StopReason::ToolUse);
                     }
                     Some("reasoning") => {
-                        if let Some(summary) =
-                            item.get("summary").and_then(|s| s.as_array())
-                        {
+                        if let Some(summary) = item.get("summary").and_then(|s| s.as_array()) {
                             for s in summary {
-                                if s.get("type").and_then(|t| t.as_str())
-                                    == Some("summary_text")
-                                {
+                                if s.get("type").and_then(|t| t.as_str()) == Some("summary_text") {
                                     let text = s
                                         .get("text")
                                         .and_then(|t| t.as_str())
@@ -281,22 +278,14 @@ impl WireProtocol for OpenAiResponsesWire {
         if stop_reason.is_none() {
             stop_reason = match value.get("status").and_then(|s| s.as_str()) {
                 Some("completed") => Some(StopReason::EndTurn),
-                Some("incomplete") | Some("incomplete_output") => {
-                    Some(StopReason::MaxTokens)
-                }
+                Some("incomplete") | Some("incomplete_output") => Some(StopReason::MaxTokens),
                 _ => Some(StopReason::EndTurn),
             };
         }
 
         let usage = value.get("usage").map(|u| Usage {
-            input_tokens: u
-                .get("input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            output_tokens: u
-                .get("output_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
             cache_creation_input_tokens: u
                 .get("input_tokens_details")
                 .and_then(|d| d.get("cached_tokens"))
@@ -338,10 +327,7 @@ impl WireProtocol for OpenAiResponsesWire {
                         ))
                     })?;
                     let resp = &value["response"];
-                    state.response_id = resp
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
+                    state.response_id = resp.get("id").and_then(|v| v.as_str()).map(str::to_string);
                     state.model = resp
                         .get("model")
                         .and_then(|v| v.as_str())
@@ -385,10 +371,8 @@ impl WireProtocol for OpenAiResponsesWire {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let idx_key = item
-                            .get("index")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32;
+                        let idx_key =
+                            item.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         state.tool_calls.insert(
                             idx_key,
                             crate::wire::ToolCallSlot {
@@ -426,10 +410,7 @@ impl WireProtocol for OpenAiResponsesWire {
                         "failed to parse response.output_text.delta: {e}"
                     ))
                 })?;
-                let text = value
-                    .get("delta")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
+                let text = value.get("delta").and_then(|d| d.as_str()).unwrap_or("");
                 if text.is_empty() {
                     return Ok(None);
                 }
@@ -439,12 +420,16 @@ impl WireProtocol for OpenAiResponsesWire {
                     // We can only return one event; emit the start now and
                     // the delta will be carried by the next event.
                     return Ok(Some(MessageStreamEvent::ContentBlockStart {
-                        content_block: ContentBlock::Text { text: String::new() },
+                        content_block: ContentBlock::Text {
+                            text: String::new(),
+                        },
                         index: 0,
                     }));
                 }
                 Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                    delta: ContentBlockDelta::TextDelta { text: text.to_string() },
+                    delta: ContentBlockDelta::TextDelta {
+                        text: text.to_string(),
+                    },
                     index: 0,
                 }))
             }
@@ -455,10 +440,7 @@ impl WireProtocol for OpenAiResponsesWire {
                         "failed to parse response.function_call_arguments.delta: {e}"
                     ))
                 })?;
-                let partial = value
-                    .get("delta")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
+                let partial = value.get("delta").and_then(|d| d.as_str()).unwrap_or("");
                 if partial.is_empty() {
                     return Ok(None);
                 }
@@ -503,16 +485,14 @@ impl WireProtocol for OpenAiResponsesWire {
                             service_tier: None,
                         });
                     }
-                    state.stop_reason = resp
-                        .get("status")
-                        .and_then(|s| s.as_str())
-                        .and_then(|s| match s {
-                            "completed" => Some(StopReason::EndTurn),
-                            "incomplete" | "incomplete_output" => {
-                                Some(StopReason::MaxTokens)
-                            }
-                            _ => None,
-                        });
+                    state.stop_reason =
+                        resp.get("status")
+                            .and_then(|s| s.as_str())
+                            .and_then(|s| match s {
+                                "completed" => Some(StopReason::EndTurn),
+                                "incomplete" | "incomplete_output" => Some(StopReason::MaxTokens),
+                                _ => None,
+                            });
                 }
                 Ok(Some(MessageStreamEvent::MessageStop))
             }
@@ -539,18 +519,16 @@ fn responses_message_item(role: &str, content: &Value) -> Value {
         Value::Array(parts) => {
             let mapped: Vec<Value> = parts
                 .iter()
-                .map(|p| {
-                    match p.get("type").and_then(|t| t.as_str()) {
-                        Some("text") => json!({
-                            "type": "input_text",
-                            "text": p.get("text").cloned().unwrap_or(json!("")),
-                        }),
-                        Some("image_url") => json!({
-                            "type": "input_image",
-                            "image_url": p.get("image_url").cloned().unwrap_or(json!("")),
-                        }),
-                        _ => p.clone(),
-                    }
+                .map(|p| match p.get("type").and_then(|t| t.as_str()) {
+                    Some("text") => json!({
+                        "type": "input_text",
+                        "text": p.get("text").cloned().unwrap_or(json!("")),
+                    }),
+                    Some("image_url") => json!({
+                        "type": "input_image",
+                        "image_url": p.get("image_url").cloned().unwrap_or(json!("")),
+                    }),
+                    _ => p.clone(),
                 })
                 .collect();
             json!({

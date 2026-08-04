@@ -192,7 +192,9 @@ impl NodeFactory for LogisticRegressionNodeFactory {
             format!("{coefs} <- as.data.frame({smry}$coefficients)"),
             format!("names({coefs}) <- c(\"coefficient\", \"std_error\", \"z_stat\", \"p_value\")"),
             format!("{coefs}$term <- rownames({coefs})"),
-            format!("{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"z_stat\", \"p_value\")]"),
+            format!(
+                "{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"z_stat\", \"p_value\")]"
+            ),
             format!("{out}$odds_ratio <- exp({out}$coefficient)"),
             format!("{out}$or_ci_lower <- exp({out}$coefficient - 1.96 * {out}$std_error)"),
             format!("{out}$or_ci_upper <- exp({out}$coefficient + 1.96 * {out}$std_error)"),

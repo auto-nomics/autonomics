@@ -1232,10 +1232,13 @@ data: {\"type\":\"message_stop\"}\r\n\
         };
 
         // Build a real HttpStreamClient from the first (stalled) response.
-        let http_stream =
-            crate::http::streaming::HttpStreamClient::from_response(first_response, config.clone(), Arc::new(crate::wire::AnthropicWire))
-                .await
-                .expect("from_response should succeed for 200");
+        let http_stream = crate::http::streaming::HttpStreamClient::from_response(
+            first_response,
+            config.clone(),
+            Arc::new(crate::wire::AnthropicWire),
+        )
+        .await
+        .expect("from_response should succeed for 200");
 
         // Reconnect closure: re-issue the same GET against a *different*
         // URL (the second server). In real code it would re-issue the
@@ -1253,7 +1256,12 @@ data: {\"type\":\"message_stop\"}\r\n\
                         message: e.to_string(),
                     }
                 })?;
-                crate::http::streaming::HttpStreamClient::from_response(resp, config, Arc::new(crate::wire::AnthropicWire)).await
+                crate::http::streaming::HttpStreamClient::from_response(
+                    resp,
+                    config,
+                    Arc::new(crate::wire::AnthropicWire),
+                )
+                .await
             }
         };
 
@@ -1355,10 +1363,13 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
             max_retries: Some(3),
         };
 
-        let http_stream =
-            crate::http::streaming::HttpStreamClient::from_response(response, config.clone(), Arc::new(crate::wire::AnthropicWire))
-                .await
-                .unwrap();
+        let http_stream = crate::http::streaming::HttpStreamClient::from_response(
+            response,
+            config.clone(),
+            Arc::new(crate::wire::AnthropicWire),
+        )
+        .await
+        .unwrap();
 
         let stream = MessageStream::from_http_stream_with_retry(http_stream, reconnect, config)
             .expect("construct");

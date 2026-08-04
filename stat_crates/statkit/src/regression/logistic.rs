@@ -256,7 +256,9 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
         pseudo_r_squared: pseudo_r2,
         n_obs: n,
         n_params: p,
-        covariance: (0..(p * p)).map(|idx| inv_mat[(idx / p, idx % p)]).collect(),
+        covariance: (0..(p * p))
+            .map(|idx| inv_mat[(idx / p, idx % p)])
+            .collect(),
         converged,
         n_iter,
     })

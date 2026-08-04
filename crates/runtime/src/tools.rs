@@ -112,9 +112,7 @@ pub async fn tool_set_from_config(
         match opengwas_tools_with_token(file_storage.clone(), config.opengwas_token.as_deref()) {
             Ok(opengwas) => tools.extend(opengwas),
             Err(e) => {
-                eprintln!(
-                    "[runtime] WARNING: OpenGWAS tools disabled (token error): {e}"
-                );
+                eprintln!("[runtime] WARNING: OpenGWAS tools disabled (token error): {e}");
             }
         }
     }
@@ -134,9 +132,7 @@ pub async fn tool_set_from_config(
         match bib_tools(&config.bib_db_path.to_string_lossy()).await {
             Ok(bib) => tools.extend(bib),
             Err(e) => {
-                eprintln!(
-                    "[runtime] WARNING: bibliography tools disabled: {e}"
-                );
+                eprintln!("[runtime] WARNING: bibliography tools disabled: {e}");
             }
         }
     }

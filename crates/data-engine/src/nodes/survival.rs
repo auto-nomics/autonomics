@@ -143,7 +143,9 @@ impl NodeFactory for SurvivalNodeFactory {
             format!(")"),
         ];
         if has_group {
-            code.push(format!("# NOTE: group-stratified KM; log-rank test omitted in codegen"));
+            code.push(format!(
+                "# NOTE: group-stratified KM; log-rank test omitted in codegen"
+            ));
         }
         code.push(format!("print(head({out}))"));
         Ok(crate::codegen::NodeCodegen::simple(code, out))

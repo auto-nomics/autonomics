@@ -41,6 +41,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::doc_lazy_continuation)]
 
+pub mod clump;
 pub mod dispatch;
 pub mod dist;
 pub mod harmonise;

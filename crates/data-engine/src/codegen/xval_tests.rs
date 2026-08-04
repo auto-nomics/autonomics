@@ -23,12 +23,11 @@ fn test_registry() -> NodeRegistry {
 const XVAL_DIR: &str = "/tmp/autonomics_xval";
 
 /// Helper: compile a manifest to R and write the generated script to disk.
-fn compile_and_write(
-    manifest: DagManifest,
-    test_name: &str,
-) -> crate::codegen::CompiledScript {
+fn compile_and_write(manifest: DagManifest, test_name: &str) -> crate::codegen::CompiledScript {
     let registry = test_registry();
-    let compiler = DagCompiler { registry: &registry };
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
     let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
     let path = format!("{XVAL_DIR}/{test_name}_generated.R");
     std::fs::create_dir_all(XVAL_DIR).unwrap();

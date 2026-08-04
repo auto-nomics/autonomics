@@ -289,7 +289,9 @@ impl NodeFactory for LinearRegressionNodeFactory {
             format!("{coefs} <- as.data.frame({smry}$coefficients)"),
             format!("names({coefs}) <- c(\"coefficient\", \"std_error\", \"t_stat\", \"p_value\")"),
             format!("{coefs}$term <- rownames({coefs})"),
-            format!("{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"t_stat\", \"p_value\")]"),
+            format!(
+                "{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"t_stat\", \"p_value\")]"
+            ),
             format!("{out}$r_squared <- {smry}$r.squared"),
             format!("{out}$n_obs <- {fit}$df + length({fit}$residuals) - {fit}$df"),
             format!("{out}$n_obs <- length({fit}$residuals)"),

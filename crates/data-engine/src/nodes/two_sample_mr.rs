@@ -515,6 +515,34 @@ fn default_clump_pop() -> String {
     "EUR".to_string()
 }
 
+/// LD clumping backend selection.
+///
+/// `Opengwas` (the default) sends SNPs to the remote OpenGWAS `/ld/clump`
+/// endpoint. `IcebergLd` queries the Iceberg `ld_matrix.eur_chr{N}` pairwise
+/// r² tables and performs greedy clumping entirely in Rust — no network
+/// access required.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "type")]
+pub enum ClumpMode {
+    /// Remote OpenGWAS `/ld/clump` endpoint (1000 Genomes reference panel).
+    /// Requires the `OPENGWAS_TOKEN` environment variable.
+    #[serde(rename = "opengwas")]
+    Opengwas,
+    /// Local Iceberg `ld_matrix.eur_chr{N}` pairwise r² tables.
+    ///
+    /// The node queries `iceberg.ld_matrix.eur_chr{chrom}` for r² pairs
+    /// involving the instrument SNPs and runs greedy clumping in Rust.
+    /// No network access or API token required.
+    #[serde(rename = "iceberg_ld")]
+    IcebergLd,
+}
+
+impl Default for ClumpMode {
+    fn default() -> Self {
+        Self::Opengwas
+    }
+}
+
 /// LD clumping parameters for selecting independent instruments via the
 /// OpenGWAS `/ld/clump` endpoint (1000 Genomes reference panel).
 ///
@@ -535,9 +563,13 @@ pub struct ClumpConfig {
     #[serde(default = "default_clump_p1")]
     pub p1: f64,
     /// 1000 Genomes reference population: `"EUR"`, `"SAS"`, `"EAS"`, `"AFR"`,
-    /// or `"AMR"`. Default `"EUR"`.
+    /// or `"AMR"`. Default `"EUR"`. Only used in [`ClumpMode::Opengwas`].
     #[serde(default = "default_clump_pop")]
     pub pop: String,
+    /// Clumping backend. Default: OpenGWAS remote API ([`ClumpMode::Opengwas`]).
+    /// Use [`ClumpMode::Local`] to clump against a local PLINK reference panel.
+    #[serde(default)]
+    pub mode: ClumpMode,
 }
 
 impl Default for ClumpConfig {
@@ -547,6 +579,7 @@ impl Default for ClumpConfig {
             kb: default_clump_kb(),
             p1: default_clump_p1(),
             pop: default_clump_pop(),
+            mode: ClumpMode::default(),
         }
     }
 }
@@ -618,17 +651,30 @@ fn parse_clumped_rsids(resp: &serde_json::Value) -> std::collections::HashSet<St
     out
 }
 
-/// Filter `inputs` to only the independent index SNPs returned by OpenGWAS
-/// `/ld/clump`. Exposure p-values are derived from `beta_exposure /
-/// se_exposure`.
+/// Filter `inputs` to only the independent index SNPs. Dispatches to the
+/// OpenGWAS remote endpoint or the Iceberg LD matrix based on
+/// [`ClumpConfig::mode`].
 async fn clump_instruments(
     inputs: Vec<mr::harmonise::HarmoniseInput>,
     cfg: &ClumpConfig,
+    session: &datafusion::prelude::SessionContext,
 ) -> Result<Vec<mr::harmonise::HarmoniseInput>, TwoSampleMrNodeError> {
     if inputs.is_empty() {
         return Ok(inputs);
     }
+    match &cfg.mode {
+        ClumpMode::Opengwas => clump_opengwas(inputs, cfg).await,
+        ClumpMode::IcebergLd => clump_iceberg_ld(inputs, cfg, session).await,
+    }
+}
 
+/// OpenGWAS `/ld/clump` backend. Exposure p-values are derived from
+/// `beta_exposure / se_exposure`, sent to the endpoint, and only the returned
+/// index SNPs are retained.
+async fn clump_opengwas(
+    inputs: Vec<mr::harmonise::HarmoniseInput>,
+    cfg: &ClumpConfig,
+) -> Result<Vec<mr::harmonise::HarmoniseInput>, TwoSampleMrNodeError> {
     let rsids: Vec<String> = inputs.iter().map(|r| r.snp.clone()).collect();
     let pvals: Vec<f64> = inputs
         .iter()
@@ -656,7 +702,7 @@ async fn clump_instruments(
 
     let kept = parse_clumped_rsids(&resp);
     tracing::info!(
-        "LD clumping: {} of {} SNPs retained as independent instruments (r²={}, kb={}, pop={})",
+        "LD clumping (OpenGWAS): {} of {} SNPs retained as independent instruments (r²={}, kb={}, pop={})",
         kept.len(),
         inputs.len(),
         cfg.r2,
@@ -673,6 +719,131 @@ async fn clump_instruments(
     let filtered: Vec<_> = inputs
         .into_iter()
         .filter(|r| kept.contains(&r.snp))
+        .collect();
+    Ok(filtered)
+}
+
+/// Iceberg LD matrix backend. Queries `iceberg.ld_matrix.eur_chr{N}` for
+/// pairwise r² values between instrument SNPs and runs greedy clumping in
+/// Rust. No network access or API token required.
+async fn clump_iceberg_ld(
+    inputs: Vec<mr::harmonise::HarmoniseInput>,
+    cfg: &ClumpConfig,
+    session: &datafusion::prelude::SessionContext,
+) -> Result<Vec<mr::harmonise::HarmoniseInput>, TwoSampleMrNodeError> {
+    use std::collections::{HashMap, HashSet};
+
+    // Build the set of instrument rsIDs for filtering.
+    let snp_set: HashSet<String> = inputs.iter().map(|r| r.snp.clone()).collect();
+
+    // Query the Iceberg ld_matrix tables for all r² pairs involving our SNPs.
+    // We query chromosomes 1-22 (standard autosomes).
+    let mut r2_map: HashMap<(String, String), f64> = HashMap::new();
+    for chrom in 1..=22 {
+        let sql = format!(
+            "SELECT id_a, id_b, unphased_r2 \
+             FROM iceberg.ld_matrix.eur_chr{chrom} \
+             WHERE unphased_r2 >= {}",
+            cfg.r2
+        );
+        let df = match session.sql(&sql).await {
+            Ok(df) => df,
+            Err(e) => {
+                tracing::warn!("LD matrix query failed for chr{chrom}: {e}; skipping chromosome");
+                continue;
+            }
+        };
+        let batches = df.collect().await.map_err(|e| {
+            TwoSampleMrNodeError::Clump(format!("LD matrix query failed (chr{chrom}): {e}"))
+        })?;
+
+        for batch in &batches {
+            let col_a = batch.column_by_name("id_a");
+            let col_b = batch.column_by_name("id_b");
+            let col_r2 = batch.column_by_name("unphased_r2");
+            let (col_a, col_b, col_r2) = match (col_a, col_b, col_r2) {
+                (Some(a), Some(b), Some(r)) => (a, b, r),
+                _ => continue,
+            };
+            let a_vals = super::meta::string_opt_values(col_a.as_ref());
+            let b_vals = super::meta::string_opt_values(col_b.as_ref());
+            if let (Some(a_vals), Some(b_vals)) = (a_vals, b_vals) {
+                for i in 0..batch.num_rows() {
+                    if col_r2.is_null(i) {
+                        continue;
+                    }
+                    let r2 = if let Some(a) = col_r2.as_any().downcast_ref::<Float64Array>() {
+                        a.value(i)
+                    } else {
+                        continue;
+                    };
+                    let a = match a_vals.get(i).and_then(|v| v.as_ref()) {
+                        Some(v) => v.to_string(),
+                        None => continue,
+                    };
+                    let b = match b_vals.get(i).and_then(|v| v.as_ref()) {
+                        Some(v) => v.to_string(),
+                        None => continue,
+                    };
+                    // Only keep pairs where at least one endpoint is in our SNP set.
+                    if snp_set.contains(&a) || snp_set.contains(&b) {
+                        // Store both directions for easy lookup.
+                        r2_map.insert((a.clone(), b.clone()), r2);
+                        r2_map.insert((b, a), r2);
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "LD matrix: loaded {} r² pairs (≥ {}) for {} instrument SNPs",
+        r2_map.len(),
+        cfg.r2,
+        snp_set.len(),
+    );
+
+    // Build ClumpSnp list. Since the Iceberg ld_matrix doesn't provide
+    // chromosome/position info, we pass placeholder values — the greedy
+    // clumping uses r² from the pre-computed table directly.
+    let clump_snps: Vec<mr::clump::ClumpSnp> = inputs
+        .iter()
+        .map(|r| mr::clump::ClumpSnp {
+            rsid: r.snp.clone(),
+            pval: pval_from_beta_se(r.beta_exposure, r.se_exposure),
+            chr: 0,
+            bp: 0,
+        })
+        .collect();
+
+    // r² closure: look up from the pre-computed HashMap. For SNPs not in the
+    // table (no LD data), return 0.0 (treat as independent).
+    let r2_fn = |i: usize, j: usize| -> f64 {
+        let key = (clump_snps[i].rsid.clone(), clump_snps[j].rsid.clone());
+        *r2_map.get(&key).unwrap_or(&0.0)
+    };
+
+    // Run greedy clumping with a large kb window (since positions are unknown,
+    // we rely on the pre-computed r² table which inherently encodes proximity).
+    let kept_rsids = mr::clump::greedy_clump(&clump_snps, cfg.r2, cfg.kb, r2_fn);
+
+    tracing::info!(
+        "LD clumping (Iceberg ld_matrix): {} of {} SNPs retained as independent instruments (r²={})",
+        kept_rsids.len(),
+        inputs.len(),
+        cfg.r2,
+    );
+
+    if kept_rsids.is_empty() {
+        return Err(TwoSampleMrNodeError::Clump(
+            "clumping removed all instruments; check the p-value threshold or input data".into(),
+        ));
+    }
+
+    let kept_set: HashSet<&str> = kept_rsids.iter().map(|s| s.as_str()).collect();
+    let filtered: Vec<_> = inputs
+        .into_iter()
+        .filter(|r| kept_set.contains(r.snp.as_str()))
         .collect();
     Ok(filtered)
 }
@@ -796,13 +967,34 @@ impl NodeFactory for TwoSampleMrNodeFactory {
             format!(")"),
         ];
 
-        // LD clumping
+        // LD clumping — branch on the configured backend.
         code.push(String::new());
-        code.push(format!("# LD clumping via OpenGWAS (requires API token)"));
-        code.push(format!(
-            "{exp_dat} <- clump_data({exp_dat}, clump_r2 = {}, clump_kb = {}, clump_p1 = {}, pop = \"{}\")",
-            spec.clump.r2, spec.clump.kb, spec.clump.p1, spec.clump.pop,
-        ));
+        match &spec.clump.mode {
+            ClumpMode::Opengwas => {
+                code.push(format!("# LD clumping via OpenGWAS (requires API token)"));
+                code.push(format!(
+                    "{exp_dat} <- clump_data({exp_dat}, clump_r2 = {}, clump_kb = {}, clump_p1 = {}, pop = \"{}\")",
+                    spec.clump.r2, spec.clump.kb, spec.clump.p1, spec.clump.pop,
+                ));
+            }
+            ClumpMode::IcebergLd => {
+                // Iceberg LD clumping: the Rust runtime queries the
+                // iceberg.ld_matrix.eur_chr{N} tables and performs greedy
+                // clumping. In the R codegen (used for cross-validation),
+                // we emit a note since R's clump_data() only supports
+                // OpenGWAS. The exposure data entering this point has
+                // already been clumped by the Rust node.
+                code.push(format!(
+                    "# LD clumping performed via Iceberg ld_matrix table"
+                ));
+                code.push(format!(
+                    "# (Rust runtime uses greedy clumping on pre-computed r²;"
+                ));
+                code.push(format!(
+                    "#  {exp_dat} is already clumped to independent instruments)"
+                ));
+            }
+        }
 
         // Harmonise
         code.push(String::new());
@@ -944,7 +1136,8 @@ impl DagNode for TwoSampleMrNode {
         }
 
         // ---- LD clumping ----
-        let hinputs = clump_instruments(hinputs, &self.spec.clump).await?;
+        let session = node_ctx.session();
+        let hinputs = clump_instruments(hinputs, &self.spec.clump, &session).await?;
 
         // ---- harmonise ----
         let harmonised =
@@ -1093,6 +1286,48 @@ mod tests {
         assert_eq!(c.kb, 5000);
         assert!((c.p1 - 5e-8).abs() < f64::EPSILON);
         assert_eq!(c.pop, "EUR");
+        assert_eq!(c.mode, ClumpMode::Opengwas);
+    }
+
+    #[test]
+    fn clump_mode_opengwas_default() {
+        let json = serde_json::json!({});
+        let c: ClumpConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(c.mode, ClumpMode::Opengwas);
+    }
+
+    #[test]
+    fn clump_mode_iceberg_ld_deserialises() {
+        let json = serde_json::json!({
+            "mode": { "type": "iceberg_ld" },
+        });
+        let c: ClumpConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(c.mode, ClumpMode::IcebergLd);
+    }
+
+    #[test]
+    fn clump_mode_opengwas_explicit() {
+        let json = serde_json::json!({
+            "mode": { "type": "opengwas" },
+        });
+        let c: ClumpConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(c.mode, ClumpMode::Opengwas);
+    }
+
+    #[test]
+    fn spec_with_iceberg_ld_clump_deserialises() {
+        let json = serde_json::json!({
+            "id_exposure": "exp",
+            "id_outcome": "out",
+            "clump": {
+                "r2": 0.01,
+                "kb": 1000,
+                "mode": { "type": "iceberg_ld" },
+            },
+        });
+        let spec: TwoSampleMrNodeSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(spec.clump.mode, ClumpMode::IcebergLd);
+        assert!((spec.clump.r2 - 0.01).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1190,6 +1425,11 @@ mod tests {
 
     // ---- End-to-end tests (require OPENGWAS_TOKEN + network) ----
 
+    /// Build a test SessionContext (used by clump_instruments for IcebergLd mode).
+    fn test_session() -> datafusion::prelude::SessionContext {
+        datafusion::prelude::SessionContext::new()
+    }
+
     /// Well-known BMI-associated SNPs (mostly in LD on different chromosomes)
     /// with approximate exposure p-values. Includes several pairs in known LD
     /// to verify that clumping removes the dependent ones.
@@ -1236,7 +1476,8 @@ mod tests {
         assert_eq!(n_before, 6, "expected 6 input SNPs");
 
         let cfg = ClumpConfig::default();
-        let clumped = clump_instruments(inputs, &cfg)
+        let session = test_session();
+        let clumped = clump_instruments(inputs, &cfg, &session)
             .await
             .expect("clumping should succeed");
 
@@ -1283,15 +1524,17 @@ mod tests {
             kb: 10_000,
             p1: 5e-8,
             pop: "EUR".to_string(),
+            ..ClumpConfig::default()
         };
-        let clumped = clump_instruments(inputs, &cfg)
+        let session = test_session();
+        let clumped = clump_instruments(inputs, &cfg, &session)
             .await
             .expect("clumping should succeed");
         let relaxed_count = clumped.len();
 
         // Strict default r² → more aggressive pruning.
         let inputs2 = real_bmi_instruments();
-        let strict = clump_instruments(inputs2, &ClumpConfig::default())
+        let strict = clump_instruments(inputs2, &ClumpConfig::default(), &session)
             .await
             .expect("clumping should succeed");
         let strict_count = strict.len();
@@ -1308,6 +1551,7 @@ mod tests {
     async fn e2e_clump_pop_filter_matters() {
         // Same SNPs, different populations — the set of retained index SNPs
         // may differ because LD patterns vary by ancestry.
+        let session = test_session();
         let inputs_eur = real_bmi_instruments();
         let eur = clump_instruments(
             inputs_eur,
@@ -1315,6 +1559,7 @@ mod tests {
                 pop: "EUR".to_string(),
                 ..ClumpConfig::default()
             },
+            &session,
         )
         .await
         .expect("EUR clumping");
@@ -1326,6 +1571,7 @@ mod tests {
                 pop: "AFR".to_string(),
                 ..ClumpConfig::default()
             },
+            &session,
         )
         .await
         .expect("AFR clumping");
@@ -1337,5 +1583,194 @@ mod tests {
         // Both should succeed and return non-empty results.
         assert!(!eur_snps.is_empty(), "EUR clumping returned no SNPs");
         assert!(!afr_snps.is_empty(), "AFR clumping returned no SNPs");
+    }
+
+    // ---- IcebergLd clumping tests (mock Iceberg ld_matrix tables) ----
+
+    /// Register mock `iceberg.ld_matrix.eur_chr{N}` tables in the session with
+    /// known r² pairs for testing. All other chromosomes are empty.
+    async fn register_mock_ld_tables(session: &datafusion::prelude::SessionContext) {
+        use datafusion::catalog::{
+            CatalogProvider, MemTable, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
+        };
+
+        // r² pairs: rs1↔rs2 = 0.9 (high LD), rs3↔rs4 = 0.8 (high LD).
+        // rs1 and rs3 are independent (no r² entry → treated as 0).
+        let id_a = StringArray::from(vec!["rs1", "rs3"]);
+        let id_b = StringArray::from(vec!["rs2", "rs4"]);
+        let r2 = Float64Array::from(vec![0.9, 0.8]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id_a", DataType::Utf8, false),
+            Field::new("id_b", DataType::Utf8, false),
+            Field::new("unphased_r2", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(id_a), Arc::new(id_b), Arc::new(r2)],
+        )
+        .unwrap();
+
+        let ld_schema = MemorySchemaProvider::new();
+        for chrom in 1u32..=22 {
+            let table_name = format!("eur_chr{chrom}");
+            let table_data: Vec<Vec<RecordBatch>> = if chrom == 1 {
+                vec![vec![batch.clone()]]
+            } else {
+                vec![vec![]]
+            };
+            let table = MemTable::try_new(schema.clone(), table_data).unwrap();
+            ld_schema
+                .register_table(table_name, std::sync::Arc::new(table))
+                .unwrap();
+        }
+        let catalog = MemoryCatalogProvider::new();
+        catalog
+            .register_schema("ld_matrix", std::sync::Arc::new(ld_schema))
+            .unwrap();
+        session.register_catalog("iceberg", std::sync::Arc::new(catalog));
+    }
+
+    /// Build 4 test instruments: rs1 (most significant) through rs4.
+    fn iceberg_test_inputs() -> Vec<mr::harmonise::HarmoniseInput> {
+        let data: &[(&str, f64, f64)] = &[
+            ("rs1", 0.10, 0.01), // z=10, p ≈ 1e-23 — most significant
+            ("rs2", 0.08, 0.01), // z=8
+            ("rs3", 0.06, 0.01), // z=6
+            ("rs4", 0.05, 0.01), // z=5 — least significant
+        ];
+        data.iter()
+            .map(|(rsid, beta, se)| mr::harmonise::HarmoniseInput {
+                snp: rsid.to_string(),
+                id_exposure: "test_exp".to_string(),
+                id_outcome: "test_out".to_string(),
+                beta_exposure: *beta,
+                beta_outcome: 0.5 * beta,
+                se_exposure: *se,
+                se_outcome: *se,
+                effect_allele_exposure: Some("A".to_string()),
+                other_allele_exposure: Some("G".to_string()),
+                effect_allele_outcome: Some("A".to_string()),
+                other_allele_outcome: Some("G".to_string()),
+                eaf_exposure: Some(0.4),
+                eaf_outcome: Some(0.4),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn iceberg_clump_prunes_high_ld() {
+        // rs1↔rs2 r²=0.9, rs3↔rs4 r²=0.8. With r2_thresh=0.001:
+        // rs1 (most significant) selected as index → prunes rs2.
+        // rs3 selected as index → prunes rs4.
+        // Result: {rs1, rs3}.
+        let session = test_session();
+        register_mock_ld_tables(&session).await;
+
+        let inputs = iceberg_test_inputs();
+        let cfg = ClumpConfig {
+            r2: 0.001,
+            kb: 5000,
+            p1: 5e-8,
+            mode: ClumpMode::IcebergLd,
+            ..ClumpConfig::default()
+        };
+        let clumped = clump_instruments(inputs, &cfg, &session)
+            .await
+            .expect("iceberg clumping should succeed");
+
+        let snps: std::collections::HashSet<&str> =
+            clumped.iter().map(|r| r.snp.as_str()).collect();
+        assert!(
+            snps.contains("rs1"),
+            "most significant SNP rs1 should be retained"
+        );
+        assert!(
+            !snps.contains("rs2"),
+            "rs2 (r²=0.9 with rs1) should be pruned"
+        );
+        assert!(
+            snps.contains("rs3"),
+            "rs3 should be retained (independent of rs1)"
+        );
+        assert!(
+            !snps.contains("rs4"),
+            "rs4 (r²=0.8 with rs3) should be pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_clump_relaxed_threshold_keeps_more() {
+        // With r2=0.95, no pair exceeds threshold → all 4 retained.
+        let session = test_session();
+        register_mock_ld_tables(&session).await;
+
+        let inputs = iceberg_test_inputs();
+        let cfg = ClumpConfig {
+            r2: 0.95,
+            kb: 5000,
+            p1: 5e-8,
+            mode: ClumpMode::IcebergLd,
+            ..ClumpConfig::default()
+        };
+        let clumped = clump_instruments(inputs, &cfg, &session)
+            .await
+            .expect("relaxed clumping should succeed");
+        assert_eq!(clumped.len(), 4, "with r²=0.95 no SNPs should be pruned");
+    }
+
+    #[tokio::test]
+    async fn iceberg_clump_no_ld_data_keeps_all() {
+        // SNPs with no r² entries in the table → treated as independent → all kept.
+        let session = test_session();
+        register_mock_ld_tables(&session).await;
+
+        let inputs = vec![
+            mr::harmonise::HarmoniseInput {
+                snp: "rs_isolated1".to_string(),
+                id_exposure: "exp".to_string(),
+                id_outcome: "out".to_string(),
+                beta_exposure: 0.1,
+                beta_outcome: 0.05,
+                se_exposure: 0.01,
+                se_outcome: 0.01,
+                effect_allele_exposure: Some("A".to_string()),
+                other_allele_exposure: Some("G".to_string()),
+                effect_allele_outcome: Some("A".to_string()),
+                other_allele_outcome: Some("G".to_string()),
+                eaf_exposure: Some(0.4),
+                eaf_outcome: Some(0.4),
+            },
+            mr::harmonise::HarmoniseInput {
+                snp: "rs_isolated2".to_string(),
+                id_exposure: "exp".to_string(),
+                id_outcome: "out".to_string(),
+                beta_exposure: 0.08,
+                beta_outcome: 0.04,
+                se_exposure: 0.01,
+                se_outcome: 0.01,
+                effect_allele_exposure: Some("A".to_string()),
+                other_allele_exposure: Some("G".to_string()),
+                effect_allele_outcome: Some("A".to_string()),
+                other_allele_outcome: Some("G".to_string()),
+                eaf_exposure: Some(0.4),
+                eaf_outcome: Some(0.4),
+            },
+        ];
+        let cfg = ClumpConfig {
+            r2: 0.001,
+            kb: 5000,
+            p1: 5e-8,
+            mode: ClumpMode::IcebergLd,
+            ..ClumpConfig::default()
+        };
+        let clumped = clump_instruments(inputs, &cfg, &session)
+            .await
+            .expect("clumping should succeed");
+        assert_eq!(
+            clumped.len(),
+            2,
+            "SNPs with no LD data should be treated as independent"
+        );
     }
 }

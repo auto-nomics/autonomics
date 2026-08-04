@@ -109,16 +109,16 @@ impl DagCompiler<'_> {
             let input_specs: Vec<(String, Option<String>)> = if ports.is_fixed_input() {
                 let n_inputs = ports.input_ports().len();
                 (0..n_inputs as u8)
-                    .map(|port_idx| {
-                        match incoming.get(&(entry.id.as_str(), port_idx)) {
+                    .map(
+                        |port_idx| match incoming.get(&(entry.id.as_str(), port_idx)) {
                             Some((from_node, from_port)) => {
                                 let var = sanitize_var_name(from_node);
                                 let csv = edge_file(from_node, *from_port);
                                 (var, Some(csv))
                             }
                             None => (format!("__missing_input_{port_idx}"), None),
-                        }
-                    })
+                        },
+                    )
                     .collect()
             } else {
                 // Variadic: collect all incoming edges in declaration order.
@@ -135,8 +135,7 @@ impl DagCompiler<'_> {
             };
 
             // The variable names the node codegen will see
-            let input_vars: Vec<String> =
-                input_specs.iter().map(|(v, _)| v.clone()).collect();
+            let input_vars: Vec<String> = input_specs.iter().map(|(v, _)| v.clone()).collect();
 
             // Pre-allocate output variable name
             let output_var = sanitize_var_name(&entry.id);
@@ -181,14 +180,10 @@ impl DagCompiler<'_> {
                         if let Some(csv) = csv {
                             match target {
                                 CodegenTarget::R => {
-                                    body.push(format!(
-                                        r#"{input_var} <- fread("{csv}")"#
-                                    ));
+                                    body.push(format!(r#"{input_var} <- fread("{csv}")"#));
                                 }
                                 CodegenTarget::Python => {
-                                    body.push(format!(
-                                        r#"{input_var} = pd.read_csv("{csv}")"#
-                                    ));
+                                    body.push(format!(r#"{input_var} = pd.read_csv("{csv}")"#));
                                 }
                             }
                         }
@@ -207,14 +202,10 @@ impl DagCompiler<'_> {
                         let csv = edge_file(&entry.id, port_idx as u8);
                         match target {
                             CodegenTarget::R => {
-                                body.push(format!(
-                                    r#"fwrite({out_var}, "{csv}")"#
-                                ));
+                                body.push(format!(r#"fwrite({out_var}, "{csv}")"#));
                             }
                             CodegenTarget::Python => {
-                                body.push(format!(
-                                    r#"{out_var}.to_csv("{csv}", index = False)"#
-                                ));
+                                body.push(format!(r#"{out_var}.to_csv("{csv}", index = False)"#));
                             }
                         }
                     }

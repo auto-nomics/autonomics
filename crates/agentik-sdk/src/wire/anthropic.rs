@@ -53,19 +53,16 @@ impl WireProtocol for AnthropicWire {
         }
     }
 
-    fn encode_request(
-        &self,
-        params: &MessageCreateParams,
-        streaming: bool,
-    ) -> Result<WireRequest> {
+    fn encode_request(&self, params: &MessageCreateParams, streaming: bool) -> Result<WireRequest> {
         // When the caller asked for streaming, ensure the body advertises it.
         // We avoid mutating the caller's `params` (it is borrowed) and instead
         // patch a serialised copy — serde_json round-trip is cheap relative to
         // the network round-trip that follows.
         let body_bytes = if streaming && params.stream != Some(true) {
-            let mut value = serde_json::to_value(params).map_err(|e| AnthropicError::Connection {
-                message: format!("failed to serialise request body: {e}"),
-            })?;
+            let mut value =
+                serde_json::to_value(params).map_err(|e| AnthropicError::Connection {
+                    message: format!("failed to serialise request body: {e}"),
+                })?;
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
             }
@@ -92,10 +89,7 @@ impl WireProtocol for AnthropicWire {
         request_id: Option<RequestId>,
     ) -> Result<Message> {
         if !(200..300).contains(&status) {
-            return Err(AnthropicError::from_status(
-                status,
-                body.to_string(),
-            ));
+            return Err(AnthropicError::from_status(status, body.to_string()));
         }
         let mut message: Message = serde_json::from_str(body).map_err(|e| {
             AnthropicError::from_status(
@@ -201,12 +195,10 @@ impl WireProtocol for AnthropicWire {
 
             "message_delta" => {
                 let value: serde_json::Value = serde_json::from_str(data).map_err(|e| {
-                    AnthropicError::StreamError(format!(
-                        "Failed to parse message_delta event: {e}"
-                    ))
+                    AnthropicError::StreamError(format!("Failed to parse message_delta event: {e}"))
                 })?;
-                let delta: MessageDelta = serde_json::from_value(value["delta"].clone())
-                    .map_err(|e| {
+                let delta: MessageDelta =
+                    serde_json::from_value(value["delta"].clone()).map_err(|e| {
                         AnthropicError::StreamError(format!("Failed to parse delta: {e}"))
                     })?;
                 let usage: MessageDeltaUsage = serde_json::from_value(value["usage"].clone())

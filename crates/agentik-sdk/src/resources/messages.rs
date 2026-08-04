@@ -146,23 +146,21 @@ impl<'a> MessagesResource<'a> {
         // Build the initial streaming request with proper authentication.
         // Wire-supplied headers (e.g. `anthropic-version`) augment the auth
         // headers managed by the stream builder.
-        let mut stream_builder =
-            StreamRequestBuilder::new(http_client.clone(), base_url.clone())
-                .header("Authorization", &auth_header)
-                .header("Content-Type", "application/json")
-                .wire(self.client.wire().clone())
-                .config((*config).clone());
+        let mut stream_builder = StreamRequestBuilder::new(http_client.clone(), base_url.clone())
+            .header("Authorization", &auth_header)
+            .header("Content-Type", "application/json")
+            .wire(self.client.wire().clone())
+            .config((*config).clone());
         for (name, value) in &wire_headers {
             stream_builder = stream_builder.header(name, value);
         }
 
         // The wire produced a raw body; pass it through as a JSON value so
         // `post_stream` doesn't re-serialise a different shape.
-        let raw_body: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            AnthropicError::Connection {
+        let raw_body: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|e| AnthropicError::Connection {
                 message: format!("wire body was not valid JSON: {e}"),
-            }
-        })?;
+            })?;
 
         // Make the streaming request to get the real HTTP stream
         let http_stream = stream_builder.post_stream(&endpoint, &raw_body).await?;
@@ -190,20 +188,18 @@ impl<'a> MessagesResource<'a> {
                 let body = body.clone();
                 let config = config.clone();
                 async move {
-                    let mut builder =
-                        StreamRequestBuilder::new(http_client, base_url)
-                            .header("Authorization", &auth_header)
-                            .header("Content-Type", "application/json")
-                            .wire(wire)
-                            .config((*config).clone());
+                    let mut builder = StreamRequestBuilder::new(http_client, base_url)
+                        .header("Authorization", &auth_header)
+                        .header("Content-Type", "application/json")
+                        .wire(wire)
+                        .config((*config).clone());
                     for (name, value) in &wire_headers {
                         builder = builder.header(name, value);
                     }
-                    let raw: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-                        AnthropicError::Connection {
+                    let raw: serde_json::Value =
+                        serde_json::from_slice(&body).map_err(|e| AnthropicError::Connection {
                             message: format!("wire body was not valid JSON: {e}"),
-                        }
-                    })?;
+                        })?;
                     builder.post_stream(&endpoint, &raw).await
                 }
             }

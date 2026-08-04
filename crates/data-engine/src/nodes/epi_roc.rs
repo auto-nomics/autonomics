@@ -162,8 +162,13 @@ impl NodeFactory for EpiRocNodeFactory {
             ));
             code.push(format!("cat(\"AUC ({}):\", auc({roc2}), \"\\n\")", s2));
             code.push(format!("{out} <- data.frame("));
-            code.push(format!("  score1 = \"{}\", auc1 = as.numeric(auc({roc1})),", s.score1_column));
-            code.push(format!("  score2 = \"{s2}\", auc2 = as.numeric(auc({roc2}))"));
+            code.push(format!(
+                "  score1 = \"{}\", auc1 = as.numeric(auc({roc1})),",
+                s.score1_column
+            ));
+            code.push(format!(
+                "  score2 = \"{s2}\", auc2 = as.numeric(auc({roc2}))"
+            ));
             code.push(format!(")"));
         } else {
             let ci_var = ctx.fresh_var("ci");

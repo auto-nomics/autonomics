@@ -65,7 +65,11 @@ impl AgentRuntime {
         model: Arc<ArcSwapOption<Model>>,
         config: RuntimeConfig,
     ) -> Result<Self> {
-        eprintln!("[runtime] starting agent {:?}: {}", config.name, config.summary());
+        eprintln!(
+            "[runtime] starting agent {:?}: {}",
+            config.name,
+            config.summary()
+        );
 
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
@@ -74,8 +78,8 @@ impl AgentRuntime {
 
         let (internal_tx, engine_handle, agent_handle) = runtime.block_on(async {
             // ── DataEngine ───────────────────────────────────────────────
-            let mut engine_builder = DataEngine::builder()
-                .register_opendal_fs(file_storage.clone())?;
+            let mut engine_builder =
+                DataEngine::builder().register_opendal_fs(file_storage.clone())?;
 
             if config.enable_iceberg {
                 engine_builder = engine_builder.register_iceberg().await?;

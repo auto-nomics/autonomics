@@ -218,11 +218,10 @@ impl RuntimeConfig {
 
         let system_prompt = base.and_then(|b| b.system_prompt.clone());
 
-        let resolve_flag = |b: Option<&RuntimeConfigBuilder>,
-                            getter: fn(&RuntimeConfigBuilder) -> Option<bool>,
-                            default: bool| {
-            b.and_then(getter).unwrap_or(default)
-        };
+        let resolve_flag =
+            |b: Option<&RuntimeConfigBuilder>,
+             getter: fn(&RuntimeConfigBuilder) -> Option<bool>,
+             default: bool| { b.and_then(getter).unwrap_or(default) };
 
         Self {
             name,
@@ -409,7 +408,9 @@ The Iceberg data lake (`reference` namespace) contains reusable reference panels
 impl RuntimeConfig {
     /// Return the system prompt, falling back to the built-in default.
     pub fn system_prompt_or_default(&self) -> &str {
-        self.system_prompt.as_deref().unwrap_or(DEFAULT_SYSTEM_PROMPT)
+        self.system_prompt
+            .as_deref()
+            .unwrap_or(DEFAULT_SYSTEM_PROMPT)
     }
 
     /// Return a display-friendly summary for logging.

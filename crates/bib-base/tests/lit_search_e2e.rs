@@ -148,7 +148,11 @@ async fn pubmed_fetch_by_pmid() {
         "abstract should be a real paragraph, not a stub"
     );
 
-    println!("✅ Fetched: {} (abstract: {} chars)", article.title, article.abstract_text.as_deref().unwrap().len());
+    println!(
+        "✅ Fetched: {} (abstract: {} chars)",
+        article.title,
+        article.abstract_text.as_deref().unwrap().len()
+    );
 }
 
 #[tokio::test]

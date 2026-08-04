@@ -131,16 +131,34 @@ impl NodeFactory for CausalNodeFactory {
         let code = match s.method.as_str() {
             "iptw" | "ipw" => vec![
                 format!("# Causal inference via IPTW"),
-                format!("# Propensity score model: {t} ~ {c}", t = s.treatment_column, c = covars),
-                format!("{ps_model} <- glm({t} ~ {c}, data = {input}, family = binomial)", t = s.treatment_column, c = covars),
+                format!(
+                    "# Propensity score model: {t} ~ {c}",
+                    t = s.treatment_column,
+                    c = covars
+                ),
+                format!(
+                    "{ps_model} <- glm({t} ~ {c}, data = {input}, family = binomial)",
+                    t = s.treatment_column,
+                    c = covars
+                ),
                 format!("{ps_score} <- predict({ps_model}, type = \"response\")"),
-                format!("{weight_var} <- ifelse({input}${t} == 1, 1/{ps_score}, 1/(1-{ps_score}))", t = s.treatment_column),
-                format!("{wlm} <- lm({y} ~ {t}, data = {input}, weights = {weight_var})", y = s.outcome_column, t = s.treatment_column),
+                format!(
+                    "{weight_var} <- ifelse({input}${t} == 1, 1/{ps_score}, 1/(1-{ps_score}))",
+                    t = s.treatment_column
+                ),
+                format!(
+                    "{wlm} <- lm({y} ~ {t}, data = {input}, weights = {weight_var})",
+                    y = s.outcome_column,
+                    t = s.treatment_column
+                ),
                 format!("{out} <- data.frame("),
                 format!("  method = \"iptw\","),
                 format!("  ate = coef({wlm})[2],"),
                 format!("  ate_se = summary({wlm})$coefficients[2, 2],"),
-                format!("  n_treated = sum({input}${t} == 1),", t = s.treatment_column),
+                format!(
+                    "  n_treated = sum({input}${t} == 1),",
+                    t = s.treatment_column
+                ),
                 format!("  n_obs = nrow({input})"),
                 format!(")"),
                 format!("{out}$ate_ci_lower <- {out}$ate - 1.96 * {out}$ate_se"),
@@ -165,7 +183,10 @@ impl NodeFactory for CausalNodeFactory {
                 format!("  method = \"psm\","),
                 format!("  att = {out}_smry$coefficients[2, 1],"),
                 format!("  att_se = {out}_smry$coefficients[2, 2],"),
-                format!("  n_treated = sum(matched_data${t} == 1),", t = s.treatment_column),
+                format!(
+                    "  n_treated = sum(matched_data${t} == 1),",
+                    t = s.treatment_column
+                ),
                 format!("  n_obs = nrow(matched_data)"),
                 format!(")"),
                 format!("print({out})"),

@@ -7,17 +7,19 @@
 //! translate `chat.completion.chunk` events into the Anthropic-shaped event
 //! stream that [`MessageStream`](crate::streaming::MessageStream) consumes.
 
+use crate::types::ContentBlock;
 use crate::types::errors::{AnthropicError, Result};
 use crate::types::messages::{Message, MessageCreateParams, Role};
 use crate::types::shared::{RequestId, Usage};
-use crate::types::streaming::{ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent};
-use crate::types::ContentBlock;
+use crate::types::streaming::{
+    ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
+};
 use crate::wire::openai::{
     OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value,
     translate_finish_reason, translate_message, translate_tool_choice,
 };
 use crate::wire::{ProtocolFeatures, StreamState, WireProtocol, WireRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Endpoint path for the Chat Completions API.
 pub const ENDPOINT_PATH: &str = "/v1/chat/completions";
@@ -42,11 +44,7 @@ impl WireProtocol for OpenAiChatWire {
         OPENAI_FEATURES
     }
 
-    fn encode_request(
-        &self,
-        params: &MessageCreateParams,
-        streaming: bool,
-    ) -> Result<WireRequest> {
+    fn encode_request(&self, params: &MessageCreateParams, streaming: bool) -> Result<WireRequest> {
         let mut messages: Vec<Value> = Vec::new();
 
         // Anthropic carries `system` as a top-level field; OpenAI Chat puts it
@@ -95,10 +93,11 @@ impl WireProtocol for OpenAiChatWire {
         // `{"type":"function","function":{…}}`.
         if let Some(tools) = &params.tools {
             if !tools.is_empty() {
-                let openai_tools: Vec<Value> =
-                    tools.iter().map(|t| function_descriptor(t)).map(|f| {
-                        json!({"type": "function", "function": f})
-                    }).collect();
+                let openai_tools: Vec<Value> = tools
+                    .iter()
+                    .map(|t| function_descriptor(t))
+                    .map(|f| json!({"type": "function", "function": f}))
+                    .collect();
                 body["tools"] = Value::Array(openai_tools);
                 // Allow parallel tool calls by default (OpenAI enables it
                 // unless explicitly disabled).
@@ -137,8 +136,15 @@ impl WireProtocol for OpenAiChatWire {
             return Err(AnthropicError::from_status(status, body.to_string()));
         }
         let value = parse_json(body)?;
-        let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let model = value.get("model").and_then(|v| v.as_str()).map(str::to_string);
+        let id = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let model = value
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         // Extract the first choice's message.
         let choice = value
@@ -158,20 +164,22 @@ impl WireProtocol for OpenAiChatWire {
         // Text content.
         if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
             if !text.is_empty() {
-                content.push(ContentBlock::Text { text: text.to_string() });
+                content.push(ContentBlock::Text {
+                    text: text.to_string(),
+                });
             }
         }
 
         // Tool calls.
         if let Some(tool_calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
             for tc in tool_calls {
-                let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let name = tc["function"]["name"]
-                    .as_str()
+                let id = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let arguments_str =
-                    tc["function"]["arguments"].as_str().unwrap_or("{}");
+                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                let arguments_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
                 let input: Value = serde_json::from_str(arguments_str).unwrap_or(json!({}));
                 content.push(ContentBlock::ToolUse { id, name, input });
             }
@@ -184,7 +192,10 @@ impl WireProtocol for OpenAiChatWire {
 
         let usage = value.get("usage").map(|u| Usage {
             input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            output_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            output_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
             cache_creation_input_tokens: None,
             cache_read_input_tokens: u
                 .get("prompt_tokens_details")
@@ -238,10 +249,7 @@ impl WireProtocol for OpenAiChatWire {
         // Seed the synthesised MessageStart on the first chunk.
         if !state.started {
             state.started = true;
-            state.response_id = chunk
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            state.response_id = chunk.get("id").and_then(|v| v.as_str()).map(str::to_string);
             state.model = chunk
                 .get("model")
                 .and_then(|v| v.as_str())
@@ -297,12 +305,16 @@ impl WireProtocol for OpenAiChatWire {
                     // chunk.
                     state.next_block_index = 1;
                     return Ok(Some(MessageStreamEvent::ContentBlockStart {
-                        content_block: ContentBlock::Text { text: String::new() },
+                        content_block: ContentBlock::Text {
+                            text: String::new(),
+                        },
                         index: 0,
                     }));
                 }
                 return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                    delta: ContentBlockDelta::TextDelta { text: text.to_string() },
+                    delta: ContentBlockDelta::TextDelta {
+                        text: text.to_string(),
+                    },
                     index: 0,
                 }));
             }
@@ -327,9 +339,7 @@ impl WireProtocol for OpenAiChatWire {
                     if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                         slot.id = id.to_string();
                     }
-                    if let Some(name) =
-                        tc["function"]["name"].as_str()
-                    {
+                    if let Some(name) = tc["function"]["name"].as_str() {
                         slot.name = name.to_string();
                     }
                     if !slot.id.is_empty() || !slot.name.is_empty() {
@@ -346,9 +356,7 @@ impl WireProtocol for OpenAiChatWire {
                 }
 
                 // Argument fragment → ContentBlockDelta::InputJsonDelta.
-                if let Some(args) =
-                    tc["function"]["arguments"].as_str()
-                {
+                if let Some(args) = tc["function"]["arguments"].as_str() {
                     if !args.is_empty() {
                         slot.arguments.push_str(args);
                         return Ok(Some(MessageStreamEvent::ContentBlockDelta {
@@ -449,9 +457,9 @@ impl OpenAiChatWire {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::StopReason;
     use crate::types::messages::MessageCreateBuilder;
     use crate::types::tools::{ToolChoice, ToolDefinitionBuilder};
-    use crate::types::StopReason;
 
     #[test]
     fn chat_wire_encodes_basic_request() {
@@ -477,9 +485,7 @@ mod tests {
     #[test]
     fn chat_wire_sets_stream_flag() {
         let wire = OpenAiChatWire;
-        let params = MessageCreateBuilder::new("gpt-4o", 1024)
-            .user("hi")
-            .build();
+        let params = MessageCreateBuilder::new("gpt-4o", 1024).user("hi").build();
         let req = wire.encode_request(&params, true).unwrap();
         let body: Value = serde_json::from_slice(&req.body).unwrap();
         assert_eq!(body["stream"], true);
@@ -500,12 +506,13 @@ mod tests {
     #[test]
     fn chat_wire_translates_tools_and_tool_choice() {
         let wire = OpenAiChatWire;
-        let tool = ToolDefinitionBuilder::new("get_weather", "Get weather")
-            .build();
+        let tool = ToolDefinitionBuilder::new("get_weather", "Get weather").build();
         let params = MessageCreateBuilder::new("gpt-4o", 1024)
             .user("What's the weather?")
             .tools(vec![tool])
-            .tool_choice(ToolChoice::Tool { name: "get_weather".into() })
+            .tool_choice(ToolChoice::Tool {
+                name: "get_weather".into(),
+            })
             .build();
         let req = wire.encode_request(&params, false).unwrap();
         let body: Value = serde_json::from_slice(&req.body).unwrap();
@@ -582,18 +589,28 @@ mod tests {
 
         // First chunk: role only, seeds MessageStart.
         let chunk1 = r#"{"id":"chatcmpl-x","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#;
-        let ev = wire.adapt_sse_event("", chunk1, &mut state).unwrap().unwrap();
+        let ev = wire
+            .adapt_sse_event("", chunk1, &mut state)
+            .unwrap()
+            .unwrap();
         assert!(matches!(ev, MessageStreamEvent::MessageStart { .. }));
         assert!(state.started);
 
         // Text delta.
         let chunk2 = r#"{"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#;
         // First text delta triggers ContentBlockStart.
-        let ev = wire.adapt_sse_event("", chunk2, &mut state).unwrap().unwrap();
+        let ev = wire
+            .adapt_sse_event("", chunk2, &mut state)
+            .unwrap()
+            .unwrap();
         assert!(matches!(ev, MessageStreamEvent::ContentBlockStart { .. }));
         // Second text delta yields the delta.
-        let chunk3 = r#"{"choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}"#;
-        let ev = wire.adapt_sse_event("", chunk3, &mut state).unwrap().unwrap();
+        let chunk3 =
+            r#"{"choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}"#;
+        let ev = wire
+            .adapt_sse_event("", chunk3, &mut state)
+            .unwrap()
+            .unwrap();
         match ev {
             MessageStreamEvent::ContentBlockDelta { delta, index } => {
                 assert_eq!(index, 0);
@@ -606,7 +623,10 @@ mod tests {
         }
 
         // [DONE] terminates.
-        let ev = wire.adapt_sse_event("", "[DONE]", &mut state).unwrap().unwrap();
+        let ev = wire
+            .adapt_sse_event("", "[DONE]", &mut state)
+            .unwrap()
+            .unwrap();
         assert_eq!(ev, MessageStreamEvent::MessageStop);
     }
 }

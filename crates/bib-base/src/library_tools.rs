@@ -389,7 +389,9 @@ impl ToolFunction for BibAddToCollectionTool {
                     format!(
                         "Article '{}' is already in collection '{}' \
                          (role: {}, note preserved) — no changes.",
-                        input.article_id, input.collection_id, role.as_str()
+                        input.article_id,
+                        input.collection_id,
+                        role.as_str()
                     )
                 } else {
                     let mut parts = Vec::new();

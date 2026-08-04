@@ -169,18 +169,24 @@ impl NodeFactory for EpiRcsNodeFactory {
             format!("# Restricted cubic splines ({} knots)", s.n_knots),
             format!("ddist <- datadist({input})"),
             format!("options(datadist = 'ddist')"),
-            format!("{fit} <- lrm({} ~ rcs({}, {}){}, data = {input}, x=TRUE)",
-                s.outcome_column, s.x_column, s.n_knots, covars),
+            format!(
+                "{fit} <- lrm({} ~ rcs({}, {}){}, data = {input}, x=TRUE)",
+                s.outcome_column, s.x_column, s.n_knots, covars
+            ),
             // Port 0: summary statistics
             format!("{out} <- data.frame("),
             format!("  lr_stat = as.numeric({fit}$stats[\"Model L.R.\"]),"),
-            format!("  p_overall = 1 - pchisq(as.numeric({fit}$stats[\"Model L.R.\"]), as.numeric({fit}$stats[\"d.f.\"])),"),
+            format!(
+                "  p_overall = 1 - pchisq(as.numeric({fit}$stats[\"Model L.R.\"]), as.numeric({fit}$stats[\"d.f.\"])),"
+            ),
             format!("  n_knots = {},", s.n_knots),
             format!("  n_obs = {fit}$stats[\"Obs\"]"),
             format!(")"),
             // Port 1: OR curve points
-            format!("{pred} <- Predict({fit}, {} = seq(min({input}${}), max({input}${}), length.out = {}))",
-                s.x_column, s.x_column, s.x_column, s.n_grid_points),
+            format!(
+                "{pred} <- Predict({fit}, {} = seq(min({input}${}), max({input}${}), length.out = {}))",
+                s.x_column, s.x_column, s.x_column, s.n_grid_points
+            ),
             format!("{out2} <- data.frame("),
             format!("  x = {pred}${},", s.x_column),
             format!("  log_odds = {pred}$yhat,"),

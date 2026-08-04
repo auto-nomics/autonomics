@@ -12,22 +12,23 @@ pub mod responses;
 pub use chat::OpenAiChatWire;
 pub use responses::OpenAiResponsesWire;
 
-use crate::types::errors::{AnthropicError, Result};
-use crate::types::messages::{ContentBlockParam, ImageSource, MessageContent, MessageCreateParams, MessageParam, Role};
-use crate::types::tools::{ToolChoice, ToolDefinition};
 use crate::types::ReasoningConfig;
-use serde_json::{json, Value};
+use crate::types::errors::{AnthropicError, Result};
+use crate::types::messages::{
+    ContentBlockParam, ImageSource, MessageContent, MessageCreateParams, MessageParam, Role,
+};
+use crate::types::tools::{ToolChoice, ToolDefinition};
+use serde_json::{Value, json};
 
 /// Common capability set for OpenAI-family protocols.
-pub(crate) const OPENAI_FEATURES: crate::wire::ProtocolFeatures =
-    crate::wire::ProtocolFeatures {
-        thinking: crate::wire::ThinkingSupport::OpenaiEffort,
-        tool_use: true,
-        parallel_tool_calls: true,
-        image_input: true,
-        system_as_message: true,
-        signed_thinking: false,
-    };
+pub(crate) const OPENAI_FEATURES: crate::wire::ProtocolFeatures = crate::wire::ProtocolFeatures {
+    thinking: crate::wire::ThinkingSupport::OpenaiEffort,
+    tool_use: true,
+    parallel_tool_calls: true,
+    image_input: true,
+    system_as_message: true,
+    signed_thinking: false,
+};
 
 /// Translate an Anthropic-shaped [`ToolDefinition`] into the OpenAI function
 /// tool descriptor.
@@ -39,9 +40,8 @@ pub(crate) const OPENAI_FEATURES: crate::wire::ProtocolFeatures =
 pub(crate) fn function_descriptor(tool: &ToolDefinition) -> Value {
     // Re-serialise the schema to preserve the `type`/`properties`/`required`
     // fields plus any `additional` flatten entries.
-    let parameters = serde_json::to_value(&tool.input_schema).unwrap_or_else(|_| {
-        json!({"type": "object", "properties": {}})
-    });
+    let parameters = serde_json::to_value(&tool.input_schema)
+        .unwrap_or_else(|_| json!({"type": "object", "properties": {}}));
     json!({
         "name": tool.name,
         "description": tool.description,
@@ -151,8 +151,8 @@ pub(crate) fn translate_message(param: &MessageParam) -> Vec<Value> {
                     ContentBlockParam::ToolUse { id, name, input } => {
                         // OpenAI wants `arguments` as a JSON **string**, not an
                         // object — it streams as text fragments.
-                        let arguments = serde_json::to_string(input)
-                            .unwrap_or_else(|_| "{}".to_string());
+                        let arguments =
+                            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
                         tool_calls.push(json!({
                             "id": id,
                             "type": "function",
@@ -191,10 +191,7 @@ pub(crate) fn translate_message(param: &MessageParam) -> Vec<Value> {
                     // Single text-only message: collapse to a plain string for
                     // maximum provider compatibility (some OpenAI-compatible
                     // gateways reject array-form content for non-vision models).
-                    msg.insert(
-                        "content".to_string(),
-                        content_parts[0]["text"].clone(),
-                    );
+                    msg.insert("content".to_string(), content_parts[0]["text"].clone());
                 } else if !content_parts.is_empty() {
                     msg.insert("content".to_string(), Value::Array(content_parts));
                 } else {

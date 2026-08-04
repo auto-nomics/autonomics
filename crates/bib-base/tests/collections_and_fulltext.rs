@@ -487,7 +487,10 @@ async fn re_add_to_collection_preserves_note() {
     assert!(outcome.was_inserted());
 
     let cas = db.list_collection_articles("c1", None, None).await.unwrap();
-    assert_eq!(cas[0].note.as_deref(), Some("Important context for this paper."));
+    assert_eq!(
+        cas[0].note.as_deref(),
+        Some("Important context for this paper.")
+    );
 
     // Re-add without a note — should NOT clobber the existing note.
     // Role changes, note does not.
@@ -676,7 +679,10 @@ async fn search_finds_annotation_content() {
     db.upsert_article(&a1).await.unwrap();
 
     // Before annotation: searching for "polygenic risk score" misses.
-    let hits = db.search_articles("polygenic risk score", 10).await.unwrap();
+    let hits = db
+        .search_articles("polygenic risk score", 10)
+        .await
+        .unwrap();
     assert!(hits.is_empty());
 
     // Add a note mentioning PRS.
@@ -690,7 +696,10 @@ async fn search_finds_annotation_content() {
     .unwrap();
 
     // Now the annotation content is searchable.
-    let hits = db.search_articles("polygenic risk score", 10).await.unwrap();
+    let hits = db
+        .search_articles("polygenic risk score", 10)
+        .await
+        .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].article_id, "a1");
     assert!(

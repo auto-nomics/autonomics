@@ -196,11 +196,7 @@ pub trait WireProtocol: Send + Sync {
     ///
     /// `streaming` is true when the request targets the streaming endpoint; for
     /// most protocols this only flips a `stream: true` field inside the body.
-    fn encode_request(
-        &self,
-        params: &MessageCreateParams,
-        streaming: bool,
-    ) -> Result<WireRequest>;
+    fn encode_request(&self, params: &MessageCreateParams, streaming: bool) -> Result<WireRequest>;
 
     /// Decode a non-streaming response body into the canonical [`Message`].
     ///
@@ -374,11 +370,14 @@ mod tests {
             WireProtocolKind::OpenaiChat,
             WireProtocolKind::OpenaiResponses,
         ] {
-            assert_eq!(kind.as_str(), match kind {
-                WireProtocolKind::Anthropic => "anthropic",
-                WireProtocolKind::OpenaiChat => "openai_chat",
-                WireProtocolKind::OpenaiResponses => "openai_responses",
-            });
+            assert_eq!(
+                kind.as_str(),
+                match kind {
+                    WireProtocolKind::Anthropic => "anthropic",
+                    WireProtocolKind::OpenaiChat => "openai_chat",
+                    WireProtocolKind::OpenaiResponses => "openai_responses",
+                }
+            );
         }
         let p = ProviderType::Mimo;
         assert_eq!(wire_protocol_for_provider(&p), WireProtocolKind::Anthropic);

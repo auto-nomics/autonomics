@@ -153,10 +153,7 @@ impl ApiClient for AnthropicApiClient {
 /// Anthropic-style `ThinkingConfig` (token budget) and an OpenAI-style
 /// `reasoning_effort` so the request works regardless of which wire
 /// protocol the client routes through.
-fn inject_thinking(
-    builder: MessageCreateBuilder,
-    model_info: &ModelInfo,
-) -> MessageCreateBuilder {
+fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> MessageCreateBuilder {
     if !model_info.supports_thinking || !model_info.thinking_enabled {
         return builder;
     }

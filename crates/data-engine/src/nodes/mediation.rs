@@ -168,13 +168,27 @@ impl NodeFactory for MediationNodeFactory {
         let input = input_0(ctx).to_string();
         let code = vec![
             format!("# Mediation analysis"),
-            format!("# Mediator model: {} ~ {}{}", s.mediator_column, s.exposure_column, covars),
-            format!("{m_model} <- lm({} ~ {}{}, data = {input})", s.mediator_column, s.exposure_column, covars),
-            format!("# Outcome model: {} ~ {} + {}{}", s.outcome_column, s.exposure_column, s.mediator_column, covars),
-            format!("{y_model} <- lm({} ~ {} + {}{}, data = {input})", s.outcome_column, s.exposure_column, s.mediator_column, covars),
+            format!(
+                "# Mediator model: {} ~ {}{}",
+                s.mediator_column, s.exposure_column, covars
+            ),
+            format!(
+                "{m_model} <- lm({} ~ {}{}, data = {input})",
+                s.mediator_column, s.exposure_column, covars
+            ),
+            format!(
+                "# Outcome model: {} ~ {} + {}{}",
+                s.outcome_column, s.exposure_column, s.mediator_column, covars
+            ),
+            format!(
+                "{y_model} <- lm({} ~ {} + {}{}, data = {input})",
+                s.outcome_column, s.exposure_column, s.mediator_column, covars
+            ),
             format!("set.seed({})", s.seed),
-            format!("{med} <- mediate({m_model}, {y_model}, treat = \"{}\", mediator = \"{}\", boot = TRUE, sims = {})",
-                s.exposure_column, s.mediator_column, s.n_bootstrap),
+            format!(
+                "{med} <- mediate({m_model}, {y_model}, treat = \"{}\", mediator = \"{}\", boot = TRUE, sims = {})",
+                s.exposure_column, s.mediator_column, s.n_bootstrap
+            ),
             format!("{med_smry} <- summary({med})"),
             format!("{out} <- data.frame("),
             format!("  nde = as.numeric({med_smry}$d0),"),

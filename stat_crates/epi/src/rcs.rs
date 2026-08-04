@@ -236,7 +236,9 @@ pub fn predict_log_odds_with_se(
     x0.truncate(p); // match fitted parameter count
 
     // η = X₀ᵀ β
-    let eta = (0..x0.len()).map(|i| x0[i] * fit.coefficients[i]).sum::<f64>();
+    let eta = (0..x0.len())
+        .map(|i| x0[i] * fit.coefficients[i])
+        .sum::<f64>();
 
     // SE(η) = sqrt(X₀ᵀ V X₀) using the flat row-major covariance matrix.
     let cov = &fit.covariance;
@@ -249,7 +251,6 @@ pub fn predict_log_odds_with_se(
     let se = var.max(0.0).sqrt();
     (eta, se)
 }
-
 
 /// via brute-force search over `n_points` samples.
 ///
@@ -410,7 +411,10 @@ mod tests {
         // Check SE and CI at a few grid points.
         for &xv in &[1.0, 3.0, 5.0, 7.0, 9.0] {
             let (eta, se) = predict_log_odds_with_se(&res.spline_fit, &res.knots, xv, &[]);
-            assert!(se.is_finite() && se >= 0.0, "SE should be non-negative at x={xv}, got {se}");
+            assert!(
+                se.is_finite() && se >= 0.0,
+                "SE should be non-negative at x={xv}, got {se}"
+            );
             let or = eta.exp();
             let or_lo = (eta - 1.96 * se).exp();
             let or_hi = (eta + 1.96 * se).exp();

@@ -585,9 +585,14 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                 ]),
                 Line::from(vec![label("FnCall"), val(yn(m.supports_function_calling))]),
                 Line::from(vec![label("Streaming"), val(yn(m.supports_streaming))]),
-                Line::from(vec![label("Thinking"), val(format!("{}{}",
-                    yn(m.supports_thinking),
-                    if m.thinking_enabled { " (on)" } else { "" }))]),
+                Line::from(vec![
+                    label("Thinking"),
+                    val(format!(
+                        "{}{}",
+                        yn(m.supports_thinking),
+                        if m.thinking_enabled { " (on)" } else { "" }
+                    )),
+                ]),
                 Line::from(vec![label("Vision"), val(yn(m.vision_ability))]),
                 Line::from(vec![
                     label("In Price"),

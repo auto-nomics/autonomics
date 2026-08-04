@@ -439,11 +439,15 @@ fn golden_ldsc_hsq_r() {
 
     // Edge CSV I/O.
     assert!(
-        script.source.contains("fwrite(sumstats, \"_edge_sumstats_0.csv\")"),
+        script
+            .source
+            .contains("fwrite(sumstats, \"_edge_sumstats_0.csv\")"),
         "sumstats should write edge CSV"
     );
     assert!(
-        script.source.contains("sumstats <- fread(\"_edge_sumstats_0.csv\")"),
+        script
+            .source
+            .contains("sumstats <- fread(\"_edge_sumstats_0.csv\")"),
         "ldsc should read edge CSV"
     );
 }

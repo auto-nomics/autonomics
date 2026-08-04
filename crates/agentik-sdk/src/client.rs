@@ -49,10 +49,7 @@ impl Anthropic {
     }
 
     /// Create a client with an explicit config and wire protocol.
-    pub fn with_config_and_wire(
-        config: ClientConfig,
-        wire: Arc<dyn WireProtocol>,
-    ) -> Result<Self> {
+    pub fn with_config_and_wire(config: ClientConfig, wire: Arc<dyn WireProtocol>) -> Result<Self> {
         let http_client = HttpClient::new(config.clone())?;
         Ok(Self {
             config,
