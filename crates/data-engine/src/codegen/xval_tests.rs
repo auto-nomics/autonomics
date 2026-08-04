@@ -1349,3 +1349,65 @@ async fn write_df_csv(df: datafusion::dataframe::DataFrame, path: &str) {
     .await
     .expect("write csv");
 }
+
+// ── coloc_abf ──────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + coloc; run with DIFFTESTS=1"]
+fn coloc_abf() {
+    let data_csv = format!("{XVAL_DIR}/coloc_abf_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R coloc_abf {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "coloc".into(),
+                kind: "coloc_abf".into(),
+                spec: serde_json::json!({
+                    "dataset1": {
+                        "type": "quant",
+                        "snp": "snp",
+                        "beta": "beta1",
+                        "varbeta": "varbeta1",
+                        "maf": "maf",
+                        "n": 1000,
+                        "sdY": 1.0
+                    },
+                    "dataset2": {
+                        "type": "cc",
+                        "snp": "snp",
+                        "beta": "beta2",
+                        "varbeta": "varbeta2",
+                        "maf": "maf",
+                        "n": 1000,
+                        "s": 0.5
+                    },
+                    "p1": 1e-4,
+                    "p2": 1e-4,
+                    "p12": 1e-5
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "coloc".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "coloc_abf");
+    assert!(script.source.contains("coloc.abf("));
+    assert!(script.source.contains("library(coloc)"));
+    assert!(script.source.contains("p1 = 0.0001"));
+    assert!(script.source.contains("type = \"quant\""));
+    assert!(script.source.contains("type = \"cc\""));
+}

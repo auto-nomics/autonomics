@@ -1459,6 +1459,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "coloc"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1945,6 +1957,7 @@ dependencies = [
  "blake3",
  "chrono",
  "cmprsk",
+ "coloc",
  "cpassoc",
  "csv",
  "datafusion",

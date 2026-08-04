@@ -9,6 +9,7 @@ pub mod bivariate_mixer;
 pub mod causal;
 pub mod chi_square;
 pub mod cmest;
+pub mod coloc;
 pub mod cox_regression;
 pub mod cpassoc;
 pub mod cuminc;
@@ -62,6 +63,7 @@ pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, Bivaria
 pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
 pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
+pub use coloc::{ColocAbfConfig, ColocAbfNode, ColocAbfNodeFactory, DatasetSpec as ColocDatasetSpec};
 pub use evalue::{EvalueConfig, EvalueNode, EvalueNodeFactory};
 pub use hdl_l::{HdlLNode, HdlLNodeFactory, HdlLSpec};
 pub use lava::{
