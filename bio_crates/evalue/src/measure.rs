@@ -126,9 +126,7 @@ impl Estimate {
             "RD" => Ok(MeasureKind::RD),
             "OLS" => Ok(MeasureKind::OLS),
             "MD" => Ok(MeasureKind::MD),
-            _ => Err(EvalueError::Invalid(format!(
-                "Unknown measure kind: '{s}'"
-            ))),
+            _ => Err(EvalueError::Invalid(format!("Unknown measure kind: '{s}'"))),
         }
     }
 }
@@ -261,7 +259,11 @@ mod tests {
         let rr = hr.to_rr().unwrap();
         let expected =
             (1.0 - 0.5_f64.powf(0.56_f64.sqrt())) / (1.0 - 0.5_f64.powf(1.0 / 0.56_f64.sqrt()));
-        assert!((rr.est - expected).abs() < 1e-10, "got {}, expected {expected}", rr.est);
+        assert!(
+            (rr.est - expected).abs() < 1e-10,
+            "got {}, expected {expected}",
+            rr.est
+        );
     }
 
     #[test]

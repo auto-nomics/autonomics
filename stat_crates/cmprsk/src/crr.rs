@@ -378,12 +378,11 @@ pub fn crr(input: &CrrInput, opts: &CrrOptions) -> Result<CrrFit> {
         z = crrfsv(&data, &b);
 
         // max(abs(score) * pmax(abs(b), 1)) < max(abs(lik), 1) * gtol
-        let gmax = z
-            .s
-            .iter()
-            .zip(b.iter())
-            .map(|(s, bi)| s.abs() * bi.abs().max(1.0))
-            .fold(f64::NEG_INFINITY, f64::max);
+        let gmax =
+            z.s.iter()
+                .zip(b.iter())
+                .map(|(s, bi)| s.abs() * bi.abs().max(1.0))
+                .fold(f64::NEG_INFINITY, f64::max);
         if gmax < z.lik.abs().max(1.0) * opts.gtol {
             converged = true;
             break;
@@ -400,8 +399,7 @@ pub fn crr(input: &CrrInput, opts: &CrrOptions) -> Result<CrrFit> {
 
         let mut i = 0usize;
         loop {
-            let armijo =
-                z.lik + 1e-4 * sc.iter().zip(z.s.iter()).map(|(a, c)| a * c).sum::<f64>();
+            let armijo = z.lik + 1e-4 * sc.iter().zip(z.s.iter()).map(|(a, c)| a * c).sum::<f64>();
             if !(fbn.is_nan() || fbn > armijo) {
                 break;
             }

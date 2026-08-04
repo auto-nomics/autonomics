@@ -435,5 +435,6 @@ pub struct AppState {
     pub main_tab_state: MainTabState,
     pub agent_tab_state: AgentTabState,
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
+    pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub active_model: Arc<ArcSwapOption<Model>>,
 }

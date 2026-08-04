@@ -594,7 +594,9 @@ fn golden_fine_gray_r() {
     assert!(script.source.contains("failcode = 2"), "failcode");
     assert!(script.source.contains("cencode = 0"), "cencode");
     assert!(
-        script.source.contains("cov1 = as.matrix(src[, c(\"x1\", \"x2\"), drop = FALSE])"),
+        script
+            .source
+            .contains("cov1 = as.matrix(src[, c(\"x1\", \"x2\"), drop = FALSE])"),
         "cov1 matrix with names"
     );
     // both of the node's output ports must be written (one fwrite per port).
@@ -603,7 +605,9 @@ fn golden_fine_gray_r() {
         "port 0 written"
     );
     assert!(
-        script.source.contains("fwrite(fg_baseline_0, \"_edge_fg_1.csv\")"),
+        script
+            .source
+            .contains("fwrite(fg_baseline_0, \"_edge_fg_1.csv\")"),
         "port 1 written"
     );
     assert!(script.source.contains("baseline_cif"), "port-1 column");
@@ -653,10 +657,15 @@ fn golden_fine_gray_tf_r() {
         "tf closure from TimeFn::Log"
     );
     assert!(
-        script.source.contains("cov2 = as.matrix(src[, c(\"x1\"), drop = FALSE])"),
+        script
+            .source
+            .contains("cov2 = as.matrix(src[, c(\"x1\"), drop = FALSE])"),
         "cov2 matrix"
     );
-    assert!(script.source.contains("cengroup = src$grp"), "cengroup column");
+    assert!(
+        script.source.contains("cengroup = src$grp"),
+        "cengroup column"
+    );
 }
 
 // ── cmprsk: cuminc ─────────────────────────────────────────────────────────
@@ -704,7 +713,9 @@ fn golden_cuminc_r() {
         "port 0 (curves) written"
     );
     assert!(
-        script.source.contains("fwrite(cuminc_tests_0, \"_edge_ci_1.csv\")"),
+        script
+            .source
+            .contains("fwrite(cuminc_tests_0, \"_edge_ci_1.csv\")"),
         "port 1 (tests) written"
     );
 }
@@ -925,9 +936,7 @@ fn golden_calibrate_chain_r() {
         script.source
     );
     assert!(
-        script
-            .source
-            .contains("weights("),
+        script.source.contains("weights("),
         "should extract calibrated weights"
     );
     assert!(

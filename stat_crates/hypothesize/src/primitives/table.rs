@@ -38,7 +38,9 @@ pub fn fisher_exact(
     let hi = n1.min(m1);
 
     if lo > hi {
-        return Err(HypoError::InvalidInput("inconsistent table marginals".into()));
+        return Err(HypoError::InvalidInput(
+            "inconsistent table marginals".into(),
+        ));
     }
 
     // Compute log-probabilities for each possible table.
@@ -157,11 +159,7 @@ mod tests {
         // R: fisher.test(matrix(c(5,0,0,5), 2, 2)) → p ≈ 0.00794
         let table = [[5, 0], [0, 5]];
         let t = fisher_exact(&table, Alternative::TwoSided, 0.95).unwrap();
-        assert!(
-            t.p_value < 0.01,
-            "p = {} (expected < 0.01)",
-            t.p_value
-        );
+        assert!(t.p_value < 0.01, "p = {} (expected < 0.01)", t.p_value);
     }
 
     #[test]

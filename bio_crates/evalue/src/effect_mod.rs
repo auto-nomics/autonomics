@@ -129,8 +129,22 @@ pub fn evalues_ic(
     }
 
     // Case 3: Unknown direction — try both
-    let cand1 = ic_evalue_inner(data, "effectMod", var_name, true_val, true, Some(UnidirBiasDirection::Positive))?;
-    let cand2 = ic_evalue_inner(data, "effectMod", var_name, true_val, true, Some(UnidirBiasDirection::Negative))?;
+    let cand1 = ic_evalue_inner(
+        data,
+        "effectMod",
+        var_name,
+        true_val,
+        true,
+        Some(UnidirBiasDirection::Positive),
+    )?;
+    let cand2 = ic_evalue_inner(
+        data,
+        "effectMod",
+        var_name,
+        true_val,
+        true,
+        Some(UnidirBiasDirection::Negative),
+    )?;
 
     let cand1_e = cand1.evalues.evalue;
     let cand1_bf = cand1.evalues.bias_factor;
@@ -185,17 +199,14 @@ fn ic_evalue_inner(
 
     if ic_c < 0.0 {
         return Err(EvalueError::Invalid(
-            "The confounded interaction contrast is negative. Please recode the stratum variable.".into(),
+            "The confounded interaction contrast is negative. Please recode the stratum variable."
+                .into(),
         ));
     }
 
     // Check if already <= true
     if stratum == "effectMod" {
-        let check_val = if var_name == "RD" {
-            ic_c
-        } else {
-            rd_c[2].lo
-        };
+        let check_val = if var_name == "RD" { ic_c } else { rd_c[2].lo };
         if check_val <= true_val {
             return Ok(IcResult {
                 evalues: IcEvalueRow {
@@ -216,27 +227,35 @@ fn ic_evalue_inner(
         Box::new(move |x| {
             let rdt = rdt_bound(data, x, BiasDir::Positive, x, BiasDir::Negative);
             let row = &rdt[stratum_idx(stratum)];
-            let val = match var_name { "RD" => row.rd, "lo" => row.lo, _ => row.rd };
+            let val = match var_name {
+                "RD" => row.rd,
+                "lo" => row.lo,
+                _ => row.rd,
+            };
             (val - true_val).abs()
         })
     } else {
         match unidir_dir.unwrap() {
-            UnidirBiasDirection::Negative => {
-                Box::new(move |x| {
-                    let rdt = rdt_bound(data, 1.0, BiasDir::Negative, x, BiasDir::Negative);
-                    let row = &rdt[stratum_idx(stratum)];
-                    let val = match var_name { "RD" => row.rd, "lo" => row.lo, _ => row.rd };
-                    (val - true_val).abs()
-                })
-            }
-            UnidirBiasDirection::Positive => {
-                Box::new(move |x| {
-                    let rdt = rdt_bound(data, x, BiasDir::Positive, 1.0, BiasDir::Positive);
-                    let row = &rdt[stratum_idx(stratum)];
-                    let val = match var_name { "RD" => row.rd, "lo" => row.lo, _ => row.rd };
-                    (val - true_val).abs()
-                })
-            }
+            UnidirBiasDirection::Negative => Box::new(move |x| {
+                let rdt = rdt_bound(data, 1.0, BiasDir::Negative, x, BiasDir::Negative);
+                let row = &rdt[stratum_idx(stratum)];
+                let val = match var_name {
+                    "RD" => row.rd,
+                    "lo" => row.lo,
+                    _ => row.rd,
+                };
+                (val - true_val).abs()
+            }),
+            UnidirBiasDirection::Positive => Box::new(move |x| {
+                let rdt = rdt_bound(data, x, BiasDir::Positive, 1.0, BiasDir::Positive);
+                let row = &rdt[stratum_idx(stratum)];
+                let val = match var_name {
+                    "RD" => row.rd,
+                    "lo" => row.lo,
+                    _ => row.rd,
+                };
+                (val - true_val).abs()
+            }),
             UnidirBiasDirection::Unknown => unreachable!(),
         }
     };
@@ -266,8 +285,12 @@ fn ic_evalue_inner(
         rdt_bound(data, opt_x, BiasDir::Positive, opt_x, BiasDir::Negative)
     } else {
         match unidir_dir.unwrap() {
-            UnidirBiasDirection::Negative => rdt_bound(data, 1.0, BiasDir::Negative, opt_x, BiasDir::Negative),
-            UnidirBiasDirection::Positive => rdt_bound(data, opt_x, BiasDir::Positive, 1.0, BiasDir::Positive),
+            UnidirBiasDirection::Negative => {
+                rdt_bound(data, 1.0, BiasDir::Negative, opt_x, BiasDir::Negative)
+            }
+            UnidirBiasDirection::Positive => {
+                rdt_bound(data, opt_x, BiasDir::Positive, 1.0, BiasDir::Positive)
+            }
             UnidirBiasDirection::Unknown => unreachable!(),
         }
     };
@@ -449,14 +472,7 @@ mod tests {
     #[test]
     fn test_evalues_ic_unidir_unknown() {
         let data = letenneur_data();
-        let res = evalues_ic(
-            &data,
-            "est",
-            0.0,
-            true,
-            Some(UnidirBiasDirection::Unknown),
-        )
-        .unwrap();
+        let res = evalues_ic(&data, "est", 0.0, true, Some(UnidirBiasDirection::Unknown)).unwrap();
         assert!(res.evalues.evalue > 1.0);
         assert!(res.candidates.is_some());
     }
@@ -465,14 +481,30 @@ mod tests {
     fn test_rdt_bound_clamping() {
         // Extreme bias factor should clamp RD to [-1, 1]
         let data = IcData {
-            p1_1: 0.9, p1_0: 0.1, n1_1: 100.0, n1_0: 100.0, f1: 0.2,
-            p0_1: 0.1, p0_0: 0.4, n0_1: 100.0, n0_0: 100.0, f0: 0.3,
+            p1_1: 0.9,
+            p1_0: 0.1,
+            n1_1: 100.0,
+            n1_0: 100.0,
+            f1: 0.2,
+            p0_1: 0.1,
+            p0_0: 0.4,
+            n0_1: 100.0,
+            n0_0: 100.0,
+            f0: 0.3,
             alpha: 0.05,
         };
         let rows = rdt_bound(&data, 50.0, BiasDir::Negative, 50.0, BiasDir::Positive);
         // Stratum 1 with negative bias → should be clamped to 1.0
-        assert!((rows[0].rd - 1.0).abs() < 1e-10, "stratum 1 RD: {}", rows[0].rd);
+        assert!(
+            (rows[0].rd - 1.0).abs() < 1e-10,
+            "stratum 1 RD: {}",
+            rows[0].rd
+        );
         // Stratum 0 with positive bias → should be clamped to -1.0
-        assert!((rows[1].rd - (-1.0)).abs() < 1e-10, "stratum 0 RD: {}", rows[1].rd);
+        assert!(
+            (rows[1].rd - (-1.0)).abs() < 1e-10,
+            "stratum 0 RD: {}",
+            rows[1].rd
+        );
     }
 }

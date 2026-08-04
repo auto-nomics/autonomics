@@ -13,7 +13,10 @@
 use serde_json::json;
 
 use super::{PvalSource, extract_pvals, validate_strict};
-use crate::{Alternative, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result, dist::chisq_sf, extras};
+use crate::{
+    Alternative, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result,
+    dist::chisq_sf, extras,
+};
 
 /// Combine independent p-values or tests via Fisher's method.
 pub fn fisher_combine<S: PvalSource>(srcs: &[S]) -> Result<HypothesisTest> {
@@ -25,7 +28,9 @@ pub fn fisher_combine_pvals(pvals: &[f64]) -> Result<HypothesisTest> {
     validate_strict(pvals)?;
     let k = pvals.len();
     if k == 0 {
-        return Err(crate::HypoError::InvalidInput("no p-values supplied".into()));
+        return Err(crate::HypoError::InvalidInput(
+            "no p-values supplied".into(),
+        ));
     }
     let stat = -2.0 * pvals.iter().map(|p| p.ln()).sum::<f64>();
     let dof = 2.0 * k as f64;

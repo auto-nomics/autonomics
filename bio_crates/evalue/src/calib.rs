@@ -41,7 +41,12 @@ mod tests {
         let sei = vec![0.5, 0.5, 0.5];
         let calib = calib_ests(&yi, &sei);
         for i in 0..3 {
-            assert!((calib[i] - yi[i]).abs() < 1e-10, "calib[{i}] = {}, expected {}", calib[i], yi[i]);
+            assert!(
+                (calib[i] - yi[i]).abs() < 1e-10,
+                "calib[{i}] = {}, expected {}",
+                calib[i],
+                yi[i]
+            );
         }
     }
 }

@@ -100,10 +100,7 @@ pub fn svy_cprod_matrix(zs: &[Vec<f64>], design: &SurveyDesign) -> Result<Vec<Ve
     // Group PSU indices by stratum.
     let mut stratum_psus: HashMap<String, Vec<usize>> = HashMap::new();
     for (k, (stratum, _)) in psu_key.iter().enumerate() {
-        stratum_psus
-            .entry(stratum.clone())
-            .or_default()
-            .push(k);
+        stratum_psus.entry(stratum.clone()).or_default().push(k);
     }
 
     // Compute stratum means.
@@ -217,15 +214,27 @@ mod tests {
 
     fn fpc_strata() -> Vec<String> {
         vec![
-            "1".into(), "1".into(), "1".into(), "1".into(), "1".into(),
-            "2".into(), "2".into(), "2".into(),
+            "1".into(),
+            "1".into(),
+            "1".into(),
+            "1".into(),
+            "1".into(),
+            "2".into(),
+            "2".into(),
+            "2".into(),
         ]
     }
     fn fpc_cluster() -> Vec<String> {
         // Already nested: stratum:psu
         vec![
-            "1.1".into(), "1.2".into(), "1.3".into(), "1.4".into(), "1.5".into(),
-            "2.1".into(), "2.2".into(), "2.3".into(),
+            "1.1".into(),
+            "1.2".into(),
+            "1.3".into(),
+            "1.4".into(),
+            "1.5".into(),
+            "2.1".into(),
+            "2.2".into(),
+            "2.3".into(),
         ]
     }
     fn fpc_weights() -> Vec<f64> {
@@ -243,10 +252,7 @@ mod tests {
 
     /// Compute the variance of a weighted mean using svy_cprod.
     /// This mirrors R's svymean for one variable.
-    fn weighted_mean_var(
-        x: &[f64],
-        design: &SurveyDesign,
-    ) -> (f64, f64) {
+    fn weighted_mean_var(x: &[f64], design: &SurveyDesign) -> (f64, f64) {
         let w = design.weights();
         let psum: f64 = w.iter().sum();
 
@@ -254,7 +260,11 @@ mod tests {
         let mean: f64 = x.iter().zip(&w).map(|(&xi, &wi)| xi * wi).sum::<f64>() / psum;
 
         // Scaled centered variable: z = w * (x - mean) / psum
-        let z: Vec<f64> = x.iter().zip(&w).map(|(&xi, &wi)| wi * (xi - mean) / psum).collect();
+        let z: Vec<f64> = x
+            .iter()
+            .zip(&w)
+            .map(|(&xi, &wi)| wi * (xi - mean) / psum)
+            .collect();
 
         let var = svy_cprod(&z, design).unwrap();
         (mean, var)

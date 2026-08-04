@@ -24,7 +24,9 @@ pub fn t_test_one(x: &[f64], mu0: f64, alt: Alternative) -> Result<HypothesisTes
     let var = ss / (n_f - 1.0);
     let se = (var / n_f).sqrt();
     if se == 0.0 {
-        return Err(HypoError::InvalidInput("all values are identical (SE = 0)".into()));
+        return Err(HypoError::InvalidInput(
+            "all values are identical (SE = 0)".into(),
+        ));
     }
     let t = (mean - mu0) / se;
     let df = n_f - 1.0;
@@ -50,12 +52,17 @@ pub fn t_test_one(x: &[f64], mu0: f64, alt: Alternative) -> Result<HypothesisTes
 /// Equivalent to a one-sample test on the differences `dᵢ = xᵢ − yᵢ`.
 pub fn t_test_paired(x: &[f64], y: &[f64], alt: Alternative) -> Result<HypothesisTest> {
     if x.len() != y.len() {
-        return Err(HypoError::LengthMismatch { a: x.len(), b: y.len() });
+        return Err(HypoError::LengthMismatch {
+            a: x.len(),
+            b: y.len(),
+        });
     }
     let d: Vec<f64> = x.iter().zip(y).map(|(a, b)| a - b).collect();
     let n = d.len();
     if n < 2 {
-        return Err(HypoError::InvalidInput("paired t-test requires ≥ 2 pairs".into()));
+        return Err(HypoError::InvalidInput(
+            "paired t-test requires ≥ 2 pairs".into(),
+        ));
     }
     let n_f = n as f64;
     let mean = crate::extras_mean(&d);
@@ -63,7 +70,9 @@ pub fn t_test_paired(x: &[f64], y: &[f64], alt: Alternative) -> Result<Hypothesi
     let var = ss / (n_f - 1.0);
     let se = (var / n_f).sqrt();
     if se == 0.0 {
-        return Err(HypoError::InvalidInput("all differences are identical (SE = 0)".into()));
+        return Err(HypoError::InvalidInput(
+            "all differences are identical (SE = 0)".into(),
+        ));
     }
     let t = mean / se;
     let df = n_f - 1.0;
@@ -121,7 +130,9 @@ pub fn t_test_two(
         (se, num / den)
     };
     if se == 0.0 {
-        return Err(HypoError::InvalidInput("SE = 0 (identical values within groups)".into()));
+        return Err(HypoError::InvalidInput(
+            "SE = 0 (identical values within groups)".into(),
+        ));
     }
     let t = (m1 - m2) / se;
     let p = p_value_t(t, df, alt);

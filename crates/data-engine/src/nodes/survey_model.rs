@@ -16,9 +16,7 @@ use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{
-    SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out,
-};
+use super::survey_common::{SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out};
 use crate::codegen::helpers::{input_0, parse_spec, r_formula};
 use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use crate::dag::{DagError, graph::PortOutputs};
@@ -125,18 +123,17 @@ impl DagNode for SvyGlmNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design =
-            super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let x = super::survey_common::extract_variables(&batches, &self.spec.predictors)?;
 
-        let fit = survey::svyglm_linear(
-            &y[0], &x, &design, self.spec.intercept, None,
-        )
-        .map_err(|e| DagError::NodeError {
-            node_type: "svyglm".into(),
-            msg: e.to_string(),
-        })?;
+        let fit =
+            survey::svyglm_linear(&y[0], &x, &design, self.spec.intercept, None).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "svyglm".into(),
+                    msg: e.to_string(),
+                }
+            })?;
 
         // Build output: term, estimate, se, t_stat, p_value.
         let p = fit.coefficients.len();
@@ -314,7 +311,10 @@ impl NodeFactory for SvyCoxphFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyCoxphSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyCoxphNode::new(s))) }
+        {
+            let s: SvyCoxphSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyCoxphNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -387,7 +387,10 @@ impl NodeFactory for SvySurvregFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvySurvregSpec = serde_json::from_value(spec)?; Ok(Box::new(SvySurvregNode::new(s))) }
+        {
+            let s: SvySurvregSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvySurvregNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -460,7 +463,10 @@ impl NodeFactory for SvyOlrFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyOlrSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyOlrNode::new(s))) }
+        {
+            let s: SvyOlrSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyOlrNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -527,7 +533,10 @@ impl NodeFactory for SvyLoglinFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyLoglinSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyLoglinNode::new(s))) }
+        {
+            let s: SvyLoglinSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyLoglinNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -543,7 +552,10 @@ impl NodeFactory for SvyLoglinFactory {
             Some(k) => format!(", subset = ~.^{k}"),
             None => String::new(),
         };
-        code.push(format!("{out} <- svyloglin(~{rhs}{sa}, {des})", sa = subset_arg));
+        code.push(format!(
+            "{out} <- svyloglin(~{rhs}{sa}, {des})",
+            sa = subset_arg
+        ));
         code.push(format!("print(summary({out}))"));
         Ok(NodeCodegen::simple(code, out))
     }
@@ -595,7 +607,10 @@ impl NodeFactory for SvyMleFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyMleSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyMleNode::new(s))) }
+        {
+            let s: SvyMleSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyMleNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -664,7 +679,10 @@ impl NodeFactory for SvyNlsFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyNlsSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyNlsNode::new(s))) }
+        {
+            let s: SvyNlsSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyNlsNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -731,7 +749,10 @@ impl NodeFactory for SvyIvregFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyIvregSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyIvregNode::new(s))) }
+        {
+            let s: SvyIvregSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyIvregNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,
@@ -778,16 +799,32 @@ impl NodeFactory for SvyIvregFactory {
 macro_rules! model_node {
     ($node:ident, $spec_ty:ty, $kind:literal) => {
         #[derive(Clone)]
-        pub struct $node { meta: NodePorts, spec: $spec_ty }
+        pub struct $node {
+            meta: NodePorts,
+            spec: $spec_ty,
+        }
         impl $node {
-            pub fn new(spec: $spec_ty) -> Self { Self { meta: one_in_one_out(), spec } }
+            pub fn new(spec: $spec_ty) -> Self {
+                Self {
+                    meta: one_in_one_out(),
+                    spec,
+                }
+            }
         }
         #[async_trait]
         impl DagNode for $node {
-            fn ports(&self) -> &NodePorts { &self.meta }
-            fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-            fn kind(&self) -> &'static str { $kind }
-            fn as_any(&self) -> &dyn std::any::Any { self }
+            fn ports(&self) -> &NodePorts {
+                &self.meta
+            }
+            fn clone_box(&self) -> Box<dyn DagNode> {
+                Box::new(self.clone())
+            }
+            fn kind(&self) -> &'static str {
+                $kind
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
             async fn execute(
                 &mut self,
                 node_ctx: &NodeCtx,
@@ -815,121 +852,399 @@ pub trait SpecExecute: Sized + Clone {
 }
 
 impl SpecExecute for SvyCoxphSpec {
-    async fn execute_spec(&self, node_ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or_else(|| DagError::NodeError { node_type: kind.into(), msg: "no input".into() })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("collect: {e}") })?;
+    async fn execute_spec(
+        &self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs.first().ok_or_else(|| DagError::NodeError {
+            node_type: kind.into(),
+            msg: "no input".into(),
+        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.design, &batches)?;
         let t = super::survey_common::extract_variables(&batches, &[self.time_column.clone()])?;
         let e = super::survey_common::extract_variables(&batches, &[self.event_column.clone()])?;
         let x = super::survey_common::extract_variables(&batches, &self.predictors)?;
-        let fit = survey::svy_coxph(&t[0], &e[0], &x, &design).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.to_string() })?;
+        let fit =
+            survey::svy_coxph(&t[0], &e[0], &x, &design).map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.to_string(),
+            })?;
         let se = fit.se();
         let terms = self.predictors.clone();
-        
-        super::survey_common::build_model_output_batch(&terms, &fit.coefficients, &se,
-            &fit.coefficients.iter().zip(&se).map(|(b,s)| if *s>0.0 {b/s} else {0.0}).collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()], &vec![fit.df as f64; fit.coefficients.len()])
-            .map(|b| { let ctx = node_ctx.session(); ctx.read_batch(b) })
-            .map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("{e}") })
-            .and_then(|df| { let mut r = PortOutputs::new(); r.insert(0, df.map_err(|e| DagError::NodeError{node_type:kind.into(), msg:format!("{e}")})?); Ok(r) })
+
+        super::survey_common::build_model_output_batch(
+            &terms,
+            &fit.coefficients,
+            &se,
+            &fit.coefficients
+                .iter()
+                .zip(&se)
+                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
+                .collect::<Vec<_>>(),
+            &vec![0.0; fit.coefficients.len()],
+            &vec![fit.df as f64; fit.coefficients.len()],
+        )
+        .map(|b| {
+            let ctx = node_ctx.session();
+            ctx.read_batch(b)
+        })
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("{e}"),
+        })
+        .and_then(|df| {
+            let mut r = PortOutputs::new();
+            r.insert(
+                0,
+                df.map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("{e}"),
+                })?,
+            );
+            Ok(r)
+        })
     }
 }
 
 impl SpecExecute for SvySurvregSpec {
-    async fn execute_spec(&self, node_ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or_else(|| DagError::NodeError { node_type: kind.into(), msg: "no input".into() })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("collect: {e}") })?;
+    async fn execute_spec(
+        &self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs.first().ok_or_else(|| DagError::NodeError {
+            node_type: kind.into(),
+            msg: "no input".into(),
+        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.design, &batches)?;
         let t = super::survey_common::extract_variables(&batches, &[self.time_column.clone()])?;
         let e = super::survey_common::extract_variables(&batches, &[self.event_column.clone()])?;
         let x = super::survey_common::extract_variables(&batches, &self.predictors)?;
-        let fit = survey::svy_survreg(&t[0], &e[0], &x, &design, true).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.to_string() })?;
+        let fit = survey::svy_survreg(&t[0], &e[0], &x, &design, true).map_err(|e| {
+            DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.to_string(),
+            }
+        })?;
         let se = fit.se();
-        let terms: Vec<String> = std::iter::once("(Intercept)".into()).chain(self.predictors.iter().cloned()).collect();
-        super::survey_common::build_model_output_batch(&terms, &fit.coefficients, &se,
-            &fit.coefficients.iter().zip(&se).map(|(b,s)| if *s>0.0 {b/s} else {0.0}).collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()], &vec![fit.df as f64; fit.coefficients.len()])
-            .map(|b| { let ctx = node_ctx.session(); ctx.read_batch(b) })
-            .map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("{e}") })
-            .and_then(|df| { let mut r = PortOutputs::new(); r.insert(0, df.map_err(|e| DagError::NodeError{node_type:kind.into(), msg:format!("{e}")})?); Ok(r) })
+        let terms: Vec<String> = std::iter::once("(Intercept)".into())
+            .chain(self.predictors.iter().cloned())
+            .collect();
+        super::survey_common::build_model_output_batch(
+            &terms,
+            &fit.coefficients,
+            &se,
+            &fit.coefficients
+                .iter()
+                .zip(&se)
+                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
+                .collect::<Vec<_>>(),
+            &vec![0.0; fit.coefficients.len()],
+            &vec![fit.df as f64; fit.coefficients.len()],
+        )
+        .map(|b| {
+            let ctx = node_ctx.session();
+            ctx.read_batch(b)
+        })
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("{e}"),
+        })
+        .and_then(|df| {
+            let mut r = PortOutputs::new();
+            r.insert(
+                0,
+                df.map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("{e}"),
+                })?,
+            );
+            Ok(r)
+        })
     }
 }
 
 impl SpecExecute for SvyOlrSpec {
-    async fn execute_spec(&self, node_ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or_else(|| DagError::NodeError { node_type: kind.into(), msg: "no input".into() })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("collect: {e}") })?;
+    async fn execute_spec(
+        &self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs.first().ok_or_else(|| DagError::NodeError {
+            node_type: kind.into(),
+            msg: "no input".into(),
+        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.design, &batches)?;
-        let y_raw = super::survey_common::extract_string_column_pub(&batches, &self.response).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.0 })?;
+        let y_raw = super::survey_common::extract_string_column_pub(&batches, &self.response)
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.0,
+            })?;
         let mut levels: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for s in &y_raw { if seen.insert(s.clone()) { levels.push(s.clone()); } }
+        for s in &y_raw {
+            if seen.insert(s.clone()) {
+                levels.push(s.clone());
+            }
+        }
         levels.sort();
-        let y_ord: Vec<usize> = y_raw.iter().map(|s| levels.iter().position(|l| l == s).unwrap()).collect();
+        let y_ord: Vec<usize> = y_raw
+            .iter()
+            .map(|s| levels.iter().position(|l| l == s).unwrap())
+            .collect();
         let x = super::survey_common::extract_variables(&batches, &self.predictors)?;
-        let fit = survey::svy_olr(&y_ord, &x, &design, 100, 1e-6).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.to_string() })?;
+        let fit =
+            survey::svy_olr(&y_ord, &x, &design, 100, 1e-6).map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.to_string(),
+            })?;
         let all = fit.all_coefs();
         let se = fit.se();
-        let terms: Vec<String> = self.predictors.iter().cloned().chain((0..fit.n_levels-1).map(|i| format!("threshold_{}", i+1))).collect();
-        super::survey_common::build_model_output_batch(&terms, &all, &se,
-            &all.iter().zip(&se).map(|(b,s)| if *s>0.0 {b/s} else {0.0}).collect::<Vec<_>>(),
-            &vec![0.0; all.len()], &vec![fit.df as f64; all.len()])
-            .map(|b| { let ctx = node_ctx.session(); ctx.read_batch(b) })
-            .map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("{e}") })
-            .and_then(|df| { let mut r = PortOutputs::new(); r.insert(0, df.map_err(|e| DagError::NodeError{node_type:kind.into(), msg:format!("{e}")})?); Ok(r) })
+        let terms: Vec<String> = self
+            .predictors
+            .iter()
+            .cloned()
+            .chain((0..fit.n_levels - 1).map(|i| format!("threshold_{}", i + 1)))
+            .collect();
+        super::survey_common::build_model_output_batch(
+            &terms,
+            &all,
+            &se,
+            &all.iter()
+                .zip(&se)
+                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
+                .collect::<Vec<_>>(),
+            &vec![0.0; all.len()],
+            &vec![fit.df as f64; all.len()],
+        )
+        .map(|b| {
+            let ctx = node_ctx.session();
+            ctx.read_batch(b)
+        })
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("{e}"),
+        })
+        .and_then(|df| {
+            let mut r = PortOutputs::new();
+            r.insert(
+                0,
+                df.map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("{e}"),
+                })?,
+            );
+            Ok(r)
+        })
     }
 }
 
 impl SpecExecute for SvyLoglinSpec {
-    async fn execute_spec(&self, node_ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or_else(|| DagError::NodeError { node_type: kind.into(), msg: "no input".into() })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("collect: {e}") })?;
+    async fn execute_spec(
+        &self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs.first().ok_or_else(|| DagError::NodeError {
+            node_type: kind.into(),
+            msg: "no input".into(),
+        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.design, &batches)?;
-        let row = super::survey_common::extract_string_column_pub(&batches, &self.variables[0]).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.0 })?;
-        let col = super::survey_common::extract_string_column_pub(&batches, &self.variables[1]).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.0 })?;
-        let fit = survey::svy_loglin(&row, &col, &design).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.to_string() })?;
+        let row = super::survey_common::extract_string_column_pub(&batches, &self.variables[0])
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.0,
+            })?;
+        let col = super::survey_common::extract_string_column_pub(&batches, &self.variables[1])
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.0,
+            })?;
+        let fit = survey::svy_loglin(&row, &col, &design).map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: e.to_string(),
+        })?;
         let se = fit.se();
-        let terms: Vec<String> = (0..fit.coefficients.len()).map(|i| format!("coef_{}", i)).collect();
-        super::survey_common::build_model_output_batch(&terms, &fit.coefficients, &se,
-            &vec![0.0; fit.coefficients.len()], &vec![0.0; fit.coefficients.len()], &vec![fit.df as f64; fit.coefficients.len()])
-            .map(|b| { let ctx = node_ctx.session(); ctx.read_batch(b) })
-            .map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("{e}") })
-            .and_then(|df| { let mut r = PortOutputs::new(); r.insert(0, df.map_err(|e| DagError::NodeError{node_type:kind.into(), msg:format!("{e}")})?); Ok(r) })
+        let terms: Vec<String> = (0..fit.coefficients.len())
+            .map(|i| format!("coef_{}", i))
+            .collect();
+        super::survey_common::build_model_output_batch(
+            &terms,
+            &fit.coefficients,
+            &se,
+            &vec![0.0; fit.coefficients.len()],
+            &vec![0.0; fit.coefficients.len()],
+            &vec![fit.df as f64; fit.coefficients.len()],
+        )
+        .map(|b| {
+            let ctx = node_ctx.session();
+            ctx.read_batch(b)
+        })
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("{e}"),
+        })
+        .and_then(|df| {
+            let mut r = PortOutputs::new();
+            r.insert(
+                0,
+                df.map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("{e}"),
+                })?,
+            );
+            Ok(r)
+        })
     }
 }
 
 impl SpecExecute for SvyNlsSpec {
-    async fn execute_spec(&self, _ctx: &NodeCtx, _inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
+    async fn execute_spec(
+        &self,
+        _ctx: &NodeCtx,
+        _inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
         Err(DagError::NodeError { node_type: kind.into(),
             msg: "svynls requires user-supplied model function. Use codegen_r or call survey::svy_nls directly.".into() })
     }
 }
 
 impl SpecExecute for SvyIvregSpec {
-    async fn execute_spec(&self, node_ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or_else(|| DagError::NodeError { node_type: kind.into(), msg: "no input".into() })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("collect: {e}") })?;
+    async fn execute_spec(
+        &self,
+        node_ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let input = inputs.first().ok_or_else(|| DagError::NodeError {
+            node_type: kind.into(),
+            msg: "no input".into(),
+        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: kind.into(),
+                msg: format!("collect: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.design, &batches)?;
         let y = super::survey_common::extract_variables(&batches, &[self.response.clone()])?;
         let endo = super::survey_common::extract_variables(&batches, &self.endogenous)?;
         let instr = super::survey_common::extract_variables(&batches, &self.instruments)?;
-        let exo = if self.exogenous.is_empty() { vec![] } else { super::survey_common::extract_variables(&batches, &self.exogenous)? };
-        let fit = survey::svy_ivreg(&y[0], &endo, &exo, &instr, &design).map_err(|e| DagError::NodeError { node_type: kind.into(), msg: e.to_string() })?;
+        let exo = if self.exogenous.is_empty() {
+            vec![]
+        } else {
+            super::survey_common::extract_variables(&batches, &self.exogenous)?
+        };
+        let fit = survey::svy_ivreg(&y[0], &endo, &exo, &instr, &design).map_err(|e| {
+            DagError::NodeError {
+                node_type: kind.into(),
+                msg: e.to_string(),
+            }
+        })?;
         let se = fit.se();
-        let terms: Vec<String> = self.endogenous.iter().chain(self.exogenous.iter()).cloned().collect();
-        super::survey_common::build_model_output_batch(&terms, &fit.coefficients, &se,
-            &fit.coefficients.iter().zip(&se).map(|(b,s)| if *s>0.0 {b/s} else {0.0}).collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()], &vec![fit.df as f64; fit.coefficients.len()])
-            .map(|b| { let ctx = node_ctx.session(); ctx.read_batch(b) })
-            .map_err(|e| DagError::NodeError { node_type: kind.into(), msg: format!("{e}") })
-            .and_then(|df| { let mut r = PortOutputs::new(); r.insert(0, df.map_err(|e| DagError::NodeError{node_type:kind.into(), msg:format!("{e}")})?); Ok(r) })
+        let terms: Vec<String> = self
+            .endogenous
+            .iter()
+            .chain(self.exogenous.iter())
+            .cloned()
+            .collect();
+        super::survey_common::build_model_output_batch(
+            &terms,
+            &fit.coefficients,
+            &se,
+            &fit.coefficients
+                .iter()
+                .zip(&se)
+                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
+                .collect::<Vec<_>>(),
+            &vec![0.0; fit.coefficients.len()],
+            &vec![fit.df as f64; fit.coefficients.len()],
+        )
+        .map(|b| {
+            let ctx = node_ctx.session();
+            ctx.read_batch(b)
+        })
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("{e}"),
+        })
+        .and_then(|df| {
+            let mut r = PortOutputs::new();
+            r.insert(
+                0,
+                df.map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("{e}"),
+                })?,
+            );
+            Ok(r)
+        })
     }
 }
 
 impl SpecExecute for SvyMleSpec {
-    async fn execute_spec(&self, _ctx: &NodeCtx, _inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter, kind: &str) -> Result<PortOutputs, DagError> {
-        Err(DagError::NodeError { node_type: kind.into(),
-            msg: "svymle requires user-supplied loglike/gradient closures. Use codegen_r.".into() })
+    async fn execute_spec(
+        &self,
+        _ctx: &NodeCtx,
+        _inputs: &[NodeInput],
+        _r: &crate::dag::node_event::NodeReporter,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        Err(DagError::NodeError {
+            node_type: kind.into(),
+            msg: "svymle requires user-supplied loglike/gradient closures. Use codegen_r.".into(),
+        })
     }
 }
 
@@ -995,7 +1310,9 @@ mod tests {
                 Arc::new(Float64Array::from(api99.clone())),
                 Arc::new(Float64Array::from(ell.clone())),
                 Arc::new(Float64Array::from(meals.clone())),
-                Arc::new(Int32Array::from(dnum.iter().map(|&i| i as i32).collect::<Vec<_>>())),
+                Arc::new(Int32Array::from(
+                    dnum.iter().map(|&i| i as i32).collect::<Vec<_>>(),
+                )),
                 Arc::new(Float64Array::from(pw)),
             ],
         )
@@ -1025,12 +1342,13 @@ mod tests {
         };
 
         let mut node = SvyGlmNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df2,
-        };
+        let input = NodeInput { port: 0, data: df2 };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

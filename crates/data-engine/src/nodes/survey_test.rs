@@ -7,16 +7,14 @@
 //! R package reference: `survey::svyttest`, `svyranktest`, `svychisq`,
 //! `svyciprop`.
 
+use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
-use async_trait::async_trait;
 
 use arrow_array::Float64Array;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{
-    SurveyDesignSpec, gen_design_r, one_in_one_out,
-};
+use super::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
 use crate::codegen::helpers::{input_0, parse_spec};
 use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use crate::dag::{DagError, graph::PortOutputs};
@@ -93,8 +91,7 @@ impl DagNode for SvyTtestNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design =
-            super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let mu = self.spec.null_value.unwrap_or(0.0);
 
@@ -116,15 +113,19 @@ impl DagNode for SvyTtestNode {
             if levels.len() != 2 {
                 return Err(DagError::NodeError {
                     node_type: "svyttest".into(),
-                    msg: format!("two-sample t-test requires exactly 2 groups, got {}", levels.len()),
+                    msg: format!(
+                        "two-sample t-test requires exactly 2 groups, got {}",
+                        levels.len()
+                    ),
                 });
             }
             let z: Vec<u8> = group_str.iter().map(|g| (g == &levels[1]) as u8).collect();
-            survey::svy_ttest_twosample(&y[0], &z, &design, mu)
-                .map_err(|e| DagError::NodeError {
+            survey::svy_ttest_twosample(&y[0], &z, &design, mu).map_err(|e| {
+                DagError::NodeError {
                     node_type: "svyttest".into(),
                     msg: e.to_string(),
-                })?
+                }
+            })?
         } else {
             // One-sample.
             survey::svy_ttest_onesample(&y[0], &design, mu).map_err(|e| DagError::NodeError {
@@ -300,15 +301,12 @@ impl DagNode for SvyRankTestNode {
             })?;
 
         let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y =
-            super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
-        let group_str =
-            super::survey_common::extract_string_column_pub(&batches, &self.spec.group).map_err(
-                |e| DagError::NodeError {
-                    node_type: "svyranktest".into(),
-                    msg: e.0,
-                },
-            )?;
+        let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
+        let group_str = super::survey_common::extract_string_column_pub(&batches, &self.spec.group)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svyranktest".into(),
+                msg: e.0,
+            })?;
 
         // Map group to 0/1 (requires exactly 2 groups for the t-test form).
         let mut levels: Vec<String> = Vec::new();
@@ -503,20 +501,16 @@ impl DagNode for SvyChisqNode {
             })?;
 
         let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let row =
-            super::survey_common::extract_string_column_pub(&batches, &self.spec.row_var).map_err(
-                |e| DagError::NodeError {
-                    node_type: "svychisq".into(),
-                    msg: e.0,
-                },
-            )?;
-        let col =
-            super::survey_common::extract_string_column_pub(&batches, &self.spec.col_var).map_err(
-                |e| DagError::NodeError {
-                    node_type: "svychisq".into(),
-                    msg: e.0,
-                },
-            )?;
+        let row = super::survey_common::extract_string_column_pub(&batches, &self.spec.row_var)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svychisq".into(),
+                msg: e.0,
+            })?;
+        let col = super::survey_common::extract_string_column_pub(&batches, &self.spec.col_var)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svychisq".into(),
+                msg: e.0,
+            })?;
 
         let r = survey::svy_chisq(&row, &col, &design).map_err(|e| DagError::NodeError {
             node_type: "svychisq".into(),
@@ -697,12 +691,11 @@ impl DagNode for SvyCiPropNode {
         };
         let level = 1.0 - self.spec.alpha;
 
-        let (prop, lo, hi) = survey::svy_ciprop(&y[0], &design, method, level).map_err(|e| {
-            DagError::NodeError {
+        let (prop, lo, hi) =
+            survey::svy_ciprop(&y[0], &design, method, level).map_err(|e| DagError::NodeError {
                 node_type: "svyciprop".into(),
                 msg: e.to_string(),
-            }
-        })?;
+            })?;
 
         use arrow_array::RecordBatch;
         use arrow_schema::{DataType, Field, Schema};
@@ -840,8 +833,12 @@ mod tests {
             vec![
                 std::sync::Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 std::sync::Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                std::sync::Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
-                std::sync::Arc::new(Float64Array::from(vec![2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2])),
+                std::sync::Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
+                std::sync::Arc::new(Float64Array::from(vec![
+                    2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2,
+                ])),
             ],
         )
         .unwrap();
@@ -867,12 +864,13 @@ mod tests {
         };
 
         let mut node = SvyTtestNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

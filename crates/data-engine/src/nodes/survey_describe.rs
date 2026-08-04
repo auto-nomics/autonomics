@@ -18,8 +18,7 @@ use arrow_schema::{DataType, Field, Schema};
 
 use super::meta::{DagNode, NodeInput, NodePorts};
 use super::survey_common::{
-    SurveyDesignSpec,
-    formula_rhs, gen_design_r, one_in_one_out, r_true_false,
+    SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
 use crate::codegen::helpers::{input_0, parse_spec};
 use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
@@ -240,7 +239,9 @@ impl NodeFactory for SvyTotalFactory {
         let (des, mut code) = gen_design_r(&s.design, &input, ctx);
         let vars = formula_rhs(&s.variables);
         let na_rm = r_true_false(s.na_rm);
-        code.push(format!("{out} <- svytotal(~{vars}, {des}, na.rm = {na_rm})"));
+        code.push(format!(
+            "{out} <- svytotal(~{vars}, {des}, na.rm = {na_rm})"
+        ));
         code.push(format!("print({out})"));
         Ok(NodeCodegen::simple(code, out))
     }
@@ -425,8 +426,10 @@ impl DagNode for SvyRatioNode {
             })?;
 
         let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let num = super::survey_common::extract_variables(&batches, &[self.spec.numerator.clone()])?;
-        let den = super::survey_common::extract_variables(&batches, &[self.spec.denominator.clone()])?;
+        let num =
+            super::survey_common::extract_variables(&batches, &[self.spec.numerator.clone()])?;
+        let den =
+            super::survey_common::extract_variables(&batches, &[self.spec.denominator.clone()])?;
 
         let stat = survey::svyratio(&num, &den, &design, self.spec.na_rm).map_err(|e| {
             DagError::NodeError {
@@ -561,18 +564,19 @@ impl DagNode for SvyTableNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design =
-            super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
 
         // Extract the variable columns.
         let mut cols: Vec<Vec<String>> = Vec::new();
         for v in &self.spec.variables {
-            cols.push(super::survey_common::extract_string_column_pub(&batches, v).map_err(
-                |e| DagError::NodeError {
-                    node_type: "svytable".into(),
-                    msg: e.0,
-                },
-            )?);
+            cols.push(
+                super::survey_common::extract_string_column_pub(&batches, v).map_err(|e| {
+                    DagError::NodeError {
+                        node_type: "svytable".into(),
+                        msg: e.0,
+                    }
+                })?,
+            );
         }
 
         // Get the survey weights.
@@ -822,9 +826,9 @@ impl DagNode for SvyQuantileNode {
         for (j, var) in self.spec.variables.iter().enumerate() {
             let res = survey::svy_quantile(&x[j], &design, &self.spec.quantiles, self.spec.alpha)
                 .map_err(|e| DagError::NodeError {
-                    node_type: "svyquantile".into(),
-                    msg: e.to_string(),
-                })?;
+                node_type: "svyquantile".into(),
+                msg: e.to_string(),
+            })?;
             for (k, (q, lo, hi)) in res.into_iter().enumerate() {
                 qs_out.push(q);
                 los.push(lo);
@@ -992,9 +996,15 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
-                Arc::new(Float64Array::from(vec![15.0, 15.0, 15.0, 15.0, 15.0, 12.0, 12.0, 12.0])),
-                Arc::new(Float64Array::from(vec![2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    15.0, 15.0, 15.0, 15.0, 15.0, 12.0, 12.0, 12.0,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2,
+                ])),
             ],
         )
         .unwrap()
@@ -1024,12 +1034,13 @@ mod tests {
         };
 
         let mut node = SvyMeanNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -1085,12 +1096,13 @@ mod tests {
         };
 
         let mut node = SvyMeanNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -1131,7 +1143,9 @@ mod tests {
             vec![
                 Arc::new(arrow_array::Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
             ],
         )
         .unwrap();
@@ -1155,12 +1169,13 @@ mod tests {
         };
 
         let mut node = SvyTableNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

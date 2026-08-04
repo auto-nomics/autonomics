@@ -16,12 +16,7 @@ use crate::{
 /// F-test comparing two variances: `H₀: σ₁²/σ₂² = ratio₀`.
 ///
 /// Mirrors `var.test(x, y, ratio = ratio₀, alternative = alt)`.
-pub fn var_test(
-    x: &[f64],
-    y: &[f64],
-    ratio: f64,
-    alt: Alternative,
-) -> Result<HypothesisTest> {
+pub fn var_test(x: &[f64], y: &[f64], ratio: f64, alt: Alternative) -> Result<HypothesisTest> {
     let (n1, n2) = (x.len(), y.len());
     if n1 < 2 || n2 < 2 {
         return Err(HypoError::InvalidInput(
@@ -108,8 +103,13 @@ pub fn bartlett_test(groups: &[&[f64]]) -> Result<HypothesisTest> {
 
     let chi2_raw = df_pool * sp2.ln() - log_terms;
     // Bartlett's correction factor C.
-    let c = 1.0 + (1.0 / (3.0 * (k - 1) as f64))
-        * (group_stats.iter().map(|(ni, _)| 1.0 / (ni - 1) as f64).sum::<f64>() - 1.0 / df_pool);
+    let c = 1.0
+        + (1.0 / (3.0 * (k - 1) as f64))
+            * (group_stats
+                .iter()
+                .map(|(ni, _)| 1.0 / (ni - 1) as f64)
+                .sum::<f64>()
+                - 1.0 / df_pool);
     let chi2 = chi2_raw / c;
     let df = (k - 1) as f64;
     let p_value = chisq_sf(chi2, df);
@@ -151,7 +151,9 @@ pub fn levene_test(groups: &[&[f64]], center: Center) -> Result<HypothesisTest> 
     for (gi, g) in groups.iter().enumerate() {
         let ni = g.len();
         if ni < 2 {
-            return Err(HypoError::InvalidInput("Levene: each group needs ≥ 2 observations".into()));
+            return Err(HypoError::InvalidInput(
+                "Levene: each group needs ≥ 2 observations".into(),
+            ));
         }
         let center_val = match center {
             Center::Mean => crate::extras_mean(g),
@@ -187,7 +189,9 @@ pub fn levene_test(groups: &[&[f64]], center: Center) -> Result<HypothesisTest> 
     let df1 = kf - 1.0;
     let df2 = nf - kf;
     if df2 <= 0.0 || ss_within <= 0.0 {
-        return Err(HypoError::InvalidInput("Levene: insufficient degrees of freedom".into()));
+        return Err(HypoError::InvalidInput(
+            "Levene: insufficient degrees of freedom".into(),
+        ));
     }
     let f = (ss_between / df1) / (ss_within / df2);
     let p_value = crate::dist::f_sf(f, df1, df2);
@@ -215,7 +219,9 @@ pub fn levene_test(groups: &[&[f64]], center: Center) -> Result<HypothesisTest> 
 }
 
 /// Center type for Levene's test.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Center {
     Mean,
@@ -266,7 +272,10 @@ pub fn fligner_test(groups: &[&[f64]]) -> Result<HypothesisTest> {
 
     // Normal scores: a_ij = (rank - (n+1)/2) / sqrt((n²-1)/12)
     let a_const = ((nf.powi(2) - 1.0) / 12.0).sqrt();
-    let scores: Vec<f64> = ranks.iter().map(|&r| (r - (nf + 1.0) / 2.0) / a_const).collect();
+    let scores: Vec<f64> = ranks
+        .iter()
+        .map(|&r| (r - (nf + 1.0) / 2.0) / a_const)
+        .collect();
 
     // Sum of scores per group, and overall sum of squares.
     let mut group_a_bar: Vec<f64> = vec![0.0; k];

@@ -21,11 +21,7 @@ use crate::{
 /// sum to 1.
 ///
 /// Mirrors `chisq.test(x = observed, p = p, rescale.p = rescale_p)`.
-pub fn chisq_gof(
-    observed: &[u64],
-    p: &[f64],
-    rescale_p: bool,
-) -> Result<HypothesisTest> {
+pub fn chisq_gof(observed: &[u64], p: &[f64], rescale_p: bool) -> Result<HypothesisTest> {
     let k = observed.len();
     if k < 2 {
         return Err(HypoError::InvalidInput(
@@ -36,7 +32,9 @@ pub fn chisq_gof(
         return Err(HypoError::LengthMismatch { a: k, b: p.len() });
     }
     if p.iter().any(|&pi| pi < 0.0) {
-        return Err(HypoError::InvalidInput("probabilities must be non-negative".into()));
+        return Err(HypoError::InvalidInput(
+            "probabilities must be non-negative".into(),
+        ));
     }
     let n: f64 = observed.iter().map(|&o| o as f64).sum();
     if n == 0.0 {
@@ -44,7 +42,9 @@ pub fn chisq_gof(
     }
     let p_sum: f64 = p.iter().sum();
     if p_sum <= 0.0 {
-        return Err(HypoError::InvalidInput("sum of probabilities must be > 0".into()));
+        return Err(HypoError::InvalidInput(
+            "sum of probabilities must be > 0".into(),
+        ));
     }
     let p_norm: Vec<f64> = if rescale_p {
         p.iter().map(|&pi| pi / p_sum).collect()
@@ -119,10 +119,7 @@ pub fn ks_one_sample(x: &[f64], cdf: impl Fn(f64) -> f64) -> Result<HypothesisTe
         f64::INFINITY,
         Alternative::TwoSided,
         "One-sample Kolmogorov-Smirnov test",
-        extras([
-            (KEY_KIND, json!("ks_test")),
-            ("n", json!(n as u64)),
-        ]),
+        extras([(KEY_KIND, json!("ks_test")), ("n", json!(n as u64))]),
     ))
 }
 
@@ -132,14 +129,12 @@ pub fn ks_one_sample(x: &[f64], cdf: impl Fn(f64) -> f64) -> Result<HypothesisTe
 /// `D = sup_x |F₁(x) − F₂(x)|`.
 ///
 /// Mirrors `ks.test(x, y)` (two-sample).
-pub fn ks_two_sample(
-    x: &[f64],
-    y: &[f64],
-    alt: Alternative,
-) -> Result<HypothesisTest> {
+pub fn ks_two_sample(x: &[f64], y: &[f64], alt: Alternative) -> Result<HypothesisTest> {
     let (n1, n2) = (x.len(), y.len());
     if n1 == 0 || n2 == 0 {
-        return Err(HypoError::InvalidInput("both samples must be non-empty".into()));
+        return Err(HypoError::InvalidInput(
+            "both samples must be non-empty".into(),
+        ));
     }
     let mut sx = x.to_vec();
     let mut sy = y.to_vec();
@@ -250,7 +245,9 @@ fn ks_asymptotic_two_sided(lambda: f64) -> f64 {
     let mut j = 1;
     while (sum - prev).abs() > 1e-12 * sum.abs() || j <= 100 {
         prev = sum;
-        let term = 2.0 * (if j % 2 == 1 { 1.0 } else { -1.0 }) * (-2.0 * (j as f64).powi(2) * lambda * lambda).exp();
+        let term = 2.0
+            * (if j % 2 == 1 { 1.0 } else { -1.0 })
+            * (-2.0 * (j as f64).powi(2) * lambda * lambda).exp();
         sum += term;
         j += 1;
         if j > 200 {
@@ -313,10 +310,7 @@ pub fn shapiro_wilk(x: &[f64]) -> Result<HypothesisTest> {
         f64::INFINITY,
         Alternative::TwoSided,
         "Shapiro-Wilk normality test",
-        extras([
-            (KEY_KIND, json!("shapiro_test")),
-            ("n", json!(n as u64)),
-        ]),
+        extras([(KEY_KIND, json!("shapiro_test")), ("n", json!(n as u64))]),
     ))
 }
 
@@ -365,12 +359,17 @@ pub fn anderson_darling(x: &[f64], dist: AdDist) -> Result<HypothesisTest> {
             if sd == 0.0 {
                 return Err(HypoError::InvalidInput("zero standard deviation".into()));
             }
-            sorted.iter().map(|&x| normal_cdf((x - mean) / sd)).collect()
+            sorted
+                .iter()
+                .map(|&x| normal_cdf((x - mean) / sd))
+                .collect()
         }
         AdDist::Exponential => {
             let mean = sorted.iter().sum::<f64>() / nf;
             if mean <= 0.0 {
-                return Err(HypoError::InvalidInput("non-positive mean for exponential".into()));
+                return Err(HypoError::InvalidInput(
+                    "non-positive mean for exponential".into(),
+                ));
             }
             sorted.iter().map(|&x| 1.0 - (-x / mean).exp()).collect()
         }
@@ -503,9 +502,7 @@ mod tests {
     #[test]
     fn shapiro_runs() {
         // Normal-ish data
-        let x: Vec<f64> = vec![
-            -0.5, 0.3, 0.8, -1.2, 0.1, 1.5, -0.7, 0.4, 0.9, -0.3,
-        ];
+        let x: Vec<f64> = vec![-0.5, 0.3, 0.8, -1.2, 0.1, 1.5, -0.7, 0.4, 0.9, -0.3];
         let t = shapiro_wilk(&x).unwrap();
         assert!(t.stat > 0.0 && t.stat <= 1.0, "W = {}", t.stat);
         // For normal data W should be fairly close to 1.
@@ -519,7 +516,11 @@ mod tests {
         // Very skewed data — W should be low even without the p-value.
         let x: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0];
         let t = shapiro_wilk(&x).unwrap();
-        assert!(t.stat < 0.5, "W should be low for non-normal data: {}", t.stat);
+        assert!(
+            t.stat < 0.5,
+            "W should be low for non-normal data: {}",
+            t.stat
+        );
     }
 
     #[test]
@@ -533,8 +534,7 @@ mod tests {
     fn anderson_darling_normal_data() {
         // Near-normal data → A²* small, p large
         let x: Vec<f64> = vec![
-            -0.5, 0.3, 0.8, -1.2, 0.1, 1.5, -0.7, 0.4,
-            0.9, -0.3, 0.2, -0.6, 1.1, -0.9, 0.5, 0.0,
+            -0.5, 0.3, 0.8, -1.2, 0.1, 1.5, -0.7, 0.4, 0.9, -0.3, 0.2, -0.6, 1.1, -0.9, 0.5, 0.0,
         ];
         let t = anderson_darling(&x, AdDist::Normal).unwrap();
         assert!(t.stat < 1.0, "A* = {}", t.stat);
@@ -545,8 +545,7 @@ mod tests {
     fn anderson_darling_nonnormal() {
         // Heavily skewed data → large A²*, small p
         let x: Vec<f64> = vec![
-            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0,
         ];
         let t = anderson_darling(&x, AdDist::Normal).unwrap();
         assert!(t.p_value < 0.05, "p = {}", t.p_value);

@@ -247,8 +247,20 @@ fn run_crr_fixture(name: &str) {
     let fit = crr(&input, &opts).unwrap_or_else(|e| panic!("{name}: crr failed: {e}"));
 
     // ── point estimates and likelihood ──────────────────────────────────────
-    check_vec(name, "coef", &fit.coef, &vec_f64(&fit_ref["coef"]), TOL_TIGHT);
-    check(name, "loglik", fit.loglik, num(&fit_ref["loglik"]), TOL_TIGHT);
+    check_vec(
+        name,
+        "coef",
+        &fit.coef,
+        &vec_f64(&fit_ref["coef"]),
+        TOL_TIGHT,
+    );
+    check(
+        name,
+        "loglik",
+        fit.loglik,
+        num(&fit_ref["loglik"]),
+        TOL_TIGHT,
+    );
     check(
         name,
         "loglik_null",
@@ -293,11 +305,7 @@ fn run_crr_fixture(name: &str) {
     // those from `colnames(tf(uft))`, which has no analogue in the TimeFn
     // vocabulary.
     if cov2.is_empty() {
-        assert_eq!(
-            fit.terms,
-            vec_str(&fit_ref["terms"]),
-            "{name}: term labels"
-        );
+        assert_eq!(fit.terms, vec_str(&fit_ref["terms"]), "{name}: term labels");
     }
 
     // ── tfs matrix ──────────────────────────────────────────────────────────
@@ -406,7 +414,13 @@ fn run_crr_fixture(name: &str) {
         let want = mat_f64(&p["curves"]);
         assert_eq!(pred.curves.len(), want.len(), "{name}: predict curve count");
         for (j, w) in want.iter().enumerate() {
-            check_vec(name, &format!("predict[{j}]"), &pred.curves[j], w, TOL_TIGHT);
+            check_vec(
+                name,
+                &format!("predict[{j}]"),
+                &pred.curves[j],
+                w,
+                TOL_TIGHT,
+            );
         }
     }
 
@@ -461,9 +475,27 @@ fn run_cuminc_fixture(name: &str) {
         let c = &res.curves[i];
         let label = format!("{} {}", c.group, c.cause);
         assert_eq!(label, text(&w["name"]), "{name}: curve {i} name");
-        check_vec(name, &format!("{label}/time"), &c.time, &vec_f64(&w["time"]), TOL_TIGHT);
-        check_vec(name, &format!("{label}/est"), &c.est, &vec_f64(&w["est"]), TOL_TIGHT);
-        check_vec(name, &format!("{label}/var"), &c.var, &vec_f64(&w["var"]), TOL_MATRIX);
+        check_vec(
+            name,
+            &format!("{label}/time"),
+            &c.time,
+            &vec_f64(&w["time"]),
+            TOL_TIGHT,
+        );
+        check_vec(
+            name,
+            &format!("{label}/est"),
+            &c.est,
+            &vec_f64(&w["est"]),
+            TOL_TIGHT,
+        );
+        check_vec(
+            name,
+            &format!("{label}/var"),
+            &c.var,
+            &vec_f64(&w["var"]),
+            TOL_MATRIX,
+        );
     }
 
     // ── Gray's k-sample test ────────────────────────────────────────────────

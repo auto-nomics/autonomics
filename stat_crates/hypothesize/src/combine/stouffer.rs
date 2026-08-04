@@ -13,10 +13,16 @@
 use serde_json::json;
 
 use super::{PvalSource, extract_pvals, validate_strict};
-use crate::{Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result, dist::normal_inv, dist::normal_two_sided_p, extras};
+use crate::{
+    Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result,
+    dist::normal_inv, dist::normal_two_sided_p, extras,
+};
 
 /// Combine via Stouffer's Z (optionally weighted).
-pub fn stouffer_combine<S: PvalSource>(srcs: &[S], weights: Option<&[f64]>) -> Result<HypothesisTest> {
+pub fn stouffer_combine<S: PvalSource>(
+    srcs: &[S],
+    weights: Option<&[f64]>,
+) -> Result<HypothesisTest> {
     stouffer_combine_pvals(&extract_pvals(srcs)?, weights)
 }
 

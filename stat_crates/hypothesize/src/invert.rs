@@ -124,11 +124,7 @@ mod tests {
         let est = 2.5_f64;
         let se = 0.8_f64;
         let grid: Vec<f64> = (0..=5000).map(|i| i as f64 * 0.001).collect();
-        let cs = invert_test(
-            |theta| wald_uni(est, se, theta).unwrap(),
-            &grid,
-            0.05,
-        );
+        let cs = invert_test(|theta| wald_uni(est, se, theta).unwrap(), &grid, 0.05);
         // Analytical 95% CI: 2.5 ± 1.96*0.8 = (0.932, 4.068)
         let (lo, hi) = confint_wald(&wald_uni(est, se, 0.0).unwrap(), 0.95).unwrap();
         assert!((cs.lower() - lo).abs() < 0.01, "{} vs {}", cs.lower(), lo);

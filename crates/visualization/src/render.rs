@@ -133,14 +133,98 @@ fn batches_to_ipc_stream(
     Ok(buf)
 }
 
-/// Resolve `Rscript` on `PATH`, returning [`VizError::RscriptNotFound`] if it
-/// is missing. Split out so the error is distinct from a real subprocess
-/// failure.
-fn resolve_rscript() -> Result<PathBuf> {
-    let candidate = std::env::var_os("VISUALIZATION_RSCRIPT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("Rscript"));
-    Ok(candidate)
+/// Candidate conda environments known to carry `arrow` + `ggplot2` for R.
+/// The base conda R (4.6.x) does **not** have `r-arrow` on conda-forge, so the
+/// renderer must prefer these dedicated envs. Searched in order; first existing
+/// `bin/Rscript` wins.
+const R_ENV_CANDIDATES: &[&str] = &["/home/wjx/miniconda3/envs/r45", "/opt/conda/envs/r45"];
+
+/// Locate the R environment root: the directory whose `bin/Rscript` should run
+/// the render. Returns `(rscript_path, env_root)` where `env_root` is the conda
+/// prefix (used to derive `R_HOME`, `LD_LIBRARY_PATH`, `PATH`).
+///
+/// Priority:
+/// 1. `VISUALIZATION_RSCRIPT` env var (explicit override — uses inherited env).
+/// 2. `R_ENV` env var (conda prefix — derives Rscript + env vars).
+/// 3. First candidate in [`R_ENV_CANDIDATES`] whose `bin/Rscript` exists.
+/// 4. Plain `"Rscript"` (inherited PATH — last resort).
+fn resolve_r_env() -> (PathBuf, Option<PathBuf>) {
+    // 1. Explicit Rscript override.
+    if let Some(rb) = std::env::var_os("VISUALIZATION_RSCRIPT") {
+        return (PathBuf::from(rb), None);
+    }
+
+    // 2. Explicit conda-prefix override.
+    if let Some(prefix) = std::env::var_os("R_ENV") {
+        let prefix = PathBuf::from(prefix);
+        let rscript = prefix.join("bin").join("Rscript");
+        if rscript.exists() {
+            return (rscript, Some(prefix));
+        }
+    }
+
+    // 3. Known candidate envs.
+    for candidate in R_ENV_CANDIDATES {
+        let rscript = Path::new(candidate).join("bin").join("Rscript");
+        if rscript.exists() {
+            return (rscript, Some(PathBuf::from(candidate)));
+        }
+    }
+
+    // 4. Fallback: whatever's on PATH.
+    (PathBuf::from("Rscript"), None)
+}
+
+/// Build the environment for the `Rscript` subprocess. When a dedicated R env
+/// (e.g. `r45`) was resolved, inject `R_HOME`, `LD_LIBRARY_PATH`, and prepend
+/// `bin` to `PATH` so the subprocess and any `library()` calls inside it find
+/// the right shared libraries. When no dedicated env was found, inherit the
+/// caller's environment unchanged.
+fn build_r_env(env_root: Option<&Path>) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
+
+    let Some(root) = env_root else {
+        return env;
+    };
+
+    let r_home = root.join("lib").join("R");
+    let lib_dir = r_home.join("lib");
+    let bin_dir = root.join("bin");
+
+    // R_HOME — tells R where its base installation lives.
+    env.retain(|(k, _)| k != "R_HOME");
+    env.push(("R_HOME".into(), r_home.as_os_str().to_os_string()));
+
+    // LD_LIBRARY_PATH — prepend R's lib dir so libR.so etc. resolve.
+    let existing_ld = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let new_ld = if existing_ld.is_empty() {
+        lib_dir.clone()
+    } else {
+        let mut s = std::path::PathBuf::new();
+        s.push(&lib_dir);
+        s.push(":");
+        s.push(existing_ld);
+        s
+    };
+    env.retain(|(k, _)| k != "LD_LIBRARY_PATH");
+    env.push(("LD_LIBRARY_PATH".into(), new_ld.into_os_string()));
+
+    // PATH — prepend the env's bin dir so `Rscript` subprocesses (and any
+    // `system()` calls from R) resolve to the right binaries.
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let new_path = if existing_path.is_empty() {
+        bin_dir.clone()
+    } else {
+        let mut s = std::path::PathBuf::new();
+        s.push(&bin_dir);
+        s.push(":");
+        s.push(existing_path);
+        s
+    };
+    env.retain(|(k, _)| k != "PATH");
+    env.push(("PATH".into(), new_path.into_os_string()));
+
+    env
 }
 
 /// Write the IPC bytes + a generated R script to a fresh tempdir, invoke
@@ -155,7 +239,7 @@ async fn run_rscript(
     height: f64,
     dpi: f64,
 ) -> Result<(Vec<u8>, Diagnostics)> {
-    let rscript = resolve_rscript()?;
+    let (rscript, env_root) = resolve_r_env();
 
     let tmp = tempfile::tempdir()?;
     let data_path = tmp.path().join("data.arrow_stream");
@@ -251,7 +335,9 @@ cat(.diag_json, file = "{diag_lit}")
     let mut cmd = tokio::process::Command::new(&rscript);
     cmd.arg(&script_path)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .env_clear()
+        .envs(build_r_env(env_root.as_deref()));
 
     let child = match cmd.spawn() {
         Ok(c) => c,

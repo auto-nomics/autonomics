@@ -47,11 +47,7 @@ pub fn multi_bound(biases: &MultiBias, params: &HashMap<String, f64>) -> Result<
     // Get values for each parameter row
     let vals: Vec<f64> = necc_params
         .iter()
-        .map(|p| {
-            *params
-                .get(&p.argument)
-                .unwrap_or(&1.0)
-        })
+        .map(|p| *params.get(&p.argument).unwrap_or(&1.0))
         .collect();
 
     // Check if any bias has SU

@@ -195,11 +195,7 @@ pub fn formula_rhs(cols: &[String]) -> String {
 
 /// Convert a Rust `bool` to an R `TRUE`/`FALSE` literal.
 pub fn r_true_false(b: bool) -> &'static str {
-    if b {
-        "TRUE"
-    } else {
-        "FALSE"
-    }
+    if b { "TRUE" } else { "FALSE" }
 }
 
 /// Generate R code to construct a `svydesign` object from a
@@ -262,7 +258,10 @@ pub fn gen_design_r(
 /// Used by factory `build` methods to validate the spec during DAG
 /// construction (so errors surface early) while deferring execution to
 /// `codegen_r`.
-pub fn build_stub<S>(kind: &'static str, spec: serde_json::Value) -> Result<Box<dyn DagNode>, super::super::node_registry::error::Error>
+pub fn build_stub<S>(
+    kind: &'static str,
+    spec: serde_json::Value,
+) -> Result<Box<dyn DagNode>, super::super::node_registry::error::Error>
 where
     S: serde::de::DeserializeOwned,
 {
@@ -377,10 +376,7 @@ fn extract_string_column(
 }
 
 /// Extract a numeric (f64) column from Arrow batches.
-fn extract_f64_column(
-    batches: &[RecordBatch],
-    name: &str,
-) -> Result<Vec<f64>, SurveyNodeError> {
+fn extract_f64_column(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, SurveyNodeError> {
     let schema = batches
         .first()
         .map(|b| b.schema())
@@ -418,9 +414,7 @@ fn extract_f64_column(
         {
             // done
         } else {
-            return Err(SurveyNodeError(format!(
-                "column '{name}' is not numeric"
-            )));
+            return Err(SurveyNodeError(format!("column '{name}' is not numeric")));
         }
     }
     Ok(values)
@@ -463,7 +457,12 @@ pub fn build_survey_design(
     let mut builder = SurveyDesignBuilder::new()
         .strata(strata)
         .cluster(cluster)
-        .lonely_psu(spec.lonely_psu.as_deref().map(LonelyPsu::from_str).unwrap_or_default());
+        .lonely_psu(
+            spec.lonely_psu
+                .as_deref()
+                .map(LonelyPsu::from_str)
+                .unwrap_or_default(),
+        );
 
     if let Some(w) = &spec.weights {
         let weights = extract_f64_column(batches, w)?;
@@ -519,8 +518,18 @@ pub fn build_describe_output_batch(
     let se = stat.se();
     // Normal approximation for 95% CI (good enough for df > 30).
     let z = 1.959963984540054_f64;
-    let ci_lower: Vec<f64> = stat.estimate.iter().zip(&se).map(|(m, s)| m - z * s).collect();
-    let ci_upper: Vec<f64> = stat.estimate.iter().zip(&se).map(|(m, s)| m + z * s).collect();
+    let ci_lower: Vec<f64> = stat
+        .estimate
+        .iter()
+        .zip(&se)
+        .map(|(m, s)| m - z * s)
+        .collect();
+    let ci_upper: Vec<f64> = stat
+        .estimate
+        .iter()
+        .zip(&se)
+        .map(|(m, s)| m + z * s)
+        .collect();
     let df_col: Vec<f64> = vec![stat.df as f64; p];
 
     arrow_array::RecordBatch::try_new(
@@ -614,10 +623,15 @@ where
         node_type: kind.into(),
         msg: "no input data".into(),
     })?;
-    let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError {
-        node_type: kind.into(),
-        msg: format!("collect failed: {e}"),
-    })?;
+    let batches = input
+        .data
+        .clone()
+        .collect()
+        .await
+        .map_err(|e| DagError::NodeError {
+            node_type: kind.into(),
+            msg: format!("collect failed: {e}"),
+        })?;
 
     let design = build_survey_design(design_spec, &batches)?;
     let y = extract_variables(&batches, &[response_col.to_string()])?;
@@ -630,11 +644,20 @@ where
 
     let p = result.coef.len();
     let se = result.se.clone();
-    let t_stats: Vec<f64> = result.coef.iter().zip(&se).map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 }).collect();
-    let p_values: Vec<f64> = t_stats.iter().map(|&t| 2.0 * (1.0 - normal_cdf(t.abs()))).collect();
+    let t_stats: Vec<f64> = result
+        .coef
+        .iter()
+        .zip(&se)
+        .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
+        .collect();
+    let p_values: Vec<f64> = t_stats
+        .iter()
+        .map(|&t| 2.0 * (1.0 - normal_cdf(t.abs())))
+        .collect();
     let df_col = vec![result.df as f64; p];
 
-    let batch = build_model_output_batch(&term_names, &result.coef, &se, &t_stats, &p_values, &df_col)?;
+    let batch =
+        build_model_output_batch(&term_names, &result.coef, &se, &t_stats, &p_values, &df_col)?;
     let ctx = node_ctx.session();
     let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
         node_type: kind.into(),
@@ -652,7 +675,9 @@ pub struct ModelResult {
     pub df: usize,
 }
 
-pub type ModelAnalysisFn = Box<dyn Fn(&[f64], &[Vec<f64>], &survey::SurveyDesign) -> survey::Result<ModelResult> + Send + Sync>;
+pub type ModelAnalysisFn = Box<
+    dyn Fn(&[f64], &[Vec<f64>], &survey::SurveyDesign) -> survey::Result<ModelResult> + Send + Sync,
+>;
 
 /// Build the standard model output batch: term, estimate, se, t_stat, p_value, df.
 pub fn build_model_output_batch(

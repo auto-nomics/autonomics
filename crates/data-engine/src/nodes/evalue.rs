@@ -255,11 +255,7 @@ impl NodeFactory for EvalueNodeFactory {
 
 /// Format a bool as R TRUE/FALSE.
 fn r_bool(b: bool) -> &'static str {
-    if b {
-        "TRUE"
-    } else {
-        "FALSE"
-    }
+    if b { "TRUE" } else { "FALSE" }
 }
 
 impl EvalueNode {
@@ -306,9 +302,7 @@ impl EvalueNode {
             output_schema(),
             vec![
                 Arc::new(StringArray::from(vec![measure_str])),
-                Arc::new(Float64Array::from(vec![
-                    result.rr_values[0]
-                ])),
+                Arc::new(Float64Array::from(vec![result.rr_values[0]])),
                 Arc::new(Float64Array::from(vec![result.rr_values[1]])),
                 Arc::new(Float64Array::from(vec![result.rr_values[2]])),
                 Arc::new(Float64Array::from(vec![result.evalues[0]])),
@@ -347,9 +341,7 @@ impl DagNode for EvalueNode {
     ) -> Result<PortOutputs, DagError> {
         let batch = self.compute()?;
         let ctx = node_ctx.session();
-        let df = ctx
-            .read_batch(batch)
-            .map_err(EvalueNodeError::ReadBatch)?;
+        let df = ctx.read_batch(batch).map_err(EvalueNodeError::ReadBatch)?;
 
         let mut res = PortOutputs::new();
         res.insert(0, df);

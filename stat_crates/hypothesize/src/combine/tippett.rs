@@ -12,10 +12,15 @@
 use serde_json::json;
 
 use super::{PvalSource, extract_pvals, validate_strict};
-use crate::{Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result, extras};
+use crate::{
+    Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result,
+    extras,
+};
 
 /// Which order statistic Tippett's method uses.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TippettVariant {
     /// Reject for small `min(p)` (the classical Tippett, 1931).
@@ -27,7 +32,10 @@ pub enum TippettVariant {
 }
 
 /// Combine via Tippett's method.
-pub fn tippett_combine<S: PvalSource>(srcs: &[S], variant: TippettVariant) -> Result<HypothesisTest> {
+pub fn tippett_combine<S: PvalSource>(
+    srcs: &[S],
+    variant: TippettVariant,
+) -> Result<HypothesisTest> {
     tippett_combine_pvals(&extract_pvals(srcs)?, variant)
 }
 

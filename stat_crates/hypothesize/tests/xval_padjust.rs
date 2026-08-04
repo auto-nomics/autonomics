@@ -25,7 +25,11 @@ fn load_golden() -> Vec<Case> {
 #[test]
 fn matches_r_p_adjust() {
     let cases = load_golden();
-    assert!(cases.len() >= 100, "expected ≥100 golden cases, got {}", cases.len());
+    assert!(
+        cases.len() >= 100,
+        "expected ≥100 golden cases, got {}",
+        cases.len()
+    );
 
     let mut tested = 0;
     for case in &cases {

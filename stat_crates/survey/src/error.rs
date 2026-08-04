@@ -7,11 +7,7 @@ pub enum SurveyError {
     #[error("empty input: {0}")]
     EmptyInput(String),
     #[error("length mismatch: {context} — {a} vs {b}")]
-    LengthMismatch {
-        context: String,
-        a: usize,
-        b: usize,
-    },
+    LengthMismatch { context: String, a: usize, b: usize },
     #[error("invalid design: {0}")]
     InvalidDesign(String),
     #[error("lonely PSU in stratum {stratum}: {hint}")]

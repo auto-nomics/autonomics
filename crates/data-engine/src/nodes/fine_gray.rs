@@ -314,12 +314,8 @@ impl NodeFactory for FineGrayNodeFactory {
             format!("  subhazard_ratio = as.numeric(exp({fit}$coef)),"),
             format!("  std_error = as.numeric({se}),"),
             format!("  z_stat = as.numeric({fit}$coef / {se}),"),
-            format!(
-                "  p_value = as.numeric(2 * (1 - pnorm(abs({fit}$coef / {se})))),"
-            ),
-            format!(
-                "  shr_ci_lower = as.numeric(exp({fit}$coef + qnorm({a}) * {se})),"
-            ),
+            format!("  p_value = as.numeric(2 * (1 - pnorm(abs({fit}$coef / {se})))),"),
+            format!("  shr_ci_lower = as.numeric(exp({fit}$coef + qnorm({a}) * {se})),"),
             format!(
                 "  shr_ci_upper = as.numeric(exp({fit}$coef + qnorm({}) * {se})),",
                 1.0 - a
@@ -330,9 +326,7 @@ impl NodeFactory for FineGrayNodeFactory {
             format!("{out}$loglik_null <- {fit}$loglik.null"),
             format!("{out}$lr_stat <- -2 * ({fit}$loglik.null - {fit}$loglik)"),
             format!("{out}$lr_df <- length({fit}$coef)"),
-            format!(
-                "{out}$lr_p_value <- 1 - pchisq({out}$lr_stat[1], length({fit}$coef))"
-            ),
+            format!("{out}$lr_p_value <- 1 - pchisq({out}$lr_stat[1], length({fit}$coef))"),
             format!("{out}$n_obs <- {fit}$n"),
             format!("{out}$n_missing <- {fit}$n.missing"),
             format!(
@@ -349,9 +343,7 @@ impl NodeFactory for FineGrayNodeFactory {
             format!("{base_var} <- data.frame("),
             format!("  uftime = as.numeric({fit}$uftime),"),
             format!("  bfitj = as.numeric({fit}$bfitj),"),
-            format!(
-                "  baseline_cif = as.numeric(1 - exp(-cumsum({fit}$bfitj)))"
-            ),
+            format!("  baseline_cif = as.numeric(1 - exp(-cumsum({fit}$bfitj)))"),
             ")".to_string(),
         ]);
 
@@ -410,9 +402,8 @@ pub(crate) fn build_batches(
     let np = fit.coef.len();
 
     let terms: Vec<String> = smry.coefficients.iter().map(|c| c.term.clone()).collect();
-    let take = |f: fn(&cmprsk::CoefRow) -> f64| -> Vec<f64> {
-        smry.coefficients.iter().map(f).collect()
-    };
+    let take =
+        |f: fn(&cmprsk::CoefRow) -> f64| -> Vec<f64> { smry.coefficients.iter().map(f).collect() };
 
     let coef_batch = RecordBatch::try_new(
         Arc::new(coef_schema()),
@@ -607,7 +598,10 @@ mod tests {
             r_tf_closure(&[TimeFn::Identity, TimeFn::Square]),
             "function(uft) cbind(uft, uft^2)"
         );
-        assert_eq!(r_tf_closure(&[TimeFn::Log]), "function(uft) cbind(log(uft))");
+        assert_eq!(
+            r_tf_closure(&[TimeFn::Log]),
+            "function(uft) cbind(log(uft))"
+        );
     }
 
     #[test]

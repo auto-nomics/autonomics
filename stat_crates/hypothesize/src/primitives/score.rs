@@ -36,7 +36,14 @@ pub fn score_uni(score: f64, fisher_info: f64, null_value: Option<f64>) -> Resul
     if let Some(n) = null_value {
         e.insert("null_value".into(), json!(n));
     }
-    Ok(HypothesisTest::new(stat, p_value, 1.0, Alternative::TwoSided, "Score Test (univariate)", e))
+    Ok(HypothesisTest::new(
+        stat,
+        p_value,
+        1.0,
+        Alternative::TwoSided,
+        "Score Test (univariate)",
+        e,
+    ))
 }
 
 /// Multivariate score test.
@@ -52,11 +59,18 @@ pub fn score_multi(
         return Err(HypoError::InvalidInput("empty score vector".into()));
     }
     if fisher_info.len() != k {
-        return Err(HypoError::LengthMismatch { a: k, b: fisher_info.len() });
+        return Err(HypoError::LengthMismatch {
+            a: k,
+            b: fisher_info.len(),
+        });
     }
     // I⁻¹ · score
     let inv_info_score = solve_spd(fisher_info, score)?;
-    let stat = score.iter().zip(inv_info_score.iter()).map(|(s, x)| s * x).sum::<f64>();
+    let stat = score
+        .iter()
+        .zip(inv_info_score.iter())
+        .map(|(s, x)| s * x)
+        .sum::<f64>();
     let p_value = chisq_sf(stat, k as f64);
     let mut e = extras([
         (KEY_KIND, json!("score_test")),
@@ -67,7 +81,14 @@ pub fn score_multi(
     if let Some(n) = null_value {
         e.insert("null_value".into(), json!(n));
     }
-    Ok(HypothesisTest::new(stat, p_value, k as f64, Alternative::TwoSided, "Score Test (multivariate)", e))
+    Ok(HypothesisTest::new(
+        stat,
+        p_value,
+        k as f64,
+        Alternative::TwoSided,
+        "Score Test (multivariate)",
+        e,
+    ))
 }
 
 #[cfg(test)]

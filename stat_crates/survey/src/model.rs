@@ -115,9 +115,8 @@ pub fn svyglm_linear(
 
     // Use statkit WLS for coefficient estimation.
     let x_refs: Vec<&[f64]> = x_eff.iter().map(|v| v.as_slice()).collect();
-    let reg = statkit::regression::wls(&x_refs, &y_eff, &w_scaled, false).map_err(|e| {
-        SurveyError::InvalidInput(format!("GLM fit failed: {e}"))
-    })?;
+    let reg = statkit::regression::wls(&x_refs, &y_eff, &w_scaled, false)
+        .map_err(|e| SurveyError::InvalidInput(format!("GLM fit failed: {e}")))?;
     let coeffs = reg.coefficients.clone();
 
     // Compute the naive (unscaled) covariance (X'WX)^{-1} directly via faer.
@@ -402,11 +401,7 @@ mod tests {
             "ell: {} (R=-0.983)",
             fit.coefficients[1]
         );
-        assert!(
-            (se[1] - 0.265).abs() < 0.05,
-            "ell SE: {} (R=0.265)",
-            se[1]
-        );
+        assert!((se[1] - 0.265).abs() < 0.05, "ell SE: {} (R=0.265)", se[1]);
 
         // R golden: meals=-3.268 SE=0.289
         assert!(

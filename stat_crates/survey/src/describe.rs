@@ -38,9 +38,7 @@ impl SurveyStat {
 
 /// Identify rows to drop (any NaN across any variable).
 fn find_nan_rows(x: &[Vec<f64>], n: usize) -> Vec<bool> {
-    (0..n)
-        .map(|i| x.iter().any(|xj| xj[i].is_nan()))
-        .collect()
+    (0..n).map(|i| x.iter().any(|xj| xj[i].is_nan())).collect()
 }
 
 /// Compute survey-weighted mean(s) of one or more variables.
@@ -90,11 +88,7 @@ fn svymean_impl(x: &[Vec<f64>], design: &SurveyDesign) -> Result<SurveyStat> {
 
     // Scaled centered variables: z[j][i] = w[i] * (x[j][i] - mean[j]) / psum
     let z: Vec<Vec<f64>> = (0..p)
-        .map(|j| {
-            (0..n)
-                .map(|i| w[i] * (x[j][i] - means[j]) / psum)
-                .collect()
-        })
+        .map(|j| (0..n).map(|i| w[i] * (x[j][i] - means[j]) / psum).collect())
         .collect();
 
     let var = svy_cprod_matrix(&z, design)?;
@@ -145,16 +139,16 @@ pub fn svytotal(x: &[Vec<f64>], design: &SurveyDesign, na_rm: bool) -> Result<Su
     // Totals = Σ w·x.
     let mut totals = vec![0.0_f64; p];
     for j in 0..p {
-        totals[j] = x_eff[j].iter().zip(&w_eff).map(|(&xi, &wi)| xi * wi).sum::<f64>();
+        totals[j] = x_eff[j]
+            .iter()
+            .zip(&w_eff)
+            .map(|(&xi, &wi)| xi * wi)
+            .sum::<f64>();
     }
 
     // Variance: z[j][i] = x[j][i] / prob[i] = x[j][i] * w[i]
     let z_total: Vec<Vec<f64>> = (0..p)
-        .map(|j| {
-            (0..n_eff)
-                .map(|i| x_eff[j][i] * w_eff[i])
-                .collect()
-        })
+        .map(|j| (0..n_eff).map(|i| x_eff[j][i] * w_eff[i]).collect())
         .collect();
 
     let var_total = svy_cprod_matrix(&z_total, &design_eff)?;
@@ -224,11 +218,7 @@ pub struct SvyTtest {
 /// - `y`: response variable (length n).
 /// - `design`: the survey design.
 /// - `mu`: null hypothesis value (default 0).
-pub fn svy_ttest_onesample(
-    y: &[f64],
-    design: &SurveyDesign,
-    mu: f64,
-) -> Result<SvyTtest> {
+pub fn svy_ttest_onesample(y: &[f64], design: &SurveyDesign, mu: f64) -> Result<SvyTtest> {
     let stat = svymean(&[y.to_vec()], design, false)?;
     let (mean, se, df_full) = stat.univariate();
     let df = df_full.saturating_sub(1);
@@ -319,9 +309,15 @@ pub enum Contrast {
     /// Linear combination: `Σ coeff[i] * estimate[i]`. Variance = C·V·C'.
     Linear(Vec<f64>),
     /// Ratio `estimate[a] / estimate[b]`. Delta-method variance.
-    Ratio { numerator: usize, denominator: usize },
+    Ratio {
+        numerator: usize,
+        denominator: usize,
+    },
     /// Product `estimate[a] * estimate[b]`. Delta-method variance.
-    Product { a: usize, b: usize },
+    Product {
+        a: usize,
+        b: usize,
+    },
     /// Unary transform: exp(estimate[i]), log(estimate[i]).
     Exp(usize),
     Log(usize),
@@ -370,11 +366,16 @@ pub fn svycontrast(
                 values.push(value);
                 vars.push(v);
             }
-            Contrast::Ratio { numerator, denominator } => {
+            Contrast::Ratio {
+                numerator,
+                denominator,
+            } => {
                 let num = estimate[*numerator];
                 let den = estimate[*denominator];
                 if den == 0.0 {
-                    return Err(SurveyError::InvalidInput("ratio denominator is zero".into()));
+                    return Err(SurveyError::InvalidInput(
+                        "ratio denominator is zero".into(),
+                    ));
                 }
                 let value = num / den;
                 // Gradient: d/dθ (num/den): [1/den, -num/den²]
@@ -407,7 +408,9 @@ pub fn svycontrast(
             }
             Contrast::Log(i) => {
                 if estimate[*i] <= 0.0 {
-                    return Err(SurveyError::InvalidInput("log of non-positive estimate".into()));
+                    return Err(SurveyError::InvalidInput(
+                        "log of non-positive estimate".into(),
+                    ));
                 }
                 let value = estimate[*i].ln();
                 let v = var[*i][*i] / (estimate[*i] * estimate[*i]);
@@ -700,7 +703,10 @@ pub fn svy_quantile(
         let qhat = qrule_math(x, &w, p);
 
         // Woodruff CI: proportion of data ≤ qhat, its CI, then invert.
-        let indicator: Vec<f64> = x.iter().map(|&xi| if xi <= qhat { 1.0 } else { 0.0 }).collect();
+        let indicator: Vec<f64> = x
+            .iter()
+            .map(|&xi| if xi <= qhat { 1.0 } else { 0.0 })
+            .collect();
         let prop = svymean(&[indicator], design, false)?;
         let (p_hat, p_se, df) = prop.univariate();
         let df_f = df as f64;
@@ -768,8 +774,7 @@ pub fn svyratio(
                 .map(|v| keep.iter().map(|&i| v[i]).collect())
                 .collect();
             let strata: Vec<String> = keep.iter().map(|&i| design.strata[i].clone()).collect();
-            let cluster: Vec<String> =
-                keep.iter().map(|&i| design.cluster[i].clone()).collect();
+            let cluster: Vec<String> = keep.iter().map(|&i| design.cluster[i].clone()).collect();
             let prob: Vec<f64> = keep.iter().map(|&i| design.prob[i]).collect();
             let d = SurveyDesign {
                 strata,
@@ -921,12 +926,24 @@ mod tests {
         };
         SurveyDesignBuilder::new()
             .strata(vec![
-                "1".into(), "1".into(), "1".into(), "1".into(), "1".into(),
-                "2".into(), "2".into(), "2".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "2".into(),
+                "2".into(),
+                "2".into(),
             ])
             .cluster(vec![
-                "1.1".into(), "1.2".into(), "1.3".into(), "1.4".into(), "1.5".into(),
-                "2.1".into(), "2.2".into(), "2.3".into(),
+                "1.1".into(),
+                "1.2".into(),
+                "1.3".into(),
+                "1.4".into(),
+                "1.5".into(),
+                "2.1".into(),
+                "2.2".into(),
+                "2.3".into(),
             ])
             .weights(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])
             .fpc_popsize(popsize.unwrap_or_default())
@@ -1025,7 +1042,10 @@ mod tests {
         let x2 = vec![FPC_X.to_vec()];
         let stat = svyratio(&x, &x2, &d, false).unwrap();
         let (ratio, se, _df) = stat.univariate();
-        assert!((ratio - 1.0).abs() < 1e-10, "ratio of x/x should be 1, got {ratio}");
+        assert!(
+            (ratio - 1.0).abs() < 1e-10,
+            "ratio of x/x should be 1, got {ratio}"
+        );
         assert!(se < 1e-10, "SE of x/x should be ~0, got {se}");
     }
 
@@ -1048,7 +1068,10 @@ mod tests {
         // on the fpc dataset with a binary group x>5.
         let d = fpc_design(false);
         let y = FPC_X.to_vec();
-        let group: Vec<f64> = FPC_X.iter().map(|&x| if x > 5.0 { 1.0 } else { 0.0 }).collect();
+        let group: Vec<f64> = FPC_X
+            .iter()
+            .map(|&x| if x > 5.0 { 1.0 } else { 0.0 })
+            .collect();
         let r = svy_ranktest(&y, &group, &d, "wilcoxon").unwrap();
         // Sanity: statistic should be finite.
         assert!(r.statistic.is_finite());
@@ -1061,7 +1084,10 @@ mod tests {
         // R golden (fpc, y = x>5, method="logit"):
         //   prop=0.4814815, CI=(0.1144855, 0.8696089)
         let d = fpc_design(false);
-        let y: Vec<f64> = FPC_X.iter().map(|&x| if x > 5.0 { 1.0 } else { 0.0 }).collect();
+        let y: Vec<f64> = FPC_X
+            .iter()
+            .map(|&x| if x > 5.0 { 1.0 } else { 0.0 })
+            .collect();
         let (prop, lo, hi) = svy_ciprop(&y, &d, "logit", 0.95).unwrap();
         assert!((prop - 0.4814815).abs() < 1e-5, "prop: {prop}");
         assert!((lo - 0.1144855).abs() < 0.01, "lo: {lo}");
@@ -1072,7 +1098,10 @@ mod tests {
     fn svy_ciprop_mean_matches_r() {
         // R golden (fpc, method="mean"): CI=(-0.01074567, 0.9737086)
         let d = fpc_design(false);
-        let y: Vec<f64> = FPC_X.iter().map(|&x| if x > 5.0 { 1.0 } else { 0.0 }).collect();
+        let y: Vec<f64> = FPC_X
+            .iter()
+            .map(|&x| if x > 5.0 { 1.0 } else { 0.0 })
+            .collect();
         let (prop, lo, hi) = svy_ciprop(&y, &d, "mean", 0.95).unwrap();
         assert!((prop - 0.4814815).abs() < 1e-5, "prop: {prop}");
         assert!((lo + 0.01074567).abs() < 0.02, "lo: {lo}");
@@ -1102,9 +1131,15 @@ mod tests {
         //      = 4/25 + 100/625 = 0.16 + 0.16 = 0.32
         let est = vec![10.0, 5.0];
         let var = vec![vec![4.0, 0.0], vec![0.0, 1.0]];
-        let (vals, vars) =
-            svycontrast(&est, &var, &[Contrast::Ratio { numerator: 0, denominator: 1 }])
-                .unwrap();
+        let (vals, vars) = svycontrast(
+            &est,
+            &var,
+            &[Contrast::Ratio {
+                numerator: 0,
+                denominator: 1,
+            }],
+        )
+        .unwrap();
         assert!((vals[0] - 2.0).abs() < 1e-12, "ratio: {}", vals[0]);
         assert!((vars[0] - 0.32).abs() < 1e-9, "var: {}", vars[0]);
     }
@@ -1116,11 +1151,23 @@ mod tests {
         let d = fpc_design(false);
         let t = svy_ttest_onesample(&FPC_X.to_vec(), &d, 0.0).unwrap();
         assert_eq!(t.df, 5);
-        assert!((t.estimate - 5.448148).abs() < 1e-5, "estimate: {}", t.estimate);
+        assert!(
+            (t.estimate - 5.448148).abs() < 1e-5,
+            "estimate: {}",
+            t.estimate
+        );
         assert!((t.statistic - 7.349765).abs() < 0.01, "t: {}", t.statistic);
         assert!((t.p_value - 0.0007318758).abs() < 0.001, "p: {}", t.p_value);
-        assert!((t.ci_lower - 3.542657).abs() < 0.01, "ci_lower: {}", t.ci_lower);
-        assert!((t.ci_upper - 7.353639).abs() < 0.01, "ci_upper: {}", t.ci_upper);
+        assert!(
+            (t.ci_lower - 3.542657).abs() < 0.01,
+            "ci_lower: {}",
+            t.ci_lower
+        );
+        assert!(
+            (t.ci_upper - 7.353639).abs() < 0.01,
+            "ci_upper: {}",
+            t.ci_upper
+        );
     }
 
     #[test]
@@ -1132,7 +1179,11 @@ mod tests {
         let y: Vec<f64> = FPC_X.iter().map(|v| v - 5.0).collect();
         let t = svy_ttest_onesample(&y, &d, 0.0).unwrap();
         assert_eq!(t.df, 5);
-        assert!((t.estimate - 0.4481481).abs() < 1e-5, "estimate: {}", t.estimate);
+        assert!(
+            (t.estimate - 0.4481481).abs() < 1e-5,
+            "estimate: {}",
+            t.estimate
+        );
         assert!((t.statistic - 0.6045694).abs() < 0.01, "t: {}", t.statistic);
     }
 }

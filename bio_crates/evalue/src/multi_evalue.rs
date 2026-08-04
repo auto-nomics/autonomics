@@ -54,7 +54,8 @@ pub fn multi_evalues_rr(
     let values = [Some(est), lo, hi];
 
     // Compute E-values
-    let mut e: [Option<f64>; 3] = values.map(|v| v.and_then(|x| multi_threshold(biases, x, true_val)));
+    let mut e: [Option<f64>; 3] =
+        values.map(|v| v.and_then(|x| multi_threshold(biases, x, true_val)));
 
     // Check if CI crosses null
     let null_ci = if est > true_val {
@@ -84,11 +85,7 @@ pub fn multi_evalues_rr(
         }
     }
 
-    let params: Vec<String> = biases
-        .parameters
-        .iter()
-        .map(|p| p.output.clone())
-        .collect();
+    let params: Vec<String> = biases.parameters.iter().map(|p| p.output.clone()).collect();
 
     Ok(MultiEvalueResult {
         rr_values: values,
@@ -111,8 +108,12 @@ pub fn multi_evalues_or(
         return Err(EvalueError::Invalid("OR cannot be negative".into()));
     }
     let est_rr = Estimate::or(est, rare).to_rr()?.est;
-    let lo_rr = lo.map(|l| Estimate::or(l, rare).to_rr().map(|r| r.est)).transpose()?;
-    let hi_rr = hi.map(|h| Estimate::or(h, rare).to_rr().map(|r| r.est)).transpose()?;
+    let lo_rr = lo
+        .map(|l| Estimate::or(l, rare).to_rr().map(|r| r.est))
+        .transpose()?;
+    let hi_rr = hi
+        .map(|h| Estimate::or(h, rare).to_rr().map(|r| r.est))
+        .transpose()?;
     let true_rr = Estimate::or(true_val, rare).to_rr()?.est;
 
     let mut res = multi_evalues_rr(biases, est_rr, lo_rr, hi_rr, true_rr)?;
@@ -133,8 +134,12 @@ pub fn multi_evalues_hr(
         return Err(EvalueError::Invalid("HR cannot be negative".into()));
     }
     let est_rr = Estimate::hr(est, rare).to_rr()?.est;
-    let lo_rr = lo.map(|l| Estimate::hr(l, rare).to_rr().map(|r| r.est)).transpose()?;
-    let hi_rr = hi.map(|h| Estimate::hr(h, rare).to_rr().map(|r| r.est)).transpose()?;
+    let lo_rr = lo
+        .map(|l| Estimate::hr(l, rare).to_rr().map(|r| r.est))
+        .transpose()?;
+    let hi_rr = hi
+        .map(|h| Estimate::hr(h, rare).to_rr().map(|r| r.est))
+        .transpose()?;
     let true_rr = Estimate::hr(true_val, rare).to_rr()?.est;
 
     let mut res = multi_evalues_rr(biases, est_rr, lo_rr, hi_rr, true_rr)?;

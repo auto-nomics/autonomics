@@ -205,11 +205,7 @@ where
         }
     }
 
-    if fc < fd {
-        (c, fc)
-    } else {
-        (d, fd)
-    }
+    if fc < fd { (c, fc) } else { (d, fd) }
 }
 
 #[cfg(test)]
@@ -279,7 +275,10 @@ mod tests {
         for &x in &[1.0, 1.5, 2.0, 3.0, 5.0, 10.0] {
             let s = g(x);
             let x_back = g_inv(s);
-            assert!((x - x_back).abs() < 1e-8, "g_inv(g({x})) = {x_back}, expected {x}");
+            assert!(
+                (x - x_back).abs() < 1e-8,
+                "g_inv(g({x})) = {x_back}, expected {x}"
+            );
         }
     }
 
@@ -295,6 +294,10 @@ mod tests {
         // Solve deg_func(x, 2, 2, 1) = x^2/(2x-1) - 2 = 0
         // Root at 2+sqrt(2) ≈ 3.414
         let root = brent_root(|x| deg_func(x, 2.0, 2, 1), 1.0 + 1e-9, 4.0, 1e-10, 100).unwrap();
-        assert!(deg_func(root, 2.0, 2, 1).abs() < 1e-8, "root={root}, f(root)={}", deg_func(root, 2.0, 2, 1));
+        assert!(
+            deg_func(root, 2.0, 2, 1).abs() < 1e-8,
+            "root={root}, f(root)={}",
+            deg_func(root, 2.0, 2, 1)
+        );
     }
 }

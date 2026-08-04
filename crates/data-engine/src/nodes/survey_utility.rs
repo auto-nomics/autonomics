@@ -105,12 +105,10 @@ impl DagNode for SvyByNode {
 
         // Extract the grouping variable (single grouping variable supported).
         let by_col = &self.spec.by[0];
-        let group_values =
-            super::survey_common::extract_string_column_pub(&batches, by_col).map_err(|e| {
-                DagError::NodeError {
-                    node_type: "svyby".into(),
-                    msg: e.0,
-                }
+        let group_values = super::survey_common::extract_string_column_pub(&batches, by_col)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svyby".into(),
+                msg: e.0,
             })?;
 
         // Unique group levels in order of appearance.
@@ -123,10 +121,8 @@ impl DagNode for SvyByNode {
         }
 
         // Build full design + extract variables once.
-        let full_design =
-            super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let all_vars =
-            super::survey_common::extract_variables(&batches, &self.spec.variables)?;
+        let full_design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let all_vars = super::survey_common::extract_variables(&batches, &self.spec.variables)?;
 
         // For each group: filter, run analysis, collect results.
         let mut out_groups: Vec<String> = Vec::new();
@@ -141,10 +137,14 @@ impl DagNode for SvyByNode {
             let keep: Vec<usize> = (0..mask.len()).filter(|&i| mask[i]).collect();
 
             // Subset design.
-            let sub_strata: Vec<String> =
-                keep.iter().map(|&i| full_design.strata[i].clone()).collect();
-            let sub_cluster: Vec<String> =
-                keep.iter().map(|&i| full_design.cluster[i].clone()).collect();
+            let sub_strata: Vec<String> = keep
+                .iter()
+                .map(|&i| full_design.strata[i].clone())
+                .collect();
+            let sub_cluster: Vec<String> = keep
+                .iter()
+                .map(|&i| full_design.cluster[i].clone())
+                .collect();
             let sub_prob: Vec<f64> = keep.iter().map(|&i| full_design.prob[i]).collect();
             let sub_design = survey::SurveyDesign {
                 strata: sub_strata,
@@ -198,10 +198,16 @@ impl DagNode for SvyByNode {
 
         // Build output batch.
         let z = 1.959963984540054_f64;
-        let ci_lower: Vec<f64> =
-            out_est.iter().zip(&out_se).map(|(m, s)| m - z * s).collect();
-        let ci_upper: Vec<f64> =
-            out_est.iter().zip(&out_se).map(|(m, s)| m + z * s).collect();
+        let ci_lower: Vec<f64> = out_est
+            .iter()
+            .zip(&out_se)
+            .map(|(m, s)| m - z * s)
+            .collect();
+        let ci_upper: Vec<f64> = out_est
+            .iter()
+            .zip(&out_se)
+            .map(|(m, s)| m + z * s)
+            .collect();
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -350,7 +356,10 @@ fn parse_contrast(
                         msg: "ratio contrast requires exactly 2 variables".into(),
                     });
                 }
-                return Ok(survey::Contrast::Ratio { numerator: 0, denominator: 1 });
+                return Ok(survey::Contrast::Ratio {
+                    numerator: 0,
+                    denominator: 1,
+                });
             }
             Some("exp") => return Ok(survey::Contrast::Exp(0)),
             Some("log") => return Ok(survey::Contrast::Log(0)),
@@ -508,10 +517,12 @@ impl DagNode for SvyContrastNode {
             names.push(ce.name.clone());
         }
 
-        let (values, vars) = survey::svycontrast(&mean.estimate, &mean.var, &contrasts)
-            .map_err(|e| DagError::NodeError {
-                node_type: "svycontrast".into(),
-                msg: e.to_string(),
+        let (values, vars) =
+            survey::svycontrast(&mean.estimate, &mean.var, &contrasts).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "svycontrast".into(),
+                    msg: e.to_string(),
+                }
             })?;
 
         // Build output: name, estimate, se, ci_lower, ci_upper.
@@ -703,12 +714,10 @@ impl DagNode for SvyStandardizeNode {
             })?
         };
 
-        let new_design =
-            survey::svy_standardize(&design, &by, &over, &self.spec.population).map_err(|e| {
-                DagError::NodeError {
-                    node_type: "svystandardize".into(),
-                    msg: e.to_string(),
-                }
+        let new_design = survey::svy_standardize(&design, &by, &over, &self.spec.population)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svystandardize".into(),
+                msg: e.to_string(),
             })?;
         let new_weights = new_design.weights();
 
@@ -737,17 +746,18 @@ impl DagNode for SvyStandardizeNode {
             combined.columns().iter().cloned().collect();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
-        let output_batch = RecordBatch::try_new(new_schema, new_columns).map_err(|e| {
-            DagError::NodeError {
+        let output_batch =
+            RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
                 node_type: "svystandardize".into(),
                 msg: format!("failed to build output: {e}"),
-            }
-        })?;
+            })?;
         let ctx = node_ctx.session();
-        let df_out = ctx.read_batch(output_batch).map_err(|e| DagError::NodeError {
-            node_type: "svystandardize".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df_out = ctx
+            .read_batch(output_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "svystandardize".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
         Ok(res)
@@ -1090,8 +1100,12 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
-                Arc::new(Float64Array::from(vec![2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2,
+                ])),
             ],
         )
         .unwrap();
@@ -1121,12 +1135,13 @@ mod tests {
         };
 
         let mut node = SvyByNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -1184,8 +1199,12 @@ mod tests {
             vec![
                 Arc::new(arrow_array::Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
-                Arc::new(Float64Array::from(vec![2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    2.8, 4.1, 6.8, 6.8, 9.2, 3.7, 6.6, 4.2,
+                ])),
             ],
         )
         .unwrap();
@@ -1215,12 +1234,13 @@ mod tests {
         };
 
         let mut node = SvyContrastNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 

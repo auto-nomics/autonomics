@@ -36,7 +36,12 @@ impl EvalueResult {
 /// - `lo`: lower CI limit (optional)
 /// - `hi`: upper CI limit (optional)
 /// - `true_val`: true RR to shift to (default 1.0)
-pub fn evalues_rr(est: f64, lo: Option<f64>, hi: Option<f64>, true_val: f64) -> Result<EvalueResult> {
+pub fn evalues_rr(
+    est: f64,
+    lo: Option<f64>,
+    hi: Option<f64>,
+    true_val: f64,
+) -> Result<EvalueResult> {
     if est < 0.0 {
         return Err(EvalueError::Invalid("RR cannot be negative".into()));
     }
@@ -179,7 +184,9 @@ pub fn evalues_hr(
 pub fn evalues_md(est: f64, se: Option<f64>, true_val: f64) -> Result<EvalueResult> {
     if let Some(se_v) = se {
         if se_v < 0.0 {
-            return Err(EvalueError::Invalid("Standard error cannot be negative".into()));
+            return Err(EvalueError::Invalid(
+                "Standard error cannot be negative".into(),
+            ));
         }
     }
 
@@ -214,7 +221,9 @@ pub fn evalues_ols(
 ) -> Result<EvalueResult> {
     if let Some(se_v) = se {
         if se_v < 0.0 {
-            return Err(EvalueError::Invalid("Standard error cannot be negative".into()));
+            return Err(EvalueError::Invalid(
+                "Standard error cannot be negative".into(),
+            ));
         }
     }
 
@@ -340,7 +349,7 @@ pub fn evalues_rd(
             - z_alpha
                 * ((s2_p1 + s2_p0 * bf * bf) * f_search * f_search
                     + rd_search * rd_search * (1.0 - 1.0 / bf).powi(2) * s2_f)
-                .sqrt();
+                    .sqrt();
 
         if low_search <= true_val {
             lower_evalue = threshold(bf, 1.0).unwrap_or(1.0);
@@ -436,8 +445,7 @@ mod tests {
     #[test]
     fn test_evalues_rd_smoking() {
         // Hammond & Horn data
-        let (est_e, lo_e) =
-            evalues_rd(397.0, 78557.0, 51.0, 108778.0, 0.0, 0.05, 0.0001).unwrap();
+        let (est_e, lo_e) = evalues_rd(397.0, 78557.0, 51.0, 108778.0, 0.0, 0.05, 0.0001).unwrap();
         // These should be reasonable positive numbers
         assert!(est_e > 1.0, "est E-value should be > 1: {est_e}");
         assert!(lo_e > 1.0, "lower E-value should be > 1: {lo_e}");

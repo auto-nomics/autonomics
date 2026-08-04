@@ -33,12 +33,13 @@ pub use combine::{
     boolean::{complement_test, intersection_test, union_test},
     fisher::{fisher_combine, fisher_combine_pvals},
     stouffer::{stouffer_combine, stouffer_combine_pvals},
-    tippett::{tippett_combine, tippett_combine_pvals, TippettVariant},
+    tippett::{TippettVariant, tippett_combine, tippett_combine_pvals},
     wilkinson::{wilkinson_combine, wilkinson_combine_pvals},
 };
 pub use dist::{chisq_sf, f_sf, normal_cdf, normal_inv, normal_sf, t_sf};
 pub use invert::{ConfidenceSet, confint_wald, confint_z, invert_test};
 pub use primitives::{
+    HypothesisTest,
     anova::oneway_anova,
     cor::{CorMethod, cor_test},
     gof::{AdDist, anderson_darling, chisq_gof, ks_one_sample, ks_two_sample, shapiro_wilk},
@@ -51,7 +52,6 @@ pub use primitives::{
     var::{Center, bartlett_test, fligner_test, levene_test, var_test},
     wald::{wald_multi, wald_uni},
     z::z_test,
-    HypothesisTest,
 };
 
 use schemars::JsonSchema;
@@ -130,7 +130,9 @@ pub const KEY_COMPONENT_PVALS: &str = "component_pvals";
 pub const KEY_N_TESTS: &str = "n_tests";
 
 /// Helper: build a `serde_json::Map` from key/value pairs of `Into<Value>`.
-pub(crate) fn extras(pairs: impl IntoIterator<Item = (&'static str, serde_json::Value)>) -> serde_json::Map<String, serde_json::Value> {
+pub(crate) fn extras(
+    pairs: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut m = serde_json::Map::new();
     for (k, v) in pairs {
         m.insert(k.to_string(), v);
@@ -177,11 +179,18 @@ mod tests {
 
     #[test]
     fn alternative_roundtrip() {
-        for a in [Alternative::TwoSided, Alternative::Less, Alternative::Greater] {
+        for a in [
+            Alternative::TwoSided,
+            Alternative::Less,
+            Alternative::Greater,
+        ] {
             let s = a.as_r_str();
             assert_eq!(Alternative::parse_r(s).unwrap(), a);
         }
-        assert_eq!(Alternative::parse_r("TWO_SIDED").unwrap(), Alternative::TwoSided);
+        assert_eq!(
+            Alternative::parse_r("TWO_SIDED").unwrap(),
+            Alternative::TwoSided
+        );
         assert!(Alternative::parse_r("sideways").is_err());
     }
 }

@@ -139,7 +139,11 @@ pub fn mann_whitney(
     }
 
     // Pool and rank.
-    let mut pooled: Vec<(f64, bool)> = x.iter().map(|&v| (v, true)).chain(y.iter().map(|&v| (v, false))).collect();
+    let mut pooled: Vec<(f64, bool)> = x
+        .iter()
+        .map(|&v| (v, true))
+        .chain(y.iter().map(|&v| (v, false)))
+        .collect();
     pooled.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let vals: Vec<f64> = pooled.iter().map(|(v, _)| *v).collect();
     let ranks = rank_average(&vals);
@@ -215,7 +219,9 @@ pub fn kruskal_wallis(groups: &[&[f64]]) -> Result<HypothesisTest> {
     }
     let n_total: usize = groups.iter().map(|g| g.len()).sum();
     if n_total < 2 {
-        return Err(HypoError::InvalidInput("total sample size must be ≥ 2".into()));
+        return Err(HypoError::InvalidInput(
+            "total sample size must be ≥ 2".into(),
+        ));
     }
 
     // Pool and rank.
@@ -382,7 +388,8 @@ mod tests {
     fn wilcoxon_signed_rank_symmetric() {
         // Symmetric data around 0 → W+ ≈ n(n+1)/4, z ≈ 0, p ≈ 1
         let x = vec![-2.0, -1.0, 0.5, 1.0, 2.5];
-        let t = wilcoxon_signed_rank(&x, 0.0, Alternative::TwoSided, ZeroMethod::Wilcox, true).unwrap();
+        let t =
+            wilcoxon_signed_rank(&x, 0.0, Alternative::TwoSided, ZeroMethod::Wilcox, true).unwrap();
         assert!(t.stat > 0.0);
         assert!(t.p_value > 0.5, "p = {}", t.p_value);
     }
@@ -391,7 +398,8 @@ mod tests {
     fn wilcoxon_shifted() {
         // Shifted positive → mostly positive ranks → significant
         let x: Vec<f64> = (1..=20).map(|i| i as f64).collect();
-        let t = wilcoxon_signed_rank(&x, 0.0, Alternative::Greater, ZeroMethod::Wilcox, true).unwrap();
+        let t =
+            wilcoxon_signed_rank(&x, 0.0, Alternative::Greater, ZeroMethod::Wilcox, true).unwrap();
         assert!(t.p_value < 0.001);
     }
 
@@ -461,7 +469,10 @@ mod tests {
 
     #[test]
     fn rejects_bad_inputs() {
-        assert!(wilcoxon_signed_rank(&[], 0.0, Alternative::TwoSided, ZeroMethod::Wilcox, true).is_err());
+        assert!(
+            wilcoxon_signed_rank(&[], 0.0, Alternative::TwoSided, ZeroMethod::Wilcox, true)
+                .is_err()
+        );
         assert!(mann_whitney(&[], &[1.0], Alternative::TwoSided, true).is_err());
         assert!(kruskal_wallis(&[&[1.0_f64][..]]).is_err());
         assert!(friedman_test(&[&[1.0_f64][..]]).is_err());

@@ -38,14 +38,7 @@ fn summary_stats() -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
     (beta_exposure, sd_exposure, y, y_se)
 }
 
-fn summary_stats_raw() -> (
-    Vec<f64>,
-    Vec<f64>,
-    Vec<f64>,
-    Vec<f64>,
-    Vec<f64>,
-    Vec<f64>,
-) {
+fn summary_stats_raw() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
     let data = include_str!("summary_stats.csv");
     let mut e1 = Vec::new();
     let mut e1_se = Vec::new();
@@ -75,9 +68,15 @@ fn input_for(exposure_indices: &[usize], seed: u32) -> MrpressoInput {
     let (beta_exposure, sd_exposure, y, y_se) = summary_stats();
     MrpressoInput {
         beta_outcome: y.clone(),
-        beta_exposure: exposure_indices.iter().map(|&i| beta_exposure[i].clone()).collect(),
+        beta_exposure: exposure_indices
+            .iter()
+            .map(|&i| beta_exposure[i].clone())
+            .collect(),
         sd_outcome: y_se.clone(),
-        sd_exposure: exposure_indices.iter().map(|&i| sd_exposure[i].clone()).collect(),
+        sd_exposure: exposure_indices
+            .iter()
+            .map(|&i| sd_exposure[i].clone())
+            .collect(),
         outlier_test: true,
         distortion_test: true,
         signif_threshold: 0.05,
@@ -202,9 +201,17 @@ fn check_scenario(key: &str, input: MrpressoInput) {
                 );
             }
             // Significant outliers must match exactly (row indices).
-            let g_sig: Vec<usize> = g["outlier"]["sig"].as_array().unwrap().iter()
-                .map(|v| v.as_u64().unwrap() as usize).collect();
-            let rust_sig: Vec<usize> = rows.iter().filter(|r| r.pvalue <= 0.05).map(|r| r.index).collect();
+            let g_sig: Vec<usize> = g["outlier"]["sig"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect();
+            let rust_sig: Vec<usize> = rows
+                .iter()
+                .filter(|r| r.pvalue <= 0.05)
+                .map(|r| r.index)
+                .collect();
             assert_eq!(rust_sig, g_sig, "[{key}] significant outlier indices");
         }
     }
@@ -216,7 +223,11 @@ fn check_scenario(key: &str, input: MrpressoInput) {
         (_, None) => panic!("[{key}] R produced distortion but Rust did not"),
         (_, Some(dt)) => {
             let g_coef: Vec<f64> = num_vec(&g["distortion"]["coefficient"]);
-            assert_eq!(dt.coefficient.len(), g_coef.len(), "[{key}] distortion coef count");
+            assert_eq!(
+                dt.coefficient.len(),
+                g_coef.len(),
+                "[{key}] distortion coef count"
+            );
             for (i, c) in dt.coefficient.iter().enumerate() {
                 assert!(
                     close(*c, g_coef[i], 1e-6),
@@ -230,9 +241,16 @@ fn check_scenario(key: &str, input: MrpressoInput) {
                 "[{key}] distortion pvalue: Rust={} R={g_p}",
                 dt.pvalue.unwrap()
             );
-            let g_ind: Vec<usize> = g["distortion"]["indices"].as_array().unwrap().iter()
-                .map(|v| v.as_u64().unwrap() as usize).collect();
-            assert_eq!(dt.outlier_indices, g_ind, "[{key}] distortion outlier indices");
+            let g_ind: Vec<usize> = g["distortion"]["indices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect();
+            assert_eq!(
+                dt.outlier_indices, g_ind,
+                "[{key}] distortion outlier indices"
+            );
         }
     }
 }

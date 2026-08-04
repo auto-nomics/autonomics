@@ -58,7 +58,12 @@ fn t_test_paired_matches_r_pt() {
     let dvar: f64 = d.iter().map(|&di| (di - dm).powi(2)).sum::<f64>() / 7.0;
     let t_expected = dm / (dvar / 8.0).sqrt();
     assert_close(t.stat, t_expected, 1e-12, "t paired");
-    assert_close(t.p_value, t_two_sided(t_expected.abs(), 7.0), 1e-12, "p paired");
+    assert_close(
+        t.p_value,
+        t_two_sided(t_expected.abs(), 7.0),
+        1e-12,
+        "p paired",
+    );
 }
 
 #[test]
@@ -74,11 +79,16 @@ fn t_test_two_welch_matches_r_pt() {
     let v2: f64 = y.iter().map(|&yi| (yi - m2).powi(2)).sum::<f64>() / (n2f - 1.0);
     let se = (v1 / n1f + v2 / n2f).sqrt();
     let t_expected = (m1 - m2) / se;
-    let df_expected = (v1/n1f + v2/n2f).powi(2)
-        / ((v1/n1f).powi(2)/(n1f-1.0) + (v2/n2f).powi(2)/(n2f-1.0));
+    let df_expected = (v1 / n1f + v2 / n2f).powi(2)
+        / ((v1 / n1f).powi(2) / (n1f - 1.0) + (v2 / n2f).powi(2) / (n2f - 1.0));
     assert_close(t.stat, t_expected, 1e-12, "t welch");
     assert_close(t.dof, df_expected, 1e-12, "df welch");
-    assert_close(t.p_value, t_two_sided(t_expected.abs(), df_expected), 1e-12, "p welch");
+    assert_close(
+        t.p_value,
+        t_two_sided(t_expected.abs(), df_expected),
+        1e-12,
+        "p welch",
+    );
 }
 
 #[test]
@@ -89,9 +99,10 @@ fn t_test_two_pooled_matches_r_pt() {
     let t = h::t_test_two(&x, &y, true, h::Alternative::TwoSided).unwrap();
     assert!((t.dof - 14.0).abs() < 1e-12, "df should be n1+n2-2");
     let (m1, m2) = (x.iter().sum::<f64>() / 8.0, y.iter().sum::<f64>() / 8.0);
-    let sp2: f64 = (x.iter().map(|&xi| (xi-m1).powi(2)).sum::<f64>()
-                + y.iter().map(|&yi| (yi-m2).powi(2)).sum::<f64>()) / 14.0;
-    let t_expected = (m1 - m2) / (sp2 * (1.0/8.0 + 1.0/8.0)).sqrt();
+    let sp2: f64 = (x.iter().map(|&xi| (xi - m1).powi(2)).sum::<f64>()
+        + y.iter().map(|&yi| (yi - m2).powi(2)).sum::<f64>())
+        / 14.0;
+    let t_expected = (m1 - m2) / (sp2 * (1.0 / 8.0 + 1.0 / 8.0)).sqrt();
     assert_close(t.stat, t_expected, 1e-12, "t pooled");
 }
 
@@ -102,7 +113,12 @@ fn t_test_directions_match_r() {
     let t = h::t_test_one(&x, 0.0, h::Alternative::TwoSided).unwrap();
     let p_less = h::t_test_one(&x, 0.0, h::Alternative::Less).unwrap();
     let p_greater = h::t_test_one(&x, 0.0, h::Alternative::Greater).unwrap();
-    assert_close(p_less.p_value + p_greater.p_value, 1.0, 1e-12, "less+greater=1");
+    assert_close(
+        p_less.p_value + p_greater.p_value,
+        1.0,
+        1e-12,
+        "less+greater=1",
+    );
     assert_close(p_less.p_value, 1.0 - 0.5 * t.p_value, 1e-12, "two-sided/2");
 }
 
@@ -130,9 +146,9 @@ fn prop_test_two_matches_r_chisq() {
     let ec2 = n2 * (1.0 - p_pool);
     let c: f64 = 0.5; // Yates
     let stat = ((x1 - exp1).abs() - c).powi(2) / exp1
-              + ((x2 - exp2).abs() - c).powi(2) / exp2
-              + (((n1 - x1) - ec1).abs() - c).powi(2) / ec1
-              + (((n2 - x2) - ec2).abs() - c).powi(2) / ec2;
+        + ((x2 - exp2).abs() - c).powi(2) / exp2
+        + (((n1 - x1) - ec1).abs() - c).powi(2) / ec1
+        + (((n2 - x2) - ec2).abs() - c).powi(2) / ec2;
     assert_close(t.stat, stat, 1e-9, "χ² two-sample");
     assert_close(t.p_value, chisq_sf(stat, 1.0), 1e-12, "p two-sample");
 }
@@ -172,7 +188,11 @@ fn cor_pearson_matches_r_cor_test() {
     let n = 8.0;
     let mx: f64 = x.iter().sum::<f64>() / n;
     let my: f64 = y.iter().sum::<f64>() / n;
-    let sxy: f64 = x.iter().zip(&y).map(|(&xi, &yi)| (xi - mx) * (yi - my)).sum();
+    let sxy: f64 = x
+        .iter()
+        .zip(&y)
+        .map(|(&xi, &yi)| (xi - mx) * (yi - my))
+        .sum();
     let sxx: f64 = x.iter().map(|&xi| (xi - mx).powi(2)).sum();
     let syy: f64 = y.iter().map(|&yi| (yi - my).powi(2)).sum();
     let r = sxy / (sxx * syy).sqrt();
@@ -191,8 +211,19 @@ fn cor_spearman_equals_pearson_on_ranks() {
     let sp = h::cor_test(&x, &y, h::CorMethod::Spearman, h::Alternative::TwoSided).unwrap();
     let rk_x = h_cor_rank_average(&x);
     let rk_y = h_cor_rank_average(&y);
-    let pe = h::cor_test(&rk_x, &rk_y, h::CorMethod::Pearson, h::Alternative::TwoSided).unwrap();
-    assert_close(sp.extra_f64("estimate").unwrap(), pe.extra_f64("estimate").unwrap(), 1e-12, "Spearman=Pearson(ranks)");
+    let pe = h::cor_test(
+        &rk_x,
+        &rk_y,
+        h::CorMethod::Pearson,
+        h::Alternative::TwoSided,
+    )
+    .unwrap();
+    assert_close(
+        sp.extra_f64("estimate").unwrap(),
+        pe.extra_f64("estimate").unwrap(),
+        1e-12,
+        "Spearman=Pearson(ranks)",
+    );
 }
 
 #[test]
@@ -214,9 +245,13 @@ fn h_cor_rank_average(v: &[f64]) -> Vec<f64> {
     let mut i = 0;
     while i < n {
         let mut j = i + 1;
-        while j < n && v[idx[j]] == v[idx[i]] { j += 1; }
+        while j < n && v[idx[j]] == v[idx[i]] {
+            j += 1;
+        }
         let avg = ((i + 1 + j) as f64) / 2.0;
-        for k in i..j { ranks[idx[k]] = avg; }
+        for k in i..j {
+            ranks[idx[k]] = avg;
+        }
         i = j;
     }
     ranks
@@ -247,10 +282,16 @@ fn chisq_gof_rescale_p_matches_r() {
 fn ks_one_sample_normal_perfect_match() {
     // R: ks.test(qnorm(c(1:n)/(n+1))) → D ≈ 0
     let n = 50;
-    let quantiles: Vec<f64> = (1..=n).map(|i| normal_inv(i as f64 / (n + 1) as f64)).collect();
+    let quantiles: Vec<f64> = (1..=n)
+        .map(|i| normal_inv(i as f64 / (n + 1) as f64))
+        .collect();
     let t = h::ks_one_sample(&quantiles, |z| normal_cdf(z)).unwrap();
     // Discrete approx: D ≤ 1/(n+1) ≈ 0.0196
-    assert!(t.stat < 0.02, "D should be small for quantiles, got {}", t.stat);
+    assert!(
+        t.stat < 0.02,
+        "D should be small for quantiles, got {}",
+        t.stat
+    );
     assert!(t.p_value > 0.4, "p = {}", t.p_value);
 }
 
@@ -279,9 +320,15 @@ fn ks_two_sample_same_matches_r() {
 fn shapiro_wilk_w_matches_normal_quantiles() {
     // For perfect normal quantiles, W should be very close to 1.
     let n = 20;
-    let x: Vec<f64> = (1..=n).map(|i| normal_inv((i as f64 - 0.375) / (n as f64 + 0.25))).collect();
+    let x: Vec<f64> = (1..=n)
+        .map(|i| normal_inv((i as f64 - 0.375) / (n as f64 + 0.25)))
+        .collect();
     let t = h::shapiro_wilk(&x).unwrap();
-    assert!(t.stat > 0.95, "W should be near 1 for normal quantiles, got {}", t.stat);
+    assert!(
+        t.stat > 0.95,
+        "W should be near 1 for normal quantiles, got {}",
+        t.stat
+    );
 }
 
 // ════ fisher_exact ══════════════════════════════════════════════════════════
@@ -314,26 +361,56 @@ fn wilcoxon_signed_rank_matches_r_wilcox() {
     // R: wilcox.test(c(-3.2, -1.5, 0.0, 0.0, 0.4, 1.5, 3.1), mu=0, alternative="two.sided")
     //   Drops zeros (zero.method="wilcox"); uses asymptotic z with continuity.
     let x = vec![-3.2, -1.5, 0.0, 0.0, 0.4, 1.5, 3.1];
-    let t = h::wilcoxon_signed_rank(&x, 0.0, h::Alternative::TwoSided, h::ZeroMethod::Wilcox, true).unwrap();
+    let t = h::wilcoxon_signed_rank(
+        &x,
+        0.0,
+        h::Alternative::TwoSided,
+        h::ZeroMethod::Wilcox,
+        true,
+    )
+    .unwrap();
     // After dropping zeros: [-3.2, -1.5, 0.4, 1.5, 3.1]
     // abs: [3.2, 1.5, 0.4, 1.5, 3.1] → sorted [0.4, 1.5, 1.5, 3.1, 3.2]
     // avg ranks (map back to original order): 3.2→5, 1.5→2.5, 0.4→1, 1.5→2.5, 3.1→4
     let ranks_orig = vec![5.0, 2.5, 1.0, 2.5, 4.0];
     let original = vec![-3.2, -1.5, 0.4, 1.5, 3.1];
-    let w_plus: f64 = original.iter().zip(&ranks_orig).filter(|(v, _)| **v > 0.0).map(|(_, r)| r).sum();
+    let w_plus: f64 = original
+        .iter()
+        .zip(&ranks_orig)
+        .filter(|(v, _)| **v > 0.0)
+        .map(|(_, r)| r)
+        .sum();
     // W+ = 1 + 2.5 + 4 = 7.5 (deterministic)
     assert_close(t.stat, w_plus, 1e-9, "W+");
     assert_close(t.stat, 7.5, 1e-9, "W+ explicit");
-    assert!(t.p_value > 0.0 && t.p_value <= 1.0, "p in (0,1], got {}", t.p_value);
+    assert!(
+        t.p_value > 0.0 && t.p_value <= 1.0,
+        "p in (0,1], got {}",
+        t.p_value
+    );
 }
 
 #[test]
 fn wilcoxon_signed_rank_symmetric_data() {
     // Symmetric data around 0 → W+ ≈ n(n+1)/4 → z ≈ 0 → p ≈ 1
     let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
-    let xs: Vec<f64> = x.iter().map(|&xi| if xi % 2.0 == 0.0 { xi } else { -xi }).collect();
-    let t = h::wilcoxon_signed_rank(&xs, 0.0, h::Alternative::TwoSided, h::ZeroMethod::Wilcox, true).unwrap();
-    assert!(t.p_value > 0.5, "p should be > 0.5 for symmetric data, got {}", t.p_value);
+    let xs: Vec<f64> = x
+        .iter()
+        .map(|&xi| if xi % 2.0 == 0.0 { xi } else { -xi })
+        .collect();
+    let t = h::wilcoxon_signed_rank(
+        &xs,
+        0.0,
+        h::Alternative::TwoSided,
+        h::ZeroMethod::Wilcox,
+        true,
+    )
+    .unwrap();
+    assert!(
+        t.p_value > 0.5,
+        "p should be > 0.5 for symmetric data, got {}",
+        t.p_value
+    );
 }
 
 // ════ mann_whitney ══════════════════════════════════════════════════════════
@@ -359,7 +436,11 @@ fn mann_whitney_identical_groups() {
     let v = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let t = h::mann_whitney(&v, &v, h::Alternative::TwoSided, true).unwrap();
     assert_close(t.stat, 12.5, 1e-9, "U=n1*n2/2");
-    assert!(t.p_value > 0.5, "p should be > 0.5 for identical groups, got {}", t.p_value);
+    assert!(
+        t.p_value > 0.5,
+        "p should be > 0.5 for identical groups, got {}",
+        t.p_value
+    );
 }
 
 // ════ kruskal_wallis ════════════════════════════════════════════════════════
@@ -373,7 +454,11 @@ fn kruskal_wallis_matches_r_kruskal() {
     let g3 = vec![3.0, 5.0, 7.0];
     let t = h::kruskal_wallis(&[&g1, &g2, &g3]).unwrap();
     assert!((t.dof - 2.0).abs() < 1e-12, "df=2");
-    assert!(t.p_value > 0.0 && t.p_value < 1.0, "p in [0,1], got {}", t.p_value);
+    assert!(
+        t.p_value > 0.0 && t.p_value < 1.0,
+        "p in [0,1], got {}",
+        t.p_value
+    );
 }
 
 #[test]
@@ -414,7 +499,11 @@ fn bartlett_matches_r_bartlett() {
     let g3 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
     let t = h::bartlett_test(&[&g1, &g2, &g3]).unwrap();
     assert!((t.dof - 2.0).abs() < 1e-12, "df=k-1");
-    assert!(t.p_value >= 0.0 && t.p_value <= 1.0, "p in [0,1], got {}", t.p_value);
+    assert!(
+        t.p_value >= 0.0 && t.p_value <= 1.0,
+        "p in [0,1], got {}",
+        t.p_value
+    );
 }
 
 #[test]
@@ -437,7 +526,11 @@ fn levene_matches_r_levene_test() {
     let g3 = vec![30.0, 32.0, 34.0, 36.0, 38.0];
     let t = h::levene_test(&[&g1, &g2, &g3], h::Center::Mean).unwrap();
     // All groups have identical variance and equal step → F should be small.
-    assert!(t.stat < 5.0, "F should be small for equal-variance groups, got {}", t.stat);
+    assert!(
+        t.stat < 5.0,
+        "F should be small for equal-variance groups, got {}",
+        t.stat
+    );
     assert!(t.p_value > 0.05, "p should be > 0.05, got {}", t.p_value);
 }
 
@@ -479,7 +572,8 @@ fn classical_anova_matches_r_aov() {
     let m1: f64 = g1.iter().sum::<f64>() / n_per;
     let m2: f64 = g2.iter().sum::<f64>() / n_per;
     let m3: f64 = g3.iter().sum::<f64>() / n_per;
-    let grand = (g1.iter().sum::<f64>() + g2.iter().sum::<f64>() + g3.iter().sum::<f64>()) / n_total;
+    let grand =
+        (g1.iter().sum::<f64>() + g2.iter().sum::<f64>() + g3.iter().sum::<f64>()) / n_total;
     let ss_b = n_per * ((m1 - grand).powi(2) + (m2 - grand).powi(2) + (m3 - grand).powi(2));
     let ss_w: f64 = g1.iter().map(|&xi| (xi - m1).powi(2)).sum::<f64>()
         + g2.iter().map(|&xi| (xi - m2).powi(2)).sum::<f64>()
@@ -505,7 +599,9 @@ fn welch_anova_matches_r_oneway_test() {
     let means = [12.0, 22.0, 32.0];
     let yw = means.iter().map(|&m| w_i * m).sum::<f64>() / w_sum;
     let numerator = means.iter().map(|&m| w_i * (m - yw).powi(2)).sum::<f64>() / (k - 1.0);
-    let c = (0..3).map(|_| (1.0 - w_i / w_sum).powi(2) / (n_i - 1.0)).sum::<f64>();
+    let c = (0..3)
+        .map(|_| (1.0 - w_i / w_sum).powi(2) / (n_i - 1.0))
+        .sum::<f64>();
     let denominator = 1.0 + 2.0 * (k - 2.0) / (k * k - 1.0) * c;
     let f_expected = numerator / denominator;
     assert_close(t.stat, f_expected, 1e-9, "F welch");
@@ -519,17 +615,30 @@ fn welch_anova_matches_r_oneway_test() {
 fn anderson_darling_normal_perfect_p_large() {
     // R: nortest::ad.test(qnorm(c(1:n)/(n+1))) — perfect quantiles
     let n = 50;
-    let x: Vec<f64> = (1..=n).map(|i| normal_inv(i as f64 / (n + 1) as f64)).collect();
+    let x: Vec<f64> = (1..=n)
+        .map(|i| normal_inv(i as f64 / (n + 1) as f64))
+        .collect();
     let t = h::anderson_darling(&x, h::AdDist::Normal).unwrap();
-    assert!(t.p_value > 0.05, "p should be > 0.05 for normal quantiles, got {}", t.p_value);
+    assert!(
+        t.p_value > 0.05,
+        "p should be > 0.05 for normal quantiles, got {}",
+        t.p_value
+    );
 }
 
 #[test]
 fn anderson_darling_nonnormal_small_p() {
     // Heavy outlier skews distribution → small p
-    let x: Vec<f64> = (0..30).map(|_| 1.0_f64).chain(std::iter::once(100.0_f64)).collect();
+    let x: Vec<f64> = (0..30)
+        .map(|_| 1.0_f64)
+        .chain(std::iter::once(100.0_f64))
+        .collect();
     let t = h::anderson_darling(&x, h::AdDist::Normal).unwrap();
-    assert!(t.p_value < 0.01, "p should be < 0.01 for heavy outlier, got {}", t.p_value);
+    assert!(
+        t.p_value < 0.01,
+        "p should be < 0.01 for heavy outlier, got {}",
+        t.p_value
+    );
 }
 
 // ════ stouffer_combine ═════════════════════════════════════════════════════

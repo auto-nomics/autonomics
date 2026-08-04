@@ -11,9 +11,7 @@ pub enum MrpressoError {
     ExposureSdMismatch,
     #[error("not enough instrumental variables: nrow={0}, nexp={1}")]
     NotEnoughInstruments(usize, usize),
-    #[error(
-        "not enough elements to compute empirical P-values: nrow={0} >= NbDistribution={1}"
-    )]
+    #[error("not enough elements to compute empirical P-values: nrow={0} >= NbDistribution={1}")]
     NotEnoughForEmpirical(usize, usize),
     #[error("data contains no rows after NA removal")]
     EmptyData,

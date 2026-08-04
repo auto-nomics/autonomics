@@ -7,9 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, ArrayRef, Float64Array, Int32Array, NullArray, RecordBatch, StringArray,
-};
+use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, NullArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use thiserror::Error;
 
@@ -95,12 +93,10 @@ pub fn emit_test_row(
 ) -> Result<PortOutputs, DagError> {
     let batch = test_to_batch(node_ctx, t).map_err(DagError::from)?;
     let session = node_ctx.session();
-    let df = session
-        .read_batch(batch)
-        .map_err(|e| DagError::NodeError {
-            node_type: "hypothesize".to_string(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+    let df = session.read_batch(batch).map_err(|e| DagError::NodeError {
+        node_type: "hypothesize".to_string(),
+        msg: format!("read_batch failed: {e}"),
+    })?;
     let mut res = PortOutputs::new();
     res.insert(0, df);
     Ok(res)
@@ -151,9 +147,7 @@ pub fn extract_f64_column(
                 }
             }
         } else {
-            return Err(HypoNodeError::Column(format!(
-                "{column} is not Float64"
-            )));
+            return Err(HypoNodeError::Column(format!("{column} is not Float64")));
         }
     }
     Ok(values)
@@ -183,8 +177,7 @@ pub fn extract_groups(
             .ok_or_else(|| HypoNodeError::Column(format!("{value_col} not Float64")))?;
 
         let grp_strings: Vec<Option<String>> =
-            crate::nodes::meta::string_opt_values(grp_arr.as_ref())
-                .unwrap_or_default();
+            crate::nodes::meta::string_opt_values(grp_arr.as_ref()).unwrap_or_default();
 
         for i in 0..vals.len() {
             if vals.is_null(i) {

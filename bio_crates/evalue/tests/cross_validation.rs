@@ -10,16 +10,13 @@
 //! cargo test -p evalue --test cross_validation
 //! ```
 
-use evalue::{
-    bias_spec, evalue as ev, multi_bound, multi_evalue, selection,
-};
+use evalue::{bias_spec, evalue as ev, multi_bound, multi_evalue, selection};
 use serde_json::Value;
 
 const TOL: f64 = 1e-4;
 
 fn load_golden() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/evalue_golden.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/evalue_golden.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "Failed to read {}: {}. Run `Rscript tests/gen_r_golden.R tests/evalue_golden.json` first.",
@@ -144,8 +141,14 @@ fn xval_rd_smoking() {
     let g = load_golden();
     let r = &g["rd_smoking"];
     let (est_e, lo_e) = ev::evalues_rd(397.0, 78557.0, 51.0, 108778.0, 0.0, 0.05, 0.0001).unwrap();
-    assert!((est_e - jnum(r, "est_evalue").unwrap()).abs() < TOL, "est_e: {est_e}");
-    assert!((lo_e - jnum(r, "lower_evalue").unwrap()).abs() < TOL, "lower_e: {lo_e}");
+    assert!(
+        (est_e - jnum(r, "est_evalue").unwrap()).abs() < TOL,
+        "est_e: {est_e}"
+    );
+    assert!(
+        (lo_e - jnum(r, "lower_evalue").unwrap()).abs() < TOL,
+        "lower_e: {lo_e}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -167,7 +170,11 @@ fn xval_multi_sel_general() {
     let expected = jnum(&g["multi_sel_general"], "point_e").unwrap();
     let mb = bias_spec::multi_bias(&[bias_spec::selection(&["general"]).unwrap()]).unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 0.5, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
@@ -176,29 +183,40 @@ fn xval_multi_sel_selected() {
     let expected = jnum(&g["multi_sel_selected"], "point_e").unwrap();
     let mb = bias_spec::multi_bias(&[bias_spec::selection(&["selected"]).unwrap()]).unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 4.7, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
 fn xval_multi_sel_incr() {
     let g = load_golden();
     let expected = jnum(&g["multi_sel_incr"], "point_e").unwrap();
-    let mb = bias_spec::multi_bias(&[
-        bias_spec::selection(&["general", "increased risk"]).unwrap()
-    ]).unwrap();
+    let mb =
+        bias_spec::multi_bias(&[bias_spec::selection(&["general", "increased risk"]).unwrap()])
+            .unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 0.8, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
 fn xval_multi_sel_su() {
     let g = load_golden();
     let expected = jnum(&g["multi_sel_su"], "point_e").unwrap();
-    let mb = bias_spec::multi_bias(&[
-        bias_spec::selection(&["general", "S = U"]).unwrap()
-    ]).unwrap();
+    let mb =
+        bias_spec::multi_bias(&[bias_spec::selection(&["general", "S = U"]).unwrap()]).unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 5.3, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
@@ -208,9 +226,14 @@ fn xval_multi_conf_sel() {
     let mb = bias_spec::multi_bias(&[
         bias_spec::confounding(),
         bias_spec::selection(&["general"]).unwrap(),
-    ]).unwrap();
+    ])
+    .unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 2.5, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
@@ -221,9 +244,14 @@ fn xval_multi_conf_sel_misclass() {
         bias_spec::confounding(),
         bias_spec::selection(&["general"]).unwrap(),
         bias_spec::misclassification("outcome", false, false).unwrap(),
-    ]).unwrap();
+    ])
+    .unwrap();
     let res = multi_evalue::multi_evalues_rr(&mb, 2.5, None, None, 1.0).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -233,7 +261,8 @@ fn xval_multi_conf_sel_misclass() {
 #[test]
 fn xval_bound_confounding() {
     let g = load_golden();
-    let expected = jnum(&g["bound_confounding"], "").unwrap_or_else(|| g["bound_confounding"].as_f64().unwrap());
+    let expected = jnum(&g["bound_confounding"], "")
+        .unwrap_or_else(|| g["bound_confounding"].as_f64().unwrap());
     let mb = bias_spec::multi_bias(&[bias_spec::confounding()]).unwrap();
     let mut params = std::collections::HashMap::new();
     params.insert("RRAUc".into(), 2.0);
@@ -249,7 +278,8 @@ fn xval_bound_conf_sel_incr() {
     let mb = bias_spec::multi_bias(&[
         bias_spec::confounding(),
         bias_spec::selection(&["general", "increased risk"]).unwrap(),
-    ]).unwrap();
+    ])
+    .unwrap();
     let mut params = std::collections::HashMap::new();
     params.insert("RRAUc".into(), 2.0);
     params.insert("RRUcY".into(), 2.0);
@@ -267,16 +297,26 @@ fn xval_bound_conf_sel_incr() {
 fn xval_svalues_zika() {
     let g = load_golden();
     let expected = jnum(&g["svalues_zika"], "point_e").unwrap();
-    let res = selection::svalues_rr(73.1, Some(13.0), None, 1.0, false, false, false, false).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    let res =
+        selection::svalues_rr(73.1, Some(13.0), None, 1.0, false, false, false, false).unwrap();
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
 fn xval_svalues_obesity() {
     let g = load_golden();
     let expected = jnum(&g["svalues_obesity"], "point_e").unwrap();
-    let res = selection::svalues_rr(1.50, Some(1.22), None, 1.0, true, false, false, false).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    let res =
+        selection::svalues_rr(1.50, Some(1.22), None, 1.0, true, false, false, false).unwrap();
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }
 
 #[test]
@@ -284,5 +324,9 @@ fn xval_svalues_endometrial() {
     let g = load_golden();
     let expected = jnum(&g["svalues_endometrial"], "point_e").unwrap();
     let res = selection::svalues_rr(2.30, None, None, 11.98, false, true, true, false).unwrap();
-    assert!((res.point_evalue().unwrap() - expected).abs() < TOL, "got {} expected {expected}", res.point_evalue().unwrap());
+    assert!(
+        (res.point_evalue().unwrap() - expected).abs() < TOL,
+        "got {} expected {expected}",
+        res.point_evalue().unwrap()
+    );
 }

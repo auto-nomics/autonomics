@@ -7,8 +7,8 @@ use crate::design::SurveyDesign;
 use crate::error::{Result, SurveyError};
 use crate::variance::svy_cprod_matrix;
 
-use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::Mat;
+use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 
 /// Result of a survey NLS fit.
 #[derive(Debug, Clone)]
@@ -195,7 +195,11 @@ pub fn svy_ivreg(
     let n_exo = exogenous.len();
     let n_instr = instruments.len();
     if y.len() != n {
-        return Err(SurveyError::LengthMismatch { context: "y".into(), a: y.len(), b: n });
+        return Err(SurveyError::LengthMismatch {
+            context: "y".into(),
+            a: y.len(),
+            b: n,
+        });
     }
 
     let w = design.weights();
@@ -207,12 +211,21 @@ pub fn svy_ivreg(
     let z1: Vec<Vec<f64>> = instruments
         .iter()
         .chain(exogenous.iter())
-        .map(|c| c.iter().enumerate().map(|(i, &v)| v * ws[i].sqrt()).collect())
+        .map(|c| {
+            c.iter()
+                .enumerate()
+                .map(|(i, &v)| v * ws[i].sqrt())
+                .collect()
+        })
         .collect();
     // For each endogenous variable, fit WLS and get fitted values.
     let mut endo_hat = vec![vec![0.0_f64; n]; n_endo];
     for (e, endo_col) in endogenous.iter().enumerate() {
-        let y_w: Vec<f64> = endo_col.iter().zip(&ws).map(|(&v, wi)| v * wi.sqrt()).collect();
+        let y_w: Vec<f64> = endo_col
+            .iter()
+            .zip(&ws)
+            .map(|(&v, wi)| v * wi.sqrt())
+            .collect();
         let z1_refs: Vec<&[f64]> = z1.iter().map(|v| v.as_slice()).collect();
         let reg = statkit::regression::ols(&z1_refs, &y_w, false)
             .map_err(|e| SurveyError::InvalidInput(format!("IV first stage failed: {e}")))?;
@@ -222,11 +235,7 @@ pub fn svy_ivreg(
     // --- Second stage: WLS of y on endo_hat + exogenous ---
     // Build design matrix for second stage: [endo_hat, exogenous]
     let p = n_endo + n_exo;
-    let x2: Vec<Vec<f64>> = endo_hat
-        .iter()
-        .chain(exogenous.iter())
-        .cloned()
-        .collect();
+    let x2: Vec<Vec<f64>> = endo_hat.iter().chain(exogenous.iter()).cloned().collect();
     let x2_refs: Vec<&[f64]> = x2.iter().map(|v| v.as_slice()).collect();
     let y_w: Vec<f64> = y.iter().zip(&ws).map(|(&v, wi)| v * wi.sqrt()).collect();
     let reg2 = statkit::regression::ols(&x2_refs, &y_w, false)
@@ -251,11 +260,7 @@ pub fn svy_ivreg(
     let naive = llt.inverse();
 
     // Estfun: use **original** endogenous (not fitted) in the score.
-    let x_orig: Vec<Vec<f64>> = endogenous
-        .iter()
-        .chain(exogenous.iter())
-        .cloned()
-        .collect();
+    let x_orig: Vec<Vec<f64>> = endogenous.iter().chain(exogenous.iter()).cloned().collect();
     let mut influence = vec![vec![0.0_f64; p]; n];
     for i in 0..n {
         for a in 0..p {
@@ -298,7 +303,11 @@ pub struct SvyOlrFit {
 impl SvyOlrFit {
     /// Full coefficient vector (slopes + cutpoints), matching R's `coef(svyolr)`.
     pub fn all_coefs(&self) -> Vec<f64> {
-        self.coefficients.iter().chain(self.alpha.iter()).copied().collect()
+        self.coefficients
+            .iter()
+            .chain(self.alpha.iter())
+            .copied()
+            .collect()
     }
 
     pub fn se(&self) -> Vec<f64> {
@@ -327,11 +336,17 @@ pub fn svy_olr(
     let n = design.n_obs;
     let p = x.len();
     if y_ord.len() != n {
-        return Err(SurveyError::LengthMismatch { context: "y_ord".into(), a: y_ord.len(), b: n });
+        return Err(SurveyError::LengthMismatch {
+            context: "y_ord".into(),
+            a: y_ord.len(),
+            b: n,
+        });
     }
     let k = *y_ord.iter().max().unwrap_or(&0) + 1;
     if k < 2 {
-        return Err(SurveyError::InvalidInput("need at least 2 ordinal levels".into()));
+        return Err(SurveyError::InvalidInput(
+            "need at least 2 ordinal levels".into(),
+        ));
     }
     let n_thresh = k - 1;
     let n_param = p + n_thresh;
@@ -478,14 +493,18 @@ pub fn svy_olr(
         }
 
         // Newton step: delta = info^{-1} * score.
-        let info_m = Mat::from_fn(n_param, n_param, |a, b| info[a][b] + 1e-8 * (a == b) as u32 as f64);
+        let info_m = Mat::from_fn(n_param, n_param, |a, b| {
+            info[a][b] + 1e-8 * (a == b) as u32 as f64
+        });
         let score_m = Mat::from_fn(n_param, 1, |a, _| score[a]);
         let llt = Llt::new(info_m.as_ref(), faer::Side::Lower)
             .ok()
             .ok_or_else(|| SurveyError::InvalidInput("singular OLR information".into()))?;
         let delta = llt.solve(&score_m);
 
-        let max_delta = (0..n_param).map(|a| delta[(a, 0)].abs()).fold(0.0_f64, f64::max);
+        let max_delta = (0..n_param)
+            .map(|a| delta[(a, 0)].abs())
+            .fold(0.0_f64, f64::max);
         for a in 0..n_param {
             theta[a] += delta[(a, 0)];
         }
@@ -548,7 +567,9 @@ pub fn svy_olr(
             }
         }
     }
-    let info_m = Mat::from_fn(n_param, n_param, |a, b| info_final[a][b] + 1e-8 * (a == b) as u32 as f64);
+    let info_m = Mat::from_fn(n_param, n_param, |a, b| {
+        info_final[a][b] + 1e-8 * (a == b) as u32 as f64
+    });
     let llt = Llt::new(info_m.as_ref(), faer::Side::Lower)
         .ok()
         .ok_or_else(|| SurveyError::InvalidInput("singular final OLR info".into()))?;
@@ -608,11 +629,7 @@ impl SvyLoglinFit {
 /// # Arguments
 /// - `row`, `col`: categorical variables.
 /// - `design`: survey design.
-pub fn svy_loglin(
-    row: &[String],
-    col: &[String],
-    design: &SurveyDesign,
-) -> Result<SvyLoglinFit> {
+pub fn svy_loglin(row: &[String], col: &[String], design: &SurveyDesign) -> Result<SvyLoglinFit> {
     let n = design.n_obs;
     let w = design.weights();
     let total_w: f64 = w.iter().sum();
@@ -622,7 +639,9 @@ pub fn svy_loglin(
         let mut s = std::collections::HashSet::new();
         let mut v = Vec::new();
         for r in row {
-            if s.insert(r.clone()) { v.push(r.clone()); }
+            if s.insert(r.clone()) {
+                v.push(r.clone());
+            }
         }
         v
     };
@@ -630,7 +649,9 @@ pub fn svy_loglin(
         let mut s = std::collections::HashSet::new();
         let mut v = Vec::new();
         for c in col {
-            if s.insert(c.clone()) { v.push(c.clone()); }
+            if s.insert(c.clone()) {
+                v.push(c.clone());
+            }
         }
         v
     };
@@ -650,7 +671,12 @@ pub fn svy_loglin(
     let n_coef = 1 + (nr - 1) + (nc - 1);
     let mut coef = vec![0.0_f64; n_coef];
     // Intercept = mean(log(prop))
-    let mean_log = cell_prop.iter().filter(|&&p| p > 0.0).map(|p| p.ln()).sum::<f64>() / (nr * nc) as f64;
+    let mean_log = cell_prop
+        .iter()
+        .filter(|&&p| p > 0.0)
+        .map(|p| p.ln())
+        .sum::<f64>()
+        / (nr * nc) as f64;
     coef[0] = mean_log;
     // Row effects (first nr-1 levels).
     for r in 0..nr - 1 {
@@ -679,7 +705,9 @@ pub fn svy_loglin(
     let z: Vec<Vec<f64>> = (0..ncell)
         .map(|j| {
             let mean_j: f64 = cells[j].iter().zip(&w).map(|(&x, wi)| x * wi).sum::<f64>() / total_w;
-            (0..n).map(|i| w[i] * (cells[j][i] - mean_j) / total_w).collect()
+            (0..n)
+                .map(|i| w[i] * (cells[j][i] - mean_j) / total_w)
+                .collect()
         })
         .collect();
     let cell_var = svy_cprod_matrix(&z, design)?;
@@ -724,11 +752,18 @@ mod tests {
         let model_fn = |beta: &[f64], xd: &[Vec<f64>]| {
             xd[0].iter().map(|&xi| beta[0] + beta[1] * xi).collect()
         };
-        let jac_fn = |_beta: &[f64], xd: &[Vec<f64>]| {
-            xd[0].iter().map(|&xi| vec![1.0, xi]).collect()
-        };
+        let jac_fn =
+            |_beta: &[f64], xd: &[Vec<f64>]| xd[0].iter().map(|&xi| vec![1.0, xi]).collect();
         let fit = svy_nls(&y, &x_data, &d, &[0.0, 1.0], model_fn, jac_fn, 50, 1e-10).unwrap();
-        assert!((fit.coefficients[0] - 3.0).abs() < 1e-6, "intercept: {}", fit.coefficients[0]);
-        assert!((fit.coefficients[1] - 2.0).abs() < 1e-6, "slope: {}", fit.coefficients[1]);
+        assert!(
+            (fit.coefficients[0] - 3.0).abs() < 1e-6,
+            "intercept: {}",
+            fit.coefficients[0]
+        );
+        assert!(
+            (fit.coefficients[1] - 2.0).abs() < 1e-6,
+            "slope: {}",
+            fit.coefficients[1]
+        );
     }
 }

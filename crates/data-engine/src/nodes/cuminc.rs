@@ -37,8 +37,8 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
-use cmprsk::cuminc::{CumincInput, CumincResult};
 use cmprsk::CumincOptions;
+use cmprsk::cuminc::{CumincInput, CumincResult};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -337,7 +337,10 @@ pub(crate) fn build_batches(res: &CumincResult) -> Result<(RecordBatch, RecordBa
         Arc::new(tests_schema()),
         vec![
             Arc::new(StringArray::from(
-                res.tests.iter().map(|t| t.cause.clone()).collect::<Vec<_>>(),
+                res.tests
+                    .iter()
+                    .map(|t| t.cause.clone())
+                    .collect::<Vec<_>>(),
             )),
             Arc::new(Float64Array::from(
                 res.tests.iter().map(|t| t.stat).collect::<Vec<_>>(),

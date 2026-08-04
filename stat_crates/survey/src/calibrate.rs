@@ -202,10 +202,7 @@ pub fn trim_weights(
             break;
         }
         // Clamp.
-        let pw_new: Vec<f64> = pw
-            .iter()
-            .map(|&w| w.max(lower).min(upper))
-            .collect();
+        let pw_new: Vec<f64> = pw.iter().map(|&w| w.max(lower).min(upper)).collect();
         // Excess removed.
         let trimmings: Vec<f64> = pw.iter().zip(&pw_new).map(|(o, nw)| o - nw).collect();
         let total_trim: f64 = trimmings.iter().sum();
@@ -383,7 +380,10 @@ pub fn svy_standardize(
     let mut target: HashMap<(String, String), f64> = HashMap::new();
     for (over_level, free) in &free_margin {
         for (by_level, prop) in population_prop {
-            target.insert((by_level.clone(), over_level.clone()), (prop / prop_sum) * free);
+            target.insert(
+                (by_level.clone(), over_level.clone()),
+                (prop / prop_sum) * free,
+            );
         }
     }
 
@@ -505,10 +505,26 @@ mod tests {
         // Total excess = 3*(4.0-3.5) = 1.5. Redistributed among 5 untrimmed obs.
         // Each gets 1.5/5 = 0.3. New: stratum1 = 3.3, stratum2 = 3.5.
         let d = SurveyDesignBuilder::new()
-            .strata(vec!["1".into(), "1".into(), "1".into(), "1".into(), "1".into(),
-                         "2".into(), "2".into(), "2".into()])
-            .cluster(vec!["1.1".into(), "1.2".into(), "1.3".into(), "1.4".into(), "1.5".into(),
-                         "2.1".into(), "2.2".into(), "2.3".into()])
+            .strata(vec![
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "2".into(),
+                "2".into(),
+                "2".into(),
+            ])
+            .cluster(vec![
+                "1.1".into(),
+                "1.2".into(),
+                "1.3".into(),
+                "1.4".into(),
+                "1.5".into(),
+                "2.1".into(),
+                "2.2".into(),
+                "2.3".into(),
+            ])
             .weights(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])
             .build()
             .unwrap();

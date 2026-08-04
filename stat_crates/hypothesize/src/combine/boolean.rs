@@ -15,7 +15,10 @@
 use serde_json::json;
 
 use super::PvalSource;
-use crate::{Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, KEY_ORIGINAL_PVAL, Result, extras};
+use crate::{
+    Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS,
+    KEY_ORIGINAL_PVAL, Result, extras,
+};
 
 /// Validate p-values lie in `[0, 1]` (Boolean combinators accept 0).
 fn validate_loose(pvals: &[f64]) -> Result<()> {

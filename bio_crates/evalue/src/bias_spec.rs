@@ -128,7 +128,8 @@ pub fn selection(opts: &[&str]) -> Result<Bias> {
     // Check incompatible assumptions
     if types.contains(&"selected") && types.len() > 1 {
         return Err(EvalueError::Invalid(
-            "These assumptions are incompatible; choose \"general\" instead of \"selected\".".into(),
+            "These assumptions are incompatible; choose \"general\" instead of \"selected\"."
+                .into(),
         ));
     }
     if types.contains(&"increased risk") && types.contains(&"decreased risk") {
@@ -207,11 +208,7 @@ pub fn selection(opts: &[&str]) -> Result<Bias> {
 /// - `target`: `"outcome"` or `"exposure"`
 /// - `rare_outcome`: for exposure misclass, must be true
 /// - `rare_exposure`: for exposure misclass
-pub fn misclassification(
-    target: &str,
-    rare_outcome: bool,
-    rare_exposure: bool,
-) -> Result<Bias> {
+pub fn misclassification(target: &str, rare_outcome: bool, rare_exposure: bool) -> Result<Bias> {
     let mut mess = vec![];
 
     let kind = match target {
@@ -220,7 +217,7 @@ pub fn misclassification(
         _ => {
             return Err(EvalueError::Invalid(format!(
                 "Either \"outcome\" or \"exposure\" must be chosen. Got '{target}'"
-            )))
+            )));
         }
     };
 
@@ -275,53 +272,281 @@ fn arg_tab() -> Vec<ArgTabRow> {
         ($bias:expr, $order:expr, $sel:expr, $ro:expr, $re:expr, $ir:expr, $dr:expr, $su:expr,
          $latex:expr, $output:expr, $argument:expr) => {
             ArgTabRow {
-                bias: $bias.into(), order: $order, selected: $sel, rare_outcome: $ro,
-                rare_exposure: $re, increased_risk: $ir, decreased_risk: $dr, su: $su,
-                latex: $latex.into(), output: $output.into(), argument: $argument.into(),
+                bias: $bias.into(),
+                order: $order,
+                selected: $sel,
+                rare_outcome: $ro,
+                rare_exposure: $re,
+                increased_risk: $ir,
+                decreased_risk: $dr,
+                su: $su,
+                latex: $latex.into(),
+                output: $output.into(),
+                argument: $argument.into(),
             }
         };
     }
     vec![
-        r!("confounding", 1, false, false, false, false, false, false,
-           r"$\text{RR}_{AU_c}$", "RR_AUc", "RRAUc"),
-        r!("confounding", 1, false, false, false, false, false, false,
-           r"$\text{RR}_{U_cY}$", "RR_UcY", "RRUcY"),
-        r!("selection", 2, false, false, false, true, false, false,
-           r"$\text{RR}_{U_sY \mid A = 1}$", "RR_UsY|A=1", "RRUsYA1"),
-        r!("selection", 23, false, false, false, true, false, true,
-           r"$\text{RR}_{SU_s \mid A = 1}$", "RR_SUs|A=1", "RRSUsA1"),
-        r!("selection", 2, false, false, false, false, true, false,
-           r"$\text{RR}_{U_sY \mid A = 0}$", "RR_UsY|A=0", "RRUsYA0"),
-        r!("selection", 23, false, false, false, false, true, true,
-           r"$\text{RR}_{SU_s \mid A = 0}$", "RR_SUs|A=0", "RRSUsA0"),
-        r!("selection", 3, false, false, false, true, false, false,
-           r"$\text{RR}_{U_sY^* \mid A = 1}$", "RR_UsY*|A=1", "RRUsYA1"),
-        r!("selection", 3, false, false, false, false, true, false,
-           r"$\text{RR}_{U_sY^* \mid A = 0}$", "RR_UsY*|A=0", "RRUsYA0"),
-        r!("selection", 3, false, false, false, true, false, false,
-           r"$\text{RR}_{U_sY \mid A^* = 1}$", "RR_UsY|A*=1", "RRUsYA1"),
-        r!("selection", 3, false, false, false, true, false, false,
-           r"$\text{RR}_{SU_s \mid A^* = 1}$", "RR_SUs|A*=1", "RRSUsA1"),
-        r!("selection", 3, false, false, false, false, true, false,
-           r"$\text{RR}_{U_sY \mid A^* = 0}$", "RR_UsY|A*=0", "RRUsYA0"),
-        r!("selection", 3, false, false, false, false, true, false,
-           r"$\text{RR}_{SU_s \mid A^* = 0}$", "RR_SUs|A*=1", "RRSUsA1"),
-        r!("confounding and selection", 1, true, false, false, false, false, false,
-           r"$\text{RR}_{AU_{sc}\mid S = 1}$", "RR_AUsc|S", "RRAUscS"),
-        r!("confounding and selection", 1, true, false, false, false, false, false,
-           r"$\text{RR}_{U_{sc}Y\mid S = 1}$", "RR_UscY|S", "RRUscYS"),
-        r!("outcome misclassification", 2, false, false, false, false, false, false,
-           r"$\text{RR}_{AY^* \mid y}$", "RR_AY*|y", "RRAYy"),
-        r!("exposure misclassification", 2, false, false, false, false, false, false,
-           r"$\text{OR}_{YA^* \mid a}$", "OR_YA*|a", "ORYAa"),
-        r!("exposure misclassification", 2, false, true, true, false, false, false,
-           r"$\text{RR}_{YA^* \mid a}$", "RR_YA*|a", "RRYAa"),
-        r!("outcome misclassification", 3, true, false, false, false, false, false,
-           r"$\text{RR}_{AY^* \mid y, S = 1}$", "RR_AY*|y,S", "RRAYyS"),
-        r!("exposure misclassification", 3, true, true, false, false, false, false,
-           r"$\text{OR}_{YA^* \mid a, S = 1}$", "OR_YA*|a,S", "ORYAaS"),
-        r!("exposure misclassification", 3, true, true, true, false, false, false,
-           r"$\text{RR}_{YA^* \mid a, S = 1}$", "RR_YA*|a,S", "RRYAaS"),
+        r!(
+            "confounding",
+            1,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{AU_c}$",
+            "RR_AUc",
+            "RRAUc"
+        ),
+        r!(
+            "confounding",
+            1,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{U_cY}$",
+            "RR_UcY",
+            "RRUcY"
+        ),
+        r!(
+            "selection",
+            2,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            r"$\text{RR}_{U_sY \mid A = 1}$",
+            "RR_UsY|A=1",
+            "RRUsYA1"
+        ),
+        r!(
+            "selection",
+            23,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+            r"$\text{RR}_{SU_s \mid A = 1}$",
+            "RR_SUs|A=1",
+            "RRSUsA1"
+        ),
+        r!(
+            "selection",
+            2,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            r"$\text{RR}_{U_sY \mid A = 0}$",
+            "RR_UsY|A=0",
+            "RRUsYA0"
+        ),
+        r!(
+            "selection",
+            23,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            r"$\text{RR}_{SU_s \mid A = 0}$",
+            "RR_SUs|A=0",
+            "RRSUsA0"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            r"$\text{RR}_{U_sY^* \mid A = 1}$",
+            "RR_UsY*|A=1",
+            "RRUsYA1"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            r"$\text{RR}_{U_sY^* \mid A = 0}$",
+            "RR_UsY*|A=0",
+            "RRUsYA0"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            r"$\text{RR}_{U_sY \mid A^* = 1}$",
+            "RR_UsY|A*=1",
+            "RRUsYA1"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            r"$\text{RR}_{SU_s \mid A^* = 1}$",
+            "RR_SUs|A*=1",
+            "RRSUsA1"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            r"$\text{RR}_{U_sY \mid A^* = 0}$",
+            "RR_UsY|A*=0",
+            "RRUsYA0"
+        ),
+        r!(
+            "selection",
+            3,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            r"$\text{RR}_{SU_s \mid A^* = 0}$",
+            "RR_SUs|A*=1",
+            "RRSUsA1"
+        ),
+        r!(
+            "confounding and selection",
+            1,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{AU_{sc}\mid S = 1}$",
+            "RR_AUsc|S",
+            "RRAUscS"
+        ),
+        r!(
+            "confounding and selection",
+            1,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{U_{sc}Y\mid S = 1}$",
+            "RR_UscY|S",
+            "RRUscYS"
+        ),
+        r!(
+            "outcome misclassification",
+            2,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{AY^* \mid y}$",
+            "RR_AY*|y",
+            "RRAYy"
+        ),
+        r!(
+            "exposure misclassification",
+            2,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{OR}_{YA^* \mid a}$",
+            "OR_YA*|a",
+            "ORYAa"
+        ),
+        r!(
+            "exposure misclassification",
+            2,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{YA^* \mid a}$",
+            "RR_YA*|a",
+            "RRYAa"
+        ),
+        r!(
+            "outcome misclassification",
+            3,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{AY^* \mid y, S = 1}$",
+            "RR_AY*|y,S",
+            "RRAYyS"
+        ),
+        r!(
+            "exposure misclassification",
+            3,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            r"$\text{OR}_{YA^* \mid a, S = 1}$",
+            "OR_YA*|a,S",
+            "ORYAaS"
+        ),
+        r!(
+            "exposure misclassification",
+            3,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            r"$\text{RR}_{YA^* \mid a, S = 1}$",
+            "RR_YA*|a,S",
+            "RRYAaS"
+        ),
     ]
 }
 
@@ -356,18 +581,24 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
 
     let yes_confounding = biases.iter().any(|b| b.kind == BiasKind::Confounding);
     let yes_selection = biases.iter().any(|b| b.kind == BiasKind::Selection);
-    let yes_misclass = biases
-        .iter()
-        .any(|b| matches!(b.kind, BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification));
+    let yes_misclass = biases.iter().any(|b| {
+        matches!(
+            b.kind,
+            BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification
+        )
+    });
 
     // Get the selection bias (if any)
     let sel_bias = biases.iter().find(|b| b.kind == BiasKind::Selection);
     let misclass_bias = biases.iter().find(|b| {
-        matches!(b.kind, BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification)
+        matches!(
+            b.kind,
+            BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification
+        )
     });
 
-    let yes_both = yes_selection && yes_confounding
-        && sel_bias.map(|b| b.selected).unwrap_or(false);
+    let yes_both =
+        yes_selection && yes_confounding && sel_bias.map(|b| b.selected).unwrap_or(false);
 
     // Determine ordering info for selection + misclassification
     let mut first_b = String::new();
@@ -376,7 +607,10 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
     if yes_selection && yes_misclass {
         let sel_idx = biases.iter().position(|b| b.kind == BiasKind::Selection);
         let mis_idx = biases.iter().position(|b| {
-            matches!(b.kind, BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification)
+            matches!(
+                b.kind,
+                BiasKind::OutcomeMisclassification | BiasKind::ExposureMisclassification
+            )
         });
         if let (Some(si), Some(mi)) = (sel_idx, mis_idx) {
             if !sel_bias.map(|b| b.selected).unwrap_or(false) {
@@ -443,7 +677,10 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
 
     // Remove order=3 rows for first_b, order=2 rows for next_b
     if !first_b.is_empty() && !next_b.is_empty() {
-        sub_tab.retain(|r| !((r.bias.as_str() == first_b.as_str() && r.order == 3) || (r.bias.as_str() == next_b.as_str() && r.order == 2)));
+        sub_tab.retain(|r| {
+            !((r.bias.as_str() == first_b.as_str() && r.order == 3)
+                || (r.bias.as_str() == next_b.as_str() && r.order == 2))
+        });
     }
 
     // Process selection rows
@@ -451,11 +688,16 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
     if yes_selection || yes_both {
         let sel = if yes_both {
             // For "confounding and selection" combined
-            sub_tab.iter().filter(|r| r.bias == "confounding and selection").cloned().collect::<Vec<_>>()
+            sub_tab
+                .iter()
+                .filter(|r| r.bias == "confounding and selection")
+                .cloned()
+                .collect::<Vec<_>>()
         } else {
             let sb = sel_bias.unwrap();
             // Filter by matching attributes (R merge on key columns)
-            let mut filtered: Vec<ArgTabRow> = sub_tab.iter()
+            let mut filtered: Vec<ArgTabRow> = sub_tab
+                .iter()
                 .filter(|r| r.bias == "selection")
                 .filter(|r| r.selected == sb.selected)
                 .filter(|r| {
@@ -546,7 +788,10 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
                     .collect();
             } else if first_b == "selection" || yes_selection {
                 // Keep only S rows
-                filtered = filtered.into_iter().filter(|r| r.output.contains('S')).collect();
+                filtered = filtered
+                    .into_iter()
+                    .filter(|r| r.output.contains('S'))
+                    .collect();
             }
         }
 
@@ -555,14 +800,22 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
 
     // Process confounding rows
     let confounding_rows: Vec<ArgTabRow> = if yes_confounding {
-        sub_tab.iter().filter(|r| r.bias == "confounding").cloned().collect()
+        sub_tab
+            .iter()
+            .filter(|r| r.bias == "confounding")
+            .cloned()
+            .collect()
     } else {
         vec![]
     };
 
     // Combined selection + confounding rows
     let combined_rows: Vec<ArgTabRow> = if yes_both {
-        sub_tab.iter().filter(|r| r.bias == "confounding and selection").cloned().collect()
+        sub_tab
+            .iter()
+            .filter(|r| r.bias == "confounding and selection")
+            .cloned()
+            .collect()
     } else {
         vec![]
     };
@@ -745,7 +998,8 @@ mod tests {
 
     #[test]
     fn test_mb05_params() {
-        let mb = multi_bias(&[selection(&["general", "decreased risk", "S = U"]).unwrap()]).unwrap();
+        let mb =
+            multi_bias(&[selection(&["general", "decreased risk", "S = U"]).unwrap()]).unwrap();
         assert_eq!(mb.parameters.len(), 1);
         assert_eq!(mb.n, 1);
         assert_eq!(mb.d, 0);
@@ -769,10 +1023,7 @@ mod tests {
 
     #[test]
     fn test_mb10_params() {
-        let mb = multi_bias(&[
-            confounding(),
-            selection(&["general"]).unwrap(),
-        ]).unwrap();
+        let mb = multi_bias(&[confounding(), selection(&["general"]).unwrap()]).unwrap();
         assert_eq!(mb.parameters.len(), 6);
         assert_eq!(mb.n, 6);
         assert_eq!(mb.d, 3);
@@ -784,7 +1035,8 @@ mod tests {
             confounding(),
             selection(&["general"]).unwrap(),
             misclassification("outcome", false, false).unwrap(),
-        ]).unwrap();
+        ])
+        .unwrap();
         assert_eq!(mb.parameters.len(), 7);
         assert_eq!(mb.n, 7);
         assert_eq!(mb.d, 3);

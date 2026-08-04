@@ -97,12 +97,13 @@ fn confounded_meta_parametric(
     cfg: &MetaConfig,
     par: Option<&ParametricInput>,
 ) -> Result<Vec<ConfoundedMetaRow>> {
-    let par = par.ok_or_else(|| {
-        EvalueError::Invalid("Parametric method requires ParametricInput".into())
-    })?;
+    let par = par
+        .ok_or_else(|| EvalueError::Invalid("Parametric method requires ParametricInput".into()))?;
 
     if par.t2 < 0.0 {
-        return Err(EvalueError::Invalid("Heterogeneity cannot be negative".into()));
+        return Err(EvalueError::Invalid(
+            "Heterogeneity cannot be negative".into(),
+        ));
     }
 
     let z = Normal::new(0.0, 1.0).unwrap();
@@ -203,12 +204,8 @@ fn confounded_meta_parametric(
         if let (Some(vyr), Some(vt2), Some(r_val)) = (par.vyr, par.vt2, cfg.r) {
             if tmin != 1.0 && tmin.is_finite() {
                 let term = match tail {
-                    Tail::Above => {
-                        vt2 * z.inverse_cdf(1.0 - r_val).powi(2) / (4.0 * denom)
-                    }
-                    Tail::Below => {
-                        vt2 * z.inverse_cdf(r_val).powi(2) / (4.0 * denom)
-                    }
+                    Tail::Above => vt2 * z.inverse_cdf(1.0 - r_val).powi(2) / (4.0 * denom),
+                    Tail::Below => vt2 * z.inverse_cdf(r_val).powi(2) / (4.0 * denom),
                 };
                 let se_t = match tail {
                     Tail::Above => {
@@ -225,7 +222,8 @@ fn confounded_meta_parametric(
                 let lo_t = (tmin + z.inverse_cdf(tail_prob) * se_t).max(1.0);
                 let hi_t = tmin - z.inverse_cdf(tail_prob) * se_t;
 
-                let se_g = se_t * (1.0 + (2.0 * tmin - 1.0) / (2.0 * (tmin * tmin - tmin).max(1e-15).sqrt()));
+                let se_g = se_t
+                    * (1.0 + (2.0 * tmin - 1.0) / (2.0 * (tmin * tmin - tmin).max(1e-15).sqrt()));
                 let lo_g = (gmin + z.inverse_cdf(tail_prob) * se_g).max(1.0);
                 let hi_g = gmin - z.inverse_cdf(tail_prob) * se_g;
 
@@ -241,9 +239,21 @@ fn confounded_meta_parametric(
         ConfoundedMetaRow {
             value: "Prop",
             est: phat,
-            se: if se_phat.is_nan() { None } else { Some(se_phat) },
-            ci_lo: if lo_phat.is_nan() { None } else { Some(lo_phat) },
-            ci_hi: if hi_phat.is_nan() { None } else { Some(hi_phat) },
+            se: if se_phat.is_nan() {
+                None
+            } else {
+                Some(se_phat)
+            },
+            ci_lo: if lo_phat.is_nan() {
+                None
+            } else {
+                Some(lo_phat)
+            },
+            ci_hi: if hi_phat.is_nan() {
+                None
+            } else {
+                Some(hi_phat)
+            },
         },
         ConfoundedMetaRow {
             value: "Tmin",
@@ -266,9 +276,8 @@ fn confounded_meta_calibrated(
     cfg: &MetaConfig,
     cal: Option<&CalibratedData>,
 ) -> Result<Vec<ConfoundedMetaRow>> {
-    let cal = cal.ok_or_else(|| {
-        EvalueError::Invalid("Calibrated method requires CalibratedData".into())
-    })?;
+    let cal = cal
+        .ok_or_else(|| EvalueError::Invalid("Calibrated method requires CalibratedData".into()))?;
 
     let sei: Vec<f64> = cal.vi.iter().map(|v| v.sqrt()).collect();
     let calib = calib_ests(&cal.yi, &sei);
@@ -297,7 +306,12 @@ fn confounded_meta_calibrated(
     };
 
     // Convert to study-level tuples for bootstrap
-    let studies: Vec<(f64, f64)> = cal.yi.iter().zip(cal.vi.iter()).map(|(&y, &v)| (y, v)).collect();
+    let studies: Vec<(f64, f64)> = cal
+        .yi
+        .iter()
+        .zip(cal.vi.iter())
+        .map(|(&y, &v)| (y, v))
+        .collect();
 
     // CI via bootstrap
     let (se_phat, lo_phat, hi_phat) = if cfg.give_ci {
@@ -320,43 +334,48 @@ fn confounded_meta_calibrated(
     };
 
     // CI for Tmin/Gmin via bootstrap
-    let (se_t, lo_t, hi_t, se_g, lo_g, hi_g) = if cfg.give_ci && cfg.r.is_some() && tmin.is_finite() && tmin != 1.0 {
-        let r_val = cfg.r.unwrap();
-        let result = bca_ci(
-            &studies,
-            |data| {
-                let yi: Vec<f64> = data.iter().map(|(y, _)| *y).collect();
-                let vi: Vec<f64> = data.iter().map(|(_, v)| *v).collect();
-                let s: Vec<f64> = vi.iter().map(|v| v.sqrt()).collect();
-                let cb = calib_ests(&yi, &s);
-                tmin_causal(&cb, cfg.q, r_val, tail)
-            },
-            cfg.r_boot,
-            cfg.ci_level,
-            cfg.seed + 1,
-        );
-        let lo_t = result.lo.map(|v| v.max(1.0));
-        let hi_t = result.hi;
-        let se_t = result.se;
-        let boot_g: Vec<f64> = result.boot_vals.iter().map(|&v| g(v)).collect();
-        let se_g = {
-            let mean: f64 = boot_g.iter().sum::<f64>() / boot_g.len().max(1) as f64;
-            let var: f64 = boot_g.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                / boot_g.len().max(1) as f64;
-            var.sqrt()
+    let (se_t, lo_t, hi_t, se_g, lo_g, hi_g) =
+        if cfg.give_ci && cfg.r.is_some() && tmin.is_finite() && tmin != 1.0 {
+            let r_val = cfg.r.unwrap();
+            let result = bca_ci(
+                &studies,
+                |data| {
+                    let yi: Vec<f64> = data.iter().map(|(y, _)| *y).collect();
+                    let vi: Vec<f64> = data.iter().map(|(_, v)| *v).collect();
+                    let s: Vec<f64> = vi.iter().map(|v| v.sqrt()).collect();
+                    let cb = calib_ests(&yi, &s);
+                    tmin_causal(&cb, cfg.q, r_val, tail)
+                },
+                cfg.r_boot,
+                cfg.ci_level,
+                cfg.seed + 1,
+            );
+            let lo_t = result.lo.map(|v| v.max(1.0));
+            let hi_t = result.hi;
+            let se_t = result.se;
+            let boot_g: Vec<f64> = result.boot_vals.iter().map(|&v| g(v)).collect();
+            let se_g = {
+                let mean: f64 = boot_g.iter().sum::<f64>() / boot_g.len().max(1) as f64;
+                let var: f64 = boot_g.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                    / boot_g.len().max(1) as f64;
+                var.sqrt()
+            };
+            let lo_g = lo_t.map(g);
+            let hi_g = hi_t.map(g);
+            (se_t, lo_t, hi_t, se_g, lo_g, hi_g)
+        } else {
+            (f64::NAN, None, None, f64::NAN, None, None)
         };
-        let lo_g = lo_t.map(g);
-        let hi_g = hi_t.map(g);
-        (se_t, lo_t, hi_t, se_g, lo_g, hi_g)
-    } else {
-        (f64::NAN, None, None, f64::NAN, None, None)
-    };
 
     Ok(vec![
         ConfoundedMetaRow {
             value: "Prop",
             est: phat,
-            se: if se_phat.is_nan() { None } else { Some(se_phat) },
+            se: if se_phat.is_nan() {
+                None
+            } else {
+                Some(se_phat)
+            },
             ci_lo: lo_phat,
             ci_hi: hi_phat,
         },
@@ -380,13 +399,7 @@ fn confounded_meta_calibrated(
 /// Proportion of studies with causal effects above/below q.
 ///
 /// Port of `Phat_causal()` in `meta-analysis.R:1067`.
-fn phat_causal(
-    calib: &[f64],
-    b: f64,
-    tail: Tail,
-    mu_b_toward_null: bool,
-    q: f64,
-) -> f64 {
+fn phat_causal(calib: &[f64], b: f64, tail: Tail, mu_b_toward_null: bool, q: f64) -> f64 {
     let median_calib = median(calib);
 
     let calib_t: Vec<f64> = calib
@@ -499,9 +512,7 @@ mod tests {
     #[test]
     fn test_calibrated_basic() {
         // Simple toy meta-analysis
-        let yi: Vec<f64> = (0..20)
-            .map(|i| (-0.5 + i as f64 * 0.1).ln())
-            .collect();
+        let yi: Vec<f64> = (0..20).map(|i| (-0.5 + i as f64 * 0.1).ln()).collect();
         let vi: Vec<f64> = vec![0.05; 20];
 
         let cfg = MetaConfig {

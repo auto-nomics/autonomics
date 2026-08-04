@@ -189,7 +189,10 @@ fn extract_opt_string(
 ) -> Result<Vec<Option<String>>, MrpressoNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(MrpressoNodeError::WrongColumnType {
             name: name.into(),
             dtype: dtype.to_string(),
@@ -333,7 +336,11 @@ impl NodeFactory for MrpressoNodeFactory {
     ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
         use crate::codegen::helpers::*;
         let cfg = parse_spec::<MrpressoConfig>(spec, "mrpresso")?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
         let exposures = format!(
@@ -356,9 +363,7 @@ impl NodeFactory for MrpressoNodeFactory {
         let code = vec![
             format!("# MR-PRESSO: pleiotropy global / outlier / distortion tests"),
             format!("library(MRPRESSO)"),
-            format!(
-                "{out} <- mr_presso("
-            ),
+            format!("{out} <- mr_presso("),
             format!("  BetaOutcome = \"{}\",", cfg.beta_outcome),
             format!("  BetaExposure = {exposures},"),
             format!("  SdOutcome = \"{}\",", cfg.sd_outcome),
@@ -382,11 +387,7 @@ impl NodeFactory for MrpressoNodeFactory {
 }
 
 fn r_bool(b: bool) -> &'static str {
-    if b {
-        "TRUE"
-    } else {
-        "FALSE"
-    }
+    if b { "TRUE" } else { "FALSE" }
 }
 
 #[async_trait]
@@ -414,15 +415,16 @@ impl DagNode for MrpressoNode {
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(MrpressoNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: MRPRESSO_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: MRPRESSO_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
             return Err(MrpressoNodeError::EmptyInput.into());
         }
@@ -487,7 +489,10 @@ impl DagNode for MrpressoNode {
         let out = mrpresso::mr_presso(&input_crate).map_err(MrpressoNodeError::Mrpresso)?;
 
         let batch = build_result_batch(&out)?;
-        let df = node_ctx.session().read_batch(batch).map_err(MrpressoNodeError::ReadBatch)?;
+        let df = node_ctx
+            .session()
+            .read_batch(batch)
+            .map_err(MrpressoNodeError::ReadBatch)?;
 
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
@@ -496,9 +501,7 @@ impl DagNode for MrpressoNode {
 }
 
 /// Build the long-format output `RecordBatch` from the MR-PRESSO result.
-fn build_result_batch(
-    out: &mrpresso::MrpressoOutput,
-) -> Result<RecordBatch, MrpressoNodeError> {
+fn build_result_batch(out: &mrpresso::MrpressoOutput) -> Result<RecordBatch, MrpressoNodeError> {
     let mut section: Vec<&str> = Vec::new();
     let mut exposure: Vec<Option<String>> = Vec::new();
     let mut analysis: Vec<Option<String>> = Vec::new();
@@ -606,11 +609,7 @@ fn build_result_batch(
 
 /// Convert an f64 to `Option<f64>`, mapping NaN → None (arrow null).
 fn finite(x: f64) -> Option<f64> {
-    if x.is_nan() {
-        None
-    } else {
-        Some(x)
-    }
+    if x.is_nan() { None } else { Some(x) }
 }
 
 // =====================================================================
@@ -633,21 +632,11 @@ mod tests {
 
     /// Build a small MR-PRESSO input batch: 8 instruments, one exposure.
     fn make_input_batch() -> RecordBatch {
-        let snp = StringArray::from(vec![
-            "rs1", "rs2", "rs3", "rs4", "rs5", "rs6", "rs7", "rs8",
-        ]);
-        let beta_out = Float64Array::from(vec![
-            0.10, 0.12, 0.09, 0.15, 0.20, 0.14, 0.25, 0.30,
-        ]);
-        let se_out = Float64Array::from(vec![
-            0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,
-        ]);
-        let beta_exp = Float64Array::from(vec![
-            0.20, 0.22, 0.19, 0.30, 0.40, 0.28, 0.50, 0.60,
-        ]);
-        let se_exp = Float64Array::from(vec![
-            0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03,
-        ]);
+        let snp = StringArray::from(vec!["rs1", "rs2", "rs3", "rs4", "rs5", "rs6", "rs7", "rs8"]);
+        let beta_out = Float64Array::from(vec![0.10, 0.12, 0.09, 0.15, 0.20, 0.14, 0.25, 0.30]);
+        let se_out = Float64Array::from(vec![0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]);
+        let beta_exp = Float64Array::from(vec![0.20, 0.22, 0.19, 0.30, 0.40, 0.28, 0.50, 0.60]);
+        let se_exp = Float64Array::from(vec![0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]);
         let schema = Arc::new(Schema::new(vec![
             Field::new("snp", DataType::Utf8, false),
             Field::new("beta_outcome", DataType::Float64, false),
@@ -684,18 +673,28 @@ mod tests {
         });
 
         let batch = make_input_batch();
-        let df = datafusion::prelude::SessionContext::new().read_batch(batch).unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
         let input = NodeInput { port: 0, data: df };
 
         let res = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
         let outputs = res.get(&0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         assert!(batch.num_rows() >= 1);
         // Column 0 is the section column.
-        let section = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let section = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         let mut has_global = false;
         let mut has_main = false;
         for i in 0..section.len() {

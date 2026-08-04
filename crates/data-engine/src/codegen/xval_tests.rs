@@ -962,8 +962,8 @@ fn mrpresso_codegen_xval() {
 /// Generate the synthetic data + reference CSVs for the cmprsk codegen tests.
 fn cmprsk_xval_data(test_name: &str) {
     // The generator lives at the repo root (CARGO_MANIFEST_DIR = crates/data-engine).
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/cross_validate.R");
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cross_validate.R");
     let _ = std::process::Command::new("Rscript")
         .arg(script)
         .arg(test_name)
@@ -1001,7 +1001,9 @@ fn max_csv_diff(gen_path: &str, ref_path: &str) -> f64 {
 
     let mut worst = 0.0_f64;
     for (name, gen_vals) in &gen_by {
-        let Some(rf_vals) = rf_by.get(name) else { continue };
+        let Some(rf_vals) = rf_by.get(name) else {
+            continue;
+        };
         if gen_vals.len() != rf_vals.len() {
             // fall back to comparing min length
         }
@@ -1027,7 +1029,9 @@ fn fine_gray_node_vs_r() {
     cmprsk_xval_data("fine_gray");
     let data_csv = format!("{XVAL_DIR}/fine_gray_data.csv");
     if !std::path::Path::new(&data_csv).exists() {
-        eprintln!("reference data missing; run: Rscript tests/cross_validate.R fine_gray {XVAL_DIR}");
+        eprintln!(
+            "reference data missing; run: Rscript tests/cross_validate.R fine_gray {XVAL_DIR}"
+        );
         return;
     }
 
@@ -1087,8 +1091,14 @@ fn fine_gray_node_vs_r() {
     let (node_diff0, node_diff1) = run_fine_gray_node(&data_csv, &manifest, "fine_gray");
     eprintln!("fine_gray node port-0 max rel diff: {node_diff0:.3e}");
     eprintln!("fine_gray node port-1 max rel diff: {node_diff1:.3e}");
-    assert!(node_diff0 < 1e-6, "Rust node port 0 diverged: {node_diff0:.3e}");
-    assert!(node_diff1 < 1e-9, "Rust node port 1 diverged: {node_diff1:.3e}");
+    assert!(
+        node_diff0 < 1e-6,
+        "Rust node port 0 diverged: {node_diff0:.3e}"
+    );
+    assert!(
+        node_diff1 < 1e-9,
+        "Rust node port 1 diverged: {node_diff1:.3e}"
+    );
 }
 
 /// Layer 2 + 3 for the `fine_gray` node with a time-interacted covariate.
@@ -1130,7 +1140,10 @@ fn fine_gray_tf_node_vs_r() {
     };
 
     let script = compile_and_write(manifest.clone(), "fine_gray_tf");
-    assert!(script.source.contains("tf = function(uft) cbind(uft^2)"), "tf closure");
+    assert!(
+        script.source.contains("tf = function(uft) cbind(uft^2)"),
+        "tf closure"
+    );
     assert!(script.source.contains("cov2 = "), "cov2");
     run_generated_script("fine_gray_tf");
 
@@ -1139,11 +1152,17 @@ fn fine_gray_tf_node_vs_r() {
         &format!("{XVAL_DIR}/fine_gray_tf_reference.csv"),
     );
     eprintln!("fine_gray_tf codegen port-0 max rel diff: {diff0:.3e}");
-    assert!(diff0 < 1e-6, "generated R (tf) port 0 diverged: {diff0:.3e}");
+    assert!(
+        diff0 < 1e-6,
+        "generated R (tf) port 0 diverged: {diff0:.3e}"
+    );
 
     let (node_diff0, _) = run_fine_gray_node(&data_csv, &manifest, "fine_gray_tf");
     eprintln!("fine_gray_tf node port-0 max rel diff: {node_diff0:.3e}");
-    assert!(node_diff0 < 1e-6, "Rust node (tf) port 0 diverged: {node_diff0:.3e}");
+    assert!(
+        node_diff0 < 1e-6,
+        "Rust node (tf) port 0 diverged: {node_diff0:.3e}"
+    );
 }
 
 /// Layer 2 + 3 for the `cuminc` node.
@@ -1183,7 +1202,10 @@ fn cuminc_node_vs_r() {
     };
 
     let script = compile_and_write(manifest.clone(), "cuminc");
-    assert!(script.source.contains("cmprsk::cuminc("), "must call cuminc()");
+    assert!(
+        script.source.contains("cmprsk::cuminc("),
+        "must call cuminc()"
+    );
     assert!(script.source.contains("group = "), "group");
     run_generated_script("cuminc");
 
@@ -1193,7 +1215,10 @@ fn cuminc_node_vs_r() {
         &format!("{XVAL_DIR}/cuminc_reference_0.csv"),
     );
     eprintln!("cuminc codegen port-0 (curves) max rel diff: {diff0:.3e}");
-    assert!(diff0 < 1e-6, "generated R cuminc curves diverged: {diff0:.3e}");
+    assert!(
+        diff0 < 1e-6,
+        "generated R cuminc curves diverged: {diff0:.3e}"
+    );
 
     // port 1 = Gray's tests
     let diff1 = max_csv_diff(
@@ -1201,14 +1226,23 @@ fn cuminc_node_vs_r() {
         &format!("{XVAL_DIR}/cuminc_reference_1.csv"),
     );
     eprintln!("cuminc codegen port-1 (tests) max rel diff: {diff1:.3e}");
-    assert!(diff1 < 1e-6, "generated R cuminc tests diverged: {diff1:.3e}");
+    assert!(
+        diff1 < 1e-6,
+        "generated R cuminc tests diverged: {diff1:.3e}"
+    );
 
     // ── Layer 3: run the Rust node ──
     let (node_diff0, node_diff1) = run_cuminc_node(&data_csv, &manifest);
     eprintln!("cuminc node port-0 max rel diff: {node_diff0:.3e}");
     eprintln!("cuminc node port-1 max rel diff: {node_diff1:.3e}");
-    assert!(node_diff0 < 1e-6, "Rust node cuminc curves diverged: {node_diff0:.3e}");
-    assert!(node_diff1 < 1e-6, "Rust node cuminc tests diverged: {node_diff1:.3e}");
+    assert!(
+        node_diff0 < 1e-6,
+        "Rust node cuminc curves diverged: {node_diff0:.3e}"
+    );
+    assert!(
+        node_diff1 < 1e-6,
+        "Rust node cuminc tests diverged: {node_diff1:.3e}"
+    );
 }
 
 /// Run a generated R script in the xval dir and wait for it to finish.
@@ -1261,7 +1295,11 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
 
         let input = crate::nodes::meta::NodeInput { port: 0, data: df };
         let outputs = node
-            .execute(&node_ctx, &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx,
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("fine_gray execute");
 
@@ -1315,7 +1353,11 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
 
         let input = crate::nodes::meta::NodeInput { port: 0, data: df };
         let outputs = node
-            .execute(&node_ctx, &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx,
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .expect("cuminc execute");
 

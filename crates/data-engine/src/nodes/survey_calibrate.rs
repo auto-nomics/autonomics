@@ -18,8 +18,7 @@ use async_trait::async_trait;
 
 use super::meta::{DagNode, NodeInput, NodePorts};
 use super::survey_common::{
-    SurveyDesignSpec, build_survey_design, formula_rhs, gen_design_r,
-    one_in_one_out, r_true_false,
+    SurveyDesignSpec, build_survey_design, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
 use crate::codegen::helpers::{input_0, parse_spec};
 use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
@@ -111,23 +110,28 @@ impl DagNode for PostStratifyNode {
                     msg: e.0,
                 })?;
 
-        let new_design =
-            survey::post_stratify(&design, &strata_vec, &self.spec.population, self.spec.partial)
-                .map_err(|e| DagError::NodeError {
-                    node_type: "post_stratify".into(),
-                    msg: e.to_string(),
-                })?;
+        let new_design = survey::post_stratify(
+            &design,
+            &strata_vec,
+            &self.spec.population,
+            self.spec.partial,
+        )
+        .map_err(|e| DagError::NodeError {
+            node_type: "post_stratify".into(),
+            msg: e.to_string(),
+        })?;
 
         let new_weights = new_design.weights();
 
         // Build output batch: original data + new weight column.
         // Concatenate input batches via arrow::compute.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches)
-            .map_err(|e| DagError::NodeError {
+        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+            DagError::NodeError {
                 node_type: "post_stratify".into(),
                 msg: format!("concat failed: {e}"),
-            })?;
+            }
+        })?;
 
         let new_schema = Arc::new(Schema::new(
             combined
@@ -147,18 +151,19 @@ impl DagNode for PostStratifyNode {
             combined.columns().iter().cloned().collect();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
-        let output_batch = RecordBatch::try_new(new_schema, new_columns).map_err(|e| {
-            DagError::NodeError {
+        let output_batch =
+            RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
                 node_type: "post_stratify".into(),
                 msg: format!("failed to build output: {e}"),
-            }
-        })?;
+            })?;
 
         let ctx = node_ctx.session();
-        let df_out = ctx.read_batch(output_batch).map_err(|e| DagError::NodeError {
-            node_type: "post_stratify".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df_out = ctx
+            .read_batch(output_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "post_stratify".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
         Ok(res)
@@ -220,11 +225,7 @@ impl NodeFactory for PostStratifyFactory {
             cnts = counts.join(", ")
         ));
 
-        let partial_arg = if s.partial {
-            ", partial = TRUE"
-        } else {
-            ""
-        };
+        let partial_arg = if s.partial { ", partial = TRUE" } else { "" };
         let des_ps = ctx.fresh_var("des_ps");
         code.push(format!(
             "{des_ps} <- postStratify({des}, ~{strat_rhs}, {pop_var}{pa})",
@@ -338,13 +339,11 @@ impl DagNode for RakeNode {
         // Build the margins: (column values, population map) per margin.
         let mut margins: Vec<(Vec<String>, std::collections::HashMap<String, f64>)> = Vec::new();
         for m in &self.spec.margins {
-            let col =
-                super::survey_common::extract_string_column_pub(&batches, &m.variable).map_err(
-                    |e| DagError::NodeError {
-                        node_type: "rake".into(),
-                        msg: e.0,
-                    },
-                )?;
+            let col = super::survey_common::extract_string_column_pub(&batches, &m.variable)
+                .map_err(|e| DagError::NodeError {
+                    node_type: "rake".into(),
+                    msg: e.0,
+                })?;
             margins.push((col, m.population.clone()));
         }
 
@@ -383,18 +382,19 @@ impl DagNode for RakeNode {
             combined.columns().iter().cloned().collect();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
-        let output_batch = RecordBatch::try_new(new_schema, new_columns).map_err(|e| {
-            DagError::NodeError {
+        let output_batch =
+            RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
                 node_type: "rake".into(),
                 msg: format!("failed to build output: {e}"),
-            }
-        })?;
+            })?;
 
         let ctx = node_ctx.session();
-        let df_out = ctx.read_batch(output_batch).map_err(|e| DagError::NodeError {
-            node_type: "rake".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df_out = ctx
+            .read_batch(output_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "rake".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
         Ok(res)
@@ -453,10 +453,8 @@ impl NodeFactory for RakeFactory {
             .margins
             .iter()
             .map(|m| {
-                let levels: Vec<String> =
-                    m.population.keys().cloned().collect();
-                let counts: Vec<String> =
-                    m.population.values().map(|v| v.to_string()).collect();
+                let levels: Vec<String> = m.population.keys().cloned().collect();
+                let counts: Vec<String> = m.population.values().map(|v| v.to_string()).collect();
                 format!(
                     "data.frame({var} = c({lvls}), Freq = c({cnts}))",
                     var = m.variable,
@@ -599,13 +597,11 @@ impl DagNode for CalibrateNode {
         let design = build_survey_design(&self.spec.design, &batches)?;
         let aux = super::survey_common::extract_variables(&batches, &self.spec.variables)?;
 
-        let new_design =
-            survey::calibrate_linear(&design, &aux, &self.spec.population_totals).map_err(
-                |e| DagError::NodeError {
-                    node_type: "calibrate".into(),
-                    msg: e.to_string(),
-                },
-            )?;
+        let new_design = survey::calibrate_linear(&design, &aux, &self.spec.population_totals)
+            .map_err(|e| DagError::NodeError {
+                node_type: "calibrate".into(),
+                msg: e.to_string(),
+            })?;
         let new_weights = new_design.weights();
 
         // Output: original data + calibrated weight column.
@@ -632,17 +628,18 @@ impl DagNode for CalibrateNode {
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
             combined.columns().iter().cloned().collect();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
-        let output_batch = RecordBatch::try_new(new_schema, new_columns).map_err(|e| {
-            DagError::NodeError {
+        let output_batch =
+            RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
                 node_type: "calibrate".into(),
                 msg: format!("failed to build output: {e}"),
-            }
-        })?;
+            })?;
         let ctx = node_ctx.session();
-        let df_out = ctx.read_batch(output_batch).map_err(|e| DagError::NodeError {
-            node_type: "calibrate".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df_out = ctx
+            .read_batch(output_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "calibrate".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
         Ok(res)
@@ -803,10 +800,12 @@ impl DagNode for TrimWeightsNode {
         let upper = self.spec.upper.unwrap_or(f64::INFINITY);
         let lower = self.spec.lower.unwrap_or(f64::NEG_INFINITY);
 
-        let new_design = survey::trim_weights(&design, upper, lower, self.spec.strict)
-            .map_err(|e| DagError::NodeError {
-                node_type: "trim_weights".into(),
-                msg: e.to_string(),
+        let new_design =
+            survey::trim_weights(&design, upper, lower, self.spec.strict).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "trim_weights".into(),
+                    msg: e.to_string(),
+                }
             })?;
 
         let new_weights = new_design.weights();
@@ -836,17 +835,18 @@ impl DagNode for TrimWeightsNode {
             combined.columns().iter().cloned().collect();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
-        let output_batch = RecordBatch::try_new(new_schema, new_columns).map_err(|e| {
-            DagError::NodeError {
+        let output_batch =
+            RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
                 node_type: "trim_weights".into(),
                 msg: format!("failed to build output: {e}"),
-            }
-        })?;
+            })?;
         let ctx = node_ctx.session();
-        let df_out = ctx.read_batch(output_batch).map_err(|e| DagError::NodeError {
-            node_type: "trim_weights".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df_out = ctx
+            .read_batch(output_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "trim_weights".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
         Ok(res)
@@ -890,8 +890,14 @@ impl NodeFactory for TrimWeightsFactory {
         let out = ctx.output_var.to_string();
         let (des, mut code) = gen_design_r(&s.design, &input, ctx);
 
-        let upper = s.upper.map(|v| v.to_string()).unwrap_or_else(|| "Inf".to_string());
-        let lower = s.lower.map(|v| v.to_string()).unwrap_or_else(|| "-Inf".to_string());
+        let upper = s
+            .upper
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "Inf".to_string());
+        let lower = s
+            .lower
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-Inf".to_string());
         let strict = r_true_false(s.strict);
 
         let des_trim = ctx.fresh_var("des_trim");
@@ -942,7 +948,9 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
             ],
         )
         .unwrap();
@@ -973,12 +981,13 @@ mod tests {
         };
 
         let mut node = PostStratifyNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -1034,7 +1043,9 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 2, 2, 2])),
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 1, 2, 3])),
-                Arc::new(Float64Array::from(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])),
+                Arc::new(Float64Array::from(vec![
+                    3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0,
+                ])),
             ],
         )
         .unwrap();
@@ -1068,12 +1079,13 @@ mod tests {
         };
 
         let mut node = RakeNode::new(spec);
-        let input = NodeInput {
-            port: 0,
-            data: df,
-        };
+        let input = NodeInput { port: 0, data: df };
         let outs = node
-            .execute(&node_ctx(), &[input], &crate::dag::node_event::NodeReporter::noop())
+            .execute(
+                &node_ctx(),
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -1094,7 +1106,12 @@ mod tests {
         // ratio = 20/15 = 4/3 for stratum 1 → weight = 3 * 4/3 = 4.0
         // ratio = 16/12 = 4/3 for stratum 2 → weight = 4 * 4/3 = 16/3 ≈ 5.333
         for i in 0..5 {
-            assert!((new_weights[i] - 4.0).abs() < 1e-6, "s1 w[{}]: {}", i, new_weights[i]);
+            assert!(
+                (new_weights[i] - 4.0).abs() < 1e-6,
+                "s1 w[{}]: {}",
+                i,
+                new_weights[i]
+            );
         }
         for i in 5..8 {
             assert!(

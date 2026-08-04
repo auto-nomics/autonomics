@@ -65,7 +65,14 @@ impl HypothesisTest {
         method: &'static str,
         extras: serde_json::Map<String, serde_json::Value>,
     ) -> Self {
-        Self { stat, p_value, dof, alternative, method, extras }
+        Self {
+            stat,
+            p_value,
+            dof,
+            alternative,
+            method,
+            extras,
+        }
     }
 
     /// Reject at level `alpha`?
@@ -80,8 +87,9 @@ impl HypothesisTest {
 
     /// Borrowed view of an extra as a `&[f64]` (flattened from a JSON array).
     pub fn extra_f64_vec(&self, key: &str) -> Option<Vec<f64>> {
-        self.extras.get(key)?.as_array().map(|arr| {
-            arr.iter().filter_map(|v| v.as_f64()).collect()
-        })
+        self.extras
+            .get(key)?
+            .as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
     }
 }

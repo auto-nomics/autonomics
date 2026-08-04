@@ -10,7 +10,10 @@
 use serde_json::json;
 
 use super::{PvalSource, extract_pvals, validate_strict};
-use crate::{Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result, extras};
+use crate::{
+    Alternative, HypoError, HypothesisTest, KEY_COMPONENT_PVALS, KEY_KIND, KEY_N_TESTS, Result,
+    extras,
+};
 
 /// Combine via Wilkinson's r-th order statistic. `r` is 1-indexed (`r = 1`
 /// is Tippett's min; `r = k` is Tippett's max).

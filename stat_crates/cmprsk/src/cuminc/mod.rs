@@ -142,7 +142,8 @@ pub fn cuminc(input: &CumincInput, opts: &CumincOptions) -> Result<CumincResult>
                 got: v.len(),
                 expected: n_in,
             });
-        }    }
+        }
+    }
 
     // ── na.omit ─────────────────────────────────────────────────────────────
     let mut keep: Vec<usize> = Vec::with_capacity(n_in);
@@ -234,9 +235,7 @@ pub fn cuminc(input: &CumincInput, opts: &CumincOptions) -> Result<CumincResult>
 
         if ng > 1 {
             // 0 censored, 1 cause of interest, 2 any other failure
-            let m: Vec<u8> = (0..no)
-                .map(|i| 2 * censind[i] - causeind[i])
-                .collect();
+            let m: Vec<u8> = (0..no).map(|i| 2 * censind[i] - causeind[i]).collect();
             let ig: Vec<usize> = gcode.iter().map(|&g| g + 1).collect();
             let ist: Vec<usize> = scode.iter().map(|&s| s + 1).collect();
             let out = crstm(&time, &m, &ig, &ist, nst, ng, opts.rho);

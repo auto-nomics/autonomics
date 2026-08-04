@@ -15,12 +15,7 @@ use crate::{Alternative, HypoError, KEY_KIND, Result, dist::chisq_sf, extras};
 /// The statistic is χ²(1); the p-value is always two-sided (R `prop.test`
 /// does not support one-sided alternatives — use `wilson_hilferty` or the
 /// normal approximation for directional tests).
-pub fn prop_test_one(
-    x: u32,
-    n: u32,
-    p0: f64,
-    correct: bool,
-) -> Result<HypothesisTest> {
+pub fn prop_test_one(x: u32, n: u32, p0: f64, correct: bool) -> Result<HypothesisTest> {
     if n == 0 {
         return Err(HypoError::InvalidInput("n must be > 0".into()));
     }
@@ -67,13 +62,7 @@ pub fn prop_test_one(
 /// Two-sample proportion test: `H₀: p₁ − p₂ = 0`.
 ///
 /// Uses the pooled estimate `p̂ = (x₁ + x₂) / (n₁ + n₂)` under H₀.
-pub fn prop_test_two(
-    x1: u32,
-    n1: u32,
-    x2: u32,
-    n2: u32,
-    correct: bool,
-) -> Result<HypothesisTest> {
+pub fn prop_test_two(x1: u32, n1: u32, x2: u32, n2: u32, correct: bool) -> Result<HypothesisTest> {
     if n1 == 0 || n2 == 0 {
         return Err(HypoError::InvalidInput("n1 and n2 must be > 0".into()));
     }

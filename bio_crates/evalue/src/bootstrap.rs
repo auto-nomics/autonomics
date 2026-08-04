@@ -57,8 +57,8 @@ where
 
     let se = {
         let mean: f64 = boot_vals.iter().sum::<f64>() / boot_vals.len() as f64;
-        let var: f64 = boot_vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-            / boot_vals.len() as f64;
+        let var: f64 =
+            boot_vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / boot_vals.len() as f64;
         var.sqrt()
     };
 
@@ -74,21 +74,14 @@ where
 
     let a = if jack_vals.len() > 1 {
         let jack_mean: f64 = jack_vals.iter().sum::<f64>() / jack_vals.len() as f64;
-        let num: f64 = jack_vals
-            .iter()
-            .map(|v| (jack_mean - v).powi(3))
-            .sum();
+        let num: f64 = jack_vals.iter().map(|v| (jack_mean - v).powi(3)).sum();
         let den: f64 = 6.0
             * (jack_vals
                 .iter()
                 .map(|v| (jack_mean - v).powi(2))
                 .sum::<f64>())
             .powf(1.5);
-        if den == 0.0 {
-            0.0
-        } else {
-            num / den
-        }
+        if den == 0.0 { 0.0 } else { num / den }
     } else {
         0.0
     };

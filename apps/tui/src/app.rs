@@ -519,6 +519,22 @@ impl App {
     }
 
     fn handle_key(&mut self, key: &KeyEvent) {
+        // Ctrl+P: toggle the command palette. Handled globally so it works
+        // from any tab / input mode. When opening, takes precedence over all
+        // other handlers; when closing, behaves identically to Esc.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+            self.state.command_palette.toggle();
+            return;
+        }
+
+        // While the command palette is open it captures all remaining keys
+        // (navigation, filtering, execution, dismissal) — tab handlers never
+        // see them.
+        if self.state.command_palette.visible {
+            self.handle_command_palette_key(key);
+            return;
+        }
+
         // Ctrl+C: cancel running agent first, then quit on second press.
         // If the agent is blocked and doesn't transition to Idle after the
         // first cancel, a second Ctrl+C within FORCE_QUIT_WINDOW force-quits.
@@ -792,6 +808,114 @@ impl App {
         }
     }
 
+    // ── Command palette ─────────────────────────────────
+
+    /// Key handling while the command palette is open. Returns control to
+    /// `handle_key`'s caller; the caller is responsible for closing on Esc
+    /// (via [`CommandPaletteState::close`]).
+    fn handle_command_palette_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::command_palette::CommandAction;
+
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            // Esc or Ctrl+P (handled above) — close without running anything.
+            KeyCode::Esc => {
+                self.state.command_palette.close();
+            }
+            // Enter: run the selected action, then dismiss.
+            KeyCode::Enter => {
+                let action = self.state.command_palette.selected_action();
+                self.state.command_palette.close();
+                if let Some(action) = action {
+                    self.run_command_action(action);
+                }
+            }
+            KeyCode::Up => self.state.command_palette.move_up(),
+            KeyCode::Down => self.state.command_palette.move_down(),
+            KeyCode::Backspace => self.state.command_palette.pop_char(),
+            KeyCode::Char(c) if !ctrl => self.state.command_palette.push_char(c),
+            _ => {}
+        }
+    }
+
+    /// Execute a command selected from the palette. Each action mirrors an
+    /// existing key binding — the palette is just a discoverable shortcut to
+    /// the same operations.
+    fn run_command_action(&mut self, action: crate::widgets::command_palette::CommandAction) {
+        use crate::widgets::command_palette::CommandAction;
+
+        match action {
+            CommandAction::SwitchTab(idx) => {
+                self.tab_state.select(idx, state::TABS.len());
+                self.sync_tab_state();
+            }
+            CommandAction::Quit => {
+                self.should_quit = true;
+            }
+            CommandAction::CancelAgent => {
+                if !matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
+                    self.agent_runtime.cancel();
+                    self.cancel_requested_at = Some(Instant::now());
+                }
+            }
+            CommandAction::EnterInput => {
+                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                    self.state.agent_tab_state.input_mode = InputMode::Input;
+                }
+            }
+            CommandAction::ToggleAutoScroll => {
+                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                    let ts = &mut self.state.agent_tab_state;
+                    if ts.auto_scroll {
+                        ts.auto_scroll = false;
+                    } else {
+                        ts.scroll_to_bottom();
+                    }
+                }
+            }
+            CommandAction::ScrollToBottom => {
+                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                    self.state.agent_tab_state.scroll_to_bottom();
+                }
+            }
+            CommandAction::ScrollToTop => {
+                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                    self.state.agent_tab_state.scroll_offset = 0;
+                    self.state.agent_tab_state.auto_scroll = false;
+                }
+            }
+            CommandAction::HistorySearch => {
+                // Trigger the same flow as Ctrl+R: only meaningful in the
+                // Agent tab when there is history and the agent is idle.
+                let ts = &mut self.state.agent_tab_state;
+                let can = matches!(self.state.main_tab_state, MainTabState::AgentTab)
+                    && ts.status == state::AgentStatus::Idle
+                    && !ts.input_history.is_empty();
+                if can {
+                    ts.input_mode = InputMode::Input;
+                    ts.in_history_search = true;
+                    ts.history_search_query.clear();
+                    ts.history_search_draft = Some(ts.input.value());
+                    ts.history_search_matches = compute_search_matches(&ts.input_history, "");
+                    ts.history_search_selected = 0;
+                    load_selected_history_match(ts);
+                }
+            }
+            CommandAction::ClearTranscript => {
+                let ts = &mut self.state.agent_tab_state;
+                ts.messages.clear();
+                ts.msg_versions.clear();
+                ts.cached_msg_lines.clear();
+                ts.cached_msg_versions.clear();
+                ts.scroll_offset = 0;
+                ts.scroll_to_bottom();
+            }
+            CommandAction::ReloadConfig => {
+                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+            }
+        }
+    }
+
     fn sync_tab_state(&mut self) {
         self.state.main_tab_state = MainTabState::from_index(self.tab_state.selected);
     }
@@ -850,6 +974,16 @@ impl App {
                     &mut self.state.model_config_state,
                 );
             }
+        }
+
+        // ── Command palette overlay ──
+        // Drawn last so it sits on top of the active tab. The popup paints its
+        // own `Clear` backdrop; we only render when the palette is visible.
+        if self.state.command_palette.visible {
+            let palette = crate::widgets::command_palette::CommandPalette {
+                state: &mut self.state.command_palette,
+            };
+            palette.render(frame.area(), frame.buffer_mut());
         }
     }
 

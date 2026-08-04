@@ -116,11 +116,17 @@ pub fn svalues_or(
         return Err(EvalueError::Invalid("OR cannot be negative".into()));
     }
     let est_rr = Estimate::or(est, rare).to_rr()?.est;
-    let lo_rr = lo.map(|l| Estimate::or(l, rare).to_rr().map(|r| r.est)).transpose()?;
-    let hi_rr = hi.map(|h| Estimate::or(h, rare).to_rr().map(|r| r.est)).transpose()?;
+    let lo_rr = lo
+        .map(|l| Estimate::or(l, rare).to_rr().map(|r| r.est))
+        .transpose()?;
+    let hi_rr = hi
+        .map(|h| Estimate::or(h, rare).to_rr().map(|r| r.est))
+        .transpose()?;
     let true_rr = Estimate::or(true_val, rare).to_rr()?.est;
 
-    let mut res = svalues_rr(est_rr, lo_rr, hi_rr, true_rr, sel_pop, s_eq_u, risk_inc, risk_dec)?;
+    let mut res = svalues_rr(
+        est_rr, lo_rr, hi_rr, true_rr, sel_pop, s_eq_u, risk_inc, risk_dec,
+    )?;
     res.measure = "OR";
     Ok(res)
 }
@@ -141,11 +147,17 @@ pub fn svalues_hr(
         return Err(EvalueError::Invalid("HR cannot be negative".into()));
     }
     let est_rr = Estimate::hr(est, rare).to_rr()?.est;
-    let lo_rr = lo.map(|l| Estimate::hr(l, rare).to_rr().map(|r| r.est)).transpose()?;
-    let hi_rr = hi.map(|h| Estimate::hr(h, rare).to_rr().map(|r| r.est)).transpose()?;
+    let lo_rr = lo
+        .map(|l| Estimate::hr(l, rare).to_rr().map(|r| r.est))
+        .transpose()?;
+    let hi_rr = hi
+        .map(|h| Estimate::hr(h, rare).to_rr().map(|r| r.est))
+        .transpose()?;
     let true_rr = Estimate::hr(true_val, rare).to_rr()?.est;
 
-    let mut res = svalues_rr(est_rr, lo_rr, hi_rr, true_rr, sel_pop, s_eq_u, risk_inc, risk_dec)?;
+    let mut res = svalues_rr(
+        est_rr, lo_rr, hi_rr, true_rr, sel_pop, s_eq_u, risk_inc, risk_dec,
+    )?;
     res.measure = "HR";
     Ok(res)
 }

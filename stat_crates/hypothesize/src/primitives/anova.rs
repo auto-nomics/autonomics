@@ -15,7 +15,9 @@ use crate::{Alternative, HypoError, KEY_KIND, Result, dist::f_sf, extras};
 pub fn oneway_anova(groups: &[&[f64]], var_equal: bool) -> Result<HypothesisTest> {
     let k = groups.len();
     if k < 2 {
-        return Err(HypoError::InvalidInput("one-way ANOVA: need ≥ 2 groups".into()));
+        return Err(HypoError::InvalidInput(
+            "one-way ANOVA: need ≥ 2 groups".into(),
+        ));
     }
     let group_n: Vec<usize> = groups.iter().map(|g| g.len()).collect();
     for &ni in &group_n {

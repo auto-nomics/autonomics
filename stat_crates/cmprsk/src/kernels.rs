@@ -396,8 +396,7 @@ pub fn crrvv(d: &CrrData, b: &[f64]) -> Vv {
                     continue; // go to 15
                 }
                 for k in 1..=np {
-                    st1[k - 1] -=
-                        (xbt[k - 1] - xb[j - 1][k] / xb[j - 1][0]) * twt / xb[j - 1][0];
+                    st1[k - 1] -= (xbt[k - 1] - xb[j - 1][k] / xb[j - 1][0]) * twt / xb[j - 1][0];
                 }
             }
         }

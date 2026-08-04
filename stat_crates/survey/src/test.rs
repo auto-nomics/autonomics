@@ -3,8 +3,8 @@
 //! Implements the Rao-Scott chi-squared test for two-way contingency tables
 //! under a complex survey design (`svychisq`).
 
-use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::Mat;
+use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 
 use crate::design::SurveyDesign;
 use crate::error::{Result, SurveyError};
@@ -29,11 +29,7 @@ pub struct SvyChisq {
 /// - `row`: row variable (categorical) per observation.
 /// - `col`: column variable (categorical) per observation.
 /// - `design`: the survey design.
-pub fn svy_chisq(
-    row: &[String],
-    col: &[String],
-    design: &SurveyDesign,
-) -> Result<SvyChisq> {
+pub fn svy_chisq(row: &[String], col: &[String], design: &SurveyDesign) -> Result<SvyChisq> {
     let n = design.n_obs;
     if row.len() != n || col.len() != n {
         return Err(SurveyError::LengthMismatch {
@@ -53,7 +49,8 @@ pub fn svy_chisq(
 
     // Cell indicator matrix (n × ncell) + svymean of cell proportions.
     let mut cells = vec![vec![0.0_f64; n]; ncell];
-    let mut cell_index: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    let mut cell_index: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
     for r in 0..nr {
         for c in 0..nc {
             cell_index.insert((row_levels[r].clone(), col_levels[c].clone()), r * nc + c);
@@ -226,12 +223,7 @@ fn quadratic(c: &[Vec<f64>], id: &[f64], scale: f64) -> Vec<Vec<f64>> {
 /// C' iD V iD C (full sandwich).
 ///
 /// `c` is ncell × nint; `v` is ncell × ncell; `id`/`id2` are length ncell.
-fn sandwich(
-    c: &[Vec<f64>],
-    id: &[f64],
-    v: &[Vec<f64>],
-    id2: &[f64],
-) -> Vec<Vec<f64>> {
+fn sandwich(c: &[Vec<f64>], id: &[f64], v: &[Vec<f64>], id2: &[f64]) -> Vec<Vec<f64>> {
     let ncell = c.len();
     let nint = c[0].len();
     // iD V iD → m (ncell × ncell)
@@ -261,7 +253,11 @@ fn sandwich(
 fn solve_sym(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
     use faer::linalg::solvers::PartialPivLu;
     let n = a.len();
-    let ridge = 1e-12 * (0..n).map(|i| a[i][i].abs()).fold(0.0_f64, f64::max).max(1e-30);
+    let ridge = 1e-12
+        * (0..n)
+            .map(|i| a[i][i].abs())
+            .fold(0.0_f64, f64::max)
+            .max(1e-30);
     let a_m = Mat::from_fn(n, n, |i, j| a[i][j] + if i == j { ridge } else { 0.0 });
     let b_m = Mat::from_fn(n, n, |i, j| b[i][j]);
     let lu = PartialPivLu::new(a_m.as_ref());
@@ -332,8 +328,18 @@ mod tests {
     #[test]
     fn pearson_stat_correct() {
         // 2x2 table with known chi-squared.
-        let row = vec!["a".to_string(), "a".to_string(), "b".to_string(), "b".to_string()];
-        let col = vec!["x".to_string(), "y".to_string(), "x".to_string(), "y".to_string()];
+        let row = vec![
+            "a".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "b".to_string(),
+        ];
+        let col = vec![
+            "x".to_string(),
+            "y".to_string(),
+            "x".to_string(),
+            "y".to_string(),
+        ];
         let w = vec![1.0, 1.0, 1.0, 1.0];
         let x2 = pearson_stat(&row, &col, &w);
         assert!(x2 >= 0.0);
@@ -395,8 +401,12 @@ mod tests {
             .weights(vec![1.0; 20])
             .build()
             .unwrap();
-        let row: Vec<String> = (0..20).map(|i| if i % 2 == 0 { "a".into() } else { "b".into() }).collect();
-        let col: Vec<String> = (0..20).map(|i| if i % 3 == 0 { "x".into() } else { "y".into() }).collect();
+        let row: Vec<String> = (0..20)
+            .map(|i| if i % 2 == 0 { "a".into() } else { "b".into() })
+            .collect();
+        let col: Vec<String> = (0..20)
+            .map(|i| if i % 3 == 0 { "x".into() } else { "y".into() })
+            .collect();
         let r = svy_chisq(&row, &col, &d).unwrap();
         assert!(r.statistic.is_finite());
         assert!(r.p_value >= 0.0 && r.p_value <= 1.0);

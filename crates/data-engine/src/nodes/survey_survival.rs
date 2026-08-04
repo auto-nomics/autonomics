@@ -4,9 +4,9 @@
 //!
 //! R package reference: `survey::svykm`, `svylogrank`.
 
+use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
-use async_trait::async_trait;
 
 use arrow_array::Float64Array;
 
@@ -88,7 +88,8 @@ impl DagNode for SvyKmNode {
             })?;
 
         let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let t = super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
+        let t =
+            super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
         let e =
             super::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
 
@@ -219,10 +220,18 @@ impl SvyLogrankNode {
 
 #[async_trait]
 impl DagNode for SvyLogrankNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "svylogrank" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "svylogrank"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -231,24 +240,48 @@ impl DagNode for SvyLogrankNode {
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
-            node_type: "svylogrank".into(), msg: "no input data".into(),
+            node_type: "svylogrank".into(),
+            msg: "no input data".into(),
         })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError {
-            node_type: "svylogrank".into(), msg: format!("collect failed: {e}"),
-        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: "svylogrank".into(),
+                msg: format!("collect failed: {e}"),
+            })?;
         let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let t = super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
-        let e = super::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
+        let t =
+            super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
+        let e =
+            super::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
         let g_str = super::survey_common::extract_string_column_pub(&batches, &self.spec.group)
-            .map_err(|e| DagError::NodeError { node_type: "svylogrank".into(), msg: e.0 })?;
+            .map_err(|e| DagError::NodeError {
+                node_type: "svylogrank".into(),
+                msg: e.0,
+            })?;
         // Map group to 0/1.
-        let g: Vec<f64> = g_str.iter().enumerate().map(|(i, s)| {
-            // Use first two unique levels as 0 and 1.
-            if i == 0 { 0.0 } else if s == &g_str[0] { 0.0 } else { 1.0 }
-        }).collect();
-        let r = survey::svy_logrank(&t[0], &e[0], &g, &design).map_err(|e| DagError::NodeError {
-            node_type: "svylogrank".into(), msg: e.to_string(),
-        })?;
+        let g: Vec<f64> = g_str
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                // Use first two unique levels as 0 and 1.
+                if i == 0 {
+                    0.0
+                } else if s == &g_str[0] {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
+            .collect();
+        let r =
+            survey::svy_logrank(&t[0], &e[0], &g, &design).map_err(|e| DagError::NodeError {
+                node_type: "svylogrank".into(),
+                msg: e.to_string(),
+            })?;
         use arrow_array::RecordBatch;
         use arrow_schema::{DataType, Field, Schema};
         use std::sync::Arc;
@@ -257,14 +290,22 @@ impl DagNode for SvyLogrankNode {
             Field::new("df", DataType::Float64, false),
             Field::new("p_value", DataType::Float64, false),
         ]));
-        let batch = RecordBatch::try_new(schema, vec![
-            Arc::new(Float64Array::from(vec![r.chisq])),
-            Arc::new(Float64Array::from(vec![r.df as f64])),
-            Arc::new(Float64Array::from(vec![r.p_value])),
-        ]).map_err(|e| DagError::NodeError { node_type: "svylogrank".into(), msg: format!("output: {e}") })?;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(vec![r.chisq])),
+                Arc::new(Float64Array::from(vec![r.df as f64])),
+                Arc::new(Float64Array::from(vec![r.p_value])),
+            ],
+        )
+        .map_err(|e| DagError::NodeError {
+            node_type: "svylogrank".into(),
+            msg: format!("output: {e}"),
+        })?;
         let ctx = node_ctx.session();
         let df_out = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
-            node_type: "svylogrank".into(), msg: format!("read: {e}"),
+            node_type: "svylogrank".into(),
+            msg: format!("read: {e}"),
         })?;
         let mut res = PortOutputs::new();
         res.insert(0, df_out);
@@ -296,7 +337,10 @@ impl NodeFactory for SvyLogrankFactory {
         spec: serde_json::Value,
         _node_ctx: crate::node_registry::registry::NodeCtx,
     ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
-        { let s: SvyLogrankSpec = serde_json::from_value(spec)?; Ok(Box::new(SvyLogrankNode::new(s))) }
+        {
+            let s: SvyLogrankSpec = serde_json::from_value(spec)?;
+            Ok(Box::new(SvyLogrankNode::new(s)))
+        }
     }
     fn codegen_r(
         &self,

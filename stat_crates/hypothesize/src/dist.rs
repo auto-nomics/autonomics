@@ -75,8 +75,8 @@ pub fn f_sf(x: f64, d1: f64, d2: f64) -> f64 {
 /// [`HypoError::SingularMatrix`] on factorisation failure, mirroring R's
 /// `solve()` error for non-PD inputs.
 pub(crate) fn solve_spd(matrix: &[Vec<f64>], v: &[f64]) -> Result<Vec<f64>> {
-    use faer::linalg::solvers::{Llt, Solve};
     use faer::Side;
+    use faer::linalg::solvers::{Llt, Solve};
 
     let k = matrix.len();
     if k == 0 {

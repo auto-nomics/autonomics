@@ -15,8 +15,8 @@
 //! Line-by-line port of the R 4.x algorithm; cross-validated against
 //! `stats::p.adjust` in `tests/xval_padjust.rs`.
 
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{HypoError, Result};
 
@@ -58,7 +58,9 @@ impl AdjustMethod {
 fn argsort_ascending(v: &[f64]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..v.len()).collect();
     idx.sort_by(|&a, &b| {
-        v[a].partial_cmp(&v[b]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+        v[a].partial_cmp(&v[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
     });
     idx
 }
@@ -67,7 +69,9 @@ fn argsort_ascending(v: &[f64]) -> Vec<usize> {
 fn argsort_descending(v: &[f64]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..v.len()).collect();
     idx.sort_by(|&a, &b| {
-        v[b].partial_cmp(&v[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+        v[b].partial_cmp(&v[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
     });
     idx
 }
@@ -250,14 +254,15 @@ pub fn adjust_pvals(
     let adjusted = p_adjust_raw(&pvals, method, n_total)?;
     let n_eff = n_total.unwrap_or(pvals.len()) as u64;
     for (t, adj) in tests.iter_mut().zip(adjusted) {
-        t.extras
-            .insert(crate::KEY_ORIGINAL_PVAL.into(), serde_json::json!(t.p_value));
+        t.extras.insert(
+            crate::KEY_ORIGINAL_PVAL.into(),
+            serde_json::json!(t.p_value),
+        );
         t.extras.insert(
             "adjustment_method".into(),
             serde_json::json!(format!("{method:?}").to_lowercase()),
         );
-        t.extras
-            .insert("n_tests".into(), serde_json::json!(n_eff));
+        t.extras.insert("n_tests".into(), serde_json::json!(n_eff));
         t.p_value = adj;
     }
     Ok(())

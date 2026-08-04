@@ -36,14 +36,10 @@ pub fn predict_crr(fit: &CrrFit, cov1: &[Vec<f64>], cov2: &[Vec<f64>]) -> Result
         return Err(CmprskError::Predict("no covariate rows supplied".into()));
     }
     if nc1 > 0 && (cov1.len() != m || cov1.iter().any(|r| r.len() != nc1)) {
-        return Err(CmprskError::Predict(format!(
-            "cov1 must be {m} × {nc1}"
-        )));
+        return Err(CmprskError::Predict(format!("cov1 must be {m} × {nc1}")));
     }
     if nc2 > 0 && (cov2.len() != m || cov2.iter().any(|r| r.len() != nc2)) {
-        return Err(CmprskError::Predict(format!(
-            "cov2 must be {m} × {nc2}"
-        )));
+        return Err(CmprskError::Predict(format!("cov2 must be {m} × {nc2}")));
     }
 
     let mut curves = Vec::with_capacity(m);

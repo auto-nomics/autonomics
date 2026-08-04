@@ -4,8 +4,8 @@
 //! `svykm` (the no-SE form, `svykm_fit`).
 
 use crate::design::SurveyDesign;
-use crate::variance::svy_cprod_matrix;
 use crate::error::{Result, SurveyError};
+use crate::variance::svy_cprod_matrix;
 
 /// Result of a survey Kaplan-Meier fit.
 #[derive(Debug, Clone)]
@@ -83,8 +83,8 @@ pub fn svy_km(time: &[f64], event: &[f64], design: &SurveyDesign) -> Result<SvyK
 // svycoxph — survey-weighted Cox proportional hazards model
 // =====================================================================
 
-use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::Mat;
+use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 
 /// Result of a survey Cox PH fit.
 #[derive(Debug, Clone)]
@@ -118,7 +118,11 @@ pub fn svy_coxph(
     let n = design.n_obs;
     let p = x.len();
     if time.len() != n || event.len() != n {
-        return Err(SurveyError::LengthMismatch { context: "time/event".into(), a: time.len(), b: n });
+        return Err(SurveyError::LengthMismatch {
+            context: "time/event".into(),
+            a: time.len(),
+            b: n,
+        });
     }
     let w = design.weights();
     let w_mean: f64 = w.iter().sum::<f64>() / n as f64;
@@ -259,7 +263,10 @@ pub fn svy_coxph(
     idx = 0;
     while idx < n {
         let i = order[idx];
-        if event[i] == 0.0 { idx += 1; continue; }
+        if event[i] == 0.0 {
+            idx += 1;
+            continue;
+        }
         let t = time[i];
         let mut tie_end = idx;
         let mut d = 0.0;
@@ -350,7 +357,7 @@ pub fn svy_logrank(
     let p = 1;
     let chisq = cox.coefficients[0].powi(2) / cox.design_cov[0][0].max(1e-30);
     let p_value = {
-        use statrs::distribution::{ContinuousCDF, ChiSquared};
+        use statrs::distribution::{ChiSquared, ContinuousCDF};
         ChiSquared::new(p as f64)
             .map(|d| d.sf(chisq))
             .unwrap_or(0.0)
@@ -411,12 +418,17 @@ pub fn svy_survreg(
     let y: Vec<f64> = time.iter().map(|&t| t.ln()).collect();
 
     // Initial fit: WLS of log(time) on X (for uncensored only).
-    let keep: Vec<usize> = (0..n).filter(|&i| event[i] == 1.0 && y[i].is_finite()).collect();
+    let keep: Vec<usize> = (0..n)
+        .filter(|&i| event[i] == 1.0 && y[i].is_finite())
+        .collect();
     if keep.is_empty() {
         return Err(SurveyError::InvalidInput("no events for survreg".into()));
     }
     let y_k: Vec<f64> = keep.iter().map(|&i| y[i]).collect();
-    let x_k: Vec<Vec<f64>> = xmat.iter().map(|col| keep.iter().map(|&i| col[i]).collect()).collect();
+    let x_k: Vec<Vec<f64>> = xmat
+        .iter()
+        .map(|col| keep.iter().map(|&i| col[i]).collect())
+        .collect();
     let x_refs: Vec<&[f64]> = x_k.iter().map(|v| v.as_slice()).collect();
     let w_k: Vec<f64> = keep.iter().map(|&i| ws[i]).collect();
     let reg = statkit::regression::wls(&x_refs, &y_k, &w_k, false)
@@ -425,7 +437,11 @@ pub fn svy_survreg(
 
     // Scale = residual standard deviation (Weibull shape parameter).
     let resid_init: Vec<f64> = y_k.iter().zip(&reg.fitted).map(|(y, f)| y - f).collect();
-    let sigma2 = resid_init.iter().zip(&w_k).map(|(r, wi)| r * r * wi).sum::<f64>()
+    let sigma2 = resid_init
+        .iter()
+        .zip(&w_k)
+        .map(|(r, wi)| r * r * wi)
+        .sum::<f64>()
         / w_k.iter().sum::<f64>();
     let mut scale = sigma2.sqrt();
 
@@ -492,12 +508,24 @@ mod tests {
         //   surv: 1 1 1 0.85 0.65 0.45 0.15 0
         let d = SurveyDesignBuilder::new()
             .strata(vec![
-                "1".into(), "1".into(), "1".into(), "1".into(), "1".into(),
-                "2".into(), "2".into(), "2".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "1".into(),
+                "2".into(),
+                "2".into(),
+                "2".into(),
             ])
             .cluster(vec![
-                "1.1".into(), "1.2".into(), "1.3".into(), "1.4".into(), "1.5".into(),
-                "2.1".into(), "2.2".into(), "2.3".into(),
+                "1.1".into(),
+                "1.2".into(),
+                "1.3".into(),
+                "1.4".into(),
+                "1.5".into(),
+                "2.1".into(),
+                "2.2".into(),
+                "2.3".into(),
             ])
             .weights(vec![3.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0])
             .build()

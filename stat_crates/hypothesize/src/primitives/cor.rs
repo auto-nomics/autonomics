@@ -7,12 +7,15 @@ use serde_json::json;
 
 use super::HypothesisTest;
 use crate::{
-    Alternative, HypoError, KEY_KIND, Result, dist::{normal_cdf, normal_two_sided_p, t_sf},
+    Alternative, HypoError, KEY_KIND, Result,
+    dist::{normal_cdf, normal_two_sided_p, t_sf},
     extras,
 };
 
 /// Correlation method selector.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CorMethod {
     Pearson,
@@ -30,7 +33,10 @@ pub fn cor_test(
     alt: Alternative,
 ) -> Result<HypothesisTest> {
     if x.len() != y.len() {
-        return Err(HypoError::LengthMismatch { a: x.len(), b: y.len() });
+        return Err(HypoError::LengthMismatch {
+            a: x.len(),
+            b: y.len(),
+        });
     }
     let n = x.len();
     if n < 3 {
@@ -216,9 +222,25 @@ mod tests {
     #[test]
     fn rejects_bad_inputs() {
         assert!(cor_test(&[1.0], &[1.0], CorMethod::Pearson, Alternative::TwoSided).is_err());
-        assert!(cor_test(&[1.0, 2.0], &[1.0], CorMethod::Pearson, Alternative::TwoSided).is_err());
+        assert!(
+            cor_test(
+                &[1.0, 2.0],
+                &[1.0],
+                CorMethod::Pearson,
+                Alternative::TwoSided
+            )
+            .is_err()
+        );
         // Constant data → zero variance
-        assert!(cor_test(&[1.0, 1.0, 1.0], &[1.0, 2.0, 3.0], CorMethod::Pearson, Alternative::TwoSided).is_err());
+        assert!(
+            cor_test(
+                &[1.0, 1.0, 1.0],
+                &[1.0, 2.0, 3.0],
+                CorMethod::Pearson,
+                Alternative::TwoSided
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -19,7 +19,9 @@ use crate::{Alternative, HypoError, KEY_KIND, Result, dist::chisq_sf, dist::solv
 /// P-value is two-sided via `P(χ²₁ > z²)`.
 pub fn wald_uni(estimate: f64, se: f64, null_value: f64) -> Result<HypothesisTest> {
     if !se.is_finite() || se <= 0.0 {
-        return Err(HypoError::InvalidInput(format!("'se' must be positive, got {se}")));
+        return Err(HypoError::InvalidInput(format!(
+            "'se' must be positive, got {se}"
+        )));
     }
     let z = (estimate - null_value) / se;
     let stat = z * z;
@@ -54,15 +56,29 @@ pub fn wald_multi(
         return Err(HypoError::InvalidInput("empty estimate vector".into()));
     }
     if vcov.len() != k {
-        return Err(HypoError::LengthMismatch { a: k, b: vcov.len() });
+        return Err(HypoError::LengthMismatch {
+            a: k,
+            b: vcov.len(),
+        });
     }
     if null_value.len() != k {
-        return Err(HypoError::LengthMismatch { a: k, b: null_value.len() });
+        return Err(HypoError::LengthMismatch {
+            a: k,
+            b: null_value.len(),
+        });
     }
-    let diff: Vec<f64> = estimate.iter().zip(null_value).map(|(e, n)| e - n).collect();
+    let diff: Vec<f64> = estimate
+        .iter()
+        .zip(null_value)
+        .map(|(e, n)| e - n)
+        .collect();
     // Σ⁻¹ diff
     let inv_vcov_diff = solve_spd(vcov, &diff)?;
-    let stat = diff.iter().zip(inv_vcov_diff.iter()).map(|(d, s)| d * s).sum::<f64>();
+    let stat = diff
+        .iter()
+        .zip(inv_vcov_diff.iter())
+        .map(|(d, s)| d * s)
+        .sum::<f64>();
     let p_value = chisq_sf(stat, k as f64);
     Ok(HypothesisTest::new(
         stat,
@@ -118,7 +134,11 @@ mod tests {
 
     #[test]
     fn multivariate_singular_rejected() {
-        let r = wald_multi(&[1.0, 1.0], &vec![vec![1.0, 1.0], vec![1.0, 1.0]], &[0.0, 0.0]);
+        let r = wald_multi(
+            &[1.0, 1.0],
+            &vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+            &[0.0, 0.0],
+        );
         assert!(r.is_err());
     }
 

@@ -303,7 +303,10 @@ pub fn mr_presso(input: &MrpressoInput) -> Result<MrpressoOutput> {
         return Err(MrpressoError::NotEnoughInstruments(n, p));
     }
     if n >= input.nb_distribution {
-        return Err(MrpressoError::NotEnoughForEmpirical(n, input.nb_distribution));
+        return Err(MrpressoError::NotEnoughForEmpirical(
+            n,
+            input.nb_distribution,
+        ));
     }
 
     // Weight-rescaled observed design (dataW = data * sqrt(w)).
@@ -392,8 +395,18 @@ pub fn mr_presso(input: &MrpressoInput) -> Result<MrpressoOutput> {
         // ── 4. Distortion test ──
         if input.distortion_test {
             distortion = Some(distortion_test(
-                &xw, n, p, &yw, &y_obs, &e_obs, &sd_y, &w, &outlier.as_ref().unwrap(),
-                input.nb_distribution, input.signif_threshold, &mut rng,
+                &xw,
+                n,
+                p,
+                &yw,
+                &y_obs,
+                &e_obs,
+                &sd_y,
+                &w,
+                &outlier.as_ref().unwrap(),
+                input.nb_distribution,
+                input.signif_threshold,
+                &mut rng,
             ));
         }
     }
@@ -583,13 +596,15 @@ fn distortion_test(
     let no_out = wls_summary_excluding(&e_obs, n, p, &y_obs, &w, &ref_out).ok();
     let (coef_all, coef_no): (Vec<f64>, Vec<f64>) = match (&all, &no_out) {
         (Some(a), Some(b)) => (a.coef.clone(), b.coef.clone()),
-        _ => return DistortionTest {
-            outlier_indices: ref_out.clone(),
-            outlier_labels: vec![],
-            status: "No significant outliers".to_string(),
-            coefficient: vec![],
-            pvalue: None,
-        },
+        _ => {
+            return DistortionTest {
+                outlier_indices: ref_out.clone(),
+                outlier_labels: vec![],
+                status: "No significant outliers".to_string(),
+                coefficient: vec![],
+                pvalue: None,
+            };
+        }
     };
 
     let mut bias_obs = vec![0.0; p];
@@ -615,7 +630,12 @@ fn distortion_test(
     } else {
         ref_out
             .iter()
-            .filter_map(|i| outlier.iter().find(|o| o.index == *i).map(|o| o.label.clone()))
+            .filter_map(|i| {
+                outlier
+                    .iter()
+                    .find(|o| o.index == *i)
+                    .map(|o| o.label.clone())
+            })
             .collect()
     };
 

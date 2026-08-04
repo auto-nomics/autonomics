@@ -18,18 +18,22 @@
 use serde_json::json;
 
 use super::HypothesisTest;
-use crate::{Alternative, HypoError, KEY_KIND, Result, dist::normal_two_sided_p, extras};
 use crate::dist::{normal_cdf, normal_sf};
+use crate::{Alternative, HypoError, KEY_KIND, Result, dist::normal_two_sided_p, extras};
 
 /// One-sample z-test with known population σ.
 ///
 /// Mirrors `hypothesize::z_test(x, mu0, sigma, alternative)`.
 pub fn z_test(x: &[f64], mu0: f64, sigma: f64, alternative: Alternative) -> Result<HypothesisTest> {
     if x.is_empty() {
-        return Err(HypoError::InvalidInput("'x' must contain at least one observation".into()));
+        return Err(HypoError::InvalidInput(
+            "'x' must contain at least one observation".into(),
+        ));
     }
     if !sigma.is_finite() || sigma <= 0.0 {
-        return Err(HypoError::InvalidInput(format!("'sigma' must be positive, got {sigma}")));
+        return Err(HypoError::InvalidInput(format!(
+            "'sigma' must be positive, got {sigma}"
+        )));
     }
     let n = x.len() as f64;
     let xbar = x.iter().copied().sum::<f64>() / n;
