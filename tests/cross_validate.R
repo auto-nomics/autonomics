@@ -335,3 +335,155 @@ if (test_name == "epi_rcs") {
     data.table::fwrite(ref, file.path(out_dir, "epi_rcs_reference.csv"))
     cat("OK epi_rcs\n")
 }
+
+# ── fine_gray ────────────────────────────────────────────────────────────────
+# Competing-risks data. fstatus 0 = censored, 1 = event of interest, 2 = other.
+if (test_name == "fine_gray") {
+    n <- 400
+    time <- round(pmin(rexp(n, 1 / 3), 10), 2) # ties + bounded follow-up
+    x1 <- rnorm(n)
+    x2 <- rnorm(n, 5, 2)
+    x3 <- runif(n)
+    z <- 0.4 * x1 - 0.3 * x2 + 0.5 * x3
+    # subdistribution hazard of the event of interest
+    p1 <- 1 - exp(-0.05 * exp(z) * time)
+    p2 <- 0.25 * (1 - exp(-0.03 * time))
+    u <- runif(n)
+    fstatus <- ifelse(u < p1, 1, ifelse(u < p1 + p2, 2, 0))
+    cengroup <- sample(1:2, n, replace = TRUE)
+    df <- data.frame(time = time, fstatus = fstatus, x1 = x1, x2 = x2, x3 = x3,
+                     cengroup = cengroup)
+    data_path <- file.path(out_dir, "fine_gray_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference — call the original R package directly.
+    fit <- cmprsk::crr(df$time, df$fstatus, cov1 = as.matrix(df[, c("x1", "x2", "x3")]),
+                       cengroup = df$cengroup, failcode = 1, cencode = 0,
+                       gtol = 1e-6, maxiter = 10, variance = TRUE)
+    se <- sqrt(diag(as.matrix(fit$var)))
+    smry <- summary(fit, conf.int = 0.95)
+    ref <- data.frame(
+        term = names(fit$coef),
+        coefficient = as.numeric(fit$coef),
+        subhazard_ratio = as.numeric(exp(fit$coef)),
+        std_error = as.numeric(se),
+        z_stat = as.numeric(fit$coef / se),
+        p_value = as.numeric(2 * (1 - pnorm(abs(fit$coef / se)))),
+        shr_ci_lower = as.numeric(exp(fit$coef + qnorm(0.025) * se)),
+        shr_ci_upper = as.numeric(exp(fit$coef + qnorm(0.975) * se)),
+        log_likelihood = fit$loglik,
+        loglik_null = fit$loglik.null,
+        lr_stat = as.numeric(-2 * (fit$loglik.null - fit$loglik)),
+        lr_df = as.numeric(length(fit$coef)),
+        lr_p_value = as.numeric(1 - pchisq(-2 * (fit$loglik.null - fit$loglik), length(fit$coef))),
+        n_obs = fit$n,
+        n_missing = fit$n.missing,
+        n_events = sum(df$fstatus == 1),
+        converged = fit$converged
+    )
+    data.table::fwrite(ref, file.path(out_dir, "fine_gray_reference.csv"))
+    # Port 1: baseline cumulative incidence.
+    base <- data.frame(
+        uftime = as.numeric(fit$uftime),
+        bfitj = as.numeric(fit$bfitj),
+        baseline_cif = as.numeric(1 - exp(-cumsum(fit$bfitj)))
+    )
+    data.table::fwrite(base, file.path(out_dir, "fine_gray_reference_1.csv"))
+    cat("OK fine_gray\n")
+}
+
+# ── fine_gray_tf ─────────────────────────────────────────────────────────────
+# Same data, but with a time-interacted covariate (cov2 = x1, tf = x1^2).
+if (test_name == "fine_gray_tf") {
+    n <- 400
+    time <- round(pmin(rexp(n, 1 / 3), 10), 2)
+    x1 <- rnorm(n)
+    x2 <- rnorm(n, 5, 2)
+    z <- 0.4 * x1 - 0.3 * x2
+    p1 <- 1 - exp(-0.05 * exp(z) * time)
+    p2 <- 0.25 * (1 - exp(-0.03 * time))
+    u <- runif(n)
+    fstatus <- ifelse(u < p1, 1, ifelse(u < p1 + p2, 2, 0))
+    df <- data.frame(time = time, fstatus = fstatus, x1 = x1, x2 = x2)
+    data_path <- file.path(out_dir, "fine_gray_tf_data.csv")
+    data.table::fwrite(df, data_path)
+
+    fit <- cmprsk::crr(df$time, df$fstatus,
+                       cov1 = as.matrix(df[, c("x1", "x2")]),
+                       cov2 = as.matrix(df[, "x1", drop = FALSE]),
+                       tf = function(uft) cbind(uft^2),
+                       failcode = 1, cencode = 0, variance = TRUE)
+    se <- sqrt(diag(as.matrix(fit$var)))
+    ref <- data.frame(
+        term = names(fit$coef),
+        coefficient = as.numeric(fit$coef),
+        subhazard_ratio = as.numeric(exp(fit$coef)),
+        std_error = as.numeric(se),
+        z_stat = as.numeric(fit$coef / se),
+        p_value = as.numeric(2 * (1 - pnorm(abs(fit$coef / se)))),
+        shr_ci_lower = as.numeric(exp(fit$coef + qnorm(0.025) * se)),
+        shr_ci_upper = as.numeric(exp(fit$coef + qnorm(0.975) * se)),
+        log_likelihood = fit$loglik,
+        loglik_null = fit$loglik.null,
+        lr_stat = as.numeric(-2 * (fit$loglik.null - fit$loglik)),
+        lr_df = as.numeric(length(fit$coef)),
+        lr_p_value = as.numeric(1 - pchisq(-2 * (fit$loglik.null - fit$loglik), length(fit$coef))),
+        n_obs = fit$n,
+        n_missing = fit$n.missing,
+        n_events = sum(df$fstatus == 1),
+        converged = fit$converged
+    )
+    data.table::fwrite(ref, file.path(out_dir, "fine_gray_tf_reference.csv"))
+    base <- data.frame(
+        uftime = as.numeric(fit$uftime),
+        bfitj = as.numeric(fit$bfitj),
+        baseline_cif = as.numeric(1 - exp(-cumsum(fit$bfitj)))
+    )
+    data.table::fwrite(base, file.path(out_dir, "fine_gray_tf_reference_1.csv"))
+    cat("OK fine_gray_tf\n")
+}
+
+# ── cuminc ──────────────────────────────────────────────────────────────────
+if (test_name == "cuminc") {
+    n <- 400
+    time <- round(pmin(rexp(n, 1 / 3), 10), 2)
+    x1 <- rnorm(n)
+    p1 <- 1 - exp(-0.05 * exp(0.4 * x1) * time)
+    p2 <- 0.25 * (1 - exp(-0.03 * time))
+    u <- runif(n)
+    fstatus <- ifelse(u < p1, 1, ifelse(u < p1 + p2, 2, 0))
+    group <- sample(1:3, n, replace = TRUE)
+    df <- data.frame(time = time, fstatus = fstatus, x1 = x1, group = group)
+    data_path <- file.path(out_dir, "cuminc_data.csv")
+    data.table::fwrite(df, data_path)
+
+    ci <- cmprsk::cuminc(df$time, df$fstatus, group = df$group, cencode = 0)
+    # Flatten curves to long form, matching the node's port 0 row order
+    # (cause-major then group, from names(ci) = "<group> <cause>").
+    test_names <- names(ci)
+    if (!is.null(ci$Tests)) {
+        test_names <- test_names[test_names != "Tests"]
+        tests <- data.frame(
+            cause = rownames(ci$Tests),
+            stat = as.numeric(ci$Tests[, "stat"]),
+            p_value = as.numeric(ci$Tests[, "pv"]),
+            df = as.integer(ci$Tests[, "df"]),
+            stringsAsFactors = FALSE
+        )
+    }
+    rows <- do.call(rbind, lapply(test_names, function(nm) {
+        parts <- strsplit(nm, " ", fixed = TRUE)[[1]]
+        cur <- ci[[nm]]
+        data.frame(
+            group = paste(parts[-length(parts)], collapse = " "),
+            cause = parts[length(parts)],
+            time = as.numeric(cur$time),
+            est = as.numeric(cur$est),
+            var = as.numeric(cur$var),
+            stringsAsFactors = FALSE
+        )
+    }))
+    data.table::fwrite(rows, file.path(out_dir, "cuminc_reference_0.csv"))
+    data.table::fwrite(tests, file.path(out_dir, "cuminc_reference_1.csv"))
+    cat("OK cuminc\n")
+}

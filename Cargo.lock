@@ -1447,6 +1447,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "cmprsk"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1932,7 +1944,9 @@ dependencies = [
  "biofusion",
  "blake3",
  "chrono",
+ "cmprsk",
  "cpassoc",
+ "csv",
  "datafusion",
  "datalake",
  "derive_more",

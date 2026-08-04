@@ -47,6 +47,21 @@ case "$TEST_NAME" in
         OUTPUT_EDGE="_edge_roc_0.csv"
         COMPARE_COLS="auc"
         ;;
+    fine_gray)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"fg","kind":"fine_gray","spec":{"time_column":"time","status_column":"fstatus","covariates":["x1","x2","x3"],"cengroup_column":"cengroup","failcode":1,"cencode":0,"gtol":1e-6,"maxiter":10,"variance":true}}],"edges":[{"from":"src","from_port":0,"to":"fg","to_port":0}]}'
+        OUTPUT_EDGE="_edge_fg_0.csv"
+        COMPARE_COLS="term,coefficient,subhazard_ratio,std_error,z_stat,p_value,shr_ci_lower,shr_ci_upper"
+        ;;
+    fine_gray_tf)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"fg","kind":"fine_gray","spec":{"time_column":"time","status_column":"fstatus","covariates":["x1","x2"],"tv_covariates":["x1"],"time_functions":["square"],"failcode":1,"cencode":0,"variance":true}}],"edges":[{"from":"src","from_port":0,"to":"fg","to_port":0}]}'
+        OUTPUT_EDGE="_edge_fg_0.csv"
+        COMPARE_COLS="term,coefficient,subhazard_ratio,std_error,z_stat,p_value"
+        ;;
+    cuminc)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"ci","kind":"cuminc","spec":{"time_column":"time","status_column":"fstatus","group_column":"group","cencode":0}}],"edges":[{"from":"src","from_port":0,"to":"ci","to_port":0}]}'
+        OUTPUT_EDGE="_edge_ci_0.csv"
+        COMPARE_COLS="group,cause,time,est,var"
+        ;;
     *)
         echo "Unknown test: $TEST_NAME"
         exit 1

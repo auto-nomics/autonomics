@@ -42,6 +42,7 @@ susie = { path = "../../bio_crates/susie" }
 evalue = { path = "../../bio_crates/evalue" }
 statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
+cmprsk = { path = "../../stat_crates/cmprsk" }
 faer.workspace = true
 schemars.workspace = true
 visualization = { path = "../visualization" }
@@ -54,3 +55,4 @@ datalake = { path = "../datalake" }
 iceberg.workspace = true
 arrow-buffer.workspace = true
 tempfile = "3"
+csv = "1"

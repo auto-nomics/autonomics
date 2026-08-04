@@ -551,3 +551,200 @@ fn golden_mixed_supported_unsupported() {
         "echo should be skipped"
     );
 }
+
+// ── cmprsk: fine_gray ──────────────────────────────────────────────────────
+
+#[test]
+fn golden_fine_gray_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/fg.csv"}),
+            },
+            NodeEntry {
+                id: "fg".into(),
+                kind: "fine_gray".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "covariates": ["x1", "x2"],
+                    "failcode": 2,
+                    "cencode": 0,
+                    "variance": true
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "fg".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(script.source.contains("library(cmprsk)"), "cmprsk package");
+    assert!(script.source.contains("cmprsk::crr("), "calls crr()");
+    assert!(script.source.contains("failcode = 2"), "failcode");
+    assert!(script.source.contains("cencode = 0"), "cencode");
+    assert!(
+        script.source.contains("cov1 = as.matrix(src[, c(\"x1\", \"x2\"), drop = FALSE])"),
+        "cov1 matrix with names"
+    );
+    // both of the node's output ports must be written (one fwrite per port).
+    assert!(
+        script.source.contains("fwrite(fg, \"_edge_fg_0.csv\")"),
+        "port 0 written"
+    );
+    assert!(
+        script.source.contains("fwrite(fg_baseline_0, \"_edge_fg_1.csv\")"),
+        "port 1 written"
+    );
+    assert!(script.source.contains("baseline_cif"), "port-1 column");
+    assert!(
+        script.packages.contains(&"cmprsk".to_string()),
+        "fine_gray requires cmprsk"
+    );
+}
+
+#[test]
+fn golden_fine_gray_tf_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/fg.csv"}),
+            },
+            NodeEntry {
+                id: "fg".into(),
+                kind: "fine_gray".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "covariates": ["x1"],
+                    "tv_covariates": ["x1"],
+                    "time_functions": ["log"],
+                    "cengroup_column": "grp"
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "fg".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(
+        script.source.contains("tf = function(uft) cbind(log(uft))"),
+        "tf closure from TimeFn::Log"
+    );
+    assert!(
+        script.source.contains("cov2 = as.matrix(src[, c(\"x1\"), drop = FALSE])"),
+        "cov2 matrix"
+    );
+    assert!(script.source.contains("cengroup = src$grp"), "cengroup column");
+}
+
+// ── cmprsk: cuminc ─────────────────────────────────────────────────────────
+
+#[test]
+fn golden_cuminc_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/ci.csv"}),
+            },
+            NodeEntry {
+                id: "ci".into(),
+                kind: "cuminc".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus",
+                    "group_column": "group",
+                    "rho": 1.0,
+                    "cencode": 0
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "ci".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(script.source.contains("cmprsk::cuminc("), "calls cuminc()");
+    assert!(script.source.contains("group = src$group"), "group column");
+    assert!(script.source.contains("rho = 1"), "rho");
+    assert!(script.source.contains("Tests"), "Gray's tests on port 1");
+    assert!(
+        script.source.contains("fwrite(ci, \"_edge_ci_0.csv\")"),
+        "port 0 (curves) written"
+    );
+    assert!(
+        script.source.contains("fwrite(cuminc_tests_0, \"_edge_ci_1.csv\")"),
+        "port 1 (tests) written"
+    );
+}
+
+#[test]
+fn golden_cuminc_no_group_omits_tests() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/ci.csv"}),
+            },
+            NodeEntry {
+                id: "ci".into(),
+                kind: "cuminc".into(),
+                spec: serde_json::json!({
+                    "time_column": "time",
+                    "status_column": "fstatus"
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "ci".into(),
+            to_port: 0,
+        }],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    // single-group analysis: no group column is passed and the port-1 test
+    // table is still emitted (empty).
+    assert!(
+        !script.source.contains("group = src$"),
+        "no group column when grouping is absent"
+    );
+    assert!(script.source.contains("character(0)"), "empty tests table");
+}
