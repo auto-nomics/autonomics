@@ -164,30 +164,34 @@ impl NodeFactory for MediationNodeFactory {
         let m_model = ctx.fresh_var("model_m");
         let y_model = ctx.fresh_var("model_y");
         let med = ctx.fresh_var("med_result");
-        let input = input_0(ctx);
+        let med_smry = ctx.fresh_var("med_smry");
+        let input = input_0(ctx).to_string();
         let code = vec![
             format!("# Mediation analysis"),
-            format!(
-                "# Mediator model: {} ~ {}{}",
-                s.mediator_column, s.exposure_column, covars
-            ),
-            format!(
-                "{m_model} <- lm({} ~ {}{}, data = {input})",
-                s.mediator_column, s.exposure_column, covars
-            ),
-            format!(
-                "# Outcome model: {} ~ {} + {}{}",
-                s.outcome_column, s.exposure_column, s.mediator_column, covars
-            ),
-            format!(
-                "{y_model} <- lm({} ~ {} + {}{}, data = {input})",
-                s.outcome_column, s.exposure_column, s.mediator_column, covars
-            ),
-            format!(
-                "{med} <- mediate({m_model}, {y_model}, treat = \"{}\", mediator = \"{}\", boot = TRUE, sims = {})",
-                s.exposure_column, s.mediator_column, s.n_bootstrap
-            ),
-            format!("{out} <- summary({med})"),
+            format!("# Mediator model: {} ~ {}{}", s.mediator_column, s.exposure_column, covars),
+            format!("{m_model} <- lm({} ~ {}{}, data = {input})", s.mediator_column, s.exposure_column, covars),
+            format!("# Outcome model: {} ~ {} + {}{}", s.outcome_column, s.exposure_column, s.mediator_column, covars),
+            format!("{y_model} <- lm({} ~ {} + {}{}, data = {input})", s.outcome_column, s.exposure_column, s.mediator_column, covars),
+            format!("set.seed({})", s.seed),
+            format!("{med} <- mediate({m_model}, {y_model}, treat = \"{}\", mediator = \"{}\", boot = TRUE, sims = {})",
+                s.exposure_column, s.mediator_column, s.n_bootstrap),
+            format!("{med_smry} <- summary({med})"),
+            format!("{out} <- data.frame("),
+            format!("  nde = as.numeric({med_smry}$d0),"),
+            format!("  nde_ci_lower = as.numeric({med_smry}$d0.ci[1]),"),
+            format!("  nde_ci_upper = as.numeric({med_smry}$d0.ci[2]),"),
+            format!("  nie = as.numeric({med_smry}$z0),"),
+            format!("  nie_ci_lower = as.numeric({med_smry}$z0.ci[1]),"),
+            format!("  nie_ci_upper = as.numeric({med_smry}$z0.ci[2]),"),
+            format!("  te = as.numeric({med_smry}$tau.coef),"),
+            format!("  te_ci_lower = as.numeric({med_smry}$tau.ci[1]),"),
+            format!("  te_ci_upper = as.numeric({med_smry}$tau.ci[2]),"),
+            format!("  prop_mediated = as.numeric({med_smry}$n.avg),"),
+            format!("  alpha_x = as.numeric(coef({m_model})[2]),"),
+            format!("  beta_x = as.numeric(coef({y_model})[2]),"),
+            format!("  beta_m = as.numeric(coef({y_model})[3]),"),
+            format!("  n_obs = as.integer(nobs({y_model}))"),
+            format!(")"),
             format!("print({out})"),
         ];
         Ok(crate::codegen::NodeCodegen::simple(code, out))

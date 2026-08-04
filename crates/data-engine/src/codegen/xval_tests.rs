@@ -422,3 +422,89 @@ fn causal_iptw() {
     let script = compile_and_write(manifest, "causal_iptw");
     assert!(script.source.contains("weights = "));
 }
+
+// ── mediation ──────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mediation; run with DIFFTESTS=1"]
+fn mediation() {
+    let data_csv = format!("{XVAL_DIR}/mediation_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mediation {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "med".into(),
+                kind: "mediation".into(),
+                spec: serde_json::json!({
+                    "exposure_column": "x",
+                    "mediator_column": "m",
+                    "outcome_column": "y",
+                    "covariates": [],
+                    "interaction": false,
+                    "n_bootstrap": 200,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "med".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mediation");
+    assert!(script.source.contains("mediate("));
+}
+
+// ── epi_rcs ────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + rms; run with DIFFTESTS=1"]
+fn epi_rcs() {
+    let data_csv = format!("{XVAL_DIR}/epi_rcs_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R epi_rcs {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "rcs".into(),
+                kind: "epi_rcs".into(),
+                spec: serde_json::json!({
+                    "x_column": "x",
+                    "outcome_column": "y",
+                    "covariates": [],
+                    "n_knots": 4,
+                    "n_grid_points": 50
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "rcs".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "epi_rcs");
+    assert!(script.source.contains("rcs("));
+}

@@ -375,4 +375,49 @@ mod tests {
         // Peak should be somewhere in the data range.
         assert!(peak >= 0.0 && peak <= 10.0);
     }
+
+    #[test]
+    fn p_overall_no_underflow_for_strong_signal() {
+        // Very strong signal → large LR statistic → p_overall should be
+        // tiny but NOT exactly 0.0 (the old `1.0 - cdf` formulation
+        // catastrophically cancelled to zero).
+        let n = 500;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64) / n as f64 * 10.0).collect();
+        let y: Vec<u64> = x
+            .iter()
+            .map(|&xi| if xi > 6.0 { 1u64 } else { 0u64 })
+            .collect();
+
+        let res = rcs_logistic(&x, &y, 3, &[]).unwrap();
+        assert!(
+            res.p_overall > 0.0 && res.p_overall < 1e-10,
+            "p_overall should be tiny but not 0.0, got {}",
+            res.p_overall
+        );
+    }
+
+    #[test]
+    fn predict_log_odds_with_se_returns_valid_ci() {
+        let n = 200;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64) / n as f64 * 10.0).collect();
+        let y: Vec<u64> = x
+            .iter()
+            .map(|&xi| if xi > 5.0 { 1u64 } else { 0u64 })
+            .collect();
+
+        let res = rcs_logistic(&x, &y, 4, &[]).unwrap();
+
+        // Check SE and CI at a few grid points.
+        for &xv in &[1.0, 3.0, 5.0, 7.0, 9.0] {
+            let (eta, se) = predict_log_odds_with_se(&res.spline_fit, &res.knots, xv, &[]);
+            assert!(se.is_finite() && se >= 0.0, "SE should be non-negative at x={xv}, got {se}");
+            let or = eta.exp();
+            let or_lo = (eta - 1.96 * se).exp();
+            let or_hi = (eta + 1.96 * se).exp();
+            assert!(
+                or_lo <= or && or <= or_hi,
+                "OR should be within CI band at x={xv}: or={or}, lo={or_lo}, hi={or_hi}"
+            );
+        }
+    }
 }

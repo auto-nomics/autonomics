@@ -275,3 +275,63 @@ if (test_name == "causal_iptw") {
     data.table::fwrite(ref, file.path(out_dir, "causal_iptw_reference.csv"))
     cat("OK causal_iptw\n")
 }
+
+# ── mediation ──────────────────────────────────────────────────────────────
+if (test_name == "mediation") {
+    n <- 200
+    x <- rnorm(n, 10, 3)
+    m <- 0.5 + 0.8 * x + rnorm(n, sd = 1)
+    y <- 1.0 + 0.3 * x + 0.6 * m + rnorm(n, sd = 1)
+    df <- data.frame(x = x, m = m, y = y)
+    data_path <- file.path(out_dir, "mediation_data.csv")
+    data.table::fwrite(df, data_path)
+
+    model_m <- lm(m ~ x, data = df)
+    model_y <- lm(y ~ x + m, data = df)
+    set.seed(42)
+    med <- mediation::mediate(model_m, model_y, treat = "x", mediator = "m",
+                              boot = TRUE, sims = 200)
+    smry <- summary(med)
+    ref <- data.frame(
+        nde = smry$d0,
+        nde_ci_lower = smry$d0.ci[1],
+        nde_ci_upper = smry$d0.ci[2],
+        nie = smry$z0,
+        nie_ci_lower = smry$z0.ci[1],
+        nie_ci_upper = smry$z0.ci[2],
+        te = smry$tau.coef,
+        alpha_x = coef(model_m)["x"],
+        beta_x = coef(model_y)["x"],
+        beta_m = coef(model_y)["m"],
+        n_obs = nobs(model_y)
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mediation_reference.csv"))
+    cat("OK mediation\n")
+}
+
+# ── epi_rcs ────────────────────────────────────────────────────────────────
+if (test_name == "epi_rcs") {
+    n <- 300
+    x <- rnorm(n, 50, 10)
+    # Nonlinear relationship: quadratic + noise
+    log_odds <- -2 + 0.05 * (x - 50) + 0.002 * (x - 50)^2
+    prob <- 1 / (1 + exp(-log_odds))
+    y <- rbinom(n, 1, prob)
+    df <- data.frame(x = x, y = y)
+    data_path <- file.path(out_dir, "epi_rcs_data.csv")
+    data.table::fwrite(df, data_path)
+
+    # Reference using rms
+    ddist <- rms::datadist(df)
+    options(datadist = "ddist")
+    fit <- rms::lrm(y ~ rms::rcs(x, 4), data = df, x = TRUE)
+    ref <- data.frame(
+        lr_stat = fit$stats["Model L.R."],
+        p_overall = 1 - pchisq(fit$stats["Model L.R."], fit$stats["d.f."]),
+        n_knots = 4,
+        n_obs = fit$stats["Obs"]
+    )
+    options(datadist = NULL)
+    data.table::fwrite(ref, file.path(out_dir, "epi_rcs_reference.csv"))
+    cat("OK epi_rcs\n")
+}
