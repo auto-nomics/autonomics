@@ -161,9 +161,18 @@ impl NodeFactory for EpiRocNodeFactory {
                 s.label_column, s2
             ));
             code.push(format!("cat(\"AUC ({}):\", auc({roc2}), \"\\n\")", s2));
-            code.push(format!("{out} <- roc.test({roc1}, {roc2})"));
+            code.push(format!("{out} <- data.frame("));
+            code.push(format!("  score1 = \"{}\", auc1 = as.numeric(auc({roc1})),", s.score1_column));
+            code.push(format!("  score2 = \"{s2}\", auc2 = as.numeric(auc({roc2}))"));
+            code.push(format!(")"));
         } else {
-            code.push(format!("{out} <- ci.auc({roc1})"));
+            let ci_var = ctx.fresh_var("ci");
+            code.push(format!("{ci_var} <- ci.auc({roc1})"));
+            code.push(format!("{out} <- data.frame("));
+            code.push(format!("  auc = as.numeric(auc({roc1})),"));
+            code.push(format!("  ci_lower = as.numeric({ci_var})[1],"));
+            code.push(format!("  ci_upper = as.numeric({ci_var})[3]"));
+            code.push(format!(")"));
         }
         code.push(format!("print({out})"));
         Ok(crate::codegen::NodeCodegen::simple(code, out))

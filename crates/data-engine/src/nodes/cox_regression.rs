@@ -138,13 +138,31 @@ impl NodeFactory for CoxRegressionNodeFactory {
     ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
         use crate::codegen::helpers::*;
         let s = parse_spec::<CoxRegressionNodeSpec>(spec, "cox_regression")?;
-        let input = input_0(ctx);
         let out = ctx.output_var.to_string();
+        let fit = ctx.fresh_var("cox_fit");
+        let smry = ctx.fresh_var("cox_smry");
+        let input = input_0(ctx).to_string();
         let preds = s.predictors.join(" + ");
         let formula = format!("Surv({}, {}) ~ {}", s.time_column, s.event_column, preds);
         let code = vec![
             format!("# Cox proportional hazards regression"),
-            format!("{out} <- summary(coxph({formula}, data = {input}))"),
+            format!("{fit} <- coxph({formula}, data = {input})"),
+            format!("{smry} <- summary({fit})"),
+            format!("{out} <- data.frame("),
+            format!("  term = rownames({smry}$coefficients),"),
+            format!("  coefficient = {smry}$coefficients[, \"coef\"],"),
+            format!("  std_error = {smry}$coefficients[, \"se(coef)\"],"),
+            format!("  z_stat = {smry}$coefficients[, \"z\"],"),
+            format!("  p_value = {smry}$coefficients[, \"Pr(>|z|)\"]"),
+            format!(")"),
+            format!("{out}$hazard_ratio <- exp({out}$coefficient)"),
+            format!("{out}$hr_ci_lower <- exp({smry}$conf.int[, \"lower .95\"])"),
+            format!("{out}$hr_ci_upper <- exp({smry}$conf.int[, \"upper .95\"])"),
+            format!("{out}$log_likelihood <- {fit}$loglik[2]"),
+            format!("{out}$concordance <- {smry}$concordance[1]"),
+            format!("{out}$n_obs <- {fit}$n"),
+            format!("{out}$n_events <- {fit}$nevent"),
+            format!("{out}$converged <- TRUE"),
             format!("print({out})"),
         ];
         Ok(crate::codegen::NodeCodegen::simple(code, out))

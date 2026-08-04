@@ -126,14 +126,22 @@ impl NodeFactory for ChiSquareNodeFactory {
     ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
         use crate::codegen::helpers::*;
         let s = parse_spec::<ChiSquareNodeSpec>(spec, "chi_square")?;
-        let input = input_0(ctx);
         let out = ctx.output_var.to_string();
+        let test_var = ctx.fresh_var("chisq");
+        let input = input_0(ctx).to_string();
         let code = vec![
             format!("# Chi-square test"),
             format!(
-                "{out} <- chisq.test(table({input}${}, {input}${}))",
+                "{test_var} <- chisq.test(table({input}${}, {input}${}))",
                 s.row_column, s.col_column
             ),
+            format!("{out} <- data.frame("),
+            format!("  chi_squared = as.numeric({test_var}$statistic),"),
+            format!("  df = as.integer({test_var}$parameter),"),
+            format!("  p_value = {test_var}$p.value,"),
+            format!("  n = sum({test_var}$observed),"),
+            format!("  small_expected = sum({test_var}$expected < 5)"),
+            format!(")"),
             format!("print({out})"),
         ];
         Ok(crate::codegen::NodeCodegen::simple(code, out))

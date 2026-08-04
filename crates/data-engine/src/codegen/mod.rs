@@ -24,3 +24,6 @@ pub use context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod xval_tests;
