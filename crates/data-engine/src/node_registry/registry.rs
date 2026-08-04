@@ -54,6 +54,7 @@ use crate::nodes::{
     mrlap::MrlapNodeFactory,
     mrpresso::MrpressoNodeFactory,
     mtag::MtagNodeFactory,
+    mvmr::MvmrNodeFactory,
     sink_file::FileSinkNodeFactory,
     sink_iceberg::IcebergSinkNodeFactory,
     source_file::FileSourceNodeFactory,
@@ -281,6 +282,7 @@ impl NodeRegistry {
         registry.register(Box::new(BivariateMixerNodeFactory {}));
         registry.register(Box::new(CausalNodeFactory {}));
         registry.register(Box::new(MtagNodeFactory {}));
+        registry.register(Box::new(MvmrNodeFactory {}));
         registry.register(Box::new(CpassocNodeFactory {}));
         registry.register(Box::new(VizNodeFactory {}));
         registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
