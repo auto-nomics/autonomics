@@ -15,6 +15,7 @@ pub mod echo_node;
 pub mod evalue;
 pub mod epi_lasso;
 pub mod epi_rcs;
+pub mod hypothesize;
 pub mod epi_roc;
 pub mod epi_wqs;
 pub mod hdl_l;

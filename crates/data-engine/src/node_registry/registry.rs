@@ -268,6 +268,7 @@ impl NodeRegistry {
         registry.register(Box::new(MagmaGeneNodeFactory {}));
         registry.register(Box::new(MagmaSetNodeFactory {}));
         registry.register(Box::new(MagmaMetaNodeFactory {}));
+        crate::nodes::hypothesize::register_all(&mut registry);
         registry
     }
 
