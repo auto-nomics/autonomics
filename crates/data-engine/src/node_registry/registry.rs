@@ -48,6 +48,7 @@ use crate::nodes::{
     },
     mediation::MediationNodeFactory,
     mrlap::MrlapNodeFactory,
+    mrpresso::MrpressoNodeFactory,
     mtag::MtagNodeFactory,
     sink_file::FileSinkNodeFactory,
     sink_iceberg::IcebergSinkNodeFactory,
@@ -248,6 +249,7 @@ impl NodeRegistry {
         registry.register(Box::new(EvalueNodeFactory {}));
         registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));
+        registry.register(Box::new(MrpressoNodeFactory {}));
         registry.register(Box::new(LavaLocusNodeFactory {}));
         registry.register(Box::new(LavaUnivNodeFactory {}));
         registry.register(Box::new(LavaBivarNodeFactory {}));

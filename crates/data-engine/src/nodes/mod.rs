@@ -32,6 +32,7 @@ pub mod magma;
 pub mod mediation;
 pub mod meta;
 pub mod mrlap;
+pub mod mrpresso;
 pub mod mtag;
 pub mod numeric_util;
 pub mod sink_common;
@@ -67,6 +68,7 @@ pub use linear_regression::{
 };
 pub use meta::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port};
 pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
+pub use mrpresso::{MrpressoConfig, MrpressoNode, MrpressoNodeFactory};
 pub use mtag::{MtagConfig, MtagNode, MtagNodeFactory};
 pub use sink_common::SinkMode;
 pub use sink_file::{FileSinkNode, FileSinkNodeFactory, FileSinkNodeSpec, WriteFormat};
