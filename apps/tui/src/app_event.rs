@@ -11,7 +11,6 @@
 /// communication (file search, plugin watchers, background tasks) modelled
 /// after codex's `AppEvent` pattern. Kept so the channel plumbing in `App`
 /// stays type-checked as it gets wired up.
-#[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum AppEvent {
     /// An event from the agent runtime (text delta, tool call, etc.).
@@ -24,4 +23,11 @@ pub(crate) enum AppEvent {
     Quit,
     /// Config data changed; the Config tab should reload from the database.
     ConfigReload,
+    /// A new agent was spawned (or failed to spawn) from a profile.
+    /// Sent by the background tokio task spawned in
+    /// `App::spawn_agent_from_profile`.
+    AgentSpawned {
+        profile_name: String,
+        result: std::result::Result<runtime::AgentHandle, String>,
+    },
 }

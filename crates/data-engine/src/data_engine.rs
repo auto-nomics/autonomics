@@ -33,10 +33,15 @@ pub struct DataEngine {
     /// mutable `SessionContext` state can never accumulate across runs.
     engine_ctx: crate::node_registry::registry::NodeCtx,
     dag: DAG,
-    node_registry: NodeRegistry,
+    /// Shared, immutable after construction. Wrapped in `Arc` so that
+    /// [`DataEngine::new_session`] can share it across per-agent engines
+    /// without rebuilding the ~70 factories.
+    node_registry: Arc<NodeRegistry>,
     config: SchedulerConfig,
     /// Optional DAG history store. When `Some`, every `run()` automatically
     /// commits a snapshot of the current DAG manifest + run report.
+    /// `DagHistory` wraps a `turso::Connection` (Arc-backed, `Clone`), so
+    /// cloned engines share the same DB file.
     history: Option<DagHistory>,
     /// The history ref that [`Self::run`] commits to (default `"main"`).
     /// Switch via [`Self::set_history_ref`] to isolate unrelated analysis
@@ -77,7 +82,7 @@ impl DataEngine {
             datalake,
             engine_ctx,
             dag: DAG::default(),
-            node_registry,
+            node_registry: Arc::new(node_registry),
             config: SchedulerConfig::default(),
             history: None,
             history_ref: "main".to_string(),
@@ -200,7 +205,7 @@ impl DataEngine {
         target: crate::codegen::CodegenTarget,
     ) -> Result<crate::codegen::CompiledScript> {
         let compiler = crate::codegen::DagCompiler {
-            registry: &self.node_registry,
+            registry: &*self.node_registry,
         };
         compiler
             .compile_dag(&self.dag, target)
@@ -508,6 +513,30 @@ impl DataEngine {
     pub fn with_history_ref(mut self, ref_name: impl Into<String>) -> Self {
         self.history_ref = ref_name.into();
         self
+    }
+
+    /// Create a new **isolated session** sharing all heavy infrastructure
+    /// (NodeRegistry, RuntimeEnv, Iceberg catalog, DagHistory DB) but with
+    /// a fresh empty DAG and an independent history ref.
+    ///
+    /// This is the per-agent constructor: each agent calls this to get its
+    /// own DAG graph without duplicating the ~70 node factories, DataFusion
+    /// runtime, or Turso DB connection. The cost is negligible — every
+    /// shared field is `Arc`-backed or `Clone`-cheap.
+    ///
+    /// The new session starts with `history_ref = "main"`.
+    pub fn new_session(&self) -> Self {
+        Self {
+            ctx: self.ctx.clone(),
+            datalake: self.datalake.clone(),
+            engine_ctx: self.engine_ctx.clone(),
+            dag: DAG::default(),
+            node_registry: Arc::clone(&self.node_registry),
+            config: self.config.clone(),
+            history: self.history.clone(),
+            history_ref: "main".to_string(),
+            pending_commit_message: None,
+        }
     }
 
     /// Switch the history ref at runtime.

@@ -50,6 +50,11 @@ pub struct AgentRuntime {
     cancel_token: CancellationToken,
     /// Shared storage handle (when persistence is enabled).
     storage: Option<Arc<dyn AgentStorage>>,
+    /// The model slot used by this agent's run loop. When the agent uses the
+    /// global default model, this Arc is shared with the caller's handle.
+    /// When the agent has a per-agent model (from profile.preferred_model),
+    /// this is a dedicated `ArcSwapOption`.
+    model: Arc<ArcSwapOption<Model>>,
 }
 
 impl AgentRuntime {
@@ -77,18 +82,14 @@ impl AgentRuntime {
         model: Arc<ArcSwapOption<Model>>,
         config: RuntimeConfig,
     ) -> Result<Self> {
-        eprintln!(
-            "[runtime] starting agent {:?}: {}",
-            config.name,
-            config.summary()
-        );
+        tracing::info!(name = ?config.name, "{}", config.summary());
 
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
 
-        let (internal_tx, engine_handle, agent_handle, storage) = runtime.block_on(async {
+        let (internal_tx, engine_handle, agent_handle, storage, model_handle) = runtime.block_on(async {
             // ── DataEngine ───────────────────────────────────────────────
             let mut engine_builder =
                 DataEngine::builder().register_opendal_fs(file_storage.clone())?;
@@ -107,18 +108,11 @@ impl AgentRuntime {
                 }
                 engine = match DagHistory::open(history_db).await {
                     Ok(history) => {
-                        eprintln!(
-                            "[runtime] DAG history store opened: {}",
-                            history_db.display()
-                        );
+                        tracing::info!(path = %history_db.display(), "DAG history store opened");
                         engine.with_history(history)
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[runtime] WARNING: failed to open DAG history store at {}: {e}. \
-                             History/ref tools will be disabled.",
-                            history_db.display()
-                        );
+                        tracing::warn!(path = %history_db.display(), error = %e, "failed to open DAG history store; history/ref tools disabled");
                         engine
                     }
                 };
@@ -141,18 +135,11 @@ impl AgentRuntime {
             let storage: Option<Arc<dyn AgentStorage>> =
                 match TursoAgentStorage::open(&config.agent_db).await {
                     Ok(s) => {
-                        eprintln!(
-                            "[runtime] agent storage opened: {}",
-                            config.agent_db.display()
-                        );
+                        tracing::info!(path = %config.agent_db.display(), "agent storage opened");
                         Some(Arc::new(s))
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[runtime] WARNING: agent storage at {} failed: {e}. \
-                             Persistence disabled.",
-                            config.agent_db.display()
-                        );
+                        tracing::warn!(path = %config.agent_db.display(), error = %e, "agent storage failed; persistence disabled");
                         None
                     }
                 };
@@ -175,15 +162,12 @@ impl AgentRuntime {
 
                 // Try to restore from existing registry.
                 if let Ok(Some(record)) = storage.get_agent_by_name(&config.name).await {
-                    eprintln!(
-                        "[runtime] restoring agent {} from storage (id={})",
-                        config.name, record.id
-                    );
+                    tracing::info!(agent = %config.name, agent_id = %record.id, "restoring agent from storage");
                     builder = builder.with_id(record.id);
 
                     if let Ok(memory) = restore_memory(storage.as_ref(), record.id).await {
                         builder = builder.with_memory(memory);
-                        eprintln!("[runtime] memory restored from snapshot + WAL");
+                        tracing::info!("memory restored from snapshot + WAL");
                     }
                 }
             }
@@ -191,12 +175,13 @@ impl AgentRuntime {
             let mut agent = builder.build().await?;
 
             let tx = agent.internal_event_tx();
+            let model_handle = agent.model_handle().clone();
 
             let agent_handle = tokio::spawn(async move {
                 agent.run().await;
             });
 
-            Ok::<_, RuntimeError>((tx, engine_handle, agent_handle, storage))
+            Ok::<_, RuntimeError>((tx, engine_handle, agent_handle, storage, model_handle))
         })?;
 
         Ok(Self {
@@ -206,6 +191,7 @@ impl AgentRuntime {
             agent_handle,
             cancel_token,
             storage,
+            model: model_handle,
         })
     }
 
@@ -245,5 +231,15 @@ impl AgentRuntime {
     /// Returns the shared storage handle, if persistence is enabled.
     pub fn storage(&self) -> Option<&Arc<dyn AgentStorage>> {
         self.storage.as_ref()
+    }
+
+    /// Returns a handle to this agent's model slot.
+    ///
+    /// Callers can `.store(Some(Arc::new(model)))` to hot-swap the model.
+    /// When the agent uses the global default, this Arc is the same object
+    /// the caller passed in. When the agent has a per-agent model, this is
+    /// a dedicated slot.
+    pub fn model_handle(&self) -> &Arc<ArcSwapOption<Model>> {
+        &self.model
     }
 }

@@ -1,4 +1,6 @@
-pub mod agent_tab_widget;
+pub mod agent_leaf;
+pub mod agent_sidebar;
+pub mod agent_workspace;
 pub mod chat_widget;
 pub mod command_palette;
 pub mod input_area;

@@ -7,6 +7,16 @@ use crate::dag::runtime::RuntimeStatus;
 use crate::error::Result as EngineResult;
 use schemars;
 
+/// Envelope that routes a [`DataEngineCmd`] to the right session (agent).
+///
+/// Each agent has its own DAG graph but shares the engine's heavy
+/// infrastructure (NodeRegistry, RuntimeEnv, DagHistory). The server looks
+/// up `session_id` in its `HashMap<String, DataEngine>` and delegates.
+pub struct EngineMsg {
+    pub session_id: String,
+    pub cmd: DataEngineCmd,
+}
+
 pub enum DataEngineCmd {
     AddNode {
         id: String,

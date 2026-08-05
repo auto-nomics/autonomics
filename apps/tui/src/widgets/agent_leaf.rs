@@ -14,14 +14,17 @@ use crate::widgets::{
     tool_exec_widget::ToolExecWidget,
 };
 
-/// Composite widget that renders the entire Agent tab: status bar, chat area with
-/// scrollbar, borderless input area, and a keybinding hint footer.
-pub struct AgentTabWidget<'a> {
+/// Renders a single agent's conversation surface: status bar, chat area,
+/// input composer, and footer hint. One `AgentLeaf` corresponds to one
+/// running agent within the [`AgentWorkspace`](super::agent_workspace::AgentWorkspace).
+pub struct AgentLeaf<'a> {
     /// Active model name shown on the composer border.
     pub active_model: Option<&'a str>,
+    /// Agent name shown in the status bar.
+    pub agent_name: Option<&'a str>,
 }
 
-impl StatefulWidgetRef for AgentTabWidget<'_> {
+impl StatefulWidgetRef for AgentLeaf<'_> {
     type State = AgentTabState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {

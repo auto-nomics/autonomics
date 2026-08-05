@@ -51,9 +51,9 @@ impl Rng {
         }
         s = 69069u32.wrapping_mul(s).wrapping_add(1);
         let mut mt = [0u32; N];
-        for i in 0..N {
+        for slot in mt.iter_mut().take(N) {
             s = 69069u32.wrapping_mul(s).wrapping_add(1);
-            mt[i] = s;
+            *slot = s;
         }
         Rng { mt, mti: N }
     }
@@ -107,8 +107,11 @@ impl Rng {
     /// consumes 0..k additional `runif`s.
     pub fn exp_rand(&mut self) -> f64 {
         // q[k-1] = sum(log(2)^k / k!)  k=1,..,16; q[15] = 1.0
+        // Trailing digits beyond f64 precision are kept to mirror R's
+        // `nmath/snorm.c` source; suppress clippy's truncation suggestion.
+        #[allow(clippy::excessive_precision)]
         const Q: [f64; 16] = [
-            0.6931471805599453,
+            std::f64::consts::LN_2,
             0.9333736875190459,
             0.9888777961838675,
             0.9984959252914960,
@@ -149,7 +152,8 @@ impl Rng {
         let mut umin = ustar;
         loop {
             // i is the index *before* increment; we compare u > q[i], then i++.
-            if !(u > Q[i]) {
+            // Use partial_cmp: matches `!(u > Q[i])` including the NaN case.
+            if !matches!(u.partial_cmp(&Q[i]), Some(std::cmp::Ordering::Greater)) {
                 return a + umin * Q[0];
             }
             ustar = self.runif();
@@ -171,6 +175,9 @@ impl Rng {
     /// Faithful port of `nmath/rgamma.c`. Note: shape is α (the "a" parameter),
     /// `scale` = 1/rate; mean = shape·scale.
     pub fn rgamma(&mut self, shape: f64, scale: f64) -> f64 {
+        // constants — full-precision literals from R's `nmath/rgamma.c`;
+        // extra digits are kept verbatim for cross-validation provenance.
+        #[allow(clippy::excessive_precision)]
         // constants
         const SQRT32: f64 = 5.656854;
         const EXP_M1: f64 = 0.36787944117144232159;
@@ -252,8 +259,11 @@ impl Rng {
         if x > 0.0 {
             let v = t / (s + s);
             let q = if v.abs() <= 0.25 {
-                q0 + 0.5 * t * t
-                    * ((((((A7 * v + A6) * v + A5) * v + A4) * v + A3) * v + A2) * v + A1) * v
+                q0 + 0.5
+                    * t
+                    * t
+                    * ((((((A7 * v + A6) * v + A5) * v + A4) * v + A3) * v + A2) * v + A1)
+                    * v
             } else {
                 q0 - s * t + 0.25 * t * t + (s2 + s2) * (1.0 + v).ln()
             };
@@ -270,8 +280,11 @@ impl Rng {
             if t2 >= -0.71874483771719 {
                 let v = t2 / (s + s);
                 let q = if v.abs() <= 0.25 {
-                    q0 + 0.5 * t2 * t2
-                        * ((((((A7 * v + A6) * v + A5) * v + A4) * v + A3) * v + A2) * v + A1) * v
+                    q0 + 0.5
+                        * t2
+                        * t2
+                        * ((((((A7 * v + A6) * v + A5) * v + A4) * v + A3) * v + A2) * v + A1)
+                        * v
                 } else {
                     q0 - s * t2 + 0.25 * t2 * t2 + (s2 + s2) * (1.0 + v).ln()
                 };
@@ -297,7 +310,11 @@ impl Rng {
             v = 65536 * v + v1;
             n += 16;
         }
-        let mask = if bits >= 63 { -1i64 } else { (1i64 << bits) - 1 };
+        let mask = if bits >= 63 {
+            -1i64
+        } else {
+            (1i64 << bits) - 1
+        };
         (v & mask) as f64
     }
 
@@ -311,7 +328,9 @@ impl Rng {
         let bits = dn.log2().ceil() as i32;
         loop {
             let dv = self.rbits(bits);
-            if !(dn <= dv) {
+            // Matches `!(dn <= dv)` including the NaN case.
+            if !matches!(dn.partial_cmp(&dv), Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
+            {
                 return dv;
             }
         }
@@ -499,6 +518,7 @@ fn dnorm(x: f64, mean: f64, sd: f64) -> f64 {
 
 /// Wichura's AS 241 normal quantile, transcribed from R's `qnorm.c`
 /// (`qnorm5`), for `lower.tail = TRUE`, `log.p = FALSE`.
+#[allow(clippy::excessive_precision)] // AS 241 coefficients kept verbatim from R source
 pub fn qnorm5(p: f64) -> f64 {
     debug_assert!(p > 0.0 && p < 1.0);
     let p_ = p;
@@ -613,11 +633,7 @@ pub fn qnorm5(p: f64) -> f64 {
             }
             x2.sqrt()
         };
-        if q < 0.0 {
-            -val
-        } else {
-            val
-        }
+        if q < 0.0 { -val } else { val }
     }
 }
 

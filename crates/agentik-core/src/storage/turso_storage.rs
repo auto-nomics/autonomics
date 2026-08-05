@@ -61,7 +61,8 @@ use uuid::Uuid;
 use agentik_sdk::types::messages::Message;
 
 use crate::storage::{
-    AgentRecord, AgentRelation, AgentSnapshot, AgentStorage, RelationKind, StorageError,
+    AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
+    RelationKind, StorageError,
 };
 
 /// Turso-backed implementation of [`AgentStorage`].
@@ -169,6 +170,15 @@ impl TursoAgentStorage {
                     ON messages(session_id, seq);
                 CREATE INDEX IF NOT EXISTS idx_messages_agent_ts
                     ON messages(session_id, ts);
+
+                CREATE TABLE IF NOT EXISTS agent_profiles (
+                    id              TEXT PRIMARY KEY,
+                    name            TEXT NOT NULL UNIQUE,
+                    description     TEXT NOT NULL DEFAULT '',
+                    config_json     TEXT NOT NULL,
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL
+                );
                 ",
             )
             .await
@@ -633,6 +643,185 @@ where
     Ok(items)
 }
 
+// ── AgentProfileRegistry impl ───────────────────────────────────
+
+fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
+    let id_str = text_col(row, 0)?;
+    let name = text_col(row, 1)?;
+    let description = text_col(row, 2)?;
+    let config_str = text_col(row, 3)?;
+    let created_at = int_col(row, 4)?;
+    let updated_at = int_col(row, 5)?;
+
+    // The config_json stores everything except id/name/timestamps.
+    let config: serde_json::Value = serde_json::from_str(&config_str)?;
+
+    Ok(AgentProfile {
+        id: Uuid::parse_str(&id_str)
+            .map_err(|e| StorageError::Other(format!("parse profile id: {e}").into()))?,
+        name,
+        description,
+        agent_identity: config
+            .get("agent_identity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("You are a helpful assistant.")
+            .to_string(),
+        system_prompt: config
+            .get("system_prompt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        enable_bibliography: config
+            .get("enable_bibliography")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_opengwas: config
+            .get("enable_opengwas")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_opentargets: config
+            .get("enable_opentargets")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_gwascatalog: config
+            .get("enable_gwascatalog")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_iceberg: config
+            .get("enable_iceberg")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_dag_history: config
+            .get("enable_dag_history")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        preferred_model: config
+            .get("preferred_model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        created_at,
+        updated_at,
+    })
+}
+
+/// Serialize the variable fields of a profile into a JSON value for storage
+/// in `config_json` (everything except `id`, `name`, `description`, and
+/// timestamps, which have their own columns).
+fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
+    serde_json::json!({
+        "agent_identity": profile.agent_identity,
+        "system_prompt": profile.system_prompt,
+        "enable_bibliography": profile.enable_bibliography,
+        "enable_opengwas": profile.enable_opengwas,
+        "enable_opentargets": profile.enable_opentargets,
+        "enable_gwascatalog": profile.enable_gwascatalog,
+        "enable_iceberg": profile.enable_iceberg,
+        "enable_dag_history": profile.enable_dag_history,
+        "preferred_model": profile.preferred_model,
+    })
+}
+
+#[async_trait]
+impl AgentProfileRegistry for TursoAgentStorage {
+    async fn create_profile(&self, profile: AgentProfile) -> Result<(), StorageError> {
+        let config_json = serde_json::to_string(&profile_to_config_json(&profile))?;
+        self.conn
+            .execute(
+                "INSERT INTO agent_profiles
+                    (id, name, description, config_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params_from_iter([
+                    Value::Text(profile.id.to_string()),
+                    Value::Text(profile.name),
+                    Value::Text(profile.description),
+                    Value::Text(config_json),
+                    Value::Integer(profile.created_at),
+                    Value::Integer(profile.updated_at),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn get_profile(&self, id: Uuid) -> Result<Option<AgentProfile>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, description, config_json, created_at, updated_at
+                 FROM agent_profiles WHERE id = ?1",
+                params_from_iter([Value::Text(id.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_profile(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn get_profile_by_name(&self, name: &str) -> Result<Option<AgentProfile>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, description, config_json, created_at, updated_at
+                 FROM agent_profiles WHERE name = ?1 LIMIT 1",
+                params_from_iter([Value::Text(name.to_string())]),
+            )
+            .await?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_profile(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_profiles(&self) -> Result<Vec<AgentProfile>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, description, config_json, created_at, updated_at
+                 FROM agent_profiles ORDER BY created_at ASC",
+                params_from_iter([] as [Value; 0]),
+            )
+            .await?;
+
+        collect_rows(&mut rows, row_to_profile).await
+    }
+
+    async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError> {
+        let config_json = serde_json::to_string(&profile_to_config_json(&profile))?;
+        self.conn
+            .execute(
+                "UPDATE agent_profiles
+                 SET name = ?2,
+                     description = ?3,
+                     config_json = ?4,
+                     updated_at = ?5
+                 WHERE id = ?1",
+                params_from_iter([
+                    Value::Text(profile.id.to_string()),
+                    Value::Text(profile.name),
+                    Value::Text(profile.description),
+                    Value::Text(config_json),
+                    Value::Integer(profile.updated_at),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "DELETE FROM agent_profiles WHERE id = ?1",
+                params_from_iter([Value::Text(id.to_string())]),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -952,5 +1141,133 @@ mod tests {
         store.delete_agent(agent_id).await.unwrap();
         assert!(store.get_agent(agent_id).await.unwrap().is_none());
         assert!(store.get_messages_since(agent_id, 0).await.unwrap().is_empty());
+    }
+
+    // ── AgentProfileRegistry ─────────────────────────────────
+
+    fn sample_profile(name: &str) -> AgentProfile {
+        AgentProfile {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            description: format!("Test profile: {name}"),
+            agent_identity: "You are a test agent.".into(),
+            system_prompt: Some("Custom prompt.".into()),
+            enable_bibliography: true,
+            enable_opengwas: false,
+            enable_opentargets: true,
+            enable_gwascatalog: false,
+            enable_iceberg: true,
+            enable_dag_history: false,
+            preferred_model: Some("anthropic:claude-sonnet-5".into()),
+            created_at: now_ms(),
+            updated_at: now_ms(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_profile_create_and_get() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let profile = sample_profile("test-profile");
+
+        store.create_profile(profile.clone()).await.unwrap();
+
+        let fetched = store.get_profile(profile.id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, profile.id);
+        assert_eq!(fetched.name, "test-profile");
+        assert_eq!(fetched.agent_identity, "You are a test agent.");
+        assert_eq!(fetched.system_prompt.as_deref(), Some("Custom prompt."));
+        assert!(fetched.enable_bibliography);
+        assert!(!fetched.enable_opengwas);
+        assert_eq!(
+            fetched.preferred_model.as_deref(),
+            Some("anthropic:claude-sonnet-5")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_profile_get_by_name() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let profile = sample_profile("by-name");
+
+        store.create_profile(profile).await.unwrap();
+
+        let fetched = store
+            .get_profile_by_name("by-name")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.name, "by-name");
+    }
+
+    #[tokio::test]
+    async fn test_profile_list_ordered() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let p1 = sample_profile("alpha");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let p2 = sample_profile("beta");
+
+        // Insert in reverse order.
+        store.create_profile(p2).await.unwrap();
+        store.create_profile(p1.clone()).await.unwrap();
+
+        let profiles = store.list_profiles().await.unwrap();
+        assert_eq!(profiles.len(), 2);
+        // Ordered by created_at ASC.
+        assert_eq!(profiles[0].name, "alpha");
+        assert_eq!(profiles[1].name, "beta");
+    }
+
+    #[tokio::test]
+    async fn test_profile_update() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let mut profile = sample_profile("updatable");
+        store.create_profile(profile.clone()).await.unwrap();
+
+        // Mutate fields.
+        profile.description = "Updated description.".into();
+        profile.enable_opengwas = true;
+        profile.agent_identity = "New identity.".into();
+        profile.updated_at = now_ms();
+        store.update_profile(profile.clone()).await.unwrap();
+
+        let fetched = store.get_profile(profile.id).await.unwrap().unwrap();
+        assert_eq!(fetched.description, "Updated description.");
+        assert!(fetched.enable_opengwas, "flag should be updated");
+        assert_eq!(fetched.agent_identity, "New identity.");
+    }
+
+    #[tokio::test]
+    async fn test_profile_delete() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let profile = sample_profile("deletable");
+        let id = profile.id;
+
+        store.create_profile(profile).await.unwrap();
+        assert!(store.get_profile(id).await.unwrap().is_some());
+
+        store.delete_profile(id).await.unwrap();
+        assert!(store.get_profile(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_seed_defaults_if_empty() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+
+        // Empty → should seed.
+        let seeded = store.seed_defaults_if_empty().await.unwrap();
+        assert!(seeded, "should seed on empty table");
+
+        let profiles = store.list_profiles().await.unwrap();
+        assert_eq!(profiles.len(), 3, "should have 3 default profiles");
+        assert!(profiles.iter().any(|p| p.name == "default"));
+        assert!(profiles.iter().any(|p| p.name == "literature"));
+        assert!(profiles.iter().any(|p| p.name == "gwas-analysis"));
+
+        // Non-empty → should NOT seed again.
+        let seeded_again = store.seed_defaults_if_empty().await.unwrap();
+        assert!(!seeded_again, "should not seed when table has data");
+
+        let profiles2 = store.list_profiles().await.unwrap();
+        assert_eq!(profiles2.len(), 3, "should still have 3 profiles");
     }
 }

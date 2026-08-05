@@ -634,8 +634,7 @@ fn mh_step_rng(
     for i in 0..n {
         quad += mu[i] * tmp[i];
     }
-    let diffliks =
-        0.5 * vcomps_star.logdet_vinv - 0.5 * vcomps.logdet_vinv - 0.5 / sigsq * quad;
+    let diffliks = 0.5 * vcomps_star.logdet_vinv - 0.5 * vcomps.logdet_vinv - 0.5 / sigsq * quad;
     let log_mh_ratio = diffliks + diffpriors + negdifflogproposal;
     let log_alpha = log_mh_ratio.min(0.0);
     let acc = rng.runif().ln() <= log_alpha;
@@ -668,10 +667,14 @@ fn mh_step_rng(
 fn hfun_calc(z: &[f64], ind: &[usize], which: usize) -> f64 {
     match which {
         1 => 4.0 * plogis(z[ind[0] - 1], 0.0, 0.3),
-        2 => {
-            0.25 * (z[ind[0] - 1] + z[ind[1] - 1] + 0.5 * z[ind[0] - 1] * z[ind[1] - 1])
+        2 => 0.25 * (z[ind[0] - 1] + z[ind[1] - 1] + 0.5 * z[ind[0] - 1] * z[ind[1] - 1]),
+        3 => {
+            4.0 * plogis(
+                0.25 * (z[ind[0] - 1] + z[ind[1] - 1] + 0.5 * z[ind[0] - 1] * z[ind[1] - 1]),
+                0.0,
+                0.3,
+            )
         }
-        3 => 4.0 * plogis(0.25 * (z[ind[0] - 1] + z[ind[1] - 1] + 0.5 * z[ind[0] - 1] * z[ind[1] - 1]), 0.0, 0.3),
         _ => 0.0,
     }
 }
@@ -856,7 +859,13 @@ pub fn kmbayes(
 
         // sigsq.eps update
         sigsq_eps[s] = sigsq_eps_update(
-            rng, &ycont, x, &beta_new, vcomps.vinv.as_ref(), cp.a_sigsq, cp.b_sigsq,
+            rng,
+            &ycont,
+            x,
+            &beta_new,
+            vcomps.vinv.as_ref(),
+            cp.a_sigsq,
+            cp.b_sigsq,
         );
 
         // lambda update
@@ -927,8 +936,19 @@ pub fn kmbayes(
                 RMethod::Equal => {
                     // single r for all forced
                     let res = r_update_one(
-                        rng, &r_sim, &forced, &delta_prev, &lambda_sim, &ycont, x, z,
-                        &beta_new, sigsq_eps[s], &vcomps, rparams, prior,
+                        rng,
+                        &r_sim,
+                        &forced,
+                        &delta_prev,
+                        &lambda_sim,
+                        &ycont,
+                        x,
+                        z,
+                        &beta_new,
+                        sigsq_eps[s],
+                        &vcomps,
+                        rparams,
+                        prior,
                     )?;
                     if res.acc {
                         vcomps = res.vcomps;
@@ -941,8 +961,19 @@ pub fn kmbayes(
                 RMethod::Varying => {
                     for &whichr in &forced {
                         let res = r_update_one(
-                            rng, &r_sim, &[whichr], &delta_prev, &lambda_sim, &ycont, x, z,
-                            &beta_new, sigsq_eps[s], &vcomps, rparams, prior,
+                            rng,
+                            &r_sim,
+                            &[whichr],
+                            &delta_prev,
+                            &lambda_sim,
+                            &ycont,
+                            x,
+                            z,
+                            &beta_new,
+                            sigsq_eps[s],
+                            &vcomps,
+                            rparams,
+                            prior,
                         )?;
                         r_sim = res.r;
                         if res.acc {
@@ -958,8 +989,20 @@ pub fn kmbayes(
         // rdelta update (varsel)
         if varsel {
             let res = rdelta_comp_update(
-                rng, &r_sim, &delta_prev, &lambda_sim, &ycont, x, z, &beta_new,
-                sigsq_eps[s], &vcomps, &ztest_1based, cp, rparams, prior,
+                rng,
+                &r_sim,
+                &delta_prev,
+                &lambda_sim,
+                &ycont,
+                x,
+                z,
+                &beta_new,
+                sigsq_eps[s],
+                &vcomps,
+                &ztest_1based,
+                cp,
+                rparams,
+                prior,
             )?;
             for j in 0..m {
                 delta[(s, j)] = res.delta[j];
@@ -1020,8 +1063,8 @@ fn r_update_one(
     let rcomp = r[whichcomp[0] - 1];
     // proposal
     let rcomp_star = rprop_gen(rng, rcomp, p, prior);
-    let negdiff = -rprop_logdens(rcomp_star, rcomp, p, prior)
-        + rprop_logdens(rcomp, rcomp_star, p, prior);
+    let negdiff =
+        -rprop_logdens(rcomp_star, rcomp, p, prior) + rprop_logdens(rcomp, rcomp_star, p, prior);
     let diffpriors = rprior_logdens(rcomp_star, p, prior) - rprior_logdens(rcomp, p, prior);
     let mut r_star = r.to_vec();
     for &c in whichcomp {
@@ -1030,8 +1073,22 @@ fn r_update_one(
     let delta_star = delta.to_vec();
     let lambda_star = lambda.to_vec();
     mh_step_rng(
-        rng, r, lambda, &lambda_star, &r_star, delta, &delta_star, y, x, z, beta, sigsq,
-        diffpriors, negdiff, vcomps, f64::NAN,
+        rng,
+        r,
+        lambda,
+        &lambda_star,
+        &r_star,
+        delta,
+        &delta_star,
+        y,
+        x,
+        z,
+        beta,
+        sigsq,
+        diffpriors,
+        negdiff,
+        vcomps,
+        f64::NAN,
     )
 }
 
@@ -1105,8 +1162,7 @@ fn rdelta_comp_update(
             - lgamma_fn(sum_delta + a_p0)
             - lgamma_fn(nz - sum_delta + b_p0))
             + sign * rprior_logdens(r_sel, p, prior);
-        negdiff = -move_prob_star.ln() + move_prob.ln()
-            - sign * rprop_logdens1(r_sel, p, prior);
+        negdiff = -move_prob_star.ln() + move_prob.ln() - sign * rprop_logdens1(r_sel, p, prior);
     } else {
         // move type 2: update r of a randomly selected included component
         let included: Vec<usize> = (0..delta.len())
@@ -1128,7 +1184,21 @@ fn rdelta_comp_update(
 
     let lambda_star = lambda.to_vec();
     mh_step_rng(
-        rng, r, lambda, &lambda_star, &r_star, delta, &delta_star, y, x, z, beta, sigsq,
-        diffpriors, negdiff, vcomps, move_type,
+        rng,
+        r,
+        lambda,
+        &lambda_star,
+        &r_star,
+        delta,
+        &delta_star,
+        y,
+        x,
+        z,
+        beta,
+        sigsq,
+        diffpriors,
+        negdiff,
+        vcomps,
+        move_type,
     )
 }

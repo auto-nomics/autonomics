@@ -841,6 +841,7 @@ macro_rules! model_node {
 }
 
 // Trait for specs that can execute themselves (avoids macro hygiene issues).
+#[async_trait]
 pub trait SpecExecute: Sized + Clone {
     async fn execute_spec(
         &self,
@@ -851,6 +852,7 @@ pub trait SpecExecute: Sized + Clone {
     ) -> Result<PortOutputs, DagError>;
 }
 
+#[async_trait]
 impl SpecExecute for SvyCoxphSpec {
     async fn execute_spec(
         &self,
@@ -918,6 +920,7 @@ impl SpecExecute for SvyCoxphSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvySurvregSpec {
     async fn execute_spec(
         &self,
@@ -987,6 +990,7 @@ impl SpecExecute for SvySurvregSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvyOlrSpec {
     async fn execute_spec(
         &self,
@@ -1073,6 +1077,7 @@ impl SpecExecute for SvyOlrSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvyLoglinSpec {
     async fn execute_spec(
         &self,
@@ -1143,6 +1148,7 @@ impl SpecExecute for SvyLoglinSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvyNlsSpec {
     async fn execute_spec(
         &self,
@@ -1156,6 +1162,7 @@ impl SpecExecute for SvyNlsSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvyIvregSpec {
     async fn execute_spec(
         &self,
@@ -1233,6 +1240,7 @@ impl SpecExecute for SvyIvregSpec {
     }
 }
 
+#[async_trait]
 impl SpecExecute for SvyMleSpec {
     async fn execute_spec(
         &self,

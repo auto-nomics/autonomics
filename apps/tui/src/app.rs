@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
+use agentik_sdk::types::AgentEvent;
 use arc_swap::ArcSwapOption;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
@@ -19,9 +20,12 @@ use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
-use crate::state::{self, AgentStatus, AppState, InputMode, MainTabState};
-use crate::widgets::agent_tab_widget::AgentTabWidget;
-use runtime::AgentRuntime;
+use crate::state::{
+    self, AgentPanel, AgentSession, AgentStatus, AppState, InputMode, MainTabState,
+};
+use crate::widgets::agent_workspace::AgentWorkspace;
+use agentik_core::{AgentProfile, TursoAgentStorage};
+use runtime::{AgentHandle, RuntimeHost};
 
 /// Lines scrolled by a half-page motion (PageDown / PageUp in browse mode).
 const HALF_PAGE: usize = 12;
@@ -58,24 +62,22 @@ fn set_panic_hook() {
 pub struct App {
     state: AppState,
     tab_state: TabNavState,
-    agent_runtime: AgentRuntime,
+    /// Multi-agent host owning shared infrastructure.
+    host: Option<RuntimeHost>,
+    /// Per-agent handles, parallel to `state.sessions`.
+    handles: Vec<AgentHandle>,
     /// Kept alive to drive the agent's background event loop task.
     _runtime: Option<tokio::runtime::Runtime>,
+    /// Handle for spawning background tasks from within the sync event loop.
+    runtime_handle: tokio::runtime::Handle,
     conn: Connection,
     /// Internal event channel for decoupled communication.
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::app_event::AppEvent>,
     /// Sender half exposed for subsystems (file search, plugins, etc.)
-    /// to push events into the main loop without direct App access.
     #[allow(dead_code)]
     pub(crate) app_event_tx: crate::app_event_sender::AppEventSender,
-    /// Set to break the main event loop so `ratatui::run()` can call `restore()`.
     should_quit: bool,
-    /// Timestamp of the last cooperative cancel (Ctrl+C while agent running).
-    /// A second Ctrl+C within `FORCE_QUIT_WINDOW` forces an immediate quit.
     cancel_requested_at: Option<Instant>,
-    /// Dirty flag: when true the next render tick will redraw. Set by every
-    /// event branch that mutates state; cleared after drawing. When the agent
-    /// is active, the render tick always draws (animation frames) regardless.
     dirty: bool,
 }
 
@@ -89,27 +91,50 @@ impl App {
         Self::init_database(&conn).expect("failed to initialize database schema");
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-
-        // Try to build a Model from DB; if none configured yet, start without an agent.
         let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
 
-        let agent_runtime =
-            AgentRuntime::new(&runtime, model.clone()).expect("failed to build agent runtime");
+        // ── Open RuntimeHost + load profiles ──────────────────────
+        let config = runtime::RuntimeConfig::default();
+        let (host, profiles) = runtime.block_on(async {
+            // Open storage directly for profile seeding/loading (the host
+            // also opens it, but we need AgentProfileRegistry trait methods
+            // which aren't on the AgentStorage trait object).
+            let storage = TursoAgentStorage::open(&config.agent_db).await.ok();
+            let profiles = if let Some(ref s) = storage {
+                use agentik_core::storage::AgentProfileRegistry;
+                let _ = s.seed_defaults_if_empty().await;
+                s.list_profiles().await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            // Now open the host (it will open the same DB again — Turso WAL
+            // mode supports concurrent connections from the same process).
+            let host = RuntimeHost::open(&config).await.ok();
+            (host, profiles)
+        });
 
         let mut state = AppState {
             active_model: model,
+            profiles,
             ..Default::default()
         };
 
         Self::load_model_config(&conn, &mut state.model_config_state);
 
+        // Inject dynamic profile-based commands into the palette.
+        state.command_palette.set_profiles(&state.profiles);
+
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime_handle = runtime.handle().clone();
 
         Self {
             state,
             tab_state: TabNavState::new(MainTabState::default().index()),
-            agent_runtime,
+            host,
+            handles: Vec::new(),
             _runtime: Some(runtime),
+            runtime_handle: runtime_handle.clone(),
             conn,
             app_event_rx,
             app_event_tx: crate::app_event_sender::AppEventSender::new(app_event_tx),
@@ -127,8 +152,6 @@ impl App {
     /// Returns `None` if no model is configured, credentials are missing,
     /// or any lookup fails — the caller treats that as "start without agent".
     fn build_model(conn: &Connection) -> Option<Model> {
-        use agentik_sdk::provider::registry;
-
         // Read the active model setting.
         let active: String = conn
             .query_row(
@@ -138,12 +161,21 @@ impl App {
             )
             .ok()?;
 
+        Self::build_model_from_spec(conn, &active)
+    }
+
+    /// Build a `Model` from a `"provider_name:model_name"` spec, using
+    /// provider credentials from the DB.
+    ///
+    /// Returns `None` if the spec is malformed, the provider is not
+    /// configured, or the model is not in the built-in catalog.
+    fn build_model_from_spec(conn: &Connection, spec: &str) -> Option<Model> {
+        use agentik_sdk::provider::registry;
+
         // Parse "provider_name:model_name"
-        let (provider_name, model_name) = active.split_once(':')?;
+        let (provider_name, model_name) = spec.split_once(':')?;
 
         // Look up provider credentials + selected base_url from the DB.
-        // base_url is user-selectable in the config panel (one of the
-        // registry presets or a custom URL) and is what we bind at runtime.
         let (api_key, db_base_url): (String, String) = conn
             .query_row(
                 "SELECT api_key, base_url FROM providers WHERE name = ?1",
@@ -158,7 +190,6 @@ impl App {
 
         // Look up model info from the built-in catalog.
         let provider_type = ProviderType::from(provider_name);
-        // Use the DB-stored base_url when present, else the registry default.
         let base_url = if db_base_url.is_empty() {
             registry::default_base_url(&provider_type)
                 .unwrap_or("")
@@ -172,8 +203,6 @@ impl App {
             .into_iter()
             .find(|m| m.model_name == model_name)?;
 
-        // Build ProviderConfig: api_key from DB, base_url and auth_method
-        // from registry defaults.
         let provider_config = ProviderConfig {
             id: Uuid::nil(),
             name: provider_name.to_string(),
@@ -301,7 +330,9 @@ impl App {
 
         // Ensure the agent and engine tasks are torn down even if the main
         // loop exited without a cooperative shutdown (e.g. force-quit).
-        self.agent_runtime.shutdown();
+        for h in &mut self.handles {
+            h.shutdown();
+        }
 
         // Restore terminal on exit (whether normal or error).
         let _ = restore_terminal();
@@ -376,14 +407,24 @@ impl App {
                     }
                 }
 
-                // ── Agent streaming events ──
-                maybe_agent = self.agent_runtime.recv_event() => {
+                // ── Agent streaming events (poll active handle) ──
+                maybe_agent = async {
+                    if let Some(handle) = self.handles.get_mut(self.state.active_agent_idx) {
+                        handle.recv_event().await
+                    } else {
+                        // No active session — park forever.
+                        std::future::pending::<Option<AgentEvent>>().await
+                    }
+                } => {
                     if let Some(event) = maybe_agent {
-                        state::apply_event(&mut self.state.agent_tab_state, event);
+                        let idx = self.state.active_agent_idx;
+                        if let Some(session) = self.state.sessions.get_mut(idx) {
+                            state::apply_event(&mut session.tab_state, event);
+                        }
                         self.dirty = true;
                     } else {
-                        // Agent channel closed → shutdown.
-                        self.should_quit = true;
+                        // Active agent channel closed — don't quit, just mark.
+                        tracing::warn!("active agent event channel closed");
                     }
                 }
 
@@ -398,21 +439,15 @@ impl App {
 
                 // ── Fixed-rate render tick ──
                 _ = render_tick.tick() => {
-                    if matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
+                    let active_status = self.state.active_status();
+                    if matches!(active_status, AgentStatus::Idle) {
                         self.clear_cancel_pending();
                     } else {
-                        // Advance animation frame counter while the agent is active.
-                        self.state.agent_tab_state.frame =
-                            self.state.agent_tab_state.frame.wrapping_add(1);
+                        let ts = self.state.active_tab_state_mut();
+                        ts.frame = ts.frame.wrapping_add(1);
                     }
 
-                    // Only draw when there's something new to show. While the
-                    // agent is active we always draw (animation frames); while
-                    // idle we draw only when an event marked the state dirty.
-                    let agent_active = !matches!(
-                        self.state.agent_tab_state.status,
-                        AgentStatus::Idle
-                    );
+                    let agent_active = !matches!(active_status, AgentStatus::Idle);
                     if self.dirty || agent_active {
                         terminal.draw(|f| self.render(f))?;
                         self.dirty = false;
@@ -426,7 +461,8 @@ impl App {
     fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
         match event {
             crate::app_event::AppEvent::Agent(e) => {
-                state::apply_event(&mut self.state.agent_tab_state, *e);
+                let ts = self.state.active_tab_state_mut();
+                state::apply_event(ts, *e);
             }
             crate::app_event::AppEvent::Quit => {
                 self.should_quit = true;
@@ -434,6 +470,27 @@ impl App {
             crate::app_event::AppEvent::ConfigReload => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
             }
+            crate::app_event::AppEvent::AgentSpawned {
+                profile_name,
+                result,
+            } => match result {
+                Ok(handle) => {
+                    let agent_id = handle.agent_id;
+                    let name = handle.name.clone();
+                    self.handles.push(handle);
+                    self.state.sessions.push(AgentSession {
+                        name,
+                        agent_id,
+                        tab_state: state::AgentTabState::default(),
+                    });
+                    self.state.active_agent_idx = self.state.sessions.len() - 1;
+                    self.state.agent_panel = AgentPanel::Chat;
+                    tracing::info!(profile = %profile_name, "agent spawned successfully");
+                }
+                Err(e) => {
+                    tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
+                }
+            },
         }
     }
 
@@ -449,7 +506,7 @@ impl App {
             Event::Paste(s) => {
                 // Insert paste into the agent chat input area when in input mode and agent is idle.
                 if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
-                    let ts = &mut self.state.agent_tab_state;
+                    let ts = self.state.active_tab_state_mut();
                     if ts.input_mode == InputMode::Input && ts.status == state::AgentStatus::Idle {
                         ts.input.insert_str(s);
                     }
@@ -492,12 +549,12 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollDown => {
-                let ts = &mut self.state.agent_tab_state;
+                let ts = self.state.active_tab_state_mut();
                 ts.auto_scroll = false;
                 lines_per_tick
             }
             MouseEventKind::ScrollUp => {
-                let ts = &mut self.state.agent_tab_state;
+                let ts = self.state.active_tab_state_mut();
                 ts.auto_scroll = false;
                 -lines_per_tick
             }
@@ -510,7 +567,7 @@ impl App {
         if !matches!(self.state.main_tab_state, MainTabState::AgentTab) {
             return;
         }
-        let ts = &mut self.state.agent_tab_state;
+        let ts = self.state.active_tab_state_mut();
         if delta > 0 {
             ts.scroll_offset = ts.scroll_offset.saturating_add(delta as usize);
         } else {
@@ -543,7 +600,7 @@ impl App {
                 // Already quitting — no-op.
                 return;
             }
-            if matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
+            if matches!(self.state.active_tab_state_mut().status, AgentStatus::Idle) {
                 self.should_quit = true;
                 return;
             }
@@ -551,13 +608,17 @@ impl App {
             if let Some(ts) = self.cancel_requested_at {
                 if ts.elapsed() < FORCE_QUIT_WINDOW {
                     tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                    self.agent_runtime.shutdown();
+                    if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
+                        h.shutdown();
+                    }
                     self.should_quit = true;
                     return;
                 }
             }
             // First Ctrl+C: cooperative cancel.
-            self.agent_runtime.cancel();
+            if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
+                h.cancel();
+            }
             self.cancel_requested_at = Some(Instant::now());
             return;
         }
@@ -571,7 +632,7 @@ impl App {
             && key.code == KeyCode::Char('g')
             && matches!(self.state.main_tab_state, MainTabState::AgentTab)
         {
-            let ts = &mut self.state.agent_tab_state;
+            let ts = self.state.active_tab_state_mut();
             if ts.auto_scroll {
                 ts.auto_scroll = false;
             } else {
@@ -609,19 +670,222 @@ impl App {
     }
 
     fn handle_agent_key(&mut self, key: &KeyEvent) {
-        let ts = &mut self.state.agent_tab_state;
+        // ── Workspace-global keys (work from both sidebar and chat) ──
 
-        match ts.input_mode {
-            InputMode::Browse => self.handle_browse_key(key),
-            InputMode::Input => self.handle_input_key(key),
+        // Tab: toggle between sidebar and chat.
+        if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::ALT) {
+            self.state.agent_panel = match self.state.agent_panel {
+                AgentPanel::Sidebar => AgentPanel::Chat,
+                AgentPanel::Chat => AgentPanel::Sidebar,
+            };
+            return;
         }
+
+        // Alt+1..9: switch to leaf by index.
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            if let KeyCode::Char(c) = key.code {
+                if let Some(digit) = c.to_digit(10) {
+                    let idx = (digit as usize).saturating_sub(1);
+                    if idx < self.state.sessions.len() {
+                        self.state.active_agent_idx = idx;
+                    }
+                    return;
+                }
+            }
+        }
+
+        match self.state.agent_panel {
+            AgentPanel::Sidebar => self.handle_sidebar_key(key),
+            AgentPanel::Chat => {
+                let input_mode = self.state.active_tab_state().input_mode;
+                match input_mode {
+                    InputMode::Browse => self.handle_browse_key(key),
+                    InputMode::Input => self.handle_input_key(key),
+                }
+            }
+        }
+    }
+
+    /// Key handling in the sidebar.
+    ///
+    /// Two sections (Agents / Profiles). Up/Down navigates within the
+    /// focused section and wraps to the other section at the boundaries.
+    /// Enter activates (switch agent or spawn from profile).
+    fn handle_sidebar_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::agent_sidebar::SidebarSection;
+
+        match key.code {
+            KeyCode::Up => match self.state.sidebar_section {
+                SidebarSection::Agents => {
+                    if self.state.active_agent_idx > 0 {
+                        self.state.active_agent_idx -= 1;
+                    } else if !self.state.profiles.is_empty() {
+                        // Wrap to bottom of Profiles.
+                        self.state.sidebar_section = SidebarSection::Profiles;
+                        self.state.profile_selected =
+                            self.state.profiles.len().saturating_sub(1);
+                    }
+                }
+                SidebarSection::Profiles => {
+                    if self.state.profile_selected > 0 {
+                        self.state.profile_selected -= 1;
+                    } else if !self.state.sessions.is_empty() {
+                        // Wrap to bottom of Agents.
+                        self.state.sidebar_section = SidebarSection::Agents;
+                        self.state.active_agent_idx =
+                            self.state.sessions.len().saturating_sub(1);
+                    }
+                }
+            },
+            KeyCode::Down => match self.state.sidebar_section {
+                SidebarSection::Agents => {
+                    let max = self.state.sessions.len().saturating_sub(1);
+                    if self.state.active_agent_idx < max {
+                        self.state.active_agent_idx += 1;
+                    } else if !self.state.profiles.is_empty() {
+                        // Wrap to top of Profiles.
+                        self.state.sidebar_section = SidebarSection::Profiles;
+                        self.state.profile_selected = 0;
+                    }
+                }
+                SidebarSection::Profiles => {
+                    let max = self.state.profiles.len().saturating_sub(1);
+                    if self.state.profile_selected < max {
+                        self.state.profile_selected += 1;
+                    } else if !self.state.sessions.is_empty() {
+                        // Wrap to top of Agents.
+                        self.state.sidebar_section = SidebarSection::Agents;
+                        self.state.active_agent_idx = 0;
+                    }
+                }
+            },
+            KeyCode::Enter => match self.state.sidebar_section {
+                SidebarSection::Agents => {
+                    if !self.state.sessions.is_empty() {
+                        self.state.agent_panel = AgentPanel::Chat;
+                    }
+                }
+                SidebarSection::Profiles => {
+                    if let Some(profile) = self
+                        .state
+                        .profiles
+                        .get(self.state.profile_selected)
+                        .cloned()
+                    {
+                        self.spawn_agent_from_profile(&profile);
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    /// Spawn a new agent from a profile asynchronously.
+    ///
+    /// Because the event loop is already inside `runtime.block_on(...)`, we
+    /// can't call `block_on` again. Instead, we spawn the creation as a
+    /// background task and send the result back via the app event channel.
+    /// The `AgentSpawned` event is handled in `handle_app_event`.
+    fn spawn_agent_from_profile(&mut self, profile: &AgentProfile) {
+        tracing::info!(profile = %profile.name, "spawn_agent_from_profile called");
+
+        let Some(host) = self.host.clone() else {
+            tracing::warn!("no runtime host available");
+            return;
+        };
+        if self.state.active_model.load_full().is_none() {
+            tracing::warn!("no model configured — configure one in Config tab first");
+            return;
+        }
+
+        let global_model = self.state.active_model.clone();
+        let model_override = profile
+            .preferred_model
+            .as_deref()
+            .and_then(|spec| Self::build_model_from_spec(&self.conn, spec));
+        tracing::debug!(
+            has_override = model_override.is_some(),
+            "model resolution complete"
+        );
+
+        let profile_clone = profile.clone();
+        let profile_name_clone = profile.name.clone();
+        let tx = self.app_event_tx.clone();
+
+        let join_handle = self.runtime_handle.spawn(async move {
+            tracing::debug!(profile = %profile_clone.name, "async spawn task started");
+            host.spawn_agent(&profile_clone, global_model, model_override)
+                .await
+                .map_err(|e| e.to_string())
+        });
+
+        self.runtime_handle.spawn(async move {
+            let result = join_handle.await;
+            let event = match result {
+                Ok(Ok(handle)) => {
+                    tracing::info!(profile = %profile_name_clone, "agent spawned successfully");
+                    crate::app_event::AppEvent::AgentSpawned {
+                        profile_name: profile_name_clone,
+                        result: Ok(handle),
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(profile = %profile_name_clone, error = %e, "agent spawn failed");
+                    crate::app_event::AppEvent::AgentSpawned {
+                        profile_name: profile_name_clone,
+                        result: Err(e),
+                    }
+                }
+                Err(join_err) => {
+                    let msg = if join_err.is_panic() {
+                        let panic_msg = join_err.into_panic();
+                        let msg = panic_msg
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic_msg.downcast_ref::<String>().map(|s| s.as_str()))
+                            .unwrap_or("(non-string panic)");
+                        format!("agent spawn panicked: {msg}")
+                    } else {
+                        "agent spawn cancelled".to_string()
+                    };
+                    tracing::error!(profile = %profile_name_clone, "{msg}");
+                    crate::app_event::AppEvent::AgentSpawned {
+                        profile_name: profile_name_clone,
+                        result: Err(msg),
+                    }
+                }
+            };
+            let _ = tx.send(event);
+        });
+
+        tracing::info!(profile = %profile.name, "spawning agent...");
     }
 
     /// Key handling in browse mode: Up/Down scroll line-by-line,
     /// PageDown/PageUp half-page, Home/End jump to top/bottom,
     /// Enter enters the composer (input mode).
     fn handle_browse_key(&mut self, key: &KeyEvent) {
-        let ts = &mut self.state.agent_tab_state;
+        // Shift+H/L: switch to previous/next agent leaf tab.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Char('H') | KeyCode::Char('h') => {
+                    if self.state.active_agent_idx > 0 {
+                        self.state.active_agent_idx -= 1;
+                    }
+                    return;
+                }
+                KeyCode::Char('L') | KeyCode::Char('l') => {
+                    let max = self.state.sessions.len().saturating_sub(1);
+                    if self.state.active_agent_idx < max {
+                        self.state.active_agent_idx += 1;
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        let ts = self.state.active_tab_state_mut();
 
         match key.code {
             // Down / PageDown: scroll down (show later content)
@@ -667,12 +931,13 @@ impl App {
 
         // While an incremental Ctrl+R search is active, every keystroke
         // drives the search instead of editing the buffer.
-        if self.state.agent_tab_state.in_history_search {
+        if self.state.active_tab_state_mut().in_history_search {
             self.handle_history_search_key(key);
             return;
         }
 
-        let ts = &mut self.state.agent_tab_state;
+        let active_idx = self.state.active_agent_idx;
+        let ts = self.state.active_tab_state_mut();
         let idle = ts.status == state::AgentStatus::Idle;
 
         // Ctrl+R: enter incremental history search (codex-style).
@@ -689,6 +954,9 @@ impl App {
             load_selected_history_match(ts);
             return;
         }
+
+        // Pre-extract data needed after the `ts` borrow ends.
+        let mut send_text: Option<String> = None;
 
         match key.code {
             // Esc: leave input mode, return to browse. Any in-progress
@@ -722,7 +990,7 @@ impl App {
                     );
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                     ts.push_user_message(text.clone());
-                    self.agent_runtime.send_message(text);
+                    send_text = Some(text);
                     ts.scroll_to_bottom();
                 }
                 ts.input_mode = InputMode::Browse;
@@ -760,11 +1028,18 @@ impl App {
                 }
             }
         }
+
+        // Dispatch send_message outside the `ts` borrow.
+        if let Some(text) = send_text {
+            if let Some(h) = self.handles.get(active_idx) {
+                h.send_message(text);
+            }
+        }
     }
 
     /// Key handling while a Ctrl+R incremental history search is active.
     fn handle_history_search_key(&mut self, key: &KeyEvent) {
-        let ts = &mut self.state.agent_tab_state;
+        let ts = self.state.active_tab_state_mut();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             // Esc: cancel the search, restore the original draft buffer.
@@ -853,19 +1128,21 @@ impl App {
                 self.should_quit = true;
             }
             CommandAction::CancelAgent => {
-                if !matches!(self.state.agent_tab_state.status, AgentStatus::Idle) {
-                    self.agent_runtime.cancel();
+                if !matches!(self.state.active_status(), AgentStatus::Idle) {
+                    if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
+                        h.cancel();
+                    }
                     self.cancel_requested_at = Some(Instant::now());
                 }
             }
             CommandAction::EnterInput => {
                 if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
-                    self.state.agent_tab_state.input_mode = InputMode::Input;
+                    self.state.active_tab_state_mut().input_mode = InputMode::Input;
                 }
             }
             CommandAction::ToggleAutoScroll => {
                 if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
-                    let ts = &mut self.state.agent_tab_state;
+                    let ts = self.state.active_tab_state_mut();
                     if ts.auto_scroll {
                         ts.auto_scroll = false;
                     } else {
@@ -875,20 +1152,22 @@ impl App {
             }
             CommandAction::ScrollToBottom => {
                 if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
-                    self.state.agent_tab_state.scroll_to_bottom();
+                    self.state.active_tab_state_mut().scroll_to_bottom();
                 }
             }
             CommandAction::ScrollToTop => {
                 if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
-                    self.state.agent_tab_state.scroll_offset = 0;
-                    self.state.agent_tab_state.auto_scroll = false;
+                    let ts = self.state.active_tab_state_mut();
+                    ts.scroll_offset = 0;
+                    ts.auto_scroll = false;
                 }
             }
             CommandAction::HistorySearch => {
                 // Trigger the same flow as Ctrl+R: only meaningful in the
                 // Agent tab when there is history and the agent is idle.
-                let ts = &mut self.state.agent_tab_state;
-                let can = matches!(self.state.main_tab_state, MainTabState::AgentTab)
+                let is_agent_tab = matches!(self.state.main_tab_state, MainTabState::AgentTab);
+                let ts = self.state.active_tab_state_mut();
+                let can = is_agent_tab
                     && ts.status == state::AgentStatus::Idle
                     && !ts.input_history.is_empty();
                 if can {
@@ -902,7 +1181,7 @@ impl App {
                 }
             }
             CommandAction::ClearTranscript => {
-                let ts = &mut self.state.agent_tab_state;
+                let ts = self.state.active_tab_state_mut();
                 ts.messages.clear();
                 ts.msg_versions.clear();
                 ts.cached_msg_lines.clear();
@@ -912,6 +1191,17 @@ impl App {
             }
             CommandAction::ReloadConfig => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+            }
+            CommandAction::SpawnAgent(profile_name) => {
+                if let Some(profile) = self
+                    .state
+                    .profiles
+                    .iter()
+                    .find(|p| p.name == profile_name)
+                    .cloned()
+                {
+                    self.spawn_agent_from_profile(&profile);
+                }
             }
         }
     }
@@ -938,31 +1228,82 @@ impl App {
         match self.state.main_tab_state {
             MainTabState::AgentTab => {
                 use ratatui::widgets::StatefulWidgetRef;
-                // Load the current model name from the shared ArcSwapOption.
-                // `load_full()` returns an owned Option<Arc<Model>> (one refcount
-                // bump), so the immutable borrow of `active_model` is released
-                // before we mutably borrow `agent_tab_state` below.
+
+                // Split into sidebar + chat.
+                let content = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Length(30), // Sidebar
+                        Constraint::Min(10),    // Chat
+                    ])
+                    .split(areas[1]);
+
+                // ── Sidebar ──
+                // Collect sidebar data before mutably borrowing tab state.
+                let profile_names: Vec<(String, String)> = self
+                    .state
+                    .profiles
+                    .iter()
+                    .map(|p| (p.name.clone(), p.description.clone()))
+                    .collect();
+                let session_names: Vec<(String, AgentStatus)> = self
+                    .state
+                    .sessions
+                    .iter()
+                    .map(|s| (s.name.clone(), s.tab_state.status.clone()))
+                    .collect();
+                let active_idx = self.state.active_agent_idx;
+                let profile_selected = self.state.profile_selected;
+                let sidebar_focused = self.state.agent_panel == AgentPanel::Sidebar;
+
+                let sidebar = crate::widgets::agent_sidebar::AgentSidebar {
+                    profile_names,
+                    session_names,
+                    active_idx,
+                    profile_selected,
+                    section: self.state.sidebar_section,
+                    focused: sidebar_focused,
+                };
+                use ratatui::widgets::Widget as _;
+                sidebar.render(content[0], frame.buffer_mut());
+
+                // ── Workspace (leaf tabs + active agent leaf) ──
                 let model_name = self
                     .state
                     .active_model
                     .load_full()
                     .map(|m| m.model_info.model_name.clone());
-                let widget = AgentTabWidget {
+
+                // Collect tab data before mutably borrowing tab state.
+                let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
+                    .state
+                    .sessions
+                    .iter()
+                    .map(|s| crate::widgets::agent_workspace::LeafTab {
+                        name: s.name.clone(),
+                        status: s.tab_state.status.clone(),
+                    })
+                    .collect();
+                let active_idx = self.state.active_agent_idx;
+
+                let workspace = AgentWorkspace {
                     active_model: model_name.as_deref(),
                 };
-                widget.render_ref(
-                    areas[1],
+                workspace.render(
+                    content[1],
                     frame.buffer_mut(),
-                    &mut self.state.agent_tab_state,
+                    &workspace_tabs,
+                    active_idx,
+                    self.state.active_tab_state_mut(),
                 );
 
-                // Position the terminal hardware cursor over the chat input.
-                // The xAI TextArea renders only text; the host must place the
-                // caret itself. Calling set_cursor_position inside the draw
-                // closure makes ratatui emit show_cursor + the move without a
-                // hide→show cycle that resets the blink timer every frame.
-                if let Some((cx, cy)) = self.state.agent_tab_state.input.last_cursor_pos() {
-                    frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                // Position cursor only when there's an active agent leaf.
+                if !self.state.sessions.is_empty() {
+                    if let Some((cx, cy)) =
+                        self.state.active_tab_state_mut().input.last_cursor_pos()
+                    {
+                        frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                    }
                 }
             }
             MainTabState::ConfigTab => {

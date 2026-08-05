@@ -21,9 +21,11 @@ bib-base = { path = "../bib-base" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }
+tracing = { workspace = true }
 arc-swap.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [lints]
 workspace = true

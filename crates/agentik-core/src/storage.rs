@@ -92,6 +92,136 @@ pub enum PersistOp {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Agent Profile (blueprint / preset)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A named, persisted agent configuration template that can be instantiated
+/// into a running [`Agent`](crate::Agent).
+///
+/// Unlike [`AgentRecord`] (which tracks *runtime state* — memory, sessions,
+/// last-active), an `AgentProfile` is a **blueprint**: it defines what an
+/// agent *is* (identity, prompts, tool capabilities, model preference) but
+/// holds no conversation history.
+///
+/// Users create profiles in the UI, pick one to instantiate, and the
+/// resulting running agent gets its own `AgentRecord` for persistence.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentProfile {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+
+    // ── Prompt ──
+    pub agent_identity: String,
+    /// Long-form system prompt. `None` means "use built-in default".
+    pub system_prompt: Option<String>,
+
+    // ── Tool capability flags ──
+    pub enable_bibliography: bool,
+    pub enable_opengwas: bool,
+    pub enable_opentargets: bool,
+    pub enable_gwascatalog: bool,
+    pub enable_iceberg: bool,
+    pub enable_dag_history: bool,
+
+    // ── Model preference ──
+    /// Preferred model in `"provider:model"` format, or `None` to use the
+    /// global default.
+    #[serde(default)]
+    pub preferred_model: Option<String>,
+
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl AgentProfile {
+    /// Create a new profile with sensible defaults (all tools enabled).
+    pub fn new(name: impl Into<String>) -> Self {
+        let now = now_ms();
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            description: String::new(),
+            agent_identity: "You are a helpful assistant.".into(),
+            system_prompt: None,
+            enable_bibliography: true,
+            enable_opengwas: true,
+            enable_opentargets: true,
+            enable_gwascatalog: true,
+            enable_iceberg: true,
+            enable_dag_history: true,
+            preferred_model: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// Return the built-in default profiles seeded on first run.
+    pub fn defaults() -> Vec<AgentProfile> {
+        let now = now_ms();
+        vec![
+            AgentProfile {
+                id: Uuid::new_v4(),
+                name: "default".into(),
+                description: "Full-featured biomedical research assistant.".into(),
+                agent_identity: "You are a biomedical research assistant specializing \
+                    in genomics, GWAS analysis, and literature mining.".into(),
+                system_prompt: None,
+                enable_bibliography: true,
+                enable_opengwas: true,
+                enable_opentargets: true,
+                enable_gwascatalog: true,
+                enable_iceberg: true,
+                enable_dag_history: true,
+                preferred_model: None,
+                created_at: now,
+                updated_at: now,
+            },
+            AgentProfile {
+                id: Uuid::new_v4(),
+                name: "literature".into(),
+                description: "Literature search and evidence synthesis expert.".into(),
+                agent_identity: "You are a literature search expert specializing in \
+                    systematic reviews, meta-analyses, and evidence synthesis. \
+                    Use PubMed, Embase, and bioRxiv tools to find and analyze publications.".into(),
+                system_prompt: None,
+                enable_bibliography: true,
+                enable_opengwas: false,
+                enable_opentargets: true,
+                enable_gwascatalog: false,
+                enable_iceberg: false,
+                enable_dag_history: false,
+                preferred_model: None,
+                created_at: now,
+                updated_at: now,
+            },
+            AgentProfile {
+                id: Uuid::new_v4(),
+                name: "gwas-analysis".into(),
+                description: "GWAS data analysis and statistical genetics expert.".into(),
+                agent_identity: "You are a GWAS analysis expert specializing in \
+                    statistical genetics. Use OpenGWAS, GWAS Catalog, and the \
+                    data pipeline engine to analyze genetic association data.".into(),
+                system_prompt: None,
+                enable_bibliography: false,
+                enable_opengwas: true,
+                enable_opentargets: true,
+                enable_gwascatalog: true,
+                enable_iceberg: true,
+                enable_dag_history: true,
+                preferred_model: None,
+                created_at: now,
+                updated_at: now,
+            },
+        ]
+    }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Error
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -164,6 +294,37 @@ pub trait AgentStorage: Send + Sync {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Agent Profile Registry trait
+// ═══════════════════════════════════════════════════════════════════════
+
+/// CRUD for [`AgentProfile`] blueprints. This is a separate trait from
+/// [`AgentStorage`] because profiles are *definitions* (user-authored
+/// templates) rather than *runtime state* (memory, sessions). A storage
+/// backend can implement both traits on the same connection.
+#[async_trait]
+pub trait AgentProfileRegistry: Send + Sync {
+    async fn create_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
+    async fn get_profile(&self, id: Uuid) -> Result<Option<AgentProfile>, StorageError>;
+    async fn get_profile_by_name(&self, name: &str) -> Result<Option<AgentProfile>, StorageError>;
+    async fn list_profiles(&self) -> Result<Vec<AgentProfile>, StorageError>;
+    async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
+    async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError>;
+
+    /// Seed the default profiles if the table is empty. Returns `true` if
+    /// profiles were inserted.
+    async fn seed_defaults_if_empty(&self) -> Result<bool, StorageError> {
+        let existing = self.list_profiles().await?;
+        if !existing.is_empty() {
+            return Ok(false);
+        }
+        for profile in AgentProfile::defaults() {
+            self.create_profile(profile).await?;
+        }
+        Ok(true)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Restore helper
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -179,7 +340,15 @@ pub async fn restore_memory(
 ) -> Result<Memory, StorageError> {
     let snapshot = storage.get_latest_snapshot(agent_id).await?;
     let snapshot_ts = snapshot.as_ref().map(|s| s.ts).unwrap_or(0);
-    let mut memory = snapshot.map(|s| s.memory).unwrap_or_default();
+    // Use Memory::new() (which seeds one empty MemoryItem) instead of
+    // Memory::default() (which has an empty items vector). Without this,
+    // the first remember() call panics with EmptyMemoryItem.
+    let mut memory = snapshot.map(|s| s.memory).unwrap_or_else(Memory::new);
+    // Defensive: even a restored snapshot might have an empty items vector
+    // (e.g. from a corrupt or edge-case state). Ensure at least one segment.
+    if memory.items.is_empty() {
+        memory.items.push(crate::memory::MemoryItem::default());
+    }
     let messages = storage.get_messages_since(agent_id, snapshot_ts).await?;
     for msg in messages {
         let _ = memory.remember(msg);

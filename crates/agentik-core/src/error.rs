@@ -56,7 +56,7 @@ pub enum AgentError {
     #[error("ApiClient request error: {0}")]
     ApiRequestError(#[from] AnthropicError),
 
-    #[error("Memory error occurred")]
+    #[error("memory error: {0}")]
     MemoryError(#[from] MemoryError),
 
     #[error("Unknown tool requested:  {0:?}. Existed tools: {1:?}")]

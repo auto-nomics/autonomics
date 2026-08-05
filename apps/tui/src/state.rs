@@ -231,7 +231,7 @@ impl AgentTabState {
     // ── Per-message versioning helpers ──
     //
     // These keep `msg_versions` in lockstep with `messages` so the render
-    // cache in `AgentTabWidget` can skip re-rendering unchanged messages.
+    // cache in `AgentLeaf` can skip re-rendering unchanged messages.
 
     /// Push a new chat line, assigning it a fresh content version.
     fn push_line(&mut self, line: ChatLine) {
@@ -429,12 +429,88 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
 
 // ── AppState ───────────────────────────────────────────
 
+/// Which panel has keyboard focus within the Agent tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentPanel {
+    #[default]
+    Sidebar,
+    Chat,
+}
+
+/// Which sub-list within the sidebar is focused for navigation.
+pub use crate::widgets::agent_sidebar::SidebarSection;
+
+/// One running agent's UI state.
+pub struct AgentSession {
+    pub name: String,
+    pub agent_id: uuid::Uuid,
+    pub tab_state: AgentTabState,
+}
+
 /// State container for the TUI.
-#[derive(Default)]
 pub struct AppState {
     pub main_tab_state: MainTabState,
+    /// All active agent sessions. `sessions[active_agent_idx]` is the one
+    /// displayed in the chat panel and receives user input.
+    pub sessions: Vec<AgentSession>,
+    pub active_agent_idx: usize,
+    /// Which panel within the Agent tab has focus.
+    pub agent_panel: AgentPanel,
+    /// Which sub-list within the sidebar is focused (agents vs profiles).
+    pub sidebar_section: SidebarSection,
+    /// Available profiles (loaded from storage at startup).
+    pub profiles: Vec<agentik_core::AgentProfile>,
+    /// Selected index in the profile list within the sidebar.
+    pub profile_selected: usize,
+    /// Legacy single-agent tab state — kept for backward-compat with
+    /// existing code that hasn't been migrated yet. When `sessions` is
+    /// non-empty, the active session's `tab_state` is used instead.
     pub agent_tab_state: AgentTabState,
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub active_model: Arc<ArcSwapOption<Model>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            main_tab_state: MainTabState::default(),
+            sessions: Vec::new(),
+            active_agent_idx: 0,
+            agent_panel: AgentPanel::default(),
+            sidebar_section: SidebarSection::default(),
+            profiles: Vec::new(),
+            profile_selected: 0,
+            agent_tab_state: AgentTabState::default(),
+            model_config_state: Default::default(),
+            command_palette: Default::default(),
+            active_model: Arc::new(ArcSwapOption::default()),
+        }
+    }
+}
+
+impl AppState {
+    /// Returns a mutable reference to the active session's tab state,
+    /// or the legacy `agent_tab_state` if no sessions exist.
+    pub fn active_tab_state_mut(&mut self) -> &mut AgentTabState {
+        if let Some(session) = self.sessions.get_mut(self.active_agent_idx) {
+            &mut session.tab_state
+        } else {
+            &mut self.agent_tab_state
+        }
+    }
+
+    /// Returns an immutable reference to the active session's tab state.
+    pub fn active_tab_state(&self) -> &AgentTabState {
+        if let Some(session) = self.sessions.get(self.active_agent_idx) {
+            &session.tab_state
+        } else {
+            &self.agent_tab_state
+        }
+    }
+
+    /// Returns the status of the active session (or Idle if none).
+    pub fn active_status(&self) -> AgentStatus {
+        self.active_tab_state().status.clone()
+    }
 }

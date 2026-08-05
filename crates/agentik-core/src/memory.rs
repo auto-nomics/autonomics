@@ -97,7 +97,9 @@ impl MemoryItem {
 
         for (tool_use_id, content, is_error) in tool_results {
             let Some(tc_msg_index) = self.get_tooluse_msg_index(&tool_use_id) else {
-                return Err(Error::EmptyMemoryItem);
+                return Err(Error::OrphanToolResult {
+                    tool_use_id: tool_use_id.clone(),
+                });
             };
 
             if tc_msg_index + 1 < self.messages.len() {
@@ -113,9 +115,10 @@ impl MemoryItem {
                             is_error,
                         });
                 } else {
-                    // This is the situation that agent create two independent messages, and each
-                    // one has a tool_use
-                    unreachable!()
+                    return Err(Error::UnexpectedMessageLayout {
+                        msg_index: tc_msg_index,
+                        tool_use_id: tool_use_id.clone(),
+                    });
                 }
             } else {
                 let mut tool_res_msg = msg.clone();

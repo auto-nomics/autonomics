@@ -1,15 +1,16 @@
-//! Sync-to-async bridge for running an agentik agent from a sync context.
+//! Runtime for agentik agents.
 //!
-//! [`AgentRuntime`] owns a sender for [`InternalEvent`]. The agent is
-//! spawned once inside [`new`] and communicates exclusively through
-//! channels — no `Arc<Mutex<Agent>>` needed.
+//! Two entry points:
+//! - [`AgentRuntime`] — legacy single-agent runtime (one struct, one agent).
+//! - [`RuntimeHost`] — multi-agent host with shared infrastructure.
 //!
-//! The caller is responsible for keeping the tokio runtime alive for
-//! the lifetime of this struct.
+//! New code should prefer [`RuntimeHost`].
 
 pub mod config;
+pub mod host;
 pub mod runtime;
 pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
+pub use host::{AgentHandle, HostError, HostResult, RuntimeHost, SharedInfra};
 pub use runtime::AgentRuntime;

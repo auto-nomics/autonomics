@@ -123,6 +123,19 @@ impl Agent {
         &self.name
     }
 
+    /// Returns a handle to the agent's model slot.
+    ///
+    /// Callers can `.store(Some(Arc::new(new_model)))` to hot-swap the model
+    /// without rebuilding the agent.
+    pub fn model_handle(&self) -> &Arc<ArcSwapOption<Model>> {
+        &self.model
+    }
+
+    /// Atomically replace the model slot.
+    pub fn set_model(&mut self, model: Arc<ArcSwapOption<Model>>) {
+        self.model = model;
+    }
+
     /// Returns a clone of the internal event sender.
     ///
     /// Used by the sync-to-async bridge (e.g. `runtime`) to
@@ -441,7 +454,12 @@ impl Agent {
                     continue;
                 }
                 Err(e) => {
-                    tracing::error!("workflow failed at iteration {iteration}: {e}");
+                    tracing::error!(
+                        iteration,
+                        error = %e,
+                        error_chain = ?e,
+                        "workflow failed"
+                    );
                     self.send_event(AgentEvent::Error(format!("{e}")));
                     self.snapshot().await;
                     self.lifecycle.set_idle();
