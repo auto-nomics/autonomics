@@ -104,13 +104,7 @@ impl AgentWorkspace<'_> {
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
-                    "  Press Tab to focus the sidebar,",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                )),
-                Line::from(Span::styled(
-                    "  then select a profile and press Enter to spawn.",
+                    "  Ctrl+P → \"New agent\" to spawn one.",
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::DIM),

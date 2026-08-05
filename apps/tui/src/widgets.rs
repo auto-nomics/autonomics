@@ -1,9 +1,11 @@
 pub mod agent_leaf;
-pub mod agent_sidebar;
 pub mod agent_workspace;
 pub mod chat_widget;
 pub mod command_palette;
 pub mod input_area;
 pub mod model_config_widget;
+pub mod popup;
+pub mod profile_picker;
+pub mod searchable_picker;
 pub mod status_bar;
 pub mod tool_exec_widget;

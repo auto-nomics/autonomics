@@ -21,7 +21,7 @@ use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
 use crate::state::{
-    self, AgentPanel, AgentSession, AgentStatus, AppState, InputMode, MainTabState,
+    self, AgentSession, AgentStatus, AppState, InputMode, MainTabState,
 };
 use crate::widgets::agent_workspace::AgentWorkspace;
 use agentik_core::{AgentProfile, TursoAgentStorage};
@@ -122,8 +122,14 @@ impl App {
 
         Self::load_model_config(&conn, &mut state.model_config_state);
 
-        // Inject dynamic profile-based commands into the palette.
+        // Sync profiles to the command palette and picker.
         state.command_palette.set_profiles(&state.profiles);
+        let picker_data: Vec<(String, String)> = state
+            .profiles
+            .iter()
+            .map(|p| (p.name.clone(), p.description.clone()))
+            .collect();
+        crate::widgets::profile_picker::set_profiles(&mut state.profile_picker, &picker_data);
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();
@@ -484,7 +490,6 @@ impl App {
                         tab_state: state::AgentTabState::default(),
                     });
                     self.state.active_agent_idx = self.state.sessions.len() - 1;
-                    self.state.agent_panel = AgentPanel::Chat;
                     tracing::info!(profile = %profile_name, "agent spawned successfully");
                 }
                 Err(e) => {
@@ -592,6 +597,12 @@ impl App {
             return;
         }
 
+        // Profile picker popup captures keys when visible.
+        if self.state.profile_picker.visible {
+            self.handle_profile_picker_key(key);
+            return;
+        }
+
         // Ctrl+C: cancel running agent first, then quit on second press.
         // If the agent is blocked and doesn't transition to Idle after the
         // first cancel, a second Ctrl+C within FORCE_QUIT_WINDOW force-quits.
@@ -670,17 +681,6 @@ impl App {
     }
 
     fn handle_agent_key(&mut self, key: &KeyEvent) {
-        // ── Workspace-global keys (work from both sidebar and chat) ──
-
-        // Tab: toggle between sidebar and chat.
-        if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::ALT) {
-            self.state.agent_panel = match self.state.agent_panel {
-                AgentPanel::Sidebar => AgentPanel::Chat,
-                AgentPanel::Chat => AgentPanel::Sidebar,
-            };
-            return;
-        }
-
         // Alt+1..9: switch to leaf by index.
         if key.modifiers.contains(KeyModifiers::ALT) {
             if let KeyCode::Char(c) = key.code {
@@ -694,89 +694,10 @@ impl App {
             }
         }
 
-        match self.state.agent_panel {
-            AgentPanel::Sidebar => self.handle_sidebar_key(key),
-            AgentPanel::Chat => {
-                let input_mode = self.state.active_tab_state().input_mode;
-                match input_mode {
-                    InputMode::Browse => self.handle_browse_key(key),
-                    InputMode::Input => self.handle_input_key(key),
-                }
-            }
-        }
-    }
-
-    /// Key handling in the sidebar.
-    ///
-    /// Two sections (Agents / Profiles). Up/Down navigates within the
-    /// focused section and wraps to the other section at the boundaries.
-    /// Enter activates (switch agent or spawn from profile).
-    fn handle_sidebar_key(&mut self, key: &KeyEvent) {
-        use crate::widgets::agent_sidebar::SidebarSection;
-
-        match key.code {
-            KeyCode::Up => match self.state.sidebar_section {
-                SidebarSection::Agents => {
-                    if self.state.active_agent_idx > 0 {
-                        self.state.active_agent_idx -= 1;
-                    } else if !self.state.profiles.is_empty() {
-                        // Wrap to bottom of Profiles.
-                        self.state.sidebar_section = SidebarSection::Profiles;
-                        self.state.profile_selected =
-                            self.state.profiles.len().saturating_sub(1);
-                    }
-                }
-                SidebarSection::Profiles => {
-                    if self.state.profile_selected > 0 {
-                        self.state.profile_selected -= 1;
-                    } else if !self.state.sessions.is_empty() {
-                        // Wrap to bottom of Agents.
-                        self.state.sidebar_section = SidebarSection::Agents;
-                        self.state.active_agent_idx =
-                            self.state.sessions.len().saturating_sub(1);
-                    }
-                }
-            },
-            KeyCode::Down => match self.state.sidebar_section {
-                SidebarSection::Agents => {
-                    let max = self.state.sessions.len().saturating_sub(1);
-                    if self.state.active_agent_idx < max {
-                        self.state.active_agent_idx += 1;
-                    } else if !self.state.profiles.is_empty() {
-                        // Wrap to top of Profiles.
-                        self.state.sidebar_section = SidebarSection::Profiles;
-                        self.state.profile_selected = 0;
-                    }
-                }
-                SidebarSection::Profiles => {
-                    let max = self.state.profiles.len().saturating_sub(1);
-                    if self.state.profile_selected < max {
-                        self.state.profile_selected += 1;
-                    } else if !self.state.sessions.is_empty() {
-                        // Wrap to top of Agents.
-                        self.state.sidebar_section = SidebarSection::Agents;
-                        self.state.active_agent_idx = 0;
-                    }
-                }
-            },
-            KeyCode::Enter => match self.state.sidebar_section {
-                SidebarSection::Agents => {
-                    if !self.state.sessions.is_empty() {
-                        self.state.agent_panel = AgentPanel::Chat;
-                    }
-                }
-                SidebarSection::Profiles => {
-                    if let Some(profile) = self
-                        .state
-                        .profiles
-                        .get(self.state.profile_selected)
-                        .cloned()
-                    {
-                        self.spawn_agent_from_profile(&profile);
-                    }
-                }
-            },
-            _ => {}
+        let input_mode = self.state.active_tab_state().input_mode;
+        match input_mode {
+            InputMode::Browse => self.handle_browse_key(key),
+            InputMode::Input => self.handle_input_key(key),
         }
     }
 
@@ -1113,6 +1034,32 @@ impl App {
         }
     }
 
+    /// Key handling while the profile picker popup is open.
+    fn handle_profile_picker_key(&mut self, key: &KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.state.profile_picker.close();
+            }
+            KeyCode::Up => self.state.profile_picker.move_up(),
+            KeyCode::Down => self.state.profile_picker.move_down(),
+            KeyCode::Backspace => self.state.profile_picker.pop_char(),
+            KeyCode::Char(c) if !ctrl => self.state.profile_picker.push_char(c),
+            KeyCode::Enter => {
+                if let Some(item) = self.state.profile_picker.selected_item() {
+                    let name = item.name.clone();
+                    self.state.profile_picker.close();
+                    if let Some(profile) =
+                        self.state.profiles.iter().find(|p| p.name == name).cloned()
+                    {
+                        self.spawn_agent_from_profile(&profile);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Execute a command selected from the palette. Each action mirrors an
     /// existing key binding — the palette is just a discoverable shortcut to
     /// the same operations.
@@ -1203,6 +1150,9 @@ impl App {
                     self.spawn_agent_from_profile(&profile);
                 }
             }
+            CommandAction::NewAgent => {
+                self.state.profile_picker.open();
+            }
         }
     }
 
@@ -1229,45 +1179,7 @@ impl App {
             MainTabState::AgentTab => {
                 use ratatui::widgets::StatefulWidgetRef;
 
-                // Split into sidebar + chat.
-                let content = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Length(30), // Sidebar
-                        Constraint::Min(10),    // Chat
-                    ])
-                    .split(areas[1]);
-
-                // ── Sidebar ──
-                // Collect sidebar data before mutably borrowing tab state.
-                let profile_names: Vec<(String, String)> = self
-                    .state
-                    .profiles
-                    .iter()
-                    .map(|p| (p.name.clone(), p.description.clone()))
-                    .collect();
-                let session_names: Vec<(String, AgentStatus)> = self
-                    .state
-                    .sessions
-                    .iter()
-                    .map(|s| (s.name.clone(), s.tab_state.status.clone()))
-                    .collect();
-                let active_idx = self.state.active_agent_idx;
-                let profile_selected = self.state.profile_selected;
-                let sidebar_focused = self.state.agent_panel == AgentPanel::Sidebar;
-
-                let sidebar = crate::widgets::agent_sidebar::AgentSidebar {
-                    profile_names,
-                    session_names,
-                    active_idx,
-                    profile_selected,
-                    section: self.state.sidebar_section,
-                    focused: sidebar_focused,
-                };
-                use ratatui::widgets::Widget as _;
-                sidebar.render(content[0], frame.buffer_mut());
-
-                // ── Workspace (leaf tabs + active agent leaf) ──
+                // ── Workspace (full width) ──
                 let model_name = self
                     .state
                     .active_model
@@ -1290,7 +1202,7 @@ impl App {
                     active_model: model_name.as_deref(),
                 };
                 workspace.render(
-                    content[1],
+                    areas[1],
                     frame.buffer_mut(),
                     &workspace_tabs,
                     active_idx,
@@ -1321,11 +1233,19 @@ impl App {
         // Drawn last so it sits on top of the active tab. The popup paints its
         // own `Clear` backdrop; we only render when the palette is visible.
         if self.state.command_palette.visible {
-            let palette = crate::widgets::command_palette::CommandPalette {
-                state: &mut self.state.command_palette,
-            };
-            palette.render(frame.area(), frame.buffer_mut());
+            crate::widgets::command_palette::render_command_palette(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.command_palette,
+            );
         }
+
+        // ── Profile picker popup ──
+        crate::widgets::profile_picker::render_profile_picker(
+            frame.area(),
+            frame.buffer_mut(),
+            &mut self.state.profile_picker,
+        );
     }
 
     // ── Config tab ──────────────────────────────────────

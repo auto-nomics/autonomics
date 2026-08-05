@@ -429,17 +429,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
 
 // ── AppState ───────────────────────────────────────────
 
-/// Which panel has keyboard focus within the Agent tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AgentPanel {
-    #[default]
-    Sidebar,
-    Chat,
-}
-
-/// Which sub-list within the sidebar is focused for navigation.
-pub use crate::widgets::agent_sidebar::SidebarSection;
-
 /// One running agent's UI state.
 pub struct AgentSession {
     pub name: String,
@@ -451,13 +440,9 @@ pub struct AgentSession {
 pub struct AppState {
     pub main_tab_state: MainTabState,
     /// All active agent sessions. `sessions[active_agent_idx]` is the one
-    /// displayed in the chat panel and receives user input.
+    /// displayed in the workspace and receives user input.
     pub sessions: Vec<AgentSession>,
     pub active_agent_idx: usize,
-    /// Which panel within the Agent tab has focus.
-    pub agent_panel: AgentPanel,
-    /// Which sub-list within the sidebar is focused (agents vs profiles).
-    pub sidebar_section: SidebarSection,
     /// Available profiles (loaded from storage at startup).
     pub profiles: Vec<agentik_core::AgentProfile>,
     /// Selected index in the profile list within the sidebar.
@@ -468,6 +453,7 @@ pub struct AppState {
     pub agent_tab_state: AgentTabState,
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
+    pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
     pub active_model: Arc<ArcSwapOption<Model>>,
 }
 
@@ -477,13 +463,12 @@ impl Default for AppState {
             main_tab_state: MainTabState::default(),
             sessions: Vec::new(),
             active_agent_idx: 0,
-            agent_panel: AgentPanel::default(),
-            sidebar_section: SidebarSection::default(),
             profiles: Vec::new(),
             profile_selected: 0,
             agent_tab_state: AgentTabState::default(),
             model_config_state: Default::default(),
             command_palette: Default::default(),
+            profile_picker: Default::default(),
             active_model: Arc::new(ArcSwapOption::default()),
         }
     }
