@@ -196,6 +196,12 @@ impl AgentHandle {
     pub fn model_handle(&self) -> &Arc<ArcSwapOption<Model>> {
         &self.model
     }
+
+    /// Hot-swap the model for this specific agent. The agent's run loop
+    /// picks up the new model on its next LLM request.
+    pub fn set_model(&self, model: Model) {
+        self.model.store(Some(Arc::new(model)));
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

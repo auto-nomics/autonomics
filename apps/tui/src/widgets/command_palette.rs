@@ -23,6 +23,8 @@ pub enum CommandAction {
     ReloadConfig,
     SpawnAgent(String),
     NewAgent,
+    /// Open the model config popup for the active agent.
+    ModelConfig,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -109,16 +111,16 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::SwitchTab(0),
         },
         Command {
-            title: "Switch to Config tab".into(),
-            keywords: "settings providers model".into(),
-            category: "tab".into(),
-            action: CommandAction::SwitchTab(1),
-        },
-        Command {
             title: "New agent".into(),
             keywords: "spawn create start profile picker".into(),
             category: "agent".into(),
             action: CommandAction::NewAgent,
+        },
+        Command {
+            title: "Select model".into(),
+            keywords: "model config provider api key switch agent".into(),
+            category: "agent".into(),
+            action: CommandAction::ModelConfig,
         },
         Command {
             title: "New conversation".into(),

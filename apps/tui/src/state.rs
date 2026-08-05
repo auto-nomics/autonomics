@@ -7,31 +7,6 @@ use agentik_sdk::types::{AgentEvent, CompactEvent};
 use arc_swap::ArcSwapOption;
 use ratatui::text::Line;
 
-pub const TABS: &[&str] = &["Agent", "Config"];
-
-#[derive(Default)]
-pub enum MainTabState {
-    #[default]
-    AgentTab,
-    ConfigTab,
-}
-
-impl MainTabState {
-    pub const fn index(&self) -> usize {
-        match self {
-            Self::AgentTab => 0,
-            Self::ConfigTab => 1,
-        }
-    }
-
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            0 => Self::AgentTab,
-            _ => Self::ConfigTab,
-        }
-    }
-}
-
 // ── Tool task tracking ─────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,7 +413,6 @@ pub struct AgentSession {
 
 /// State container for the TUI.
 pub struct AppState {
-    pub main_tab_state: MainTabState,
     /// All active agent sessions. `sessions[active_agent_idx]` is the one
     /// displayed in the workspace and receives user input.
     pub sessions: Vec<AgentSession>,
@@ -454,13 +428,14 @@ pub struct AppState {
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
+    /// Model config popup visibility.
+    pub model_config_visible: bool,
     pub active_model: Arc<ArcSwapOption<Model>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            main_tab_state: MainTabState::default(),
             sessions: Vec::new(),
             active_agent_idx: 0,
             profiles: Vec::new(),
@@ -469,6 +444,7 @@ impl Default for AppState {
             model_config_state: Default::default(),
             command_palette: Default::default(),
             profile_picker: Default::default(),
+            model_config_visible: false,
             active_model: Arc::new(ArcSwapOption::default()),
         }
     }

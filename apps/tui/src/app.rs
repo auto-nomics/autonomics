@@ -15,13 +15,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     prelude::{Terminal, Widget},
 };
-use ratatui_comfy_tabs::{TabBarAlign, TabDirection, TabNav, TabNavState};
 use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
 use crate::state::{
-    self, AgentSession, AgentStatus, AppState, InputMode, MainTabState,
+    self, AgentSession, AgentStatus, AppState, InputMode,
 };
 use crate::widgets::agent_workspace::AgentWorkspace;
 use agentik_core::{AgentProfile, TursoAgentStorage};
@@ -61,7 +60,6 @@ fn set_panic_hook() {
 
 pub struct App {
     state: AppState,
-    tab_state: TabNavState,
     /// Multi-agent host owning shared infrastructure.
     host: Option<RuntimeHost>,
     /// Per-agent handles, parallel to `state.sessions`.
@@ -136,7 +134,6 @@ impl App {
 
         Self {
             state,
-            tab_state: TabNavState::new(MainTabState::default().index()),
             host,
             handles: Vec::new(),
             _runtime: Some(runtime),
@@ -510,14 +507,14 @@ impl App {
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Paste(s) => {
                 // Insert paste into the agent chat input area when in input mode and agent is idle.
-                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                if true {
                     let ts = self.state.active_tab_state_mut();
                     if ts.input_mode == InputMode::Input && ts.status == state::AgentStatus::Idle {
                         ts.input.insert_str(s);
                     }
                 }
                 // Insert paste into the focused textarea when in Config mode.
-                if matches!(self.state.main_tab_state, MainTabState::ConfigTab) {
+                if false {
                     use crate::widgets::model_config_widget::{ConfigField, ProviderPanelState};
                     if let ProviderPanelState::Config {
                         api_key,
@@ -546,7 +543,7 @@ impl App {
     /// Handle mouse events: scroll wheel scrolls the chat in Agent tab.
     /// Returns the scroll delta to be batched with other scroll events.
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> i32 {
-        if !matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+        if !true {
             return 0;
         }
 
@@ -569,7 +566,7 @@ impl App {
 
     /// Apply a batched scroll delta to the agent tab.
     fn apply_scroll_delta(&mut self, delta: i32) {
-        if !matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+        if !true {
             return;
         }
         let ts = self.state.active_tab_state_mut();
@@ -600,6 +597,12 @@ impl App {
         // Profile picker popup captures keys when visible.
         if self.state.profile_picker.visible {
             self.handle_profile_picker_key(key);
+            return;
+        }
+
+        // Model config popup captures keys when visible.
+        if self.state.model_config_visible {
+            self.handle_model_config_key(key);
             return;
         }
 
@@ -641,7 +644,7 @@ impl App {
         // and handle_browse_key); Ctrl+G is the dedicated toggle.
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('g')
-            && matches!(self.state.main_tab_state, MainTabState::AgentTab)
+            && true
         {
             let ts = self.state.active_tab_state_mut();
             if ts.auto_scroll {
@@ -652,32 +655,8 @@ impl App {
             return;
         }
 
-        // Tab switching (global)
-        match key.code {
-            KeyCode::Char(']') => {
-                self.tab_state
-                    .select_direction_wrapping(TabDirection::Next, state::TABS.len());
-                self.sync_tab_state();
-                return;
-            }
-            KeyCode::Char('[') => {
-                self.tab_state
-                    .select_direction_wrapping(TabDirection::Previous, state::TABS.len());
-                self.sync_tab_state();
-                return;
-            }
-            _ => {}
-        }
-
-        // Delegate to active tab
-        match self.state.main_tab_state {
-            MainTabState::AgentTab => {
-                self.handle_agent_key(key);
-            }
-            MainTabState::ConfigTab => {
-                self.handle_config_key(key);
-            }
-        }
+        // All remaining keys go to the agent workspace.
+        self.handle_agent_key(key);
     }
 
     fn handle_agent_key(&mut self, key: &KeyEvent) {
@@ -1067,9 +1046,8 @@ impl App {
         use crate::widgets::command_palette::CommandAction;
 
         match action {
-            CommandAction::SwitchTab(idx) => {
-                self.tab_state.select(idx, state::TABS.len());
-                self.sync_tab_state();
+            CommandAction::SwitchTab(_) => {
+                // No-op: single-tab app now.
             }
             CommandAction::Quit => {
                 self.should_quit = true;
@@ -1083,12 +1061,12 @@ impl App {
                 }
             }
             CommandAction::EnterInput => {
-                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                if true {
                     self.state.active_tab_state_mut().input_mode = InputMode::Input;
                 }
             }
             CommandAction::ToggleAutoScroll => {
-                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                if true {
                     let ts = self.state.active_tab_state_mut();
                     if ts.auto_scroll {
                         ts.auto_scroll = false;
@@ -1098,12 +1076,12 @@ impl App {
                 }
             }
             CommandAction::ScrollToBottom => {
-                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                if true {
                     self.state.active_tab_state_mut().scroll_to_bottom();
                 }
             }
             CommandAction::ScrollToTop => {
-                if matches!(self.state.main_tab_state, MainTabState::AgentTab) {
+                if true {
                     let ts = self.state.active_tab_state_mut();
                     ts.scroll_offset = 0;
                     ts.auto_scroll = false;
@@ -1112,7 +1090,7 @@ impl App {
             CommandAction::HistorySearch => {
                 // Trigger the same flow as Ctrl+R: only meaningful in the
                 // Agent tab when there is history and the agent is idle.
-                let is_agent_tab = matches!(self.state.main_tab_state, MainTabState::AgentTab);
+                let is_agent_tab = true;
                 let ts = self.state.active_tab_state_mut();
                 let can = is_agent_tab
                     && ts.status == state::AgentStatus::Idle
@@ -1153,85 +1131,51 @@ impl App {
             CommandAction::NewAgent => {
                 self.state.profile_picker.open();
             }
+            CommandAction::ModelConfig => {
+                self.state.model_config_visible = true;
+            }
         }
     }
 
-    fn sync_tab_state(&mut self) {
-        self.state.main_tab_state = MainTabState::from_index(self.tab_state.selected);
-    }
-
     fn render(&mut self, frame: &mut Frame) {
-        let areas = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // TabBar
-                Constraint::Min(5),    // Content (Widget handles its own layout)
-            ])
-            .split(frame.area());
+        // ── Workspace (full screen) ──
+        let model_name = self
+            .state
+            .active_model
+            .load_full()
+            .map(|m| m.model_info.model_name.clone());
 
-        // ── TabBar ──
-        let tabs = TabNav::new(state::TABS, self.tab_state.selected)
-            .tab_bar_align(TabBarAlign::Center)
-            .highlight_style(ratatui::style::Style::default().yellow());
-        frame.render_stateful_widget(tabs, areas[0], &mut self.tab_state);
+        // Collect tab data before mutably borrowing tab state.
+        let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
+            .state
+            .sessions
+            .iter()
+            .map(|s| crate::widgets::agent_workspace::LeafTab {
+                name: s.name.clone(),
+                status: s.tab_state.status.clone(),
+            })
+            .collect();
+        let active_idx = self.state.active_agent_idx;
 
-        match self.state.main_tab_state {
-            MainTabState::AgentTab => {
-                use ratatui::widgets::StatefulWidgetRef;
+        let workspace = AgentWorkspace {
+            active_model: model_name.as_deref(),
+        };
+        workspace.render(
+            frame.area(),
+            frame.buffer_mut(),
+            &workspace_tabs,
+            active_idx,
+            self.state.active_tab_state_mut(),
+        );
 
-                // ── Workspace (full width) ──
-                let model_name = self
-                    .state
-                    .active_model
-                    .load_full()
-                    .map(|m| m.model_info.model_name.clone());
-
-                // Collect tab data before mutably borrowing tab state.
-                let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
-                    .state
-                    .sessions
-                    .iter()
-                    .map(|s| crate::widgets::agent_workspace::LeafTab {
-                        name: s.name.clone(),
-                        status: s.tab_state.status.clone(),
-                    })
-                    .collect();
-                let active_idx = self.state.active_agent_idx;
-
-                let workspace = AgentWorkspace {
-                    active_model: model_name.as_deref(),
-                };
-                workspace.render(
-                    areas[1],
-                    frame.buffer_mut(),
-                    &workspace_tabs,
-                    active_idx,
-                    self.state.active_tab_state_mut(),
-                );
-
-                // Position cursor only when there's an active agent leaf.
-                if !self.state.sessions.is_empty() {
-                    if let Some((cx, cy)) =
-                        self.state.active_tab_state_mut().input.last_cursor_pos()
-                    {
-                        frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
-                    }
-                }
-            }
-            MainTabState::ConfigTab => {
-                use ratatui::widgets::StatefulWidgetRef;
-                let widget = crate::widgets::model_config_widget::ModelConfigWidget;
-                widget.render_ref(
-                    areas[1],
-                    frame.buffer_mut(),
-                    &mut self.state.model_config_state,
-                );
+        // Position cursor only when there's an active agent leaf.
+        if !self.state.sessions.is_empty() {
+            if let Some((cx, cy)) = self.state.active_tab_state_mut().input.last_cursor_pos() {
+                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
             }
         }
 
         // ── Command palette overlay ──
-        // Drawn last so it sits on top of the active tab. The popup paints its
-        // own `Clear` backdrop; we only render when the palette is visible.
         if self.state.command_palette.visible {
             crate::widgets::command_palette::render_command_palette(
                 frame.area(),
@@ -1246,17 +1190,27 @@ impl App {
             frame.buffer_mut(),
             &mut self.state.profile_picker,
         );
+
+        // ── Model config popup ──
+        if self.state.model_config_visible {
+            use ratatui::widgets::StatefulWidgetRef as _;
+            let popup = crate::widgets::popup::Popup::new(" Model Config ")
+                .accent(ratatui::style::Color::Magenta);
+            let inner = popup.render(frame.area(), frame.buffer_mut());
+            let widget = crate::widgets::model_config_widget::ModelConfigWidget;
+            widget.render_ref(inner, frame.buffer_mut(), &mut self.state.model_config_state);
+        }
     }
 
-    // ── Config tab ──────────────────────────────────────
-
-    /// Config tab key handling.
-    ///
-    /// Widget-internal keys are delegated to [`ModelConfigState::handle_key`],
-    /// which returns a [`ConfigCommand`] for operations requiring DB access.
-    /// Unrecognized keys fall through to App-level handlers (e.g. `r` reload).
-    fn handle_config_key(&mut self, key: &KeyEvent) {
+    /// Key handling while the model config popup is open.
+    fn handle_model_config_key(&mut self, key: &KeyEvent) {
         use crate::widgets::model_config_widget::ConfigCommand;
+
+        // Esc closes the popup.
+        if key.code == KeyCode::Esc {
+            self.state.model_config_visible = false;
+            return;
+        }
 
         let cmd = self.state.model_config_state.handle_key(*key);
         match cmd {
@@ -1271,39 +1225,21 @@ impl App {
                 provider_name,
                 model_name,
             } => {
-                self.activate_model(&provider_name, &model_name);
-            }
-            ConfigCommand::None => {
-                // Key not consumed by widget — try App-level handlers.
-                match key.code {
-                    KeyCode::Char('r') => {
-                        Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+                // Build the model and apply to the active agent's handle.
+                let spec = format!("{provider_name}:{model_name}");
+                if let Some(model) = Self::build_model_from_spec(&self.conn, &spec) {
+                    if let Some(handle) = self.handles.get(self.state.active_agent_idx) {
+                        handle.set_model(model);
+                        tracing::info!(
+                            agent_idx = self.state.active_agent_idx,
+                            model = %spec,
+                            "model hot-swapped for active agent"
+                        );
                     }
-                    _ => {}
                 }
+                self.state.model_config_visible = false;
             }
-        }
-    }
-
-    /// Persist the active model selection to the `settings` table and hot-swap
-    /// the model in the shared [`ArcSwapOption`]. The agent picks up the new
-    /// model on its next turn — no runtime restart needed.
-    fn activate_model(&mut self, provider_name: &str, model_name: &str) {
-        let value = format!("{provider_name}:{model_name}");
-
-        // Persist to settings table.
-        let _ = self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('active_model', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = ?1",
-            [&value],
-        );
-
-        // Hot-swap: rebuild the Model from DB and atomically store it.
-        if let Some(new_model) = Self::build_model(&self.conn) {
-            self.state.active_model.store(Some(Arc::new(new_model)));
-            tracing::info!("model '{value}' hot-swapped");
-        } else {
-            tracing::warn!("model '{value}' saved but failed to build — restart to apply");
+            ConfigCommand::None => {}
         }
     }
 
