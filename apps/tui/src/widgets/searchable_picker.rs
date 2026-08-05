@@ -118,12 +118,13 @@ impl<T: PickerItem> PickerState<T> {
     }
 
     fn sync_list_state(&mut self) {
-        self.list_state
-            .select(if self.filtered.is_empty() || self.selected >= self.filtered.len() {
+        self.list_state.select(
+            if self.filtered.is_empty() || self.selected >= self.filtered.len() {
                 None
             } else {
                 Some(self.selected)
-            });
+            },
+        );
     }
 
     // ── Selection ──
@@ -240,7 +241,7 @@ impl<'a> SearchablePicker<'a> {
         // ── Search input ──
         let input_line = if state.query.is_empty() {
             Line::from(vec![
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
+                Span::styled("> ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     self.placeholder,
                     Style::default()
@@ -250,14 +251,15 @@ impl<'a> SearchablePicker<'a> {
             ])
         } else {
             Line::from(vec![
-                Span::styled("/", Style::default().fg(self.accent)),
-                Span::styled(
-                    state.query.clone(),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled("> ", Style::default().fg(self.accent)),
+                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
             ])
         };
-        Widget::render(ratatui::widgets::Paragraph::new(input_line), regions[0], buf);
+        Widget::render(
+            ratatui::widgets::Paragraph::new(input_line),
+            regions[0],
+            buf,
+        );
 
         // ── List ──
         let list_area = regions[1];
@@ -298,10 +300,7 @@ impl<'a> SearchablePicker<'a> {
 
                     if let Some(cat) = item.category() {
                         spans.push(Span::raw("  "));
-                        spans.push(Span::styled(
-                            cat,
-                            Style::default().fg(Color::DarkGray),
-                        ));
+                        spans.push(Span::styled(cat, Style::default().fg(Color::DarkGray)));
                     }
 
                     let mut lines = vec![Line::from(spans)];
@@ -328,17 +327,15 @@ impl<'a> SearchablePicker<'a> {
                     .add_modifier(Modifier::BOLD),
             );
 
-            ratatui::widgets::StatefulWidget::render(
-                list,
-                list_area,
-                buf,
-                &mut state.list_state,
-            );
+            ratatui::widgets::StatefulWidget::render(list, list_area, buf, &mut state.list_state);
         }
 
         // ── Footer ──
-        let p = ratatui::widgets::Paragraph::new(self.footer_hint)
-            .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+        let p = ratatui::widgets::Paragraph::new(self.footer_hint).style(
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        );
         Widget::render(p, regions[2], buf);
     }
 }

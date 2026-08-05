@@ -1259,7 +1259,7 @@ mod tests {
 
         let profiles = store.list_profiles().await.unwrap();
         assert_eq!(profiles.len(), 3, "should have 3 default profiles");
-        assert!(profiles.iter().any(|p| p.name == "default"));
+        assert!(profiles.iter().any(|p| p.name == "researcher"));
         assert!(profiles.iter().any(|p| p.name == "literature"));
         assert!(profiles.iter().any(|p| p.name == "gwas-analysis"));
 
@@ -1269,5 +1269,41 @@ mod tests {
 
         let profiles2 = store.list_profiles().await.unwrap();
         assert_eq!(profiles2.len(), 3, "should still have 3 profiles");
+    }
+
+    #[tokio::test]
+    async fn test_seed_migrates_legacy_default() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+
+        // Simulate a legacy DB: only a "default" profile exists.
+        let legacy = AgentProfile {
+            name: "default".into(),
+            description: "legacy".into(),
+            agent_identity: "legacy identity".into(),
+            ..AgentProfile::new("default")
+        };
+        store.create_profile(legacy).await.unwrap();
+
+        // Seed should rename default → researcher AND add missing defaults.
+        let changed = store.seed_defaults_if_empty().await.unwrap();
+        assert!(changed, "migration should make a change");
+
+        let profiles = store.list_profiles().await.unwrap();
+        // researcher (migrated from default) + literature + gwas-analysis.
+        assert_eq!(profiles.len(), 3);
+        assert!(
+            profiles.iter().any(|p| p.name == "researcher"),
+            "legacy 'default' should be renamed to 'researcher'"
+        );
+        assert!(
+            profiles.iter().all(|p| p.name != "default"),
+            "no profile should retain the legacy 'default' name"
+        );
+        // The migrated researcher should preserve the legacy identity.
+        let researcher = profiles
+            .iter()
+            .find(|p| p.name == "researcher")
+            .unwrap();
+        assert_eq!(researcher.agent_identity, "legacy identity");
     }
 }

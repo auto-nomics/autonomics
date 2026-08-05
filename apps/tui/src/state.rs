@@ -284,7 +284,10 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.push_line(ChatLine::Assistant { text, usage: None });
                 state.streaming_assistant = Some(state.messages.len() - 1);
             }
-            state.scroll_to_bottom();
+            // Only auto-scroll if the user hasn't manually scrolled away.
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::ThinkingDelta(text) => {
             let last_is_thinking = state
@@ -299,7 +302,9 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             } else {
                 state.push_line(ChatLine::Thinking(text));
             }
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::UsageUpdate {
             input_tokens,
@@ -345,11 +350,15 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 name,
                 input: input.to_string(),
             });
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::ToolResult { ok, content } => {
             state.push_line(ChatLine::ToolResult { ok, content });
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::ToolCallBackground { id, name } => {
             state.push_line(ChatLine::ToolBackground {
@@ -361,7 +370,9 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 name,
                 status: ToolTaskStatus::Running,
             });
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::ToolBackgroundComplete { id, ok } => {
             state.push_line(ChatLine::ToolResult {
@@ -371,23 +382,25 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             if let Some(task) = state.tool_tasks.iter_mut().find(|t| t.id == id) {
                 task.status = ToolTaskStatus::Done { ok };
             }
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::Done => {
             state.status = AgentStatus::Idle;
-            // Keep still-running background tasks visible across the IDLE
-            // window — the agent intentionally goes IDLE while they execute
-            // and is woken later by `ToolBackgroundComplete`. Only drop tasks
-            // that have already finished.
             state
                 .tool_tasks
                 .retain(|t| matches!(t.status, ToolTaskStatus::Running));
             state.push_line(ChatLine::Separator);
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
         }
         AgentEvent::Error(msg) => {
             state.push_line(ChatLine::Error(msg));
-            state.scroll_to_bottom();
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
             state.status = AgentStatus::Idle;
         }
         // Streaming protocol events — not surfaced directly to the chat view
@@ -428,6 +441,11 @@ pub struct AppState {
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
+    pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
+    pub name_input: crate::widgets::name_input::NameInputState,
+    /// Profile selected from the picker, waiting for the user to enter a name.
+    /// When `Some`, the name input popup is shown.
+    pub pending_profile: Option<agentik_core::AgentProfile>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
     pub active_model: Arc<ArcSwapOption<Model>>,
@@ -444,6 +462,9 @@ impl Default for AppState {
             model_config_state: Default::default(),
             command_palette: Default::default(),
             profile_picker: Default::default(),
+            agent_picker: Default::default(),
+            name_input: Default::default(),
+            pending_profile: None,
             model_config_visible: false,
             active_model: Arc::new(ArcSwapOption::default()),
         }

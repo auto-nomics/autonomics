@@ -25,6 +25,8 @@ pub enum CommandAction {
     NewAgent,
     /// Open the model config popup for the active agent.
     ModelConfig,
+    /// Open the agent resume picker.
+    ResumeAgent,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -115,6 +117,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "spawn create start profile picker".into(),
             category: "agent".into(),
             action: CommandAction::NewAgent,
+        },
+        Command {
+            title: "Resume agent".into(),
+            keywords: "restore reconnect continue previous session agent record".into(),
+            category: "agent".into(),
+            action: CommandAction::ResumeAgent,
         },
         Command {
             title: "Select model".into(),

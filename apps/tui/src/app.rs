@@ -19,9 +19,7 @@ use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
-use crate::state::{
-    self, AgentSession, AgentStatus, AppState, InputMode,
-};
+use crate::state::{self, AgentSession, AgentStatus, AppState, InputMode};
 use crate::widgets::agent_workspace::AgentWorkspace;
 use agentik_core::{AgentProfile, TursoAgentStorage};
 use runtime::{AgentHandle, RuntimeHost};
@@ -122,12 +120,7 @@ impl App {
 
         // Sync profiles to the command palette and picker.
         state.command_palette.set_profiles(&state.profiles);
-        let picker_data: Vec<(String, String)> = state
-            .profiles
-            .iter()
-            .map(|p| (p.name.clone(), p.description.clone()))
-            .collect();
-        crate::widgets::profile_picker::set_profiles(&mut state.profile_picker, &picker_data);
+        state.profile_picker.set_profiles(state.profiles.clone());
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();
@@ -473,6 +466,15 @@ impl App {
             crate::app_event::AppEvent::ConfigReload => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
             }
+            crate::app_event::AppEvent::AgentRecordsLoaded(records) => {
+                self.state.agent_picker.set_records(&records);
+                self.state.agent_picker.open();
+                tracing::info!(count = records.len(), "agent records loaded for picker");
+            }
+            crate::app_event::AppEvent::AgentDeleted(agent_id) => {
+                self.state.agent_picker.remove_by_id(agent_id);
+                tracing::info!(%agent_id, "agent removed from picker after deletion");
+            }
             crate::app_event::AppEvent::AgentSpawned {
                 profile_name,
                 result,
@@ -600,6 +602,18 @@ impl App {
             return;
         }
 
+        // Agent resume picker popup captures keys when visible.
+        if self.state.agent_picker.visible {
+            self.handle_agent_picker_key(key);
+            return;
+        }
+
+        // Name input popup captures keys when visible.
+        if self.state.name_input.visible {
+            self.handle_name_input_key(key);
+            return;
+        }
+
         // Model config popup captures keys when visible.
         if self.state.model_config_visible {
             self.handle_model_config_key(key);
@@ -642,10 +656,7 @@ impl App {
         // so the user can scroll freely; a second press re-pins to the bottom.
         // Scroll-producing keys/mouse also release the lock (see handle_mouse
         // and handle_browse_key); Ctrl+G is the dedicated toggle.
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && key.code == KeyCode::Char('g')
-            && true
-        {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') && true {
             let ts = self.state.active_tab_state_mut();
             if ts.auto_scroll {
                 ts.auto_scroll = false;
@@ -686,8 +697,12 @@ impl App {
     /// can't call `block_on` again. Instead, we spawn the creation as a
     /// background task and send the result back via the app event channel.
     /// The `AgentSpawned` event is handled in `handle_app_event`.
-    fn spawn_agent_from_profile(&mut self, profile: &AgentProfile) {
-        tracing::info!(profile = %profile.name, "spawn_agent_from_profile called");
+    fn spawn_agent_from_profile(&mut self, profile: &AgentProfile, agent_name: &str) {
+        tracing::info!(
+            profile = %profile.name,
+            agent = %agent_name,
+            "spawn_agent_from_profile called"
+        );
 
         let Some(host) = self.host.clone() else {
             tracing::warn!("no runtime host available");
@@ -709,30 +724,40 @@ impl App {
         );
 
         let profile_clone = profile.clone();
-        let profile_name_clone = profile.name.clone();
+        let agent_name_owned = agent_name.to_string();
+        let profile_name_owned = profile.name.clone();
         let tx = self.app_event_tx.clone();
 
         let join_handle = self.runtime_handle.spawn(async move {
-            tracing::debug!(profile = %profile_clone.name, "async spawn task started");
-            host.spawn_agent(&profile_clone, global_model, model_override)
-                .await
-                .map_err(|e| e.to_string())
+            tracing::debug!(
+                profile = %profile_clone.name,
+                agent = %agent_name_owned,
+                "async spawn task started"
+            );
+            host.spawn_agent(
+                &agent_name_owned,
+                &profile_clone,
+                global_model,
+                model_override,
+            )
+            .await
+            .map_err(|e| e.to_string())
         });
 
         self.runtime_handle.spawn(async move {
             let result = join_handle.await;
             let event = match result {
                 Ok(Ok(handle)) => {
-                    tracing::info!(profile = %profile_name_clone, "agent spawned successfully");
+                    tracing::info!(profile = %profile_name_owned, "agent spawned successfully");
                     crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_clone,
+                        profile_name: profile_name_owned,
                         result: Ok(handle),
                     }
                 }
                 Ok(Err(e)) => {
-                    tracing::error!(profile = %profile_name_clone, error = %e, "agent spawn failed");
+                    tracing::error!(profile = %profile_name_owned, error = %e, "agent spawn failed");
                     crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_clone,
+                        profile_name: profile_name_owned,
                         result: Err(e),
                     }
                 }
@@ -748,9 +773,9 @@ impl App {
                     } else {
                         "agent spawn cancelled".to_string()
                     };
-                    tracing::error!(profile = %profile_name_clone, "{msg}");
+                    tracing::error!(profile = %profile_name_owned, "{msg}");
                     crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_clone,
+                        profile_name: profile_name_owned,
                         result: Err(msg),
                     }
                 }
@@ -764,6 +789,142 @@ impl App {
     /// Key handling in browse mode: Up/Down scroll line-by-line,
     /// PageDown/PageUp half-page, Home/End jump to top/bottom,
     /// Enter enters the composer (input mode).
+    /// Query the agents table and open the resume picker.
+    fn open_agent_picker(&mut self) {
+        let Some(host) = self.host.clone() else {
+            tracing::warn!("no host available for agent listing");
+            return;
+        };
+        let tx = self.app_event_tx.clone();
+        self.runtime_handle.spawn(async move {
+            let storage = host.storage();
+            match storage.list_agents().await {
+                Ok(records) => {
+                    let _ = tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to list agents");
+                }
+            }
+        });
+    }
+
+    /// Key handling while the agent resume picker popup is open.
+    fn handle_agent_picker_key(&mut self, key: &KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // If delete confirmation is active, route keys differently.
+        if self.state.agent_picker.delete_confirm_id.is_some() {
+            match key.code {
+                KeyCode::Esc => self.state.agent_picker.cancel_delete(),
+                KeyCode::Backspace => {
+                    self.state.agent_picker.delete_confirm_input.pop();
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    self.state.agent_picker.delete_confirm_input.push(c);
+                }
+                KeyCode::Enter => {
+                    if let Some(agent_id) = self.state.agent_picker.check_delete_confirm() {
+                        self.delete_agent_record(agent_id);
+                    } else {
+                        // Wrong input — cancel confirmation.
+                        self.state.agent_picker.cancel_delete();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Normal mode.
+        match key.code {
+            KeyCode::Esc => {
+                self.state.agent_picker.close();
+            }
+            KeyCode::Up => self.state.agent_picker.move_up(),
+            KeyCode::Down => self.state.agent_picker.move_down(),
+            KeyCode::Backspace => self.state.agent_picker.pop_char(),
+            KeyCode::Char('d') if !ctrl => {
+                self.state.agent_picker.start_delete_confirm();
+            }
+            KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
+            KeyCode::Enter => {
+                if let Some(item) = self.state.agent_picker.selected_item() {
+                    let config_json = item.config_json.clone();
+                    let agent_name = item.name.clone();
+                    self.state.agent_picker.close();
+                    // Try to reconstruct the profile from the stored config_json.
+                    // Fall back to looking up by name in the current profiles.
+                    let profile = serde_json::from_value::<AgentProfile>(config_json)
+                        .ok()
+                        .or_else(|| {
+                            self.state
+                                .profiles
+                                .iter()
+                                .find(|p| p.name == agent_name)
+                                .cloned()
+                        });
+                    match profile {
+                        Some(p) => self.spawn_agent_from_profile(&p, &agent_name),
+                        None => tracing::warn!(
+                            agent = %agent_name,
+                            "could not reconstruct profile for agent record",
+                        ),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Delete an agent record from storage and update the picker list.
+    fn delete_agent_record(&mut self, agent_id: uuid::Uuid) {
+        tracing::info!(%agent_id, "deleting agent record");
+        let Some(host) = self.host.clone() else {
+            tracing::warn!("no host available for deletion");
+            return;
+        };
+        let tx = self.app_event_tx.clone();
+        self.runtime_handle.spawn(async move {
+            let storage = host.storage();
+            match storage.delete_agent(agent_id).await {
+                Ok(()) => {
+                    tracing::info!(%agent_id, "agent deleted from storage");
+                    let _ = tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
+                }
+                Err(e) => {
+                    tracing::error!(%agent_id, error = %e, "failed to delete agent");
+                }
+            }
+        });
+    }
+
+    /// Key handling while the name input popup is open.
+    fn handle_name_input_key(&mut self, key: &KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.state.name_input.close();
+                self.state.pending_profile = None;
+            }
+            KeyCode::Backspace => self.state.name_input.pop_char(),
+            KeyCode::Char(c) if !ctrl => self.state.name_input.push_char(c),
+            KeyCode::Enter => {
+                let name = self.state.name_input.value().to_string();
+                let profile = self.state.pending_profile.take();
+                self.state.name_input.close();
+                if let Some(p) = profile {
+                    if name.is_empty() {
+                        tracing::warn!("agent name cannot be empty");
+                        return;
+                    }
+                    self.spawn_agent_from_profile(&p, &name);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle_browse_key(&mut self, key: &KeyEvent) {
         // Shift+H/L: switch to previous/next agent leaf tab.
         if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -1026,13 +1187,15 @@ impl App {
             KeyCode::Char(c) if !ctrl => self.state.profile_picker.push_char(c),
             KeyCode::Enter => {
                 if let Some(item) = self.state.profile_picker.selected_item() {
-                    let name = item.name.clone();
+                    let profile = item.profile;
                     self.state.profile_picker.close();
-                    if let Some(profile) =
-                        self.state.profiles.iter().find(|p| p.name == name).cloned()
-                    {
-                        self.spawn_agent_from_profile(&profile);
-                    }
+                    // Stash the selected profile; the name input popup
+                    // will open next and prompt the user for an agent
+                    // name (pre-filled with the profile name).
+                    self.state.pending_profile = Some(profile.clone());
+                    self.state
+                        .name_input
+                        .open(format!(" New Agent ({}) ", profile.name), profile.name);
                 }
             }
             _ => {}
@@ -1125,11 +1288,18 @@ impl App {
                     .find(|p| p.name == profile_name)
                     .cloned()
                 {
-                    self.spawn_agent_from_profile(&profile);
+                    // Stash the profile; name input prompts for the agent name.
+                    self.state.pending_profile = Some(profile.clone());
+                    self.state
+                        .name_input
+                        .open(format!(" New Agent ({}) ", profile.name), profile.name);
                 }
             }
             CommandAction::NewAgent => {
                 self.state.profile_picker.open();
+            }
+            CommandAction::ResumeAgent => {
+                self.open_agent_picker();
             }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
@@ -1139,11 +1309,20 @@ impl App {
 
     fn render(&mut self, frame: &mut Frame) {
         // ── Workspace (full screen) ──
+        // Read the model name from the active agent's own model slot (not
+        // the global active_model), so per-agent model switches are reflected.
         let model_name = self
-            .state
-            .active_model
-            .load_full()
-            .map(|m| m.model_info.model_name.clone());
+            .handles
+            .get(self.state.active_agent_idx)
+            .and_then(|h| h.model_handle().load_full())
+            .map(|m| m.model_info.model_name.clone())
+            .or_else(|| {
+                // Fallback to global model when no agent is active.
+                self.state
+                    .active_model
+                    .load_full()
+                    .map(|m| m.model_info.model_name.clone())
+            });
 
         // Collect tab data before mutably borrowing tab state.
         let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
@@ -1185,10 +1364,36 @@ impl App {
         }
 
         // ── Profile picker popup ──
-        crate::widgets::profile_picker::render_profile_picker(
+        if self.state.profile_picker.visible {
+            use ratatui::widgets::StatefulWidget as _;
+            crate::widgets::profile_picker::ProfilePicker::new()
+                .popup_width((frame.area().width * 8 / 10).max(70))
+                .list_width(28)
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.profile_picker,
+                );
+        }
+
+        // ── Agent resume picker popup ──
+        if self.state.agent_picker.visible {
+            use ratatui::widgets::StatefulWidget as _;
+            crate::widgets::agent_picker::AgentPicker::new()
+                .popup_width((frame.area().width * 8 / 10).max(70))
+                .list_width(28)
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agent_picker,
+                );
+        }
+
+        // ── Name input popup ──
+        crate::widgets::name_input::render_name_input(
             frame.area(),
             frame.buffer_mut(),
-            &mut self.state.profile_picker,
+            &self.state.name_input,
         );
 
         // ── Model config popup ──
@@ -1198,7 +1403,11 @@ impl App {
                 .accent(ratatui::style::Color::Magenta);
             let inner = popup.render(frame.area(), frame.buffer_mut());
             let widget = crate::widgets::model_config_widget::ModelConfigWidget;
-            widget.render_ref(inner, frame.buffer_mut(), &mut self.state.model_config_state);
+            widget.render_ref(
+                inner,
+                frame.buffer_mut(),
+                &mut self.state.model_config_state,
+            );
         }
     }
 

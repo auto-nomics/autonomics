@@ -274,8 +274,13 @@ impl RuntimeHost {
     /// - `model_override`: an optional per-agent model (e.g. resolved from
     ///   the profile's `preferred_model`). When `Some`, the agent gets its
     ///   own `ArcSwapOption` slot instead of sharing the global one.
+    /// - `agent_name`: the **unique** name for this agent instance. The
+    ///   profile name is used for configuration (identity, prompts, tools)
+    ///   but the agent's identity is independent — multiple agents can
+    ///   share the same profile with different names.
     pub async fn spawn_agent(
         &self,
+        agent_name: &str,
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
@@ -283,10 +288,15 @@ impl RuntimeHost {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
-        // Resolve model: per-agent override or shared global.
+        // Resolve model: per-agent override, or a fresh independent slot
+        // cloned from the current global model. Using a dedicated ArcSwapOption
+        // for each agent is critical — sharing the global Arc would cause
+        // `set_model` on one agent to mutate the model for all agents.
         let model = match model_override {
             Some(m) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
-            None => global_model,
+            None => Arc::new(ArcSwapOption::from_pointee(
+                global_model.load_full().as_deref().cloned(),
+            )),
         };
 
         // ── Assemble tools from profile flags ──────────────────────
@@ -299,7 +309,7 @@ impl RuntimeHost {
         let mut builder = Agent::builder()
             .with_model(model.clone())
             .with_agent_event_tx(event_tx)
-            .with_name(&profile.name)
+            .with_name(agent_name)
             .with_config_json(config_json)
             .with_system_prompt_identity(&profile.agent_identity)
             .with_storage(storage.clone());
@@ -318,9 +328,9 @@ impl RuntimeHost {
             .with_cancel_token(cancel_token.clone());
 
         // ── Restore from storage if this agent name already exists ──
-        if let Ok(Some(record)) = storage.get_agent_by_name(&profile.name).await {
+        if let Ok(Some(record)) = storage.get_agent_by_name(agent_name).await {
             tracing::info!(
-                agent = %profile.name,
+                agent = %agent_name,
                 agent_id = %record.id,
                 "restoring agent from storage"
             );

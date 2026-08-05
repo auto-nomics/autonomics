@@ -30,4 +30,8 @@ pub(crate) enum AppEvent {
         profile_name: String,
         result: std::result::Result<runtime::AgentHandle, String>,
     },
+    /// Agent records loaded from storage (for the resume picker).
+    AgentRecordsLoaded(Vec<agentik_core::storage::AgentRecord>),
+    /// An agent was deleted from storage. Carries the agent ID.
+    AgentDeleted(uuid::Uuid),
 }

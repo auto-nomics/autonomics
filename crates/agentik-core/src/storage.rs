@@ -162,7 +162,7 @@ impl AgentProfile {
         vec![
             AgentProfile {
                 id: Uuid::new_v4(),
-                name: "default".into(),
+                name: "researcher".into(),
                 description: "Full-featured biomedical research assistant.".into(),
                 agent_identity: "You are a biomedical research assistant specializing \
                     in genomics, GWAS analysis, and literature mining.".into(),
@@ -310,17 +310,40 @@ pub trait AgentProfileRegistry: Send + Sync {
     async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
     async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError>;
 
-    /// Seed the default profiles if the table is empty. Returns `true` if
-    /// profiles were inserted.
+    /// Ensure every built-in default profile exists (by name), seeding any
+    /// that are missing. Also migrates legacy profile names (e.g. the old
+    /// `default` → `researcher` rename). Returns `true` if any change was
+    /// made.
     async fn seed_defaults_if_empty(&self) -> Result<bool, StorageError> {
         let existing = self.list_profiles().await?;
-        if !existing.is_empty() {
-            return Ok(false);
+        let mut changed = false;
+
+        // ── Legacy migration: rename `default` → `researcher` ──
+        if let Some(legacy) = existing
+            .iter()
+            .find(|p| p.name == "default")
+            .map(|p| p.clone())
+        {
+            let mut renamed = legacy;
+            renamed.name = "researcher".into();
+            renamed.updated_at = now_ms();
+            self.update_profile(renamed).await?;
+            changed = true;
         }
+
+        // ── Ensure every default profile exists ──
+        // Re-read after the migration so the name set reflects any renames.
+        let current = self.list_profiles().await?;
+        let names: std::collections::HashSet<String> =
+            current.iter().map(|p| p.name.clone()).collect();
         for profile in AgentProfile::defaults() {
-            self.create_profile(profile).await?;
+            if !names.contains(&profile.name) {
+                self.create_profile(profile).await?;
+                changed = true;
+            }
         }
-        Ok(true)
+
+        Ok(changed)
     }
 }
 
