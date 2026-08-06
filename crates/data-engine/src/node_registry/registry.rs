@@ -722,6 +722,8 @@ mod tests {
             "ml_stl_decompose" => serde_json::json!({"value_column": "y", "period": 4}),
             "ml_changepoint" => serde_json::json!({"value_column": "y"}),
             "ml_apriori" => serde_json::json!({"item_column": "item", "transaction_column": "txn"}),
+            "ml_mlp" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_autoencoder" => serde_json::json!({"features": ["x", "y"]}),
             // ── ML nodes ──
             "ml_standardize" => serde_json::json!({"columns": ["x"]}),
             "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
@@ -768,6 +770,8 @@ mod tests {
             "ml_stl_decompose" => serde_json::json!({"value_column": "y", "period": 4}),
             "ml_changepoint" => serde_json::json!({"value_column": "y"}),
             "ml_apriori" => serde_json::json!({"item_column": "item", "transaction_column": "txn"}),
+            "ml_mlp" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_autoencoder" => serde_json::json!({"features": ["x", "y"]}),
             // ── hypothesize fallback ──
             k if k.starts_with("hypothesize.") => serde_json::json!({}),
             // ── fallback for nodes without a fixture spec ──

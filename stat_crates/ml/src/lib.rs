@@ -34,6 +34,7 @@ pub mod artifact;
 pub mod assoc_recsys;
 pub mod classify;
 pub mod cluster;
+pub mod deep;
 pub mod dimred;
 pub mod feat_select;
 pub mod metrics;

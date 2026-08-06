@@ -7,6 +7,7 @@
 
 pub mod cluster_nodes;
 pub mod common;
+pub mod deep_nodes;
 pub mod dimred_nodes;
 pub mod feat_select_nodes;
 pub mod metrics_nodes;
@@ -91,4 +92,8 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
 
     // ── Association rules (1) ───────────────────────────────────────────
     registry.register(Box::new(ts_assoc_nodes::AprioriFactory));
+
+    // ── Deep learning (2) ───────────────────────────────────────────────
+    registry.register(Box::new(deep_nodes::MlpFactory));
+    registry.register(Box::new(deep_nodes::AutoencoderFactory));
 }
