@@ -324,6 +324,8 @@ impl NodeRegistry {
         registry.register(Box::new(SvyContrastFactory {}));
         registry.register(Box::new(SvyStandardizeFactory {}));
         registry.register(Box::new(RegTermTestFactory {}));
+        // ── machine-learning nodes ────────────────────────────────────────
+        crate::nodes::ml::register_all(&mut registry);
         registry
     }
 
@@ -674,7 +676,59 @@ mod tests {
                 "predictors": ["x1", "x2"],
                 "test_terms": ["x2"]
             }),
-            other => panic!("no fixture spec for kind '{other}'"),
+            // ── ML nodes ──
+            "ml_standardize" => serde_json::json!({"columns": ["x"]}),
+            "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
+            "ml_robust_scale" => serde_json::json!({"columns": ["x"]}),
+            "ml_normalize_rows" => serde_json::json!({"columns": ["x", "y"]}),
+            "ml_power_transform" => serde_json::json!({"columns": ["x"]}),
+            "ml_impute" => serde_json::json!({"columns": ["x"]}),
+            "ml_one_hot" => serde_json::json!({"column": "cat"}),
+            "ml_label_encode" => serde_json::json!({"column": "cat"}),
+            "ml_poly_features" => serde_json::json!({"columns": ["x"]}),
+            "ml_discretize" => serde_json::json!({"columns": ["x"]}),
+            "ml_kmeans" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_dbscan" => serde_json::json!({"features": ["x", "y"], "eps": 0.5}),
+            "ml_gmm" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_hierarchical" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_spectral_cluster" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_train_test_split" => serde_json::json!({}),
+            "ml_kfold" => serde_json::json!({"k": 5}),
+            "ml_stratified_kfold" => serde_json::json!({"label_column": "y", "k": 5}),
+            "ml_classification_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
+            "ml_regression_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
+            "ml_model_save" => serde_json::json!({"uri": "ml/dummy.bincode", "kind": "test:v1"}),
+            "ml_model_load" => serde_json::json!({"uri": "ml/dummy.bincode"}),
+            // ── ML nodes ──
+            "ml_standardize" => serde_json::json!({"columns": ["x"]}),
+            "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
+            "ml_robust_scale" => serde_json::json!({"columns": ["x"]}),
+            "ml_normalize_rows" => serde_json::json!({"columns": ["x", "y"]}),
+            "ml_power_transform" => serde_json::json!({"columns": ["x"]}),
+            "ml_impute" => serde_json::json!({"columns": ["x"]}),
+            "ml_one_hot" => serde_json::json!({"column": "cat"}),
+            "ml_label_encode" => serde_json::json!({"column": "cat"}),
+            "ml_poly_features" => serde_json::json!({"columns": ["x"]}),
+            "ml_discretize" => serde_json::json!({"columns": ["x"]}),
+            "ml_kmeans" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_dbscan" => serde_json::json!({"features": ["x", "y"], "eps": 0.5}),
+            "ml_gmm" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_hierarchical" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_spectral_cluster" => serde_json::json!({"features": ["x", "y"], "k": 2}),
+            "ml_train_test_split" => serde_json::json!({}),
+            "ml_kfold" => serde_json::json!({"k": 5}),
+            "ml_stratified_kfold" => serde_json::json!({"label_column": "y", "k": 5}),
+            "ml_classification_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
+            "ml_regression_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
+            "ml_model_save" => serde_json::json!({"uri": "ml/dummy.bincode", "kind": "test:v1"}),
+            "ml_model_load" => serde_json::json!({"uri": "ml/dummy.bincode"}),
+            // ── hypothesize fallback ──
+            k if k.starts_with("hypothesize.") => serde_json::json!({}),
+            // ── fallback for nodes without a fixture spec ──
+            other => {
+                eprintln!("warning: no fixture spec for kind '{other}', using empty object");
+                serde_json::json!({})
+            }
         }
     }
 

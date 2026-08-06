@@ -61,6 +61,7 @@ pub mod susie_rss;
 pub mod two_sample_mr;
 pub mod univariate_mixer;
 pub mod viz;
+pub mod ml;
 
 pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, BivariateMixerNodeSpec};
 pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
