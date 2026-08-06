@@ -20,7 +20,7 @@ use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
-use data_engine::runtime::{DataEngineClient, spawn_with_engine};
+use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use datalake::Datalake;
 use fs::OpendalFileStorage;
 use thiserror::Error;
@@ -62,14 +62,15 @@ pub type HostResult<T> = std::result::Result<T, HostError>;
 /// Cloning is cheap — every field is `Arc`-backed.
 #[derive(Clone)]
 pub struct SharedInfra {
-    pub engine_client: DataEngineClient,
+    /// Per-agent session manager — each agent gets its own DAG actor task,
+    /// fully isolated from other agents. Heavy infrastructure (NodeRegistry,
+    /// DagHistory, RuntimeEnv) is shared via `Arc`.
+    pub engine_manager: Arc<DataEngineManager>,
     pub file_storage: Arc<OpendalFileStorage>,
     pub datalake: Arc<Datalake>,
     pub storage: Arc<dyn AgentStorage>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
-    /// Keep the engine task alive as long as infra is alive.
-    _engine_handle: Arc<tokio::task::JoinHandle<()>>,
 }
 
 impl SharedInfra {
@@ -117,7 +118,7 @@ impl SharedInfra {
             };
         }
 
-        let (engine_client, engine_handle) = spawn_with_engine(engine);
+        let engine_manager = Arc::new(DataEngineManager::new(engine));
 
         // ── Datalake ─────────────────────────────────────────────────
         let datalake = Arc::new(Datalake::new());
@@ -134,12 +135,11 @@ impl SharedInfra {
         };
 
         Ok(Self {
-            engine_client,
+            engine_manager,
             file_storage,
             datalake,
             storage,
             runtime_handle: tokio::runtime::Handle::current(),
-            _engine_handle: Arc::new(engine_handle),
         })
     }
 }
@@ -408,10 +408,9 @@ impl RuntimeHost {
 
     /// Assemble the tool set for a profile, respecting its feature flags.
     ///
-    /// Each agent gets a **per-session** `DataEngineClient` via
-    /// [`DataEngineClient::with_session`], so its DAG graph is isolated
-    /// from other agents' DAGs while sharing the same engine infrastructure
-    /// (NodeRegistry, RuntimeEnv, DagHistory).
+    /// Each agent gets a **dedicated** `SessionServer` (its own tokio task +
+    /// channel) via `DataEngineManager::client_for_session`, providing full
+    /// cross-agent isolation — a DAG run in one agent never blocks another.
     async fn tools_from_profile(
         &self,
         profile: &agentik_core::AgentProfile,
@@ -421,8 +420,8 @@ impl RuntimeHost {
 
         let file_storage = self.infra.file_storage.clone();
         let datalake = self.infra.datalake.clone();
-        // Create a per-agent engine session — independent DAG, shared infra.
-        let engine_client = self.infra.engine_client.with_session(&profile.name);
+        // Create (or reuse) a dedicated per-agent session actor.
+        let engine_client = self.infra.engine_manager.client_for_session(&profile.name);
 
         // Filesystem / shell tools — always enabled.
         let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());

@@ -36,8 +36,7 @@ impl ToolFunction for GetNodePortsTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let ports = self
             .client
-            .get_node_ports(input.kind)
-            .await
+            .get_node_ports(&input.kind)
             .map_err(ExecError::from)?;
 
         let content = serde_json::to_value(&ports).map_err(|e| ToolError::ExecutionFailed {

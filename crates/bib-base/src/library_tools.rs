@@ -11,7 +11,7 @@
 //! |------------------------|--------------------------------------------------|
 //! | `bib_save`             | Fetch + store an article in the local library.   |
 //! | `bib_create_collection`| Create a new collection.                         |
-//! | `bib_add_to_collection`| Associate an article with a collection + role.   |
+//! | `bib_add_to_collection`| Add one or more articles to a collection + roles. |
 //! | `bib_list_collection`  | List collections or articles within one.         |
 //! | `bib_search_library`   | LIKE search across local library.                |
 //! | `bib_get_article`      | Get full metadata + full text from local library.|
@@ -315,20 +315,39 @@ impl ToolFunction for BibCreateCollectionTool {
 }
 
 // ===========================================================================
-// bib_add_to_collection
+// bib_add_to_collection — batch
 // ===========================================================================
+
+/// One article to add to a collection. Role/note are optional and fall back
+/// to the top-level `default_role` / `default_note` on [`BibAddToCollectionInput`].
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct BibAddToCollectionEntry {
+    /// Article ID (from bib_save or lit_search results).
+    pub article_id: String,
+    /// Role for this article: "requested", "referenced", "cited", or "background".
+    /// When omitted the top-level `default_role` is used.
+    pub role: Option<String>,
+    /// Note explaining this article's relevance to the collection.
+    /// When omitted the top-level `default_note` is used.
+    pub note: Option<String>,
+}
 
 #[tool(
     name = "bib_add_to_collection",
-    description = "Add an article (already saved via bib_save) to a collection with a \
-                  semantic role describing why it's included. \
+    description = "Add one or more articles (already saved via bib_save) to a collection, \
+                  each with a semantic role describing why it's included. \
                   \
-                  If the article is already in the collection, the existing entry is \
-                  updated (not duplicated). The response distinguishes the two cases: \
-                  `action:\"inserted\"` for a new entry, `action:\"updated\"` with \
-                  `previous_role` / `previous_note` and `role_changed` / `note_changed` \
-                  flags for an overwrite. Pass `note=null` (omit the field) to preserve \
-                  the existing note; pass an explicit note to overwrite it. \
+                  Pass a list under `articles`; a single-article call is just a \
+                  one-element list. Each entry may carry its own `role` and `note`; \
+                  entries that omit them inherit the top-level `default_role` / \
+                  `default_note`. \
+                  \
+                  If an article is already in the collection, its entry is updated in \
+                  place (not duplicated). Each result reports `action:\"inserted\"` for \
+                  a new entry or `action:\"updated\"` with `role_changed` / \
+                  `note_changed` flags for an overwrite. Omitting `note` (both on the \
+                  entry and at the top level) preserves the existing note; passing an \
+                  explicit note overwrites it. \
                   \
                   Roles: \
                   • \"requested\" — you actively need this paper for your investigation \
@@ -339,16 +358,35 @@ impl ToolFunction for BibCreateCollectionTool {
 pub struct BibAddToCollectionInput {
     #[desc = "Collection ID (from bib_create_collection)"]
     pub collection_id: String,
-    #[desc = "Article ID (from bib_save or lit_search results)"]
-    pub article_id: String,
-    #[desc = "Role: \"requested\", \"referenced\", \"cited\", or \"background\". Default: referenced"]
-    pub role: Option<String>,
-    #[desc = "Note explaining the article's relevance to this collection"]
-    pub note: Option<String>,
+    #[desc = "Articles to add. Pass a list — even for a single article use a one-element list."]
+    pub articles: Vec<BibAddToCollectionEntry>,
+    #[desc = "Default role for entries that omit their own: \"requested\", \"referenced\", \"cited\", or \"background\". Default: referenced"]
+    pub default_role: Option<String>,
+    #[desc = "Default note for entries that omit their own note."]
+    pub default_note: Option<String>,
 }
 
 pub struct BibAddToCollectionTool {
     pub bib: Arc<BibBase>,
+}
+
+/// Per-article outcome within a batch add.
+#[derive(serde::Serialize)]
+struct AddResult {
+    article_id: String,
+    added: bool,
+    action: &'static str,
+    role: String,
+    note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note_changed: Option<bool>,
+    error: Option<String>,
 }
 
 #[async_trait]
@@ -356,84 +394,125 @@ impl ToolFunction for BibAddToCollectionTool {
     type Input = BibAddToCollectionInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let role = parse_role(input.role.as_deref());
+        if input.articles.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "at least one article is required".into(),
+            });
+        }
+
+        let default_role = parse_role(input.default_role.as_deref());
+
+        // Resolve each entry's role/note against the top-level defaults, then
+        // add it sequentially (position ordering matters within a collection).
+        let mut results = Vec::with_capacity(input.articles.len());
+        for entry in &input.articles {
+            results.push(
+                self.add_one(
+                    &input.collection_id,
+                    entry,
+                    default_role,
+                    input.default_note.as_deref(),
+                )
+                .await,
+            );
+        }
+
+        let total = results.len();
+        let inserted = results
+            .iter()
+            .filter(|r| r.action == "inserted" && r.error.is_none())
+            .count();
+        let updated = results
+            .iter()
+            .filter(|r| r.action == "updated" && r.error.is_none())
+            .count();
+        let failed = results.iter().filter(|r| r.error.is_some()).count();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "collection_id": input.collection_id,
+            "total": total,
+            "inserted": inserted,
+            "updated": updated,
+            "failed": failed,
+            "results": results,
+            "message": format!(
+                "{inserted} inserted, {updated} updated, {failed} failed \
+                 out of {total} articles in collection '{}'.",
+                input.collection_id
+            ),
+        })))
+    }
+}
+
+impl BibAddToCollectionTool {
+    /// Add a single article to a collection, never erroring — failures are
+    /// captured in the returned [`AddResult::error`] so one bad article
+    /// doesn't abort the batch.
+    async fn add_one(
+        &self,
+        collection_id: &str,
+        entry: &BibAddToCollectionEntry,
+        default_role: ArticleRole,
+        default_note: Option<&str>,
+    ) -> AddResult {
+        // Entry role takes priority; fall back to the top-level default. Resolve
+        // at the string level before parsing so an explicit "referenced" is not
+        // confused with an omitted role (both map to ArticleRole::Referenced).
+        let role = match entry.role.as_deref() {
+            Some(r) => parse_role(Some(r)),
+            None => default_role,
+        };
+        // Entry note takes priority; fall back to the top-level default.
+        let note = entry.note.as_deref().or(default_note);
 
         let outcome = self
             .bib
-            .add_to_collection(
-                &input.collection_id,
-                &input.article_id,
-                role,
-                AddedBy::Agent,
-                input.note.as_deref(),
-            )
-            .await
-            .map_err(box_error)?;
+            .add_to_collection(collection_id, &entry.article_id, role, AddedBy::Agent, note)
+            .await;
 
-        let json = match &outcome {
-            CollectionAddOutcome::Inserted => serde_json::json!({
-                "action": "inserted",
-                "added": true,
-                "collection_id": input.collection_id,
-                "article_id": input.article_id,
-                "role": role.as_str(),
-                "note": input.note,
-            }),
-            CollectionAddOutcome::Updated {
+        match outcome {
+            Ok(CollectionAddOutcome::Inserted) => AddResult {
+                article_id: entry.article_id.clone(),
+                added: true,
+                action: "inserted",
+                role: role.as_str().to_owned(),
+                note: note.map(str::to_owned),
+                previous_role: None,
+                previous_note: None,
+                role_changed: None,
+                note_changed: None,
+                error: None,
+            },
+            Ok(CollectionAddOutcome::Updated {
                 previous_role,
                 previous_note,
                 role_changed,
                 note_changed,
-            } => {
-                let message = if outcome.was_noop() {
-                    format!(
-                        "Article '{}' is already in collection '{}' \
-                         (role: {}, note preserved) — no changes.",
-                        input.article_id,
-                        input.collection_id,
-                        role.as_str()
-                    )
-                } else {
-                    let mut parts = Vec::new();
-                    if *role_changed {
-                        parts.push(format!(
-                            "role: {} → {}",
-                            previous_role.as_str(),
-                            role.as_str()
-                        ));
-                    }
-                    if *note_changed {
-                        parts.push(format!(
-                            "note: '{}' → '{}'",
-                            previous_note.as_deref().unwrap_or("(none)"),
-                            input.note.as_deref().unwrap_or("(none)")
-                        ));
-                    }
-                    format!(
-                        "Article '{}' was already in collection '{}' — updated {}.",
-                        input.article_id,
-                        input.collection_id,
-                        parts.join(", ")
-                    )
-                };
-
-                serde_json::json!({
-                    "action": "updated",
-                    "added": true,
-                    "collection_id": input.collection_id,
-                    "article_id": input.article_id,
-                    "role": role.as_str(),
-                    "note": input.note.as_deref().or(previous_note.as_deref()),
-                    "previous_role": previous_role.as_str(),
-                    "previous_note": previous_note,
-                    "role_changed": role_changed,
-                    "note_changed": note_changed,
-                    "message": message,
-                })
-            }
-        };
-
-        Ok(AgentToolResult::success_json(json))
+            }) => AddResult {
+                article_id: entry.article_id.clone(),
+                added: true,
+                action: "updated",
+                role: role.as_str().to_owned(),
+                note: note.map(str::to_owned).or(previous_note.clone()),
+                previous_role: Some(previous_role.as_str().to_owned()),
+                previous_note: previous_note,
+                role_changed: Some(role_changed),
+                note_changed: Some(note_changed),
+                error: None,
+            },
+            Err(e) => AddResult {
+                article_id: entry.article_id.clone(),
+                added: false,
+                action: "error",
+                role: role.as_str().to_owned(),
+                note: note.map(str::to_owned),
+                previous_role: None,
+                previous_note: None,
+                role_changed: None,
+                note_changed: None,
+                error: Some(e.to_string()),
+            },
+        }
     }
 }
 

@@ -19,6 +19,7 @@ textwrap = "0.16"
 agentik-core = { path = "../../crates/agentik-core" }
 agentik-sdk = { path = "../../crates/agentik-sdk" }
 agentik-types = { path = "../../crates/agentik-types" }
+agentik-network = { path = "../../crates/agentik-network" }
 runtime = { path = "../../crates/runtime" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }

@@ -90,6 +90,12 @@ pub enum ChatLine {
     },
     Error(String),
     Separator,
+    /// Network routing or status line (arena, pipeline, etc.).
+    /// Styled differently from assistant messages — prefixed with an icon.
+    Network {
+        icon: &'static str,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -266,7 +272,7 @@ impl AgentTabState {
     // cache in `AgentLeaf` can skip re-rendering unchanged messages.
 
     /// Push a new chat line, assigning it a fresh content version.
-    fn push_line(&mut self, line: ChatLine) {
+    pub fn push_line(&mut self, line: ChatLine) {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages.push(line);
         self.msg_versions.push(self.msg_version_counter);
@@ -551,11 +557,14 @@ pub fn apply_session_event(
                 .into_iter()
                 .map(|info| {
                     if let Some(mut old) = previous.remove(&info.id) {
-                        // Keep the existing tab_state, update title.
+                        // Keep the existing tab_state, update metadata.
                         old.title = info.title;
+                        old.last_active = info.last_active;
                         old
                     } else {
-                        SubSession::new(info.id, info.title)
+                        let mut sub = SubSession::new(info.id, info.title);
+                        sub.last_active = info.last_active;
+                        sub
                     }
                 })
                 .collect();
@@ -569,7 +578,7 @@ pub fn apply_session_event(
                             id: s.id,
                             title: s.title.clone(),
                             message_count: s.tab_state.messages.len(),
-                            last_active: 0,
+                            last_active: s.last_active,
                         })
                         .collect();
                 state.session_picker.set_sessions(picker_items, active_session_id);
@@ -646,6 +655,9 @@ pub struct AgentSession {
 pub struct SubSession {
     pub id: uuid::Uuid,
     pub title: Option<String>,
+    /// Epoch-millis of the last activity in this session, as reported by
+    /// the agent's session list. Drives the picker's "Last active" field.
+    pub last_active: i64,
     /// Conversation-level state — chat history, token counts, scroll, etc.
     /// Owned per-session so each session has its own memory of what
     /// happened in it.
@@ -657,6 +669,7 @@ impl SubSession {
         Self {
             id,
             title,
+            last_active: 0,
             tab_state: AgentTabState::default(),
         }
     }

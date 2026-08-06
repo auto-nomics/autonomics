@@ -569,6 +569,13 @@ impl DataEngine {
         self.history.as_ref()
     }
 
+    /// Borrow the shared `NodeRegistry`. Used by the runtime client to serve
+    /// metadata queries (list/spec/ports/doc) directly, bypassing the actor
+    /// channel so they never block on a running DAG.
+    pub fn node_registry(&self) -> &Arc<NodeRegistry> {
+        &self.node_registry
+    }
+
     /// Validate and run every node of the DAG.
     ///
     /// If a [`DagHistory`] is attached ([`Self::with_history`]), a snapshot

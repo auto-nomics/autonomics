@@ -5,13 +5,13 @@ use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
 use crate::error::Result as EngineResult;
-use schemars;
 
-/// Envelope that routes a [`DataEngineCmd`] to the right session (agent).
+/// Envelope that routes a [`DataEngineCmd`] to a session's actor.
 ///
-/// Each agent has its own DAG graph but shares the engine's heavy
-/// infrastructure (NodeRegistry, RuntimeEnv, DagHistory). The server looks
-/// up `session_id` in its `HashMap<String, DataEngine>` and delegates.
+/// In the per-agent architecture, each session has its own channel and
+/// tokio task (`SessionServer`), so `session_id` is kept for logging only.
+/// Metadata queries (list/spec/ports/doc) bypass this channel entirely —
+/// they are served synchronously from `Arc<NodeRegistry>` on the client.
 pub struct EngineMsg {
     pub session_id: String,
     pub cmd: DataEngineCmd,
@@ -106,25 +106,10 @@ pub enum DataEngineCmd {
     GetDagRef {
         reply: oneshot::Sender<EngineResult<String>>,
     },
-    GetNodeSpec {
-        kind: String,
-        reply: oneshot::Sender<EngineResult<schemars::Schema>>,
-    },
-    ListNodeFactories {
-        reply: oneshot::Sender<EngineResult<Vec<crate::node_registry::NodeInfo>>>,
-    },
     UpdateNode {
         id: String,
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
-    },
-    GetNodePorts {
-        kind: String,
-        reply: oneshot::Sender<EngineResult<crate::nodes::meta::NodePorts>>,
-    },
-    GetNodeDoc {
-        kind: String,
-        reply: oneshot::Sender<EngineResult<String>>,
     },
     /// Reverse-compile the current DAG to R or Python source code.
     CompileDag {

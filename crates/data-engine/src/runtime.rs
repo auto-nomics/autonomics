@@ -1,63 +1,124 @@
-//! Runtime of Data Engine based on tokio runtime
+//! Runtime of Data Engine based on tokio runtime.
 //!
-//! The server maintains a **pool of per-session `DataEngine` instances**.
-//! Each session (agent) gets its own DAG graph, but all sessions share the
-//! same heavy infrastructure via `Arc` (NodeRegistry, RuntimeEnv, DagHistory).
+//! # Architecture (three-layer isolation)
 //!
-//! New sessions are created lazily via `DataEngine::new_session()` on the
-//! first command for a given `session_id`.
+//! **Layer 1 — Metadata bypass.** Read-only node-registry queries
+//! (`list_node_factories`, `get_node_spec`, `get_node_ports`, `get_node_doc`)
+//! are served directly from `Arc<NodeRegistry>` on the client side and never
+//! enter the actor channel, so they cannot be blocked by a running DAG.
+//!
+//! **Layer 2 — RunDag fire-and-forget.** `RunDag` is spawned as a background
+//! task inside the session actor; the actor loop returns immediately and keeps
+//! processing subsequent commands. A per-session `AtomicBool` guards against
+//! concurrent runs; mutation commands during a run return an immediate error
+//! instead of blocking.
+//!
+//! **Layer 3 — Per-agent actors.** Each agent session gets its own tokio task
+//! and its own mpsc channel, managed by `DataEngineManager`. A long DAG run in
+//! agent-A's actor never blocks agent-B's commands. Heavy infrastructure
+//! (`NodeRegistry`, `DagHistory`, `RuntimeEnv`) is shared via `Arc`.
 
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use datafusion::common::HashMap;
 use futures::FutureExt;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::data_engine::DataEngine;
-use crate::runtime::error::Result;
+use crate::node_registry::registry::NodeRegistry;
+use crate::runtime::error::{ClientError, Result};
 use crate::runtime::types::{DataEngineCmd, EngineMsg};
 
 pub mod error;
 pub mod types;
 
-/// Multi-session DataEngine actor.
+// ═══════════════════════════════════════════════════════════════════════
+// Per-session actor (Layer 2 + 3)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Single-session DataEngine actor.
 ///
-/// Holds a template engine (created at startup with all heavy infra) and
-/// a lazily-populated map of per-session engines. Each session engine
-/// shares the template's `Arc<NodeRegistry>`, `NodeCtx`, `DagHistory`, etc.
-/// but has its own independent `DAG` and `history_ref`.
-pub struct DataEngineServer {
-    /// Template engine — used to spawn new sessions via `new_session()`.
-    template: DataEngine,
-    /// Per-session engines, keyed by session_id.
-    sessions: HashMap<String, DataEngine>,
+/// One instance per agent session. The engine is behind a `Mutex` so that
+/// `RunDag` can be spawned as a background task while the actor loop continues
+/// processing other commands. The `running` flag prevents concurrent DAG runs
+/// and allows mutation commands to fast-fail instead of blocking.
+struct SessionServer {
+    session_id: String,
+    engine: Arc<tokio::sync::Mutex<DataEngine>>,
+    running: Arc<AtomicBool>,
     rx: mpsc::UnboundedReceiver<EngineMsg>,
 }
 
-impl DataEngineServer {
-    /// Main event loop. Exits when all senders are dropped.
-    pub async fn run(mut self) {
+impl SessionServer {
+    async fn run(mut self) {
         while let Some(msg) = self.rx.recv().await {
-            if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
-                tracing::error!("data engine handler panicked: {:?}", panic);
+            if let Err(panic) = AssertUnwindSafe(self.handle(msg))
+                .catch_unwind()
+                .await
+            {
+                tracing::error!(
+                    session_id = %self.session_id,
+                    "session actor handler panicked: {:?}",
+                    panic
+                );
             }
         }
+        tracing::debug!(session_id = %self.session_id, "session actor exited");
     }
 
-    /// Get (or lazily create) the session engine for `session_id`.
-    fn session(&mut self, session_id: &str) -> &mut DataEngine {
-        if !self.sessions.contains_key(session_id) {
-            let new_engine = self.template.new_session();
-            tracing::info!(session_id, "created new DAG session");
-            self.sessions.insert(session_id.to_string(), new_engine);
-        }
-        self.sessions.get_mut(session_id).expect("just inserted")
-    }
-
-    async fn handle(&mut self, msg: EngineMsg) {
-        let EngineMsg { session_id, cmd } = msg;
+    async fn handle(&self, msg: EngineMsg) {
+        let EngineMsg { cmd, .. } = msg;
 
         match cmd {
+            // ── DAG execution (fire-and-forget) ──────────────────────────
+            DataEngineCmd::RunDag {
+                event_tx,
+                commit_message,
+                reply,
+            } => {
+                if self.running.swap(true, Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is already running for this session; wait for the current run to complete"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let engine = Arc::clone(&self.engine);
+                let running = Arc::clone(&self.running);
+                tokio::spawn(async move {
+                    let result = AssertUnwindSafe(async {
+                        let mut engine = engine.lock().await;
+                        engine.set_commit_message(commit_message);
+                        match event_tx {
+                            Some(sink) => engine.run_with_events(sink).await,
+                            None => engine.run().await,
+                        }
+                    })
+                    .catch_unwind()
+                    .await;
+
+                    running.store(false, Ordering::SeqCst);
+
+                    match result {
+                        Ok(res) => {
+                            let _ = reply.send(res);
+                        }
+                        Err(panic) => {
+                            let _ = reply.send(Err(crate::error::Error::Custom(
+                                format!("DAG run panicked: {:?}", panic),
+                            )));
+                        }
+                    }
+                });
+            }
+
+            // ── Commands that need exclusive engine access ───────────────
+            //
+            // When a DAG is running, the mutex is held by the run task.
+            // Instead of blocking, these commands fast-fail so the actor
+            // loop stays responsive for other messages (and other sessions).
             DataEngineCmd::AddEdge {
                 from,
                 from_port,
@@ -65,110 +126,22 @@ impl DataEngineServer {
                 to_port,
                 reply,
             } => {
-                let engine = self.session(&session_id);
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before modifying the graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
                 let res = match (from_port, to_port) {
                     (Some(fp), Some(tp)) => engine.add_edge(from, to, fp, tp).map(|_| ()),
                     (None, None) => engine.add_edge(from, to, 0, 0).map(|_| ()),
                     _ => Err(crate::error::Error::Custom(
-                        "add_edge: from_port and to_port must both be Some or both None"
-                            .to_string(),
+                        "add_edge: from_port and to_port must both be Some or both None".to_string(),
                     )),
                 };
                 let _ = reply.send(res);
-            }
-            DataEngineCmd::RunDag {
-                event_tx,
-                commit_message,
-                reply,
-            } => {
-                let engine = self.session(&session_id);
-                engine.set_commit_message(commit_message);
-                let res = match event_tx {
-                    Some(sink) => engine.run_with_events(sink).await,
-                    None => engine.run().await,
-                };
-                let _ = reply.send(res);
-            }
-            DataEngineCmd::GetOutput { id, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(Ok(engine.get_output(id).await));
-            }
-            DataEngineCmd::GetNodeStatus { id, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(Ok(engine.node_status(&id)));
-            }
-            DataEngineCmd::RemoveNode { id, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.remove_node(id).map(|_| ()));
-            }
-            DataEngineCmd::ViewDag { reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.view_dag());
-            }
-            DataEngineCmd::ClearDag { reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.clear_dag().map(|_| ()));
-            }
-            DataEngineCmd::NewDagRef { name, reply } => {
-                let engine = self.session(&session_id);
-                let res = engine.new_dag_ref(&name).await;
-                let _ = reply.send(res);
-            }
-            DataEngineCmd::SwitchDagRef { name, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.switch_dag_ref(&name).await);
-            }
-            DataEngineCmd::ListDagRefs { reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.list_dag_refs().await);
-            }
-            DataEngineCmd::DagLog {
-                ref_name,
-                limit,
-                reply,
-            } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.dag_log(ref_name.as_deref(), limit).await);
-            }
-            DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.checkout_dag(&snapshot_id).await);
-            }
-            DataEngineCmd::BranchFromSnapshot {
-                snapshot_id,
-                ref_name,
-                reply,
-            } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(
-                    engine
-                        .branch_from_snapshot(&snapshot_id, &ref_name)
-                        .await,
-                );
-            }
-            DataEngineCmd::GetDagRef { reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(Ok(engine.history_ref().to_string()));
-            }
-            DataEngineCmd::GetSnapshot { snapshot_id, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.get_snapshot(&snapshot_id).await);
-            }
-            DataEngineCmd::DiffSnapshots {
-                old_id,
-                new_id,
-                reply,
-            } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.diff_snapshots(&old_id, &new_id).await);
-            }
-            DataEngineCmd::GetNodeSpec { kind, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.get_node_spec(&kind));
-            }
-            DataEngineCmd::ListNodeFactories { reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(Ok(engine.list_nodes()));
             }
             DataEngineCmd::AddNode {
                 id,
@@ -176,68 +149,269 @@ impl DataEngineServer {
                 spec,
                 reply,
             } => {
-                let engine = self.session(&session_id);
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before modifying the graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
                 let _ = reply.send(engine.add_node_from_registry(id, &kind, spec));
             }
             DataEngineCmd::UpdateNode { id, spec, reply } => {
-                let engine = self.session(&session_id);
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before modifying the graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
                 let _ = reply.send(engine.update_node(id, spec));
             }
-            DataEngineCmd::GetNodePorts { kind, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.get_node_ports(&kind));
+            DataEngineCmd::RemoveNode { id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before modifying the graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.remove_node(id).map(|_| ()));
             }
-            DataEngineCmd::GetNodeDoc { kind, reply } => {
-                let engine = self.session(&session_id);
-                let _ = reply.send(engine.get_node_doc(&kind));
+            DataEngineCmd::ClearDag { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before clearing"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.clear_dag().map(|_| ()));
+            }
+
+            // ── Read-only engine inspection ──────────────────────────────
+            DataEngineCmd::GetOutput { id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; query outputs after it completes".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.get_output(id).await));
+            }
+            DataEngineCmd::GetNodeStatus { id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; use event stream for progress".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.node_status(&id)));
+            }
+            DataEngineCmd::ViewDag { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; view it after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.view_dag());
             }
             DataEngineCmd::CompileDag { target, reply } => {
-                let engine = self.session(&session_id);
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; compile it after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
                 let _ = reply.send(engine.compile_dag(target));
+            }
+
+            // ── History / ref management (async, may hold lock across await) ──
+            DataEngineCmd::NewDagRef { name, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for completion before managing refs"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.new_dag_ref(&name).await);
+            }
+            DataEngineCmd::SwitchDagRef { name, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for completion before switching refs"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.switch_dag_ref(&name).await);
+            }
+            DataEngineCmd::ListDagRefs { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.list_dag_refs().await);
+            }
+            DataEngineCmd::DagLog {
+                ref_name,
+                limit,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.dag_log(ref_name.as_deref(), limit).await);
+            }
+            DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for completion before checkout".to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.checkout_dag(&snapshot_id).await);
+            }
+            DataEngineCmd::BranchFromSnapshot {
+                snapshot_id,
+                ref_name,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for completion before branching".to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(
+                    engine
+                        .branch_from_snapshot(&snapshot_id, &ref_name)
+                        .await,
+                );
+            }
+            DataEngineCmd::GetDagRef { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.history_ref().to_string()));
+            }
+            DataEngineCmd::GetSnapshot { snapshot_id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.get_snapshot(&snapshot_id).await);
+            }
+            DataEngineCmd::DiffSnapshots {
+                old_id,
+                new_id,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let _ = reply.send(engine.diff_snapshots(&old_id, &new_id).await);
             }
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Client
+// Client (Layer 1: metadata bypass)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Channel-based client for the multi-session DataEngine actor.
+/// Channel-based client for the DataEngine actor.
 ///
-/// Each client carries a `session_id` that routes commands to the right
-/// per-agent DAG. Use [`DataEngineClient::with_session`] to create a new
-/// client for a different agent — both clients share the same underlying
-/// channel (and thus the same actor / infrastructure).
+/// Each client carries a `session_id` that routes to the right per-agent
+/// `SessionServer`. Metadata queries (`list_node_factories`, `get_node_spec`,
+/// `get_node_ports`, `get_node_doc`) bypass the actor entirely — they read
+/// from the shared `Arc<NodeRegistry>` synchronously and therefore never
+/// block on a running DAG.
 #[derive(Clone)]
 pub struct DataEngineClient {
     tx: mpsc::UnboundedSender<EngineMsg>,
+    /// Shared, immutable node registry. Cloned once at session creation;
+    /// subsequent metadata queries are zero-cost reads with no channel hop.
+    node_registry: Arc<NodeRegistry>,
     session_id: String,
 }
 
 impl DataEngineClient {
-    /// Create a new client for a **different session** sharing the same
-    /// actor connection. The new session's DAG is created lazily on first
-    /// command.
-    pub fn with_session(&self, session_id: impl Into<String>) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            session_id: session_id.into(),
-        }
-    }
-
     /// Returns the session ID this client routes to.
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
+
+    // ── Metadata queries (Layer 1: synchronous, bypass actor) ────────────
+
+    /// List metadata of every registered node kind (kind + JSON Schema).
+    ///
+    /// Reads directly from the shared `NodeRegistry` — never blocks on a
+    /// running DAG.
+    pub fn list_node_factories(&self) -> Result<Vec<crate::node_registry::NodeInfo>> {
+        Ok(self.node_registry.list_nodes())
+    }
+
+    /// Get the JSON Schema for a specific node kind. Synchronous, never blocks.
+    pub fn get_node_spec(&self, kind: &str) -> Result<schemars::Schema> {
+        self.node_registry
+            .get_node_spec(kind)
+            .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
+    }
+
+    /// Get the input/output port layout of a node kind. Synchronous, never blocks.
+    pub fn get_node_ports(&self, kind: &str) -> Result<crate::nodes::meta::NodePorts> {
+        self.node_registry
+            .get_node_ports(kind)
+            .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
+    }
+
+    /// Get the documentation string for a node kind. Synchronous, never blocks.
+    pub fn get_node_doc(&self, kind: &str) -> Result<String> {
+        self.node_registry
+            .get_node_doc(kind)
+            .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
+    }
+
+    // ── Actor-routed commands ─────────────────────────────────────────────
 
     async fn request<T>(
         &self,
         cmd: DataEngineCmd,
         reply_rx: tokio::sync::oneshot::Receiver<std::result::Result<T, crate::error::Error>>,
     ) -> Result<T> {
-        use crate::runtime::error::ClientError;
-
         self.tx
             .send(EngineMsg {
                 session_id: self.session_id.clone(),
@@ -490,24 +664,6 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn get_node_spec(&self, kind: String) -> Result<schemars::Schema> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetNodeSpec { kind, reply: reply_tx },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn list_node_factories(&self) -> Result<Vec<crate::node_registry::NodeInfo>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ListNodeFactories { reply: reply_tx },
-            reply_rx,
-        )
-        .await
-    }
-
     pub async fn add_node(
         &self,
         id: String,
@@ -540,24 +696,6 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn get_node_ports(&self, kind: String) -> Result<crate::nodes::meta::NodePorts> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetNodePorts { kind, reply: reply_tx },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn get_node_doc(&self, kind: String) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetNodeDoc { kind, reply: reply_tx },
-            reply_rx,
-        )
-        .await
-    }
-
     pub async fn compile_dag(
         &self,
         target: crate::codegen::CodegenTarget,
@@ -572,25 +710,106 @@ impl DataEngineClient {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Spawn
+// Manager (Layer 3: per-agent actors)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Spawn the multi-session DataEngine actor.
+/// Lazily spawns a dedicated `SessionServer` (tokio task + channel) per agent
+/// session, all sharing the same heavy infrastructure from the template engine.
 ///
-/// Returns a `DataEngineClient` whose default session is `"default"`. Use
-/// `client.with_session("agent-foo")` to create a client that routes to a
-/// different (lazily-created) DAG session.
+/// This provides **full cross-agent isolation**: a long DAG run in agent-A's
+/// actor never blocks agent-B's commands, and a panic in one session's handler
+/// does not affect others.
+pub struct DataEngineManager {
+    template: DataEngine,
+    node_registry: Arc<NodeRegistry>,
+    sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
+}
+
+struct SessionHandle {
+    tx: mpsc::UnboundedSender<EngineMsg>,
+    _task: JoinHandle<()>,
+}
+
+impl DataEngineManager {
+    /// Create a manager from a template engine. The template's
+    /// `NodeRegistry`, `RuntimeEnv`, `DagHistory`, etc. are shared across all
+    /// lazily-created sessions via `Arc` / `Clone`.
+    pub fn new(engine: DataEngine) -> Self {
+        let node_registry = Arc::clone(engine.node_registry());
+        Self {
+            template: engine,
+            node_registry,
+            sessions: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Get (or lazily create) a [`DataEngineClient`] for `session_id`.
+    ///
+    /// The first call for a given session spawns a dedicated tokio task.
+    /// Subsequent calls return a cheap clone of the same channel sender.
+    ///
+    /// This method is synchronous because the internal sessions map uses a
+    /// `std::sync::Mutex` — it is never held across an `.await` point, so
+    /// there is no risk of blocking the executor.
+    pub fn client_for_session(&self, session_id: &str) -> DataEngineClient {
+        let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
+
+        // Fast path: session already exists.
+        if let Some(handle) = sessions.get(session_id) {
+            return DataEngineClient {
+                tx: handle.tx.clone(),
+                node_registry: Arc::clone(&self.node_registry),
+                session_id: session_id.to_string(),
+            };
+        }
+
+        // Slow path: create new session.
+        let new_engine = self.template.new_session();
+        let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
+        let server = SessionServer {
+            session_id: session_id.to_string(),
+            engine: Arc::new(tokio::sync::Mutex::new(new_engine)),
+            running: Arc::new(AtomicBool::new(false)),
+            rx,
+        };
+        let task = tokio::task::spawn(server.run());
+
+        tracing::info!(session_id, "created new DAG session");
+        sessions.insert(
+            session_id.to_string(),
+            SessionHandle {
+                tx: tx.clone(),
+                _task: task,
+            },
+        );
+        drop(sessions);
+
+        DataEngineClient {
+            tx,
+            node_registry: Arc::clone(&self.node_registry),
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Legacy spawn helper (backward compatibility for tests)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Spawn a single-session DataEngine actor and return a client for the
+/// `"default"` session.
+///
+/// This is a convenience wrapper around [`DataEngineManager`] for code that
+/// does not need multi-session support (e.g. tests). New code should use
+/// `DataEngineManager::new` + `client_for_session` directly.
 pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()>) {
-    let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
-    let server = DataEngineServer {
-        template: engine,
-        sessions: HashMap::new(),
-        rx,
-    };
-    let client = DataEngineClient {
-        tx,
-        session_id: "default".to_string(),
-    };
-    let handle = tokio::task::spawn(server.run());
+    let manager = Box::leak(Box::new(DataEngineManager::new(engine)));
+    let client = manager.client_for_session("default");
+
+    // Provide a dummy JoinHandle for API compatibility — the session task is
+    // already spawned inside the manager.
+    let handle = tokio::task::spawn(async {
+        std::future::pending::<()>().await;
+    });
     (client, handle)
 }

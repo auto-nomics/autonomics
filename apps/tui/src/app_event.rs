@@ -32,4 +32,6 @@ pub(crate) enum AppEvent {
         session_id: uuid::Uuid,
         messages: Vec<agentik_sdk::types::messages::Message>,
     },
+    /// An event from a running multi-agent network (arena, pipeline, etc.).
+    Network(agentik_network::NetworkEvent),
 }

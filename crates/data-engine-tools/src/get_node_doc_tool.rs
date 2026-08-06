@@ -37,8 +37,7 @@ impl ToolFunction for GetNodeDocTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let doc = self
             .client
-            .get_node_doc(input.kind)
-            .await
+            .get_node_doc(&input.kind)
             .map_err(ExecError::from)?;
 
         Ok(ToolResult::success_json(serde_json::json!({ "doc": doc })))

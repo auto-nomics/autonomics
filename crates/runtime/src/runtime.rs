@@ -10,7 +10,7 @@ use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
-use data_engine::runtime::spawn_with_engine;
+use data_engine::runtime::DataEngineManager;
 use datalake::Datalake;
 use fs::OpendalFileStorage;
 use thiserror::Error;
@@ -44,7 +44,6 @@ pub type Result<T> = std::result::Result<T, RuntimeError>;
 pub struct AgentRuntime {
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
-    _engine_handle: tokio::task::JoinHandle<()>,
     /// Handle for the spawned agent task, so we can abort it on forced shutdown.
     agent_handle: tokio::task::JoinHandle<()>,
     cancel_token: CancellationToken,
@@ -89,7 +88,7 @@ impl AgentRuntime {
 
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
 
-        let (internal_tx, engine_handle, agent_handle, storage, model_handle) = runtime.block_on(async {
+        let (internal_tx, agent_handle, storage, model_handle) = runtime.block_on(async {
             // ── DataEngine ───────────────────────────────────────────────
             let mut engine_builder =
                 DataEngine::builder().register_opendal_fs(file_storage.clone())?;
@@ -118,7 +117,10 @@ impl AgentRuntime {
                 };
             }
 
-            let (data_engine_client, engine_handle) = spawn_with_engine(engine);
+            let engine_manager = Arc::new(DataEngineManager::new(engine));
+            let data_engine_client = engine_manager.client_for_session("default");
+            // Keep the manager alive for the process lifetime.
+            std::mem::forget(engine_manager);
 
             // ── Tools ────────────────────────────────────────────────────
             let datalake = Arc::new(Datalake::new());
@@ -181,13 +183,12 @@ impl AgentRuntime {
                 agent.run().await;
             });
 
-            Ok::<_, RuntimeError>((tx, engine_handle, agent_handle, storage, model_handle))
+            Ok::<_, RuntimeError>((tx, agent_handle, storage, model_handle))
         })?;
 
         Ok(Self {
             internal_tx,
             event_rx,
-            _engine_handle: engine_handle,
             agent_handle,
             cancel_token,
             storage,

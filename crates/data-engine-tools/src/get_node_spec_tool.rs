@@ -37,8 +37,7 @@ impl ToolFunction for GetNodeSpecTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let schema = self
             .client
-            .get_node_spec(input.kind)
-            .await
+            .get_node_spec(&input.kind)
             .map_err(ExecError::from)?;
 
         let content = serde_json::to_value(&schema).map_err(|e| ToolError::ExecutionFailed {

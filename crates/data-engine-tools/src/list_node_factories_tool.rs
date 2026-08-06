@@ -36,7 +36,6 @@ impl ToolFunction for ListNodeFactoriesTool {
         let nodes = self
             .client
             .list_node_factories()
-            .await
             .map_err(ExecError::from)?;
 
         let content = serde_json::to_value(&nodes).map_err(|e| ToolError::ExecutionFailed {
