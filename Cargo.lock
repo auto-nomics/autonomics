@@ -1987,6 +1987,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "lava",
+ "lcmm",
  "lcv",
  "ldsc",
  "magma",

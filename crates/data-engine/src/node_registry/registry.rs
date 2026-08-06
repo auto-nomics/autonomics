@@ -28,6 +28,7 @@ use crate::nodes::{
     echo_node::EchoNodeFactory,
     coloc::ColocAbfNodeFactory,
     bkmr::BkmrNodeFactory,
+    hlme::{HlmeCompareNodeFactory, HlmeNodeFactory, HlmePredictNodeFactory},
     epi_lasso::EpiLassoNodeFactory,
     epi_rcs::EpiRcsNodeFactory,
     epi_roc::EpiRocNodeFactory,
@@ -268,6 +269,9 @@ impl NodeRegistry {
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(ColocAbfNodeFactory {}));
         registry.register(Box::new(BkmrNodeFactory {}));
+        registry.register(Box::new(HlmeNodeFactory {}));
+        registry.register(Box::new(HlmePredictNodeFactory {}));
+        registry.register(Box::new(HlmeCompareNodeFactory {}));
         registry.register(Box::new(EvalueNodeFactory {}));
         registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));
@@ -673,6 +677,17 @@ mod tests {
                 "response": "y",
                 "predictors": ["x1", "x2"],
                 "test_terms": ["x2"]
+            }),
+            "hlme" => serde_json::json!({
+                "subject": "ID", "outcome": "Y", "ng": 1,
+                "fixed": ["Time"], "intercept": true
+            }),
+            "hlme_predict" => serde_json::json!({
+                "columns": ["Time"], "intercept": true, "ng": 1,
+                "best": [0.0, 0.0, 1.0], "idg": [1, 1]
+            }),
+            "hlme_compare" => serde_json::json!({
+                "models": [{"name": "m1", "ng": 1, "npm": 3, "loglik": -100.0, "ns": 100}]
             }),
             other => panic!("no fixture spec for kind '{other}'"),
         }

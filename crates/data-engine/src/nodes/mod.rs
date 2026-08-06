@@ -23,6 +23,7 @@ pub mod evalue;
 pub mod fine_gray;
 pub mod hdl_l;
 pub mod hdl_l_scan;
+pub mod hlme;
 pub mod hypothesize;
 pub mod lava;
 pub mod lcv;
@@ -66,6 +67,10 @@ pub use bivariate_mixer::{BivariateMixerNode, BivariateMixerNodeFactory, Bivaria
 pub use chi_square::{ChiSquareNode, ChiSquareNodeFactory, ChiSquareNodeSpec};
 pub use cpassoc::{CpassocConfig, CpassocNode, CpassocNodeFactory};
 pub use echo_node::{EchoNode, EchoNodeFactory, EchoNodeSpec};
+pub use hlme::{
+    HlmeCompareNode, HlmeCompareNodeFactory, HlmeConfig, HlmeNode, HlmeNodeFactory,
+    HlmePredictNode, HlmePredictNodeFactory,
+};
 pub use coloc::{ColocAbfConfig, ColocAbfNode, ColocAbfNodeFactory, DatasetSpec as ColocDatasetSpec};
 pub use bkmr::{BkmrConfig, BkmrNode, BkmrNodeFactory};
 pub use evalue::{EvalueConfig, EvalueNode, EvalueNodeFactory};
