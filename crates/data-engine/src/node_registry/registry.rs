@@ -699,6 +699,11 @@ mod tests {
             "ml_regression_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
             "ml_model_save" => serde_json::json!({"uri": "ml/dummy.bincode", "kind": "test:v1"}),
             "ml_model_load" => serde_json::json!({"uri": "ml/dummy.bincode"}),
+            "ml_pca" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_ica" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_tsne" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             // ── ML nodes ──
             "ml_standardize" => serde_json::json!({"columns": ["x"]}),
             "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
@@ -722,6 +727,11 @@ mod tests {
             "ml_regression_metrics" => serde_json::json!({"y_true": "yt", "y_pred": "yp"}),
             "ml_model_save" => serde_json::json!({"uri": "ml/dummy.bincode", "kind": "test:v1"}),
             "ml_model_load" => serde_json::json!({"uri": "ml/dummy.bincode"}),
+            "ml_pca" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_ica" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_tsne" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             // ── hypothesize fallback ──
             k if k.starts_with("hypothesize.") => serde_json::json!({}),
             // ── fallback for nodes without a fixture spec ──

@@ -31,6 +31,7 @@
 
 pub mod artifact;
 pub mod cluster;
+pub mod dimred;
 pub mod metrics;
 pub mod preprocess;
 pub mod split;

@@ -7,6 +7,7 @@
 
 pub mod cluster_nodes;
 pub mod common;
+pub mod dimred_nodes;
 pub mod metrics_nodes;
 pub mod model_nodes;
 pub mod preprocess_nodes;
@@ -47,4 +48,11 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
     // ── Model artifact (2) ──────────────────────────────────────────────
     registry.register(Box::new(model_nodes::ModelSaveFactory));
     registry.register(Box::new(model_nodes::ModelLoadFactory));
+
+    // ── Dimensionality reduction (5) ────────────────────────────────────
+    registry.register(Box::new(dimred_nodes::PcaFactory));
+    registry.register(Box::new(dimred_nodes::IcaFactory));
+    registry.register(Box::new(dimred_nodes::TsneFactory));
+    registry.register(Box::new(dimred_nodes::NmfFactory));
+    registry.register(Box::new(dimred_nodes::TruncatedSvdFactory));
 }
