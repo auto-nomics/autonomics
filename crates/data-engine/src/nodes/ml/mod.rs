@@ -14,6 +14,7 @@ pub mod model_nodes;
 pub mod preprocess_nodes;
 pub mod split_nodes;
 pub mod supervised_nodes;
+pub mod svm_anomaly_nodes;
 
 /// Register all ML node factories with the engine's [`NodeRegistry`].
 ///
@@ -72,4 +73,13 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
     // ── Supervised — regression (2) ─────────────────────────────────────
     registry.register(Box::new(supervised_nodes::LinearRegressFactory));
     registry.register(Box::new(supervised_nodes::ElasticNetFactory));
+
+    // ── SVM + Ensemble (2) ──────────────────────────────────────────────
+    registry.register(Box::new(svm_anomaly_nodes::SvmFactory));
+    registry.register(Box::new(svm_anomaly_nodes::AdaBoostFactory));
+
+    // ── Anomaly detection (3) ───────────────────────────────────────────
+    registry.register(Box::new(svm_anomaly_nodes::IsolationForestFactory));
+    registry.register(Box::new(svm_anomaly_nodes::ZscoreOutlierFactory));
+    registry.register(Box::new(svm_anomaly_nodes::LofFactory));
 }

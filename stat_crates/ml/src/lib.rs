@@ -29,6 +29,7 @@
 //! | [`split`] | Train/test split, K-Fold, CV |
 //! | [`deep`] | MLP, CNN, LSTM, Transformer (feature `deep`) |
 
+pub mod anomaly;
 pub mod artifact;
 pub mod classify;
 pub mod cluster;
@@ -38,6 +39,7 @@ pub mod metrics;
 pub mod preprocess;
 pub mod regress;
 pub mod split;
+pub mod svm_ensemble;
 
 pub use artifact::ModelArtifact;
 pub use metrics::MetricsError;

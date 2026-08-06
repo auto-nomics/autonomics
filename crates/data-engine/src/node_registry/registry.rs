@@ -713,6 +713,11 @@ mod tests {
             "ml_decision_tree" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
             "ml_linear_regress" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_elastic_net" => serde_json::json!({"features": ["x"], "target_column": "y"}),
+            "ml_svm" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_adaboost" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_isolation_forest" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_zscore_outlier" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_lof" => serde_json::json!({"features": ["x", "y"]}),
             // ── ML nodes ──
             "ml_standardize" => serde_json::json!({"columns": ["x"]}),
             "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
@@ -750,6 +755,11 @@ mod tests {
             "ml_decision_tree" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
             "ml_linear_regress" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_elastic_net" => serde_json::json!({"features": ["x"], "target_column": "y"}),
+            "ml_svm" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_adaboost" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_isolation_forest" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_zscore_outlier" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_lof" => serde_json::json!({"features": ["x", "y"]}),
             // ── hypothesize fallback ──
             k if k.starts_with("hypothesize.") => serde_json::json!({}),
             // ── fallback for nodes without a fixture spec ──
