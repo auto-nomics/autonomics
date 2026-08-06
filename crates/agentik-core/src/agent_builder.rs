@@ -5,13 +5,14 @@ use arc_swap::ArcSwapOption;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::agent::{Agent, AgentConfig, TokenBudget};
+use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
+use crate::session::{AgentShared, Session};
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
-use crate::tools::ToolRegistration;
-use crate::{lifecycle::AgentLifecycle, memory::Memory, tools::Toolset};
+use crate::tools::{ToolRegistration, ToolRegistry};
+use crate::memory::Memory;
 use agentik_sdk::types::messages::Message;
 
 pub struct AgentBuilder {
@@ -170,43 +171,77 @@ impl AgentBuilder {
 
         let (internal_event_tx, internal_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut toolset = Toolset::new(self.agent_event_tx.clone());
-        toolset.register_all(self.tools)?;
-        toolset.register_all(crate::tools::task_registrations(toolset.tasks_handle()))?;
+        // ── Build the shared tool registry ──────────────────
+        // User tools + builtin task tools (tied to a tasks handle that will
+        // be shared with the initial session's Toolset) + skill todo tool.
+        let tasks: Arc<tokio::sync::RwLock<Vec<crate::tools::task_runtime::TaskEntry>>> =
+            Arc::new(tokio::sync::RwLock::new(Vec::new()));
 
+        let mut registry = ToolRegistry::new();
+        registry.register_all(self.tools)?;
+        registry.register_all(crate::tools::task_registrations(tasks.clone()))?;
         if let Some((_, todo_reg)) = &skill_runtime {
-            toolset.register(todo_reg.clone())?;
+            registry.register(todo_reg.clone())?;
         }
+        let registry = Arc::new(registry);
 
-        let memory = if let Some(memory) = self.memory {
-            memory
+        // ── Build AgentShared ───────────────────────────────
+        let event_tx = ArcSwapOption::new(self.agent_event_tx.map(Arc::new));
+
+        let shared = Arc::new(AgentShared {
+            id: self.id.unwrap_or_else(Uuid::new_v4),
+            name: self.name.unwrap_or_else(|| "agent".to_string()),
+            config_json: self.config_json.unwrap_or(serde_json::json!({})),
+            model,
+            config: self.config,
+            storage: self.storage,
+            context_provider: self.context_provider,
+            system_prompt_section: self.system_prompt_section,
+            system_prompt_identity: self.system_prompt_identity,
+            skill_runtime: skill_runtime.map(|(rt, _)| rt),
+            tool_registry: registry,
+            event_tx,
+            persist_tx: std::sync::OnceLock::new(),
+        });
+
+        // ── Build the initial (default) session ─────────────
+        let cancel_token = self.cancel_token.unwrap_or_default();
+
+        let mut session = if let Some(memory) = self.memory {
+            Session::new_with_memory(
+                Uuid::new_v4(),
+                shared.clone(),
+                memory,
+                cancel_token,
+            )
         } else {
             let mut memory = Memory::new();
             for msg in self.initial_messages {
                 let _ = memory.remember(msg);
             }
-            memory
+            let mut s = Session::new(Uuid::new_v4(), shared.clone());
+            s.memory = memory;
+            s.cancel_token = cancel_token;
+            s
         };
 
-        let cancel_token = self.cancel_token.unwrap_or_default();
+        // The Toolset created by Session::new has its own task list; we need
+        // the one we created above (which the builtin task tools reference).
+        // Replace it so the task tools point at the correct handle.
+        session.toolset = crate::tools::Toolset::from_registry_with_tasks(
+            shared.tool_registry.clone(),
+            tasks,
+            shared.event_tx(),
+        );
+
+        let session_id = session.id;
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert(session_id, session);
 
         Ok(Agent {
-            id: self.id.unwrap_or_else(Uuid::new_v4),
-            name: self.name.unwrap_or_else(|| "agent".to_string()),
-            config_json: self.config_json.unwrap_or(serde_json::json!({})),
-            model,
-            memory,
-            toolset,
-            lifecycle: AgentLifecycle::new(),
-            config: self.config,
-            storage: self.storage,
-            token_budget: TokenBudget::default(),
-            context_provider: self.context_provider,
-            system_prompt_section: self.system_prompt_section,
-            system_prompt_identity: self.system_prompt_identity,
-            skill_runtime: skill_runtime.map(|(rt, _)| rt),
-            agent_event_tx: self.agent_event_tx,
-            cancel_token,
+            shared,
+            sessions,
+            active_session_id: Some(session_id),
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),
         })

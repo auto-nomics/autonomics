@@ -9,5 +9,6 @@ pub mod name_input;
 pub mod popup;
 pub mod profile_picker;
 pub mod searchable_picker;
+pub mod session_picker;
 pub mod status_bar;
 pub mod tool_exec_widget;

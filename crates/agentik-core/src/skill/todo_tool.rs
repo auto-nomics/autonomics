@@ -164,12 +164,18 @@ mod tests {
     /// Toolset, dispatch via `execute`, and confirm the shared runtime advances.
     #[tokio::test]
     async fn end_to_end_via_toolset_advances_step() {
+        use crate::tools::ToolRegistry;
+
         let (runtime, todo_reg) = crate::skill::instantiate(demo_skill());
 
-        let mut toolset = Toolset::new(Some(
-            tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
-        ));
-        toolset.register(todo_reg).unwrap();
+        let mut registry = ToolRegistry::new();
+        registry.register(todo_reg).unwrap();
+        let toolset = Toolset::from_registry(
+            std::sync::Arc::new(registry),
+            Some(
+                tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
+            ),
+        );
 
         // allowed_tools whitelist must always permit update_todo.
         let allowed = runtime.lock().await.allowed_tools_for_current_step();

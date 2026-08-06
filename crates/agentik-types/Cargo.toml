@@ -12,6 +12,7 @@ serde_json = "1.0"
 schemars.workspace = true
 thiserror.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["serde"] }
 reqwest = { version = "0.13", features = [
   "json",
   "query",

@@ -60,8 +60,9 @@ pub enum ChatLine {
     Separator,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AgentStatus {
+    #[default]
     Idle,
     Requesting,
     Streaming,
@@ -103,6 +104,19 @@ pub struct AgentTabState {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    /// Tokens consumed by the most recent completed turn. Reset at the start
+    /// of each turn (on `Requesting`) and updated when the final UsageUpdate
+    /// delta arrives. The status bar shows these instead of the cumulative
+    /// totals so the user can see per-turn cost at a glance.
+    pub latest_turn_input_tokens: u64,
+    pub latest_turn_output_tokens: u64,
+    pub latest_turn_cache_read_tokens: u64,
+    pub latest_turn_cache_creation_tokens: u64,
+    /// Total prompt tokens billed for the latest turn, i.e.
+    /// `input_tokens + cache_creation + cache_read`. This is the value
+    /// that counts against the model's context window, so it powers the
+    /// context-window progress bar.
+    pub latest_turn_context_used: u64,
     pub input_mode: InputMode,
     /// When true, `clamp_scroll` forces offset to the bottom each frame.
     pub auto_scroll: bool,
@@ -165,6 +179,11 @@ impl Default for AgentTabState {
             input_tokens: 0,
             output_tokens: 0,
             cache_read_tokens: 0,
+            latest_turn_input_tokens: 0,
+            latest_turn_output_tokens: 0,
+            latest_turn_cache_read_tokens: 0,
+            latest_turn_cache_creation_tokens: 0,
+            latest_turn_context_used: 0,
             input_mode: InputMode::Browse,
             auto_scroll: true,
             in_history_search: false,
@@ -267,6 +286,13 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             // A new LLM call begins — clear the streaming-assistant handle so
             // usage from this call isn't attributed to a prior turn's line.
             state.streaming_assistant = None;
+            // NOTE: do NOT reset `latest_turn_*` here. Anthropic's streaming
+            // protocol only emits the final input/cache counts on the last
+            // UsageUpdate delta, so during a turn `input_tokens` is `None` and
+            // any reset would leave the status bar blank. Keep the previous
+            // turn's values visible until the new turn's final UsageUpdate
+            // arrives (which will overwrite `latest_turn_*` in the UsageUpdate
+            // branch below).
         }
         AgentEvent::TextDelta(text) => {
             state.status = AgentStatus::Streaming;
@@ -326,11 +352,23 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 }
                 state.bump_version_at(idx);
             }
-            // Cumulative totals for the status bar.
             // `input_tokens` is `Some` only on the final delta of a turn — at that
-            // point output_tokens and cache_read_input_tokens also hold the complete
-            // per-turn totals, so we accumulate once per turn.
+            // point output_tokens and cache_read_input_tokens also hold the
+            // complete per-turn totals. Use this as the signal to capture
+            // latest-turn usage (status bar) and update cumulative totals
+            // (kept for future session-level display).
             if let Some(t) = input_tokens {
+                state.latest_turn_input_tokens = t;
+                state.latest_turn_output_tokens = output_tokens;
+                state.latest_turn_cache_read_tokens = cache_read_input_tokens.unwrap_or(0);
+                state.latest_turn_cache_creation_tokens =
+                    cache_creation_input_tokens.unwrap_or(0);
+                // Anthropic's `input_tokens` is the count of NEW uncached
+                // tokens. To get the full prompt size that counted against
+                // the context window, add cached reads + cached writes.
+                state.latest_turn_context_used = t
+                    + state.latest_turn_cache_read_tokens
+                    + state.latest_turn_cache_creation_tokens;
                 state.input_tokens += t;
                 state.output_tokens += output_tokens;
                 if let Some(c) = cache_read_input_tokens {
@@ -412,6 +450,100 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             CompactEvent::CompactStart { .. } => state.compact_state.is_compacting = true,
             CompactEvent::CompactFinish { .. } => state.compact_state.is_compacting = false,
         },
+        // Session lifecycle events — handled at the AppState level (these
+        // need access to the full AgentSession, not just the chat view).
+        AgentEvent::SessionActivated { .. }
+        | AgentEvent::SessionPaused { .. }
+        | AgentEvent::SessionClosed { .. }
+        | AgentEvent::SessionList { .. } => {}
+    }
+}
+
+/// Apply session lifecycle events to the full AppState (mutates the
+/// `sub_sessions` list of the currently active agent).
+pub fn apply_session_event(
+    state: &mut AppState,
+    event: AgentEvent,
+) {
+    let active_agent_id = state
+        .sessions
+        .get(state.active_agent_idx)
+        .map(|s| s.agent_id);
+    let active_session_id = state
+        .sessions
+        .get(state.active_agent_idx)
+        .and_then(|s| s.sub_sessions.get(s.active_sub_session_idx))
+        .map(|s| s.id);
+    let session = match state.sessions.get_mut(state.active_agent_idx) {
+        Some(s) => s,
+        None => return,
+    };
+    match event {
+        AgentEvent::SessionList { sessions } => {
+            // Build new SubSession entries, preserving tab_state for sessions
+            // we already know about (so we don't wipe message history).
+            let old_subs = std::mem::take(&mut session.sub_sessions);
+            let mut previous: std::collections::HashMap<uuid::Uuid, SubSession> =
+                old_subs.into_iter().map(|s| (s.id, s)).collect();
+            let subs: Vec<SubSession> = sessions
+                .into_iter()
+                .map(|info| {
+                    if let Some(mut old) = previous.remove(&info.id) {
+                        // Keep the existing tab_state, update title.
+                        old.title = info.title;
+                        old
+                    } else {
+                        SubSession::new(info.id, info.title)
+                    }
+                })
+                .collect();
+            // Feed the picker if it's open for the same agent.
+            if state.session_picker.visible
+                && state.session_picker.agent_id == active_agent_id
+            {
+                let picker_items: Vec<crate::widgets::session_picker::PickerSession> =
+                    subs.iter()
+                        .map(|s| crate::widgets::session_picker::PickerSession {
+                            id: s.id,
+                            title: s.title.clone(),
+                        })
+                        .collect();
+                state.session_picker.set_sessions(picker_items, active_session_id);
+            }
+            session.sub_sessions = subs;
+            if session.active_sub_session_idx >= session.sub_sessions.len()
+                && !session.sub_sessions.is_empty()
+            {
+                session.active_sub_session_idx = session.sub_sessions.len() - 1;
+            }
+        }
+        AgentEvent::SessionActivated { id, title } => {
+            if let Some(idx) = session.sub_sessions.iter().position(|s| s.id == id) {
+                session.active_sub_session_idx = idx;
+                if let Some(t) = title.clone() {
+                    session.sub_sessions[idx].title = Some(t);
+                }
+            } else {
+                session.sub_sessions.push(SubSession::new(id, title));
+                session.active_sub_session_idx = session.sub_sessions.len() - 1;
+            }
+        }
+        AgentEvent::SessionPaused { id } => {
+            if let Some(s) = session.sub_sessions.iter().find(|s| s.id == id) {
+                tracing::debug!(session_id = %s.id, "session paused");
+            }
+        }
+        AgentEvent::SessionClosed { id } => {
+            if let Some(pos) = session.sub_sessions.iter().position(|s| s.id == id) {
+                session.sub_sessions.remove(pos);
+                if session.sub_sessions.is_empty() {
+                    session.active_sub_session_idx = 0;
+                } else if session.active_sub_session_idx >= session.sub_sessions.len() {
+                    session.active_sub_session_idx = session.sub_sessions.len() - 1;
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -421,7 +553,32 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
 pub struct AgentSession {
     pub name: String,
     pub agent_id: uuid::Uuid,
+    /// All sub-sessions within this agent. Each session carries its own
+    /// `tab_state` so switching sessions restores the previous conversation
+    /// (messages, token counts, scroll position, …).
+    pub sub_sessions: Vec<SubSession>,
+    /// Index into `sub_sessions` of the currently active sub-session.
+    pub active_sub_session_idx: usize,
+}
+
+/// One conversation within an agent.
+pub struct SubSession {
+    pub id: uuid::Uuid,
+    pub title: Option<String>,
+    /// Conversation-level state — chat history, token counts, scroll, etc.
+    /// Owned per-session so each session has its own memory of what
+    /// happened in it.
     pub tab_state: AgentTabState,
+}
+
+impl SubSession {
+    pub fn new(id: uuid::Uuid, title: Option<String>) -> Self {
+        Self {
+            id,
+            title,
+            tab_state: AgentTabState::default(),
+        }
+    }
 }
 
 /// State container for the TUI.
@@ -443,6 +600,7 @@ pub struct AppState {
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
     pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
     pub name_input: crate::widgets::name_input::NameInputState,
+    pub session_picker: crate::widgets::session_picker::SessionPickerState,
     /// Profile selected from the picker, waiting for the user to enter a name.
     /// When `Some`, the name input popup is shown.
     pub pending_profile: Option<agentik_core::AgentProfile>,
@@ -464,6 +622,7 @@ impl Default for AppState {
             profile_picker: Default::default(),
             agent_picker: Default::default(),
             name_input: Default::default(),
+            session_picker: Default::default(),
             pending_profile: None,
             model_config_visible: false,
             active_model: Arc::new(ArcSwapOption::default()),
@@ -472,23 +631,32 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Returns a mutable reference to the active session's tab state,
-    /// or the legacy `agent_tab_state` if no sessions exist.
+    /// Returns a mutable reference to the active sub-session's tab state.
+    /// Falls back to the legacy `agent_tab_state` if no sub-session is
+    /// active (e.g. before the first SessionList arrives).
     pub fn active_tab_state_mut(&mut self) -> &mut AgentTabState {
         if let Some(session) = self.sessions.get_mut(self.active_agent_idx) {
-            &mut session.tab_state
-        } else {
-            &mut self.agent_tab_state
+            if let Some(sub) = session
+                .sub_sessions
+                .get_mut(session.active_sub_session_idx)
+            {
+                return &mut sub.tab_state;
+            }
         }
+        &mut self.agent_tab_state
     }
 
-    /// Returns an immutable reference to the active session's tab state.
+    /// Returns an immutable reference to the active sub-session's tab state.
     pub fn active_tab_state(&self) -> &AgentTabState {
         if let Some(session) = self.sessions.get(self.active_agent_idx) {
-            &session.tab_state
-        } else {
-            &self.agent_tab_state
+            if let Some(sub) = session
+                .sub_sessions
+                .get(session.active_sub_session_idx)
+            {
+                return &sub.tab_state;
+            }
         }
+        &self.agent_tab_state
     }
 
     /// Returns the status of the active session (or Idle if none).

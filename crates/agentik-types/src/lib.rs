@@ -10,6 +10,7 @@ pub mod shared;
 pub mod streaming;
 pub mod tools;
 
+pub use agent_events::{SessionInfo};
 pub use errors::{AnthropicError, Result};
 pub use reasoning::{
     ReasoningConfig, ReasoningEffort, ThinkingConfig, ThinkingKind, anthropic_budget_for_effort,

@@ -54,14 +54,14 @@ impl ToolProviderRegistry {
     ///
     /// Tools not found in the registry are silently skipped (with a warning log).
     pub fn build_toolset(&self, names: &[String]) -> Toolset {
-        let mut toolset = Toolset::new(Some(
-            tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
-        ));
+        use super::ToolRegistry;
+
+        let mut registry = ToolRegistry::new();
 
         for name in names {
             match self.tools.get(name) {
                 Some(reg) => {
-                    if let Err(e) = toolset.register(reg.clone()) {
+                    if let Err(e) = registry.register(reg.clone()) {
                         tracing::warn!(
                             tool_name = %name,
                             error = %e,
@@ -78,7 +78,12 @@ impl ToolProviderRegistry {
             }
         }
 
-        toolset
+        Toolset::from_registry(
+            std::sync::Arc::new(registry),
+            Some(
+                tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
+            ),
+        )
     }
 
     /// Return the number of registered tools.

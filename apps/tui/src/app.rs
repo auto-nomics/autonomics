@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
 use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use arc_swap::ArcSwapOption;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
@@ -413,9 +414,20 @@ impl App {
                     }
                 } => {
                     if let Some(event) = maybe_agent {
-                        let idx = self.state.active_agent_idx;
-                        if let Some(session) = self.state.sessions.get_mut(idx) {
-                            state::apply_event(&mut session.tab_state, event);
+                        let _idx = self.state.active_agent_idx;
+                        if matches!(
+                            event,
+                            AgentEvent::SessionActivated { .. }
+                                | AgentEvent::SessionPaused { .. }
+                                | AgentEvent::SessionClosed { .. }
+                                | AgentEvent::SessionList { .. }
+                        ) {
+                            state::apply_session_event(&mut self.state, event);
+                        } else {
+                            state::apply_event(
+                                self.state.active_tab_state_mut(),
+                                event,
+                            );
                         }
                         self.dirty = true;
                     } else {
@@ -475,6 +487,9 @@ impl App {
                 self.state.agent_picker.remove_by_id(agent_id);
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
+            crate::app_event::AppEvent::HistoryLoaded { agent_id, messages } => {
+                self.replay_history(agent_id, &messages);
+            }
             crate::app_event::AppEvent::AgentSpawned {
                 profile_name,
                 result,
@@ -483,12 +498,50 @@ impl App {
                     let agent_id = handle.agent_id;
                     let name = handle.name.clone();
                     self.handles.push(handle);
+                    // Request the session list so we can sync the session tab bar.
+                    self.handles.last().map(|h| h.list_sessions());
                     self.state.sessions.push(AgentSession {
                         name,
                         agent_id,
-                        tab_state: state::AgentTabState::default(),
+                        sub_sessions: Vec::new(),
+                        active_sub_session_idx: 0,
                     });
                     self.state.active_agent_idx = self.state.sessions.len() - 1;
+
+                    // ── Load conversation history from storage ──
+                    // On resume, the agent's Memory is restored from the WAL
+                    // but the TUI's `tab_state.messages` is empty. Load the
+                    // rendered history asynchronously and replay it as
+                    // ChatLines.
+                    if let Some(host) = &self.host {
+                        let storage = host.storage().clone();
+                        let tx = self.app_event_tx.clone();
+                        let aid = agent_id;
+                        self.runtime_handle.spawn(async move {
+                            match agentik_core::storage::restore_memory(
+                                storage.as_ref(),
+                                aid,
+                            )
+                            .await
+                            {
+                                Ok(memory) => {
+                                    let messages = memory
+                                        .render_context()
+                                        .unwrap_or_default();
+                                    if !messages.is_empty() {
+                                        tx.send(crate::app_event::AppEvent::HistoryLoaded {
+                                            agent_id: aid,
+                                            messages,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "failed to load history for agent {aid}");
+                                }
+                            }
+                        });
+                    }
+
                     tracing::info!(profile = %profile_name, "agent spawned successfully");
                 }
                 Err(e) => {
@@ -498,7 +551,50 @@ impl App {
         }
     }
 
-    /// Handle a single event. Returns a scroll delta to be accumulated.
+    /// Replay conversation history loaded from storage into the TUI's
+    /// `tab_state.messages` as `ChatLine` entries.
+    ///
+    /// This is called when a resumed agent's history arrives via
+    /// `AppEvent::HistoryLoaded`. Each `Message` in the rendered context is
+    /// converted to one or more `ChatLine`s (user text → `ChatLine::User`,
+    /// assistant text → `ChatLine::Assistant`, tool_use → `ChatLine::ToolCall`,
+    /// tool_result → `ChatLine::ToolResult`, etc.).
+    fn replay_history(&mut self, agent_id: uuid::Uuid, messages: &[Message]) {
+        // Find the agent session index.
+        let session_idx = self.state.sessions.iter().position(|s| s.agent_id == agent_id);
+        let Some(session_idx) = session_idx else {
+            tracing::warn!(%agent_id, "history loaded for unknown agent");
+            return;
+        };
+
+        // Build ChatLines from the message list.
+        let lines = messages_to_chatlines(messages);
+        if lines.is_empty() {
+            return;
+        }
+
+        // If the agent already has sub_sessions, write into the active one.
+        // Otherwise, create a default sub_session to hold the history.
+        let session = &mut self.state.sessions[session_idx];
+        if session.sub_sessions.is_empty() {
+            session.sub_sessions.push(state::SubSession::new(
+                uuid::Uuid::new_v4(),
+                Some("Restored".into()),
+            ));
+        }
+        let sub = &mut session.sub_sessions[session.active_sub_session_idx];
+        if !sub.tab_state.messages.is_empty() {
+            // Already has messages — don't clobber (e.g. user sent something
+            // while history was loading).
+            tracing::debug!(%agent_id, "tab_state already populated, skipping history replay");
+            return;
+        }
+        sub.tab_state.messages = lines;
+        sub.tab_state.content_line_count = sub.tab_state.messages.len();
+        sub.tab_state.scroll_to_bottom();
+        self.dirty = true;
+        tracing::info!(%agent_id, count = sub.tab_state.messages.len(), "history replayed into tab_state");
+    }
     fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
             Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press => {
@@ -611,6 +707,12 @@ impl App {
         // Name input popup captures keys when visible.
         if self.state.name_input.visible {
             self.handle_name_input_key(key);
+            return;
+        }
+
+        // Session picker popup captures keys when visible.
+        if self.state.session_picker.visible {
+            self.handle_session_picker_key(key);
             return;
         }
 
@@ -925,6 +1027,49 @@ impl App {
         }
     }
 
+    /// Key handling while the session picker popup is open.
+    fn handle_session_picker_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.session_picker.close();
+            }
+            KeyCode::Up => self.state.session_picker.move_up(),
+            KeyCode::Down => self.state.session_picker.move_down(),
+            KeyCode::Char('n') => {
+                // Create a new (empty) session in the current agent.
+                if let Some(handle) =
+                    self.handles.get(self.state.active_agent_idx)
+                {
+                    handle.create_session(Some("New session".into()), None);
+                }
+                self.state.session_picker.close();
+            }
+            KeyCode::Char('d') => {
+                // Close the currently selected session.
+                if let Some(id) = self.state.session_picker.selected_id() {
+                    if let Some(handle) =
+                        self.handles.get(self.state.active_agent_idx)
+                    {
+                        handle.close_session(id);
+                    }
+                }
+                self.state.session_picker.close();
+            }
+            KeyCode::Enter => {
+                // Switch to the selected session.
+                if let Some(id) = self.state.session_picker.selected_id() {
+                    if let Some(handle) =
+                        self.handles.get(self.state.active_agent_idx)
+                    {
+                        handle.switch_session(id);
+                    }
+                }
+                self.state.session_picker.close();
+            }
+            _ => {}
+        }
+    }
+
     fn handle_browse_key(&mut self, key: &KeyEvent) {
         // Shift+H/L: switch to previous/next agent leaf tab.
         if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -1209,9 +1354,6 @@ impl App {
         use crate::widgets::command_palette::CommandAction;
 
         match action {
-            CommandAction::SwitchTab(_) => {
-                // No-op: single-tab app now.
-            }
             CommandAction::Quit => {
                 self.should_quit = true;
             }
@@ -1304,25 +1446,70 @@ impl App {
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
             }
+            CommandAction::OpenSessions => {
+                self.open_session_picker();
+            }
         }
+    }
+
+    /// Open the session picker for the currently active agent.
+    fn open_session_picker(&mut self) {
+        let Some(agent_session) = self.state.sessions.get(self.state.active_agent_idx) else {
+            tracing::warn!("no active agent to open session picker");
+            return;
+        };
+        let agent_id = agent_session.agent_id;
+        let agent_name = agent_session.name.clone();
+        let Some(handle) = self.handles.get(self.state.active_agent_idx) else {
+            tracing::warn!("no handle for active agent");
+            return;
+        };
+        // Seed picker with whatever sub_sessions are already known; the
+        // SessionList event will refresh the list shortly.
+        let initial_items: Vec<crate::widgets::session_picker::PickerSession> =
+            agent_session
+                .sub_sessions
+                .iter()
+                .map(|s| crate::widgets::session_picker::PickerSession {
+                    id: s.id,
+                    title: s.title.clone(),
+                })
+                .collect();
+        let active_id = agent_session
+            .sub_sessions
+            .get(agent_session.active_sub_session_idx)
+            .map(|s| s.id);
+        self.state
+            .session_picker
+            .open(agent_id, agent_name.clone());
+        self.state
+            .session_picker
+            .set_sessions(initial_items, active_id);
+        // Ask the agent for a fresh list (will arrive via SessionList event).
+        handle.list_sessions();
+        tracing::info!(agent = %agent_name, "session picker opened");
     }
 
     fn render(&mut self, frame: &mut Frame) {
         // ── Workspace (full screen) ──
         // Read the model name from the active agent's own model slot (not
         // the global active_model), so per-agent model switches are reflected.
-        let model_name = self
+        let model_info = self
             .handles
             .get(self.state.active_agent_idx)
             .and_then(|h| h.model_handle().load_full())
-            .map(|m| m.model_info.model_name.clone())
+            .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
             .or_else(|| {
                 // Fallback to global model when no agent is active.
                 self.state
                     .active_model
                     .load_full()
-                    .map(|m| m.model_info.model_name.clone())
+                    .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
             });
+        let (model_name, context_window) = match model_info {
+            Some((name, ctx)) => (Some(name), Some(ctx)),
+            None => (None, None),
+        };
 
         // Collect tab data before mutably borrowing tab state.
         let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
@@ -1331,13 +1518,18 @@ impl App {
             .iter()
             .map(|s| crate::widgets::agent_workspace::LeafTab {
                 name: s.name.clone(),
-                status: s.tab_state.status.clone(),
+                status: s
+                    .sub_sessions
+                    .get(s.active_sub_session_idx)
+                    .map(|sub| sub.tab_state.status.clone())
+                    .unwrap_or_default(),
             })
             .collect();
         let active_idx = self.state.active_agent_idx;
 
         let workspace = AgentWorkspace {
             active_model: model_name.as_deref(),
+            context_window,
         };
         workspace.render(
             frame.area(),
@@ -1389,6 +1581,17 @@ impl App {
                 );
         }
 
+        // ── Session picker popup ──
+        if self.state.session_picker.visible {
+            use ratatui::widgets::StatefulWidget as _;
+            crate::widgets::session_picker::SessionPicker::new()
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.session_picker,
+                );
+        }
+
         // ── Name input popup ──
         crate::widgets::name_input::render_name_input(
             frame.area(),
@@ -1412,6 +1615,43 @@ impl App {
     }
 
     /// Key handling while the model config popup is open.
+    /// Persist a model spec into the agent's stored record so it survives restarts.
+    fn persist_agent_model(&mut self, agent_name: &str, model_spec: &str) {
+        let Some(host) = self.host.clone() else {
+            tracing::warn!("no host available for model persistence");
+            return;
+        };
+        let name = agent_name.to_string();
+        let spec = model_spec.to_string();
+        self.runtime_handle.spawn(async move {
+            let storage = host.storage();
+            // Read the current record.
+            let Some(mut record) = storage
+                .get_agent_by_name(&name)
+                .await
+                .ok()
+                .flatten()
+            else {
+                tracing::warn!(agent = %name, "agent record not found for model persistence");
+                return;
+            };
+            // Update preferred_model inside config_json.
+            if let Some(obj) = record.config_json.as_object_mut() {
+                obj.insert(
+                    "preferred_model".to_string(),
+                    serde_json::Value::String(spec.clone()),
+                );
+            }
+            record.last_active = chrono::Utc::now().timestamp_millis();
+            // Upsert the updated record.
+            if let Err(e) = storage.upsert_agent(record).await {
+                tracing::error!(agent = %name, error = %e, "failed to persist model spec");
+            } else {
+                tracing::info!(agent = %name, model = %spec, "model spec persisted to agent record");
+            }
+        });
+    }
+
     fn handle_model_config_key(&mut self, key: &KeyEvent) {
         use crate::widgets::model_config_widget::ConfigCommand;
 
@@ -1444,6 +1684,12 @@ impl App {
                             model = %spec,
                             "model hot-swapped for active agent"
                         );
+
+                        // Persist the model spec into the agent's record so it
+                        // survives restarts. We update the `preferred_model`
+                        // field inside the stored `config_json`.
+                        let agent_name = handle.name.clone();
+                        self.persist_agent_model(&agent_name, &spec);
                     }
                 }
                 self.state.model_config_visible = false;
@@ -1571,4 +1817,103 @@ fn end_history_search(ts: &mut crate::state::AgentTabState) {
     ts.history_search_matches.clear();
     ts.history_search_selected = 0;
     ts.history_search_draft = None;
+}
+
+/// Convert a flat list of SDK `Message`s (as returned by
+/// `Memory::render_context()`) into TUI `ChatLine`s for display.
+///
+/// Each message can contain multiple `ContentBlock`s:
+/// - User text → `ChatLine::User`
+/// - System text → skipped (system prompt isn't shown)
+/// - Assistant text → `ChatLine::Assistant`
+/// - Assistant thinking → `ChatLine::Thinking`
+/// - `tool_use` → `ChatLine::ToolCall`
+/// - `tool_result` → `ChatLine::ToolResult`
+///
+/// Summary checkpoint messages (from compaction) are rendered as
+/// `ChatLine::Assistant` with a prefix so the user can see what was
+/// summarized.
+fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine> {
+    let mut lines = Vec::new();
+    for msg in messages {
+        match msg.role {
+            Role::User => {
+                // A user message may contain multiple blocks (text +
+                // tool_result). Separate them.
+                let mut text_parts = String::new();
+                for block in &msg.content {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            if !text_parts.is_empty() {
+                                text_parts.push('\n');
+                            }
+                            text_parts.push_str(text);
+                        }
+                        ContentBlock::ToolResult {
+                            content,
+                            is_error,
+                            ..
+                        } => {
+                            if !text_parts.is_empty() {
+                                lines.push(state::ChatLine::User(
+                                    std::mem::take(&mut text_parts),
+                                ));
+                            }
+                            lines.push(state::ChatLine::ToolResult {
+                                ok: !is_error.unwrap_or(false),
+                                content: content.clone().unwrap_or_default(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                if !text_parts.is_empty() {
+                    lines.push(state::ChatLine::User(text_parts));
+                }
+            }
+            Role::Assistant => {
+                let mut text_parts = String::new();
+                for block in &msg.content {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            if !text_parts.is_empty() {
+                                text_parts.push('\n');
+                            }
+                            text_parts.push_str(text);
+                        }
+                        ContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
+                            if !text_parts.is_empty() {
+                                lines.push(state::ChatLine::Assistant {
+                                    text: std::mem::take(&mut text_parts),
+                                    usage: None,
+                                });
+                            }
+                            lines.push(state::ChatLine::Thinking(thinking.clone()));
+                        }
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            if !text_parts.is_empty() {
+                                lines.push(state::ChatLine::Assistant {
+                                    text: std::mem::take(&mut text_parts),
+                                    usage: None,
+                                });
+                            }
+                            lines.push(state::ChatLine::ToolCall {
+                                name: name.clone(),
+                                input: serde_json::to_string_pretty(input)
+                                    .unwrap_or_else(|_| input.to_string()),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                if !text_parts.is_empty() {
+                    lines.push(state::ChatLine::Assistant {
+                        text: text_parts,
+                        usage: None,
+                    });
+                }
+            }
+        }
+    }
+    lines
 }

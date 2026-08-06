@@ -46,8 +46,9 @@ async fn test_add_source_sql_run_dag() {
 
     // 3. Register tools (no more datalake param)
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
-    let mut toolset = Toolset::new(None);
-    toolset.register_all(tools).unwrap();
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
 
     // 4. Add source node via generic add_node
     let results = toolset
@@ -188,8 +189,9 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
-    let mut toolset = Toolset::new(None);
-    toolset.register_all(tools).unwrap();
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
 
     // 1. VCF source — auto-detected from the `.vcf.gz` extension.
     let res = toolset
@@ -324,8 +326,9 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
-    let mut toolset = Toolset::new(None);
-    toolset.register_all(tools).unwrap();
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
 
     let res = toolset
         .execute(
@@ -443,8 +446,9 @@ async fn test_get_output_synthetic_struct_column_baseline() {
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
-    let mut toolset = Toolset::new(None);
-    toolset.register_all(tools).unwrap();
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
 
     let res = toolset
         .execute(

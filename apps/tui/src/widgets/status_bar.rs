@@ -18,6 +18,12 @@ pub struct StatusBar<'a> {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    /// Total prompt tokens billed for the latest turn (input + cache_read +
+    /// cache_creation). Counts against the model's context window.
+    pub context_used: u64,
+    /// The active model's context window size, when known.
+    pub context_window: Option<u64>,
     pub model_name: Option<&'a str>,
     pub is_compacting: bool,
 }
@@ -37,8 +43,16 @@ impl Widget for StatusBar<'_> {
             }
         };
 
-        let in_tok = format_tokens(self.input_tokens);
         let out_tok = format_tokens(self.output_tokens);
+        let ctx_used = format_tokens(self.context_used);
+        // `in:` shows the absolute prompt size (input + cache_read + cache_creation).
+        // Anthropic's `input_tokens` is uncached-only; adding the cache portions
+        // here gives the user the full token count billed for the prompt.
+        let absolute_in = self.input_tokens
+            + self.cache_read_tokens
+            + self.cache_creation_tokens;
+        let absolute_in_tok = format_tokens(absolute_in);
+        let cache_hit = self.cache_read_tokens + self.cache_creation_tokens;
 
         let mut spans = vec![
             Span::styled(indicator, Style::default().fg(indicator_color)),
@@ -50,20 +64,56 @@ impl Widget for StatusBar<'_> {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
-            Span::styled(format!("in: {}", in_tok), Style::default().fg(Color::Gray)),
-            Span::raw("  "),
-            Span::styled(
-                format!("out: {}", out_tok),
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled(format!("in: {}", absolute_in_tok), Style::default().fg(Color::Gray)),
         ];
-        if self.cache_read_tokens > 0 {
-            let cache_tok = format_tokens(self.cache_read_tokens);
-            spans.push(Span::raw("  "));
+        // Cache annotation: shown only when cache > 0.
+        if cache_hit > 0 {
+            spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("cache: {}", cache_tok),
+                format!("(cache: {})", format_tokens(cache_hit)),
                 Style::default().fg(Color::DarkGray),
             ));
+        }
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("out: {}", out_tok),
+            Style::default().fg(Color::Gray),
+        ));
+
+        // Context window usage — shows percentage, bar, and absolute tokens.
+        if self.context_used > 0 {
+            spans.push(Span::raw("  │  "));
+            spans.push(Span::styled("ctx:", Style::default().fg(Color::Gray)));
+            if let Some(window) = self.context_window {
+                if window > 0 {
+                    let pct = (self.context_used * 100) / window;
+                    let pct_clamped = pct.min(100);
+                    let bar = context_bar(pct_clamped);
+                    let color = match pct_clamped {
+                        0..=60 => Color::Green,
+                        61..=85 => Color::Yellow,
+                        _ => Color::Red,
+                    };
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        format!("{pct}%"),
+                        Style::default().fg(color),
+                    ));
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(bar, Style::default().fg(color)));
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        format!("{}/{}k", ctx_used, window / 1_000),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                } else {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(ctx_used, Style::default().fg(Color::Gray)));
+                }
+            } else {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(ctx_used, Style::default().fg(Color::Gray)));
+            }
         }
 
         let line = Line::from(spans);
@@ -89,6 +139,14 @@ impl Widget for StatusBar<'_> {
             }
         }
     }
+}
+
+/// Build a 6-char progress bar from a 0..=100 percentage.
+fn context_bar(pct: u64) -> String {
+    const WIDTH: usize = 6;
+    let filled = (pct as usize * WIDTH) / 100;
+    let empty = WIDTH - filled;
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
 }
 
 pub(crate) fn format_tokens(n: u64) -> String {

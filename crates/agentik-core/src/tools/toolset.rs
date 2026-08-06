@@ -16,6 +16,8 @@ use super::task_runtime::TaskEntry;
 use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::tools::{ToolResult, ToolUse};
 
+// ─────────────────────────── ToolRegistration ───────────────────────────
+
 #[derive(Clone)]
 pub struct ToolRegistration {
     pub definition: ToolDefinition,
@@ -46,24 +48,29 @@ impl<T: super::ToolFunction + 'static> From<T> for ToolRegistration {
     }
 }
 
-pub struct Toolset {
+// ─────────────────────────── ToolRegistry ───────────────────────────
+
+/// Immutable registry of tool definitions, shared across sessions within one
+/// agent. Built mutably, then frozen into [`Arc<ToolRegistry>`] and cloned
+/// cheaply for each [`Toolset`].
+///
+/// `ToolRegistration` values hold `Arc<dyn DynToolFunction>` internally, so
+/// cloning the HashMap is just ref-count bumps.
+#[derive(Clone)]
+pub struct ToolRegistry {
     tools: HashMap<String, ToolRegistration>,
-    tasks: Arc<RwLock<Vec<TaskEntry>>>,
-    agent_event_tx: Option<UnboundedSender<AgentEvent>>,
 }
 
-// impl Default for Toolset {
-//     fn default() -> Self {
-//         Self::new()
-//     }
-// }
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-impl Toolset {
-    pub fn new(agent_event_tx: Option<UnboundedSender<AgentEvent>>) -> Self {
+impl ToolRegistry {
+    pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
-            tasks: Arc::new(RwLock::new(Vec::new())),
-            agent_event_tx,
         }
     }
 
@@ -89,12 +96,94 @@ impl Toolset {
         self.tools.contains_key(name)
     }
 
+    pub fn get(&self, name: &str) -> Option<&ToolRegistration> {
+        self.tools.get(name)
+    }
+
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.values().map(|r| r.definition.clone()).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+}
+
+// ─────────────────────────── Toolset ───────────────────────────
+
+/// Session-level tool runtime: shares an immutable [`ToolRegistry`] (tool
+/// definitions + implementations) across sessions while maintaining
+/// independent per-session state (background task list, event channel).
+///
+/// Construct via [`Toolset::from_registry`] after building and freezing a
+/// [`ToolRegistry`] into an [`Arc`].
+pub struct Toolset {
+    registry: Arc<ToolRegistry>,
+    tasks: Arc<RwLock<Vec<TaskEntry>>>,
+    agent_event_tx: Option<UnboundedSender<AgentEvent>>,
+}
+
+impl Toolset {
+    /// Create a Toolset that shares the given frozen registry.
+    ///
+    /// Each call produces a fresh, independent task list — background tools
+    /// in one Toolset are invisible to another.
+    pub fn from_registry(
+        registry: Arc<ToolRegistry>,
+        agent_event_tx: Option<UnboundedSender<AgentEvent>>,
+    ) -> Self {
+        Self::from_registry_with_tasks(
+            registry,
+            Arc::new(RwLock::new(Vec::new())),
+            agent_event_tx,
+        )
+    }
+
+    /// Create a Toolset with an explicitly provided task list.
+    ///
+    /// Used by [`AgentBuilder`](crate::agent_builder::AgentBuilder) where the
+    /// builtin task tools (registered into the `ToolRegistry`) already hold a
+    /// reference to the tasks handle — so the Toolset must share that exact
+    /// Arc rather than creating a new one.
+    pub fn from_registry_with_tasks(
+        registry: Arc<ToolRegistry>,
+        tasks: Arc<RwLock<Vec<TaskEntry>>>,
+        agent_event_tx: Option<UnboundedSender<AgentEvent>>,
+    ) -> Self {
+        Self {
+            registry,
+            tasks,
+            agent_event_tx,
+        }
+    }
+
+    /// Convenience: create a Toolset with a brand-new (empty) registry.
+    ///
+    /// Intended for tests and callers that don't need cross-session sharing.
+    pub fn with_empty_registry(agent_event_tx: Option<UnboundedSender<AgentEvent>>) -> Self {
+        Self::from_registry(Arc::new(ToolRegistry::new()), agent_event_tx)
+    }
+
     /// Return a clone of the shared task-list handle.
     ///
     /// Used by builtin tools (e.g. `view_task_results`) that need to
     /// inspect background tasks without going through the agent loop.
     pub fn tasks_handle(&self) -> Arc<RwLock<Vec<TaskEntry>>> {
         self.tasks.clone()
+    }
+
+    /// Access the shared tool registry.
+    pub fn registry(&self) -> &Arc<ToolRegistry> {
+        &self.registry
+    }
+
+    /// Mutable access to the registry Arc (for `Arc::get_mut` patterns).
+    pub fn registry_mut(&mut self) -> &mut Arc<ToolRegistry> {
+        &mut self.registry
     }
 
     /// Spawn independent threads to execute tool calls
@@ -118,7 +207,7 @@ impl Toolset {
         let mut new_entries: Vec<TaskEntry> = Vec::with_capacity(toolcalls.len());
 
         for tc in toolcalls {
-            let Some(registration) = self.tools.get(&tc.name) else {
+            let Some(registration) = self.registry.get(&tc.name) else {
                 continue;
             };
 
@@ -233,7 +322,7 @@ impl Toolset {
     }
 
     pub fn tools(&self) -> Vec<ToolDefinition> {
-        self.tools.values().map(|r| r.definition.clone()).collect()
+        self.registry.definitions()
     }
 
     /// Look up a finished background task by `tool_use_id` and return
@@ -269,6 +358,7 @@ impl Toolset {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use crate::tools::ToolFunction;
@@ -279,7 +369,7 @@ mod tests {
     use serde_json::json;
     use tokio::sync::mpsc;
 
-    use super::Toolset;
+    use super::{ToolRegistry, Toolset};
     use crate::tools::ToolContext;
     use agentik_proc::tool;
 
@@ -346,21 +436,20 @@ mod tests {
         }
     }
 
-    /// Register any `ToolFunction` onto the toolset. The tool's name,
-    /// description, and JSON-schema come from its `definition()` (which
-    /// defaults to `Self::Input::definition()`).
-    fn register_mock<T: ToolFunction + 'static>(
-        toolset: &mut Toolset,
-        tool: T,
-    ) -> Result<(), crate::tools::error::ToolError> {
-        toolset.register(tool.into())
+    /// Build a `ToolRegistry` from a list of tools and freeze it into `Arc`.
+    fn build_registry(
+        tools: Vec<crate::tools::ToolRegistration>,
+    ) -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry.register_all(tools).unwrap();
+        Arc::new(registry)
     }
 
     #[tokio::test]
     async fn test_register_and_list_tools() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let mut toolset = Toolset::new(Some(tx));
-        register_mock(&mut toolset, MockTool::new("mock result")).unwrap();
+        let registry = build_registry(vec![MockTool::new("mock result").into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
 
         let tools = toolset.tools();
         assert_eq!(tools.len(), 1);
@@ -370,8 +459,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_tool() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let mut toolset = Toolset::new(Some(tx));
-        register_mock(&mut toolset, MockTool::new("mock result")).unwrap();
+        let registry = build_registry(vec![MockTool::new("mock result").into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
 
         let tool_call = ToolUse {
             id: "tc1".to_string(),
@@ -387,13 +476,11 @@ mod tests {
     #[tokio::test]
     async fn test_double_phase_tool_execution() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let mut toolset = Toolset::new(Some(tx));
-        // register_mock(&mut toolset, MockTool::new("mock result")).unwrap();
-        toolset
-            .register(MockTwophaseTool::new("test").into())
-            .unwrap();
-
-        toolset.register(MockTool::new("test").into()).unwrap();
+        let registry = build_registry(vec![
+            MockTwophaseTool::new("test").into(),
+            MockTool::new("test").into(),
+        ]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
 
         let tool_call = ToolUse {
             id: "tc1".to_string(),
@@ -454,8 +541,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_context_surfaces_output() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let mut toolset = Toolset::new(Some(tx));
-        toolset.register(MockProgressTool.into()).unwrap();
+        let registry = build_registry(vec![MockProgressTool.into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
 
         let tool_call = ToolUse {
             id: "tc1".to_string(),
@@ -489,6 +576,47 @@ mod tests {
             out.len(),
             2,
             "expected exactly two progress records; got: {out:?}"
+        );
+    }
+
+    /// Two sessions sharing the same registry must have independent task lists.
+    #[tokio::test]
+    async fn test_shared_registry_independent_tasks() {
+        let registry = build_registry(vec![MockTool::new("ok").into()]);
+
+        let toolset_a = Toolset::from_registry(registry.clone(), None);
+        let toolset_b = Toolset::from_registry(registry, None);
+
+        // Task handles must NOT be the same Arc.
+        assert!(!Arc::ptr_eq(
+            &toolset_a.tasks_handle(),
+            &toolset_b.tasks_handle(),
+        ));
+
+        // But registries ARE shared.
+        assert!(Arc::ptr_eq(
+            toolset_a.registry(),
+            toolset_b.registry(),
+        ));
+
+        // Running a tool on A does not affect B's task list.
+        let _ = toolset_a
+            .execute(
+                &[ToolUse {
+                    id: "tc_a".to_string(),
+                    name: "test_tool".to_string(),
+                    input: json!({ "reason": "a" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+
+        let b_tasks = toolset_b.tasks_handle();
+        let b_tasks = b_tasks.read().await;
+        assert!(
+            b_tasks.is_empty(),
+            "session B should have no tasks from session A"
         );
     }
 }

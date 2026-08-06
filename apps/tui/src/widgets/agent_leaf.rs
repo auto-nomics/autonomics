@@ -22,6 +22,9 @@ pub struct AgentLeaf<'a> {
     pub active_model: Option<&'a str>,
     /// Agent name shown in the status bar.
     pub agent_name: Option<&'a str>,
+    /// Model context window size in tokens, when known. Powers the
+    /// context-usage progress bar in the status bar.
+    pub context_window: Option<u64>,
 }
 
 impl StatefulWidgetRef for AgentLeaf<'_> {
@@ -64,9 +67,12 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // ── StatusBar ──
         let status_bar = StatusBar {
             status: &ts.status,
-            input_tokens: ts.input_tokens,
-            output_tokens: ts.output_tokens,
-            cache_read_tokens: ts.cache_read_tokens,
+            input_tokens: ts.latest_turn_input_tokens,
+            output_tokens: ts.latest_turn_output_tokens,
+            cache_read_tokens: ts.latest_turn_cache_read_tokens,
+            cache_creation_tokens: ts.latest_turn_cache_creation_tokens,
+            context_used: ts.latest_turn_context_used,
+            context_window: self.context_window,
             model_name: self.active_model,
             is_compacting: ts.compact_state.is_compacting,
         };

@@ -31,6 +31,8 @@ use crate::widgets::agent_leaf::AgentLeaf;
 /// Renders the workspace: leaf tab bar + active leaf.
 pub struct AgentWorkspace<'a> {
     pub active_model: Option<&'a str>,
+    /// Context window size of the active model (tokens), when known.
+    pub context_window: Option<u64>,
 }
 
 /// One entry in the tab bar.
@@ -76,6 +78,7 @@ impl AgentWorkspace<'_> {
         let leaf = AgentLeaf {
             active_model: self.active_model,
             agent_name,
+            context_window: self.context_window,
         };
         leaf.render_ref(areas[1], buf, tab_state);
     }

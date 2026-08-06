@@ -567,7 +567,9 @@ pub struct ClumpConfig {
     #[serde(default = "default_clump_pop")]
     pub pop: String,
     /// Clumping backend. Default: OpenGWAS remote API ([`ClumpMode::Opengwas`]).
-    /// Use [`ClumpMode::Local`] to clump against a local PLINK reference panel.
+    /// Use [`ClumpMode::IcebergLd`] to clump against the local Iceberg
+    /// `ld_matrix.eur_chr{N}` pairwise r² tables — no network or API token
+    /// required.
     #[serde(default)]
     pub mode: ClumpMode,
 }
@@ -736,20 +738,33 @@ async fn clump_iceberg_ld(
     // Build the set of instrument rsIDs for filtering.
     let snp_set: HashSet<String> = inputs.iter().map(|r| r.snp.clone()).collect();
 
+    // Build a quoted SNP-list SQL fragment so the query only returns rows
+    // involving our instruments, rather than scanning the entire LD table.
+    let snp_list = snp_set
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     // Query the Iceberg ld_matrix tables for all r² pairs involving our SNPs.
     // We query chromosomes 1-22 (standard autosomes).
     let mut r2_map: HashMap<(String, String), f64> = HashMap::new();
+    let mut skipped_chroms: Vec<u32> = Vec::new();
     for chrom in 1..=22 {
         let sql = format!(
             "SELECT id_a, id_b, unphased_r2 \
              FROM iceberg.ld_matrix.eur_chr{chrom} \
-             WHERE unphased_r2 >= {}",
+             WHERE unphased_r2 >= {} \
+               AND (id_a IN ({snp_list}) OR id_b IN ({snp_list}))",
             cfg.r2
         );
         let df = match session.sql(&sql).await {
             Ok(df) => df,
             Err(e) => {
-                tracing::warn!("LD matrix query failed for chr{chrom}: {e}; skipping chromosome");
+                tracing::debug!(
+                    "LD matrix table for chr{chrom} unavailable ({e}); skipping"
+                );
+                skipped_chroms.push(chrom);
                 continue;
             }
         };
@@ -797,11 +812,28 @@ async fn clump_iceberg_ld(
     }
 
     tracing::info!(
-        "LD matrix: loaded {} r² pairs (≥ {}) for {} instrument SNPs",
+        "LD matrix: loaded {} r² pairs (≥ {}) for {} instrument SNPs{}",
         r2_map.len(),
         cfg.r2,
         snp_set.len(),
+        if skipped_chroms.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; skipped chromosomes (no table): {:?}",
+                skipped_chroms
+            )
+        },
     );
+
+    if !skipped_chroms.is_empty() {
+        tracing::warn!(
+            "LD matrix: chromosomes {:?} had no ld_matrix table; \
+             SNPs on those chromosomes are treated as having no LD data \
+             (kept as independent instruments)",
+            skipped_chroms
+        );
+    }
 
     // Build ClumpSnp list. Since the Iceberg ld_matrix doesn't provide
     // chromosome/position info, we pass placeholder values — the greedy
@@ -823,8 +855,10 @@ async fn clump_iceberg_ld(
         *r2_map.get(&key).unwrap_or(&0.0)
     };
 
-    // Run greedy clumping with a large kb window (since positions are unknown,
-    // we rely on the pre-computed r² table which inherently encodes proximity).
+    // Run greedy clumping. Since all positions are 0 (the ld_matrix table
+    // has no bp column), the kb window distance is always 0 ≤ cfg.kb — i.e.
+    // the window constraint is effectively disabled and pruning is driven
+    // solely by the pre-computed r² values, which already encode proximity.
     let kept_rsids = mr::clump::greedy_clump(&clump_snps, cfg.r2, cfg.kb, r2_fn);
 
     tracing::info!(

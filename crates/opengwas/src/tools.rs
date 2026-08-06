@@ -11,7 +11,6 @@ mod gwasinfo_search;
 mod ld_clump;
 mod ld_matrix;
 mod phewas;
-mod tophits;
 mod variants_chrpos;
 mod variants_rsid;
 
@@ -64,9 +63,6 @@ pub fn opengwas_registrations(
             client: client.clone(),
         }),
         R::from(associations::AssociationsTool {
-            client: client.clone(),
-        }),
-        R::from(tophits::TophitsTool {
             client: client.clone(),
         }),
         R::from(phewas::PhewasTool {

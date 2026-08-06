@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::{ContentBlockDelta, Message, MessageStreamEvent, StopReason};
 
@@ -77,6 +78,25 @@ pub enum AgentEvent {
 
     /// An error occurred.
     Error(String),
+
+    // ── Session lifecycle ──
+    /// A session was activated (became the active session).
+    SessionActivated { id: Uuid, title: Option<String> },
+    /// A session was paused (no longer the active session).
+    SessionPaused { id: Uuid },
+    /// A session was closed and removed.
+    SessionClosed { id: Uuid },
+    /// Response to `ListSessions` — all known sessions.
+    SessionList { sessions: Vec<SessionInfo> },
+}
+
+/// Lightweight info about a session, for listing / display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: Uuid,
+    pub title: Option<String>,
+    pub created_at: i64,
+    pub last_active: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

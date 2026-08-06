@@ -46,6 +46,7 @@ pub mod sink_file;
 pub mod sink_iceberg;
 pub mod source_file;
 pub mod source_iceberg;
+pub mod source_opengwas_tophits;
 pub mod source_opentargets;
 pub mod sql_node;
 pub mod survey_calibrate;
@@ -94,6 +95,9 @@ pub use source_iceberg::{IcebergSourceNode, IcebergSourceNodeFactory, IcebergSou
 pub use source_opentargets::{
     OpentargetsAssociationsNode, OpentargetsAssociationsNodeFactory, OpentargetsAssociationsSpec,
     OpentargetsSearchNode, OpentargetsSearchNodeFactory, OpentargetsSearchSpec,
+};
+pub use source_opengwas_tophits::{
+    OpengwasTophitsNode, OpengwasTophitsNodeFactory, OpengwasTophitsSpec,
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use susie_rss::{SusieRssNode, SusieRssNodeFactory, SusieRssSpec};

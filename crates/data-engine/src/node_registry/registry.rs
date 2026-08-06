@@ -60,6 +60,7 @@ use crate::nodes::{
     source_file::FileSourceNodeFactory,
     source_iceberg::IcebergSourceNodeFactory,
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
+    source_opengwas_tophits::OpengwasTophitsNodeFactory,
     sql_node::SqlNodeFactory,
     survey_calibrate::{CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory},
     survey_describe::{
@@ -287,6 +288,7 @@ impl NodeRegistry {
         registry.register(Box::new(VizNodeFactory {}));
         registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
         registry.register(Box::new(OpentargetsSearchNodeFactory {}));
+        registry.register(Box::new(OpengwasTophitsNodeFactory {}));
         registry.register(Box::new(SusieRssNodeFactory {}));
         registry.register(Box::new(MagmaAnnotateNodeFactory {}));
         registry.register(Box::new(MagmaGeneNodeFactory {}));

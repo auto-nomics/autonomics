@@ -202,6 +202,44 @@ impl AgentHandle {
     pub fn set_model(&self, model: Model) {
         self.model.store(Some(Arc::new(model)));
     }
+
+    // ── Session management ────────────────────────────────
+
+    /// Create a new session within this agent. Returns the new session ID.
+    ///
+    /// If `fork_from` is `Some(parent_id)`, the new session deep-clones the
+    /// parent's memory (conversation branching). Otherwise the session
+    /// starts with an empty conversation.
+    pub fn create_session(
+        &self,
+        title: Option<String>,
+        fork_from: Option<uuid::Uuid>,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        let _ = self.internal_tx.send(InternalEvent::CreateSession {
+            id,
+            fork_from,
+            title,
+        });
+        id
+    }
+
+    /// Switch the active session to `id`. Pauses the current session and
+    /// activates the target.
+    pub fn switch_session(&self, id: uuid::Uuid) {
+        let _ = self.internal_tx.send(InternalEvent::SwitchSession { id });
+    }
+
+    /// Close and remove a session.
+    pub fn close_session(&self, id: uuid::Uuid) {
+        let _ = self.internal_tx.send(InternalEvent::CloseSession { id });
+    }
+
+    /// Request a list of all sessions. The reply arrives as
+    /// `AgentEvent::SessionList` on the event channel.
+    pub fn list_sessions(&self) {
+        let _ = self.internal_tx.send(InternalEvent::ListSessions);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -11,7 +11,6 @@ use crate::widgets::searchable_picker::{PickerItem, PickerState, SearchablePicke
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
-    SwitchTab(usize),
     Quit,
     CancelAgent,
     EnterInput,
@@ -27,6 +26,8 @@ pub enum CommandAction {
     ModelConfig,
     /// Open the agent resume picker.
     ResumeAgent,
+    /// Open the session picker for the currently active agent.
+    OpenSessions,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -107,12 +108,6 @@ pub fn render_command_palette(
 fn default_commands() -> Vec<Command> {
     vec![
         Command {
-            title: "Switch to Agent tab".into(),
-            keywords: "chat agent conversation".into(),
-            category: "tab".into(),
-            action: CommandAction::SwitchTab(0),
-        },
-        Command {
             title: "New agent".into(),
             keywords: "spawn create start profile picker".into(),
             category: "agent".into(),
@@ -125,14 +120,20 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::ResumeAgent,
         },
         Command {
+            title: "Sessions".into(),
+            keywords: "conversation switch fork list branch".into(),
+            category: "agent".into(),
+            action: CommandAction::OpenSessions,
+        },
+        Command {
             title: "Select model".into(),
             keywords: "model config provider api key switch agent".into(),
             category: "agent".into(),
             action: CommandAction::ModelConfig,
         },
         Command {
-            title: "New conversation".into(),
-            keywords: "clear transcript reset chat".into(),
+            title: "New session".into(),
+            keywords: "new conversation clear transcript reset chat branch".into(),
             category: "agent".into(),
             action: CommandAction::ClearTranscript,
         },
