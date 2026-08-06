@@ -704,6 +704,9 @@ mod tests {
             "ml_tsne" => serde_json::json!({"features": ["x", "y"]}),
             "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_variance_threshold" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_select_k_best" => serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1}),
+            "ml_correlation_rank" => serde_json::json!({"features": ["x", "y"], "target_column": "t"}),
             // ── ML nodes ──
             "ml_standardize" => serde_json::json!({"columns": ["x"]}),
             "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
@@ -732,6 +735,9 @@ mod tests {
             "ml_tsne" => serde_json::json!({"features": ["x", "y"]}),
             "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
+            "ml_variance_threshold" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_select_k_best" => serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1}),
+            "ml_correlation_rank" => serde_json::json!({"features": ["x", "y"], "target_column": "t"}),
             // ── hypothesize fallback ──
             k if k.starts_with("hypothesize.") => serde_json::json!({}),
             // ── fallback for nodes without a fixture spec ──

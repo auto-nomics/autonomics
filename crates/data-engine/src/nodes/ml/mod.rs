@@ -8,6 +8,7 @@
 pub mod cluster_nodes;
 pub mod common;
 pub mod dimred_nodes;
+pub mod feat_select_nodes;
 pub mod metrics_nodes;
 pub mod model_nodes;
 pub mod preprocess_nodes;
@@ -55,4 +56,9 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
     registry.register(Box::new(dimred_nodes::TsneFactory));
     registry.register(Box::new(dimred_nodes::NmfFactory));
     registry.register(Box::new(dimred_nodes::TruncatedSvdFactory));
+
+    // ── Feature selection (3) ───────────────────────────────────────────
+    registry.register(Box::new(feat_select_nodes::VarianceThresholdFactory));
+    registry.register(Box::new(feat_select_nodes::SelectKBestFactory));
+    registry.register(Box::new(feat_select_nodes::CorrelationRankFactory));
 }
