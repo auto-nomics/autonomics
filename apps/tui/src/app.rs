@@ -415,6 +415,7 @@ impl App {
                 } => {
                     if let Some(event) = maybe_agent {
                         let _idx = self.state.active_agent_idx;
+                        let is_session_list = matches!(event, AgentEvent::SessionList { .. });
                         if matches!(
                             event,
                             AgentEvent::SessionActivated { .. }
@@ -429,6 +430,13 @@ impl App {
                                 event,
                             );
                         }
+
+                        // After SessionList arrives, spawn background history
+                        // loads for sessions that have empty tab_state.messages.
+                        if is_session_list {
+                            self.spawn_session_history_loads();
+                        }
+
                         self.dirty = true;
                     } else {
                         // Active agent channel closed — don't quit, just mark.
@@ -487,8 +495,8 @@ impl App {
                 self.state.agent_picker.remove_by_id(agent_id);
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
-            crate::app_event::AppEvent::HistoryLoaded { agent_id, messages } => {
-                self.replay_history(agent_id, &messages);
+            crate::app_event::AppEvent::HistoryLoaded { agent_id, session_id, messages } => {
+                self.replay_history(agent_id, session_id, &messages);
             }
             crate::app_event::AppEvent::AgentSpawned {
                 profile_name,
@@ -499,6 +507,7 @@ impl App {
                     let name = handle.name.clone();
                     self.handles.push(handle);
                     // Request the session list so we can sync the session tab bar.
+                    // SessionList arrival triggers per-session history loading.
                     self.handles.last().map(|h| h.list_sessions());
                     self.state.sessions.push(AgentSession {
                         name,
@@ -507,41 +516,6 @@ impl App {
                         active_sub_session_idx: 0,
                     });
                     self.state.active_agent_idx = self.state.sessions.len() - 1;
-
-                    // ── Load conversation history from storage ──
-                    // On resume, the agent's Memory is restored from the WAL
-                    // but the TUI's `tab_state.messages` is empty. Load the
-                    // rendered history asynchronously and replay it as
-                    // ChatLines.
-                    if let Some(host) = &self.host {
-                        let storage = host.storage().clone();
-                        let tx = self.app_event_tx.clone();
-                        let aid = agent_id;
-                        self.runtime_handle.spawn(async move {
-                            match agentik_core::storage::restore_memory(
-                                storage.as_ref(),
-                                aid,
-                            )
-                            .await
-                            {
-                                Ok(memory) => {
-                                    let messages = memory
-                                        .render_context()
-                                        .unwrap_or_default();
-                                    if !messages.is_empty() {
-                                        tx.send(crate::app_event::AppEvent::HistoryLoaded {
-                                            agent_id: aid,
-                                            messages,
-                                        });
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to load history for agent {aid}");
-                                }
-                            }
-                        });
-                    }
-
                     tracing::info!(profile = %profile_name, "agent spawned successfully");
                 }
                 Err(e) => {
@@ -559,41 +533,123 @@ impl App {
     /// converted to one or more `ChatLine`s (user text → `ChatLine::User`,
     /// assistant text → `ChatLine::Assistant`, tool_use → `ChatLine::ToolCall`,
     /// tool_result → `ChatLine::ToolResult`, etc.).
-    fn replay_history(&mut self, agent_id: uuid::Uuid, messages: &[Message]) {
-        // Find the agent session index.
-        let session_idx = self.state.sessions.iter().position(|s| s.agent_id == agent_id);
+    fn replay_history(
+        &mut self,
+        agent_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        messages: &[Message],
+    ) {
+        let session_idx = self
+            .state
+            .sessions
+            .iter()
+            .position(|s| s.agent_id == agent_id);
         let Some(session_idx) = session_idx else {
             tracing::warn!(%agent_id, "history loaded for unknown agent");
             return;
         };
 
-        // Build ChatLines from the message list.
         let lines = messages_to_chatlines(messages);
         if lines.is_empty() {
             return;
         }
 
-        // If the agent already has sub_sessions, write into the active one.
-        // Otherwise, create a default sub_session to hold the history.
         let session = &mut self.state.sessions[session_idx];
-        if session.sub_sessions.is_empty() {
-            session.sub_sessions.push(state::SubSession::new(
-                uuid::Uuid::new_v4(),
-                Some("Restored".into()),
-            ));
-        }
-        let sub = &mut session.sub_sessions[session.active_sub_session_idx];
+        // Find the sub-session by session_id.
+        let sub = session
+            .sub_sessions
+            .iter_mut()
+            .find(|s| s.id == session_id);
+        let Some(sub) = sub else {
+            tracing::warn!(%session_id, "history loaded for unknown sub-session");
+            return;
+        };
+
         if !sub.tab_state.messages.is_empty() {
-            // Already has messages — don't clobber (e.g. user sent something
-            // while history was loading).
-            tracing::debug!(%agent_id, "tab_state already populated, skipping history replay");
+            tracing::debug!(%session_id, "tab_state already populated, skipping");
             return;
         }
-        sub.tab_state.messages = lines;
-        sub.tab_state.content_line_count = sub.tab_state.messages.len();
+        sub.tab_state.set_messages(lines);
         sub.tab_state.scroll_to_bottom();
         self.dirty = true;
-        tracing::info!(%agent_id, count = sub.tab_state.messages.len(), "history replayed into tab_state");
+        tracing::info!(%session_id, count = sub.tab_state.messages.len(), "history replayed");
+    }
+
+    /// Spawn background history loads for all sessions of the active agent
+    /// that have empty `tab_state.messages`.
+    fn spawn_session_history_loads(&mut self) {
+        let Some(host) = &self.host else {
+            return;
+        };
+        let storage = host.storage().clone();
+        let tx = self.app_event_tx.clone();
+
+        let agent_idx = self.state.active_agent_idx;
+        let Some(agent_session) = self.state.sessions.get(agent_idx) else {
+            return;
+        };
+        let agent_id = agent_session.agent_id;
+
+        // Collect sessions that need history loading.
+        let to_load: Vec<uuid::Uuid> = agent_session
+            .sub_sessions
+            .iter()
+            .filter(|s| s.tab_state.messages.is_empty())
+            .map(|s| s.id)
+            .collect();
+
+        for session_id in to_load {
+            let storage = storage.clone();
+            let tx = tx.clone();
+            self.runtime_handle.spawn(async move {
+                use agentik_core::storage::AgentStorage;
+                // Load per-session snapshot + WAL messages.
+                let memory = match storage
+                    .get_latest_snapshot_for_session(agent_id, session_id)
+                    .await
+                {
+                    Ok(Some(snap)) => {
+                        let snap_ts = snap.ts;
+                        let mut mem = snap.memory;
+                        if let Ok(msgs) = storage
+                            .get_messages_since_for_session(session_id, snap_ts)
+                            .await
+                        {
+                            for msg in msgs {
+                                let _ = mem.remember(msg);
+                            }
+                        }
+                        mem
+                    }
+                    Ok(None) => {
+                        // No snapshot — replay all WAL messages.
+                        let mut mem = agentik_core::memory::Memory::new();
+                        if let Ok(msgs) = storage
+                            .get_messages_since_for_session(session_id, 0)
+                            .await
+                        {
+                            for msg in msgs {
+                                let _ = mem.remember(msg);
+                            }
+                        }
+                        mem
+                    }
+                    Err(e) => {
+                        tracing::warn!(%session_id, error = %e, "failed to load snapshot");
+                        return;
+                    }
+                };
+
+                let messages = memory.render_context().unwrap_or_default();
+                if !messages.is_empty() {
+                    tx.send(crate::app_event::AppEvent::HistoryLoaded {
+                        agent_id,
+                        session_id,
+                        messages,
+                    });
+                }
+            });
+        }
     }
     fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
@@ -1008,19 +1064,37 @@ impl App {
             KeyCode::Esc => {
                 self.state.name_input.close();
                 self.state.pending_profile = None;
+                self.state.pending_session_name = false;
             }
             KeyCode::Backspace => self.state.name_input.pop_char(),
             KeyCode::Char(c) if !ctrl => self.state.name_input.push_char(c),
             KeyCode::Enter => {
                 let name = self.state.name_input.value().to_string();
-                let profile = self.state.pending_profile.take();
                 self.state.name_input.close();
-                if let Some(p) = profile {
-                    if name.is_empty() {
-                        tracing::warn!("agent name cannot be empty");
-                        return;
+
+                if self.state.pending_session_name {
+                    // ── Session naming mode ──
+                    self.state.pending_session_name = false;
+                    let title = if name.is_empty() {
+                        "New session".to_string()
+                    } else {
+                        name
+                    };
+                    if let Some(handle) =
+                        self.handles.get(self.state.active_agent_idx)
+                    {
+                        handle.create_session(Some(title), None);
                     }
-                    self.spawn_agent_from_profile(&p, &name);
+                } else {
+                    // ── Agent naming mode ──
+                    let profile = self.state.pending_profile.take();
+                    if let Some(p) = profile {
+                        if name.is_empty() {
+                            tracing::warn!("agent name cannot be empty");
+                            return;
+                        }
+                        self.spawn_agent_from_profile(&p, &name);
+                    }
                 }
             }
             _ => {}
@@ -1036,13 +1110,13 @@ impl App {
             KeyCode::Up => self.state.session_picker.move_up(),
             KeyCode::Down => self.state.session_picker.move_down(),
             KeyCode::Char('n') => {
-                // Create a new (empty) session in the current agent.
-                if let Some(handle) =
-                    self.handles.get(self.state.active_agent_idx)
-                {
-                    handle.create_session(Some("New session".into()), None);
-                }
+                // Open name input for the new session instead of creating
+                // immediately with a default name.
                 self.state.session_picker.close();
+                self.state.pending_session_name = true;
+                self.state
+                    .name_input
+                    .open(" New Session ", "New session");
             }
             KeyCode::Char('d') => {
                 // Close the currently selected session.

@@ -245,6 +245,121 @@ impl Agent {
             }
         }
 
+        // ── Restore previously created sessions from storage ──
+        // Query all session records and rebuild sessions that no longer
+        // exist in the HashMap (they were created in a prior run but lost
+        // on restart).
+        if let Some(storage) = self.shared.storage.clone() {
+            match storage
+                .as_ref()
+                .list_session_records(self.shared.id)
+                .await
+            {
+                Ok(records) => {
+                    for rec in records {
+                        // Skip if this session is already in the HashMap
+                        // (e.g. the default session from the builder).
+                        if self.sessions.contains_key(&rec.session_id) {
+                            // Just update the title if we have one.
+                            if let Some(t) = &rec.title {
+                                if let Some(s) = self.sessions.get_mut(&rec.session_id) {
+                                    if s.title.is_none() {
+                                        s.title = Some(t.clone());
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        // Rebuild a session from storage, restoring its memory from
+                        // per-session snapshot + WAL messages.
+                        let mut s = Session::new(rec.session_id, self.shared.clone());
+                        s.title = rec.title;
+                        s.created_at = rec.started_at;
+
+                        // Restore memory: latest snapshot for this session +
+                        // WAL messages since the snapshot timestamp.
+                        match storage
+                            .as_ref()
+                            .get_latest_snapshot_for_session(
+                                self.shared.id,
+                                rec.session_id,
+                            )
+                            .await
+                        {
+                            Ok(Some(snap)) => {
+                                let snap_ts = snap.ts;
+                                s.memory = snap.memory;
+                                // Replay WAL messages for this session.
+                                match storage
+                                    .as_ref()
+                                    .get_messages_since_for_session(
+                                        rec.session_id,
+                                        snap_ts,
+                                    )
+                                    .await
+                                {
+                                    Ok(msgs) => {
+                                        for msg in msgs {
+                                            let _ = s.memory.remember(msg);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "failed to replay WAL for session {}", rec.session_id
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                // No snapshot — try replaying all WAL messages.
+                                match storage
+                                    .as_ref()
+                                    .get_messages_since_for_session(
+                                        rec.session_id,
+                                        0,
+                                    )
+                                    .await
+                                {
+                                    Ok(msgs) => {
+                                        for msg in msgs {
+                                            let _ = s.memory.remember(msg);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "failed to replay WAL for session {}", rec.session_id
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "failed to load snapshot for session {}", rec.session_id
+                                );
+                            }
+                        }
+
+                        // Wire persist_tx.
+                        if let Some(tx) = self.shared.persist_tx.get() {
+                            s.memory.persist_tx = Some(tx.clone());
+                        }
+                        tracing::info!(
+                            session_id = %rec.session_id,
+                            title = ?s.title,
+                            "restored session from storage"
+                        );
+                        self.sessions.insert(rec.session_id, s);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to list session records");
+                }
+            }
+        }
+
         loop {
             let event = match rx.recv().await {
                 Some(e) => e,
@@ -318,22 +433,31 @@ impl Agent {
             Some(parent_id) => {
                 if let Some(parent) = self.sessions.get(&parent_id) {
                     let mut s = Session::fork_from(parent, id, self.shared.clone());
-                    s.title = title;
+                    s.title = title.clone();
                     s
                 } else {
                     tracing::warn!(parent_id = %parent_id, "fork parent not found");
                     let mut s = Session::new(id, self.shared.clone());
-                    s.title = title;
+                    s.title = title.clone();
                     s
                 }
             }
             None => {
                 let mut s = Session::new(id, self.shared.clone());
-                s.title = title;
+                s.title = title.clone();
                 s
             }
         };
         self.sessions.insert(id, session);
+
+        // Persist the session title so it survives restarts. The WAL session
+        // row is created by resume() below; we update its title here.
+        if let Some(storage) = &self.shared.storage {
+            if let Some(ref t) = title {
+                let _ = storage.update_session_title(id, t).await;
+            }
+        }
+
         self.handle_switch_session(id).await;
         let title = self.sessions.get(&id).and_then(|s| s.title.clone());
         self.shared

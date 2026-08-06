@@ -234,6 +234,20 @@ impl AgentTabState {
         self.msg_versions.push(self.msg_version_counter);
     }
 
+    /// Replace the entire message list in one shot, keeping `msg_versions`,
+    /// `cached_msg_lines`, and `cached_msg_versions` in lockstep. Use this
+    /// instead of assigning `messages` directly (e.g. when replaying history
+    /// from storage).
+    pub fn set_messages(&mut self, messages: Vec<ChatLine>) {
+        let n = messages.len();
+        self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
+        self.messages = messages;
+        self.msg_versions = (0..n).map(|_| self.msg_version_counter).collect();
+        self.cached_msg_lines = vec![Vec::new(); n];
+        self.cached_msg_versions = vec![0; n];
+        self.content_line_count = n;
+    }
+
     /// Bump the content version of the last message (its content mutated in place).
     fn bump_last_version(&mut self) {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
@@ -601,6 +615,9 @@ pub struct AppState {
     pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
     pub name_input: crate::widgets::name_input::NameInputState,
     pub session_picker: crate::widgets::session_picker::SessionPickerState,
+    /// When `true`, the name input popup is collecting a **session name**
+    /// (not an agent name). The Enter handler checks this flag.
+    pub pending_session_name: bool,
     /// Profile selected from the picker, waiting for the user to enter a name.
     /// When `Some`, the name input popup is shown.
     pub pending_profile: Option<agentik_core::AgentProfile>,
@@ -623,6 +640,7 @@ impl Default for AppState {
             agent_picker: Default::default(),
             name_input: Default::default(),
             session_picker: Default::default(),
+            pending_session_name: false,
             pending_profile: None,
             model_config_visible: false,
             active_model: Arc::new(ArcSwapOption::default()),

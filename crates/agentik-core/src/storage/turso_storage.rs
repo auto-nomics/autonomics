@@ -154,7 +154,8 @@ impl TursoAgentStorage {
                     id         TEXT PRIMARY KEY,
                     agent_id   TEXT NOT NULL,
                     started_at INTEGER NOT NULL,
-                    ended_at   INTEGER
+                    ended_at   INTEGER,
+                    title      TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_agent
                     ON sessions(agent_id);
@@ -183,6 +184,27 @@ impl TursoAgentStorage {
             )
             .await
             .map_err(|e| StorageError::Other(format!("schema init failed: {e}").into()))?;
+
+        // ── Migrations for existing databases ──
+        // Add `title` column to sessions if missing (idempotent).
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN title TEXT", ())
+            .await;
+        // Add `session_id` column to snapshots if missing (idempotent).
+        let _ = self
+            .conn
+            .execute("ALTER TABLE snapshots ADD COLUMN session_id TEXT", ())
+            .await;
+        // Create per-session snapshot index (safe now that column exists).
+        let _ = self
+            .conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_session_ts ON snapshots(session_id, ts DESC)",
+                (),
+            )
+            .await;
+
         Ok(())
     }
 }
@@ -214,6 +236,11 @@ fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
     let ts = int_col(row, 2)?;
     let status_json = text_col(row, 3)?;
     let memory_json = text_col(row, 4)?;
+    // Column 5 is session_id (may be NULL for old snapshots).
+    let session_id = match row.get_value(5) {
+        Ok(Value::Text(s)) if !s.is_empty() => Uuid::parse_str(&s).ok(),
+        _ => None,
+    };
 
     Ok(AgentSnapshot {
         snapshot_id: Uuid::parse_str(&snapshot_id_str)
@@ -223,6 +250,7 @@ fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
         ts,
         agent_status: serde_json::from_str(&status_json)?,
         memory: serde_json::from_str(&memory_json)?,
+        session_id,
     })
 }
 
@@ -266,17 +294,22 @@ impl AgentStorage for TursoAgentStorage {
     async fn create_snapshot(&self, snapshot: AgentSnapshot) -> Result<(), StorageError> {
         let memory_json = serde_json::to_string(&snapshot.memory)?;
         let status_json = serde_json::to_string(&snapshot.agent_status)?;
+        let session_id_val = snapshot
+            .session_id
+            .map(|id| Value::Text(id.to_string()))
+            .unwrap_or(Value::Null);
         self.conn
             .execute(
                 "INSERT INTO snapshots
-                    (snapshot_id, agent_id, ts, status, memory)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                    (snapshot_id, agent_id, ts, status, memory, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params_from_iter([
                     Value::Text(snapshot.snapshot_id.to_string()),
                     Value::Text(snapshot.agent_id.to_string()),
                     Value::Integer(snapshot.ts),
                     Value::Text(status_json),
                     Value::Text(memory_json),
+                    session_id_val,
                 ]),
             )
             .await?;
@@ -287,7 +320,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory
+                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
                  FROM snapshots WHERE snapshot_id = ?1",
                 params_from_iter([Value::Text(snapshot_id.to_string())]),
             )
@@ -307,7 +340,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory
+                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
                  FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -323,7 +356,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory
+                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
                  FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC LIMIT 1",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -540,7 +573,7 @@ impl AgentStorage for TursoAgentStorage {
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
-                "INSERT INTO sessions (id, agent_id, started_at, ended_at)
+                "INSERT OR IGNORE INTO sessions (id, agent_id, started_at, ended_at)
                  VALUES (?1, ?2, ?3, NULL)",
                 params_from_iter([
                     Value::Text(session_id.to_string()),
@@ -608,6 +641,122 @@ impl AgentStorage for TursoAgentStorage {
             )
             .await?;
 
+        let mut messages = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    let json_str = text_col(&row, 0)?;
+                    messages.push(serde_json::from_str(&json_str)?);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(messages)
+    }
+
+    async fn update_session_title(
+        &self,
+        session_id: Uuid,
+        title: &str,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET title = ?1 WHERE id = ?2",
+                params_from_iter([
+                    Value::Text(title.to_string()),
+                    Value::Text(session_id.to_string()),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_session_records(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Vec<crate::storage::SessionRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, title, started_at FROM sessions
+                 WHERE agent_id = ?1
+                 ORDER BY started_at ASC",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+
+        let mut records = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    let id_str = text_col(&row, 0)?;
+                    let title = match row.get_value(1)? {
+                        Value::Text(s) => Some(s),
+                        _ => None,
+                    };
+                    let started_at = match row.get_value(2)? {
+                        Value::Integer(n) => n,
+                        _ => 0,
+                    };
+                    let session_id = Uuid::parse_str(&id_str)
+                        .map_err(|e| {
+                            StorageError::Other(
+                                format!("invalid session UUID '{id_str}': {e}").into(),
+                            )
+                        })?;
+                    records.push(crate::storage::SessionRecord {
+                        session_id,
+                        title,
+                        started_at,
+                    });
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(records)
+    }
+
+    async fn get_latest_snapshot_for_session(
+        &self,
+        _agent_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<AgentSnapshot>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
+                 FROM snapshots
+                 WHERE session_id = ?1
+                 ORDER BY ts DESC LIMIT 1",
+                params_from_iter([Value::Text(session_id.to_string())]),
+            )
+            .await?;
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_snapshot(&row)?)),
+            _ => Ok(None),
+        }
+    }
+
+    async fn get_messages_since_for_session(
+        &self,
+        session_id: Uuid,
+        ts: i64,
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT message_json
+                 FROM messages
+                 WHERE session_id = ?1 AND ts > ?2
+                 ORDER BY ts ASC, seq ASC",
+                params_from_iter([
+                    Value::Text(session_id.to_string()),
+                    Value::Integer(ts),
+                ]),
+            )
+            .await?;
         let mut messages = Vec::new();
         loop {
             match rows.next().await {
@@ -852,6 +1001,7 @@ mod tests {
             agent_id,
             agent_status: AgentLifecycleStatus::IDLE,
             memory: Memory::new(),
+            session_id: None,
         }
     }
 

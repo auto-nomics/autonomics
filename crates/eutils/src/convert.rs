@@ -95,7 +95,7 @@ fn parse_esummary_doc(pmid: &str, doc: &Value) -> Article {
     // elocationid often contains "doi: 10.xxx/yyy"
     let elo = str_field(doc, "elocationid");
     let doi_from_elocation = if elo.starts_with("doi:") {
-        let d = elo.strip_prefix("doi:").unwrap_or(&elo).trim();
+        let d = elo.strip_prefix("doi:").unwrap_or(elo).trim();
         if !d.is_empty() {
             Some(d.to_owned())
         } else {
@@ -116,11 +116,11 @@ fn parse_esummary_doc(pmid: &str, doc: &Value) -> Article {
             match idtype {
                 "doi" => {
                     if !identifiers.iter().any(|i| i.kind == IdKind::Doi) {
-                        identifiers.push(Identifier::doi(normalize_doi(&value)));
+                        identifiers.push(Identifier::doi(normalize_doi(value)));
                     }
                 }
                 "pmc" => {
-                    let v = value.strip_prefix("PMC").unwrap_or(&value);
+                    let v = value.strip_prefix("PMC").unwrap_or(value);
                     identifiers.push(Identifier::new(IdKind::Pmc, v));
                 }
                 _ => {}

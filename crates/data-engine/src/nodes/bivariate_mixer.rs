@@ -47,10 +47,10 @@ pub enum BivariateMixerError {
     Subprocess { exit_code: i32, stderr: String },
 
     #[error("bivariate_mixer io error: {0}")]
-    Io(#[from std::io::Error),
+    Io(#[from] std::io::Error),
 
     #[error("bivariate_mixer json error: {0}")]
-    Json(#[from serde_json::Error),
+    Json(#[from] serde_json::Error),
 }
 
 impl From<BivariateMixerError> for DagError {
@@ -281,7 +281,7 @@ impl DagNode for BivariateMixerNode {
         // ── 3. Write temp files ────────────────────────────────────────
         let tmp_id = nanoid::nanoid!(8);
         let tmp_dir = std::env::temp_dir().join(format!("mixer_fit2_{tmp_id}"));
-        std::fs::create_dir_all(&tmp_dir)?;
+        std::fs::create_dir_all(&tmp_dir).map_err(BivariateMixerError::from)?;
 
         let ss1_path = tmp_dir.join("trait1.sumstats");
         let ss2_path = tmp_dir.join("trait2.sumstats");
@@ -292,11 +292,11 @@ impl DagNode for BivariateMixerNode {
         write_sumstats(&sumstats1.data, &[
             (INPUT_RSID_COL, "SNP"), (INPUT_A1_COL, "A1"), (INPUT_A2_COL, "A2"),
             (INPUT_N_COL, "N"), (INPUT_Z_COL, "Z"),
-        ], &ss1_path)?;
+        ], &ss1_path).await?;
         write_sumstats(&sumstats2.data, &[
             (INPUT_RSID_COL, "SNP"), (INPUT_A1_COL, "A1"), (INPUT_A2_COL, "A2"),
             (INPUT_N_COL, "N"), (INPUT_Z_COL, "Z"),
-        ], &ss2_path)?;
+        ], &ss2_path).await?;
 
         // Write minimal fit1 JSON params files (mixer.py fit2 only reads params)
         write_minimal_fit1_json(pi1, sb1, sz1, &params1_path)?;
@@ -340,13 +340,14 @@ impl DagNode for BivariateMixerNode {
             .await
             .map_err(|e| BivariateMixerError::Step {
                 context: "subprocess join".into(), detail: e.to_string()
-            })??;
+            })?
+            .map_err(BivariateMixerError::from)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let lines: Vec<&str> = stderr.lines().collect();
-            let tail = lines.iter().rev().take(20).collect::<Vec<_>>().iter().rev()
-                .collect::<Vec<_>>().join("\n");
+            let start = lines.len().saturating_sub(20);
+            let tail = lines[start..].join("\n");
             reporter.error(format!("fit2: gsa-mixer failed\n{tail}"));
             return Err(BivariateMixerError::Subprocess {
                 exit_code: output.status.code().unwrap_or(-1), stderr: tail,
@@ -363,7 +364,8 @@ impl DagNode for BivariateMixerNode {
                 detail: e.to_string(),
             }
         })?;
-        let json: serde_json::Value = serde_json::from_str(&json_str)?;
+        let json: serde_json::Value =
+            serde_json::from_str(&json_str).map_err(BivariateMixerError::from)?;
         let result = parse_fit2_json(&json)?;
 
         reporter.info(format!(
@@ -444,7 +446,7 @@ fn write_minimal_fit1_json(
 }
 
 /// Write selected columns from a DataFrame to a plain TSV file.
-fn write_sumstats(
+async fn write_sumstats(
     df: &datafusion::dataframe::DataFrame,
     col_map: &[(&str, &str)],
     path: &std::path::Path,
@@ -456,7 +458,7 @@ fn write_sumstats(
     ).map_err(|e| BivariateMixerError::Step {
         context: "select columns".into(), detail: e.to_string()
     })?
-    .collect().map_err(|e| BivariateMixerError::Step {
+    .collect().await.map_err(|e| BivariateMixerError::Step {
         context: "collect batches".into(), detail: e.to_string()
     })?;
 
@@ -479,7 +481,7 @@ fn write_sumstats(
         for row in 0..batch.num_rows() {
             for (i, col) in columns.iter().enumerate() {
                 if i > 0 { write!(w, "\t")?; }
-                let val = arrow_array::cast::as_string_array(col);
+                let val = arrow_array::cast::as_string_array(*col);
                 write!(w, "{}", val.value(row))?;
             }
             writeln!(w)?;

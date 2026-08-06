@@ -21,6 +21,21 @@ pub struct Message {
     pub request_id: Option<RequestId>,
 }
 
+/// Maximum number of characters of text/thinking/tool content included in
+/// [`Message::log_summary`] previews. Anything longer is truncated with `…`.
+const LOG_PREVIEW_LEN: usize = 120;
+
+/// Truncate `s` to at most `max` characters, appending `…` when truncated.
+fn truncate_preview(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max).collect();
+        t.push('…');
+        t
+    }
+}
+
 impl Message {
     pub fn has_tool_use(&self) -> bool {
         self.content.iter().any(ContentBlock::is_tool_use)
@@ -36,6 +51,30 @@ impl Message {
 
     pub fn tool_results(&self) -> Vec<&ContentBlock> {
         self.content.iter().filter(|c| c.is_tool_result()).collect()
+    }
+
+    /// Produce a compact, single-line summary of this message for logs.
+    ///
+    /// Format: `[role] block1 | block2 | ... [stop=<reason>] [tokens=in+out]`,
+    /// where each block preview is produced by [`ContentBlock::log_summary`].
+    /// Long text/JSON payloads are truncated to [`LOG_PREVIEW_LEN`] chars so
+    /// the whole line fits comfortably on a single log line. This is intended
+    /// for `tracing`/log output — not a faithful serialization.
+    #[must_use]
+    pub fn log_summary(&self) -> String {
+        let role = match self.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        };
+        let blocks: Vec<String> = self.content.iter().map(ContentBlock::log_summary).collect();
+        let mut s = format!("[{role}] {}", blocks.join(" | "));
+        if let Some(stop) = &self.stop_reason {
+            s.push_str(&format!(" stop={stop:?}"));
+        }
+        if let Some(u) = &self.usage {
+            s.push_str(&format!(" tokens={}+{}", u.input_tokens, u.output_tokens));
+        }
+        s
     }
 }
 
@@ -108,6 +147,50 @@ impl ContentBlock {
             ContentBlock::ToolUse { id, .. } => Some(id.clone()),
             ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
             _ => None,
+        }
+    }
+
+    /// Compact one-line preview of this block for logs (see
+    /// [`Message::log_summary`]). Reports the block kind, a short payload
+    /// preview, and identifying ids where applicable.
+    #[must_use]
+    pub fn log_summary(&self) -> String {
+        match self {
+            ContentBlock::Text { text } => {
+                let n = text.chars().count();
+                format!("text({n}): {}", truncate_preview(text, LOG_PREVIEW_LEN))
+            }
+            ContentBlock::Thinking { thinking, .. } => {
+                let n = thinking.chars().count();
+                format!(
+                    "thinking({n}): {}",
+                    truncate_preview(thinking, LOG_PREVIEW_LEN)
+                )
+            }
+            ContentBlock::Image { source } => match source {
+                ImageSource::Base64 { media_type, .. } => format!("image[{media_type}]"),
+                ImageSource::Url { url } => format!("image<{url}>"),
+            },
+            ContentBlock::ToolUse { id, name, input } => {
+                let payload = truncate_preview(&input.to_string(), LOG_PREVIEW_LEN);
+                format!("tool_use {name}#{id} {payload}")
+            }
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                let err = if is_error.unwrap_or(false) {
+                    " ERROR"
+                } else {
+                    ""
+                };
+                let body = content.as_deref().unwrap_or("");
+                format!(
+                    "tool_result#{tool_use_id}{err}: {}",
+                    truncate_preview(body, LOG_PREVIEW_LEN)
+                )
+            }
         }
     }
 }
@@ -442,5 +525,83 @@ mod tests {
             MessageContent::Text(text) => assert_eq!(text, "Hello"),
             _ => panic!("Expected text content"),
         }
+    }
+
+    #[test]
+    fn test_log_summary_text_message() {
+        let msg = Message {
+            id: "m1".into(),
+            type_: "message".into(),
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "Hello world".into(),
+            }],
+            model: None,
+            stop_reason: Some(StopReason::EndTurn),
+            stop_sequence: None,
+            usage: Some(Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                ..Default::default()
+            }),
+            request_id: None,
+        };
+        let s = msg.log_summary();
+        assert!(s.starts_with("[assistant] text(11): Hello world"));
+        assert!(s.contains("stop=EndTurn"));
+        assert!(s.contains("tokens=10+5"));
+    }
+
+    #[test]
+    fn test_log_summary_mixed_blocks() {
+        let msg = Message {
+            id: "m2".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "tu_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"cmd": "ls"}),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".into(),
+                    content: Some("file_a\nfile_b".into()),
+                    is_error: Some(false),
+                },
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        let s = msg.log_summary();
+        assert!(s.starts_with("[user] tool_use bash#tu_1"));
+        assert!(s.contains("tool_result#tu_1: file_a"));
+        // should not append stop/tokens when absent
+        assert!(!s.contains("stop="));
+        assert!(!s.contains("tokens="));
+    }
+
+    #[test]
+    fn test_log_summary_truncation() {
+        let long = "x".repeat(LOG_PREVIEW_LEN + 50);
+        let block = ContentBlock::Text { text: long.clone() };
+        let s = block.log_summary();
+        assert!(s.ends_with('…'));
+        // char count preview = LOG_PREVIEW_LEN, plus the ellipsis
+        let preview: String = s.split(": ").nth(1).unwrap().to_string();
+        assert_eq!(preview.chars().count(), LOG_PREVIEW_LEN + 1);
+    }
+
+    #[test]
+    fn test_log_summary_error_result() {
+        let block = ContentBlock::ToolResult {
+            tool_use_id: "tu_9".into(),
+            content: Some("boom".into()),
+            is_error: Some(true),
+        };
+        assert!(block.log_summary().contains("ERROR"));
     }
 }

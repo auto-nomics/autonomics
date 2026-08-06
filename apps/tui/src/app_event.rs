@@ -25,10 +25,11 @@ pub(crate) enum AppEvent {
     AgentRecordsLoaded(Vec<agentik_core::storage::AgentRecord>),
     /// An agent was deleted from storage. Carries the agent ID.
     AgentDeleted(uuid::Uuid),
-    /// Conversation history loaded from storage for a resumed agent.
-    /// Carries the agent ID and the rendered messages.
+    /// Conversation history loaded from storage for a resumed agent's
+    /// specific session.
     HistoryLoaded {
         agent_id: uuid::Uuid,
+        session_id: uuid::Uuid,
         messages: Vec<agentik_sdk::types::messages::Message>,
     },
 }

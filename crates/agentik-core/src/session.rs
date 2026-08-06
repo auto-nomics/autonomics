@@ -101,10 +101,7 @@ pub struct Session {
 impl Session {
     /// Create a new empty session.
     pub(crate) fn new(id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry(
-            shared.tool_registry.clone(),
-            shared.event_tx(),
-        );
+        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
         let now = chrono::Utc::now().timestamp_millis();
         let mut memory = Memory::new();
         // Wire persist_tx if the agent's persist worker is already running.
@@ -132,10 +129,7 @@ impl Session {
         memory: Memory,
         cancel_token: CancellationToken,
     ) -> Self {
-        let toolset = Toolset::from_registry(
-            shared.tool_registry.clone(),
-            shared.event_tx(),
-        );
+        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
         let now = chrono::Utc::now().timestamp_millis();
         Self {
             id,
@@ -153,10 +147,7 @@ impl Session {
 
     /// Fork a new session from an existing one, deep-cloning its memory.
     pub(crate) fn fork_from(parent: &Session, new_id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry(
-            shared.tool_registry.clone(),
-            shared.event_tx(),
-        );
+        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
         let now = chrono::Utc::now().timestamp_millis();
         let mut memory = parent.memory.clone();
         if let Some(tx) = shared.persist_tx.get() {
@@ -164,7 +155,10 @@ impl Session {
         }
         Self {
             id: new_id,
-            title: Some(format!("Fork of {}", parent.title.as_deref().unwrap_or("session"))),
+            title: Some(format!(
+                "Fork of {}",
+                parent.title.as_deref().unwrap_or("session")
+            )),
             created_at: now,
             last_active: now,
             memory,
@@ -196,6 +190,7 @@ impl Session {
             agent_id: self.shared.id,
             agent_status: *self.lifecycle.status(),
             memory: self.memory.clone(),
+            session_id: Some(self.id),
         }
     }
 
@@ -242,14 +237,19 @@ impl Session {
         self.memory.current_session = None;
     }
 
-    /// Resume the session: start a fresh WAL session, lifecycle → IDLE.
+    /// Resume the session: open WAL session (if not already open), lifecycle → IDLE.
     pub async fn resume(&mut self) {
-        let session_id = Uuid::new_v4();
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.start_session(self.shared.id, session_id).await;
-            let _ = storage.touch_agent(self.shared.id).await;
+        // Use Session.id as the WAL session ID so metadata (title) can be
+        // queried by the same key. Only start a WAL session if we don't
+        // already have one.
+        if self.memory.current_session.is_none() {
+            let wal_id = self.id;
+            if let Some(storage) = &self.shared.storage {
+                let _ = storage.start_session(self.shared.id, wal_id).await;
+                let _ = storage.touch_agent(self.shared.id).await;
+            }
+            self.memory.current_session = Some(wal_id);
         }
-        self.memory.current_session = Some(session_id);
         self.lifecycle.set_idle();
         self.last_active = chrono::Utc::now().timestamp_millis();
     }
@@ -260,10 +260,7 @@ impl Session {
     ///
     /// Returns `true` for events that represent new work; `false` for
     /// terminal control signals.
-    pub(crate) async fn apply_internal_event(
-        &mut self,
-        event: InternalEvent,
-    ) -> bool {
+    pub(crate) async fn apply_internal_event(&mut self, event: InternalEvent) -> bool {
         match event {
             InternalEvent::MessageInject(content) => {
                 let _ = self.inject_message(content);
@@ -273,10 +270,8 @@ impl Session {
                 if let Some((name, ok, content)) =
                     self.toolset.finished_task_notification(&id).await
                 {
-                    self.shared.send_event(AgentEvent::ToolBackgroundComplete {
-                        id: id.clone(),
-                        ok,
-                    });
+                    self.shared
+                        .send_event(AgentEvent::ToolBackgroundComplete { id: id.clone(), ok });
                     let note = if ok {
                         format!(
                             "Background task '{name}' (id={id}) finished. \
@@ -323,16 +318,25 @@ impl Session {
         rx: &mut UnboundedReceiver<InternalEvent>,
     ) {
         self.lifecycle.set_running();
-        self.shared.send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
+        self.shared
+            .send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
         let cancelled = self.cancel_token.clone();
 
-        // ── Start a new persisted session ────────────────────
-        let session_id = Uuid::new_v4();
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.start_session(self.shared.id, session_id).await;
-            let _ = storage.touch_agent(self.shared.id).await;
-        }
-        self.memory.current_session = Some(session_id);
+        // ── Reuse or start a persisted WAL session ───────────
+        // resume() may have already opened a WAL session and set
+        // current_session. Reuse it so we don't orphan the old one.
+        let wal_session_id = match self.memory.current_session {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4();
+                if let Some(storage) = &self.shared.storage {
+                    let _ = storage.start_session(self.shared.id, id).await;
+                    let _ = storage.touch_agent(self.shared.id).await;
+                }
+                self.memory.current_session = Some(id);
+                id
+            }
+        };
 
         let mut iteration = 0;
         let mut consecutive_retries = 0;
@@ -370,7 +374,9 @@ impl Session {
                         false
                     }
                 }
-                Err(e) if e.is_retryable() && consecutive_retries < self.shared.config.max_retries => {
+                Err(e)
+                    if e.is_retryable() && consecutive_retries < self.shared.config.max_retries =>
+                {
                     consecutive_retries += 1;
                     tracing::warn!(
                         "retryable error at iteration {}/{}, retry {}/{}: {e}",
@@ -449,7 +455,7 @@ impl Session {
 
         // ── End persisted session ─────────────────────────────
         if let Some(storage) = &self.shared.storage {
-            let _ = storage.end_session(session_id).await;
+            let _ = storage.end_session(wal_session_id).await;
         }
         self.memory.current_session = None;
     }
@@ -528,10 +534,12 @@ impl Session {
         for block in &response_message.content {
             match block {
                 ContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
-                    self.shared.send_event(AgentEvent::Thinking(thinking.clone()));
+                    self.shared
+                        .send_event(AgentEvent::Thinking(thinking.clone()));
                 }
                 ContentBlock::Text { text } if !text.is_empty() => {
-                    self.shared.send_event(AgentEvent::LlmResponse(text.clone()));
+                    self.shared
+                        .send_event(AgentEvent::LlmResponse(text.clone()));
                 }
                 _ => {}
             }
@@ -689,20 +697,16 @@ impl Session {
         while let Some(event) = stream.next().await {
             let stream_event = match event {
                 Ok(e) => e,
-                Err(e) => {
-                    match &e {
-                        AnthropicError::StreamError(msg)
-                            if msg.starts_with("Stream lagged:") =>
-                        {
-                            tracing::debug!("skipping lagged event: {e}");
-                            continue;
-                        }
-                        _ => {
-                            tracing::warn!("stream event error: {e}; breaking stream loop");
-                            break;
-                        }
+                Err(e) => match &e {
+                    AnthropicError::StreamError(msg) if msg.starts_with("Stream lagged:") => {
+                        tracing::debug!("skipping lagged event: {e}");
+                        continue;
                     }
-                }
+                    _ => {
+                        tracing::warn!("stream event error: {e}; breaking stream loop");
+                        break;
+                    }
+                },
             };
 
             if let Some(agent_event) = AgentEvent::from_stream_event(&stream_event) {
@@ -721,7 +725,7 @@ impl Session {
                     ))),
                 })??;
 
-        tracing::debug!(?response, "LLM response");
+        tracing::debug!(summary = response.log_summary(), "LLM response");
 
         Ok(response)
     }

@@ -240,19 +240,22 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
         let code = vec![
-            format!("# MiXeR univariate analysis (gsa-mixer subprocess)"),
-            format!("tmp_sumstats <- tempfile(fileext = '.sumstats.gz')"),
+            "# MiXeR univariate analysis (gsa-mixer subprocess)".to_string(),
+            "tmp_sumstats <- tempfile(fileext = '.sumstats.gz')".to_string(),
             format!("data.table::fwrite({input}, tmp_sumstats, sep = '\\t')"),
-            format!("system2('python', c("),
-            format!("  '{s}/precimed/mixer.py', 'fit1',"),
-            format!("  '--bim-file', '{bim}', '--ld-file', '{ld}',", bim = s.bim_file, ld = s.ld_file),
-            format!("  '--lib', '{h}/libbgmg.so',", h = s.mixer_home),
-            format!("  '--extract', '{e}', e = s.extract_file),
-            format!("  '--trait1-file', tmp_sumstats,"),
-            format!("  '--chr2use', '{c}', c = s.chr2use),
-            format!("  '--seed', '{s}', s = s.seed),
+            "system2('python', c(".to_string(),
+            format!("  '{}/precimed/mixer.py', 'fit1',", s.mixer_home),
+            format!(
+                "  '--bim-file', '{}', '--ld-file', '{}',",
+                s.bim_file, s.ld_file
+            ),
+            format!("  '--lib', '{}/libbgmg.so',", s.mixer_home),
+            format!("  '--extract', '{}',", s.extract_file),
+            "  '--trait1-file', tmp_sumstats,".to_string(),
+            format!("  '--chr2use', '{}',", s.chr2use),
+            format!("  '--seed', '{}',", s.seed),
             format!("  '--out', '{out}'"),
-            format!("))"),
+            "))".to_string(),
         ];
         Ok(crate::codegen::NodeCodegen::simple(code, out))
     }
@@ -296,12 +299,19 @@ impl DagNode for UnivariateMixerNode {
 
         // ── 1. Validate input columns ──────────────────────────────────
         let schema = input.data.schema();
-        for needed in [INPUT_Z_COL, INPUT_N_COL, INPUT_RSID_COL, INPUT_A1_COL, INPUT_A2_COL] {
+        for needed in [
+            INPUT_Z_COL,
+            INPUT_N_COL,
+            INPUT_RSID_COL,
+            INPUT_A1_COL,
+            INPUT_A2_COL,
+        ] {
             if !schema.fields().iter().any(|f| f.name() == needed) {
                 let avail: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
                 return Err(UnivariateMixerError::InvalidInput(format!(
                     "upstream sumstats missing required column '{needed}'; have: {avail:?}"
-                )).into());
+                ))
+                .into());
             }
         }
 
@@ -310,7 +320,7 @@ impl DagNode for UnivariateMixerNode {
         // to avoid the flate2 dependency — mixer.py auto-detects compression.
         let tmp_id = nanoid::nanoid!(8);
         let tmp_dir = std::env::temp_dir().join(format!("mixer_fit1_{tmp_id}"));
-        std::fs::create_dir_all(&tmp_dir)?;
+        std::fs::create_dir_all(&tmp_dir).map_err(UnivariateMixerError::from)?;
         let sumstats_path = tmp_dir.join("trait1.sumstats");
 
         reporter.info("writing sumstats to temp file...");
@@ -324,7 +334,8 @@ impl DagNode for UnivariateMixerNode {
                 (INPUT_Z_COL, "Z"),
             ],
             &sumstats_path,
-        )?;
+        )
+        .await?;
 
         let n_snp = count_lines(&sumstats_path).saturating_sub(1); // minus header
         reporter.info(format!("wrote {n_snp} SNPs to {}", sumstats_path.display()));
@@ -337,30 +348,40 @@ impl DagNode for UnivariateMixerNode {
         let mut cmd = std::process::Command::new("python");
         cmd.arg(&mixer_py)
             .arg("fit1")
-            .arg("--bim-file").arg(&self.spec.bim_file)
-            .arg("--ld-file").arg(&self.spec.ld_file)
-            .arg("--lib").arg(&lib_path)
-            .arg("--extract").arg(&self.spec.extract_file)
-            .arg("--trait1-file").arg(&sumstats_path)
-            .arg("--chr2use").arg(&self.spec.chr2use)
-            .arg("--seed").arg(self.spec.seed.to_string())
-            .arg("--out").arg(&out_prefix)
+            .arg("--bim-file")
+            .arg(&self.spec.bim_file)
+            .arg("--ld-file")
+            .arg(&self.spec.ld_file)
+            .arg("--lib")
+            .arg(&lib_path)
+            .arg("--extract")
+            .arg(&self.spec.extract_file)
+            .arg("--trait1-file")
+            .arg(&sumstats_path)
+            .arg("--chr2use")
+            .arg(&self.spec.chr2use)
+            .arg("--seed")
+            .arg(self.spec.seed.to_string())
+            .arg("--out")
+            .arg(&out_prefix)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         // Fit sequence
         if self.spec.fast_run {
-            cmd.arg("--fit-sequence").arg("diffevo-fast")
+            cmd.arg("--fit-sequence")
+                .arg("diffevo-fast")
                 .arg("neldermead-fast")
-                .arg("--diffevo-fast-repeats").arg(self.spec.diffevo_fast_repeats.to_string());
+                .arg("--diffevo-fast-repeats")
+                .arg(self.spec.diffevo_fast_repeats.to_string());
         } else {
-            cmd.arg("--fit-sequence").arg("diffevo")
-                .arg("neldermead");
+            cmd.arg("--fit-sequence").arg("diffevo").arg("neldermead");
         }
 
         // Optional speed flags
         cmd.arg("--kmax-pdf").arg(self.spec.kmax_pdf.to_string());
-        cmd.arg("--downsample-factor").arg(self.spec.downsample_factor.to_string());
+        cmd.arg("--downsample-factor")
+            .arg(self.spec.downsample_factor.to_string());
 
         // ── 4. Run mixer.py fit1 ───────────────────────────────────────
         reporter.info(format!(
@@ -369,25 +390,26 @@ impl DagNode for UnivariateMixerNode {
         ));
 
         // Run in a blocking thread to avoid stalling the async runtime.
-        let output = tokio::task::spawn_blocking(move || {
-            cmd.output()
-        })
-        .await
-        .map_err(|e| UnivariateMixerError::Step {
-            context: "subprocess join".into(),
-            detail: e.to_string(),
-        })??;
+        let output = tokio::task::spawn_blocking(move || cmd.output())
+            .await
+            .map_err(|e| UnivariateMixerError::Step {
+                context: "subprocess join".into(),
+                detail: e.to_string(),
+            })?
+            .map_err(UnivariateMixerError::from)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Extract the most useful error line from mixer's verbose stderr
             let last_lines: Vec<&str> = stderr.lines().collect();
-            let tail: String = last_lines.iter().rev().take(20).collect::<Vec<_>>().iter().rev().collect::<Vec<_>>().join("\n");
+            let start = last_lines.len().saturating_sub(20);
+            let tail: String = last_lines[start..].join("\n");
             reporter.error(format!("fit1: gsa-mixer failed\n{tail}"));
             return Err(UnivariateMixerError::Subprocess {
                 exit_code: output.status.code().unwrap_or(-1),
                 stderr: tail,
-            }.into());
+            }
+            .into());
         }
 
         reporter.info(format!(
@@ -397,21 +419,27 @@ impl DagNode for UnivariateMixerNode {
 
         // ── 5. Parse result JSON ───────────────────────────────────────
         let json_path = format!("{}.json", out_prefix.display());
-        let json_str = std::fs::read_to_string(&json_path).map_err(|e| {
-            UnivariateMixerError::Step {
+        let json_str =
+            std::fs::read_to_string(&json_path).map_err(|e| UnivariateMixerError::Step {
                 context: format!("read result json ({})", json_path),
                 detail: e.to_string(),
-            }
-        })?;
-        let json: serde_json::Value = serde_json::from_str(&json_str)?;
+            })?;
+        let json: serde_json::Value =
+            serde_json::from_str(&json_str).map_err(UnivariateMixerError::from)?;
 
         let result = parse_fit1_json(&json)?;
         reporter.info(format!(
             "fit1 result: pi={:.4} sig2_beta={:.4} sig2_zero={:.4} h2={:.4} \
              nc={:.0} nc_p9={:.0} loglike={:.2} aic={:.2} bic={:.2}",
-            result.pi, result.sig2_beta, result.sig2_zero,
-            result.h2, result.nc, result.nc_p9,
-            result.loglike, result.aic, result.bic,
+            result.params.pi,
+            result.params.sig2_beta,
+            result.params.sig2_zero,
+            result.h2,
+            result.nc,
+            result.nc_p9,
+            result.loglike,
+            result.aic,
+            result.bic,
         ));
 
         // Flag degeneracies (same warnings as original)
@@ -431,14 +459,19 @@ impl DagNode for UnivariateMixerNode {
         // ── 6. Build output RecordBatch ────────────────────────────────
         let batch = build_result_batch(&result)?;
         let ctx = node_ctx.session();
-        let df = ctx.read_batch(batch).map_err(|e| UnivariateMixerError::Step {
-            context: "read result batch into DataFrame".into(),
-            detail: e.to_string(),
-        })?;
+        let df = ctx
+            .read_batch(batch)
+            .map_err(|e| UnivariateMixerError::Step {
+                context: "read result batch into DataFrame".into(),
+                detail: e.to_string(),
+            })?;
 
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
-        reporter.info(format!("fit1: finished in {:.2}s", t0.elapsed().as_secs_f64()));
+        reporter.info(format!(
+            "fit1: finished in {:.2}s",
+            t0.elapsed().as_secs_f64()
+        ));
 
         // Cleanup temp files
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -479,7 +512,8 @@ struct UnivariateParams {
 /// }
 /// ```
 fn parse_fit1_json(json: &serde_json::Value) -> Result<FitResult, UnivariateMixerError> {
-    let p = json.get("params")
+    let p = json
+        .get("params")
         .ok_or_else(|| UnivariateMixerError::Step {
             context: "parse json".into(),
             detail: "missing 'params' key".into(),
@@ -508,11 +542,13 @@ fn parse_fit1_json(json: &serde_json::Value) -> Result<FitResult, UnivariateMixe
     let bic = aic; // placeholder; will be refined below if data available
 
     // h2 = sig2_beta * pi * totalhet (totalhet from options)
-    let totalhet = json.get("options")
+    let totalhet = json
+        .get("options")
         .and_then(|o| o.get("totalhet"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let n_snp = json.get("options")
+    let n_snp = json
+        .get("options")
         .and_then(|o| o.get("n_snp"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0) as usize;
@@ -536,7 +572,11 @@ fn parse_fit1_json(json: &serde_json::Value) -> Result<FitResult, UnivariateMixe
         .unwrap_or((aic, bic));
 
     Ok(FitResult {
-        params: UnivariateParams { pi, sig2_beta, sig2_zero },
+        params: UnivariateParams {
+            pi,
+            sig2_beta,
+            sig2_zero,
+        },
         h2,
         nc,
         nc_p9,
@@ -577,39 +617,53 @@ fn build_result_batch(r: &FitResult) -> Result<RecordBatch, UnivariateMixerError
 /// renaming columns as specified by `col_map`.
 /// mixer.py auto-detects gz vs plain, so we skip compression to avoid
 /// the flate2 dependency.
-fn write_sumstats(
+async fn write_sumstats(
     df: &datafusion::dataframe::DataFrame,
-    col_map: &[(&str, &str)],  // (source_col, dest_col)
+    col_map: &[(&str, &str)], // (source_col, dest_col)
     path: &std::path::Path,
 ) -> Result<(), UnivariateMixerError> {
     use std::io::Write;
 
     // Collect the data from the DataFrame
-    let batches = df.clone().select(
-        col_map.iter().map(|(src, _)| datafusion::prelude::col(*src)).collect::<Vec<_>>()
-    ).map_err(|e| UnivariateMixerError::Step {
-        context: "select columns".into(),
-        detail: e.to_string(),
-    })?
-    .collect().map_err(|e| UnivariateMixerError::Step {
-        context: "collect batches".into(),
-        detail: e.to_string(),
-    })?;
+    let batches = df
+        .clone()
+        .select(
+            col_map
+                .iter()
+                .map(|(src, _)| datafusion::prelude::col(*src))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| UnivariateMixerError::Step {
+            context: "select columns".into(),
+            detail: e.to_string(),
+        })?
+        .collect()
+        .await
+        .map_err(|e| UnivariateMixerError::Step {
+            context: "collect batches".into(),
+            detail: e.to_string(),
+        })?;
 
     let mut f = std::fs::File::create(path)?;
     use std::io::BufWriter;
     let mut w = BufWriter::new(&mut f);
 
     // Header
-    let header = col_map.iter().map(|(_, dst)| *dst).collect::<Vec<_>>().join("\t");
+    let header = col_map
+        .iter()
+        .map(|(_, dst)| *dst)
+        .collect::<Vec<_>>()
+        .join("\t");
     writeln!(w, "{header}")?;
 
     // Data rows
     let mut n_rows = 0;
     for batch in &batches {
-        let columns: Vec<&dyn arrow_array::Array> = col_map.iter()
+        let columns: Vec<&dyn arrow_array::Array> = col_map
+            .iter()
             .map(|(_, dst)| {
-                batch.column_by_name(dst)
+                batch
+                    .column_by_name(dst)
                     .expect("column should exist after select")
                     .as_ref()
             })
@@ -617,8 +671,10 @@ fn write_sumstats(
 
         for row in 0..batch.num_rows() {
             for (i, col) in columns.iter().enumerate() {
-                if i > 0 { write!(w, "\t")?; }
-                let val = arrow_array::cast::as_string_array(col);
+                if i > 0 {
+                    write!(w, "\t")?;
+                }
+                let val = arrow_array::cast::as_string_array(*col);
                 write!(w, "{}", val.value(row))?;
             }
             writeln!(w)?;

@@ -27,6 +27,10 @@ pub struct AgentSnapshot {
     pub agent_id: Uuid,
     pub agent_status: AgentLifecycleStatus,
     pub memory: Memory,
+    /// Which session this snapshot belongs to. `None` for snapshots from
+    /// older versions that predate per-session snapshots.
+    #[serde(default)]
+    pub session_id: Option<Uuid>,
 }
 
 /// One row in the `agents` registry table.
@@ -258,6 +262,20 @@ pub trait AgentStorage: Send + Sync {
         &self,
         agent_id: Uuid,
     ) -> Result<Option<AgentSnapshot>, StorageError>;
+
+    /// Get the latest snapshot for a specific session.
+    async fn get_latest_snapshot_for_session(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<AgentSnapshot>, StorageError>;
+
+    /// Get messages for a specific session since the given timestamp.
+    async fn get_messages_since_for_session(
+        &self,
+        session_id: Uuid,
+        ts: i64,
+    ) -> Result<Vec<Message>, StorageError>;
     async fn list_all_agent_ids(&self) -> Result<Vec<Uuid>, StorageError>;
     async fn delete_agent_snapshots(&self, agent_id: Uuid) -> Result<usize, StorageError>;
 
@@ -291,6 +309,29 @@ pub trait AgentStorage: Send + Sync {
         agent_id: Uuid,
         ts: i64,
     ) -> Result<Vec<Message>, StorageError>;
+
+    /// Update the title of a session record.
+    async fn update_session_title(
+        &self,
+        session_id: Uuid,
+        title: &str,
+    ) -> Result<(), StorageError>;
+
+    /// List all session records for an agent (for restoring session list on
+    /// restart). Returns sessions ordered by creation time ascending.
+    async fn list_session_records(
+        &self,
+        agent_id: Uuid,
+    ) -> Result<Vec<SessionRecord>, StorageError>;
+}
+
+/// Persisted metadata about one session, used to rebuild the session list on
+/// agent restart.
+#[derive(Debug, Clone)]
+pub struct SessionRecord {
+    pub session_id: Uuid,
+    pub title: Option<String>,
+    pub started_at: i64,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
