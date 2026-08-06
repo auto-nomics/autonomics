@@ -511,8 +511,20 @@ mod tests {
                 serde_json::json!({"id": "ENSG00000012048"})
             }
             "source_opentargets_search" => serde_json::json!({"query": "BRCA1"}),
-            "univariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
-            "bivariate_mixer" => serde_json::json!({"chromosomes": [21, 22]}),
+            "univariate_mixer" => serde_json::json!({
+                "mixer_home": "reference/mixer_data/engine",
+                "bim_file": "reference/mixer_data/stage/chr@/1000G.EUR.chr@.qc.bim",
+                "ld_file": "reference/mixer_data/ld_mixer/1000G.EUR.chr@",
+                "extract_file": "reference/mixer_data/snps/g1000_eur_chr@.snps",
+                "chr2use": "21-22"
+            }),
+            "bivariate_mixer" => serde_json::json!({
+                "mixer_home": "reference/mixer_data/engine",
+                "bim_file": "reference/mixer_data/stage/chr@/1000G.EUR.chr@.qc.bim",
+                "ld_file": "reference/mixer_data/ld_mixer/1000G.EUR.chr@",
+                "extract_file": "reference/mixer_data/snps/g1000_eur_chr@.snps",
+                "chr2use": "21-22"
+            }),
             "fine_gray" => {
                 serde_json::json!({"time_column": "time", "status_column": "fstatus", "covariates": ["x1"]})
             }
