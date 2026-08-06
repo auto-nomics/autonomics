@@ -15,6 +15,7 @@ pub mod preprocess_nodes;
 pub mod split_nodes;
 pub mod supervised_nodes;
 pub mod svm_anomaly_nodes;
+pub mod ts_assoc_nodes;
 
 /// Register all ML node factories with the engine's [`NodeRegistry`].
 ///
@@ -82,4 +83,12 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
     registry.register(Box::new(svm_anomaly_nodes::IsolationForestFactory));
     registry.register(Box::new(svm_anomaly_nodes::ZscoreOutlierFactory));
     registry.register(Box::new(svm_anomaly_nodes::LofFactory));
+
+    // ── Time series (3) ─────────────────────────────────────────────────
+    registry.register(Box::new(ts_assoc_nodes::ExpSmoothingFactory));
+    registry.register(Box::new(ts_assoc_nodes::StlFactory));
+    registry.register(Box::new(ts_assoc_nodes::PeltFactory));
+
+    // ── Association rules (1) ───────────────────────────────────────────
+    registry.register(Box::new(ts_assoc_nodes::AprioriFactory));
 }

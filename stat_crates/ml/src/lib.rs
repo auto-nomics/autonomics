@@ -31,6 +31,7 @@
 
 pub mod anomaly;
 pub mod artifact;
+pub mod assoc_recsys;
 pub mod classify;
 pub mod cluster;
 pub mod dimred;
@@ -40,6 +41,7 @@ pub mod preprocess;
 pub mod regress;
 pub mod split;
 pub mod svm_ensemble;
+pub mod timeseries;
 
 pub use artifact::ModelArtifact;
 pub use metrics::MetricsError;

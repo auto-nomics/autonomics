@@ -718,6 +718,10 @@ mod tests {
             "ml_isolation_forest" => serde_json::json!({"features": ["x", "y"]}),
             "ml_zscore_outlier" => serde_json::json!({"features": ["x", "y"]}),
             "ml_lof" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_exp_smoothing" => serde_json::json!({"value_column": "y"}),
+            "ml_stl_decompose" => serde_json::json!({"value_column": "y", "period": 4}),
+            "ml_changepoint" => serde_json::json!({"value_column": "y"}),
+            "ml_apriori" => serde_json::json!({"item_column": "item", "transaction_column": "txn"}),
             // ── ML nodes ──
             "ml_standardize" => serde_json::json!({"columns": ["x"]}),
             "ml_minmax_scale" => serde_json::json!({"columns": ["x"]}),
@@ -760,6 +764,10 @@ mod tests {
             "ml_isolation_forest" => serde_json::json!({"features": ["x", "y"]}),
             "ml_zscore_outlier" => serde_json::json!({"features": ["x", "y"]}),
             "ml_lof" => serde_json::json!({"features": ["x", "y"]}),
+            "ml_exp_smoothing" => serde_json::json!({"value_column": "y"}),
+            "ml_stl_decompose" => serde_json::json!({"value_column": "y", "period": 4}),
+            "ml_changepoint" => serde_json::json!({"value_column": "y"}),
+            "ml_apriori" => serde_json::json!({"item_column": "item", "transaction_column": "txn"}),
             // ── hypothesize fallback ──
             k if k.starts_with("hypothesize.") => serde_json::json!({}),
             // ── fallback for nodes without a fixture spec ──
