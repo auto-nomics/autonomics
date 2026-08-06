@@ -13,6 +13,7 @@ pub mod metrics_nodes;
 pub mod model_nodes;
 pub mod preprocess_nodes;
 pub mod split_nodes;
+pub mod supervised_nodes;
 
 /// Register all ML node factories with the engine's [`NodeRegistry`].
 ///
@@ -61,4 +62,14 @@ pub fn register_all(registry: &mut crate::node_registry::registry::NodeRegistry)
     registry.register(Box::new(feat_select_nodes::VarianceThresholdFactory));
     registry.register(Box::new(feat_select_nodes::SelectKBestFactory));
     registry.register(Box::new(feat_select_nodes::CorrelationRankFactory));
+
+    // ── Supervised — classification (4) ─────────────────────────────────
+    registry.register(Box::new(supervised_nodes::LogisticFactory));
+    registry.register(Box::new(supervised_nodes::GaussianNbFactory));
+    registry.register(Box::new(supervised_nodes::KnnFactory));
+    registry.register(Box::new(supervised_nodes::DecisionTreeFactory));
+
+    // ── Supervised — regression (2) ─────────────────────────────────────
+    registry.register(Box::new(supervised_nodes::LinearRegressFactory));
+    registry.register(Box::new(supervised_nodes::ElasticNetFactory));
 }

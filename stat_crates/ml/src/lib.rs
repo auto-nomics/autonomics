@@ -30,11 +30,13 @@
 //! | [`deep`] | MLP, CNN, LSTM, Transformer (feature `deep`) |
 
 pub mod artifact;
+pub mod classify;
 pub mod cluster;
 pub mod dimred;
 pub mod feat_select;
 pub mod metrics;
 pub mod preprocess;
+pub mod regress;
 pub mod split;
 
 pub use artifact::ModelArtifact;
