@@ -1,6 +1,7 @@
 use crate::agent::InternalEvent;
 use crate::tools::function::ProgressRecord;
 use agentik_sdk::ToolResult;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -11,6 +12,58 @@ use crate::tools::error::ToolError;
 use crate::tools::function::ProgressBuffer;
 
 pub type TaskId = String;
+
+// ─────────────────────────── TaskStore ───────────────────────────
+
+/// Task list with a monotonic sequence counter.
+///
+/// Wraps `Vec<TaskEntry>` (via `Deref`/`DerefMut`) so all existing Vec
+/// operations work unchanged. The additional [`alloc_seq`] method hands out
+/// short, 1-based task numbers that the LLM uses to reference background tasks
+/// — far friendlier than long `tool_use_id` UUIDs.
+pub struct TaskStore {
+    tasks: Vec<TaskEntry>,
+    seq_counter: AtomicU64,
+}
+
+impl TaskStore {
+    pub fn new() -> Self {
+        Self {
+            tasks: Vec::new(),
+            seq_counter: AtomicU64::new(0),
+        }
+    }
+
+    /// Allocate the next sequential task number (1-based).
+    /// Uses atomic `fetch_add` so a read-lock holder can call this.
+    pub fn alloc_seq(&self) -> u64 {
+        self.seq_counter.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Find a task by its sequence number.
+    pub fn find_by_seq(&self, seq: u64) -> Option<&TaskEntry> {
+        self.tasks.iter().find(|t| t.seq == seq)
+    }
+}
+
+impl Default for TaskStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Deref for TaskStore {
+    type Target = Vec<TaskEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.tasks
+    }
+}
+
+impl std::ops::DerefMut for TaskStore {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tasks
+    }
+}
 
 #[derive(Clone, PartialEq)]
 pub enum RunMode {
@@ -32,19 +85,24 @@ pub enum WaitResultKind {
         result: ToolResult,
         run_mode: RunMode,
     },
-    StillRunning(TaskId),
+    StillRunning {
+        id: TaskId,
+        seq: u64,
+    },
     Failed(ToolResult),
 }
 
 pub struct WaitResult {
     pub inner: WaitResultKind,
+    seq: u64,
     read_tx: watch::Sender<bool>,
 }
 
 impl From<WaitResult> for ToolResult {
     fn from(value: WaitResult) -> Self {
+        let seq = value.seq;
         match value.inner {
-            WaitResultKind::StillRunning(id) => ToolResult::from_pending_task(&id),
+            WaitResultKind::StillRunning { id, .. } => ToolResult::from_pending_task(&id, seq),
             WaitResultKind::Failed(tool_result) => {
                 value.read_tx.send(true).ok();
                 tool_result
@@ -54,7 +112,9 @@ impl From<WaitResult> for ToolResult {
                     value.read_tx.send(true).ok();
                     result
                 }
-                RunMode::Bg => ToolResult::task_finish_notification(result.tool_use_id.as_str()),
+                RunMode::Bg => {
+                    ToolResult::task_finish_notification(result.tool_use_id.as_str(), seq)
+                }
             },
         }
     }
@@ -74,6 +134,10 @@ pub type BgTaskNotifyTx = tokio::sync::mpsc::UnboundedSender<InternalEvent>;
 /// [`InternalEvent::BgTaskComplete`] through the optional `notify_tx`,
 /// allowing the agent to wake up without polling.
 pub struct TaskEntry {
+    /// Short 1-based task number (allocated by [`TaskStore::alloc_seq`]).
+    /// Used by the LLM to reference background tasks via `wait_task` /
+    /// `view_task_results` / `view_task_status`.
+    seq: u64,
     id: TaskId,
     /// The tool's display name (e.g. "run_bash"), distinct from the task id.
     name: String,
@@ -100,6 +164,7 @@ impl TaskEntry {
     /// status channel on completion. The handle is consumed here; callers
     /// read results exclusively through the watch channel.
     pub fn new(
+        seq: u64,
         id: TaskId,
         name: String,
         handle: JoinHandle<Result<ToolResult, ToolError>>,
@@ -107,6 +172,7 @@ impl TaskEntry {
         block_secs: u64,
     ) -> Self {
         Self::with_notify(
+            seq,
             id,
             name,
             handle,
@@ -124,6 +190,7 @@ impl TaskEntry {
     /// structured [`ProgressRecord`]s onto (so it must be created before the
     /// tool runs). When in doubt, pass a fresh `Arc::new(Mutex::new(Vec::new()))`.
     pub fn with_notify(
+        seq: u64,
         id: TaskId,
         name: String,
         handle: JoinHandle<Result<ToolResult, ToolError>>,
@@ -143,24 +210,18 @@ impl TaskEntry {
         let bg_notify = notify_tx.clone();
         let spwan_ts_tx = tool_result_tx.clone();
         let task_id = id.clone();
+        let task_seq = seq;
         tokio::spawn(async move {
             match handle.await {
                 Ok(Ok(tool_result)) => {
-                    // TODO: use tokio::watch to get tool_result instead of directly carried inside
-                    // TaskStatus::Done
-
                     // Store final result in `tool_result` field.
                     spwan_ts_tx.send(Some(tool_result.clone())).ok();
 
                     let current_mode = mode_rx.borrow().clone();
                     if matches!(current_mode, RunMode::Bg) {
-                        // NOTE: background tasks' results should not be injected into memory. This
-                        // will corrupt LLM's context and cause hallucination. Instead let agent
-                        // read tool_result stored in TaskEntry.
-                        //
-                        // WARN: This is a temperary patching measure
                         tx.send(TaskStatus::Done(ToolResult::task_finish_notification(
                             &tool_result.tool_use_id,
+                            task_seq,
                         )))
                         .ok();
                     } else {
@@ -191,12 +252,16 @@ impl TaskEntry {
             // without scanning the whole task list.
             if *mode_rx.borrow() == RunMode::Bg {
                 if let Some(notify) = bg_notify {
-                    let _ = notify.send(InternalEvent::BgTaskComplete(task_id));
+                    let _ = notify.send(InternalEvent::BgTaskComplete {
+                        id: task_id,
+                        seq: task_seq,
+                    });
                 }
             }
         });
 
         Self {
+            seq,
             id,
             name,
             status,
@@ -209,6 +274,11 @@ impl TaskEntry {
             output,
             tool_result,
         }
+    }
+
+    /// Return the short task sequence number (1-based).
+    pub fn seq(&self) -> u64 {
+        self.seq
     }
 
     /// Return the task identifier.
@@ -264,17 +334,30 @@ impl TaskEntry {
         tokio::select! {
             _ = self.status.changed() => {
                 match self.status.borrow().clone() {
-                    TaskStatus::Done(result) => WaitResult { inner: WaitResultKind::Done { result, run_mode: RunMode::Fg }, read_tx: self.read_tx.clone() },
-                    TaskStatus::Failed(err) => WaitResult { inner: WaitResultKind::Failed(ToolResult::error(err.to_string()).with_id(&self.id)), read_tx: self.read_tx.clone() },
-                    // WARN: this variant will never be reached
-                    TaskStatus::Running =>
-                       WaitResult { inner: WaitResultKind::StillRunning(self.id.clone()), read_tx: self.read_tx.clone() },
+                    TaskStatus::Done(result) => WaitResult {
+                        inner: WaitResultKind::Done { result, run_mode: RunMode::Fg },
+                        seq: self.seq,
+                        read_tx: self.read_tx.clone(),
+                    },
+                    TaskStatus::Failed(err) => WaitResult {
+                        inner: WaitResultKind::Failed(ToolResult::error(err.to_string()).with_id(&self.id)),
+                        seq: self.seq,
+                        read_tx: self.read_tx.clone(),
+                    },
+                    TaskStatus::Running => WaitResult {
+                        inner: WaitResultKind::StillRunning { id: self.id.clone(), seq: self.seq },
+                        seq: self.seq,
+                        read_tx: self.read_tx.clone(),
+                    },
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(self.block_secs)) => {
-                // Sync phase expired, task continues async
                 self.run_mode_tx.send(RunMode::Bg).ok();
-                WaitResult { inner: WaitResultKind::StillRunning(self.id.clone()), read_tx: self.read_tx.clone() }
+                WaitResult {
+                    inner: WaitResultKind::StillRunning { id: self.id.clone(), seq: self.seq },
+                    seq: self.seq,
+                    read_tx: self.read_tx.clone(),
+                }
             }
         }
     }
@@ -321,6 +404,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_two_phase() {
         let mut task = TaskEntry::new(
+            1,
             "test-task-1".into(),
             "test_tool".into(),
             tokio::spawn(async {
@@ -333,7 +417,7 @@ mod tests {
 
         // Phase 1 (sync): task takes 5s but block_secs=1, should StillRunning
         let result = task.wait().await;
-        assert!(matches!(result.inner, WaitResultKind::StillRunning(_)));
+        assert!(matches!(result.inner, WaitResultKind::StillRunning { .. }));
 
         // Phase 2 (async): task is still running, wait for it to actually finish
         assert!(matches!(task.status(), TaskStatus::Running));

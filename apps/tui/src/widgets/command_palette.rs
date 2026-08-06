@@ -26,8 +26,16 @@ pub enum CommandAction {
     ModelConfig,
     /// Open the agent resume picker.
     ResumeAgent,
+    /// Close the active agent leaf and terminate its background process.
+    CloseAgent,
     /// Open the session picker for the currently active agent.
     OpenSessions,
+    /// Toggle collapse for thinking blocks.
+    ToggleCollapseThinking,
+    /// Toggle collapse for tool call blocks.
+    ToggleCollapseToolCalls,
+    /// Toggle collapse for tool result blocks.
+    ToggleCollapseToolResults,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -126,6 +134,12 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::OpenSessions,
         },
         Command {
+            title: "Close agent".into(),
+            keywords: "close kill terminate shutdown tab leaf".into(),
+            category: "agent".into(),
+            action: CommandAction::CloseAgent,
+        },
+        Command {
             title: "Select model".into(),
             keywords: "model config provider api key switch agent".into(),
             category: "agent".into(),
@@ -166,6 +180,24 @@ fn default_commands() -> Vec<Command> {
             keywords: "follow pin lock ctrl g".into(),
             category: "view".into(),
             action: CommandAction::ToggleAutoScroll,
+        },
+        Command {
+            title: "Toggle thinking blocks".into(),
+            keywords: "collapse fold hide thinking reasoning".into(),
+            category: "view".into(),
+            action: CommandAction::ToggleCollapseThinking,
+        },
+        Command {
+            title: "Toggle tool calls".into(),
+            keywords: "collapse fold hide tool call function".into(),
+            category: "view".into(),
+            action: CommandAction::ToggleCollapseToolCalls,
+        },
+        Command {
+            title: "Toggle tool results".into(),
+            keywords: "collapse fold hide tool result output response".into(),
+            category: "view".into(),
+            action: CommandAction::ToggleCollapseToolResults,
         },
         Command {
             title: "Reload config".into(),

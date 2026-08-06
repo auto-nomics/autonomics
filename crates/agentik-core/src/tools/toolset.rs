@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::task_runtime::{RunMode, TaskStatus, WaitResultKind};
+use crate::tools::task_runtime::{RunMode, TaskStatus, TaskStore, WaitResultKind};
 use crate::tools::{ProgressBuffer, ProgressLog, ToolContext};
 
 use super::DynToolFunction;
@@ -123,7 +123,7 @@ impl ToolRegistry {
 /// [`ToolRegistry`] into an [`Arc`].
 pub struct Toolset {
     registry: Arc<ToolRegistry>,
-    tasks: Arc<RwLock<Vec<TaskEntry>>>,
+    tasks: Arc<RwLock<TaskStore>>,
     agent_event_tx: Option<UnboundedSender<AgentEvent>>,
 }
 
@@ -138,7 +138,7 @@ impl Toolset {
     ) -> Self {
         Self::from_registry_with_tasks(
             registry,
-            Arc::new(RwLock::new(Vec::new())),
+            Arc::new(RwLock::new(TaskStore::new())),
             agent_event_tx,
         )
     }
@@ -151,7 +151,7 @@ impl Toolset {
     /// Arc rather than creating a new one.
     pub fn from_registry_with_tasks(
         registry: Arc<ToolRegistry>,
-        tasks: Arc<RwLock<Vec<TaskEntry>>>,
+        tasks: Arc<RwLock<TaskStore>>,
         agent_event_tx: Option<UnboundedSender<AgentEvent>>,
     ) -> Self {
         Self {
@@ -172,7 +172,7 @@ impl Toolset {
     ///
     /// Used by builtin tools (e.g. `view_task_results`) that need to
     /// inspect background tasks without going through the agent loop.
-    pub fn tasks_handle(&self) -> Arc<RwLock<Vec<TaskEntry>>> {
+    pub fn tasks_handle(&self) -> Arc<RwLock<TaskStore>> {
         self.tasks.clone()
     }
 
@@ -223,6 +223,10 @@ impl Toolset {
             let input = tc.input.clone();
             let task_id = tc.id.clone();
 
+            // Allocate a short 1-based sequence number for this task.
+            // Uses an atomic inside TaskStore — safe under a brief read lock.
+            let seq = self.tasks.read().await.alloc_seq();
+
             let cancel_token = CancellationToken::new();
             let cancel = cancel_token.clone();
 
@@ -252,6 +256,7 @@ impl Toolset {
             });
 
             new_entries.push(TaskEntry::with_notify(
+                seq,
                 tc.id.clone(),
                 tc.name.clone(),
                 task_handle,
@@ -293,12 +298,12 @@ impl Toolset {
             // running in the background — notify frontend observers and agent immediately. Only
             // announce tasks spawned in this call; retained background tasks
             // from a prior turn already announced themselves.
-            if let WaitResultKind::StillRunning(ref id) = wait_result.inner
+            if let WaitResultKind::StillRunning { ref id, seq } = wait_result.inner
                 && let Some(name) = spawned_names.get(id)
                 && let Some(tx) = &self.agent_event_tx
             {
                 let _ = tx.send(AgentEvent::ToolCallBackground {
-                    id: id.clone(),
+                    seq,
                     name: name.clone(),
                 });
             }
@@ -335,9 +340,9 @@ impl Toolset {
     /// real content is read from `tool_result`.
     ///
     /// Returns `None` when the task is unknown or still running.
-    pub async fn finished_task_notification(&self, id: &str) -> Option<(String, bool, String)> {
+    pub async fn finished_task_notification(&self, seq: u64) -> Option<(String, bool, String)> {
         let tasks = self.tasks.read().await;
-        let entry = tasks.iter().find(|t| t.id() == id)?;
+        let entry = tasks.iter().find(|t| t.seq() == seq)?;
         match entry.status() {
             TaskStatus::Done(res) => Some((
                 entry.name().to_string(),

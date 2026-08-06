@@ -1,5 +1,8 @@
 //! Session picker — popup listing sub-sessions of the currently active agent.
 //!
+//! Two-block layout: left = searchable session list, right = preview of the
+//! selected session (metadata + message count + first/last message snippet).
+//!
 //! Triggered from the command palette ("Sessions" command). The picker is
 //! populated lazily from `AgentEvent::SessionList`, so the caller must
 //! request a fresh listing via `AgentHandle::list_sessions()` after opening.
@@ -14,12 +17,13 @@ use ratatui::{
 
 use crate::widgets::popup::Popup;
 
-/// Lightweight picker item — just id and title. The picker doesn't need the
-/// full session tab state.
+/// Lightweight picker item — just id, title and basic metadata.
 #[derive(Clone)]
 pub struct PickerSession {
     pub id: uuid::Uuid,
     pub title: Option<String>,
+    pub message_count: usize,
+    pub last_active: i64,
 }
 
 /// State for the session picker popup.
@@ -48,8 +52,7 @@ impl Default for SessionPickerState {
 }
 
 impl SessionPickerState {
-    /// Open the picker for the given agent. Caller must refresh `items`
-    /// after the agent emits `SessionList`.
+    /// Open the picker for the given agent.
     pub fn open(&mut self, agent_id: uuid::Uuid, agent_name: String) {
         self.visible = true;
         self.agent_id = Some(agent_id);
@@ -71,7 +74,6 @@ impl SessionPickerState {
     pub fn set_sessions(&mut self, items: Vec<PickerSession>, active_id: Option<uuid::Uuid>) {
         self.items = items;
         self.active_id = active_id;
-        // Default selection: active session if present, else first item.
         if active_id.is_some() {
             if let Some(idx) = self.items.iter().position(|s| Some(s.id) == active_id) {
                 self.selected = idx;
@@ -114,19 +116,21 @@ impl SessionPickerState {
     }
 }
 
-/// Widget that renders the session picker as a centered popup.
+/// Widget that renders the session picker as a centered popup with two blocks.
 pub struct SessionPicker {
     pub accent: Color,
     pub popup_width: u16,
     pub popup_height: u16,
+    pub list_width: u16,
 }
 
 impl SessionPicker {
     pub fn new() -> Self {
         Self {
             accent: Color::Magenta,
-            popup_width: 50,
-            popup_height: 14,
+            popup_width: 70,
+            popup_height: 18,
+            list_width: 28,
         }
     }
 
@@ -159,9 +163,9 @@ impl StatefulWidget for SessionPicker {
         let v_regions = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),       // Header (agent name)
-                Constraint::Min(3),          // Session list
-                Constraint::Length(1),       // Footer (hint)
+                Constraint::Length(1), // Header (agent name)
+                Constraint::Min(3),   // Content (list + preview)
+                Constraint::Length(1), // Footer (hint)
             ])
             .split(inner);
 
@@ -177,71 +181,197 @@ impl StatefulWidget for SessionPicker {
         ]);
         Widget::render(Paragraph::new(header), v_regions[0], buf);
 
-        // ── Session list ──
-        let block = Block::default()
-            .borders(Borders::TOP | Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray));
-        let inner_list = block.inner(v_regions[1]);
-        block.render(v_regions[1], buf);
+        // ── Content: two horizontal blocks ──
+        let h_regions = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(self.list_width),
+                Constraint::Min(10),
+            ])
+            .split(v_regions[1]);
 
-        if state.items.is_empty() {
-            let line = Line::from(Span::styled(
-                "  (loading sessions…)",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ));
-            Widget::render(Paragraph::new(line), inner_list, buf);
-        } else {
-            let items: Vec<ListItem> = state
-                .items
-                .iter()
-                .enumerate()
-                .map(|(idx, session)| {
-                    let is_active = state.active_id == Some(session.id);
-                    let is_selected = idx == state.selected;
-                    let marker = if is_active { "●" } else { "○" };
-                    let title = session.title.as_deref().unwrap_or("(untitled)");
-                    let style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(self.accent)
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_active {
-                        Style::default()
-                            .fg(self.accent)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-                    Line::from(vec![
-                        Span::styled("  ", Style::default()),
-                        Span::styled(
-                            format!("{} ", marker),
-                            Style::default().fg(self.accent),
-                        ),
-                        Span::styled(title.to_string(), style),
-                    ])
-                })
-                .map(ListItem::new)
-                .collect();
-
-            let list = List::new(items).highlight_style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(self.accent)
-                    .add_modifier(Modifier::BOLD),
-            );
-            StatefulWidget::render(list, inner_list, buf, &mut state.list_state);
-        }
+        self.render_list_block(h_regions[0], buf, state);
+        self.render_preview_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint = " ↑↓ navigate  Enter switch  n new  d close  Esc cancel";
+        let hint = " ↑↓ navigate  Enter switch  n new  r rename  d close  Esc cancel";
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
         );
         Widget::render(p, v_regions[2], buf);
+    }
+}
+
+impl SessionPicker {
+    /// Render the left block: session list.
+    fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut SessionPickerState) {
+        let block = Block::default()
+            .borders(Borders::RIGHT)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Sessions ",
+                Style::default()
+                    .fg(self.accent)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        if state.items.is_empty() {
+            let line = Line::from(Span::styled(
+                "  (loading…)",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ));
+            Widget::render(Paragraph::new(line), inner, buf);
+            return;
+        }
+
+        let items: Vec<ListItem> = state
+            .items
+            .iter()
+            .enumerate()
+            .map(|(idx, session)| {
+                let is_active = state.active_id == Some(session.id);
+                let is_selected = idx == state.selected;
+                let marker = if is_active { "●" } else { "○" };
+                let title = session.title.as_deref().unwrap_or("(untitled)");
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(self.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_active {
+                    Style::default()
+                        .fg(self.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(format!("{} ", marker), Style::default().fg(self.accent)),
+                    Span::styled(title.to_string(), style),
+                ])
+            })
+            .map(ListItem::new)
+            .collect();
+
+        let list = List::new(items).highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(self.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+        StatefulWidget::render(list, inner, buf, &mut state.list_state);
+    }
+
+    /// Render the right block: preview of the selected session.
+    fn render_preview_block(&self, area: Rect, buf: &mut Buffer, state: &SessionPickerState) {
+        let block = Block::default().borders(Borders::NONE).title(Span::styled(
+            " Preview ",
+            Style::default()
+                .fg(self.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let Some(session) = state.items.get(state.selected) else {
+            let line = Line::from(Span::styled(
+                "  No session selected.",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ));
+            let area = Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: 1,
+            };
+            Widget::render(Paragraph::new(line), area, buf);
+            return;
+        };
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Title
+        lines.push(Line::from(vec![
+            Span::styled("  Title     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                session.title.clone().unwrap_or_else(|| "(untitled)".into()),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // Session ID (truncated)
+        let id_short = &session.id.to_string()[..8];
+        lines.push(Line::from(vec![
+            Span::styled("  ID       ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}…", id_short), Style::default().fg(Color::Gray)),
+        ]));
+
+        // Status
+        let is_active = state.active_id == Some(session.id);
+        let status_text = if is_active { "● active" } else { "○ inactive" };
+        let status_color = if is_active { self.accent } else { Color::DarkGray };
+        lines.push(Line::from(vec![
+            Span::styled("  Status   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(status_text, Style::default().fg(status_color)),
+        ]));
+
+        // Message count
+        lines.push(Line::from(vec![
+            Span::styled("  Messages ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", session.message_count),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
+
+        // Last active
+        let last_active_str = chrono::DateTime::from_timestamp_millis(session.last_active)
+            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        lines.push(Line::from(vec![
+            Span::styled("  Last     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(last_active_str, Style::default().fg(Color::Gray)),
+        ]));
+
+        // Spacer
+        lines.push(Line::from(""));
+
+        // Mini bar chart of message count vs largest session
+        let max_msgs = state.items.iter().map(|s| s.message_count).max().unwrap_or(1);
+        let bar_len = if max_msgs > 0 {
+            ((session.message_count * 20) / max_msgs).min(20)
+        } else {
+            0
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  Volume   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ({})", "█".repeat(bar_len), session.message_count),
+                Style::default().fg(self.accent),
+            ),
+        ]));
+
+        // Truncate to fit available height.
+        let max_lines = inner.height as usize;
+        if lines.len() > max_lines {
+            lines.truncate(max_lines.saturating_sub(1));
+            lines.push(Line::from(Span::styled(
+                "  …",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        Widget::render(Paragraph::new(lines), inner, buf);
     }
 }

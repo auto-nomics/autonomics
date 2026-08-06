@@ -123,6 +123,21 @@ impl App {
         state.command_palette.set_profiles(&state.profiles);
         state.profile_picker.set_profiles(state.profiles.clone());
 
+        // ── Load display settings from the settings table ──
+        for (key, field) in [
+            ("collapse_thinking", &mut state.display_settings.collapse_thinking),
+            ("collapse_tool_calls", &mut state.display_settings.collapse_tool_calls),
+            ("collapse_tool_results", &mut state.display_settings.collapse_tool_results),
+        ] {
+            if let Ok(value) = conn.query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                rusqlite::params![key],
+                |row| row.get::<_, String>(0),
+            ) {
+                *field = value == "1";
+            }
+        }
+
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();
 
@@ -514,6 +529,7 @@ impl App {
                         agent_id,
                         sub_sessions: Vec::new(),
                         active_sub_session_idx: 0,
+                        pending_tab_state: Default::default(),
                     });
                     self.state.active_agent_idx = self.state.sessions.len() - 1;
                     tracing::info!(profile = %profile_name, "agent spawned successfully");
@@ -737,6 +753,16 @@ impl App {
         // other handlers; when closing, behaves identically to Esc.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
             self.state.command_palette.toggle();
+            return;
+        }
+
+        // Ctrl+W: close the active agent leaf (and terminate its background
+        // process). Disabled when no agent is running.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
+            if self.state.sessions.is_empty() {
+                return;
+            }
+            self.close_active_agent();
             return;
         }
 
@@ -1065,6 +1091,7 @@ impl App {
                 self.state.name_input.close();
                 self.state.pending_profile = None;
                 self.state.pending_session_name = false;
+                self.state.pending_session_rename_id = None;
             }
             KeyCode::Backspace => self.state.name_input.pop_char(),
             KeyCode::Char(c) if !ctrl => self.state.name_input.push_char(c),
@@ -1072,8 +1099,20 @@ impl App {
                 let name = self.state.name_input.value().to_string();
                 self.state.name_input.close();
 
-                if self.state.pending_session_name {
-                    // ── Session naming mode ──
+                if let Some(session_id) = self.state.pending_session_rename_id.take() {
+                    // ── Session rename mode ──
+                    let title = if name.is_empty() {
+                        "Untitled".to_string()
+                    } else {
+                        name
+                    };
+                    if let Some(handle) =
+                        self.handles.get(self.state.active_agent_idx)
+                    {
+                        handle.rename_session(session_id, title);
+                    }
+                } else if self.state.pending_session_name {
+                    // ── Session naming mode (new session) ──
                     self.state.pending_session_name = false;
                     let title = if name.is_empty() {
                         "New session".to_string()
@@ -1128,6 +1167,25 @@ impl App {
                     }
                 }
                 self.state.session_picker.close();
+            }
+            KeyCode::Char('r') => {
+                // Rename the currently selected session.
+                let selected_id = self.state.session_picker.selected_id();
+                if let Some(id) = selected_id {
+                    // Pre-fill with current title.
+                    let current_title = self
+                        .state
+                        .session_picker
+                        .items
+                        .get(self.state.session_picker.selected)
+                        .and_then(|s| s.title.clone())
+                        .unwrap_or_default();
+                    self.state.pending_session_rename_id = Some(id);
+                    self.state.session_picker.close();
+                    self.state
+                        .name_input
+                        .open(" Rename Session ", current_title);
+                }
             }
             KeyCode::Enter => {
                 // Switch to the selected session.
@@ -1517,13 +1575,72 @@ impl App {
             CommandAction::ResumeAgent => {
                 self.open_agent_picker();
             }
+            CommandAction::CloseAgent => {
+                if !self.state.sessions.is_empty() {
+                    self.close_active_agent();
+                }
+            }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
             }
             CommandAction::OpenSessions => {
                 self.open_session_picker();
             }
+            CommandAction::ToggleCollapseThinking => {
+                self.state.display_settings.toggle_thinking();
+                self.persist_display_setting("collapse_thinking", self.state.display_settings.collapse_thinking);
+            }
+            CommandAction::ToggleCollapseToolCalls => {
+                self.state.display_settings.toggle_tool_calls();
+                self.persist_display_setting("collapse_tool_calls", self.state.display_settings.collapse_tool_calls);
+            }
+            CommandAction::ToggleCollapseToolResults => {
+                self.state.display_settings.toggle_tool_results();
+                self.persist_display_setting("collapse_tool_results", self.state.display_settings.collapse_tool_results);
+            }
         }
+    }
+
+    /// Persist a display toggle to the `settings` table.
+    fn persist_display_setting(&self, key: &str, value: bool) {
+        let _ = self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            rusqlite::params![key, if value { "1" } else { "0" }],
+        );
+    }
+
+    /// Close the active agent leaf: terminate the background agent process
+    /// and remove the corresponding handle + UI session state.
+    ///
+    /// This is the "close tab" operation. The agent's conversation history
+    /// remains in storage and can be resumed later via the resume picker.
+    fn close_active_agent(&mut self) {
+        let idx = self.state.active_agent_idx;
+
+        // Shutdown the agent's background task (sends Shutdown + aborts).
+        if let Some(handle) = self.handles.get_mut(idx) {
+            let name = handle.name.clone();
+            handle.shutdown();
+            tracing::info!(agent = %name, idx, "agent leaf closed — background process terminated");
+        } else {
+            tracing::warn!(idx, "close_active_agent: no handle at index");
+            return;
+        }
+
+        // Remove handle and UI session in parallel.
+        self.handles.remove(idx);
+        self.state.sessions.remove(idx);
+
+        // Adjust active index: clamp to the new last position.
+        if self.state.sessions.is_empty() {
+            self.state.active_agent_idx = 0;
+        } else if self.state.active_agent_idx >= self.state.sessions.len() {
+            self.state.active_agent_idx = self.state.sessions.len() - 1;
+        }
+        // If idx was before active_agent_idx, it hasn't changed (elements shifted down).
+        // If idx was active_agent_idx, the clamp above handles it.
+
+        self.dirty = true;
     }
 
     /// Open the session picker for the currently active agent.
@@ -1547,6 +1664,8 @@ impl App {
                 .map(|s| crate::widgets::session_picker::PickerSession {
                     id: s.id,
                     title: s.title.clone(),
+                    message_count: s.tab_state.messages.len(),
+                    last_active: 0,
                 })
                 .collect();
         let active_id = agent_session
@@ -1601,9 +1720,32 @@ impl App {
             .collect();
         let active_idx = self.state.active_agent_idx;
 
+        // Read session info from the active agent for the session bar.
+        // Clone strings to avoid holding an immutable borrow across the
+        // mutable `active_tab_state_mut()` call below.
+        let (session_title, session_index, session_count) = self
+            .state
+            .sessions
+            .get(active_idx)
+            .and_then(|s| {
+                s.sub_sessions.get(s.active_sub_session_idx).map(|sub| {
+                    (
+                        sub.title.clone(),
+                        s.active_sub_session_idx + 1,
+                        s.sub_sessions.len(),
+                    )
+                })
+            })
+            .unwrap_or((None, 0, 0));
+
+        let display = self.state.display_settings.clone();
         let workspace = AgentWorkspace {
             active_model: model_name.as_deref(),
             context_window,
+            session_title: session_title.as_deref(),
+            session_index,
+            session_count,
+            display: &display,
         };
         workspace.render(
             frame.area(),

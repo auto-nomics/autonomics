@@ -12,6 +12,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
+use agentik_types::AgentPlan;
 
 use crate::{lifecycle::AgentLifecycleStatus, memory::Memory};
 
@@ -323,6 +324,14 @@ pub trait AgentStorage: Send + Sync {
         &self,
         agent_id: Uuid,
     ) -> Result<Vec<SessionRecord>, StorageError>;
+
+    // ── Agent plan (first-class persistent task plan) ──────
+
+    /// Persist the agent's current plan (full-snapshot upsert).
+    async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError>;
+
+    /// Load the agent's plan. Returns `None` if no plan has been stored.
+    async fn load_plan(&self, agent_id: Uuid) -> Result<Option<AgentPlan>, StorageError>;
 }
 
 /// Persisted metadata about one session, used to rebuild the session list on

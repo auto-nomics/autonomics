@@ -159,20 +159,25 @@ pub enum ImageSource {
 
 impl ToolResult {
     #[must_use]
-    pub fn from_pending_task(tool_use_id: &str) -> Self {
+    pub fn from_pending_task(tool_use_id: &str, seq: u64) -> Self {
         Self {
             tool_use_id: tool_use_id.to_string(),
-            content: ToolResultContent::Text(format!("Task '{tool_use_id}' is running in backend")),
+            content: ToolResultContent::Text(format!(
+                "Task #{seq} is running in background. \
+                 Use `view_task_results` with task={seq} (or `wait_task` with task={seq}) \
+                 to retrieve the result when it completes."
+            )),
             is_error: None,
         }
     }
 
     #[must_use]
-    pub fn task_finish_notification(tool_use_id: &str) -> Self {
+    pub fn task_finish_notification(tool_use_id: &str, seq: u64) -> Self {
         Self {
             tool_use_id: tool_use_id.to_string(),
             content: ToolResultContent::Text(format!(
-                "Task '{tool_use_id}' has finished, use tool to view output"
+                "Task #{seq} has finished. \
+                 Use `view_task_results` with task={seq} to view output."
             )),
             is_error: None,
         }

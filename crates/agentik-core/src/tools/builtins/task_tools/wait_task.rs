@@ -6,7 +6,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::tools::task_runtime::{TaskEntry, TaskStatus};
+use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use crate::tools::{ToolError, ToolFunction};
 
 #[tool(
@@ -17,28 +17,28 @@ use crate::tools::{ToolError, ToolFunction};
                   If the timeout is reached before the task finishes, returns timeout status."
 )]
 pub struct WaitTaskInput {
-    #[desc = "Tool call id of the background task to wait for"]
-    task_id: String,
+    #[desc = "Task number (#N) of the background task to wait for, as shown when it was spawned"]
+    task: u64,
     #[desc = "Maximum seconds to wait for the task to finish. Defaults to 120."]
     #[default = 120]
     timeout_seconds: Option<u64>,
 }
 
 pub struct WaitTaskTool {
-    tasks: Arc<RwLock<Vec<TaskEntry>>>,
+    tasks: Arc<RwLock<TaskStore>>,
 }
 
 impl WaitTaskTool {
-    pub fn new(tasks: Arc<RwLock<Vec<TaskEntry>>>) -> Self {
+    pub fn new(tasks: Arc<RwLock<TaskStore>>) -> Self {
         Self { tasks }
     }
 
     /// Read the actual result of a completed task.
-    async fn read_result(&self, task_id: &str) -> Result<AgentToolResult, ToolError> {
+    async fn read_result(&self, task_seq: u64) -> Result<AgentToolResult, ToolError> {
         let tasks = self.tasks.read().await;
-        let Some(task) = tasks.iter().find(|t| t.id() == task_id) else {
+        let Some(task) = tasks.iter().find(|t| t.seq() == task_seq) else {
             return Ok(AgentToolResult::error(format!(
-                "task {task_id:?} no longer exists"
+                "task #{task_seq} no longer exists"
             )));
         };
 
@@ -49,7 +49,7 @@ impl WaitTaskTool {
                 task.mark_read();
                 let is_error = result.is_error.unwrap_or(false);
                 Ok(AgentToolResult::success_json(serde_json::json!({
-                    "task_id": task.id(),
+                    "task": task.seq(),
                     "name": task.name(),
                     "status": if is_error { "error" } else { "done" },
                     "content": result.text_content(),
@@ -60,19 +60,19 @@ impl WaitTaskTool {
                 // This can happen if the task failed before storing a result.
                 match task.status() {
                     TaskStatus::Failed(e) => Ok(AgentToolResult::success_json(serde_json::json!({
-                        "task_id": task.id(),
+                        "task": task.seq(),
                         "name": task.name(),
                         "status": "error",
                         "content": e.to_string(),
                     }))),
                     TaskStatus::Done(_) => Ok(AgentToolResult::success_json(serde_json::json!({
-                        "task_id": task.id(),
+                        "task": task.seq(),
                         "name": task.name(),
                         "status": "done",
                         "content": "(task completed but result was not stored)",
                     }))),
                     TaskStatus::Running => Ok(AgentToolResult::success_json(serde_json::json!({
-                        "task_id": task.id(),
+                        "task": task.seq(),
                         "name": task.name(),
                         "status": "running",
                         "content": "task is still running",
@@ -106,10 +106,10 @@ impl ToolFunction for WaitTaskTool {
         // Phase 1: look up the task; if already done, return immediately.
         let mut status_rx = {
             let tasks = self.tasks.read().await;
-            let Some(task) = tasks.iter().find(|t| t.id() == input.task_id) else {
+            let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
                 return Ok(AgentToolResult::error(format!(
-                    "no background task with id {:?}",
-                    input.task_id
+                    "no background task #{}, use `view_task_status` to list active tasks",
+                    input.task
                 )));
             };
 
@@ -118,7 +118,7 @@ impl ToolFunction for WaitTaskTool {
                     // Already finished — read lock still held, but read_result
                     // will acquire its own read lock so we need to drop first.
                     drop(tasks);
-                    return self.read_result(&input.task_id).await;
+                    return self.read_result(input.task).await;
                 }
                 TaskStatus::Running => {}
             }
@@ -139,18 +139,18 @@ impl ToolFunction for WaitTaskTool {
         };
 
         if completed {
-            self.read_result(&input.task_id).await
+            self.read_result(input.task).await
         } else {
             // Timeout — task is still running.
             let tasks = self.tasks.read().await;
             let name = tasks
                 .iter()
-                .find(|t| t.id() == input.task_id)
+                .find(|t| t.seq() == input.task)
                 .map(|t| t.name().to_string())
-                .unwrap_or_else(|| input.task_id.clone());
+                .unwrap_or_else(|| format!("#{}", input.task));
 
             Ok(AgentToolResult::success_json(serde_json::json!({
-                "task_id": input.task_id,
+                "task": input.task,
                 "name": name,
                 "status": "timeout",
                 "content": format!(

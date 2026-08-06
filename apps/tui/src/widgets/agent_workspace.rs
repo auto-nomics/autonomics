@@ -25,7 +25,7 @@ use ratatui::{
     widgets::{Block, Borders, StatefulWidgetRef},
 };
 
-use crate::state::{AgentStatus, AgentTabState};
+use crate::state::{AgentStatus, AgentTabState, DisplaySettings};
 use crate::widgets::agent_leaf::AgentLeaf;
 
 /// Renders the workspace: leaf tab bar + active leaf.
@@ -33,6 +33,14 @@ pub struct AgentWorkspace<'a> {
     pub active_model: Option<&'a str>,
     /// Context window size of the active model (tokens), when known.
     pub context_window: Option<u64>,
+    /// Active session title.
+    pub session_title: Option<&'a str>,
+    /// 1-based index of the active session.
+    pub session_index: usize,
+    /// Total number of sessions.
+    pub session_count: usize,
+    /// Global display settings (collapse toggles).
+    pub display: &'a DisplaySettings,
 }
 
 /// One entry in the tab bar.
@@ -79,6 +87,10 @@ impl AgentWorkspace<'_> {
             active_model: self.active_model,
             agent_name,
             context_window: self.context_window,
+            session_title: self.session_title,
+            session_index: self.session_index,
+            session_count: self.session_count,
+            display: self.display,
         };
         leaf.render_ref(areas[1], buf, tab_state);
     }
@@ -107,7 +119,7 @@ impl AgentWorkspace<'_> {
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
-                    "  Ctrl+P → \"New agent\" to spawn one.",
+                    "  Ctrl+P → \"New agent\" or \"Resume agent\" to start.",
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::DIM),

@@ -17,6 +17,7 @@ pub use function::{
     DynToolFunction, MAX_PROGRESS_RECORDS, ProgressBuffer, ProgressLog, ProgressRecord,
     ToolContext, ToolFunction,
 };
+pub use task_runtime::TaskStore;
 pub use tool_provider::ToolProviderRegistry;
 pub use toolset::{ToolRegistration, ToolRegistry, Toolset};
 
@@ -28,6 +29,7 @@ pub use agentik_sdk::types::{
 // Re-export built-in tools at the `tools` facade so callers can do
 // `use agentik_core::tools::{WaitTaskTool, ...}`.
 pub use builtins::{
-    TaskResultViewerTool, ViewTaskResultsInput, WaitTaskInput, WaitTaskTool,
-    lifecycle_registrations, task_registrations,
+    PlanHandle, PlanStepInput, TaskResultViewerTool, UpdatePlanInput, UpdatePlanTool,
+    ViewTaskResultsInput, WaitTaskInput, WaitTaskTool, lifecycle_registrations, plan_registrations,
+    task_registrations,
 };

@@ -4,7 +4,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::state::{ChatLine, TurnUsage};
+use crate::state::{ChatLine, DisplaySettings, TurnUsage};
 use crate::widgets::status_bar::format_tokens;
 
 /// Try to parse `text` as JSON and return a pretty-printed version.
@@ -103,9 +103,9 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             }
             lines
         }
-        ChatLine::ToolBackground { id: _id, name } => {
+        ChatLine::ToolBackground { seq, name } => {
             vec![Line::from(Span::styled(
-                format!("⏳ Calling: {} (running in background)", name),
+                format!("⏳ Calling: {name} (running in background, task #{seq})"),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::DIM),
@@ -150,5 +150,44 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 Style::default().fg(Color::DarkGray),
             ))]
         }
+    }
+}
+
+/// Render with display settings (collapse toggles). Falls back to
+/// `render_line_owned` for variants that aren't collapsed.
+pub(crate) fn render_line_with_settings(
+    msg: &ChatLine,
+    area: Rect,
+    display: &DisplaySettings,
+) -> Vec<Line<'static>> {
+    match msg {
+        ChatLine::Thinking(text) if display.collapse_thinking => {
+            let n = text.lines().count();
+            vec![Line::from(Span::styled(
+                format!(" 💭 [thinking — {n} lines, collapsed]"),
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            ))]
+        }
+        ChatLine::ToolCall { name, input } if display.collapse_tool_calls => {
+            let preview: String = if input.is_empty() {
+                String::new()
+            } else {
+                let p: String = input.chars().take(40).collect();
+                if input.len() > 40 { format!("({p}…)") } else { format!("({p})") }
+            };
+            vec![Line::from(Span::styled(
+                format!(" 🔧 {name}{preview} [collapsed]"),
+                Style::default().fg(Color::Yellow),
+            ))]
+        }
+        ChatLine::ToolResult { ok, content } if display.collapse_tool_results => {
+            let (icon, color) = if *ok { ("✓", Color::Green) } else { ("✗", Color::Red) };
+            let n = content.chars().count();
+            vec![Line::from(Span::styled(
+                format!(" {icon} [result — {n} chars, collapsed]"),
+                Style::default().fg(color),
+            ))]
+        }
+        _ => render_line_owned(msg, area),
     }
 }

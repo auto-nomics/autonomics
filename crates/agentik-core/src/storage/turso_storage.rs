@@ -59,6 +59,7 @@ use turso::{Value, params_from_iter};
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
+use agentik_types::AgentPlan;
 
 use crate::storage::{
     AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
@@ -179,6 +180,13 @@ impl TursoAgentStorage {
                     config_json     TEXT NOT NULL,
                     created_at      INTEGER NOT NULL,
                     updated_at      INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_plans (
+                    agent_id   TEXT PRIMARY KEY,
+                    plan_json  TEXT NOT NULL,
+                    revision   INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
                 );
                 ",
             )
@@ -770,9 +778,48 @@ impl AgentStorage for TursoAgentStorage {
         }
         Ok(messages)
     }
-}
 
-// ── Generic row collector ───────────────────────────────────────
+    async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError> {
+        let json = serde_json::to_string(plan)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        self.conn
+            .execute(
+                "INSERT INTO agent_plans (agent_id, plan_json, revision, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(agent_id) DO UPDATE SET
+                     plan_json = excluded.plan_json,
+                     revision   = excluded.revision,
+                     updated_at = excluded.updated_at",
+                params_from_iter([
+                    Value::Text(agent_id.to_string()),
+                    Value::Text(json),
+                    Value::Integer(plan.revision as i64),
+                    Value::Integer(now),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn load_plan(&self, agent_id: Uuid) -> Result<Option<AgentPlan>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT plan_json FROM agent_plans WHERE agent_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        match rows.next().await {
+            Ok(Some(row)) => {
+                let json_str = text_col(&row, 0)?;
+                let plan = serde_json::from_str(&json_str)?;
+                Ok(Some(plan))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
 
 async fn collect_rows<T, F>(
     rows: &mut turso::Rows,
@@ -1455,5 +1502,51 @@ mod tests {
             .find(|p| p.name == "researcher")
             .unwrap();
         assert_eq!(researcher.agent_identity, "legacy identity");
+    }
+
+    #[tokio::test]
+    async fn test_plan_save_and_load() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+
+        // No plan yet.
+        assert!(store.load_plan(agent_id).await.unwrap().is_none());
+
+        // Save a plan.
+        let mut plan = AgentPlan::new();
+        plan.replace(agentik_types::PlanUpdate {
+            explanation: Some("test plan".into()),
+            plan: vec![
+                agentik_types::PlanStep {
+                    step: "First".into(),
+                    status: agentik_types::StepStatus::Completed,
+                },
+                agentik_types::PlanStep {
+                    step: "Second".into(),
+                    status: agentik_types::StepStatus::InProgress,
+                },
+            ],
+        });
+        store.save_plan(agent_id, &plan).await.unwrap();
+
+        // Load it back.
+        let loaded = store.load_plan(agent_id).await.unwrap().unwrap();
+        assert_eq!(loaded, plan);
+        assert_eq!(loaded.update.plan.len(), 2);
+        assert_eq!(loaded.update.completed_count(), 1);
+
+        // Overwrite with a new plan (upsert).
+        let mut plan2 = AgentPlan::new();
+        plan2.replace(agentik_types::PlanUpdate {
+            explanation: None,
+            plan: vec![agentik_types::PlanStep {
+                step: "Only".into(),
+                status: agentik_types::StepStatus::Pending,
+            }],
+        });
+        store.save_plan(agent_id, &plan2).await.unwrap();
+        let loaded2 = store.load_plan(agent_id).await.unwrap().unwrap();
+        assert_eq!(loaded2.update.plan.len(), 1);
+        assert_eq!(loaded2.revision, 1);
     }
 }

@@ -15,8 +15,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
 use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
-use agentik_types::CompactEvent;
-use agentik_types::SessionInfo;
+use agentik_types::{AgentPlan, CompactEvent, PlanUpdate, SessionInfo};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use chrono::Utc;
 use futures::StreamExt;
@@ -34,6 +33,7 @@ use crate::message_ext::AgentMessageExt;
 use crate::prompt::system_prompt_builder;
 use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentSnapshot, AgentStorage, PersistOp};
+use crate::tools::task_runtime::TaskStore;
 use crate::tools::{ToolRegistry, Toolset};
 
 // ─────────────────────────── AgentShared ───────────────────────────
@@ -55,6 +55,12 @@ pub(crate) struct AgentShared {
     pub system_prompt_identity: Option<String>,
     pub skill_runtime: Option<SharedSkillRuntime>,
     pub tool_registry: Arc<ToolRegistry>,
+    /// Shared background-task list — the same Arc baked into the registry's
+    /// task tools (`wait_task`, `view_task_results`, `view_task_status`).
+    /// Sessions MUST create their Toolset with this handle (via
+    /// `from_registry_with_tasks`) so that background tasks spawned by the
+    /// Toolset are visible to the task-viewer tools.
+    pub tasks: Arc<tokio::sync::RwLock<TaskStore>>,
     /// Event channel for external observers. Uses `ArcSwap` for interior
     /// mutability so `set_event_tx` works even after sessions are created.
     pub event_tx: ArcSwapOption<UnboundedSender<AgentEvent>>,
@@ -62,6 +68,10 @@ pub(crate) struct AgentShared {
     /// Sessions created after bootstrap read this to wire their
     /// `Memory::persist_tx`.
     pub persist_tx: std::sync::OnceLock<UnboundedSender<PersistOp>>,
+    /// The agent's persistent task plan — a first-class citizen that lives
+    /// as long as the agent does. Updated via the `update_plan` tool.
+    /// Uses `Arc<ArcSwap>` for lock-free reads and sharing with the tool.
+    pub plan: Arc<ArcSwap<AgentPlan>>,
 }
 
 impl AgentShared {
@@ -75,6 +85,25 @@ impl AgentShared {
         if let Some(tx) = self.event_tx.load_full().as_deref() {
             let _ = tx.send(event);
         }
+    }
+
+    // ── Plan (first-class persistent task plan) ───────────
+
+    /// Load a snapshot of the current plan.
+    pub fn plan_snapshot(&self) -> AgentPlan {
+        AgentPlan::clone(&self.plan.load())
+    }
+
+    /// Atomically replace the plan, bumping its revision.
+    ///
+    /// Returns the new revision. The caller is responsible for persisting
+    /// the update and emitting a [`AgentEvent::PlanUpdate`] event if needed.
+    pub fn replace_plan(&self, update: PlanUpdate) -> u64 {
+        let mut new_plan = AgentPlan::clone(&self.plan.load());
+        new_plan.replace(update);
+        let revision = new_plan.revision;
+        self.plan.store(Arc::new(new_plan));
+        revision
     }
 }
 
@@ -101,7 +130,11 @@ pub struct Session {
 impl Session {
     /// Create a new empty session.
     pub(crate) fn new(id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
+        let toolset = Toolset::from_registry_with_tasks(
+            shared.tool_registry.clone(),
+            shared.tasks.clone(),
+            shared.event_tx(),
+        );
         let now = chrono::Utc::now().timestamp_millis();
         let mut memory = Memory::new();
         // Wire persist_tx if the agent's persist worker is already running.
@@ -129,7 +162,11 @@ impl Session {
         memory: Memory,
         cancel_token: CancellationToken,
     ) -> Self {
-        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
+        let toolset = Toolset::from_registry_with_tasks(
+            shared.tool_registry.clone(),
+            shared.tasks.clone(),
+            shared.event_tx(),
+        );
         let now = chrono::Utc::now().timestamp_millis();
         Self {
             id,
@@ -147,7 +184,11 @@ impl Session {
 
     /// Fork a new session from an existing one, deep-cloning its memory.
     pub(crate) fn fork_from(parent: &Session, new_id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry(shared.tool_registry.clone(), shared.event_tx());
+        let toolset = Toolset::from_registry_with_tasks(
+            shared.tool_registry.clone(),
+            shared.tasks.clone(),
+            shared.event_tx(),
+        );
         let now = chrono::Utc::now().timestamp_millis();
         let mut memory = parent.memory.clone();
         if let Some(tx) = shared.persist_tx.get() {
@@ -266,21 +307,21 @@ impl Session {
                 let _ = self.inject_message(content);
                 true
             }
-            InternalEvent::BgTaskComplete(id) => {
+            InternalEvent::BgTaskComplete { id: _, seq } => {
                 if let Some((name, ok, content)) =
-                    self.toolset.finished_task_notification(&id).await
+                    self.toolset.finished_task_notification(seq).await
                 {
                     self.shared
-                        .send_event(AgentEvent::ToolBackgroundComplete { id: id.clone(), ok });
+                        .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
                     let note = if ok {
                         format!(
-                            "Background task '{name}' (id={id}) finished. \
-                             Call `view_task_results` with task_id={id} to read its result."
+                            "Background task '{name}' (#{seq}) finished. \
+                             Call `view_task_results` with task={seq} to read its result."
                         )
                     } else {
                         format!(
-                            "Background task '{name}' (id={id}) finished with an error: {content}. \
-                             Call `view_task_results` with task_id={id} to read the error."
+                            "Background task '{name}' (#{seq}) finished with an error: {content}. \
+                             Call `view_task_results` with task={seq} to read the error."
                         )
                     };
                     let _ = self.memory.remember(Message::user(note));
@@ -304,7 +345,8 @@ impl Session {
             InternalEvent::CreateSession { .. }
             | InternalEvent::SwitchSession { .. }
             | InternalEvent::CloseSession { .. }
-            | InternalEvent::ListSessions => true,
+            | InternalEvent::ListSessions
+            | InternalEvent::RenameSession { .. } => true,
         }
     }
 
@@ -422,6 +464,7 @@ impl Session {
                         | InternalEvent::SwitchSession { .. }
                         | InternalEvent::CloseSession { .. }
                         | InternalEvent::ListSessions
+                        | InternalEvent::RenameSession { .. }
                 ) {
                     // Re-queue for the outer Agent::run() loop.
                     let _ = internal_event_tx.send(event);
@@ -637,6 +680,13 @@ impl Session {
             }
         }
 
+        // Inject the current plan status so the model knows what it has
+        // committed to and where it left off.
+        let plan = self.shared.plan_snapshot();
+        if !plan.is_empty() {
+            builder = builder.with_extra_section(render_plan_prompt_section(&plan));
+        }
+
         let system_prompt = builder.parse();
         let context_messages = self.memory.render_context()?.to_vec();
 
@@ -765,3 +815,30 @@ impl From<&Session> for SessionInfo {
 // Suppress unused import warning for ArcSwap (used in AgentShared.event_tx type).
 #[allow(unused_imports)]
 use ArcSwap as _ArcSwap;
+
+/// Render the current plan as a system-prompt section.
+///
+/// This is injected into every LLM call so the model remembers its own todo
+/// list across turns and context compaction.
+fn render_plan_prompt_section(plan: &AgentPlan) -> String {
+    use agentik_types::StepStatus;
+
+    let mut s = String::from("## Current plan status\n");
+    s.push_str("Your persistent plan (survives across turns). ");
+    s.push_str("Continue from the `in_progress` step.\n\n");
+
+    for (i, step) in plan.update.plan.iter().enumerate() {
+        let marker = match step.status {
+            StepStatus::Completed => '✔',
+            StepStatus::InProgress => '▶',
+            StepStatus::Pending => '○',
+        };
+        s.push_str(&format!("{}. {} {}\n", i + 1, marker, step.step));
+    }
+
+    if let Some((done, total)) = plan.progress() {
+        s.push_str(&format!("\nProgress: {done}/{total} completed.\n"));
+    }
+
+    s
+}

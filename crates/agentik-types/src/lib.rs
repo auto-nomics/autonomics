@@ -5,6 +5,7 @@ pub mod files_api;
 pub mod lifecycle;
 pub mod messages;
 pub mod models_api;
+pub mod plan;
 pub mod reasoning;
 pub mod shared;
 pub mod streaming;
@@ -38,6 +39,8 @@ pub use tools::{
 pub use agent_events::{AgentEvent, CompactEvent, ContentBlockKind};
 
 pub use lifecycle::AgentLifecycleStatus;
+
+pub use plan::{AgentPlan, PlanStep, PlanUpdate, StepStatus};
 
 pub use batches::{
     BatchCreateParams, BatchError, BatchList, BatchListParams, BatchRequest, BatchRequestBuilder,

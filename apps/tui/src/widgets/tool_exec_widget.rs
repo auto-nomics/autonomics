@@ -8,6 +8,10 @@ use ratatui::{
 use crate::state::{ToolTaskInfo, ToolTaskStatus};
 
 /// Compact panel showing background tool execution tasks.
+///
+/// Currently superseded by the sidebar's inline task section, but kept as a
+/// standalone widget for potential reuse (e.g. a dedicated tools tab).
+#[allow(dead_code)]
 pub(crate) struct ToolExecWidget<'a> {
     pub tasks: &'a [ToolTaskInfo],
 }

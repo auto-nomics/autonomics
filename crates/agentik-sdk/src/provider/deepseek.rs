@@ -47,7 +47,7 @@ impl DeepseekProvider {
                 .build(),
             // V4 Flash — fast, low-cost, still supports thinking.
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_FLASH)
-                .context(128_000, 32_000)
+                .context(1_000_000, 32_000)
                 .capabilities(false, true, true, true)
                 .pricing(0.1, 0.3)
                 .build(),

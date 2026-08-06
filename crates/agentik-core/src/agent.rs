@@ -52,8 +52,9 @@ impl Default for AgentConfig {
 pub enum InternalEvent {
     /// User injected a new message (already in memory via `inject_message`).
     MessageInject(Vec<ContentBlock>),
-    /// A background tool task (with the given `tool_use_id`) finished.
-    BgTaskComplete(String),
+    /// A background tool task finished.
+    /// `id` is the `tool_use_id`, `seq` is the short task number.
+    BgTaskComplete { id: String, seq: u64 },
     Done,
     /// External Runtime requests the agent to shut down.
     Shutdown,
@@ -72,6 +73,8 @@ pub enum InternalEvent {
     CloseSession { id: Uuid },
     /// Request a list of all sessions (reply via event channel).
     ListSessions,
+    /// Rename a session (update title in memory + storage).
+    RenameSession { id: Uuid, title: String },
 }
 
 pub struct Agent {
@@ -81,6 +84,13 @@ pub struct Agent {
     pub(crate) internal_event_tx: UnboundedSender<InternalEvent>,
     /// Receiver consumed once by [`run()`]; `None` after that.
     pub(crate) internal_event_rx: Option<UnboundedReceiver<InternalEvent>>,
+    /// Memory from the builder's `with_memory` path. Used as a fallback
+    /// when no session records exist in storage (e.g. agents created
+    /// before the session abstraction). Consumed (set to `None`) during
+    /// `run()` after the fallback session is created.
+    pub(crate) initial_memory: Option<crate::memory::Memory>,
+    /// Cancel token from the builder, used when auto-creating sessions.
+    pub(crate) cancel_token: CancellationToken,
 }
 
 impl Agent {
@@ -227,6 +237,18 @@ impl Agent {
 
             let (persist_tx, persist_rx) =
                 tokio::sync::mpsc::unbounded_channel::<PersistOp>();
+
+            // ── Restore the agent's persistent plan ──────────
+            if let Ok(Some(plan)) = storage.as_ref().load_plan(self.shared.id).await {
+                if !plan.is_empty() {
+                    self.shared.plan.store(Arc::new(plan));
+                    tracing::debug!(
+                        agent_id = %self.shared.id,
+                        "restored agent plan from storage"
+                    );
+                }
+            }
+
             // Store in shared so sessions created later can also access it.
             let _ = self.shared.persist_tx.set(persist_tx);
             // Wire into existing sessions' memories.
@@ -238,14 +260,7 @@ impl Agent {
             tokio::spawn(persist_worker(persist_rx, storage));
         }
 
-        // Resume the active session (starts WAL session).
-        if let Some(id) = self.active_session_id {
-            if let Some(s) = self.sessions.get_mut(&id) {
-                s.resume().await;
-            }
-        }
-
-        // ── Restore previously created sessions from storage ──
+        // ── Restore sessions from storage ──
         // Query all session records and rebuild sessions that no longer
         // exist in the HashMap (they were created in a prior run but lost
         // on restart).
@@ -360,11 +375,66 @@ impl Agent {
             }
         }
 
+        // ── Fallback: no session records in storage ──
+        // If the builder provided memory (from the old restore path) and
+        // no sessions were loaded from storage, create one session with
+        // that memory so the conversation history isn't lost.
+        if self.sessions.is_empty() {
+            if let Some(memory) = self.initial_memory.take() {
+                let id = Uuid::new_v4();
+                let mut s = Session::new_with_memory(
+                    id,
+                    self.shared.clone(),
+                    memory,
+                    self.cancel_token.clone(),
+                );
+                s.title = Some("Restored".into());
+                if let Some(tx) = self.shared.persist_tx.get() {
+                    s.memory.persist_tx = Some(tx.clone());
+                }
+                s.resume().await;
+                self.sessions.insert(id, s);
+                self.active_session_id = Some(id);
+                tracing::info!("created fallback session from builder memory");
+            }
+        } else if self.active_session_id.is_none() {
+            // Sessions exist but none is active — activate the first one.
+            if let Some(&id) = self.sessions.keys().next() {
+                self.active_session_id = Some(id);
+                if let Some(s) = self.sessions.get_mut(&id) {
+                    s.resume().await;
+                }
+            }
+        }
+
         loop {
             let event = match rx.recv().await {
                 Some(e) => e,
                 None => break,
             };
+
+            // ── Auto-create a session on first message ──
+            // If no session exists yet, create one before processing the
+            // event so the message isn't lost.
+            if matches!(event, InternalEvent::MessageInject(_))
+                && self.active_session_id.is_none()
+            {
+                let id = Uuid::new_v4();
+                let mut s = Session::new(id, self.shared.clone());
+                s.title = Some("New conversation".into());
+                s.cancel_token = self.cancel_token.clone();
+                if let Some(tx) = self.shared.persist_tx.get() {
+                    s.memory.persist_tx = Some(tx.clone());
+                }
+                s.resume().await;
+                self.sessions.insert(id, s);
+                self.active_session_id = Some(id);
+                self.shared.send_event(AgentEvent::SessionActivated {
+                    id,
+                    title: Some("New conversation".into()),
+                });
+                tracing::info!("auto-created session on first message");
+            }
 
             // Session management events are handled inline before delegation.
             let should_run = match &event {
@@ -387,7 +457,11 @@ impl Agent {
                         .send_event(AgentEvent::SessionList { sessions: infos });
                     false
                 }
-                InternalEvent::MessageInject(_) | InternalEvent::BgTaskComplete(_) => true,
+                InternalEvent::RenameSession { id, title } => {
+                    self.handle_rename_session(*id, title.clone()).await;
+                    false
+                }
+                InternalEvent::MessageInject(_) | InternalEvent::BgTaskComplete { .. } => true,
                 _ => false,
             };
 
@@ -398,6 +472,7 @@ impl Agent {
                     | InternalEvent::SwitchSession { .. }
                     | InternalEvent::CloseSession { .. }
                     | InternalEvent::ListSessions
+                    | InternalEvent::RenameSession { .. }
             ) {
                 let keep_going = self.apply_event(event).await;
                 if !keep_going {
@@ -484,6 +559,20 @@ impl Agent {
         let title = self.sessions.get(&id).and_then(|s| s.title.clone());
         self.shared
             .send_event(AgentEvent::SessionActivated { id, title });
+    }
+
+    async fn handle_rename_session(&mut self, id: Uuid, title: String) {
+        if let Some(s) = self.sessions.get_mut(&id) {
+            s.title = Some(title.clone());
+            tracing::info!(session_id = %id, title = %title, "session renamed");
+        }
+        // Persist to storage.
+        if let Some(storage) = &self.shared.storage {
+            let _ = storage.update_session_title(id, &title).await;
+        }
+        // Notify TUI.
+        self.shared
+            .send_event(AgentEvent::SessionActivated { id, title: Some(title) });
     }
 
     async fn handle_close_session(&mut self, id: Uuid) {

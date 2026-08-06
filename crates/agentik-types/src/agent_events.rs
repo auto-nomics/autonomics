@@ -64,14 +64,21 @@ pub enum AgentEvent {
     ToolResult { ok: bool, content: String },
 
     /// Sync phase expired — tool is now running in the background.
-    /// `id` is the `tool_use_id`, `name` is the tool name.
-    ToolCallBackground { id: String, name: String },
+    /// `seq` is the short task number (1-based), `name` is the tool name.
+    ToolCallBackground { seq: u64, name: String },
 
     /// A background tool task completed with its real result.
-    ToolBackgroundComplete { id: String, ok: bool },
+    ToolBackgroundComplete { seq: u64, ok: bool },
 
     /// Agent is performing context compaction
     Compact { event: CompactEvent },
+
+    /// The agent's persistent task plan was updated via `update_plan`.
+    /// Carries the full new plan snapshot and the revision number.
+    PlanUpdate {
+        revision: u64,
+        update: crate::plan::PlanUpdate,
+    },
 
     /// Agent finished its workflow.
     Done,

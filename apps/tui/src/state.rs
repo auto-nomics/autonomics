@@ -17,7 +17,7 @@ pub enum ToolTaskStatus {
 
 #[derive(Debug, Clone)]
 pub struct ToolTaskInfo {
-    pub id: String,
+    pub seq: u64,
     pub name: String,
     pub status: ToolTaskStatus,
 }
@@ -33,6 +33,38 @@ pub struct TurnUsage {
     pub output_tokens: u64,
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
+}
+
+/// Snapshot of the agent's current task plan, maintained by `apply_event`
+/// when `AgentEvent::PlanUpdate` arrives.
+#[derive(Debug, Clone, Default)]
+pub struct PlanState {
+    /// The latest plan snapshot. Empty when no plan has been set.
+    pub steps: Vec<agentik_types::PlanStep>,
+    /// Optional explanation from the last update.
+    pub explanation: Option<String>,
+    /// Revision counter from the agent.
+    pub revision: u64,
+}
+
+impl PlanState {
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// `(completed, total)` or `None` if the plan is empty.
+    pub fn progress(&self) -> Option<(usize, usize)> {
+        let total = self.steps.len();
+        if total == 0 {
+            return None;
+        }
+        let done = self
+            .steps
+            .iter()
+            .filter(|s| s.status == agentik_types::StepStatus::Completed)
+            .count();
+        Some((done, total))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -53,7 +85,7 @@ pub enum ChatLine {
     },
     /// Tool is running in the background (sync phase expired).
     ToolBackground {
-        id: String,
+        seq: u64,
         name: String,
     },
     Error(String),
@@ -149,6 +181,8 @@ pub struct AgentTabState {
     pub cached_msg_versions: Vec<u64>,
     /// Terminal width at which the per-message cache was built.
     pub cached_msg_width: u16,
+    /// DisplaySettings.version at which cache was built; mismatch = invalidate.
+    pub cached_display_version: u64,
     /// Index of the assistant line currently being streamed, so incoming
     /// `UsageUpdate` events can be attributed to the right turn. Reset on each
     /// `Requesting` (one per LLM call); `None` for tool-only turns.
@@ -157,6 +191,8 @@ pub struct AgentTabState {
     /// is active (Requesting / Streaming). Drives loading animations.
     pub frame: u64,
     pub compact_state: CompactState,
+    /// Agent task plan (updated via `update_plan` tool events).
+    pub plan: PlanState,
 }
 
 #[derive(Debug, Default)]
@@ -197,9 +233,11 @@ impl Default for AgentTabState {
             cached_msg_lines: Vec::new(),
             cached_msg_versions: Vec::new(),
             cached_msg_width: 0,
+            cached_display_version: 0,
             streaming_assistant: None,
             frame: 0,
             compact_state: CompactState::default(),
+            plan: PlanState::default(),
         }
     }
 }
@@ -412,13 +450,13 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.scroll_to_bottom();
             }
         }
-        AgentEvent::ToolCallBackground { id, name } => {
+        AgentEvent::ToolCallBackground { seq, name } => {
             state.push_line(ChatLine::ToolBackground {
-                id: id.clone(),
+                seq,
                 name: name.clone(),
             });
             state.tool_tasks.push(ToolTaskInfo {
-                id,
+                seq,
                 name,
                 status: ToolTaskStatus::Running,
             });
@@ -426,12 +464,12 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.scroll_to_bottom();
             }
         }
-        AgentEvent::ToolBackgroundComplete { id, ok } => {
+        AgentEvent::ToolBackgroundComplete { seq, ok } => {
             state.push_line(ChatLine::ToolResult {
                 ok,
-                content: format!("Background task `{id}` has completed"),
+                content: format!("Background task #{seq} has completed"),
             });
-            if let Some(task) = state.tool_tasks.iter_mut().find(|t| t.id == id) {
+            if let Some(task) = state.tool_tasks.iter_mut().find(|t| t.seq == seq) {
                 task.status = ToolTaskStatus::Done { ok };
             }
             if state.auto_scroll {
@@ -470,6 +508,16 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         | AgentEvent::SessionPaused { .. }
         | AgentEvent::SessionClosed { .. }
         | AgentEvent::SessionList { .. } => {}
+        AgentEvent::PlanUpdate { revision, update } => {
+            state.plan = PlanState {
+                steps: update.plan,
+                explanation: update.explanation,
+                revision,
+            };
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
+        }
     }
 }
 
@@ -520,6 +568,8 @@ pub fn apply_session_event(
                         .map(|s| crate::widgets::session_picker::PickerSession {
                             id: s.id,
                             title: s.title.clone(),
+                            message_count: s.tab_state.messages.len(),
+                            last_active: 0,
                         })
                         .collect();
                 state.session_picker.set_sessions(picker_items, active_session_id);
@@ -538,7 +588,17 @@ pub fn apply_session_event(
                     session.sub_sessions[idx].title = Some(t);
                 }
             } else {
-                session.sub_sessions.push(SubSession::new(id, title));
+                let mut sub = SubSession::new(id, title);
+                // Migrate any pending messages (sent before the backend
+                // announced a session) into the new sub-session.
+                if !session.pending_tab_state.messages.is_empty() {
+                    sub.tab_state = std::mem::take(&mut session.pending_tab_state);
+                    tracing::debug!(
+                        migrated = sub.tab_state.messages.len(),
+                        "migrated pending messages into new sub-session"
+                    );
+                }
+                session.sub_sessions.push(sub);
                 session.active_sub_session_idx = session.sub_sessions.len() - 1;
             }
         }
@@ -573,6 +633,13 @@ pub struct AgentSession {
     pub sub_sessions: Vec<SubSession>,
     /// Index into `sub_sessions` of the currently active sub-session.
     pub active_sub_session_idx: usize,
+    /// Per-agent buffer holding messages sent before the backend announces
+    /// the first sub-session (via `SessionActivated`). When a sub-session is
+    /// created, the pending state is migrated into it and this is cleared.
+    ///
+    /// This replaces the old shared `agent_tab_state` fallback, preventing
+    /// messages from one agent leaking into another's UI.
+    pub pending_tab_state: AgentTabState,
 }
 
 /// One conversation within an agent.
@@ -592,6 +659,44 @@ impl SubSession {
             title,
             tab_state: AgentTabState::default(),
         }
+    }
+}
+
+/// Global display preferences affecting how chat lines are rendered.
+/// Persisted in the `settings` table.
+#[derive(Debug, Clone)]
+pub struct DisplaySettings {
+    pub collapse_thinking: bool,
+    pub collapse_tool_calls: bool,
+    pub collapse_tool_results: bool,
+    /// Monotonic counter bumped on every toggle. Used by the render cache
+    /// to invalidate all cached lines when display settings change.
+    pub version: u64,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            collapse_thinking: false,
+            collapse_tool_calls: false,
+            collapse_tool_results: false,
+            version: 0,
+        }
+    }
+}
+
+impl DisplaySettings {
+    pub fn toggle_thinking(&mut self) {
+        self.collapse_thinking = !self.collapse_thinking;
+        self.version = self.version.wrapping_add(1);
+    }
+    pub fn toggle_tool_calls(&mut self) {
+        self.collapse_tool_calls = !self.collapse_tool_calls;
+        self.version = self.version.wrapping_add(1);
+    }
+    pub fn toggle_tool_results(&mut self) {
+        self.collapse_tool_results = !self.collapse_tool_results;
+        self.version = self.version.wrapping_add(1);
     }
 }
 
@@ -618,11 +723,16 @@ pub struct AppState {
     /// When `true`, the name input popup is collecting a **session name**
     /// (not an agent name). The Enter handler checks this flag.
     pub pending_session_name: bool,
+    /// When `Some(id)`, the name input popup is collecting a **new title**
+    /// for renaming an existing session.
+    pub pending_session_rename_id: Option<uuid::Uuid>,
     /// Profile selected from the picker, waiting for the user to enter a name.
     /// When `Some`, the name input popup is shown.
     pub pending_profile: Option<agentik_core::AgentProfile>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
+    /// Global display preferences (collapse thinking/tool blocks).
+    pub display_settings: DisplaySettings,
     pub active_model: Arc<ArcSwapOption<Model>>,
 }
 
@@ -641,8 +751,10 @@ impl Default for AppState {
             name_input: Default::default(),
             session_picker: Default::default(),
             pending_session_name: false,
+            pending_session_rename_id: None,
             pending_profile: None,
             model_config_visible: false,
+            display_settings: DisplaySettings::default(),
             active_model: Arc::new(ArcSwapOption::default()),
         }
     }
@@ -650,8 +762,11 @@ impl Default for AppState {
 
 impl AppState {
     /// Returns a mutable reference to the active sub-session's tab state.
-    /// Falls back to the legacy `agent_tab_state` if no sub-session is
-    /// active (e.g. before the first SessionList arrives).
+    /// If the active agent exists but has no sub-sessions yet (before the
+    /// first `SessionActivated`), returns that agent's `pending_tab_state`
+    /// so messages are buffered per-agent without cross-contamination.
+    /// If no agent exists at all, returns the legacy `agent_tab_state`
+    /// (which is never displayed since the workspace renders an empty state).
     pub fn active_tab_state_mut(&mut self) -> &mut AgentTabState {
         if let Some(session) = self.sessions.get_mut(self.active_agent_idx) {
             if let Some(sub) = session
@@ -660,6 +775,7 @@ impl AppState {
             {
                 return &mut sub.tab_state;
             }
+            return &mut session.pending_tab_state;
         }
         &mut self.agent_tab_state
     }
@@ -673,6 +789,7 @@ impl AppState {
             {
                 return &sub.tab_state;
             }
+            return &session.pending_tab_state;
         }
         &self.agent_tab_state
     }

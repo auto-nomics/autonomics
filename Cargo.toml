@@ -51,6 +51,9 @@ members = [
   "bio_crates/coloc",
   "bio_crates/bkmr",
   "bio_crates/mvmr",
+  "crates/kms",
+  "crates/kms-tools",
+  "crates/agentik-network",
 ]
 resolver = "3"
 

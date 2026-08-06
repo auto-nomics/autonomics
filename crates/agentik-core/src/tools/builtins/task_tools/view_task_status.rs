@@ -5,7 +5,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::tools::task_runtime::{TaskEntry, TaskStatus};
+use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use crate::tools::{MAX_PROGRESS_RECORDS, ToolError, ToolFunction};
 
 /// Default page size when `limit` is omitted.
@@ -32,8 +32,8 @@ const DEFAULT_LIMIT: usize = 50;
                   what remains."
 )]
 pub struct ViewTaskStatusInput {
-    #[desc = "ID of target background task"]
-    task_id: String,
+    #[desc = "Task number (#N) of the target background task, as shown when it was spawned"]
+    task: u64,
     #[desc = "Max records to return. Default 50; 0 = counts only (no records); \
               clamped to MAX_PROGRESS_RECORDS otherwise."]
     limit: Option<usize>,
@@ -49,11 +49,11 @@ pub struct ViewTaskStatusInput {
 }
 
 pub struct TaskStatusViewerTool {
-    tasks: Arc<RwLock<Vec<TaskEntry>>>,
+    tasks: Arc<RwLock<TaskStore>>,
 }
 
 impl TaskStatusViewerTool {
-    pub fn new(tasks: Arc<RwLock<Vec<TaskEntry>>>) -> Self {
+    pub fn new(tasks: Arc<RwLock<TaskStore>>) -> Self {
         Self { tasks }
     }
 }
@@ -106,10 +106,10 @@ impl ToolFunction for TaskStatusViewerTool {
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let tasks = self.tasks.read().await;
-        let Some(task) = tasks.iter().find(|t| t.id() == input.task_id) else {
+        let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
             return Ok(AgentToolResult::error(format!(
-                "no background task with id {:?}",
-                input.task_id
+                "no background task #{}, use `view_task_status` with no filter to list active tasks",
+                input.task
             )));
         };
 
@@ -149,7 +149,7 @@ impl ToolFunction for TaskStatusViewerTool {
         let window_start = window.start;
 
         let mut payload = serde_json::json!({
-            "task_id": task.id(),
+            "task": task.seq(),
             "name": task.name(),
             "status": status,
             "log": {

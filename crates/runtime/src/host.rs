@@ -240,6 +240,11 @@ impl AgentHandle {
     pub fn list_sessions(&self) {
         let _ = self.internal_tx.send(InternalEvent::ListSessions);
     }
+
+    /// Rename a session.
+    pub fn rename_session(&self, id: uuid::Uuid, title: String) {
+        let _ = self.internal_tx.send(InternalEvent::RenameSession { id, title });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

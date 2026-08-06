@@ -2,64 +2,76 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::{Buffer, StatefulWidget, Widget},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Padding, Paragraph, StatefulWidgetRef},
 };
 
-use crate::state::{AgentStatus, AgentTabState, InputMode};
+use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
+    sidebar::{SideBar, SidebarData},
     status_bar::StatusBar,
-    tool_exec_widget::ToolExecWidget,
 };
 
-/// Renders a single agent's conversation surface: status bar, chat area,
-/// input composer, and footer hint. One `AgentLeaf` corresponds to one
-/// running agent within the [`AgentWorkspace`](super::agent_workspace::AgentWorkspace).
+/// Width of the sidebar as a percentage of the total leaf area.
+/// At 120 cols → ~30 cols sidebar; at 80 cols → ~20 cols.
+const SIDEBAR_PERCENT: u16 = 25;
+/// Minimum sidebar width in columns. Below this the sidebar is hidden.
+const SIDEBAR_MIN_WIDTH: u16 = 24;
+
+/// Renders a single agent's conversation surface with a right-hand sidebar.
+///
+/// Layout:
+/// ```text
+/// ┌──────────────────────────────────────────────────┐
+/// │ StatusBar (full width, 1 row)                    │
+/// ├──────────────────────────────┬───────────────────┤
+/// │ Chat area                    │ Sidebar           │
+/// │ (scrollable transcript)      │ - Task Plan       │
+/// │                              │ - Sessions        │
+/// │                              │ - Background Tasks│
+/// ├──────────────────────────────┴───────────────────┤
+/// │ Input (full width, dynamic height)               │
+/// │ Footer hints (full width, 1 row)                 │
+/// └──────────────────────────────────────────────────┘
+/// ```
 pub struct AgentLeaf<'a> {
-    /// Active model name shown on the composer border.
     pub active_model: Option<&'a str>,
-    /// Agent name shown in the status bar.
     pub agent_name: Option<&'a str>,
-    /// Model context window size in tokens, when known. Powers the
-    /// context-usage progress bar in the status bar.
     pub context_window: Option<u64>,
+    pub session_title: Option<&'a str>,
+    pub session_index: usize,
+    pub session_count: usize,
+    pub display: &'a DisplaySettings,
 }
 
 impl StatefulWidgetRef for AgentLeaf<'_> {
     type State = AgentTabState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
-        let task_count = ts.tool_tasks.len() as u16;
-        let task_constraint = if task_count > 0 {
-            Constraint::Length(task_count + 2) // +2 for border
-        } else {
-            Constraint::Length(0)
-        };
+        let running = ts.status != crate::state::AgentStatus::Idle;
 
         // Dynamic input height: the boxed composer grows with content
         // (word-wrapped), capped at MAX_INPUT_ROWS text rows. The widget draws
         // a rounded border box, so reserve +2 rows (top/bottom) and subtract
         // the border columns (+ gutter) from the wrap width.
-        let running = ts.status != crate::state::AgentStatus::Idle;
         // area.width − 2 (box borders) − 2 (❯ prefix gutter).
         let text_width = area.width.saturating_sub(PROMPT_GUTTER + 2);
         let input_text_rows = if running && ts.input.is_empty() {
-            // While the agent runs, keep the composer collapsed to one text row.
             1
         } else {
             ts.input.display_height(text_width)
         };
         let input_constraint = Constraint::Length(input_text_rows + 2);
 
+        // ── Top-level vertical split ──
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // StatusBar (includes model name)
-                task_constraint,       // ToolExecWidget (0 when empty)
-                Constraint::Min(3),    // Chat (shrinks as input grows)
-                input_constraint,      // Input (dynamic, borderless)
+                Constraint::Length(1), // StatusBar (full width)
+                Constraint::Min(3),    // Middle: Chat + Sidebar (horizontal split)
+                input_constraint,      // Input (full width)
                 Constraint::Length(1), // Footer hints
             ])
             .split(area);
@@ -78,16 +90,27 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         };
         status_bar.render(layout[0], buf);
 
-        // ── Tool execution panel ──
-        if task_count > 0 {
-            let tool_widget = ToolExecWidget {
-                tasks: &ts.tool_tasks,
-            };
-            tool_widget.render(layout[1], buf);
-        }
+        // ── Middle: Chat + Sidebar horizontal split ──
+        let middle = layout[1];
+
+        // Decide whether to show the sidebar based on available width.
+        let sidebar_width = (middle.width * SIDEBAR_PERCENT / 100).max(SIDEBAR_MIN_WIDTH);
+        let show_sidebar = middle.width >= SIDEBAR_MIN_WIDTH * 3;
+
+        let (chat_area, sidebar_area) = if show_sidebar {
+            let h_split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(20),          // Chat (flexible)
+                    Constraint::Length(sidebar_width), // Sidebar (fixed)
+                ])
+                .split(middle);
+            (h_split[0], Some(h_split[1]))
+        } else {
+            (middle, None)
+        };
 
         // ── Chat area ──
-        let chat_area = layout[2];
         let chat_block = Block::default().padding(Padding::new(2, 2, 2, 2));
         let chat_inner_area = chat_block.inner(chat_area);
 
@@ -95,13 +118,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let width = chat_inner_area.width;
 
         // ── Incremental per-message render cache ──
-        //
-        // Only messages whose content version changed (or whose render width
-        // changed) are re-rendered through the expensive markdown / syntax-
-        // highlight pipeline. All other messages reuse their cached lines.
-        // This is the key optimisation that keeps the TUI responsive as the
-        // conversation grows: a streaming token delta only invalidates the
-        // single message being appended to, not the entire history.
         let n = ts.messages.len();
         if ts.cached_msg_lines.len() != n {
             ts.cached_msg_lines.resize(n, Vec::new());
@@ -113,14 +129,24 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 *v = 0;
             }
         }
+        if ts.cached_display_version != self.display.version {
+            ts.cached_display_version = self.display.version;
+            for v in &mut ts.cached_msg_versions {
+                *v = 0;
+            }
+        }
 
-        let mut flat: Vec<Line<'static>> = Vec::new();
+        let mut flat: Vec<ratatui::text::Line<'static>> = Vec::new();
         for (i, msg) in ts.messages.iter().enumerate() {
             if ts.cached_msg_versions[i] == ts.msg_versions[i] && !ts.cached_msg_lines[i].is_empty()
             {
                 flat.extend_from_slice(&ts.cached_msg_lines[i]);
             } else {
-                let rendered = super::chat_widget::render::render_line_owned(msg, chat_inner_area);
+                let rendered = super::chat_widget::render::render_line_with_settings(
+                    msg,
+                    chat_inner_area,
+                    self.display,
+                );
                 flat.extend_from_slice(&rendered);
                 ts.cached_msg_lines[i] = rendered;
                 ts.cached_msg_versions[i] = ts.msg_versions[i];
@@ -131,9 +157,21 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let chat_widget = ChatWidget { lines: &flat };
         chat_widget.render(chat_inner_area, buf, &mut chat_state);
         ts.content_line_count = chat_state.total_lines;
-
-        // Clamp scroll *after* render so we use the current frame's line count.
         ts.clamp_scroll(viewport_height);
+
+        // ── Sidebar ──
+        if let Some(sb_area) = sidebar_area {
+            let sidebar = SideBar {
+                data: SidebarData {
+                    plan: &ts.plan,
+                    tool_tasks: &ts.tool_tasks,
+                    session_title: self.session_title,
+                    session_index: self.session_index,
+                    session_count: self.session_count,
+                },
+            };
+            sidebar.render(sb_area, buf);
+        }
 
         // ── Input area (boxed composer, ❯ prompt) ──
         let placeholder: &str = if running {
@@ -144,9 +182,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 InputMode::Input => "Type a message…",
             }
         };
-        // Status label inlined in the top border (top-left), reflecting what
-        // the agent is doing right now. While active, a braille spinner is
-        // prepended for a visual loading indicator.
         let spinner = if running {
             BRAILLE_SPINNER[(ts.frame / 4) as usize % BRAILLE_SPINNER.len()]
         } else {
@@ -164,9 +199,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
 
         let input_widget = InputWidget {
             disabled: running,
-            // Editable only when composing (Input mode) and the agent is idle.
-            // Browse mode hides the caret and the app routes keys away from the
-            // composer in that mode (see App::handle_key).
             editable: !running && ts.input_mode == InputMode::Input,
             title: &title,
             placeholder,
@@ -174,16 +206,16 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
-        input_widget.render(layout[3], buf, &mut input_state);
+        input_widget.render(layout[2], buf, &mut input_state);
 
         // ── Animated loading bar on the input box bottom border ──
         if running {
-            render_loading_bar(layout[3], buf, ts.frame);
+            render_loading_bar(layout[2], buf, ts.frame);
         }
 
         // ── Footer hint line ──
         render_footer_hint(
-            layout[4],
+            layout[3],
             buf,
             ts.input_mode,
             running,
@@ -199,12 +231,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
 const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Draw an animated loading bar on the bottom border of the input box.
-///
-/// A bright segment (`━`) slides across the border left→right, wraps around,
-/// and repeats. The rest of the border remains the default `─`. The effect is
-/// a "scrolling" progress indicator — like a download bar — driven by `frame`.
-fn render_loading_bar(area: Rect, buf: &mut ratatui::prelude::Buffer, frame: u64) {
-    // Bottom border row sits at y = area bottom; inner span excludes corners.
+fn render_loading_bar(area: Rect, buf: &mut Buffer, frame: u64) {
     let y = area.y + area.height - 1;
     let start = area.x + 1;
     let end = area.x + area.width.saturating_sub(1);
@@ -213,10 +240,7 @@ fn render_loading_bar(area: Rect, buf: &mut ratatui::prelude::Buffer, frame: u64
         return;
     }
 
-    // Segment length: ~1/4 of the border, clamped to a sensible range.
     let bar_len = (width / 4).clamp(3, 12);
-
-    // Animation speed: advance 1 position every 2 frames (~30 fps at 60 fps render).
     let pos = ((frame / 2) as usize) % (width + bar_len);
 
     let bar_style = Style::default()
@@ -224,17 +248,11 @@ fn render_loading_bar(area: Rect, buf: &mut ratatui::prelude::Buffer, frame: u64
         .add_modifier(Modifier::BOLD);
 
     for i in 0..width {
-        // The bar occupies indices [pos - bar_len, pos) clamped to [0, width).
-        // When pos > width, the bar has partially wrapped to the start.
         let in_bar = if pos < bar_len {
-            // Bar straddles the wrap boundary: tail at [0, pos) and
-            // head at [width + pos - bar_len, width).
             i < pos || i >= width + pos - bar_len
         } else if pos > width {
-            // Past the right edge: wrapped portion [0, pos - width).
             i < pos - width
         } else {
-            // Normal: bar fully inside [pos - bar_len, pos).
             i >= pos - bar_len && i < pos
         };
         if in_bar {
@@ -243,14 +261,11 @@ fn render_loading_bar(area: Rect, buf: &mut ratatui::prelude::Buffer, frame: u64
     }
 }
 
-/// Draw the 1-row keybinding hint at the bottom of the agent tab. The hint
-/// changes with the active input mode so the relevant shortcuts are always
-/// visible, mirroring codex's footer. While a Ctrl+R search is active, the
-/// query and current match position are shown instead.
+/// Draw the 1-row keybinding hint at the bottom of the agent tab.
 #[allow(clippy::too_many_arguments)]
 fn render_footer_hint(
     area: Rect,
-    buf: &mut ratatui::prelude::Buffer,
+    buf: &mut Buffer,
     mode: InputMode,
     running: bool,
     searching: bool,

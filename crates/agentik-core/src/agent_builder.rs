@@ -174,22 +174,40 @@ impl AgentBuilder {
         // ── Build the shared tool registry ──────────────────
         // User tools + builtin task tools (tied to a tasks handle that will
         // be shared with the initial session's Toolset) + skill todo tool.
-        let tasks: Arc<tokio::sync::RwLock<Vec<crate::tools::task_runtime::TaskEntry>>> =
-            Arc::new(tokio::sync::RwLock::new(Vec::new()));
+        let tasks: Arc<tokio::sync::RwLock<crate::tools::task_runtime::TaskStore>> =
+            Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            ));
+
+        // Plan state is created early so the update_plan tool can share it.
+        let agent_id = self.id.unwrap_or_else(Uuid::new_v4);
+        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+
+        // Event channel — created early so both the plan tool and AgentShared
+        // can reference the same ArcSwap.
+        let event_tx = ArcSwapOption::new(self.agent_event_tx.clone().map(Arc::new));
+
+        let plan_handle = crate::tools::builtins::PlanHandle::new(
+            Arc::clone(&plan_state),
+            agent_id,
+            self.storage.clone(),
+            self.agent_event_tx.clone(),
+        );
 
         let mut registry = ToolRegistry::new();
         registry.register_all(self.tools)?;
         registry.register_all(crate::tools::task_registrations(tasks.clone()))?;
+        registry.register_all(crate::tools::plan_registrations(plan_handle))?;
         if let Some((_, todo_reg)) = &skill_runtime {
             registry.register(todo_reg.clone())?;
         }
         let registry = Arc::new(registry);
 
         // ── Build AgentShared ───────────────────────────────
-        let event_tx = ArcSwapOption::new(self.agent_event_tx.map(Arc::new));
-
         let shared = Arc::new(AgentShared {
-            id: self.id.unwrap_or_else(Uuid::new_v4),
+            id: agent_id,
             name: self.name.unwrap_or_else(|| "agent".to_string()),
             config_json: self.config_json.unwrap_or(serde_json::json!({})),
             model,
@@ -200,50 +218,38 @@ impl AgentBuilder {
             system_prompt_identity: self.system_prompt_identity,
             skill_runtime: skill_runtime.map(|(rt, _)| rt),
             tool_registry: registry,
+            tasks,
             event_tx,
             persist_tx: std::sync::OnceLock::new(),
+            plan: plan_state,
         });
 
-        // ── Build the initial (default) session ─────────────
+        // ── No default session at build time ────────────────
+        // Sessions are restored from storage in `Agent::run()` or
+        // auto-created on the first `MessageInject`. The builder-memory
+        // (from `with_memory`) is stashed as `initial_memory` for `run()`
+        // to pick up as a fallback when no session records exist in storage.
         let cancel_token = self.cancel_token.unwrap_or_default();
-
-        let mut session = if let Some(memory) = self.memory {
-            Session::new_with_memory(
-                Uuid::new_v4(),
-                shared.clone(),
-                memory,
-                cancel_token,
-            )
-        } else {
+        let initial_memory = if let Some(memory) = self.memory {
+            Some(memory)
+        } else if !self.initial_messages.is_empty() {
             let mut memory = Memory::new();
             for msg in self.initial_messages {
                 let _ = memory.remember(msg);
             }
-            let mut s = Session::new(Uuid::new_v4(), shared.clone());
-            s.memory = memory;
-            s.cancel_token = cancel_token;
-            s
+            Some(memory)
+        } else {
+            None
         };
-
-        // The Toolset created by Session::new has its own task list; we need
-        // the one we created above (which the builtin task tools reference).
-        // Replace it so the task tools point at the correct handle.
-        session.toolset = crate::tools::Toolset::from_registry_with_tasks(
-            shared.tool_registry.clone(),
-            tasks,
-            shared.event_tx(),
-        );
-
-        let session_id = session.id;
-        let mut sessions = std::collections::HashMap::new();
-        sessions.insert(session_id, session);
 
         Ok(Agent {
             shared,
-            sessions,
-            active_session_id: Some(session_id),
+            sessions: std::collections::HashMap::new(),
+            active_session_id: None,
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),
+            initial_memory,
+            cancel_token,
         })
     }
 }
