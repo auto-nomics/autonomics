@@ -199,6 +199,17 @@ impl AgentNetwork {
     }
 
     /// Number of pending delegations (agents waiting for a response).
+    /// Read the accumulated (not yet drained) LLM response for a node.
+    /// Returns empty string if no buffer exists. Does NOT drain — the
+    /// buffer is only removed when `process_event` receives a `Done`.
+    pub fn accumulated_response(&self, name: &str) -> &str {
+        self.response_buffers
+            .get(name)
+            .map(|s| s.as_str())
+            .unwrap_or("")
+    }
+
+    /// Number of pending delegations (agents waiting for a response).
     pub fn pending_count(&self) -> usize {
         self.pending_delegations.len()
     }

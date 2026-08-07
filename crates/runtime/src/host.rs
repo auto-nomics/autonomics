@@ -442,6 +442,9 @@ pub struct RuntimeHost {
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<crate::control::HostCommand>,
     /// Clonable control handle — passed to agent tools.
     control: crate::control::HostControl,
+    /// Pending tool-delegation reply channels: maps delegatee name → reply.
+    /// When the delegatee Dones, its response is sent through the channel.
+    tool_delegations: HashMap<String, tokio::sync::oneshot::Sender<String>>,
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -475,6 +478,7 @@ impl RuntimeHost {
             event_rx,
             cmd_rx,
             control,
+            tool_delegations: HashMap::new(),
         })
     }
 
@@ -543,6 +547,16 @@ impl RuntimeHost {
             }
             HostCommand::SendTo { name, message } => {
                 self.send_to(&name, message);
+            }
+            HostCommand::Delegate {
+                to,
+                message,
+                reply_tx,
+            } => {
+                // Record the reply channel — when `to` Dones, its response
+                // is sent through reply_tx (handled in step()).
+                self.tool_delegations.insert(to.clone(), reply_tx);
+                self.send_to(&to, message);
             }
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
@@ -735,7 +749,22 @@ impl RuntimeHost {
     /// Returns `(agent_name, raw_event, routing_actions)` or `None` if
     /// all agents are done.
     pub async fn step(&mut self) -> Option<(String, AgentEvent, Vec<RoutingAction>)> {
+        // Drain any pending tool commands first.
+        self.try_process_commands();
+
         let (name, event) = self.recv_any().await?;
+
+        // If a Done event arrives and there's a pending tool delegation,
+        // capture the accumulated response and send it to the waiting tool.
+        // This must happen BEFORE process_event (which drains the buffer).
+        if matches!(event, AgentEvent::Done) {
+            if let Some(reply_tx) = self.tool_delegations.remove(&name) {
+                let response = self.network.accumulated_response(&name).to_string();
+                let _ = reply_tx.send(response);
+            }
+        }
+
+        // Process the event through the topology network.
         let actions = self.network.process_event(&name, &event);
         for action in &actions {
             if let RoutingAction::Send { to, message } = action {

@@ -5,9 +5,8 @@
 //! channel. The RuntimeHost drains and executes these commands in its event
 //! loop via [`RuntimeHost::try_process_commands`](crate::RuntimeHost::try_process_commands).
 //!
-//! Commands that need a response (Spawn, GetStatus) include a `oneshot`
-//! reply channel; the tool `await`s it. The latency is bounded by the
-//! event-loop tick rate (~30 ms in the TUI).
+//! Commands that need a response (Spawn, Delegate, GetStatus) include a
+//! `oneshot` reply channel; the tool `await`s it.
 
 use agentik_network::{EdgeTrigger, TerminationSpec};
 use serde::{Deserialize, Serialize};
@@ -15,9 +14,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 /// A clonable handle for sending commands to RuntimeHost.
-///
-/// Passed to agent tools so they can control the multi-agent system
-/// (spawn agents, manage topology, send messages, query status).
 #[derive(Clone)]
 pub struct HostControl {
     pub(crate) cmd_tx: UnboundedSender<HostCommand>,
@@ -47,6 +43,7 @@ impl HostControl {
 
     // ── Convenience methods ────────────────────────────────
 
+    /// Send a message to a named agent (fire-and-forget, no response).
     pub fn send_to(&self, name: &str, message: impl Into<String>) {
         self.fire(HostCommand::SendTo {
             name: name.into(),
@@ -54,17 +51,27 @@ impl HostControl {
         });
     }
 
+    /// Delegate a task to a named agent and wait for its Done response.
+    /// Returns the target agent's full response text.
+    pub async fn delegate(&self, to: &str, message: impl Into<String>) -> Option<String> {
+        self.ask(|tx| HostCommand::Delegate {
+            to: to.into(),
+            message: message.into(),
+            reply_tx: tx,
+        })
+        .await
+    }
+
     pub fn shutdown_agent(&self, name: &str) {
         self.fire(HostCommand::Shutdown { name: name.into() });
     }
 
-    pub fn add_node(&self, name: &str, profile: &str) -> Result<(), String> {
+    pub fn add_node(&self, name: &str, profile: &str) {
         self.fire(HostCommand::AddNode {
             name: name.into(),
             profile: profile.into(),
             initial_prompt: None,
         });
-        Ok(())
     }
 
     pub fn add_node_with_prompt(
@@ -163,8 +170,16 @@ pub enum HostCommand {
     /// Disconnect two nodes.
     Disconnect { from: String, to: String },
 
-    /// Send a message to a named agent.
+    /// Send a message to a named agent (fire-and-forget).
     SendTo { name: String, message: String },
+
+    /// Delegate a task to an agent and wait for its Done response.
+    /// Reply: the target agent's response text.
+    Delegate {
+        to: String,
+        message: String,
+        reply_tx: oneshot::Sender<String>,
+    },
 
     /// Query host + topology status.
     GetStatus {
@@ -200,6 +215,6 @@ pub struct HostStatus {
     pub rounds: usize,
     /// Whether the network has terminated.
     pub is_finished: bool,
-    /// Current termination spec (as JSON string).
+    /// Current termination spec (as debug string).
     pub termination: String,
 }

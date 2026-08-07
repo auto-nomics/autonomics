@@ -21,6 +21,7 @@ pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SpawnAgentTool { control: ctrl.clone() }),
         ToolRegistration::from(SendToAgentTool { control: ctrl.clone() }),
+        ToolRegistration::from(DelegateToTool { control: ctrl.clone() }),
         ToolRegistration::from(ListAgentsTool { control: ctrl.clone() }),
         ToolRegistration::from(ConnectAgentsTool { control: ctrl.clone() }),
         ToolRegistration::from(DisconnectAgentsTool { control: ctrl.clone() }),
@@ -101,6 +102,51 @@ impl ToolFunction for SendToAgentTool {
             "Message delivered to '{}'.",
             input.agent_name
         )))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Delegate To Agent (request-response, background async)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "delegate_to",
+    description = "Delegate a task to another agent and wait for its full response. \
+                   The target agent processes the message and its complete output is \
+                   returned as this tool's result. Runs in the background — use \
+                   wait_task / view_task_results to retrieve the response. \
+                   Multiple delegates can run concurrently."
+)]
+struct DelegateToInput {
+    /// Name of the target agent to delegate to.
+    agent_name: String,
+    /// The task or question to send to the target agent.
+    task: String,
+}
+
+struct DelegateToTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for DelegateToTool {
+    type Input = DelegateToInput;
+
+    /// sync_seconds = 0 → immediately goes to background execution.
+    /// The agent can continue other work and retrieve the result via
+    /// wait_task / view_task_results.
+    fn sync_seconds(&self) -> u64 {
+        0
+    }
+
+    async fn run(&self, input: DelegateToInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        match self.control.delegate(&input.agent_name, input.task).await {
+            Some(response) => Ok(ToolResult::success(response)),
+            None => Ok(ToolResult::success(format!(
+                "Delegation to '{}' failed — agent not found or host channel closed.",
+                input.agent_name
+            ))),
+        }
     }
 }
 
