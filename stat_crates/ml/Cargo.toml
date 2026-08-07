@@ -1,0 +1,76 @@
+[package]
+name = "ml"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ml"
+path = "src/lib.rs"
+
+[features]
+default = ["linfa-stack"]
+# linfa algorithm family (classic ML)
+linfa-stack = [
+    "dep:linfa",
+    "dep:linfa-reduction",
+    "dep:linfa-ica",
+    "dep:linfa-tsne",
+    "dep:linfa-clustering",
+    "dep:linfa-svm",
+    "dep:linfa-trees",
+    "dep:linfa-linear",
+    "dep:linfa-logistic",
+    "dep:linfa-elasticnet",
+    "dep:linfa-bayes",
+    "dep:linfa-nn",
+    "dep:linfa-kernel",
+    "dep:linfa-preprocessing",
+    "dep:linfa-ensemble",
+    "dep:linfa-lars",
+    "dep:linfa-pls",
+    "dep:linfa-hierarchical",
+]
+# Deep learning via burn (opt-in, no dataset/sqlite feature to avoid rusqlite conflict)
+deep = ["dep:burn"]
+
+[dependencies]
+statkit = { path = "../statkit" }
+faer.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+rand = "0.9"
+rand_chacha = "0.9"
+bincode = "1.3"
+schemars.workspace = true
+ndarray = "0.16"
+ndarray-rand = "0.15"
+rand_isaac = "0.4"
+
+# ── linfa family (classic ML via linfa-stack feature) ──────────────────
+linfa = { version = "0.8", optional = true }
+linfa-reduction = { version = "0.8", optional = true }
+linfa-ica = { version = "0.8", optional = true }
+linfa-tsne = { version = "0.8", optional = true }
+linfa-clustering = { version = "0.8", optional = true }
+linfa-svm = { version = "0.8", optional = true }
+linfa-trees = { version = "0.8", optional = true }
+linfa-linear = { version = "0.8", optional = true }
+linfa-logistic = { version = "0.8", optional = true }
+linfa-elasticnet = { version = "0.8", optional = true }
+linfa-bayes = { version = "0.8", optional = true }
+linfa-nn = { version = "0.8", optional = true }
+linfa-kernel = { version = "0.8", optional = true }
+linfa-preprocessing = { version = "0.8", optional = true }
+linfa-ensemble = { version = "0.8", optional = true }
+linfa-lars = { version = "0.8", optional = true }
+linfa-pls = { version = "0.8", optional = true }
+linfa-hierarchical = { version = "0.8", optional = true }
+
+# ── deep learning (opt-in via deep feature, minimal to avoid rusqlite conflict) ─
+burn = { version = "0.14", optional = true, default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

@@ -54,6 +54,7 @@ members = [
   "crates/kms",
   "crates/kms-tools",
   "crates/agentik-network",
+  "stat_crates/ml",
 ]
 resolver = "3"
 
