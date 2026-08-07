@@ -2584,12 +2584,17 @@ dependencies = [
  "mtag",
  "mvmr",
  "nanoid",
+ "nodes-causal",
  "nodes-coloc",
  "nodes-epi",
  "nodes-hypothesize",
+ "nodes-io",
+ "nodes-lcmm",
  "nodes-ml",
+ "nodes-mr",
  "nodes-regression",
  "nodes-sql",
+ "nodes-survey",
  "nodes-survival",
  "nodes-viz",
  "opengwas",
@@ -7131,6 +7136,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodes-causal"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "epi",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statkit",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "nodes-coloc"
 version = "0.1.0"
 dependencies = [
@@ -7187,6 +7211,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodes-io"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "async-trait",
+ "biofusion",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "fs",
+ "iceberg",
+ "iceberg-catalog-rest",
+ "mr",
+ "opengwas",
+ "opentargets",
+ "parquet",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nodes-lcmm"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "lcmm",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "nodes-ml"
 version = "0.1.0"
 dependencies = [
@@ -7203,6 +7273,32 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "nodes-mr"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "faer",
+ "ldsc",
+ "mr",
+ "mrlap",
+ "mrpresso",
+ "mvmr",
+ "opengwas",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -7237,6 +7333,26 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "nodes-survey"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "survey",
  "thiserror 2.0.19",
  "tokio",
 ]

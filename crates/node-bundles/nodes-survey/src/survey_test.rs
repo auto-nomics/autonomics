@@ -13,12 +13,12 @@ use serde::Deserialize;
 
 use arrow_array::Float64Array;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
-use crate::codegen::helpers::{input_0, parse_spec};
-use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use crate::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
+use dag_core::codegen::helpers::{input_0, parse_spec};
+use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
 // svyttest
@@ -75,7 +75,7 @@ impl DagNode for SvyTtestNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyttest".into(),
@@ -91,13 +91,13 @@ impl DagNode for SvyTtestNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let mu = self.spec.null_value.unwrap_or(0.0);
 
         let t_result = if let Some(group_col) = &self.spec.group {
             // Two-sample: extract group indicator.
-            let group_str = super::survey_common::extract_string_column_pub(&batches, group_col)
+            let group_str = crate::survey_common::extract_string_column_pub(&batches, group_col)
                 .map_err(|e| DagError::NodeError {
                     node_type: "svyttest".into(),
                     msg: e.0,
@@ -198,8 +198,8 @@ impl NodeFactory for SvyTtestFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyTtestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTtestNode::new(node_spec)))
     }
@@ -284,7 +284,7 @@ impl DagNode for SvyRankTestNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyranktest".into(),
@@ -300,9 +300,9 @@ impl DagNode for SvyRankTestNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
-        let group_str = super::survey_common::extract_string_column_pub(&batches, &self.spec.group)
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
+        let group_str = crate::survey_common::extract_string_column_pub(&batches, &self.spec.group)
             .map_err(|e| DagError::NodeError {
                 node_type: "svyranktest".into(),
                 msg: e.0,
@@ -394,8 +394,8 @@ impl NodeFactory for SvyRankTestFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyRankTestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyRankTestNode::new(node_spec)))
     }
@@ -484,7 +484,7 @@ impl DagNode for SvyChisqNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svychisq".into(),
@@ -500,13 +500,13 @@ impl DagNode for SvyChisqNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let row = super::survey_common::extract_string_column_pub(&batches, &self.spec.row_var)
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let row = crate::survey_common::extract_string_column_pub(&batches, &self.spec.row_var)
             .map_err(|e| DagError::NodeError {
                 node_type: "svychisq".into(),
                 msg: e.0,
             })?;
-        let col = super::survey_common::extract_string_column_pub(&batches, &self.spec.col_var)
+        let col = crate::survey_common::extract_string_column_pub(&batches, &self.spec.col_var)
             .map_err(|e| DagError::NodeError {
                 node_type: "svychisq".into(),
                 msg: e.0,
@@ -574,8 +574,8 @@ impl NodeFactory for SvyChisqFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyChisqSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyChisqNode::new(node_spec)))
     }
@@ -658,7 +658,7 @@ impl DagNode for SvyCiPropNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyciprop".into(),
@@ -674,8 +674,8 @@ impl DagNode for SvyCiPropNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y = super::survey_common::extract_variables(&batches, &[self.spec.variable.clone()])?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let y = crate::survey_common::extract_variables(&batches, &[self.spec.variable.clone()])?;
 
         // Map R method names to our implementation.
         let method = match self.spec.method.as_str() {
@@ -752,8 +752,8 @@ impl NodeFactory for SvyCiPropFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyCiPropSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyCiPropNode::new(node_spec)))
     }
@@ -809,8 +809,8 @@ mod tests {
 
     // ── End-to-end test ────────────────────────────────────────────────────
 
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -847,7 +847,7 @@ mod tests {
             .unwrap();
 
         let spec = SvyTtestSpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -869,7 +869,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

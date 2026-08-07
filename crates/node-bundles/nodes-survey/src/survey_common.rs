@@ -17,11 +17,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     codegen::CodegenCtx,
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::NodeCtx,
+    registry::NodeCtx,
 };
 
 // =====================================================================
@@ -148,7 +148,7 @@ impl DagNode for SurveyStubNode {
         &mut self,
         _ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         Err(DagError::NodeError {
             node_type: self.kind.to_string(),
@@ -261,7 +261,7 @@ pub fn gen_design_r(
 pub fn build_stub<S>(
     kind: &'static str,
     spec: serde_json::Value,
-) -> Result<Box<dyn DagNode>, super::super::node_registry::error::Error>
+) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error>
 where
     S: serde::de::DeserializeOwned,
 {

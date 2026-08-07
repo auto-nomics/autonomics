@@ -16,12 +16,12 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::sink_common::SinkMode;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::sink::SinkMode;
+use dag_core::{
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -212,7 +212,7 @@ impl NodeFactory for IcebergSinkNodeFactory {
         &self,
         spec: serde_json::Value,
         node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: IcebergSinkNodeSpec = serde_json::from_value(spec)?;
         let node = IcebergSinkNode::new(node_spec.ident, node_spec.mode, node_ctx.datalake);
         Ok(Box::new(node))
@@ -221,9 +221,9 @@ impl NodeFactory for IcebergSinkNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<IcebergSinkNodeSpec>(spec, "sink_iceberg")?;
         let input = input_0(ctx).to_string();
         let code = vec![
@@ -235,7 +235,7 @@ impl NodeFactory for IcebergSinkNodeFactory {
             format!(r#"fwrite({input}, "iceberg_export.csv")"#),
             format!("# Then import iceberg_export.csv into table '{}'", s.ident),
         ];
-        Ok(crate::codegen::NodeCodegen {
+        Ok(dag_core::codegen::NodeCodegen {
             code,
             output_vars: vec![],
             extra_packages: vec![],
@@ -270,9 +270,9 @@ impl DagNode for IcebergSinkNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(IcebergSinkError::InvalidInput {
             message: "IcebergSinkNode requires exactly one upstream input".to_string(),
@@ -362,7 +362,7 @@ impl DagNode for IcebergSinkNode {
             .get_provider()
             .await
             .map_err(|e| IcebergSinkError::Iceberg { msg: e.to_string() })?;
-        let ctx = crate::node_registry::registry::new_isolated_ctx(
+        let ctx = dag_core::registry::new_isolated_ctx(
             node_ctx.runtime_env.clone(),
             Some(Arc::new(fresh_provider)),
         );
@@ -407,8 +407,8 @@ impl DagNode for IcebergSinkNode {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -573,7 +573,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

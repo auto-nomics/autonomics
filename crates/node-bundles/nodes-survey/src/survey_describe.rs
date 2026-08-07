@@ -16,14 +16,14 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use crate::survey_common::{
     SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
-use crate::codegen::helpers::{input_0, parse_spec};
-use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::codegen::helpers::{input_0, parse_spec};
+use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
 // svymean — REAL IMPLEMENTATION
@@ -76,9 +76,9 @@ impl DagNode for SvyMeanNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        super::survey_common::execute_describe(
+        crate::survey_common::execute_describe(
             "svymean",
             &self.spec.variables,
             &self.spec.design,
@@ -114,8 +114,8 @@ impl NodeFactory for SvyMeanFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyMeanSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyMeanNode::new(node_spec)))
     }
@@ -186,9 +186,9 @@ impl DagNode for SvyTotalNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        super::survey_common::execute_describe(
+        crate::survey_common::execute_describe(
             "svytotal",
             &self.spec.variables,
             &self.spec.design,
@@ -223,8 +223,8 @@ impl NodeFactory for SvyTotalFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyTotalSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTotalNode::new(node_spec)))
     }
@@ -297,9 +297,9 @@ impl DagNode for SvyVarNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        super::survey_common::execute_describe(
+        crate::survey_common::execute_describe(
             "svyvar",
             &self.spec.variables,
             &self.spec.design,
@@ -334,8 +334,8 @@ impl NodeFactory for SvyVarFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyVarSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyVarNode::new(node_spec)))
     }
@@ -409,7 +409,7 @@ impl DagNode for SvyRatioNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyratio".into(),
@@ -425,11 +425,11 @@ impl DagNode for SvyRatioNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let num =
-            super::survey_common::extract_variables(&batches, &[self.spec.numerator.clone()])?;
+            crate::survey_common::extract_variables(&batches, &[self.spec.numerator.clone()])?;
         let den =
-            super::survey_common::extract_variables(&batches, &[self.spec.denominator.clone()])?;
+            crate::survey_common::extract_variables(&batches, &[self.spec.denominator.clone()])?;
 
         let stat = survey::svyratio(&num, &den, &design, self.spec.na_rm).map_err(|e| {
             DagError::NodeError {
@@ -439,7 +439,7 @@ impl DagNode for SvyRatioNode {
         })?;
 
         let var_names = vec![format!("{}/{}", self.spec.numerator, self.spec.denominator)];
-        let batch = super::survey_common::build_describe_output_batch(&var_names, &stat)?;
+        let batch = crate::survey_common::build_describe_output_batch(&var_names, &stat)?;
         let ctx = node_ctx.session();
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: "svyratio".into(),
@@ -473,8 +473,8 @@ impl NodeFactory for SvyRatioFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyRatioSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyRatioNode::new(node_spec)))
     }
@@ -548,7 +548,7 @@ impl DagNode for SvyTableNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svytable".into(),
@@ -564,13 +564,13 @@ impl DagNode for SvyTableNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
 
         // Extract the variable columns.
         let mut cols: Vec<Vec<String>> = Vec::new();
         for v in &self.spec.variables {
             cols.push(
-                super::survey_common::extract_string_column_pub(&batches, v).map_err(|e| {
+                crate::survey_common::extract_string_column_pub(&batches, v).map_err(|e| {
                     DagError::NodeError {
                         node_type: "svytable".into(),
                         msg: e.0,
@@ -703,8 +703,8 @@ impl NodeFactory for SvyTableFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyTableSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTableNode::new(node_spec)))
     }
@@ -800,7 +800,7 @@ impl DagNode for SvyQuantileNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyquantile".into(),
@@ -816,8 +816,8 @@ impl DagNode for SvyQuantileNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let x = super::survey_common::extract_variables(&batches, &self.spec.variables)?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let x = crate::survey_common::extract_variables(&batches, &self.spec.variables)?;
 
         let mut qs_out: Vec<f64> = Vec::new();
         let mut los: Vec<f64> = Vec::new();
@@ -901,8 +901,8 @@ impl NodeFactory for SvyQuantileFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyQuantileSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyQuantileNode::new(node_spec)))
     }
@@ -972,8 +972,8 @@ mod tests {
     // Uses the R `fpc` dataset (8 obs, 2 strata) and validates the Rust
     // svymean output against R survey v4.5 golden values.
 
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -1018,7 +1018,7 @@ mod tests {
             .unwrap();
 
         let spec = SvyMeanSpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -1039,7 +1039,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
@@ -1080,7 +1080,7 @@ mod tests {
             .unwrap();
 
         let spec = SvyMeanSpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -1101,7 +1101,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
@@ -1154,7 +1154,7 @@ mod tests {
             .unwrap();
 
         let spec = SvyTableSpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -1174,7 +1174,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

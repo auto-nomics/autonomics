@@ -13,10 +13,10 @@ use datafusion::common::HashMap;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodePorts};
-use crate::nodes::source_opengwas::{build_json_batch, extract_rows, make_client, single_output_port};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodePorts};
+use crate::source_opengwas::{build_json_batch, extract_rows, make_client, single_output_port};
 
 // ---------------------------------------------------------------------------
 // Spec
@@ -115,7 +115,7 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: OpengwasTophitsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasTophitsNode::new(node_spec)))
     }
@@ -123,9 +123,9 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasTophitsSpec>(spec, SOURCE_OPENGWAS_TOPHITS_KIND)?;
         let out = ctx.output_var.to_string();
         let ids = s.id.join("\", \"");
@@ -139,7 +139,7 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
             ),
             format!("{out} <- ao[ao$pval.outcome <= {}, ]", s.pval),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -168,8 +168,8 @@ impl DagNode for OpengwasTophitsNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
 

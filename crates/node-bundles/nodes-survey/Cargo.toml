@@ -1,0 +1,28 @@
+[package]
+name = "nodes-survey"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Survey analysis DAG node bundle (R survey package port)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+survey = { path = "../../../stat_crates/survey" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+statrs = "0.18"
+arrow.workspace = true
+datafusion.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }
+
+[lints]
+workspace = true

@@ -28,8 +28,8 @@ use opentargets::{
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use crate::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -150,7 +150,7 @@ impl NodeFactory for OpentargetsAssociationsNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: OpentargetsAssociationsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpentargetsAssociationsNode {
             meta: assoc_port_layout(),
@@ -161,9 +161,9 @@ impl NodeFactory for OpentargetsAssociationsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpentargetsAssociationsSpec>(spec, "source_opentargets_associations")?;
         let out = ctx.output_var.to_string();
         let code = vec![
@@ -181,7 +181,7 @@ impl NodeFactory for OpentargetsAssociationsNodeFactory {
             format!("  encode = \"json\""),
             format!("))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -210,8 +210,8 @@ impl DagNode for OpentargetsAssociationsNode {
     async fn execute(
         &mut self,
         ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let direction = self
             .spec
@@ -463,7 +463,7 @@ impl NodeFactory for OpentargetsSearchNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: OpentargetsSearchSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpentargetsSearchNode {
             meta: search_port_layout(),
@@ -474,9 +474,9 @@ impl NodeFactory for OpentargetsSearchNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpentargetsSearchSpec>(spec, "source_opentargets_search")?;
         let out = ctx.output_var.to_string();
         let code = vec![
@@ -490,7 +490,7 @@ impl NodeFactory for OpentargetsSearchNodeFactory {
             format!("  encode = \"json\""),
             format!("))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -519,8 +519,8 @@ impl DagNode for OpentargetsSearchNode {
     async fn execute(
         &mut self,
         ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = client_from_endpoint(&self.spec.endpoint);
         let entities: Option<Vec<&str>> = self

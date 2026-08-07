@@ -1,7 +1,7 @@
 //! File sink node: consumes an upstream `DataFrame` and writes it to a file
 //! (CSV or Parquet).
 //!
-//! One untyped input port; no output ports. Symmetric to [`crate::nodes::FileSourceNode`]
+//! One untyped input port; no output ports. Symmetric to [`crate::source_file::FileSourceNode`]
 //! for the file case.
 
 use async_trait::async_trait;
@@ -14,14 +14,14 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::sink_common::SinkMode;
-use super::source_file::normalize_path;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::sink::SinkMode;
+use crate::source_file::normalize_path;
+use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 /// Supported on-disk write formats.
@@ -95,7 +95,7 @@ impl FileSinkNode {
     /// is returned unchanged.
     async fn append_existing(
         &self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         path: &str,
         format: WriteFormat,
         new: DataFrame,
@@ -181,7 +181,7 @@ impl NodeFactory for FileSinkNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSinkNodeSpec = serde_json::from_value(spec)?;
         let node = FileSinkNode::new(node_spec.path, node_spec.format, node_spec.mode);
         Ok(Box::new(node))
@@ -253,9 +253,9 @@ impl DagNode for FileSinkNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(FileSinkError::InvalidInput {
             message: "FileSinkNode requires exactly one upstream input".to_string(),
@@ -300,8 +300,8 @@ impl DagNode for FileSinkNode {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -314,10 +314,8 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::prelude::{DataFrame, SessionContext};
 
-    use crate::nodes::{
-        FileSinkNode, SinkMode, WriteFormat,
-        meta::{DagNode, NodeInput},
-    };
+    use crate::sink_file::{FileSinkNode, WriteFormat};
+    use dag_core::{DagNode, NodeInput, SinkMode};
 
     /// Build a small in-memory [`DataFrame`] for sink tests.
     ///
@@ -410,7 +408,7 @@ mod tests {
                 node.execute(
                     &node_ctx(),
                     &[NodeInput { port: 0, data: df }],
-                    &crate::dag::node_event::NodeReporter::noop(),
+                    &dag_core::dag::node_event::NodeReporter::noop(),
                 )
                 .await
             }
@@ -440,7 +438,7 @@ mod tests {
                 node.execute(
                     &node_ctx(),
                     &[NodeInput { port: 0, data: df }],
-                    &crate::dag::node_event::NodeReporter::noop(),
+                    &dag_core::dag::node_event::NodeReporter::noop(),
                 )
                 .await
             }

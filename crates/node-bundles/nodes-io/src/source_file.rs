@@ -19,11 +19,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 /// Supported file formats. Tabular formats go through DataFusion natively;
@@ -185,7 +185,7 @@ impl NodeFactory for FileSourceNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
         let node = FileSourceNode::new(node_spec.path, node_spec.format);
         Ok(Box::new(node))
@@ -276,9 +276,9 @@ impl DagNode for FileSourceNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         _inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ctx = node_ctx.session();
         let path = normalize_path(&self.path);

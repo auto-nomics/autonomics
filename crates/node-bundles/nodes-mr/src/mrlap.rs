@@ -16,10 +16,10 @@ use faer::Mat;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 const MRLAP_KIND: &str = "mrlap";
 
@@ -148,16 +148,16 @@ impl NodeFactory for MrlapNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(MrlapNode::new(serde_json::from_value(spec)?)))
     }
 
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<MrlapSpec>(spec, "mrlap")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
@@ -192,7 +192,7 @@ impl NodeFactory for MrlapNodeFactory {
             format!("{out} <- summary({result})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -213,7 +213,7 @@ fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        for v in super::meta::string_opt_values(col.as_ref())? {
+        for v in dag_core::node::string_opt_values(col.as_ref())? {
             out.push(v.unwrap_or_default());
         }
     }
@@ -347,7 +347,7 @@ impl DagNode for MrlapNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
 

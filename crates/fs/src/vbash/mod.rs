@@ -74,8 +74,8 @@ impl ToolFunction for VfsBashTool {
             // ── reading ──
             "read" => ops::op_read(op, input.path.as_deref(), input.offset, input.limit).await,
             "cat" => ops::op_cat(op, input.path.as_deref(), input.offset, input.limit).await,
-            "head" => ops::op_head(op, input.path.as_deref(), input.limit).await,
-            "tail" => ops::op_tail(op, input.path.as_deref(), input.limit).await,
+            "head" => ops::op_head(op, input.path.as_deref(), input.offset, input.limit).await,
+            "tail" => ops::op_tail(op, input.path.as_deref(), input.offset, input.limit).await,
 
             // ── writing ──
             "write" => ops::op_write(op, input.path.as_deref(), input.content.as_deref()).await,
@@ -739,6 +739,185 @@ mod tests {
                 "content length mismatch on write #{i}"
             );
         }
+    }
+
+    // ─── ls default non-recursive (问题 8) ───────────────────────────
+
+    #[tokio::test]
+    async fn ls_default_is_non_recursive() {
+        let tool = make_tool();
+        // Set up: top-level file + nested file
+        let mut w1 = input("write");
+        w1.path = Some("/top.txt".into());
+        w1.content = Some("top".into());
+        tool.run(w1).await.unwrap();
+
+        let mut w2 = input("write");
+        w2.path = Some("/dir/nested.txt".into());
+        w2.content = Some("nested".into());
+        tool.run(w2).await.unwrap();
+
+        // Default (no recursive flag) must NOT see the nested entry
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<String> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str().map(String::from))
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("top.txt")),
+            "expected top.txt at depth 0, got: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with("nested.txt")),
+            "default ls must not descend into subdirs, got: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ls_recursive_true_descends() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/dir/nested.txt".into());
+        w.content = Some("nested".into());
+        tool.run(w).await.unwrap();
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(true);
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<String> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str().map(String::from))
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("nested.txt")),
+            "recursive ls should include nested files, got: {names:?}"
+        );
+    }
+
+    // ─── tree standard tree characters (问题 9) ─────────────────────
+
+    #[tokio::test]
+    async fn tree_uses_standard_tree_chars() {
+        let tool = make_tool();
+        let mut m = input("mkdir");
+        m.path = Some("/d".into());
+        tool.run(m).await.unwrap();
+        let mut w = input("write");
+        w.path = Some("/d/a.txt".into());
+        w.content = Some("a".into());
+        tool.run(w).await.unwrap();
+        let mut w = input("write");
+        w.path = Some("/d/b.txt".into());
+        w.content = Some("b".into());
+        tool.run(w).await.unwrap();
+
+        let mut t = input("tree");
+        t.path = Some("/".into());
+        let result = tool.run(t).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(
+            content.contains("├── ") || content.contains("└── "),
+            "expected tree connectors in:\n{content}"
+        );
+        assert!(content.contains("d/"), "expected 'd/' marker in:\n{content}");
+        assert!(content.contains("a.txt"), "expected a.txt in:\n{content}");
+        assert!(content.contains("b.txt"), "expected b.txt in:\n{content}");
+    }
+
+    #[tokio::test]
+    async fn tree_root_not_duplicated() {
+        let tool = make_tool();
+        let mut t = input("tree");
+        t.path = Some("/".into());
+        let result = tool.run(t).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        // Root must appear exactly once (as the header), not as a child
+        let count = content.matches("
+/").count();
+        assert!(
+            count <= 1,
+            "root '/' should not be duplicated as child, got content:\n{content}"
+        );
+    }
+
+    // ─── head/tail offset semantics (问题 10) ────────────────────────
+
+    #[tokio::test]
+    async fn head_offset_skips_lines() {
+        let tool = make_tool();
+        let lines: String = (1..=10).map(|i| format!("line{i}\n")).collect();
+        let mut w = input("write");
+        w.path = Some("/nums.txt".into());
+        w.content = Some(lines);
+        tool.run(w).await.unwrap();
+
+        let mut h = input("head");
+        h.path = Some("/nums.txt".into());
+        h.offset = Some(4);
+        h.limit = Some(3);
+        let result = tool.run(h).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["start_line"], 4);
+        assert_eq!(json["lines_returned"], 3);
+        let content = json["content"].as_str().unwrap();
+        assert!(content.contains("line4"));
+        assert!(content.contains("line6"));
+        assert!(!content.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn tail_offset_is_ignored() {
+        let tool = make_tool();
+        let lines: String = (1..=10).map(|i| format!("line{i}\n")).collect();
+        let mut w = input("write");
+        w.path = Some("/nums.txt".into());
+        w.content = Some(lines);
+        tool.run(w).await.unwrap();
+
+        let mut t = input("tail");
+        t.path = Some("/nums.txt".into());
+        t.offset = Some(5); // should be ignored
+        t.limit = Some(2);
+        let result = tool.run(t).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(
+            json["offset_ignored"], true,
+            "tail must flag offset_ignored when caller passed one"
+        );
+        let content = json["content"].as_str().unwrap();
+        // tail 2 = last 2 lines = line9 and line10
+        assert!(content.contains("line10"));
+        assert!(content.contains("line9"));
+        assert!(!content.contains("line8"));
+    }
+
+    #[tokio::test]
+    async fn head_nonexistent_returns_error() {
+        let tool = make_tool();
+        let mut h = input("head");
+        h.path = Some("/nope_head".into());
+        let result = tool.run(h).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn tail_nonexistent_returns_error() {
+        let tool = make_tool();
+        let mut t = input("tail");
+        t.path = Some("/nope_tail".into());
+        let result = tool.run(t).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
     }
 
 

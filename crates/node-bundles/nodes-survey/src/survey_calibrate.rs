@@ -16,14 +16,14 @@ use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use crate::survey_common::{
     SurveyDesignSpec, build_survey_design, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
-use crate::codegen::helpers::{input_0, parse_spec};
-use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::codegen::helpers::{input_0, parse_spec};
+use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
 // post_stratify
@@ -86,7 +86,7 @@ impl DagNode for PostStratifyNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "post_stratify".into(),
@@ -104,7 +104,7 @@ impl DagNode for PostStratifyNode {
 
         let design = build_survey_design(&self.spec.design, &batches)?;
         let strata_vec =
-            super::survey_common::extract_string_column_pub(&batches, &self.spec.strata[0])
+            crate::survey_common::extract_string_column_pub(&batches, &self.spec.strata[0])
                 .map_err(|e| DagError::NodeError {
                     node_type: "post_stratify".into(),
                     msg: e.0,
@@ -193,8 +193,8 @@ impl NodeFactory for PostStratifyFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: PostStratifySpec = serde_json::from_value(spec)?;
         Ok(Box::new(PostStratifyNode::new(node_spec)))
     }
@@ -318,7 +318,7 @@ impl DagNode for RakeNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "rake".into(),
@@ -339,7 +339,7 @@ impl DagNode for RakeNode {
         // Build the margins: (column values, population map) per margin.
         let mut margins: Vec<(Vec<String>, std::collections::HashMap<String, f64>)> = Vec::new();
         for m in &self.spec.margins {
-            let col = super::survey_common::extract_string_column_pub(&batches, &m.variable)
+            let col = crate::survey_common::extract_string_column_pub(&batches, &m.variable)
                 .map_err(|e| DagError::NodeError {
                     node_type: "rake".into(),
                     msg: e.0,
@@ -424,8 +424,8 @@ impl NodeFactory for RakeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: RakeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(RakeNode::new(node_spec)))
     }
@@ -567,7 +567,7 @@ impl DagNode for CalibrateNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Only the linear (regcalibrate) path is implemented in Rust.
         if self.spec.calfun != "linear" {
@@ -595,7 +595,7 @@ impl DagNode for CalibrateNode {
             })?;
 
         let design = build_survey_design(&self.spec.design, &batches)?;
-        let aux = super::survey_common::extract_variables(&batches, &self.spec.variables)?;
+        let aux = crate::survey_common::extract_variables(&batches, &self.spec.variables)?;
 
         let new_design = survey::calibrate_linear(&design, &aux, &self.spec.population_totals)
             .map_err(|e| DagError::NodeError {
@@ -670,8 +670,8 @@ impl NodeFactory for CalibrateFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: CalibrateSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CalibrateNode::new(node_spec)))
     }
@@ -780,7 +780,7 @@ impl DagNode for TrimWeightsNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "trim_weights".into(),
@@ -875,8 +875,8 @@ impl NodeFactory for TrimWeightsFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: TrimWeightsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TrimWeightsNode::new(node_spec)))
     }
@@ -925,8 +925,8 @@ mod tests {
     use arrow_schema::Schema;
     use std::sync::Arc;
 
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -963,7 +963,7 @@ mod tests {
         pop.insert("2".into(), 24.0);
 
         let spec = PostStratifySpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -986,7 +986,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
@@ -1058,7 +1058,7 @@ mod tests {
         pop1.insert("2".into(), 16.0);
 
         let spec = RakeSpec {
-            design: super::super::survey_common::SurveyDesignSpec {
+            design: crate::survey_common::SurveyDesignSpec {
                 ids: vec!["psuid".into()],
                 strata: vec!["stratid".into()],
                 probs: vec![],
@@ -1084,7 +1084,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

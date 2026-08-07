@@ -108,14 +108,35 @@ pub async fn op_cat(
 }
 
 /// `head` — first N lines (default 10).
+///
+/// `offset` (1-indexed) skips that many leading lines before applying
+/// `limit`. Mirrors `cat` / `read` semantics so the three ops stay
+/// interchangeable for paging through a file.
 pub async fn op_head(
     op: &opendal::Operator,
     path: Option<&str>,
+    offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for head")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+    let start = offset.unwrap_or(1).saturating_sub(1);
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "head: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("head: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "head: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
@@ -124,27 +145,50 @@ pub async fn op_head(
     }
     let content = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = content.lines().collect();
-    let take = n.min(lines.len());
-
-    let out: String = lines[..take].join("\n");
+    let total_lines = lines.len();
+    let start = start.min(total_lines);
+    let end = (start + n).min(total_lines);
+    let out: String = lines[start..end].join("\n");
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": raw_path,
         "content": out,
-        "lines_returned": take,
-        "total_lines": lines.len(),
+        "start_line": start + 1,
+        "lines_returned": end - start,
+        "total_lines": total_lines,
     })))
 }
 
 /// `tail` — last N lines (default 10).
+///
+/// `offset` is **not** meaningful for `tail` (Unix tail has no offset
+/// concept). If the caller passes one it is silently ignored and the
+/// response sets `offset_ignored: true` so the caller can detect the
+/// mismatch and switch to `cat` / `read` if they meant to page.
 pub async fn op_tail(
     op: &opendal::Operator,
     path: Option<&str>,
+    offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for tail")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "tail: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("tail: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "tail: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
@@ -158,12 +202,17 @@ pub async fn op_tail(
 
     let out: String = lines[start..].join("\n");
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
+    let mut payload = serde_json::json!({
         "path": raw_path,
         "content": out,
         "lines_returned": total - start,
         "total_lines": total,
-    })))
+    });
+    if offset.is_some() {
+        payload["offset_ignored"] = serde_json::json!(true);
+    }
+
+    Ok(AgentToolResult::success_json(payload))
 }
 
 // ══════════════════ writing ops ══════════════════
@@ -346,7 +395,9 @@ pub async fn op_ls(
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
-    let recursive = recursive.unwrap_or(true);
+    // Match Unix `ls` (non-recursive by default); pass recursive=true
+    // for the previous recursive listing behaviour.
+    let recursive = recursive.unwrap_or(false);
     // Treat 0 as "no explicit limit" — the field is optional in the schema
     // and some callers default-empty rather than omitting it.
     let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
@@ -617,7 +668,9 @@ pub async fn op_wc(
     })))
 }
 
-/// `tree` — formatted recursive directory listing.
+/// `tree` — formatted recursive directory listing using standard
+/// `├──` / `└──` / `│` tree characters (instead of plain indented
+/// slashes which were hard to scan visually).
 pub async fn op_tree(
     op: &opendal::Operator,
     path: Option<&str>,
@@ -626,21 +679,32 @@ pub async fn op_tree(
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let max_entries = limit.unwrap_or(500);
 
+    // OpenDAL Fs backend requires a trailing '/' to walk recursively.
+    let scan = if vpath.ends_with('/') {
+        vpath.clone()
+    } else {
+        format!("{vpath}/")
+    };
     let mut lister = op
-        .lister_with(&vpath)
+        .lister_with(&scan)
         .recursive(true)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Collect entries as (depth, path, is_dir).
+    // Collect entries as (depth, path, is_dir). Drop the scan-root
+    // self-entry to avoid duplicating it in the rendered tree.
     let mut entries: Vec<(usize, String, bool)> = Vec::new();
     let prefix = vpath.trim_end_matches('/');
+    let scan_root = if prefix.is_empty() { "/" } else { prefix };
     while let Some(entry) = lister.next().await {
         let entry = entry.map_err(|e| e.to_string())?;
         let p = entry.path().to_string();
         let is_dir = entry.metadata().is_dir();
 
-        // Compute depth relative to the scan root.
+        if is_dir && p.trim_end_matches('/') == scan_root.trim_end_matches('/') {
+            continue;
+        }
+
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {
@@ -653,17 +717,72 @@ pub async fn op_tree(
         }
     }
 
-    // Render tree.
     entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Index immediate children by parent path. Always use the virtual
+    // root ('/') as the top-level parent so we can render the tree from
+    // there.
+    let mut children_of: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (_, p, _) in &entries {
+        let pp = match p.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(i) => p[..i].to_string(),
+            None => "/".to_string(),
+        };
+        children_of.entry(pp).or_default().push(p.clone());
+    }
+    for v in children_of.values_mut() {
+        v.sort();
+    }
+
+    let meta_by_path: std::collections::HashMap<String, bool> =
+        entries.iter().map(|(_, p, d)| (p.clone(), *d)).collect();
+
     let mut out = String::new();
     out.push_str(&vpath);
     out.push('\n');
-    for (depth, p, is_dir) in &entries {
-        let indent = "  ".repeat(*depth);
-        let name = p.rsplit('/').next().unwrap_or(p);
-        let suffix = if *is_dir { "/" } else { "" };
-        out.push_str(&format!("{indent}{name}{suffix}\n"));
+    panic!("DBG children_of keys: {:?}, entries: {:?}, scan={:?}", children_of.keys().collect::<Vec<_>>(), entries, scan);
+
+    // `ancestor_has_more[i]` is true when the i-th ancestor of the
+    // current node has a later sibling — i.e. we should keep drawing
+    // the `│` guide at that level instead of blank space.
+    fn walk(
+        parent: &str,
+        ancestor_has_more: &mut Vec<bool>,
+        children_of: &std::collections::BTreeMap<String, Vec<String>>,
+        meta_by_path: &std::collections::HashMap<String, bool>,
+        out: &mut String,
+    ) {
+        let Some(children) = children_of.get(parent) else { return };
+        let n = children.len();
+        for (i, child) in children.iter().enumerate() {
+            let is_last = i + 1 == n;
+            let is_dir = meta_by_path.get(child).copied().unwrap_or(false);
+            let name = child.rsplit('/').next().unwrap_or(child);
+            let display = if is_dir {
+                format!("{name}/")
+            } else {
+                name.to_string()
+            };
+            let connector = if is_last { "└── " } else { "├── " };
+            for more in ancestor_has_more.iter() {
+                out.push_str(if *more { "│   " } else { "    " });
+            }
+            out.push_str(connector);
+            out.push_str(&display);
+            out.push('\n');
+
+            if is_dir {
+                ancestor_has_more.push(!is_last);
+                walk(child, ancestor_has_more, children_of, meta_by_path, out);
+                ancestor_has_more.pop();
+            }
+        }
     }
+
+    let mut ancestor_has_more: Vec<bool> = Vec::new();
+    walk("/", &mut ancestor_has_more, &children_of, &meta_by_path, &mut out);
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": vpath,

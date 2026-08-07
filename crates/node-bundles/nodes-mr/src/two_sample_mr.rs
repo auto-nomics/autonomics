@@ -35,11 +35,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -775,8 +775,8 @@ async fn clump_iceberg_ld(
                 (Some(a), Some(b), Some(r)) => (a, b, r),
                 _ => continue,
             };
-            let a_vals = super::meta::string_opt_values(col_a.as_ref());
-            let b_vals = super::meta::string_opt_values(col_b.as_ref());
+            let a_vals = dag_core::node::string_opt_values(col_a.as_ref());
+            let b_vals = dag_core::node::string_opt_values(col_b.as_ref());
             if let (Some(a_vals), Some(b_vals)) = (a_vals, b_vals) {
                 for i in 0..batch.num_rows() {
                     if col_r2.is_null(i) {
@@ -942,7 +942,7 @@ impl NodeFactory for TwoSampleMrNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: TwoSampleMrNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TwoSampleMrNode::new(spec)))
     }
@@ -1088,9 +1088,9 @@ impl DagNode for TwoSampleMrNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(TwoSampleMrNodeError::EmptyInput)?;
 

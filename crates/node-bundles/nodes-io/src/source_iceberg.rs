@@ -3,7 +3,7 @@
 //! An [`IcebergSourceNode`] has no inputs and produces exactly one output. The
 //! table is resolved by identifier (`namespace.table`) through the `iceberg`
 //! catalog registered on the engine context. Symmetric to
-//! [`crate::nodes::IcebergSinkNode`] for the Iceberg case.
+//! [`crate::sink_iceberg::IcebergSinkNode`] for the Iceberg case.
 
 use async_trait::async_trait;
 use datafusion::common::HashMap;
@@ -11,11 +11,11 @@ use datafusion::prelude::DataFrame;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::DagError,
     dag::graph::PortOutputs,
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ impl NodeFactory for IcebergSourceNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: IcebergSourceNodeSpec = serde_json::from_value(spec)?;
         let node = IcebergSourceNode::new(node_spec.ident);
         Ok(Box::new(node))
@@ -86,9 +86,9 @@ impl NodeFactory for IcebergSourceNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<IcebergSourceNodeSpec>(spec, "source_iceberg")?;
         let out = ctx.output_var.to_string();
         let code = vec![
@@ -102,7 +102,7 @@ impl NodeFactory for IcebergSourceNodeFactory {
                 s.ident
             ),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -126,9 +126,9 @@ impl DagNode for IcebergSourceNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         _inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ctx = node_ctx.session();
         // The iceberg catalog is registered under "iceberg"; qualify the
@@ -190,8 +190,8 @@ pub(crate) fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -211,7 +211,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

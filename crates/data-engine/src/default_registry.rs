@@ -1,8 +1,8 @@
 //! Registration of all built-in node factories into a [`NodeRegistry`].
 //!
 //! [`dag_core::NodeRegistry`] is the infrastructure; this module populates it
-//! with every concrete factory implemented in `data-engine`. Called once at
-//! engine startup by [`crate::data_engine::DataEngine`].
+//! with every concrete factory implemented in `data-engine` and all enabled
+//! bundle plugins. Called once at engine startup by [`crate::data_engine::DataEngine`].
 
 use std::sync::Arc;
 
@@ -12,65 +12,11 @@ use datafusion::{
 };
 use datalake::Datalake;
 
-use dag_core::registry::{NodeCtx, NodeRegistry};
-
-use crate::nodes::{
-    bivariate_mixer::BivariateMixerNodeFactory,
-    causal::CausalNodeFactory,
-    cmest::{
-        CmestBinaryMNodeFactory, CmestBinaryYNodeFactory, CmestGformulaNodeFactory,
-        CmestMultiNodeFactory, CmestNodeFactory, CmestWeightingNodeFactory,
-    },
-    cpassoc::CpassocNodeFactory,
-    hdl_l::HdlLNodeFactory,
-    hdl_l_scan::HdlLScanNodeFactory,
-    hlme::{HlmeCompareNodeFactory, HlmeNodeFactory, HlmePredictNodeFactory},
-    lava::{
-        LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
-        LavaUnivNodeFactory,
-    },
-    lcv::LcvNodeFactory,
-    ldsc_hsq::LdscHsqNodeFactory,
-    ldsc_rg::LdscRgNodeFactory,
-    ldsc_sldsc::LdscSldscNodeFactory,
-    liability::LiabilityNodeFactory,
-    magma::{
-        MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
-    },
-    mediation::MediationNodeFactory,
-    mrlap::MrlapNodeFactory,
-    mrpresso::MrpressoNodeFactory,
-    mtag::MtagNodeFactory,
-    mvmr::MvmrNodeFactory,
-    sink_file::FileSinkNodeFactory,
-    sink_iceberg::IcebergSinkNodeFactory,
-    source_file::FileSourceNodeFactory,
-    source_iceberg::IcebergSourceNodeFactory,
-    source_opengwas_tophits::OpengwasTophitsNodeFactory,
-    source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
-    survey_calibrate::{CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory},
-    survey_describe::{
-        SvyMeanFactory, SvyQuantileFactory, SvyRatioFactory, SvyTableFactory, SvyTotalFactory,
-        SvyVarFactory,
-    },
-    survey_model::{
-        SvyCoxphFactory, SvyGlmFactory, SvyIvregFactory, SvyLoglinFactory, SvyMleFactory,
-        SvyNlsFactory, SvyOlrFactory, SvySurvregFactory,
-    },
-    survey_survival::{SvyKmFactory, SvyLogrankFactory},
-    survey_test::{SvyChisqFactory, SvyCiPropFactory, SvyRankTestFactory, SvyTtestFactory},
-    survey_utility::{RegTermTestFactory, SvyByFactory, SvyContrastFactory, SvyStandardizeFactory},
-    susie_rss::SusieRssNodeFactory,
-    two_sample_mr::TwoSampleMrNodeFactory,
-    univariate_mixer::UnivariateMixerNodeFactory,
-};
+use dag_core::registry::NodeRegistry;
 
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
 ///
-/// This is the engine's "default plugin set" — the single place that knows
-/// about all concrete factories. As node bundles are extracted into separate
-/// crates (Phase 1+), each bundle's `Plugin::register` will replace the
-/// corresponding `register` calls here.
+/// Node bundles are registered via Cargo features (default: all enabled).
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
     iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
@@ -84,16 +30,19 @@ pub fn build_default_registry(
         opendal,
     );
 
-    registry.register(Box::new(FileSourceNodeFactory {}));
-    registry.register(Box::new(IcebergSourceNodeFactory {}));
-    registry.register(Box::new(FileSinkNodeFactory {}));
-    registry.register(Box::new(IcebergSinkNodeFactory {}));
-    registry.register(Box::new(LdscHsqNodeFactory {}));
-    registry.register(Box::new(LdscRgNodeFactory {}));
-    registry.register(Box::new(LcvNodeFactory {}));
-    registry.register(Box::new(LdscSldscNodeFactory {}));
-    registry.register(Box::new(LiabilityNodeFactory {}));
-    // ── Phase 2 bundles ──────────────────────────────────────────────
+    // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
+    #[cfg(feature = "bundle-io")]
+    registry.register_plugin(&nodes_io::Plugin);
+    #[cfg(feature = "bundle-causal")]
+    registry.register_plugin(&nodes_causal::Plugin);
+    #[cfg(feature = "bundle-lcmm")]
+    registry.register_plugin(&nodes_lcmm::Plugin);
+    #[cfg(feature = "bundle-mr")]
+    registry.register_plugin(&nodes_mr::Plugin);
+    #[cfg(feature = "bundle-survey")]
+    registry.register_plugin(&nodes_survey::Plugin);
+
+    // ── Phase 2: regression, survival, coloc, epi, viz, sql bundles ────
     #[cfg(feature = "bundle-regression")]
     registry.register_plugin(&nodes_regression::Plugin);
     #[cfg(feature = "bundle-survival")]
@@ -106,20 +55,42 @@ pub fn build_default_registry(
     registry.register_plugin(&nodes_viz::Plugin);
     #[cfg(feature = "bundle-sql")]
     registry.register_plugin(&nodes_sql::Plugin);
-    // ── remaining inline registrations ──────────────────────────────
-    registry.register(Box::new(MediationNodeFactory {}));
-    registry.register(Box::new(CmestNodeFactory {}));
-    registry.register(Box::new(CmestMultiNodeFactory {}));
-    registry.register(Box::new(CmestBinaryYNodeFactory {}));
-    registry.register(Box::new(CmestBinaryMNodeFactory {}));
-    registry.register(Box::new(CmestWeightingNodeFactory {}));
-    registry.register(Box::new(CmestGformulaNodeFactory {}));
-    registry.register(Box::new(HlmeNodeFactory {}));
-    registry.register(Box::new(HlmePredictNodeFactory {}));
-    registry.register(Box::new(HlmeCompareNodeFactory {}));
-    registry.register(Box::new(TwoSampleMrNodeFactory {}));
-    registry.register(Box::new(MrlapNodeFactory {}));
-    registry.register(Box::new(MrpressoNodeFactory {}));
+
+    // ── Phase 1: ml, hypothesize bundles ───────────────────────────────
+    #[cfg(feature = "bundle-ml")]
+    registry.register_plugin(&nodes_ml::Plugin);
+    #[cfg(feature = "bundle-hypothesize")]
+    registry.register_plugin(&nodes_hypothesize::Plugin);
+
+    // ── Phase 4 (pending): LDSC + genetics nodes remain inline ────────
+    // These will be extracted in the next phase.
+    use crate::nodes::{
+        bivariate_mixer::BivariateMixerNodeFactory,
+        cpassoc::CpassocNodeFactory,
+        hdl_l::HdlLNodeFactory,
+        hdl_l_scan::HdlLScanNodeFactory,
+        lava::{
+            LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
+            LavaUnivNodeFactory,
+        },
+        lcv::LcvNodeFactory,
+        ldsc_hsq::LdscHsqNodeFactory,
+        ldsc_rg::LdscRgNodeFactory,
+        ldsc_sldsc::LdscSldscNodeFactory,
+        liability::LiabilityNodeFactory,
+        magma::{
+            MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
+        },
+        mtag::MtagNodeFactory,
+        susie_rss::SusieRssNodeFactory,
+        univariate_mixer::UnivariateMixerNodeFactory,
+    };
+
+    registry.register(Box::new(LdscHsqNodeFactory {}));
+    registry.register(Box::new(LdscRgNodeFactory {}));
+    registry.register(Box::new(LcvNodeFactory {}));
+    registry.register(Box::new(LdscSldscNodeFactory {}));
+    registry.register(Box::new(LiabilityNodeFactory {}));
     registry.register(Box::new(LavaLocusNodeFactory {}));
     registry.register(Box::new(LavaUnivNodeFactory {}));
     registry.register(Box::new(LavaBivarNodeFactory {}));
@@ -129,51 +100,13 @@ pub fn build_default_registry(
     registry.register(Box::new(HdlLScanNodeFactory {}));
     registry.register(Box::new(UnivariateMixerNodeFactory {}));
     registry.register(Box::new(BivariateMixerNodeFactory {}));
-    registry.register(Box::new(CausalNodeFactory {}));
     registry.register(Box::new(MtagNodeFactory {}));
-    registry.register(Box::new(MvmrNodeFactory {}));
     registry.register(Box::new(CpassocNodeFactory {}));
-    registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
-    registry.register(Box::new(OpentargetsSearchNodeFactory {}));
-    registry.register(Box::new(OpengwasTophitsNodeFactory {}));
     registry.register(Box::new(SusieRssNodeFactory {}));
     registry.register(Box::new(MagmaAnnotateNodeFactory {}));
     registry.register(Box::new(MagmaGeneNodeFactory {}));
     registry.register(Box::new(MagmaSetNodeFactory {}));
     registry.register(Box::new(MagmaMetaNodeFactory {}));
-    #[cfg(feature = "bundle-hypothesize")]
-    registry.register_plugin(&nodes_hypothesize::Plugin);
-    // ── survey-package nodes ───────────────────────────────────────────
-    registry.register(Box::new(SvyMeanFactory {}));
-    registry.register(Box::new(SvyTotalFactory {}));
-    registry.register(Box::new(SvyVarFactory {}));
-    registry.register(Box::new(SvyRatioFactory {}));
-    registry.register(Box::new(SvyTableFactory {}));
-    registry.register(Box::new(SvyQuantileFactory {}));
-    registry.register(Box::new(SvyGlmFactory {}));
-    registry.register(Box::new(SvyCoxphFactory {}));
-    registry.register(Box::new(SvySurvregFactory {}));
-    registry.register(Box::new(SvyOlrFactory {}));
-    registry.register(Box::new(SvyLoglinFactory {}));
-    registry.register(Box::new(SvyMleFactory {}));
-    registry.register(Box::new(SvyNlsFactory {}));
-    registry.register(Box::new(SvyIvregFactory {}));
-    registry.register(Box::new(PostStratifyFactory {}));
-    registry.register(Box::new(RakeFactory {}));
-    registry.register(Box::new(CalibrateFactory {}));
-    registry.register(Box::new(TrimWeightsFactory {}));
-    registry.register(Box::new(SvyTtestFactory {}));
-    registry.register(Box::new(SvyRankTestFactory {}));
-    registry.register(Box::new(SvyChisqFactory {}));
-    registry.register(Box::new(SvyCiPropFactory {}));
-    registry.register(Box::new(SvyKmFactory {}));
-    registry.register(Box::new(SvyLogrankFactory {}));
-    registry.register(Box::new(SvyByFactory {}));
-    registry.register(Box::new(SvyContrastFactory {}));
-    registry.register(Box::new(SvyStandardizeFactory {}));
-    registry.register(Box::new(RegTermTestFactory {}));
-    // ── machine-learning nodes ────────────────────────────────────────
-    #[cfg(feature = "bundle-ml")]
-    registry.register_plugin(&nodes_ml::Plugin);
+
     registry
 }

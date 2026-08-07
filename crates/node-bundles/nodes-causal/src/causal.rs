@@ -11,11 +11,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::ColumnError;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::ColumnError;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -93,10 +93,10 @@ impl NodeFactory for CausalNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CausalNodeSpec = serde_json::from_value(spec)?;
         if s.method != "iptw" && s.method != "psm" {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "causal".into(),
                 reason: format!("method must be 'iptw' or 'psm', got '{}'", s.method),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(CausalNodeSpec))
@@ -112,9 +112,9 @@ impl NodeFactory for CausalNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CausalNodeSpec>(spec, "causal")?;
         let out = ctx.output_var.to_string();
         let covars = s.covariates.join(" + ");
@@ -190,7 +190,7 @@ impl NodeFactory for CausalNodeFactory {
                 "# NOTE: causal method '{other}' not yet mapped to R codegen"
             )],
         };
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -216,7 +216,7 @@ impl DagNode for CausalNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -229,14 +229,14 @@ impl DagNode for CausalNode {
             .map_err(|e| CausalError::Collect(e.to_string()))?;
 
         let t_raw =
-            super::numeric_util::extract_numeric_lenient(&batches, &self.spec.treatment_column)?;
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.spec.treatment_column)?;
         let y_raw =
-            super::numeric_util::extract_numeric_lenient(&batches, &self.spec.outcome_column)?;
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.spec.outcome_column)?;
         let cov_raw: Vec<Vec<f64>> = self
             .spec
             .covariates
             .iter()
-            .map(|c| super::numeric_util::extract_numeric_lenient(&batches, c))
+            .map(|c| dag_core::arrow_util::extract_numeric_lenient(&batches, c))
             .collect::<Result<_, _>>()?;
         let n = t_raw.len();
         let mut t = Vec::with_capacity(n);

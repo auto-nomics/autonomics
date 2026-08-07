@@ -32,9 +32,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodePorts};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodePorts};
 
 use opengwas::types::*;
 
@@ -424,7 +424,7 @@ impl NodeFactory for OpengwasAssociationsNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasAssociationsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasAssociationsNode {
             meta: single_output_port(),
@@ -434,9 +434,9 @@ impl NodeFactory for OpengwasAssociationsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasAssociationsSpec>(spec, KIND_ASSOC)?;
         let out = ctx.output_var.to_string();
         let variants = r_vec(&s.variant);
@@ -449,7 +449,7 @@ impl NodeFactory for OpengwasAssociationsNodeFactory {
             format!("  id = c({ids})"),
             format!(")"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -473,8 +473,8 @@ impl DagNode for OpengwasAssociationsNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let resp = client
@@ -551,7 +551,7 @@ impl NodeFactory for OpengwasPhewasNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasPhewasSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasPhewasNode {
             meta: single_output_port(),
@@ -561,9 +561,9 @@ impl NodeFactory for OpengwasPhewasNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasPhewasSpec>(spec, KIND_PHEWAS)?;
         let out = ctx.output_var.to_string();
         let variants = r_vec(&s.variant);
@@ -575,7 +575,7 @@ impl NodeFactory for OpengwasPhewasNodeFactory {
             format!("  pval = {}", s.pval),
             format!(")"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -599,8 +599,8 @@ impl DagNode for OpengwasPhewasNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let resp = client
@@ -662,7 +662,7 @@ impl NodeFactory for OpengwasGwasinfoNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasGwasinfoSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasGwasinfoNode {
             meta: single_output_port(),
@@ -672,9 +672,9 @@ impl NodeFactory for OpengwasGwasinfoNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasGwasinfoSpec>(spec, KIND_GWASINFO)?;
         let out = ctx.output_var.to_string();
         let ids = r_vec(&s.id);
@@ -683,7 +683,7 @@ impl NodeFactory for OpengwasGwasinfoNodeFactory {
             format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
             format!("{out} <- ieugwasr::gwasinfo(id = c({ids}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -707,8 +707,8 @@ impl DagNode for OpengwasGwasinfoNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let rows = client
@@ -785,7 +785,7 @@ impl NodeFactory for OpengwasGwasinfoSearchNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasGwasinfoSearchSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasGwasinfoSearchNode {
             meta: single_output_port(),
@@ -795,9 +795,9 @@ impl NodeFactory for OpengwasGwasinfoSearchNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasGwasinfoSearchSpec>(spec, KIND_GWASINFO_SEARCH)?;
         let out = ctx.output_var.to_string();
         let code = vec![
@@ -813,7 +813,7 @@ impl NodeFactory for OpengwasGwasinfoSearchNodeFactory {
                 s.keyword, s.field
             ),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -837,8 +837,8 @@ impl DagNode for OpengwasGwasinfoSearchNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         // Map external "trait" → internal column "trait_".
@@ -912,7 +912,7 @@ impl NodeFactory for OpengwasVariantsRsidNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasVariantsRsidSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasVariantsRsidNode {
             meta: single_output_port(),
@@ -922,9 +922,9 @@ impl NodeFactory for OpengwasVariantsRsidNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasVariantsRsidSpec>(spec, KIND_VARIANTS_RSID)?;
         let out = ctx.output_var.to_string();
         let rsids = r_vec(&s.rsid);
@@ -933,7 +933,7 @@ impl NodeFactory for OpengwasVariantsRsidNodeFactory {
             format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
             format!("{out} <- ieugwasr::variants_rsid(c({rsids}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -957,8 +957,8 @@ impl DagNode for OpengwasVariantsRsidNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let resp = client
@@ -1019,7 +1019,7 @@ impl NodeFactory for OpengwasVariantsChrposNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasVariantsChrposSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasVariantsChrposNode {
             meta: single_output_port(),
@@ -1029,9 +1029,9 @@ impl NodeFactory for OpengwasVariantsChrposNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasVariantsChrposSpec>(spec, KIND_VARIANTS_CHRPOS)?;
         let out = ctx.output_var.to_string();
         let chrpos = r_vec(&s.chrpos);
@@ -1040,7 +1040,7 @@ impl NodeFactory for OpengwasVariantsChrposNodeFactory {
             format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
             format!("{out} <- ieugwasr::variants_chrpos(c({chrpos}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -1064,8 +1064,8 @@ impl DagNode for OpengwasVariantsChrposNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let resp = client
@@ -1149,7 +1149,7 @@ impl NodeFactory for OpengwasLdClumpNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: OpengwasLdClumpSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasLdClumpNode {
             meta: single_output_port(),
@@ -1159,9 +1159,9 @@ impl NodeFactory for OpengwasLdClumpNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<OpengwasLdClumpSpec>(spec, KIND_LD_CLUMP)?;
         let out = ctx.output_var.to_string();
         let rsids = r_vec(&s.rsid);
@@ -1175,7 +1175,7 @@ impl NodeFactory for OpengwasLdClumpNodeFactory {
             format!("  clump_kb = {}, clump_r2 = {}, plink_bin = NULL", s.kb, s.r2),
             format!(")"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["ieugwasr".into()]
@@ -1199,8 +1199,8 @@ impl DagNode for OpengwasLdClumpNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[crate::dag::NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
         let resp = client

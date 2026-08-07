@@ -10,12 +10,12 @@ use serde::Deserialize;
 
 use arrow_array::Float64Array;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
-use crate::codegen::helpers::{input_0, parse_spec};
-use crate::codegen::{CodegenCtx, CodegenError, NodeCodegen};
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use crate::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
+use dag_core::codegen::helpers::{input_0, parse_spec};
+use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
 // svykm
@@ -71,7 +71,7 @@ impl DagNode for SvyKmNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svykm".into(),
@@ -87,11 +87,11 @@ impl DagNode for SvyKmNode {
                 msg: format!("collect failed: {e}"),
             })?;
 
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let t =
-            super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
+            crate::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
         let e =
-            super::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
+            crate::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
 
         let km = survey::svy_km(&t[0], &e[0], &design).map_err(|err| DagError::NodeError {
             node_type: "svykm".into(),
@@ -150,8 +150,8 @@ impl NodeFactory for SvyKmFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyKmSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyKmNode::new(node_spec)))
     }
@@ -237,7 +237,7 @@ impl DagNode for SvyLogrankNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svylogrank".into(),
@@ -252,12 +252,12 @@ impl DagNode for SvyLogrankNode {
                 node_type: "svylogrank".into(),
                 msg: format!("collect failed: {e}"),
             })?;
-        let design = super::survey_common::build_survey_design(&self.spec.design, &batches)?;
+        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let t =
-            super::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
+            crate::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;
         let e =
-            super::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
-        let g_str = super::survey_common::extract_string_column_pub(&batches, &self.spec.group)
+            crate::survey_common::extract_variables(&batches, &[self.spec.event_column.clone()])?;
+        let g_str = crate::survey_common::extract_string_column_pub(&batches, &self.spec.group)
             .map_err(|e| DagError::NodeError {
                 node_type: "svylogrank".into(),
                 msg: e.0,
@@ -335,8 +335,8 @@ impl NodeFactory for SvyLogrankFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn crate::dag::DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         {
             let s: SvyLogrankSpec = serde_json::from_value(spec)?;
             Ok(Box::new(SvyLogrankNode::new(s)))

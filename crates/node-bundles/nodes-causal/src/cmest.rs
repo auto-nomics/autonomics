@@ -23,11 +23,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::{ColumnError, extract_numeric_lenient};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -258,10 +258,10 @@ impl NodeFactory for CmestNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestSpec = serde_json::from_value(spec)?;
         if s.mediator_column == s.exposure_column || s.mediator_column == s.outcome_column {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "cmest".into(),
                 reason: "mediator_column must differ from exposure and outcome columns".into(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(CmestSpec))
@@ -277,9 +277,9 @@ impl NodeFactory for CmestNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestSpec>(spec, "cmest")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -298,7 +298,7 @@ impl NodeFactory for CmestNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -323,7 +323,7 @@ impl DagNode for CmestNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -413,10 +413,10 @@ impl NodeFactory for CmestMultiNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestMultiSpec = serde_json::from_value(spec)?;
         if s.mediator_columns.len() < 2 {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "cmest_multi".into(),
                 reason: format!(
                     "mediator_columns must contain ≥ 2 entries, got {}",
@@ -428,7 +428,7 @@ impl NodeFactory for CmestMultiNodeFactory {
         }
         for m in &s.mediator_columns {
             if *m == s.exposure_column || *m == s.outcome_column {
-                return Err(crate::node_registry::error::Error::SpecRejection {
+                return Err(dag_core::registry::error::Error::SpecRejection {
                     kind: "cmest_multi".into(),
                     reason: format!("mediator '{}' must differ from exposure and outcome", m),
                     schema_pretty: serde_json::to_string_pretty(&schema_for!(CmestMultiSpec))
@@ -445,9 +445,9 @@ impl NodeFactory for CmestMultiNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestMultiSpec>(spec, "cmest_multi")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -472,7 +472,7 @@ impl NodeFactory for CmestMultiNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -497,7 +497,7 @@ impl DagNode for CmestMultiNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -593,7 +593,7 @@ impl NodeFactory for CmestBinaryYNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestBinaryYSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CmestBinaryYNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -604,9 +604,9 @@ impl NodeFactory for CmestBinaryYNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestBinaryYSpec>(spec, "cmest_binary_y")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -626,7 +626,7 @@ impl NodeFactory for CmestBinaryYNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -651,7 +651,7 @@ impl DagNode for CmestBinaryYNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -744,7 +744,7 @@ impl NodeFactory for CmestBinaryMNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestBinaryMSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CmestBinaryMNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -755,9 +755,9 @@ impl NodeFactory for CmestBinaryMNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestBinaryMSpec>(spec, "cmest_binary_m")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -777,7 +777,7 @@ impl NodeFactory for CmestBinaryMNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -802,7 +802,7 @@ impl DagNode for CmestBinaryMNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -896,10 +896,10 @@ impl NodeFactory for CmestWeightingNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestWeightingSpec = serde_json::from_value(spec)?;
         if s.covariates.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "cmest_weighting".into(),
                 reason: "covariates must be non-empty for weighting-based method".into(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(CmestWeightingSpec))
@@ -915,9 +915,9 @@ impl NodeFactory for CmestWeightingNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestWeightingSpec>(spec, "cmest_weighting")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -939,7 +939,7 @@ impl NodeFactory for CmestWeightingNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -964,7 +964,7 @@ impl DagNode for CmestWeightingNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -1051,10 +1051,10 @@ impl NodeFactory for CmestGformulaNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CmestGformulaSpec = serde_json::from_value(spec)?;
         if s.covariates.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "cmest_gformula".into(),
                 reason: "covariates must be non-empty for g-formula (need parametric simulation)"
                     .into(),
@@ -1071,9 +1071,9 @@ impl NodeFactory for CmestGformulaNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CmestGformulaSpec>(spec, "cmest_gformula")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -1094,7 +1094,7 @@ impl NodeFactory for CmestGformulaNodeFactory {
             format!(")"),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["CMAverse".into()]
@@ -1119,7 +1119,7 @@ impl DagNode for CmestGformulaNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _: &crate::dag::node_event::NodeReporter,
+        _: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
