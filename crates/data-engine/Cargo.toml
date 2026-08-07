@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 dag-core = { path = "../dag-core" }
 thiserror.workspace = true
-biofusion = { path = "../biofusion" }
 datalake = { path = "../datalake" }
 fs = { path = "../fs" }
 serde = { workspace = true, features = ["derive"] }
@@ -17,48 +16,13 @@ tokio = { workspace = true }
 arrow = { workspace = true, features = ["prettyprint"] }
 arrow-array.workspace = true
 arrow-schema.workspace = true
-arrow-select.workspace = true
 parquet.workspace = true
 serde_json = { workspace = true }
-nanoid = "0.5.0"
 async-trait.workspace = true
-petgraph = "0.8"
 tracing.workspace = true
 futures.workspace = true
-ahash = "0.8"
-blake3 = "1.8.5"
-derive_more.workspace = true
-opentargets = { path = "../opentargets" }
-opengwas = { path = "../opengwas" }
-ldsc = { path = "../../bio_crates/ldsc" }
-lava = { path = "../../bio_crates/lava" }
-hdl = { path = "../../bio_crates/hdl" }
-mixer = { path = "../../bio_crates/mixer" }
-mr = { path = "../../bio_crates/mr" }
-lcv = { path = "../../bio_crates/lcv" }
-mtag = { path = "../../bio_crates/mtag" }
-mrlap = { path = "../../bio_crates/mrlap" }
-cpassoc = { path = "../../bio_crates/cpassoc" }
-magma = { path = "../../bio_crates/magma" }
-susie = { path = "../../bio_crates/susie" }
-evalue = { path = "../../bio_crates/evalue" }
-mrpresso = { path = "../../bio_crates/mrpresso" }
-coloc = { path = "../../bio_crates/coloc" }
-bkmr = { path = "../../bio_crates/bkmr" }
-mvmr = { path = "../../bio_crates/mvmr" }
-statkit = { path = "../../stat_crates/statkit" }
-epi = { path = "../../stat_crates/epi" }
-hypothesize = { path = "../../stat_crates/hypothesize" }
-cmprsk = { path = "../../stat_crates/cmprsk" }
-lcmm = { path = "../../bio_crates/lcmm" }
-survey = { path = "../../stat_crates/survey" }
-ml = { path = "../../stat_crates/ml" }
-faer.workspace = true
 schemars.workspace = true
-visualization = { path = "../visualization" }
-statrs = "0.18"
 turso.workspace = true
-chrono.workspace = true
 
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
@@ -101,3 +65,8 @@ iceberg.workspace = true
 arrow-buffer.workspace = true
 tempfile = "3"
 csv = "1"
+evalue = { path = "../../bio_crates/evalue" }
+mrpresso = { path = "../../bio_crates/mrpresso" }
+mvmr = { path = "../../bio_crates/mvmr" }
+mixer = { path = "../../bio_crates/mixer" }
+

@@ -6,8 +6,8 @@
 //! cargo test -p data-engine --test opentargets_node_live -- --ignored
 //! ```
 
-use data_engine::node_registry::registry::{NodeCtx, NodeFactory, NodeRegistry};
-use data_engine::nodes::source_opentargets::{
+use data_engine::node_registry::{NodeCtx, NodeFactory, NodeRegistry};
+use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };
 use datafusion::prelude::SessionContext;

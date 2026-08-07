@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use datalake::Datalake;
 
-use data_engine::node_registry::registry::NodeCtx;
-use data_engine::nodes::meta::{DagNode, NodeInput};
-use data_engine::nodes::susie_rss::{SusieRssNode, SusieRssSpec};
+use data_engine::node_registry::NodeCtx;
+use data_engine::nodes::DagNode;
+use dag_core::NodeInput;
+use nodes_genetics::susie_rss::{SusieRssNode, SusieRssSpec};
 
 /// Helper: build a NodeCtx from a Datalake.
 async fn make_node_ctx(dk: &Arc<Datalake>) -> NodeCtx {
