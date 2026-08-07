@@ -1659,3 +1659,251 @@ fn mvmr_codegen_xval() {
         eprintln!("✓ mvmr ivw[{i}]: R={r_val:.10} Rust={rust_val:.10}");
     }
 }
+
+
+// ── mice_impute_pmm ────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice_impute_pmm() {
+    let data_csv = format!("{XVAL_DIR}/mice_impute_pmm_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice_impute_pmm {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "pmm".into(),
+                kind: "mice_impute_pmm".into(),
+                spec: serde_json::json!({
+                    "y_column": "y",
+                    "predictors": ["x1", "x2"],
+                    "donors": 5,
+                    "matchtype": 1,
+                    "ridge": 1e-5,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "pmm".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice_impute_pmm");
+    assert!(script.source.contains("mice.impute.pmm"));
+    assert!(script.source.contains("fwrite"));
+}
+
+// ── mice_impute_norm ───────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice_impute_norm() {
+    let data_csv = format!("{XVAL_DIR}/mice_impute_norm_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice_impute_norm {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "norm".into(),
+                kind: "mice_impute_norm".into(),
+                spec: serde_json::json!({
+                    "y_column": "y",
+                    "predictors": ["x1", "x2"],
+                    "ridge": 1e-5,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "norm".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice_impute_norm");
+    assert!(script.source.contains("mice.impute.norm"));
+    assert!(script.source.contains("fwrite"));
+}
+
+// ── mice_impute_logreg ─────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice_impute_logreg() {
+    let data_csv = format!("{XVAL_DIR}/mice_impute_logreg_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice_impute_logreg {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "lr".into(),
+                kind: "mice_impute_logreg".into(),
+                spec: serde_json::json!({
+                    "y_column": "y",
+                    "predictors": ["x1", "x2"],
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "lr".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice_impute_logreg");
+    assert!(script.source.contains("mice.impute.logreg"));
+    assert!(script.source.contains("fwrite"));
+}
+
+// ── mice_impute_mean ───────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice_impute_mean() {
+    let data_csv = format!("{XVAL_DIR}/mice_impute_mean_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice_impute_mean {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "mean".into(),
+                kind: "mice_impute_mean".into(),
+                spec: serde_json::json!({"y_column": "y", "seed": 42}),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "mean".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice_impute_mean");
+    assert!(script.source.contains("mice.impute.mean"));
+    assert!(script.source.contains("fwrite"));
+}
+
+// ── mice_impute_sample ─────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice_impute_sample() {
+    let data_csv = format!("{XVAL_DIR}/mice_impute_sample_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice_impute_sample {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "sample".into(),
+                kind: "mice_impute_sample".into(),
+                spec: serde_json::json!({"y_column": "y", "seed": 42}),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "sample".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice_impute_sample");
+    assert!(script.source.contains("mice.impute.sample"));
+    assert!(script.source.contains("fwrite"));
+}
+
+// ── mice orchestrator ──────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "requires R + mice; run with DIFFTESTS=1"]
+fn mice() {
+    let data_csv = format!("{XVAL_DIR}/mice_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R mice {XVAL_DIR}");
+        return;
+    }
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "miced".into(),
+                kind: "mice".into(),
+                spec: serde_json::json!({
+                    "impute_columns": ["y", "z"],
+                    "methods": ["norm", "norm"],
+                    "m": 3,
+                    "maxit": 3,
+                    "ridge": 1e-5,
+                    "donors": 5,
+                    "matchtype": 1,
+                    "seed": 42
+                }),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "miced".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "mice");
+    assert!(script.source.contains("mice("));
+    assert!(script.source.contains("fwrite"));
+}

@@ -62,6 +62,37 @@ case "$TEST_NAME" in
         OUTPUT_EDGE="_edge_ci_0.csv"
         COMPARE_COLS="group,cause,time,est,var"
         ;;
+    mice_impute_pmm)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"pmm","kind":"mice_impute_pmm","spec":{"y_column":"y","predictors":["x1","x2"],"donors":5,"matchtype":1,"ridge":1e-5,"seed":42}}],"edges":[{"from":"src","from_port":0,"to":"pmm","to_port":0}]}'
+        OUTPUT_EDGE="_edge_pmm_0.csv"
+        COMPARE_COLS="in_observed_set,observed_mean,observed_sd,observed_min,observed_max"
+        ;;
+    mice_impute_norm)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"norm","kind":"mice_impute_norm","spec":{"y_column":"y","predictors":["x1","x2"],"ridge":1e-5,"seed":42}}],"edges":[{"from":"src","from_port":0,"to":"norm","to_port":0}]}'
+        OUTPUT_EDGE="_edge_norm_0.csv"
+        COMPARE_COLS="predicted_mean,observed_mean,observed_sd"
+        ;;
+    mice_impute_logreg)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"lr","kind":"mice_impute_logreg","spec":{"y_column":"y","predictors":["x1","x2"],"seed":42}}],"edges":[{"from":"src","from_port":0,"to":"lr","to_port":0}]}'
+        OUTPUT_EDGE="_edge_lr_0.csv"
+        COMPARE_COLS="is_binary,predicted_prob,observed_mean"
+        ;;
+    mice_impute_mean)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"mean","kind":"mice_impute_mean","spec":{"y_column":"y","seed":42}}],"edges":[{"from":"src","from_port":0,"to":"mean","to_port":0}]}'
+        OUTPUT_EDGE="_edge_mean_0.csv"
+        COMPARE_COLS="observed_mean,deviation_from_mean"
+        ;;
+    mice_impute_sample)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"sample","kind":"mice_impute_sample","spec":{"y_column":"y","seed":42}}],"edges":[{"from":"src","from_port":0,"to":"sample","to_port":0}]}'
+        OUTPUT_EDGE="_edge_sample_0.csv"
+        COMPARE_COLS="in_observed_set,observed_mean,observed_sd,observed_min,observed_max"
+        ;;
+    mice)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"miced","kind":"mice","spec":{"impute_columns":["y","z"],"methods":["norm","norm"],"m":3,"maxit":3,"ridge":1e-5,"donors":5,"matchtype":1,"seed":42}}],"edges":[{"from":"src","from_port":0,"to":"miced","to_port":0}]}'
+        OUTPUT_EDGE="_edge_miced_0.csv"
+        COMPARE_COLS="imp_col,n_rows,y_mean,y_sd,y_min,y_max"
+        SUMMARY_REF="${XVAL_DIR}/mice_reference_summary.csv"
+        ;;
     *)
         echo "Unknown test: $TEST_NAME"
         exit 1

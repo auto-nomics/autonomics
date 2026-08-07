@@ -18,6 +18,9 @@ test_name <- args[1]
 out_dir <- args[2]
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+suppressPackageStartupMessages({
+  library(mice)
+})
 set.seed(42)
 
 # ── linear_regression ──────────────────────────────────────────────────────
@@ -524,4 +527,223 @@ if (test_name == "mvmr") {
     )
     data.table::fwrite(ref, file.path(out_dir, "mvmr_reference.csv"))
     cat("OK mvmr\n")
+}
+
+
+# ── mice_impute_pmm ────────────────────────────────────────────────────────
+if (test_name == "mice_impute_pmm") {
+    set.seed(42)
+    n <- 80
+    x1 <- rnorm(n, mean = 5, sd = 2)
+    x2 <- rnorm(n, mean = 0, sd = 1)
+    y <- 3 + 2 * x1 - 1.5 * x2 + rnorm(n, sd = 1)
+    # Inject ~15% missingness into y.
+    missing_idx <- sample(seq_len(n), size = 12)
+    y_mis <- y
+    y_mis[missing_idx] <- NA_real_
+    df <- data.frame(x1 = x1, x2 = x2, y = y_mis)
+    data_path <- file.path(out_dir, "mice_impute_pmm_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    imp <- mice.impute.pmm(
+        y = df$y,
+        ry = !is.na(df$y),
+        x = cbind(df$x1, df$x2),
+        wy = is.na(df$y),
+        donors = 5,
+        matchtype = 1
+    )
+    # Reference: emit summary stats + donor-set membership (deterministic
+    # checks independent of the random donor selection).
+    obs_y <- df$y[!is.na(df$y)]
+    obs_mean <- mean(obs_y)
+    obs_sd <- sd(obs_y)
+    ref <- data.frame(
+        imputed = as.numeric(imp),
+        in_observed_set = as.numeric(imp) %in% obs_y,
+        observed_mean = obs_mean,
+        observed_sd = obs_sd,
+        observed_min = min(obs_y),
+        observed_max = max(obs_y)
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mice_impute_pmm_reference.csv"))
+    cat("OK mice_impute_pmm\n")
+}
+
+# ── mice_impute_norm ───────────────────────────────────────────────────────
+if (test_name == "mice_impute_norm") {
+    set.seed(42)
+    n <- 100
+    x1 <- rnorm(n, mean = 5, sd = 2)
+    x2 <- rnorm(n, mean = 0, sd = 1)
+    y <- 3 + 2 * x1 - 1.5 * x2 + rnorm(n, sd = 1)
+    missing_idx <- sample(seq_len(n), size = 15)
+    y_mis <- y
+    y_mis[missing_idx] <- NA_real_
+    df <- data.frame(x1 = x1, x2 = x2, y = y_mis)
+    data_path <- file.path(out_dir, "mice_impute_norm_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    imp <- mice.impute.norm(
+        y = df$y,
+        ry = !is.na(df$y),
+        x = cbind(df$x1, df$x2),
+        wy = is.na(df$y),
+        ridge = 1e-5
+    )
+    # Compute the OLS prediction at the missing rows: this is the posterior
+    # mean (ignoring σ*·z term) which is deterministic.
+    fit <- lm(y ~ x1 + x2, data = df)
+    pred_obs <- predict(fit, newdata = df[is.na(df$y), ])
+    obs_y <- df$y[!is.na(df$y)]
+    ref <- data.frame(
+        imputed = as.numeric(imp),
+        predicted_mean = as.numeric(pred_obs),
+        deviation_from_mean = as.numeric(imp) - as.numeric(pred_obs),
+        observed_mean = mean(obs_y),
+        observed_sd = sd(obs_y)
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mice_impute_norm_reference.csv"))
+    cat("OK mice_impute_norm\n")
+}
+
+# ── mice_impute_logreg ─────────────────────────────────────────────────────
+if (test_name == "mice_impute_logreg") {
+    set.seed(42)
+    n <- 100
+    x1 <- rnorm(n)
+    x2 <- rnorm(n)
+    linpred <- -0.5 + 0.8 * x1 - 0.6 * x2
+    prob <- 1 / (1 + exp(-linpred))
+    y <- rbinom(n, 1, prob)
+    missing_idx <- sample(seq_len(n), size = 20)
+    y_mis <- y
+    y_mis[missing_idx] <- NA_real_
+    df <- data.frame(x1 = x1, x2 = x2, y = y_mis)
+    data_path <- file.path(out_dir, "mice_impute_logreg_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    imp <- mice.impute.logreg(
+        y = df$y,
+        ry = !is.na(df$y),
+        x = cbind(df$x1, df$x2),
+        wy = is.na(df$y)
+    )
+    # Compute predicted probability at missing rows + binarised version.
+    fit <- glm(y ~ x1 + x2, data = df, family = binomial)
+    pred_obs <- predict(fit, newdata = df[is.na(df$y), ], type = "response")
+    ref <- data.frame(
+        imputed = as.numeric(imp),
+        is_binary = as.numeric(imp) %in% c(0, 1),
+        predicted_prob = as.numeric(pred_obs),
+        binarised_pred = as.numeric(pred_obs > 0.5),
+        observed_mean = mean(df$y[!is.na(df$y)])
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mice_impute_logreg_reference.csv"))
+    cat("OK mice_impute_logreg\n")
+}
+
+# ── mice_impute_mean ───────────────────────────────────────────────────────
+if (test_name == "mice_impute_mean") {
+    set.seed(42)
+    n <- 50
+    y <- rnorm(n, mean = 10, sd = 3)
+    missing_idx <- sample(seq_len(n), size = 10)
+    y_mis <- y
+    y_mis[missing_idx] <- NA_real_
+    df <- data.frame(y = y_mis)
+    data_path <- file.path(out_dir, "mice_impute_mean_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    imp <- mice.impute.mean(y = df$y, ry = !is.na(df$y))
+    obs_y <- df$y[!is.na(df$y)]
+    obs_mean <- mean(obs_y)
+    ref <- data.frame(
+        imputed = as.numeric(imp),
+        observed_mean = obs_mean,
+        deviation_from_mean = as.numeric(imp) - obs_mean
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mice_impute_mean_reference.csv"))
+    cat("OK mice_impute_mean\n")
+}
+
+# ── mice_impute_sample ─────────────────────────────────────────────────────
+if (test_name == "mice_impute_sample") {
+    set.seed(42)
+    n <- 50
+    y <- rnorm(n, mean = 10, sd = 3)
+    missing_idx <- sample(seq_len(n), size = 10)
+    y_mis <- y
+    y_mis[missing_idx] <- NA_real_
+    df <- data.frame(y = y_mis)
+    data_path <- file.path(out_dir, "mice_impute_sample_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    imp <- mice.impute.sample(y = df$y, ry = !is.na(df$y))
+    obs_y <- df$y[!is.na(df$y)]
+    obs_mean <- mean(obs_y)
+    obs_sd <- sd(obs_y)
+    ref <- data.frame(
+        imputed = as.numeric(imp),
+        in_observed_set = as.numeric(imp) %in% obs_y,
+        observed_mean = obs_mean,
+        observed_sd = obs_sd,
+        observed_min = min(obs_y),
+        observed_max = max(obs_y)
+    )
+    data.table::fwrite(ref, file.path(out_dir, "mice_impute_sample_reference.csv"))
+    cat("OK mice_impute_sample\n")
+}
+
+# ── mice (orchestrator) ────────────────────────────────────────────────────
+if (test_name == "mice") {
+    set.seed(42)
+    n <- 60
+    x1 <- rnorm(n, mean = 5, sd = 2)
+    x2 <- rnorm(n, mean = 0, sd = 1)
+    y <- 3 + 2 * x1 - 1.5 * x2 + rnorm(n, sd = 1)
+    z <- rnorm(n)
+    # Inject ~20% missingness into both y and z.
+    miss_y <- sample(seq_len(n), size = 12)
+    miss_z <- sample(seq_len(n), size = 12)
+    y_mis <- y
+    y_mis[miss_y] <- NA_real_
+    z_mis <- z
+    z_mis[miss_z] <- NA_real_
+    df <- data.frame(x1 = x1, x2 = x2, y = y_mis, z = z_mis)
+    data_path <- file.path(out_dir, "mice_data.csv")
+    data.table::fwrite(df, data_path)
+
+    set.seed(42)
+    mids <- mice(
+        df,
+        m = 3,
+        method = c("", "", "norm", "norm"),
+        maxit = 3,
+        printFlag = FALSE,
+        ridge = 1e-5,
+        donors = 5,
+        matchtype = 1
+    )
+    comp <- complete(mids, action = "long", include = FALSE)
+    # Output the long-format completed data frame (deterministic structure
+    # + per-row imputed values; we check the structural invariants downstream).
+    data.table::fwrite(comp, file.path(out_dir, "mice_reference.csv"))
+    # Also output per-imputation summary statistics for the y column.
+    comp_y <- as.data.frame(comp)[, c(".imp", "y")]
+    summ <- data.frame(
+        imp_col = unique(comp_y[, ".imp"]),
+        n_rows = as.numeric(table(comp_y[, ".imp"])),
+        y_mean = as.numeric(tapply(comp_y[, "y"], comp_y[, ".imp"], mean)),
+        y_sd = as.numeric(tapply(comp_y[, "y"], comp_y[, ".imp"], sd)),
+        y_min = as.numeric(tapply(comp_y[, "y"], comp_y[, ".imp"], min)),
+        y_max = as.numeric(tapply(comp_y[, "y"], comp_y[, ".imp"], max))
+    )
+    data.table::fwrite(summ, file.path(out_dir, "mice_reference_summary.csv"))
+    cat("OK mice\n")
 }
