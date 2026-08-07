@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ impl NodeFactory for TrainTestSplitFactory {
             .add_output_port(None)
             .add_output_port(None)
     }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: TrainTestSplitSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TrainTestSplitNode {
             stratify_column: s.stratify_column, test_size: s.test_size, seed: s.seed, meta: self.ports(),
@@ -96,7 +96,7 @@ impl DagNode for TrainTestSplitNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_train_test_split" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let n: usize = batches.iter().map(|b| b.num_rows()).sum();
 
@@ -140,7 +140,7 @@ impl NodeFactory for KFoldFactory {
     fn doc(&self) -> &'static str { "KFold: assigns each row to one of K folds (0..K-1) via a new `fold` column. Downstream nodes can group by fold for CV." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(KFoldSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: KFoldSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KFoldNode { k: s.k, shuffle: s.shuffle, seed: s.seed, meta: self.ports() }))
     }
@@ -155,7 +155,7 @@ impl DagNode for KFoldNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_kfold" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let n: usize = batches.iter().map(|b| b.num_rows()).sum();
         let folds = ml::split::kfold(n, self.k, self.shuffle, self.seed)
@@ -194,7 +194,7 @@ impl NodeFactory for StratifiedKFoldFactory {
     fn doc(&self) -> &'static str { "StratifiedKFold: assigns folds such that each fold maintains the same class proportion as the full dataset. Requires a label column." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(StratifiedKFoldSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: StratifiedKFoldSpec = serde_json::from_value(spec)?;
         Ok(Box::new(StratifiedKFoldNode {
             label_column: s.label_column, k: s.k, shuffle: s.shuffle, seed: s.seed, meta: self.ports(),
@@ -211,7 +211,7 @@ impl DagNode for StratifiedKFoldNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_stratified_kfold" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let n: usize = batches.iter().map(|b| b.num_rows()).sum();
         let labels = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError {

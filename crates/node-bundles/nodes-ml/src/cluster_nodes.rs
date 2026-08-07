@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 use ml::cluster::{
     DbscanOptions, GmmOptions, HierarchicalResult, KMeansOptions, Linkage,
@@ -76,7 +76,7 @@ impl NodeFactory for KMeansFactory {
     fn doc(&self) -> &'static str { "KMeans: partitions data into K clusters using Lloyd's algorithm with k-means++ seeding. Outputs cluster assignments + centroid distances." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(KMeansSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: KMeansSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KMeansNode {
             features: s.features, k: s.k, max_iter: s.max_iter, n_init: s.n_init,
@@ -96,7 +96,7 @@ impl DagNode for KMeansNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_kmeans" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_kmeans".into(), msg: e.to_string()
@@ -145,7 +145,7 @@ impl NodeFactory for DbscanFactory {
     fn doc(&self) -> &'static str { "DBSCAN: identifies clusters of arbitrary shape via density reachability. Noise points are labelled -1 (null)." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(DbscanSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: DbscanSpec = serde_json::from_value(spec)?;
         Ok(Box::new(DbscanNode { features: s.features, eps: s.eps, min_points: s.min_points, meta: self.ports() }))
     }
@@ -160,7 +160,7 @@ impl DagNode for DbscanNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_dbscan" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_dbscan".into(), msg: e.to_string()
@@ -202,7 +202,7 @@ impl NodeFactory for GmmFactory {
     fn doc(&self) -> &'static str { "GMM: fits a Gaussian mixture via EM with k-means++ init. Reports BIC/AIC for model selection. Outputs cluster assignments + per-component probabilities summary." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(GmmSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: GmmSpec = serde_json::from_value(spec)?;
         Ok(Box::new(GmmNode {
             features: s.features, k: s.k, max_iter: s.max_iter, tol: s.tol,
@@ -222,7 +222,7 @@ impl DagNode for GmmNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_gmm" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_gmm".into(), msg: e.to_string()
@@ -274,7 +274,7 @@ impl NodeFactory for HierarchicalFactory {
     fn doc(&self) -> &'static str { "Hierarchical: bottom-up agglomerative clustering with Ward/complete/average/single linkage. Cuts the dendrogram at K clusters." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(HierarchicalSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: HierarchicalSpec = serde_json::from_value(spec)?;
         Ok(Box::new(HierarchicalNode { features: s.features, k: s.k, linkage: s.linkage, meta: self.ports() }))
     }
@@ -289,7 +289,7 @@ impl DagNode for HierarchicalNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_hierarchical" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_hierarchical".into(), msg: e.to_string()
@@ -321,9 +321,9 @@ impl NodeFactory for SpectralClusteringFactory {
     fn doc(&self) -> &'static str { "SpectralClustering: builds affinity matrix, embeds via normalised Laplacian eigenvectors, runs K-means in embedding space. [Coming soon]" }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(SpectralSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let _s: SpectralSpec = serde_json::from_value(spec)?;
-        Err(crate::node_registry::error::Error::Unknown("ml_spectral_cluster is not yet implemented".into()))
+        Err(dag_core::registry::error::Error::Unknown("ml_spectral_cluster is not yet implemented".into()))
     }
 }
 

@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // ═══════════════════════════════════════════════════════════════════════
 // ClassificationMetrics
@@ -42,7 +42,7 @@ impl NodeFactory for ClassificationMetricsFactory {
     fn doc(&self) -> &'static str { "ClassificationMetrics: takes y_true + y_pred columns and computes accuracy, precision (macro + per-class), recall, F1, and optionally ROC AUC. Outputs a single-row metrics table." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ClassificationMetricsSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ClassificationMetricsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ClassificationMetricsNode {
             y_true: s.y_true, y_pred: s.y_pred, y_score: s.y_score,
@@ -63,7 +63,7 @@ impl DagNode for ClassificationMetricsNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_classification_metrics" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let y_true = common::extract_numeric_column(&batches, &self.y_true).map_err(|e| DagError::NodeError {
             node_type: "ml_classification_metrics".into(), msg: e.to_string()
@@ -133,7 +133,7 @@ impl NodeFactory for RegressionMetricsFactory {
     fn doc(&self) -> &'static str { "RegressionMetrics: takes y_true + y_pred columns and computes MSE, RMSE, MAE, R², MAPE, explained variance, and max error." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(RegressionMetricsSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: RegressionMetricsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(RegressionMetricsNode { y_true: s.y_true, y_pred: s.y_pred, meta: self.ports() }))
     }
@@ -148,7 +148,7 @@ impl DagNode for RegressionMetricsNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_regression_metrics" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let y_true = common::extract_numeric_column(&batches, &self.y_true).map_err(|e| DagError::NodeError {
             node_type: "ml_regression_metrics".into(), msg: e.to_string()

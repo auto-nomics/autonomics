@@ -60,6 +60,15 @@ statrs = "0.18"
 turso.workspace = true
 chrono.workspace = true
 
+# ── Node bundle plugins (optional) ────────────────────────────────────────
+nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
+nodes-ml = { path = "../node-bundles/nodes-ml", optional = true }
+
+[features]
+default = ["bundle-hypothesize", "bundle-ml"]
+bundle-hypothesize = ["dep:nodes-hypothesize"]
+bundle-ml = ["dep:nodes-ml"]
+
 [dev-dependencies]
 datalake = { path = "../datalake" }
 iceberg.workspace = true

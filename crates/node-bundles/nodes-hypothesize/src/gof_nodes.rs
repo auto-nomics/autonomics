@@ -5,9 +5,9 @@
 use super::common::{
     HypoNodeError, collect_input, emit_test_row, extract_f64_column, extract_groups,
 };
-use crate::dag::DagError;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
@@ -52,7 +52,7 @@ impl NodeFactory for ChisqGofNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: ChisqGofNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ChisqGofNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -83,8 +83,8 @@ impl DagNode for ChisqGofNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let counts_f = extract_f64_column(&batches, &self.spec.count_column)?;
         let counts: Vec<u64> = counts_f.iter().map(|&x| x as u64).collect();
@@ -132,7 +132,7 @@ impl NodeFactory for KsTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: KsTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KsTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -163,8 +163,8 @@ impl DagNode for KsTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -215,7 +215,7 @@ impl NodeFactory for ShapiroNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: ShapiroNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ShapiroNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -246,8 +246,8 @@ impl DagNode for ShapiroNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let x = extract_f64_column(&batches, &self.spec.x_column)?;
         let result = h::shapiro_wilk(&x).map_err(|e| HypoNodeError::Test(e.to_string()))?;
@@ -288,7 +288,7 @@ impl NodeFactory for AdTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: AdTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AdTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -319,8 +319,8 @@ impl DagNode for AdTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let x = extract_f64_column(&batches, &self.spec.x_column)?;
         let dist = match self.spec.dist.to_lowercase().as_str() {
@@ -370,7 +370,7 @@ impl NodeFactory for FisherExactNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: FisherExactNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(FisherExactNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -401,8 +401,8 @@ impl DagNode for FisherExactNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -418,8 +418,8 @@ impl DagNode for FisherExactNode {
             let ca = batch
                 .column_by_name(&self.spec.col_column)
                 .ok_or_else(|| HypoNodeError::Column(self.spec.col_column.clone()))?;
-            let rs = crate::nodes::meta::string_opt_values(ra.as_ref()).unwrap_or_default();
-            let cs = crate::nodes::meta::string_opt_values(ca.as_ref()).unwrap_or_default();
+            let rs = dag_core::node::string_opt_values(ra.as_ref()).unwrap_or_default();
+            let cs = dag_core::node::string_opt_values(ca.as_ref()).unwrap_or_default();
             for i in 0..rs.len() {
                 if let (Some(r), Some(c)) = (rs[i].as_ref(), cs[i].as_ref()) {
                     if !rows_order.contains(r) {

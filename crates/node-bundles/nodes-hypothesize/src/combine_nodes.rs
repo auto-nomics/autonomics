@@ -6,9 +6,9 @@
 //! passthrough table with adjusted p-values.
 
 use super::common::{HypoNodeError, collect_input, emit_test_row, extract_f64_column};
-use crate::dag::DagError;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use arrow_array::{Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
@@ -54,7 +54,7 @@ impl NodeFactory for CombineNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CombineNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CombineNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -85,8 +85,8 @@ impl DagNode for CombineNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let pvals =
             extract_f64_column(&batches, self.spec.p_column.as_deref().unwrap_or("p_value"))?;
@@ -133,7 +133,7 @@ impl NodeFactory for BooleanNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: BooleanNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(BooleanNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -164,8 +164,8 @@ impl DagNode for BooleanNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let pvals =
             extract_f64_column(&batches, self.spec.p_column.as_deref().unwrap_or("p_value"))?;
@@ -222,7 +222,7 @@ impl NodeFactory for AdjustNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: AdjustNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AdjustNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -253,8 +253,8 @@ impl DagNode for AdjustNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let pcol = self.spec.p_column.as_deref().unwrap_or("p_value");
         let pvals = extract_f64_column(&batches, pcol)?;
@@ -285,7 +285,7 @@ impl DagNode for AdjustNode {
         let df = session
             .read_batch(new_batch)
             .map_err(|e| HypoNodeError::ReadBatch(e.to_string()))?;
-        let mut res = crate::dag::graph::PortOutputs::new();
+        let mut res = dag_core::dag::graph::PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

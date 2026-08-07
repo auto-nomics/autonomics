@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -53,7 +53,7 @@ impl NodeFactory for ExpSmoothingFactory {
     fn doc(&self) -> &'static str { "ExpSmoothing: single exponential smoothing for time series without trend. Outputs fitted values + h-step forecast." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ExpSmoothingSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ExpSmoothingSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ExpSmoothingNode { value_column: s.value_column, alpha: s.alpha, n_forecast: s.n_forecast, meta: self.ports() }))
     }
@@ -68,7 +68,7 @@ impl DagNode for ExpSmoothingNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_exp_smoothing" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_numeric_column(&batches, &self.value_column).map_err(|e| DagError::NodeError { node_type: "ml_exp_smoothing".into(), msg: e.to_string() })?;
         let result = ml::timeseries::exponential_smoothing(&data, self.alpha, self.n_forecast)
@@ -110,7 +110,7 @@ impl NodeFactory for StlFactory {
     fn doc(&self) -> &'static str { "STL: decomposes a time series into trend, seasonal, and residual components using moving-average trend extraction." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(StlSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: StlSpec = serde_json::from_value(spec)?;
         Ok(Box::new(StlNode { value_column: s.value_column, period: s.period, meta: self.ports() }))
     }
@@ -125,7 +125,7 @@ impl DagNode for StlNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_stl_decompose" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_numeric_column(&batches, &self.value_column).map_err(|e| DagError::NodeError { node_type: "ml_stl_decompose".into(), msg: e.to_string() })?;
         let result = ml::timeseries::stl_decompose(&data, self.period)
@@ -165,7 +165,7 @@ impl NodeFactory for PeltFactory {
     fn doc(&self) -> &'static str { "PELT: detects change-points in a time series by minimizing segment cost + penalty. Returns detected change-point indices." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(PeltSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: PeltSpec = serde_json::from_value(spec)?;
         Ok(Box::new(PeltNode { value_column: s.value_column, penalty: s.penalty, meta: self.ports() }))
     }
@@ -180,7 +180,7 @@ impl DagNode for PeltNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_changepoint" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_numeric_column(&batches, &self.value_column).map_err(|e| DagError::NodeError { node_type: "ml_changepoint".into(), msg: e.to_string() })?;
         let cps = ml::timeseries::pelt(&data, self.penalty)
@@ -218,7 +218,7 @@ impl NodeFactory for AprioriFactory {
     fn doc(&self) -> &'static str { "Apriori: discovers frequent itemsets and association rules from transaction data. Requires item + transaction ID columns." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(AprioriSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: AprioriSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AprioriNode { item_column: s.item_column, transaction_column: s.transaction_column, min_support: s.min_support, min_confidence: s.min_confidence, meta: self.ports() }))
     }
@@ -233,7 +233,7 @@ impl DagNode for AprioriNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_apriori" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let items = common::extract_string_column(&batches, &self.item_column).map_err(|e| DagError::NodeError { node_type: "ml_apriori".into(), msg: e.to_string() })?;
         let txn_ids = common::extract_string_column(&batches, &self.transaction_column).map_err(|e| DagError::NodeError { node_type: "ml_apriori".into(), msg: e.to_string() })?;

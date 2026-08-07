@@ -4,9 +4,9 @@
 use super::common::{
     HypoNodeError, collect_input, emit_test_row, extract_f64_column, extract_groups,
 };
-use crate::dag::DagError;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
@@ -63,7 +63,7 @@ impl NodeFactory for TTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: TTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -97,8 +97,8 @@ impl DagNode for TTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -166,7 +166,7 @@ impl NodeFactory for ZTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: ZTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ZTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -199,8 +199,8 @@ impl DagNode for ZTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -257,7 +257,7 @@ impl NodeFactory for PropTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: PropTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(PropTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -290,8 +290,8 @@ impl DagNode for PropTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let result = if let (Some(x), Some(n)) = (self.spec.count, self.spec.n) {
             h::prop_test_one(x, n, self.spec.p, self.spec.correct)
         } else if let (Some(cc), Some(nc)) = (&self.spec.count_column, &self.spec.n_column) {
@@ -365,7 +365,7 @@ impl NodeFactory for VarTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: VarTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(VarTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -398,8 +398,8 @@ impl DagNode for VarTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -451,7 +451,7 @@ impl NodeFactory for CorTestNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CorTestNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CorTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -484,8 +484,8 @@ impl DagNode for CorTestNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;

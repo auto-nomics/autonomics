@@ -2,9 +2,9 @@
 //! `hypothesize.levene_test`, `hypothesize.fligner_test`, `hypothesize.oneway_anova`.
 
 use super::common::{HypoNodeError, collect_input, emit_test_row, extract_groups};
-use crate::dag::DagError;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
@@ -43,7 +43,7 @@ macro_rules! group_node {
                 &self,
                 spec: serde_json::Value,
                 _: NodeCtx,
-            ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+            ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
                 let s: $spec = serde_json::from_value(spec)?;
                 Ok(Box::new($node {
                     meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -74,8 +74,8 @@ macro_rules! group_node {
                 &mut self,
                 ctx: &NodeCtx,
                 inputs: &[NodeInput],
-                _r: &crate::dag::node_event::NodeReporter,
-            ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+                _r: &dag_core::dag::node_event::NodeReporter,
+            ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
                 let batches = collect_input(inputs).await?;
                 let groups =
                     extract_groups(&batches, &self.spec.value_column, &self.spec.group_column)?;
@@ -144,7 +144,7 @@ impl NodeFactory for LeveneNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: LeveneNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LeveneNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -175,8 +175,8 @@ impl DagNode for LeveneNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let groups = extract_groups(&batches, &self.spec.value_column, &self.spec.group_column)?;
         if groups.len() < 2 {
@@ -225,7 +225,7 @@ impl NodeFactory for AnovaNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: AnovaNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AnovaNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -256,8 +256,8 @@ impl DagNode for AnovaNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let groups = extract_groups(&batches, &self.spec.value_column, &self.spec.group_column)?;
         if groups.len() < 2 {

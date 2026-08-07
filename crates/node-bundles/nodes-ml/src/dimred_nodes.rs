@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -91,7 +91,7 @@ impl NodeFactory for PcaFactory {
     fn doc(&self) -> &'static str { "PCA: linear dimensionality reduction via SVD of the covariance matrix. Outputs projected data (pc_0, pc_1, …) appended to the input table." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(PcaSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: PcaSpec = serde_json::from_value(spec)?;
         Ok(Box::new(PcaNode { features: s.features, n_components: s.n_components, meta: self.ports() }))
     }
@@ -106,7 +106,7 @@ impl DagNode for PcaNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_pca" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_pca".into(), msg: e.to_string()
@@ -139,7 +139,7 @@ impl NodeFactory for IcaFactory {
     fn doc(&self) -> &'static str { "FastICA: separates multivariate signal into additive independent components. Outputs ic_0, ic_1, … appended to input table." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(IcaSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: IcaSpec = serde_json::from_value(spec)?;
         Ok(Box::new(IcaNode { features: s.features, n_components: s.n_components, meta: self.ports() }))
     }
@@ -154,7 +154,7 @@ impl DagNode for IcaNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_ica" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_ica".into(), msg: e.to_string()
@@ -195,7 +195,7 @@ impl NodeFactory for TsneFactory {
     fn doc(&self) -> &'static str { "t-SNE: maps high-dimensional data to 2D/3D for visualisation via Barnes-Hut t-SNE. Outputs tsne_0, tsne_1 columns." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(TsneSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: TsneSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TsneNode {
             features: s.features, n_components: s.n_components,
@@ -217,7 +217,7 @@ impl DagNode for TsneNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_tsne" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_tsne".into(), msg: e.to_string()
@@ -263,7 +263,7 @@ impl NodeFactory for NmfFactory {
     fn doc(&self) -> &'static str { "NMF: factorises a non-negative matrix V ≈ W·H. Outputs W (basis weights) as nmf_0, nmf_1, … columns." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(NmfSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: NmfSpec = serde_json::from_value(spec)?;
         Ok(Box::new(NmfNode {
             features: s.features, n_components: s.n_components,
@@ -284,7 +284,7 @@ impl DagNode for NmfNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_nmf" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_nmf".into(), msg: e.to_string()
@@ -313,7 +313,7 @@ impl NodeFactory for TruncatedSvdFactory {
     fn doc(&self) -> &'static str { "TruncatedSVD: dimensionality reduction via thin SVD without centering. Suitable for sparse text/count data. Outputs lsa_0, lsa_1, … columns." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(TruncatedSvdSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: TruncatedSvdSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TruncatedSvdNode { features: s.features, n_components: s.n_components, meta: self.ports() }))
     }
@@ -328,7 +328,7 @@ impl DagNode for TruncatedSvdNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_truncated_svd" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_truncated_svd".into(), msg: e.to_string()

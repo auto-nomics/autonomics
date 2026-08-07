@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -54,7 +54,7 @@ impl NodeFactory for SvmFactory {
     fn doc(&self) -> &'static str { "SVM: binary classification via SMO solver. Supports linear, RBF, and polynomial kernels." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(SvmSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: SvmSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvmNode { features: s.features, label_column: s.label_column, kernel: s.kernel, c: s.c, meta: self.ports() }))
     }
@@ -69,7 +69,7 @@ impl DagNode for SvmNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_svm" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_svm".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_svm".into(), msg: e.to_string() })?;
@@ -108,7 +108,7 @@ impl NodeFactory for AdaBoostFactory {
     fn doc(&self) -> &'static str { "AdaBoost: boosted ensemble of decision trees with adaptive sample weighting." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(AdaBoostSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: AdaBoostSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AdaBoostNode { features: s.features, label_column: s.label_column, n_estimators: s.n_estimators, learning_rate: s.learning_rate, meta: self.ports() }))
     }
@@ -123,7 +123,7 @@ impl DagNode for AdaBoostNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_adaboost" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_adaboost".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_adaboost".into(), msg: e.to_string() })?;
@@ -164,7 +164,7 @@ impl NodeFactory for IsolationForestFactory {
     fn doc(&self) -> &'static str { "IsolationForest: detects anomalies via random partition trees. Points with shorter average path lengths are more anomalous. Outputs anomaly_score + is_outlier." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(IsolationForestSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: IsolationForestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(IsolationForestNode { features: s.features, n_trees: s.n_trees, max_samples: s.max_samples, seed: s.seed, meta: self.ports() }))
     }
@@ -179,7 +179,7 @@ impl DagNode for IsolationForestNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_isolation_forest" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_isolation_forest".into(), msg: e.to_string() })?;
         let result = ml::anomaly::isolation_forest(&data, self.n_trees, self.max_samples, self.seed)
@@ -214,7 +214,7 @@ impl NodeFactory for ZscoreOutlierFactory {
     fn doc(&self) -> &'static str { "Z-score: flags rows where any feature's z-score exceeds threshold. Simple but effective for Gaussian-distributed features." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ZscoreOutlierSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ZscoreOutlierSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ZscoreOutlierNode { features: s.features, threshold: s.threshold, meta: self.ports() }))
     }
@@ -229,7 +229,7 @@ impl DagNode for ZscoreOutlierNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_zscore_outlier" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_zscore_outlier".into(), msg: e.to_string() })?;
         let result = ml::anomaly::zscore_outliers(&data, self.threshold)
@@ -264,7 +264,7 @@ impl NodeFactory for LofFactory {
     fn doc(&self) -> &'static str { "LOF: density-based anomaly detection. LOF > 1 indicates a point is sparser than its neighbors." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(LofSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: LofSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LofNode { features: s.features, k: s.k, meta: self.ports() }))
     }
@@ -279,7 +279,7 @@ impl DagNode for LofNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_lof" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_lof".into(), msg: e.to_string() })?;
         let result = ml::anomaly::local_outlier_factor(&data, self.k)

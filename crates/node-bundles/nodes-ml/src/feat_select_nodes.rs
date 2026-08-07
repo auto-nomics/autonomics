@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -50,7 +50,7 @@ impl NodeFactory for VarianceThresholdFactory {
     fn doc(&self) -> &'static str { "VarianceThreshold: filters out low-variance features. Outputs a summary table with feature names, variances, and selected status." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(VarianceThresholdSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: VarianceThresholdSpec = serde_json::from_value(spec)?;
         Ok(Box::new(VarianceThresholdNode { features: s.features, threshold: s.threshold, meta: self.ports() }))
     }
@@ -65,7 +65,7 @@ impl DagNode for VarianceThresholdNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_variance_threshold" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_variance_threshold".into(), msg: e.to_string()
@@ -109,7 +109,7 @@ impl NodeFactory for SelectKBestFactory {
     fn doc(&self) -> &'static str { "SelectKBest: ranks features by ANOVA F-statistic against class labels, returns the top K. Outputs feature, score, rank." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(SelectKBestSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: SelectKBestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SelectKBestNode { features: s.features, label_column: s.label_column, k: s.k, meta: self.ports() }))
     }
@@ -124,7 +124,7 @@ impl DagNode for SelectKBestNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_select_k_best" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_select_k_best".into(), msg: e.to_string()
@@ -171,7 +171,7 @@ impl NodeFactory for CorrelationRankFactory {
     fn doc(&self) -> &'static str { "CorrelationRank: computes |Pearson r| between each feature and the target column, outputs feature name and correlation sorted by descending strength." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(CorrelationRankSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: CorrelationRankSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CorrelationRankNode { features: s.features, target_column: s.target_column, meta: self.ports() }))
     }
@@ -186,7 +186,7 @@ impl DagNode for CorrelationRankNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_correlation_rank" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError {
             node_type: "ml_correlation_rank".into(), msg: e.to_string()

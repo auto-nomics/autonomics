@@ -11,9 +11,9 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 // ═══════════════════════════════════════════════════════════════════════
 // ModelSave
@@ -36,7 +36,7 @@ impl NodeFactory for ModelSaveFactory {
     fn doc(&self) -> &'static str { "ModelSave: wraps raw model bytes in a ModelArtifact with metadata and writes to the specified URI (local path for now)." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ModelSaveSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ModelSaveSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ModelSaveNode {
             uri: s.uri, kind: s.kind, feature_names: s.feature_names,
@@ -57,7 +57,7 @@ impl DagNode for ModelSaveNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_model_save" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, _inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, _inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let artifact = ml::ModelArtifact::new(
             &self.kind,
             &Vec::<u8>::new(),
@@ -102,7 +102,7 @@ impl NodeFactory for ModelLoadFactory {
     fn doc(&self) -> &'static str { "ModelLoad: reads a bincode-serialised ModelArtifact and returns its metadata." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ModelLoadSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ModelLoadSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ModelLoadNode { uri: s.uri, meta: self.ports() }))
     }
@@ -117,7 +117,7 @@ impl DagNode for ModelLoadNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_model_load" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, _inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, _inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let bytes = std::fs::read(&self.uri).map_err(|e| DagError::NodeError {
             node_type: "ml_model_load".into(), msg: format!("fs read: {e}"),
         })?;

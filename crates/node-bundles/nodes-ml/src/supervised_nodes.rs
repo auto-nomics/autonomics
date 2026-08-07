@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -57,7 +57,7 @@ impl NodeFactory for LogisticFactory {
     fn doc(&self) -> &'static str { "LogisticRegression: L2-regularised binary logistic regression via gradient descent. Outputs predictions + probabilities." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(LogisticSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: LogisticSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LogisticNode { features: s.features, label_column: s.label_column, alpha: s.alpha, max_iter: s.max_iter, meta: self.ports() }))
     }
@@ -72,7 +72,7 @@ impl DagNode for LogisticNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_logistic" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_logistic".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_logistic".into(), msg: e.to_string() })?;
@@ -107,7 +107,7 @@ impl NodeFactory for GaussianNbFactory {
     fn doc(&self) -> &'static str { "GaussianNB: assumes features are conditionally independent given class, each following a Gaussian distribution." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(GaussianNbSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: GaussianNbSpec = serde_json::from_value(spec)?;
         Ok(Box::new(GaussianNbNode { features: s.features, label_column: s.label_column, meta: self.ports() }))
     }
@@ -122,7 +122,7 @@ impl DagNode for GaussianNbNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_gaussian_nb" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_gaussian_nb".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_gaussian_nb".into(), msg: e.to_string() })?;
@@ -158,7 +158,7 @@ impl NodeFactory for KnnFactory {
     fn doc(&self) -> &'static str { "KNN: classifies each sample by majority vote among its k nearest neighbors. Uses Euclidean distance." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(KnnSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: KnnSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KnnNode { features: s.features, label_column: s.label_column, k: s.k, meta: self.ports() }))
     }
@@ -173,7 +173,7 @@ impl DagNode for KnnNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_knn" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_knn".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_knn".into(), msg: e.to_string() })?;
@@ -216,7 +216,7 @@ impl NodeFactory for DecisionTreeFactory {
     fn doc(&self) -> &'static str { "DecisionTree: CART classification tree with configurable depth, split, and leaf constraints." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(DecisionTreeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: DecisionTreeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(DecisionTreeNode { features: s.features, label_column: s.label_column, max_depth: s.max_depth, min_samples_split: s.min_samples_split, min_samples_leaf: s.min_samples_leaf, meta: self.ports() }))
     }
@@ -235,7 +235,7 @@ impl DagNode for DecisionTreeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_decision_tree" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_decision_tree".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_decision_tree".into(), msg: e.to_string() })?;
@@ -268,7 +268,7 @@ impl NodeFactory for LinearRegressFactory {
     fn doc(&self) -> &'static str { "LinearRegression: OLS via linfa-linear. Outputs predictions + coefficients." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(LinearRegressSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: LinearRegressSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LinearRegressNode { features: s.features, target_column: s.target_column, meta: self.ports() }))
     }
@@ -283,7 +283,7 @@ impl DagNode for LinearRegressNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_linear_regress" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_linear_regress".into(), msg: e.to_string() })?;
         let target = common::extract_numeric_column(&batches, &self.target_column).map_err(|e| DagError::NodeError { node_type: "ml_linear_regress".into(), msg: e.to_string() })?;
@@ -327,7 +327,7 @@ impl NodeFactory for ElasticNetFactory {
     fn doc(&self) -> &'static str { "ElasticNet: L1+L2 regularised regression. l1_ratio=0 → Ridge, l1_ratio=1 → Lasso, 0<l1_ratio<1 → Elastic Net." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ElasticNetSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ElasticNetSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ElasticNetNode { features: s.features, target_column: s.target_column, penalty: s.penalty, l1_ratio: s.l1_ratio, max_iter: s.max_iter, tol: s.tol, meta: self.ports() }))
     }
@@ -342,7 +342,7 @@ impl DagNode for ElasticNetNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_elastic_net" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_elastic_net".into(), msg: e.to_string() })?;
         let target = common::extract_numeric_column(&batches, &self.target_column).map_err(|e| DagError::NodeError { node_type: "ml_elastic_net".into(), msg: e.to_string() })?;

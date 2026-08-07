@@ -161,7 +161,8 @@ pub fn build_default_registry(
     registry.register(Box::new(MagmaGeneNodeFactory {}));
     registry.register(Box::new(MagmaSetNodeFactory {}));
     registry.register(Box::new(MagmaMetaNodeFactory {}));
-    crate::nodes::hypothesize::register_all(&mut registry);
+    #[cfg(feature = "bundle-hypothesize")]
+    registry.register_plugin(&nodes_hypothesize::Plugin);
     // ── survey-package nodes ───────────────────────────────────────────
     registry.register(Box::new(SvyMeanFactory {}));
     registry.register(Box::new(SvyTotalFactory {}));
@@ -192,6 +193,7 @@ pub fn build_default_registry(
     registry.register(Box::new(SvyStandardizeFactory {}));
     registry.register(Box::new(RegTermTestFactory {}));
     // ── machine-learning nodes ────────────────────────────────────────
-    crate::nodes::ml::register_all(&mut registry);
+    #[cfg(feature = "bundle-ml")]
+    registry.register_plugin(&nodes_ml::Plugin);
     registry
 }

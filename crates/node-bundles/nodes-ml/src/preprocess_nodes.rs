@@ -15,10 +15,10 @@ use faer::Mat;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 use ml::preprocess::{
     ImputeStrategy, Imputer, MinMaxScaler, NormKind, PowerTransformer, RobustScaler,
@@ -111,7 +111,7 @@ impl NodeFactory for StandardizeFactory {
     fn doc(&self) -> &'static str { "StandardScaler: for each column, subtract the mean and divide by standard deviation. Constant columns (std=0) cause an error." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(StandardizeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: StandardizeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(StandardizeNode { columns: s.columns, meta: self.ports() }))
     }
@@ -126,7 +126,7 @@ impl DagNode for StandardizeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_standardize" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let (_, transformed) = StandardScaler::fit_transform(&data).map_err(|e| DagError::NodeError {
@@ -159,7 +159,7 @@ impl NodeFactory for MinMaxScaleFactory {
     fn doc(&self) -> &'static str { "MinMaxScaler: linearly scales each column to [feature_min, feature_max]. Default range is [0, 1]." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(MinMaxScaleSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: MinMaxScaleSpec = serde_json::from_value(spec)?;
         Ok(Box::new(MinMaxScaleNode { columns: s.columns, feature_range: (s.feature_min, s.feature_max), meta: self.ports() }))
     }
@@ -174,7 +174,7 @@ impl DagNode for MinMaxScaleNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_minmax_scale" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let (_, mut transformed) = MinMaxScaler::fit_transform(&data, self.feature_range).map_err(|e| DagError::NodeError {
@@ -200,7 +200,7 @@ impl NodeFactory for RobustScaleFactory {
     fn doc(&self) -> &'static str { "RobustScaler: subtract median and divide by interquartile range (Q3 - Q1). Outlier-resistant." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(RobustScaleSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: RobustScaleSpec = serde_json::from_value(spec)?;
         Ok(Box::new(RobustScaleNode { columns: s.columns, meta: self.ports() }))
     }
@@ -215,7 +215,7 @@ impl DagNode for RobustScaleNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_robust_scale" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let scaler = RobustScaler::fit(&data).map_err(|e| DagError::NodeError { node_type: "ml_robust_scale".into(), msg: e.to_string() })?;
@@ -245,7 +245,7 @@ impl NodeFactory for NormalizeRowsFactory {
     fn doc(&self) -> &'static str { "Row-wise normalisation: each row vector is scaled so its L1/L2/Max norm equals 1." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(NormalizeRowsSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: NormalizeRowsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(NormalizeRowsNode { columns: s.columns, norm: s.norm, meta: self.ports() }))
     }
@@ -260,7 +260,7 @@ impl DagNode for NormalizeRowsNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_normalize_rows" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let mut data = extract_features(&batches, &self.columns)?;
         let kind = match self.norm.to_lowercase().as_str() {
@@ -289,7 +289,7 @@ impl NodeFactory for PowerTransformFactory {
     fn doc(&self) -> &'static str { "PowerTransformer: fits Yeo-Johnson λ per column via MLE, transforms data to approximate Gaussian. Works on positive and negative values." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(PowerTransformSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: PowerTransformSpec = serde_json::from_value(spec)?;
         Ok(Box::new(PowerTransformNode { columns: s.columns, meta: self.ports() }))
     }
@@ -304,7 +304,7 @@ impl DagNode for PowerTransformNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_power_transform" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let scaler = PowerTransformer::fit(&data).map_err(|e| DagError::NodeError { node_type: "ml_power_transform".into(), msg: e.to_string() })?;
@@ -336,7 +336,7 @@ impl NodeFactory for ImputeFactory {
     fn doc(&self) -> &'static str { "Imputer: fills NaN values in specified columns using mean, median, or constant fill_value strategy." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(ImputeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ImputeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ImputeNode { columns: s.columns, strategy: s.strategy, fill_value: s.fill_value, meta: self.ports() }))
     }
@@ -351,7 +351,7 @@ impl DagNode for ImputeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_impute" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let strat = match self.strategy.as_str() {
@@ -385,7 +385,7 @@ impl NodeFactory for OneHotEncodeFactory {
     fn doc(&self) -> &'static str { "OneHotEncoder: expands a categorical column into one binary column per category. If categories are not specified, they are inferred from the data." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(OneHotEncodeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: OneHotEncodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OneHotEncodeNode { column: s.column, categories: s.categories, meta: self.ports() }))
     }
@@ -400,7 +400,7 @@ impl DagNode for OneHotEncodeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_one_hot" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let values = common::extract_string_column(&batches, &self.column)?;
 
@@ -461,7 +461,7 @@ impl NodeFactory for LabelEncodeFactory {
     fn doc(&self) -> &'static str { "LabelEncoder: maps each unique value in a categorical column to an integer starting from 0." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(LabelEncodeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: LabelEncodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LabelEncodeNode { column: s.column, meta: self.ports() }))
     }
@@ -476,7 +476,7 @@ impl DagNode for LabelEncodeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_label_encode" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let values = common::extract_string_column(&batches, &self.column)?;
         // Build label map
@@ -529,7 +529,7 @@ impl NodeFactory for PolyFeaturesFactory {
     fn doc(&self) -> &'static str { "PolynomialFeatures: generates all polynomial combinations of features up to the specified degree. Optionally interaction-only (no x^2 terms)." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(PolyFeaturesSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: PolyFeaturesSpec = serde_json::from_value(spec)?;
         Ok(Box::new(PolyFeaturesNode { columns: s.columns, degree: s.degree, include_bias: s.include_bias, interaction_only: s.interaction_only, meta: self.ports() }))
     }
@@ -544,7 +544,7 @@ impl DagNode for PolyFeaturesNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_poly_features" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let (nrows, ncols) = data.shape();
@@ -563,7 +563,7 @@ impl DagNode for PolyFeaturesNode {
                 out_data[i * n_out + out_j] = val;
             }
         }
-        let result_mat = crate::nodes::ml::common::mat_from_row_major(nrows, n_out, &out_data);
+        let result_mat = crate::common::mat_from_row_major(nrows, n_out, &out_data);
 
         // Output column names
         let names: Vec<String> = combos.iter().map(|combo| {
@@ -645,7 +645,7 @@ impl NodeFactory for KBinsDiscretizeFactory {
     fn doc(&self) -> &'static str { "KBinsDiscretizer: partitions continuous values into n_bins bins using uniform-width or quantile (median) edges. Outputs ordinal bin indices." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(KBinsDiscretizeSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: KBinsDiscretizeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KBinsDiscretizeNode { columns: s.columns, n_bins: s.n_bins, strategy: s.strategy, meta: self.ports() }))
     }
@@ -660,7 +660,7 @@ impl DagNode for KBinsDiscretizeNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_discretize" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = extract_features(&batches, &self.columns)?;
         let (nrows, ncols) = data.shape();

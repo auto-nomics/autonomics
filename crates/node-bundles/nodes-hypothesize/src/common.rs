@@ -11,8 +11,8 @@ use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, NullArray, RecordBa
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use thiserror::Error;
 
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::NodeCtx;
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::NodeCtx;
 
 // ─── Error ──────────────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ fn opt_i32_array(v: Option<i32>) -> ArrayRef {
 
 /// Collect all input data into a single `RecordBatch`.
 pub async fn collect_input(
-    inputs: &[crate::nodes::meta::NodeInput],
+    inputs: &[dag_core::node::NodeInput],
 ) -> Result<Vec<RecordBatch>, HypoNodeError> {
     let input = inputs
         .first()
@@ -172,7 +172,7 @@ pub fn extract_groups(
             .ok_or_else(|| HypoNodeError::Column(format!("{value_col} not Float64")))?;
 
         let grp_strings: Vec<Option<String>> =
-            crate::nodes::meta::string_opt_values(grp_arr.as_ref()).unwrap_or_default();
+            dag_core::node::string_opt_values(grp_arr.as_ref()).unwrap_or_default();
 
         for i in 0..vals.len() {
             if vals.is_null(i) {

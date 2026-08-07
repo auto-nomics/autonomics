@@ -10,9 +10,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use faer::Mat;
 
-use crate::dag::DagError;
+use dag_core::dag::DagError;
 
-use super::super::numeric_util::ColumnError;
+use dag_core::arrow_util::ColumnError;
 
 /// Create a `Mat<f64>` from row-major data (faer 0.24 lacks from_row_major).
 pub fn mat_from_row_major(nrows: usize, ncols: usize, data: &[f64]) -> Mat<f64> {

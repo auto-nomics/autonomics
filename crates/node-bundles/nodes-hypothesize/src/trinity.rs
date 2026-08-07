@@ -2,10 +2,10 @@
 //! `hypothesize.score_test`. These read scalars from the spec, not from columns.
 
 use super::common::{HypoNodeError, emit_test_row};
-use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::dag::graph::PortOutputs;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use arrow_array::{Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
@@ -52,7 +52,7 @@ impl NodeFactory for WaldNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: WaldNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(WaldNode {
             meta: one_port(),
@@ -83,8 +83,8 @@ impl DagNode for WaldNode {
         &mut self,
         ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let result =
             if let (Some(vcov), Some(est_vec)) = (&self.spec.vcov, &self.spec.estimate_vec) {
                 let default_null = vec![0.0_f64; est_vec.len()];
@@ -132,7 +132,7 @@ impl NodeFactory for LrtNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: LrtNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(LrtNode {
             meta: one_port(),
@@ -163,8 +163,8 @@ impl DagNode for LrtNode {
         &mut self,
         ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let result = h::lrt(
             self.spec.null_loglik,
             self.spec.alt_loglik,
@@ -205,7 +205,7 @@ impl NodeFactory for ScoreNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: ScoreNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(ScoreNode {
             meta: one_port(),
@@ -236,8 +236,8 @@ impl DagNode for ScoreNode {
         &mut self,
         ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let result = h::score_uni(self.spec.score, self.spec.fisher_info, self.spec.null_value)
             .map_err(|e| HypoNodeError::Test(e.to_string()))?;
         emit_test_row(ctx, &result)
@@ -280,7 +280,7 @@ impl NodeFactory for InvertNodeFactory {
         &self,
         spec: serde_json::Value,
         _: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: InvertNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(InvertNode {
             meta: NodePorts::new().add_output_port(None),
@@ -311,7 +311,7 @@ impl DagNode for InvertNode {
         &mut self,
         ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
+        _r: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let est = self.spec.estimate;
         let se = self.spec.se;

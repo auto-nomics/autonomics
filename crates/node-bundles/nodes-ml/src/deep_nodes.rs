@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use super::super::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use super::common;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs.first().ok_or(DagError::NodeError {
@@ -63,7 +63,7 @@ impl NodeFactory for MlpFactory {
     fn doc(&self) -> &'static str { "MLP: feedforward neural network for binary classification. Configurable hidden layers, activation (relu/sigmoid/tanh), learning rate, epochs." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(MlpSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: MlpSpec = serde_json::from_value(spec)?;
         Ok(Box::new(MlpNode {
             features: s.features, label_column: s.label_column,
@@ -86,7 +86,7 @@ impl DagNode for MlpNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_mlp" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_mlp".into(), msg: e.to_string() })?;
         let labels_f = common::extract_numeric_column(&batches, &self.label_column).map_err(|e| DagError::NodeError { node_type: "ml_mlp".into(), msg: e.to_string() })?;
@@ -145,7 +145,7 @@ impl NodeFactory for AutoencoderFactory {
     fn doc(&self) -> &'static str { "Autoencoder: learns a compressed latent representation by training encoder-decoder weight matrices to reconstruct input. Outputs ae_0, ae_1, ... latent coordinates." }
     fn spec_schema(&self) -> schemars::Schema { schema_for!(AutoencoderSpec) }
     fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, crate::node_registry::error::Error> {
+    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: AutoencoderSpec = serde_json::from_value(spec)?;
         Ok(Box::new(AutoencoderNode {
             features: s.features, latent_dim: s.latent_dim,
@@ -166,7 +166,7 @@ impl DagNode for AutoencoderNode {
     fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
     fn kind(&self) -> &'static str { "ml_autoencoder" }
     fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &crate::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
         let batches = collect_batches(inputs).await?;
         let data = common::extract_matrix(&batches, &self.features).map_err(|e| DagError::NodeError { node_type: "ml_autoencoder".into(), msg: e.to_string() })?;
         let result = ml::deep::autoencoder(&data, self.latent_dim, self.n_epochs, self.learning_rate, self.seed)

@@ -4,9 +4,9 @@
 use super::common::{
     HypoNodeError, collect_input, emit_test_row, extract_f64_column, extract_groups,
 };
-use crate::dag::DagError;
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
-use crate::nodes::meta::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
@@ -57,7 +57,7 @@ impl NodeFactory for WilcoxonNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: WilcoxonNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(WilcoxonNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -90,8 +90,8 @@ impl DagNode for WilcoxonNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
@@ -158,7 +158,7 @@ impl NodeFactory for KruskalWallisNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: KruskalWallisNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(KruskalWallisNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -191,8 +191,8 @@ impl DagNode for KruskalWallisNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let groups = extract_groups(&batches, &self.spec.value_column, &self.spec.group_column)?;
         if groups.len() < 2 {
@@ -234,7 +234,7 @@ impl NodeFactory for FriedmanNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: FriedmanNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(FriedmanNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
@@ -267,8 +267,8 @@ impl DagNode for FriedmanNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &crate::dag::node_event::NodeReporter,
-    ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         // Build blocks × treatments from value/group/block columns.
         let mut blocks: std::collections::BTreeMap<String, Vec<(String, f64)>> =
@@ -288,8 +288,8 @@ impl DagNode for FriedmanNode {
                 .as_any()
                 .downcast_ref::<Float64Array>()
                 .ok_or_else(|| HypoNodeError::Column("value not f64".into()))?;
-            let g_strs = crate::nodes::meta::string_opt_values(grps.as_ref()).unwrap_or_default();
-            let b_strs = crate::nodes::meta::string_opt_values(blks.as_ref()).unwrap_or_default();
+            let g_strs = dag_core::node::string_opt_values(grps.as_ref()).unwrap_or_default();
+            let b_strs = dag_core::node::string_opt_values(blks.as_ref()).unwrap_or_default();
             for i in 0..va.len() {
                 if va.is_null(i) {
                     continue;

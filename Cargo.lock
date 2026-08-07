@@ -2584,6 +2584,8 @@ dependencies = [
  "mtag",
  "mvmr",
  "nanoid",
+ "nodes-hypothesize",
+ "nodes-ml",
  "opengwas",
  "opentargets",
  "parquet",
@@ -7120,6 +7122,41 @@ dependencies = [
  "cfg_aliases 0.2.2",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nodes-hypothesize"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "hypothesize",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "nodes-ml"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "faer",
+ "ml",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
