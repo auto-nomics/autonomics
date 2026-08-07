@@ -746,14 +746,27 @@ impl DagNode for HlmeNode {
         // Build output batches.
         let summary_batch = build_summary_batch(&fit, data.nobs);
         let params_batch = build_params_batch(&fit, &col_labels);
-        let posterior_batch = build_posterior_batch(&fit, &data);
-        let fitted_batch = build_fitted_batch(&fit, &data);
-
         let session = node_ctx.session();
         let df_summary = session.read_batch(summary_batch).map_err(HlmeNodeError::Df)?;
         let df_params = session.read_batch(params_batch).map_err(HlmeNodeError::Df)?;
-        let df_posterior = session.read_batch(posterior_batch).map_err(HlmeNodeError::Df)?;
-        let df_fitted = session.read_batch(fitted_batch).map_err(HlmeNodeError::Df)?;
+
+        // Posterior + fitted ports: only computed when the fit is usable.
+        let (df_posterior, df_fitted) = if fit.posterior.is_some() {
+            let posterior_batch = build_posterior_batch(&fit, &data);
+            let fitted_batch = build_fitted_batch(&fit, &data);
+            let df_posterior = session.read_batch(posterior_batch).map_err(HlmeNodeError::Df)?;
+            let df_fitted = session.read_batch(fitted_batch).map_err(HlmeNodeError::Df)?;
+            (df_posterior, df_fitted)
+        } else {
+            // maxiter=0 or failed convergence: emit empty batches.
+            let empty_posterior = session.read_batch(
+                RecordBatch::new_empty(posterior_schema(fit.ng))
+            ).map_err(HlmeNodeError::Df)?;
+            let empty_fitted = session.read_batch(
+                RecordBatch::new_empty(fitted_schema())
+            ).map_err(HlmeNodeError::Df)?;
+            (empty_posterior, empty_fitted)
+        };
 
         let mut res = PortOutputs::new();
         res.insert(0, df_summary);
@@ -1530,5 +1543,515 @@ mod tests {
         // Cholesky diagonal entries should be 1.0.
         assert_eq!(b[4], 1.0); // i_nvc + 0 = 4
         assert_eq!(b[6], 1.0); // i_nvc + 2 = 6 (diag of 2×2 upper-tri)
+    }
+}
+
+// =====================================================================
+// Cross-validation against R lcmm golden fixtures
+// =====================================================================
+//
+// Golden fixtures: `bio_crates/lcmm/tests/fixtures/{data_hlme.csv, hlme_golden.json}`
+// Restore: `rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/`
+
+#[cfg(test)]
+mod cross_validation {
+    use super::*;
+    use crate::dag::node_event::NodeReporter;
+    use crate::node_registry::registry::NodeCtx;
+    use datalake::Datalake;
+    use datafusion::prelude::SessionContext;
+
+    const TOL_LL: f64 = 1e-8;
+
+    // ---- Path helpers --------------------------------------------------
+
+    fn fixtures_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bio_crates/lcmm/tests/fixtures")
+    }
+
+    // ---- CSV → RecordBatch ---------------------------------------------
+
+    fn load_data_batch() -> RecordBatch {
+        let path = fixtures_dir().join("data_hlme.csv");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                path.display(), e
+            )
+        });
+
+        let mut ids = Vec::new();
+        let mut ys = Vec::new();
+        let mut times = Vec::new();
+        let mut x1s = Vec::new();
+        let mut x2s = Vec::new();
+        let mut x3s = Vec::new();
+
+        for (i, line) in text.lines().enumerate() {
+            if i == 0 { continue; }
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() < 6 { continue; }
+            ids.push(f[0].parse::<i64>().unwrap());
+            ys.push(f[1].parse::<f64>().unwrap());
+            times.push(f[2].parse::<f64>().unwrap());
+            x1s.push(f[3].parse::<f64>().unwrap());
+            x2s.push(f[4].parse::<f64>().unwrap());
+            x3s.push(f[5].parse::<f64>().unwrap());
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ID", DataType::Int64, false),
+            Field::new("Y", DataType::Float64, false),
+            Field::new("Time", DataType::Float64, false),
+            Field::new("X1", DataType::Float64, false),
+            Field::new("X2", DataType::Float64, false),
+            Field::new("X3", DataType::Float64, false),
+        ]));
+
+        RecordBatch::try_new(schema, vec![
+            Arc::new(Int64Array::from(ids)),
+            Arc::new(Float64Array::from(ys)),
+            Arc::new(Float64Array::from(times)),
+            Arc::new(Float64Array::from(x1s)),
+            Arc::new(Float64Array::from(x2s)),
+            Arc::new(Float64Array::from(x3s)),
+        ]).unwrap()
+    }
+
+    // ---- Golden JSON ---------------------------------------------------
+
+    fn load_golden() -> serde_json::Value {
+        let path = fixtures_dir().join("hlme_golden.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                path.display(), e
+            )
+        });
+        serde_json::from_str(&text).expect("Failed to parse golden JSON")
+    }
+
+    fn golden_fit<'a>(golden: &'a serde_json::Value, tag: &str) -> &'a serde_json::Value {
+        golden["fits"].as_array().unwrap().iter()
+            .find(|f| f["tag"].as_str() == Some(tag))
+            .unwrap_or_else(|| panic!("golden fit '{tag}' not found"))
+    }
+
+    fn json_to_f64_array(v: &serde_json::Value) -> Vec<f64> {
+        v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+    }
+
+    /// Convert golden `best` from R's post-processed form (varcov entries hold
+    /// B=U'U) back to Fortran optimization form (Cholesky factor entries).
+    fn convert_golden_best(
+        best: &[f64],
+        cholesky: &[f64],
+        layout: &ParamLayout,
+        idiag: bool,
+    ) -> Vec<f64> {
+        let mut b = best.to_vec();
+        let nvc = layout.nvc;
+        let i_nvc = layout.i_nvc;
+        if !idiag && nvc > 0 {
+            for k in 0..nvc {
+                b[i_nvc + k] = cholesky[k];
+            }
+        } else if idiag && nvc > 0 {
+            let nea = layout.nea;
+            for j in 0..nea {
+                b[i_nvc + j] = cholesky[j * (j + 1) / 2 + j];
+            }
+        }
+        b
+    }
+
+    // ---- Design matrix verification ------------------------------------
+    // Verifies that build_model_data() produces the same ModelSpec as the
+    // manually-constructed specs in the lcmm crate's cross-validation tests.
+
+    fn check_spec(
+        test_name: &str,
+        spec: &ModelSpec,
+        ng: usize, idiag: bool, nwg: bool,
+        idprob: &[u8], idea: &[u8], idg: &[u8],
+    ) {
+        assert_eq!(spec.ng, ng, "{test_name}: ng mismatch");
+        assert_eq!(spec.idiag, idiag, "{test_name}: idiag mismatch");
+        assert_eq!(spec.nwg, nwg, "{test_name}: nwg mismatch");
+        assert_eq!(spec.idprob, idprob, "{test_name}: idprob mismatch: got {:?}, want {:?}", spec.idprob, idprob);
+        assert_eq!(spec.idea, idea, "{test_name}: idea mismatch: got {:?}, want {:?}", spec.idea, idea);
+        assert_eq!(spec.idg, idg, "{test_name}: idg mismatch: got {:?}, want {:?}", spec.idg, idg);
+        eprintln!("PASS design_matrix {test_name}");
+    }
+
+    #[test]
+    fn design_matrix_gbtm1() {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let cfg = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec![], random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (data, spec, _) = build_model_data(&batches, &cfg).unwrap();
+        // gbtm1: X0 = [intercept, Time], idg=[1,1], idea=[0,0]
+        assert_eq!(spec.idg.len(), 2, "nv should be 2");
+        check_spec("gbtm1", &spec, 1, false, false, &[0,0], &[0,0], &[1,1]);
+        // Verify data dimensions
+        assert_eq!(data.ns, 100, "gbtm1: ns should be 100");
+    }
+
+    #[test]
+    fn design_matrix_gbtm2() {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let cfg = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec!["Time".into()],
+            random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
+        // gbtm2: X0 = [intercept, Time], idg=[2,2], idea=[0,0], idprob=[1,0]
+        assert_eq!(spec.idg.len(), 2);
+        check_spec("gbtm2", &spec, 2, false, false, &[1,0], &[0,0], &[2,2]);
+    }
+
+    #[test]
+    fn design_matrix_m1() {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let cfg = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
+        // m1: X0 = [intercept, Time, X1, Time:X1]
+        // idg=[1,1,1,1], idea=[1,1,0,0]
+        assert_eq!(spec.idg.len(), 4, "m1: nv should be 4 (intercept + Time + X1 + Time:X1)");
+        check_spec("m1", &spec, 1, false, false, &[0,0,0,0], &[1,1,0,0], &[1,1,1,1]);
+    }
+
+    #[test]
+    fn design_matrix_m2a() {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let cfg = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec!["Time".into()],
+            random: vec!["Time".into()],
+            classmb: vec!["X2".into(), "X3".into()],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
+        // m2a: X0 = [intercept, Time, X1, Time:X1, X2, X3]
+        // idprob=[1,0,0,0,1,1], idea=[1,1,0,0,0,0], idg=[2,2,1,1,0,0]
+        assert_eq!(spec.idg.len(), 6, "m2a: nv should be 6");
+        check_spec(
+            "m2a", &spec, 2, false, false,
+            &[1,0,0,0,1,1], &[1,1,0,0,0,0], &[2,2,1,1,0,0],
+        );
+    }
+
+    #[test]
+    fn design_matrix_m1_idiag() {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let cfg = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
+            idiag: true, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
+        assert_eq!(spec.idiag, true, "m1_idiag: idiag should be true");
+        check_spec(
+            "m1_idiag", &spec, 1, true, false,
+            &[0,0,0,0], &[1,1,0,0], &[1,1,1,1],
+        );
+    }
+
+    // ---- Loglik cross-validation ---------------------------------------
+    // Evaluates loglik at the golden best parameter vector and compares
+    // against R lcmm's reported loglik.
+
+    fn check_loglik(test_name: &str, cfg: &HlmeConfig, golden_tag: &str) {
+        let batch = load_data_batch();
+        let batches = vec![batch];
+        let (data, spec, _) = build_model_data(&batches, cfg).unwrap();
+        let layout = spec.layout();
+
+        let golden = load_golden();
+        let gf = golden_fit(&golden, golden_tag);
+
+        // Validate NPM.
+        let golden_best = json_to_f64_array(&gf["best"]);
+        assert_eq!(
+            golden_best.len(), layout.npm,
+            "{test_name}: golden NPM={} != Rust NPM={}",
+            golden_best.len(), layout.npm,
+        );
+
+        // Convert golden best from R post-processed form.
+        let golden_chol = json_to_f64_array(&gf["cholesky"]);
+        let golden_idiag = gf["idiag"].as_i64().unwrap_or(0) == 1;
+        let best = convert_golden_best(&golden_best, &golden_chol, &layout, golden_idiag);
+
+        // Evaluate loglik.
+        let ll = lcmm::loglik_hlme(&best, &data, &spec);
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+        let rel = (ll - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(
+            rel < TOL_LL,
+            "{test_name}: loglik mismatch. Rust={ll:.10}, R={golden_ll:.10}, rel={rel:.3e}"
+        );
+        eprintln!("PASS loglik {test_name}: Rust={ll:.6} R={golden_ll:.6} rel={rel:.2e}");
+    }
+
+    #[test]
+    fn loglik_gbtm1() {
+        check_loglik("gbtm1", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec![], random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        }, "gbtm1");
+    }
+
+    #[test]
+    fn loglik_gbtm2() {
+        check_loglik("gbtm2", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec!["Time".into()],
+            random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        }, "gbtm2");
+    }
+
+    #[test]
+    fn loglik_gbtm3() {
+        check_loglik("gbtm3", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 3,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec!["Time".into()],
+            random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        }, "gbtm3");
+    }
+
+    #[test]
+    fn loglik_m1() {
+        check_loglik("m1", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        }, "m1");
+    }
+
+    #[test]
+    fn loglik_m1_idiag() {
+        check_loglik("m1_idiag", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
+            idiag: true, nwg: false, maxiter: 500, init_b: vec![],
+        }, "m1_idiag");
+    }
+
+    #[test]
+    fn loglik_m2a() {
+        check_loglik("m2a", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec!["Time".into()],
+            random: vec!["Time".into()],
+            classmb: vec!["X2".into(), "X3".into()],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        }, "m2a");
+    }
+
+    #[test]
+    fn loglik_m2a_nwg() {
+        check_loglik("m2a_nwg", &HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time*X1".into()],
+            mixture: vec!["Time".into()],
+            random: vec!["Time".into()],
+            classmb: vec!["X2".into(), "X3".into()],
+            idiag: false, nwg: true, maxiter: 500, init_b: vec![],
+        }, "m2a_nwg");
+    }
+
+    // ---- End-to-end node execution test --------------------------------
+
+    fn test_node_ctx() -> NodeCtx {
+        let ctx = SessionContext::new();
+        NodeCtx {
+            runtime_env: ctx.runtime_env(),
+            iceberg_catalog: None,
+            datalake: Arc::new(Datalake::default()),
+            opendal: None,
+        }
+    }
+
+    /// Full pipeline: RecordBatch → node execute → output port 0 (summary).
+    /// Uses maxiter=0 with golden best to isolate the design matrix + loglik
+    /// evaluation from optimizer convergence issues.
+    #[tokio::test]
+    async fn node_execute_gbtm1_loglik() {
+        let batch = load_data_batch();
+        let golden = load_golden();
+        let gf = golden_fit(&golden, "gbtm1");
+
+        // First, build model data to get the layout for golden best conversion.
+        let batches = vec![batch.clone()];
+        let cfg_layout = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec![], random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (data, spec, _) = build_model_data(&batches, &cfg_layout).unwrap();
+        let layout = spec.layout();
+
+        // Convert golden best.
+        let golden_best = json_to_f64_array(&gf["best"]);
+        let golden_chol = json_to_f64_array(&gf["cholesky"]);
+        let best = convert_golden_best(&golden_best, &golden_chol, &layout, false);
+
+        // Execute node with maxiter=0.
+        let mut node = HlmeNode::new(HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 1,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec![], random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 0, init_b: best,
+        });
+
+        let df = SessionContext::new().read_batch(batch).unwrap();
+        let input = NodeInput { port: 0, data: df };
+
+        let res = node
+            .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
+            .await
+            .expect("node execute should succeed");
+
+        // Check port 0 (summary).
+        let summary_df = res.get(&0).unwrap().clone();
+        let summary = summary_df.collect().await.unwrap().into_iter().next().unwrap();
+
+        let loglik = summary
+            .column_by_name("loglik")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+        let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(
+            rel < TOL_LL,
+            "node_execute gbtm1: loglik mismatch. Node={loglik:.10}, R={golden_ll:.10}, rel={rel:.3e}"
+        );
+        eprintln!("PASS node_execute_gbtm1: loglik={loglik:.6} R={golden_ll:.6} rel={rel:.2e}");
+
+        // Also verify AIC and BIC.
+        let aic = summary.column_by_name("aic").unwrap()
+            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let bic = summary.column_by_name("bic").unwrap()
+            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let golden_aic = gf["AIC"].as_f64().unwrap();
+        let golden_bic = gf["BIC"].as_f64().unwrap();
+        let rel_aic = (aic - golden_aic).abs() / golden_aic.abs().max(1e-10);
+        let rel_bic = (bic - golden_bic).abs() / golden_bic.abs().max(1e-10);
+        assert!(rel_aic < TOL_LL, "AIC mismatch: Node={aic}, R={golden_aic}");
+        assert!(rel_bic < TOL_LL, "BIC mismatch: Node={bic}, R={golden_bic}");
+
+        // Verify port 1 (params) has the right number of rows.
+        let params_df = res.get(&1).unwrap().clone();
+        let params = params_df.collect().await.unwrap().into_iter().next().unwrap();
+        assert_eq!(
+            params.num_rows(),
+            layout.npm,
+            "params port should have NPM={} rows, got {}",
+            layout.npm,
+            params.num_rows(),
+        );
+
+        // Verify port 2 (posterior) is absent for maxiter=0 (no posterior computation).
+        // With maxiter=0, the fit returns early with posterior=None.
+        // So port 2 should still exist but may have 0 rows or error.
+        // Actually, build_posterior_batch panics if posterior is None.
+        // Since maxiter=0 returns early with posterior=None, the node would
+        // panic. Let's just verify port 0 and 1 are correct.
+        let _ = data;
+    }
+
+    /// End-to-end with ng=2 GBTM: verifies loglik + empty posterior port
+    /// when maxiter=0 (posterior is not computed).
+    #[tokio::test]
+    async fn node_execute_gbtm2_loglik() {
+        let batch = load_data_batch();
+        let golden = load_golden();
+        let gf = golden_fit(&golden, "gbtm2");
+
+        // Build model data for layout.
+        let batches = vec![batch.clone()];
+        let cfg_layout = HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec!["Time".into()],
+            random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+        };
+        let (_data, spec, _) = build_model_data(&batches, &cfg_layout).unwrap();
+        let layout = spec.layout();
+
+        // Convert golden best.
+        let golden_best = json_to_f64_array(&gf["best"]);
+        let golden_chol = json_to_f64_array(&gf["cholesky"]);
+        let best = convert_golden_best(&golden_best, &golden_chol, &layout, false);
+
+        // Execute with maxiter=0.
+        let mut node = HlmeNode::new(HlmeConfig {
+            subject: "ID".into(), outcome: "Y".into(), ng: 2,
+            intercept: true, fixed: vec!["Time".into()],
+            mixture: vec!["Time".into()],
+            random: vec![], classmb: vec![],
+            idiag: false, nwg: false, maxiter: 0, init_b: best,
+        });
+
+        let df = SessionContext::new().read_batch(batch).unwrap();
+        let input = NodeInput { port: 0, data: df };
+
+        let res = node
+            .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
+            .await
+            .expect("node execute should succeed");
+
+        // Verify loglik from port 0.
+        let summary_df = res.get(&0).unwrap().clone();
+        let summary = summary_df.collect().await.unwrap().into_iter().next().unwrap();
+        let loglik = summary.column_by_name("loglik").unwrap()
+            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+        let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(rel < TOL_LL,
+            "node_execute gbtm2: loglik mismatch. Node={loglik:.10}, R={golden_ll:.10}, rel={rel:.3e}");
+        eprintln!("PASS node_execute_gbtm2: loglik={loglik:.6} R={golden_ll:.6} rel={rel:.2e}");
+
+        // With maxiter=0, posterior is None → port 2 should be an empty batch.
+        let posterior_df = res.get(&2).unwrap().clone();
+        let posterior = posterior_df.collect().await.unwrap().into_iter().next().unwrap();
+        assert_eq!(posterior.num_rows(), 0,
+            "posterior port should be empty with maxiter=0");
     }
 }
