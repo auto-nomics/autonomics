@@ -448,6 +448,17 @@ pub struct RuntimeHost {
     /// Cached profiles (blueprints) loaded at startup. Used by GetStatus
     /// and route_task so agents can discover what they can spawn.
     profiles: Vec<agentik_core::AgentProfile>,
+    /// Current model (for spawning agents from tools). Set by TUI at startup.
+    model: Option<Arc<ArcSwapOption<Model>>>,
+    /// Channel for receiving spawned agent handles from background tasks.
+    /// Background spawn tasks send (handle, info) here; the main loop
+    /// drains and registers them.
+    registration_rx: tokio::sync::mpsc::UnboundedReceiver<(
+        AgentHandle,
+        crate::control::AgentInfo,
+    )>,
+    registration_tx:
+        tokio::sync::mpsc::UnboundedSender<(AgentHandle, crate::control::AgentInfo)>,
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -473,6 +484,7 @@ impl RuntimeHost {
         let mut infra = SharedInfra::open(config).await?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (registration_tx, registration_rx) = mpsc::unbounded_channel();
         let control = crate::control::HostControl::new(cmd_tx);
         infra.host_control = Some(control.clone());
         Ok(Self {
@@ -485,6 +497,9 @@ impl RuntimeHost {
             control,
             tool_delegations: HashMap::new(),
             profiles: Vec::new(),
+            model: None,
+            registration_rx,
+            registration_tx,
         })
     }
 
@@ -502,6 +517,11 @@ impl RuntimeHost {
         self.profiles = profiles;
     }
 
+    /// Set the current model (for spawning agents from tools).
+    pub fn set_model(&mut self, model: Arc<ArcSwapOption<Model>>) {
+        self.model = Some(model);
+    }
+
     /// Drain and execute all pending commands from agent tools.
     /// Call this in the event loop (e.g. at each render tick).
     pub fn try_process_commands(&mut self) {
@@ -510,13 +530,23 @@ impl RuntimeHost {
         }
     }
 
-    /// Await the next command from agent tools, then process it.
-    /// Event-driven — only wakes when a command arrives. Use as a
-    /// `select!` branch in the event loop instead of polling
-    /// [`try_process_commands`](Self::try_process_commands).
+    /// Await either a host command or a background spawn completion.
+    /// Event-driven — wakes when either arrives. Use as a `select!`
+    /// branch in the event loop.
     pub async fn recv_and_process_command(&mut self) {
-        if let Some(cmd) = self.cmd_rx.recv().await {
-            self.process_command(cmd);
+        tokio::select! {
+            cmd = self.cmd_rx.recv() => {
+                if let Some(cmd) = cmd {
+                    self.process_command(cmd);
+                }
+            }
+            reg = self.registration_rx.recv() => {
+                if let Some((handle, info)) = reg {
+                    let name = handle.name.clone();
+                    self.register_agent(handle, info);
+                    tracing::info!(agent = %name, "background spawn completed and registered");
+                }
+            }
         }
     }
 
@@ -524,21 +554,43 @@ impl RuntimeHost {
         use crate::control::{HostCommand, HostStatus};
         match cmd {
             HostCommand::Spawn {
-                name: _,
+                name,
                 profile_name,
                 reply_tx,
             } => {
-                // Look up profile by name. In the current design, profiles
-                // are passed externally — we can't resolve them here.
-                // Return an error indicating the caller should use
-                // spawn_and_register directly, or we need a profile
-                // registry on the host.
-                let _ = reply_tx.send(Err(format!(
-                    "Agent spawn via tool requires a profile registry. \
-                     Profile '{profile_name}' cannot be resolved from within \
-                     the host command loop. Use host.spawn_and_register() \
-                     directly, or register profiles first."
-                )));
+                // Look up profile from cache.
+                let Some(profile) = self.profiles.iter().find(|p| p.name == profile_name).cloned() else {
+                    let _ = reply_tx.send(Err(format!(
+                        "Profile '{profile_name}' not found. Available: {}",
+                        self.profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    )));
+                    return;
+                };
+                // Need a model to spawn.
+                let Some(ref model) = self.model else {
+                    let _ = reply_tx.send(Err("No model configured on host.".into()));
+                    return;
+                };
+
+                // Spawn in background — agent creation is async.
+                let infra = self.infra.clone();
+                let model = model.clone();
+                let reg_tx = self.registration_tx.clone();
+                let info = capability_from_profile(&name, &profile);
+                let agent_name = name.clone();
+
+                self.infra.runtime_handle.spawn(async move {
+                    match infra.spawn_agent(&agent_name, &profile, model, None).await {
+                        Ok(handle) => {
+                            let registered_name = handle.name.clone();
+                            let _ = reply_tx.send(Ok(registered_name));
+                            let _ = reg_tx.send((handle, info));
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(Err(e.to_string()));
+                        }
+                    }
+                });
             }
             HostCommand::Shutdown { name } => {
                 self.shutdown_agent(&name);

@@ -144,9 +144,10 @@ impl App {
             ..Default::default()
         };
 
-        // Share profiles with RuntimeHost for capability discovery.
+        // Share profiles + model with RuntimeHost for tool-driven agent spawning.
         if let Some(ref mut host) = host {
             host.set_profiles(profiles);
+            host.set_model(state.active_model.clone());
         }
 
         Self::load_model_config(&conn, &mut state.model_config_state);
