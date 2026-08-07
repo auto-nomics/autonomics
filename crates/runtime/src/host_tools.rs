@@ -175,6 +175,11 @@ impl ToolFunction for DelegateToTool {
         0
     }
 
+    /// 24-hour timeout — delegated agents may run long analyses.
+    fn timeout_seconds(&self) -> u64 {
+        86400
+    }
+
     async fn run(
         &self,
         input: DelegateToInput,
