@@ -16,18 +16,18 @@ use crate::dag::DagNode;
 use crate::nodes::meta::NodePorts;
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
+    bkmr::BkmrNodeFactory,
     causal::CausalNodeFactory,
     chi_square::ChiSquareNodeFactory,
     cmest::{
         CmestBinaryMNodeFactory, CmestBinaryYNodeFactory, CmestGformulaNodeFactory,
         CmestMultiNodeFactory, CmestNodeFactory, CmestWeightingNodeFactory,
     },
+    coloc::ColocAbfNodeFactory,
     cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
     cuminc::CumincNodeFactory,
     echo_node::EchoNodeFactory,
-    coloc::ColocAbfNodeFactory,
-    bkmr::BkmrNodeFactory,
     epi_lasso::EpiLassoNodeFactory,
     epi_rcs::EpiRcsNodeFactory,
     epi_roc::EpiRocNodeFactory,
@@ -36,6 +36,7 @@ use crate::nodes::{
     fine_gray::FineGrayNodeFactory,
     hdl_l::HdlLNodeFactory,
     hdl_l_scan::HdlLScanNodeFactory,
+    hlme::{HlmeCompareNodeFactory, HlmeNodeFactory, HlmePredictNodeFactory},
     lava::{
         LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
         LavaUnivNodeFactory,
@@ -59,8 +60,8 @@ use crate::nodes::{
     sink_iceberg::IcebergSinkNodeFactory,
     source_file::FileSourceNodeFactory,
     source_iceberg::IcebergSourceNodeFactory,
-    source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     source_opengwas_tophits::OpengwasTophitsNodeFactory,
+    source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
     sql_node::SqlNodeFactory,
     survey_calibrate::{CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory},
     survey_describe::{
@@ -268,6 +269,9 @@ impl NodeRegistry {
         registry.register(Box::new(EchoNodeFactory {}));
         registry.register(Box::new(ColocAbfNodeFactory {}));
         registry.register(Box::new(BkmrNodeFactory {}));
+        registry.register(Box::new(HlmeNodeFactory {}));
+        registry.register(Box::new(HlmePredictNodeFactory {}));
+        registry.register(Box::new(HlmeCompareNodeFactory {}));
         registry.register(Box::new(EvalueNodeFactory {}));
         registry.register(Box::new(TwoSampleMrNodeFactory {}));
         registry.register(Box::new(MrlapNodeFactory {}));
@@ -705,12 +709,20 @@ mod tests {
             "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_variance_threshold" => serde_json::json!({"features": ["x", "y"]}),
-            "ml_select_k_best" => serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1}),
-            "ml_correlation_rank" => serde_json::json!({"features": ["x", "y"], "target_column": "t"}),
+            "ml_select_k_best" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1})
+            }
+            "ml_correlation_rank" => {
+                serde_json::json!({"features": ["x", "y"], "target_column": "t"})
+            }
             "ml_logistic" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
-            "ml_gaussian_nb" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_gaussian_nb" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label"})
+            }
             "ml_knn" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
-            "ml_decision_tree" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_decision_tree" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label"})
+            }
             "ml_linear_regress" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_elastic_net" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_svm" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
@@ -753,12 +765,20 @@ mod tests {
             "ml_nmf" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_truncated_svd" => serde_json::json!({"features": ["x", "y"], "n_components": 2}),
             "ml_variance_threshold" => serde_json::json!({"features": ["x", "y"]}),
-            "ml_select_k_best" => serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1}),
-            "ml_correlation_rank" => serde_json::json!({"features": ["x", "y"], "target_column": "t"}),
+            "ml_select_k_best" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label", "k": 1})
+            }
+            "ml_correlation_rank" => {
+                serde_json::json!({"features": ["x", "y"], "target_column": "t"})
+            }
             "ml_logistic" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
-            "ml_gaussian_nb" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_gaussian_nb" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label"})
+            }
             "ml_knn" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
-            "ml_decision_tree" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
+            "ml_decision_tree" => {
+                serde_json::json!({"features": ["x", "y"], "label_column": "label"})
+            }
             "ml_linear_regress" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_elastic_net" => serde_json::json!({"features": ["x"], "target_column": "y"}),
             "ml_svm" => serde_json::json!({"features": ["x", "y"], "label_column": "label"}),
@@ -779,6 +799,18 @@ mod tests {
                 eprintln!("warning: no fixture spec for kind '{other}', using empty object");
                 serde_json::json!({})
             }
+            "hlme" => serde_json::json!({
+                "subject": "ID", "outcome": "Y", "ng": 1,
+                "fixed": ["Time"], "intercept": true
+            }),
+            "hlme_predict" => serde_json::json!({
+                "columns": ["Time"], "intercept": true, "ng": 1,
+                "best": [0.0, 0.0, 1.0], "idg": [1, 1]
+            }),
+            "hlme_compare" => serde_json::json!({
+                "models": [{"name": "m1", "ng": 1, "npm": 3, "loglik": -100.0, "ns": 100}]
+            }),
+            other => panic!("no fixture spec for kind '{other}'"),
         }
     }
 

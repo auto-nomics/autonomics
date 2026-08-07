@@ -49,6 +49,7 @@ statkit = { path = "../../stat_crates/statkit" }
 epi = { path = "../../stat_crates/epi" }
 hypothesize = { path = "../../stat_crates/hypothesize" }
 cmprsk = { path = "../../stat_crates/cmprsk" }
+lcmm = { path = "../../bio_crates/lcmm" }
 survey = { path = "../../stat_crates/survey" }
 ml = { path = "../../stat_crates/ml" }
 faer.workspace = true

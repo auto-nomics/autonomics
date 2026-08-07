@@ -97,6 +97,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentik-network"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "arc-swap",
+ "clap",
+ "runtime",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "agentik-proc"
 version = "0.1.0"
 dependencies = [
@@ -2525,6 +2543,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "lava",
+ "lcmm",
  "lcv",
  "ldsc",
  "magma",
@@ -5775,6 +5794,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "kms"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "turso",
+ "uuid",
+]
+
+[[package]]
+name = "kms-tools"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "agentik-types",
+ "async-trait",
+ "futures",
+ "kms",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "kodama"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5814,6 +5866,18 @@ name = "lazycell"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
+
+[[package]]
+name = "lcmm"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "lcv"
@@ -11042,7 +11106,9 @@ name = "tui"
 version = "0.1.0"
 dependencies = [
  "agentik-core",
+ "agentik-network",
  "agentik-sdk",
+ "agentik-types",
  "arboard",
  "arc-swap",
  "bib-base",
