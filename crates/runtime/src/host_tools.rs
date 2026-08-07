@@ -19,16 +19,42 @@ pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
         return vec![];
     };
     vec![
-        ToolRegistration::from(SpawnAgentTool { control: ctrl.clone() }),
-        ToolRegistration::from(SendToAgentTool { control: ctrl.clone() }),
-        ToolRegistration::from(DelegateToTool { control: ctrl.clone() }),
-        ToolRegistration::from(ListAgentsTool { control: ctrl.clone() }),
-        ToolRegistration::from(ConnectAgentsTool { control: ctrl.clone() }),
-        ToolRegistration::from(DisconnectAgentsTool { control: ctrl.clone() }),
-        ToolRegistration::from(SetTerminationTool { control: ctrl.clone() }),
-        ToolRegistration::from(GetNetworkStatusTool { control: ctrl.clone() }),
-        ToolRegistration::from(ShutdownAgentTool { control: ctrl.clone() }),
-        ToolRegistration::from(ResetNetworkTool { control: ctrl.clone() }),
+        ToolRegistration::from(SpawnAgentTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(SendToAgentTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(DelegateToTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(RouteTaskTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(GetAgentInfoTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(ListAgentsTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(ConnectAgentsTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(DisconnectAgentsTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(SetTerminationTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(GetNetworkStatusTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(ShutdownAgentTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(ResetNetworkTool {
+            control: ctrl.clone(),
+        }),
         ToolRegistration::from(InjectPromptsTool { control: ctrl }),
     ]
 }
@@ -58,7 +84,10 @@ struct SpawnAgentTool {
 impl ToolFunction for SpawnAgentTool {
     type Input = SpawnAgentInput;
 
-    async fn run(&self, input: SpawnAgentInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: SpawnAgentInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
             .spawn_agent(&input.agent_name, &input.profile_name)
@@ -96,7 +125,10 @@ struct SendToAgentTool {
 impl ToolFunction for SendToAgentTool {
     type Input = SendToAgentInput;
 
-    async fn run(&self, input: SendToAgentInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: SendToAgentInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.send_to(&input.agent_name, input.message);
         Ok(ToolResult::success(format!(
             "Message delivered to '{}'.",
@@ -139,11 +171,83 @@ impl ToolFunction for DelegateToTool {
         0
     }
 
-    async fn run(&self, input: DelegateToInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: DelegateToInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.delegate(&input.agent_name, input.task).await {
             Some(response) => Ok(ToolResult::success(response)),
             None => Ok(ToolResult::success(format!(
                 "Delegation to '{}' failed — agent not found or host channel closed.",
+                input.agent_name
+            ))),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Route Task — find the best agent for a task
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "route_task",
+    description = "Find the best agent for a task based on capability matching. \
+                   Describe what you need done and this tool returns the recommended \
+                   agent name, match reason, and all candidates with scores. \
+                   Use the returned agent name with delegate_to."
+)]
+struct RouteTaskInput {
+    /// Natural language description of the task to route.
+    description: String,
+}
+
+struct RouteTaskTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for RouteTaskTool {
+    type Input = RouteTaskInput;
+
+    async fn run(&self, input: RouteTaskInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        match self.control.route_task(&input.description).await {
+            Some(result) => Ok(ToolResult::success_json(
+                serde_json::to_value(&result).unwrap_or_default(),
+            )),
+            None => Ok(ToolResult::success("Routing failed — host unavailable.")),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Get Agent Info — query a specific agent's capabilities
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "get_agent_info",
+    description = "Get detailed capability info for a specific agent: summary, tags, \
+                   expertise areas, and available tools."
+)]
+struct GetAgentInfoInput {
+    /// Name of the agent to query.
+    agent_name: String,
+}
+
+struct GetAgentInfoTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for GetAgentInfoTool {
+    type Input = GetAgentInfoInput;
+
+    async fn run(&self, input: GetAgentInfoInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        match self.control.get_agent_info(&input.agent_name).await {
+            Some(info) => Ok(ToolResult::success_json(
+                serde_json::to_value(&info).unwrap_or_default(),
+            )),
+            None => Ok(ToolResult::success(format!(
+                "Agent '{}' not found.",
                 input.agent_name
             ))),
         }
@@ -168,7 +272,10 @@ struct ListAgentsTool {
 impl ToolFunction for ListAgentsTool {
     type Input = ListAgentsInput;
 
-    async fn run(&self, _input: ListAgentsInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        _input: ListAgentsInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_status().await {
             Some(status) => Ok(ToolResult::success_json(
                 serde_json::to_value(&status).unwrap_or_default(),
@@ -209,7 +316,10 @@ struct ConnectAgentsTool {
 impl ToolFunction for ConnectAgentsTool {
     type Input = ConnectAgentsInput;
 
-    async fn run(&self, input: ConnectAgentsInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: ConnectAgentsInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         let trigger = match input.trigger.as_str() {
             "on_done" | "done" => EdgeTrigger::OnDone,
             "on_pattern" | "pattern" => EdgeTrigger::OnPattern {
@@ -218,7 +328,7 @@ impl ToolFunction for ConnectAgentsTool {
             other => {
                 return Ok(ToolResult::success(format!(
                     "Unknown trigger '{other}'. Use 'on_done' or 'on_pattern'."
-                )))
+                )));
             }
         };
         self.control.connect(&input.from, &input.to, trigger);
@@ -250,7 +360,10 @@ struct DisconnectAgentsTool {
 impl ToolFunction for DisconnectAgentsTool {
     type Input = DisconnectAgentsInput;
 
-    async fn run(&self, input: DisconnectAgentsInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: DisconnectAgentsInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.disconnect(&input.from, &input.to);
         Ok(ToolResult::success(format!(
             "Disconnected {} → {}.",
@@ -283,7 +396,10 @@ struct SetTerminationTool {
 impl ToolFunction for SetTerminationTool {
     type Input = SetTerminationInput;
 
-    async fn run(&self, input: SetTerminationInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: SetTerminationInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         use agentik_network::TerminationSpec;
 
         let spec = match parse_termination(&input.spec) {
@@ -343,7 +459,10 @@ struct GetNetworkStatusTool {
 impl ToolFunction for GetNetworkStatusTool {
     type Input = GetNetworkStatusInput;
 
-    async fn run(&self, _input: GetNetworkStatusInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        _input: GetNetworkStatusInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_status().await {
             Some(status) => Ok(ToolResult::success_json(
                 serde_json::to_value(&status).unwrap_or_default(),
@@ -373,7 +492,10 @@ struct ShutdownAgentTool {
 impl ToolFunction for ShutdownAgentTool {
     type Input = ShutdownAgentInput;
 
-    async fn run(&self, input: ShutdownAgentInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: ShutdownAgentInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.shutdown_agent(&input.agent_name);
         Ok(ToolResult::success(format!(
             "Agent '{}' shutdown requested.",
@@ -402,7 +524,10 @@ struct ResetNetworkTool {
 impl ToolFunction for ResetNetworkTool {
     type Input = ResetNetworkInput;
 
-    async fn run(&self, _input: ResetNetworkInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        _input: ResetNetworkInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.reset_run_state();
         Ok(ToolResult::success("Network routing state reset."))
     }
@@ -427,7 +552,10 @@ struct InjectPromptsTool {
 impl ToolFunction for InjectPromptsTool {
     type Input = InjectPromptsInput;
 
-    async fn run(&self, _input: InjectPromptsInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        _input: InjectPromptsInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.inject_prompts();
         Ok(ToolResult::success("Initial prompts injected."))
     }

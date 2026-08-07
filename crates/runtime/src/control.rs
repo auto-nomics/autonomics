@@ -135,6 +135,25 @@ impl HostControl {
     pub async fn get_status(&self) -> Option<HostStatus> {
         self.ask(|tx| HostCommand::GetStatus { reply_tx: tx }).await
     }
+
+    /// Route a task to the best-matching agent.
+    pub async fn route_task(&self, description: &str) -> Option<RouteResult> {
+        self.ask(|tx| HostCommand::RouteTask {
+            description: description.into(),
+            reply_tx: tx,
+        })
+        .await
+    }
+
+    /// Query detailed info about a specific agent.
+    pub async fn get_agent_info(&self, name: &str) -> Option<AgentInfo> {
+        self.ask(|tx| HostCommand::GetAgentInfo {
+            name: name.into(),
+            reply_tx: tx,
+        })
+        .await
+        .flatten()
+    }
 }
 
 /// Commands sent from agent tools to RuntimeHost via [`HostControl`].
@@ -194,13 +213,26 @@ pub enum HostCommand {
 
     /// Inject initial prompts for all nodes that have them.
     InjectPrompts,
+
+    /// Route a task description to the best-matching agent.
+    /// Reply: routing recommendation with candidates.
+    RouteTask {
+        description: String,
+        reply_tx: oneshot::Sender<RouteResult>,
+    },
+
+    /// Query detailed info about a specific agent.
+    GetAgentInfo {
+        name: String,
+        reply_tx: oneshot::Sender<Option<AgentInfo>>,
+    },
 }
 
 /// Read-only snapshot of host + topology state, returned by GetStatus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStatus {
-    /// Names of all registered (running) agents.
-    pub agents: Vec<String>,
+    /// All registered agents with their capabilities.
+    pub agents: Vec<AgentInfo>,
     /// All topology node names.
     pub nodes: Vec<String>,
     /// Total edge count.
@@ -217,4 +249,39 @@ pub struct HostStatus {
     pub is_finished: bool,
     /// Current termination spec (as debug string).
     pub termination: String,
+}
+
+/// Information about one registered agent, including capability metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    /// Agent name (unique within the host).
+    pub name: String,
+    /// Human/LLM-readable capability summary.
+    pub summary: String,
+    /// Capability tags for quick filtering.
+    pub tags: Vec<String>,
+    /// Areas of expertise.
+    pub expertise: Vec<String>,
+    /// Tool names available to this agent.
+    pub tools: Vec<String>,
+}
+
+/// A routing recommendation returned by [`HostControl::route_task`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteResult {
+    /// Name of the recommended agent.
+    pub agent: String,
+    /// Why this agent was selected (human-readable).
+    pub reason: String,
+    /// Match score (higher = better).
+    pub score: f64,
+    /// All candidates that were considered, with their scores.
+    pub candidates: Vec<RouteCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteCandidate {
+    pub agent: String,
+    pub score: f64,
+    pub matched_tags: Vec<String>,
 }

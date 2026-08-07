@@ -460,6 +460,8 @@ enum AgentCommand {
 struct AgentEntry {
     cmd_tx: UnboundedSender<AgentCommand>,
     _relay_task: JoinHandle<()>,
+    /// Capability metadata for routing and discovery.
+    info: crate::control::AgentInfo,
 }
 
 impl RuntimeHost {
@@ -563,8 +565,8 @@ impl RuntimeHost {
                 let status = HostStatus {
                     agents: self
                         .agents
-                        .keys()
-                        .cloned()
+                        .values()
+                        .map(|e| e.info.clone())
                         .collect(),
                     nodes: g.node_names().into_iter().map(String::from).collect(),
                     edge_count: g.edge_count(),
@@ -586,6 +588,89 @@ impl RuntimeHost {
             HostCommand::InjectPrompts => {
                 self.inject_initial_prompts();
             }
+            HostCommand::RouteTask {
+                description,
+                reply_tx,
+            } => {
+                let result = self.route_task(&description);
+                let _ = reply_tx.send(result);
+            }
+            HostCommand::GetAgentInfo { name, reply_tx } => {
+                let info = self.agents.get(&name).map(|e| e.info.clone());
+                let _ = reply_tx.send(info);
+            }
+        }
+    }
+
+    /// Route a task description to the best-matching agent.
+    /// Uses tag matching + keyword overlap.
+    fn route_task(&self, description: &str) -> crate::control::RouteResult {
+        let desc_lower = description.to_lowercase();
+        let desc_words: std::collections::HashSet<&str> = desc_lower
+            .split_whitespace()
+            .filter(|w| w.len() > 2)
+            .collect();
+
+        let mut candidates: Vec<crate::control::RouteCandidate> = self
+            .agents
+            .iter()
+            .map(|(name, entry)| {
+                let matched_tags: Vec<String> = entry
+                    .info
+                    .tags
+                    .iter()
+                    .filter(|tag| desc_lower.contains(tag.as_str()))
+                    .cloned()
+                    .collect();
+
+                // Score: tag matches (weight 3) + keyword overlap with
+                // summary/expertise (weight 1 per match).
+                let tag_score = matched_tags.len() as f64 * 3.0;
+
+                let info_text = format!(
+                    "{} {}",
+                    entry.info.summary.to_lowercase(),
+                    entry.info.expertise.join(" ").to_lowercase()
+                );
+                let info_words: std::collections::HashSet<&str> = info_text
+                    .split_whitespace()
+                    .filter(|w| w.len() > 2)
+                    .collect();
+
+                let word_overlap = desc_words.intersection(&info_words).count() as f64;
+                let score = tag_score + word_overlap;
+
+                crate::control::RouteCandidate {
+                    agent: name.clone(),
+                    score,
+                    matched_tags,
+                }
+            })
+            .filter(|c| c.score > 0.0)
+            .collect();
+
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        let (best, reason) = if let Some(top) = candidates.first() {
+            let reason = if top.matched_tags.is_empty() {
+                format!("Best keyword match (score: {:.1})", top.score)
+            } else {
+                format!(
+                    "Matched tags: {} (score: {:.1})",
+                    top.matched_tags.join(", "),
+                    top.score
+                )
+            };
+            (top.agent.clone(), reason)
+        } else {
+            ("none".into(), "No matching agent found.".into())
+        };
+
+        crate::control::RouteResult {
+            agent: best,
+            reason,
+            score: candidates.first().map(|c| c.score).unwrap_or(0.0),
+            candidates,
         }
     }
 
@@ -668,7 +753,7 @@ impl RuntimeHost {
     /// delivery and [`recv_any`](Self::recv_any) for unified event polling.
     /// The host takes ownership of the handle — do not use it directly
     /// after registration.
-    pub fn register_agent(&mut self, handle: AgentHandle) {
+    pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
         let name = handle.name.clone();
         let relay_name = name.clone();
         let event_tx = self.event_tx.clone();
@@ -683,6 +768,7 @@ impl RuntimeHost {
             AgentEntry {
                 cmd_tx,
                 _relay_task: relay_task,
+                info,
             },
         );
     }
@@ -700,7 +786,8 @@ impl RuntimeHost {
             .spawn_agent(agent_name, profile, global_model, model_override)
             .await?;
         let name = handle.name.clone();
-        self.register_agent(handle);
+        let info = capability_from_profile(agent_name, profile);
+        self.register_agent(handle, info);
         Ok(name)
     }
 
@@ -819,6 +906,57 @@ impl RuntimeHost {
     /// ```
     pub fn spawner(&self) -> SharedInfra {
         self.infra.clone()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Capability extraction
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Build [`AgentInfo`] from an [`AgentProfile`], auto-extracting tags,
+/// expertise, and tool list from the profile's feature flags.
+fn capability_from_profile(
+    name: &str,
+    profile: &agentik_core::AgentProfile,
+) -> crate::control::AgentInfo {
+    let mut tags = Vec::new();
+    let mut expertise = Vec::new();
+
+    if profile.enable_bibliography {
+        tags.push("literature".into());
+        tags.push("bibliography".into());
+        expertise.push("literature-search".into());
+        expertise.push("citation-management".into());
+    }
+    if profile.enable_opengwas {
+        tags.push("gwas".into());
+        tags.push("genetics".into());
+        expertise.push("gwas-analysis".into());
+    }
+    if profile.enable_opentargets {
+        tags.push("drug-targets".into());
+        expertise.push("target-identification".into());
+    }
+    if profile.enable_gwascatalog {
+        tags.push("gwas-catalog".into());
+        expertise.push("variant-lookup".into());
+    }
+    if profile.enable_iceberg {
+        tags.push("datalake".into());
+        tags.push("iceberg".into());
+        expertise.push("data-lake-query".into());
+    }
+    if profile.enable_dag_history {
+        tags.push("pipeline".into());
+        expertise.push("dag-execution".into());
+    }
+
+    crate::control::AgentInfo {
+        name: name.into(),
+        summary: profile.description.clone(),
+        tags,
+        expertise,
+        tools: Vec::new(), // populated at runtime if needed
     }
 }
 
