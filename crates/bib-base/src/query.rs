@@ -279,7 +279,12 @@ const BIORXIV_DOI_PREFIX: &str = "10.1101/";
 /// Use [`fetch`](LiteratureSource::fetch) with a DOI, or search via
 /// PubMed (which indexes many preprints) instead.
 pub struct BiorxivSource {
-    client: reqwest::Client,
+    /// Shared `reqwest::Client`. Held as `Arc` so the same connection
+    /// pool can be reused by every `BiorxivSource` (and every agent) in
+    /// the process. Construct via [`BiorxivSource::with_client`] in
+    /// production code; the `new()` zero-arg constructor exists for
+    /// backwards compatibility and test fixtures.
+    client: Arc<reqwest::Client>,
 }
 
 impl Default for BiorxivSource {
@@ -289,13 +294,24 @@ impl Default for BiorxivSource {
 }
 
 impl BiorxivSource {
+    /// Build a `BiorxivSource` with a fresh, private `reqwest::Client`.
+    /// Prefer [`BiorxivSource::with_client`] in production so the
+    /// process shares one connection pool.
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
+        Self::with_client(Arc::new(
+            reqwest::Client::builder()
                 .user_agent("autonomics-bib-base")
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
-        }
+        ))
+    }
+
+    /// Build a `BiorxivSource` backed by a caller-supplied
+    /// `reqwest::Client`. Typically called with the
+    /// [`crate::BibShared::http`] handle so every agent in a multi-agent
+    /// network reuses the same connection pool.
+    pub fn with_client(client: Arc<reqwest::Client>) -> Self {
+        Self { client }
     }
 
     /// Fetch paper details from one server (`"biorxiv"` or `"medrxiv"`).
@@ -395,7 +411,7 @@ fn entry_to_article(entry: &serde_json::Value, server: &str) -> Article {
         .split(';')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|name| parse_biorxiv_author(name))
+        .map(parse_biorxiv_author)
         .collect();
 
     let mut article = build_article(
@@ -525,9 +541,12 @@ impl LiteratureGateway {
     /// Create a gateway pre-loaded with all built-in literature sources:
     /// PubMed (via NCBI E-utilities), arXiv, and bioRxiv/medRxiv.
     ///
-    /// This is the constructor most callers want. Use [`new`](Self::new)
-    /// plus [`with_source`](Self::with_source) only when you need a custom
-    /// source set.
+    /// **Each call constructs its own `EutilsClient` / `ArxivClient` /
+    /// `reqwest::Client`**, so use this only when a single agent needs
+    /// its own private clients (e.g. tests, or when you don't have a
+    /// [`crate::BibShared`] available). In a multi-agent host prefer
+    /// [`with_shared_clients`] so every agent shares one connection
+    /// pool and one arXiv rate-limit window.
     pub fn with_default_sources() -> Self {
         Self::new()
             .with_source(Arc::new(PubmedSource::new(Arc::new(
@@ -537,6 +556,24 @@ impl LiteratureGateway {
                 arxiv::ArxivClient::new(),
             ))))
             .with_source(Arc::new(BiorxivSource::new()))
+    }
+
+    /// Create a gateway pre-loaded with all built-in literature sources
+    /// backed by caller-supplied shared clients. This is the constructor
+    /// the multi-agent host uses: every agent spawned from the same
+    /// [`crate::BibShared`] shares one `EutilsClient`, one
+    /// `ArxivClient`, and one `reqwest::Client`, so the process has
+    /// exactly one connection pool and one arXiv rate-limit window
+    /// regardless of agent count.
+    pub fn with_shared_clients(
+        eutils: Arc<eutils::EutilsClient>,
+        arxiv: Arc<arxiv::ArxivClient>,
+        http: Arc<reqwest::Client>,
+    ) -> Self {
+        Self::new()
+            .with_source(Arc::new(PubmedSource::new(eutils)))
+            .with_source(Arc::new(ArxivSource::new(arxiv)))
+            .with_source(Arc::new(BiorxivSource::with_client(http)))
     }
 
     /// Register a source.

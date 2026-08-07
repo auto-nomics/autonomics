@@ -1,0 +1,28 @@
+[package]
+name = "nodes-coloc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Colocalisation DAG node bundle (coloc.abf, BKMR)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+coloc = { path = "../../../bio_crates/coloc" }
+bkmr = { path = "../../../bio_crates/bkmr" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+faer.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }

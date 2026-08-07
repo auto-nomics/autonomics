@@ -34,6 +34,8 @@
 
 use std::path::PathBuf;
 
+use bib_base::BibHttpOptions;
+
 // serde derives are used on RuntimeConfig / RuntimeConfigBuilder for agent
 // persistence — they are serialised into the `agents` registry table.
 
@@ -93,6 +95,22 @@ pub const ENV_OPENGWAS_TOKEN: &str = "OPENGWAS_TOKEN";
 
 /// Env var overriding the OpenGWAS on-disk cache directory.
 pub const ENV_OPENGWAS_CACHE_DIR: &str = "OPENGWAS_CACHE_DIR";
+
+/// Env var overriding the bibliography HTTP client's `User-Agent`
+/// header.
+pub const ENV_HTTP_USER_AGENT: &str = "AUTONOMICS_HTTP_USER_AGENT";
+
+/// Env var overriding the bibliography HTTP client's connect timeout
+/// (whole seconds).
+pub const ENV_HTTP_CONNECT_TIMEOUT_SECS: &str = "AUTONOMICS_HTTP_CONNECT_TIMEOUT_SECS";
+
+/// Env var overriding the bibliography HTTP client's per-request
+/// timeout (whole seconds).
+pub const ENV_HTTP_REQUEST_TIMEOUT_SECS: &str = "AUTONOMICS_HTTP_REQUEST_TIMEOUT_SECS";
+
+/// Env var pointing the bibliography HTTP client at an HTTP or SOCKS5
+/// proxy (e.g. `http://proxy.corp:3128`).
+pub const ENV_HTTP_PROXY: &str = "AUTONOMICS_HTTP_PROXY";
 
 // ---------------------------------------------------------------------------
 // RuntimeConfig
@@ -168,6 +186,15 @@ pub struct RuntimeConfig {
 
     /// Whether to enable GWAS Catalog tools.
     pub enable_gwascatalog: bool,
+
+    // ── HTTP client (shared via `BibShared`) ─────────────────────────
+    /// Configuration for the process-wide `reqwest::Client` used by
+    /// every literature source (PubMed / arXiv / bioRxiv) and by the
+    /// Europe PMC full-text fetcher. Touched fields flow through env
+    /// vars [`ENV_HTTP_USER_AGENT`], [`ENV_HTTP_CONNECT_TIMEOUT_SECS`],
+    /// [`ENV_HTTP_REQUEST_TIMEOUT_SECS`], and [`ENV_HTTP_PROXY`].
+    #[serde(default)]
+    pub bib_http: BibHttpOptions,
 }
 
 impl Default for RuntimeConfig {
@@ -256,6 +283,7 @@ impl RuntimeConfig {
             enable_opengwas: resolve_flag(base, |b| b.enable_opengwas, true),
             enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
+            bib_http: resolve_bib_http(base),
         }
     }
 }
@@ -480,6 +508,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_opengwas: Option<bool>,
     pub(crate) enable_opentargets: Option<bool>,
     pub(crate) enable_gwascatalog: Option<bool>,
+    pub(crate) bib_http: Option<BibHttpOptions>,
 }
 
 impl RuntimeConfigBuilder {
@@ -590,6 +619,14 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Override the bibliography HTTP client configuration. Merged on
+    /// top of any env-var defaults already resolved by
+    /// [`RuntimeConfig::resolve`].
+    pub fn bib_http(mut self, opts: BibHttpOptions) -> Self {
+        self.bib_http = Some(opts);
+        self
+    }
+
     /// Resolve into a fully-resolved [`RuntimeConfig`].
     pub fn build(self) -> RuntimeConfig {
         RuntimeConfig::resolve(Some(&self))
@@ -605,6 +642,44 @@ fn env_path(var: &str) -> Option<PathBuf> {
     std::env::var_os(var)
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
+}
+
+/// Resolve [`BibHttpOptions`] from the builder overlay + environment
+/// variables. Builder-explicit fields win; otherwise env vars fill in;
+/// otherwise everything stays `None` (i.e. the default applied by
+/// [`BibHttpOptions::apply_to`]).
+fn resolve_bib_http(base: Option<&RuntimeConfigBuilder>) -> BibHttpOptions {
+    let overlay = base.and_then(|b| b.bib_http.clone());
+    let env_user_agent = std::env::var(ENV_HTTP_USER_AGENT).ok();
+    let env_connect = std::env::var(ENV_HTTP_CONNECT_TIMEOUT_SECS)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs);
+    let env_request = std::env::var(ENV_HTTP_REQUEST_TIMEOUT_SECS)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs);
+    let env_proxy = std::env::var(ENV_HTTP_PROXY).ok();
+
+    BibHttpOptions {
+        user_agent: overlay
+            .as_ref()
+            .and_then(|o| o.user_agent.clone())
+            .or(env_user_agent),
+        connect_timeout: overlay
+            .as_ref()
+            .and_then(|o| o.connect_timeout)
+            .or(env_connect),
+        request_timeout: overlay
+            .as_ref()
+            .and_then(|o| o.request_timeout)
+            .or(env_request),
+        proxy_url: overlay
+            .as_ref()
+            .and_then(|o| o.proxy_url.clone())
+            .or(env_proxy),
+        accept_invalid_certs: overlay.as_ref().and_then(|o| o.accept_invalid_certs),
+    }
 }
 
 #[cfg(test)]
@@ -703,6 +778,42 @@ mod tests {
         assert_eq!(cfg.data_dir, PathBuf::from("/tmp/explicit-data"));
         unsafe {
             std::env::remove_var(ENV_DATA_DIR);
+        }
+    }
+
+    #[test]
+    fn bib_http_defaults_to_all_none() {
+        let cfg = RuntimeConfig::default();
+        assert!(cfg.bib_http.user_agent.is_none());
+        assert!(cfg.bib_http.connect_timeout.is_none());
+        assert!(cfg.bib_http.request_timeout.is_none());
+        assert!(cfg.bib_http.proxy_url.is_none());
+        assert!(cfg.bib_http.accept_invalid_certs.is_none());
+    }
+
+    #[test]
+    fn bib_http_builder_overrides() {
+        let opts = BibHttpOptions {
+            user_agent: Some("autonomics-test/0.1".into()),
+            connect_timeout: Some(std::time::Duration::from_secs(3)),
+            request_timeout: Some(std::time::Duration::from_secs(20)),
+            proxy_url: Some("http://proxy.test:3128".into()),
+            accept_invalid_certs: Some(false),
+        };
+        let cfg = RuntimeConfig::builder().bib_http(opts.clone()).build();
+        assert_eq!(cfg.bib_http, opts);
+    }
+
+    #[test]
+    fn bib_http_env_user_agent_override() {
+        // SAFETY: single-threaded test, no concurrent env access.
+        unsafe {
+            std::env::set_var(ENV_HTTP_USER_AGENT, "from-env");
+        }
+        let cfg = RuntimeConfig::default();
+        assert_eq!(cfg.bib_http.user_agent.as_deref(), Some("from-env"));
+        unsafe {
+            std::env::remove_var(ENV_HTTP_USER_AGENT);
         }
     }
 }

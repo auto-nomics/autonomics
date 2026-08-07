@@ -1,0 +1,27 @@
+[package]
+name = "nodes-causal"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Causal inference DAG node bundle (mediation, causal, cmest)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+statkit = { path = "../../../stat_crates/statkit" }
+epi = { path = "../../../stat_crates/epi" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }
+
+[lints]
+workspace = true

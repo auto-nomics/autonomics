@@ -21,12 +21,16 @@ pub mod error;
 pub mod export;
 pub mod extract;
 pub mod fulltext;
+pub mod http_options;
 pub mod library_tools;
 pub mod oa_fetch;
 pub mod query;
+pub mod shared;
 pub mod tools;
 
 pub use bib_base::BibBase;
+pub use http_options::BibHttpOptions;
+pub use shared::BibShared;
 pub use error::{Error, Result};
 pub use export::{render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};

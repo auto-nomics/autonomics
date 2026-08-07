@@ -495,7 +495,7 @@ impl BibAddToCollectionTool {
                 role: role.as_str().to_owned(),
                 note: note.map(str::to_owned).or(previous_note.clone()),
                 previous_role: Some(previous_role.as_str().to_owned()),
-                previous_note: previous_note,
+                previous_note,
                 role_changed: Some(role_changed),
                 note_changed: Some(note_changed),
                 error: None,
@@ -984,14 +984,21 @@ impl ToolFunction for BibExportTool {
 
 /// Build [`ToolRegistration`]s for all library management tools.
 ///
-/// Requires both [`BibBase`] (for storage) and [`LiteratureGateway`]
-/// (for `bib_save` external fetching).
+/// Requires a [`BibBase`] (for storage), a [`LiteratureGateway`] (for
+/// `bib_save` external fetching), and a shared [`EuropePmcClient`] (for
+/// the OA full-text auto-fetch inside `bib_save`).
+///
+/// `epmc` should normally come from [`crate::BibShared::europe_pmc`] so
+/// every agent in a multi-agent host shares a single connection pool.
+/// A fresh `EuropePmcClient` is constructed only if `None` is passed —
+/// kept for backwards compatibility and standalone single-agent use.
 pub fn bib_library_registrations(
     bib: Arc<BibBase>,
     gateway: Arc<LiteratureGateway>,
+    epmc: Option<Arc<EuropePmcClient>>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
-    let epmc = Arc::new(EuropePmcClient::new());
+    let epmc = epmc.unwrap_or_else(|| Arc::new(EuropePmcClient::new()));
     vec![
         R::from(BibSaveTool {
             bib: bib.clone(),
@@ -1012,23 +1019,32 @@ pub fn bib_library_registrations(
 /// Build [`ToolRegistration`]s for **all** bibliography tools — both query
 /// and management. This is the one-stop registration function.
 ///
+/// When called from a multi-agent host, pass the shared
+/// [`EuropePmcClient`] from [`crate::BibShared::europe_pmc`] so every
+/// spawned agent reuses the same connection pool. Pass `None` to
+/// allocate a fresh client (single-agent / test use).
+///
 /// # Example
 ///
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use bib_base::{BibBase, query::LiteratureGateway, bib_all_registrations};
+/// # use bib_base::{BibBase, BibShared, bib_all_registrations};
 /// # async fn example() {
-/// let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-/// let gateway = Arc::new(LiteratureGateway::new());
-/// let tools = bib_all_registrations(bib, gateway);
+/// let shared = BibShared::open_in_memory().await.unwrap();
+/// let tools = bib_all_registrations(
+///     shared.bib.clone(),
+///     shared.gateway.clone(),
+///     Some(shared.europe_pmc.clone()),
+/// );
 /// # }
 /// ```
 pub fn bib_all_registrations(
     bib: Arc<BibBase>,
     gateway: Arc<LiteratureGateway>,
+    epmc: Option<Arc<europepmc::EuropePmcClient>>,
 ) -> Vec<ToolRegistration> {
     let mut tools = crate::tools::bib_query_registrations(gateway.clone());
-    tools.extend(bib_library_registrations(bib, gateway));
+    tools.extend(bib_library_registrations(bib, gateway, epmc));
     tools
 }
 

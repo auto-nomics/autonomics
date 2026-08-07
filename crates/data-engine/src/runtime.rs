@@ -27,7 +27,7 @@ use futures::FutureExt;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::data_engine::DataEngine;
-use crate::node_registry::registry::NodeRegistry;
+use crate::node_registry::NodeRegistry;
 use crate::runtime::error::{ClientError, Result};
 use crate::runtime::types::{DataEngineCmd, EngineMsg};
 

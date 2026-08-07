@@ -1,0 +1,27 @@
+[package]
+name = "nodes-survival"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Survival analysis DAG node bundle (Fine-Gray, cuminc, KM)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+cmprsk = { path = "../../../stat_crates/cmprsk" }
+epi = { path = "../../../stat_crates/epi" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }

@@ -362,7 +362,6 @@ impl Session {
         self.lifecycle.set_running();
         self.shared
             .send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
-        let cancelled = self.cancel_token.clone();
 
         // ── Reuse or start a persisted WAL session ───────────
         // The WAL session ID is always the Session's own ID. This is
@@ -379,12 +378,21 @@ impl Session {
 
         let mut iteration = 0;
         let mut consecutive_retries = 0;
+        let mut was_cancelled = false;
 
         loop {
+            // Re-capture the cancel token each iteration so that
+            // ResetCancelToken updates (applied during the drain below)
+            // are reflected. Without this, a prior cancel() would leave
+            // `cancelled` pointing at the old (already-cancelled) token
+            // and the select! below would never fire on a fresh token.
+            let cancelled = self.cancel_token.clone();
+
             if iteration >= self.shared.config.max_iterations
                 || !self.lifecycle.is_running()
                 || cancelled.is_cancelled()
             {
+                was_cancelled = was_cancelled || cancelled.is_cancelled();
                 break;
             }
 
@@ -397,6 +405,7 @@ impl Session {
                     self.lifecycle.set_aborted();
                     self.persist_snapshot().await;
                     self.shared.send_event(AgentEvent::Error("Task cancelled by user".into()));
+                    was_cancelled = true;
                     break;
                 }
                 result = self.agent_workflow(internal_event_tx, None) => result,
@@ -430,7 +439,14 @@ impl Session {
                         max_retries: self.shared.config.max_retries as u32,
                     });
                     let delay = Duration::from_secs(1) * (1 << (consecutive_retries - 1));
-                    tokio::time::sleep(delay).await;
+                    tokio::select! {
+                        biased;
+                        _ = cancelled.cancelled() => {
+                            was_cancelled = true;
+                            break;
+                        }
+                        _ = tokio::time::sleep(delay) => {}
+                    }
                     let _ = self.memory.remember(Message::user(e.retry_message()));
                     continue;
                 }
@@ -490,7 +506,7 @@ impl Session {
         }
 
         // Post-loop cleanup
-        if cancelled.is_cancelled() && self.lifecycle.is_running() {
+        if was_cancelled && self.lifecycle.is_running() {
             self.lifecycle.set_idle();
             self.shared
                 .send_event(AgentEvent::Error("Task cancelled by user".into()));

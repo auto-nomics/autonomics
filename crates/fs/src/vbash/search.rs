@@ -33,6 +33,24 @@ pub async fn op_grep(
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let pattern = pattern.ok_or("missing 'pattern' for grep")?;
 
+    // Verify the search root exists and is a directory before walking.
+    // Without this, OpenDAL's recursive lister on a missing path returns
+    // an empty stream and the op would silently report "(no matches)".
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "grep: '{vpath}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("grep: '{vpath}': {e}"))),
+    };
+    if !meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "grep: '{vpath}' is not a directory"
+        )));
+    }
+
     let re = Regex::new(pattern).map_err(|e| format!("Invalid regex: {e}"))?;
 
     let glob_pat = match glob_filter {
@@ -206,6 +224,35 @@ mod tests {
             ToolResultContent::Json(v) => v,
             other => panic!("expected JSON, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn grep_nonexistent_directory_errors() {
+        let op = make_op();
+        let result = op_grep(&op, Some("/no_such_dir_xyz"), Some("anything"), None)
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("No such file") || s.contains("not found"),
+            "expected not-found error, got: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_path_is_file_errors() {
+        let op = make_op();
+        write_file(&op, "a.txt", "hello\n").await;
+        let result = op_grep(&op, Some("/a.txt"), Some("hello"), None)
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("not a directory"),
+            "expected not-a-directory error, got: {s}"
+        );
     }
 
     #[tokio::test]

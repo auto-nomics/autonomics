@@ -57,11 +57,21 @@ pub async fn op_cat(
     let raw_path = path.ok_or("missing 'path' for cat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
-    let total_size = op
-        .stat(&vpath)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "cat: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("cat: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "cat: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
+    let total_size = meta.content_length();
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": raw_path,
@@ -98,14 +108,35 @@ pub async fn op_cat(
 }
 
 /// `head` — first N lines (default 10).
+///
+/// `offset` (1-indexed) skips that many leading lines before applying
+/// `limit`. Mirrors `cat` / `read` semantics so the three ops stay
+/// interchangeable for paging through a file.
 pub async fn op_head(
     op: &opendal::Operator,
     path: Option<&str>,
+    offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for head")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+    let start = offset.unwrap_or(1).saturating_sub(1);
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "head: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("head: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "head: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
@@ -114,27 +145,50 @@ pub async fn op_head(
     }
     let content = String::from_utf8_lossy(&bytes);
     let lines: Vec<&str> = content.lines().collect();
-    let take = n.min(lines.len());
-
-    let out: String = lines[..take].join("\n");
+    let total_lines = lines.len();
+    let start = start.min(total_lines);
+    let end = (start + n).min(total_lines);
+    let out: String = lines[start..end].join("\n");
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": raw_path,
         "content": out,
-        "lines_returned": take,
-        "total_lines": lines.len(),
+        "start_line": start + 1,
+        "lines_returned": end - start,
+        "total_lines": total_lines,
     })))
 }
 
 /// `tail` — last N lines (default 10).
+///
+/// `offset` is **not** meaningful for `tail` (Unix tail has no offset
+/// concept). If the caller passes one it is silently ignored and the
+/// response sets `offset_ignored: true` so the caller can detect the
+/// mismatch and switch to `cat` / `read` if they meant to page.
 pub async fn op_tail(
     op: &opendal::Operator,
     path: Option<&str>,
+    offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for tail")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "tail: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("tail: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "tail: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
@@ -148,17 +202,29 @@ pub async fn op_tail(
 
     let out: String = lines[start..].join("\n");
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
+    let mut payload = serde_json::json!({
         "path": raw_path,
         "content": out,
         "lines_returned": total - start,
         "total_lines": total,
-    })))
+    });
+    if offset.is_some() {
+        payload["offset_ignored"] = serde_json::json!(true);
+    }
+
+    Ok(AgentToolResult::success_json(payload))
 }
 
 // ══════════════════ writing ops ══════════════════
 
 /// `write` — create or overwrite a file.
+///
+/// The implementation performs an explicit delete-then-write to sidestep
+/// the OpenDAL Fs backend race that produces `writer got too little data`
+/// when an existing file is overwritten with a longer payload. After the
+/// write we retry-stat to defend against the same backend's brief
+/// final-consistency window where a freshly written file is not yet
+/// visible to a follow-up stat.
 pub async fn op_write(
     op: &opendal::Operator,
     path: Option<&str>,
@@ -169,14 +235,40 @@ pub async fn op_write(
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let size = content.len() as u64;
 
+    // Atomic-replace path: drop any existing entry first so the Fs
+    // backend's overwrite path cannot race with its size bookkeeping.
+    if let Err(e) = op.delete(&vpath).await {
+        if !matches!(e.kind(), opendal::ErrorKind::NotFound) {
+            return Ok(AgentToolResult::error(format!(
+                "write: failed to clear {raw_path}: {e}"
+            )));
+        }
+    }
+
     op.write(&vpath, content.into_bytes())
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
-        "path": raw_path,
-        "size": size,
-    })))
+    // Visibility probe: the Fs backend occasionally returns a stale
+    // NotFound on the stat that immediately follows a write in the same
+    // process. Retry a handful of times before declaring a real failure.
+    for attempt in 0..5 {
+        if op.stat(&vpath).await.is_ok() {
+            return Ok(AgentToolResult::success_json(serde_json::json!({
+                "path": raw_path,
+                "size": size,
+            })));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(
+            5 * (attempt as u64 + 1),
+        ))
+        .await;
+    }
+
+    Ok(AgentToolResult::error(format!(
+        "write: wrote {size} bytes to {raw_path} but the file is not yet visible to a follow-up stat. \
+         The backend may be in an inconsistent state; retry or verify with a separate tool call."
+    )))
 }
 
 /// `edit` — exact string replacement.
@@ -303,7 +395,9 @@ pub async fn op_ls(
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
-    let recursive = recursive.unwrap_or(true);
+    // Match Unix `ls` (non-recursive by default); pass recursive=true
+    // for the previous recursive listing behaviour.
+    let recursive = recursive.unwrap_or(false);
     // Treat 0 as "no explicit limit" — the field is optional in the schema
     // and some callers default-empty rather than omitting it.
     let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
@@ -448,24 +542,66 @@ pub async fn op_mkdir(
     })))
 }
 
-/// `rm` — delete a file or directory (recursive).
-#[allow(deprecated)]
+/// `rm` — delete a file or directory.
+///
+/// Safety contract:
+/// - The virtual root (`/`) is always refused.
+/// - Missing targets are reported as errors (no silent success).
+/// - Non-empty directories are refused unless `recursive=true` is passed;
+///   empty directories can be removed without the flag.
 pub async fn op_rm(
     op: &opendal::Operator,
     path: Option<&str>,
+    recursive: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for rm")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
-    // delete_with().recursive(true) is the recommended API (remove_all is deprecated).
+    if vpath == "/" {
+        return Ok(AgentToolResult::error(
+            "Refusing to rm '/': that is the virtual filesystem root. \
+             Use a sub-path like '/tmp' instead.",
+        ));
+    }
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "rm: cannot remove '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("rm: {e}"))),
+    };
+
+    let recursive_flag = recursive.unwrap_or(false);
+
+    if meta.is_dir() && !recursive_flag {
+        // Empty-directory removal: succeeds only if the directory has no
+        // entries. Non-empty directories are explicitly refused here so
+        // the caller sees a clear message instead of a silent wipe.
+        return match op.delete(&vpath).await {
+            Ok(()) => Ok(AgentToolResult::success_json(serde_json::json!({
+                "path": raw_path,
+                "deleted": true,
+                "recursive": false,
+            }))),
+            Err(e) => Ok(AgentToolResult::error(format!(
+                "rm: cannot remove '{raw_path}': {e}. \
+                 If the directory is non-empty, pass recursive=true to remove it and its contents."
+            ))),
+        };
+    }
+
     op.delete_with(&vpath)
-        .recursive(true)
+        .recursive(recursive_flag)
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": raw_path,
         "deleted": true,
+        "recursive": recursive_flag,
     })))
 }
 
@@ -532,7 +668,9 @@ pub async fn op_wc(
     })))
 }
 
-/// `tree` — formatted recursive directory listing.
+/// `tree` — formatted recursive directory listing using standard
+/// `├──` / `└──` / `│` tree characters (instead of plain indented
+/// slashes which were hard to scan visually).
 pub async fn op_tree(
     op: &opendal::Operator,
     path: Option<&str>,
@@ -541,21 +679,32 @@ pub async fn op_tree(
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let max_entries = limit.unwrap_or(500);
 
+    // OpenDAL Fs backend requires a trailing '/' to walk recursively.
+    let scan = if vpath.ends_with('/') {
+        vpath.clone()
+    } else {
+        format!("{vpath}/")
+    };
     let mut lister = op
-        .lister_with(&vpath)
+        .lister_with(&scan)
         .recursive(true)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Collect entries as (depth, path, is_dir).
+    // Collect entries as (depth, path, is_dir). Drop the scan-root
+    // self-entry to avoid duplicating it in the rendered tree.
     let mut entries: Vec<(usize, String, bool)> = Vec::new();
     let prefix = vpath.trim_end_matches('/');
+    let scan_root = if prefix.is_empty() { "/" } else { prefix };
     while let Some(entry) = lister.next().await {
         let entry = entry.map_err(|e| e.to_string())?;
         let p = entry.path().to_string();
         let is_dir = entry.metadata().is_dir();
 
-        // Compute depth relative to the scan root.
+        if is_dir && p.trim_end_matches('/') == scan_root.trim_end_matches('/') {
+            continue;
+        }
+
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {
@@ -568,22 +717,132 @@ pub async fn op_tree(
         }
     }
 
-    // Render tree.
     entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Index immediate children by parent path. Top-level entries
+    // (depth == 1 relative to the scan root) are always parented to '/'.
+    // OpenDAL returns each top-level directory as a trailing-slash
+    // entry like 'd/', so computing parent from `rfind('/')` would
+    // wrongly assign `d/` as a child of `d` (its own directory name).
+    // Using the recorded depth sidesteps that.
+    let mut children_of: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    children_of.insert("/".to_string(), Vec::new());
+    for (depth, p, _) in &entries {
+        let parent = if *depth == 1 {
+            "/".to_string()
+        } else if let Some(idx) = p.rfind('/') {
+            if idx == 0 {
+                "/".to_string()
+            } else {
+                p[..idx].to_string()
+            }
+        } else {
+            "/".to_string()
+        };
+        children_of.entry(parent).or_default().push(p.clone());
+    }
+    for v in children_of.values_mut() {
+        v.sort();
+    }
+
+    let meta_by_path: std::collections::HashMap<String, bool> =
+        entries.iter().map(|(_, p, d)| (p.clone(), *d)).collect();
+
+
+    // Collect all entry paths and the parent-directory path each one
+    // belongs to. The walker below uses these to render the tree.
+    let all_paths: Vec<String> = entries.iter().map(|(_, p, _)| p.clone()).collect();
+
+    fn walk(
+        parent: &str,
+        ancestor_has_more: &mut Vec<bool>,
+        all_paths: &[String],
+        meta_by_path: &std::collections::HashMap<String, bool>,
+        out: &mut String,
+    ) {
+        // The `parent` for the root is '/'; for a directory it's the
+        // directory path (e.g. 'd'). A child of `parent` is any entry
+        // whose immediate parent directory is `parent`. For a directory
+        // entry like `d/`, its immediate children are all entries with
+        // path `parent/segment` (depth relative to scan root = depth of
+        // parent + 1).
+        let mut children: Vec<&String> = all_paths
+            .iter()
+            .filter(|p| {
+                if parent == "/" {
+                    // Top-level: the first path segment is non-empty.
+                    // OpenDAL returns directories with a trailing slash
+                    // (e.g. `d/`), so trim it before checking for
+                    // further segments.
+                    let trimmed = p.trim_start_matches('/').trim_end_matches('/');
+                    !trimmed.is_empty() && !trimmed.contains('/')
+                } else {
+                    // Entry belongs to `parent` if it is exactly one
+                    // path segment deeper (e.g. parent='d' matches
+                    // 'd/a.txt' but not 'd/a/b.txt'). The directory
+                    // entry 'd/' is filtered here too — `p` may have a
+                    // trailing slash and equal `parent + '/'`, in which
+                    // case it represents `parent` itself and must not
+                    // be re-descended into.
+                    let trimmed = p.trim_start_matches('/').trim_end_matches('/');
+                    let parent_trimmed = parent.trim_start_matches('/').trim_end_matches('/');
+                    trimmed != parent_trimmed
+                        && trimmed.starts_with(&format!("{}/", parent_trimmed))
+                        && !trimmed[parent_trimmed.len() + 1..].contains('/')
+                }
+            })
+            .collect();
+        children.sort();
+            if children.is_empty() {
+            return;
+        }
+        let n = children.len();
+        for (i, child) in children.iter().enumerate() {
+            let is_last = i + 1 == n;
+            let child_path = child.as_str();
+            let is_dir = meta_by_path.get(*child).copied().unwrap_or(false);
+            // Display name: the last path segment, with '/' for dirs.
+            // We trim trailing '/' so a directory entry like 'd/'
+            // produces the segment name 'd' rather than an empty string.
+            let trimmed = child_path.trim_end_matches('/');
+            let seg = trimmed.rsplit('/').next().unwrap_or(trimmed);
+            let display = if is_dir {
+                format!("{seg}/")
+            } else {
+                seg.to_string()
+            };
+            let connector = if is_last { "└── " } else { "├── " };
+            for more in ancestor_has_more.iter() {
+                out.push_str(if *more { "│   " } else { "    " });
+            }
+            out.push_str(connector);
+            out.push_str(&display);
+            out.push('\n');
+
+            if is_dir {
+                ancestor_has_more.push(!is_last);
+                // Recurse with the directory path (no trailing slash)
+                // so subsequent prefix lookups match child entries.
+                walk(child.trim_end_matches('/'), ancestor_has_more, &all_paths, &meta_by_path, out);
+                ancestor_has_more.pop();
+            }
+        }
+    }
+
     let mut out = String::new();
     out.push_str(&vpath);
     out.push('\n');
-    for (depth, p, is_dir) in &entries {
-        let indent = "  ".repeat(*depth);
-        let name = p.rsplit('/').next().unwrap_or(p);
-        let suffix = if *is_dir { "/" } else { "" };
-        out.push_str(&format!("{indent}{name}{suffix}\n"));
-    }
+
+    let mut ancestor_has_more: Vec<bool> = Vec::new();
+    walk("/", &mut ancestor_has_more, &all_paths, &meta_by_path, &mut out);
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": vpath,
         "content": out,
         "entries": entries.len(),
+        "_dbg_co": format!("{:?}", children_of),
+        "_dbg_meta": format!("{:?}", meta_by_path),
     })))
 }
 
@@ -597,11 +856,21 @@ async fn read_text_numbered(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op
-        .stat(vpath)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let meta = match op.stat(vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "read: '{display_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("read: '{display_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "read: '{display_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
+    let total_size = meta.content_length();
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": display_path,

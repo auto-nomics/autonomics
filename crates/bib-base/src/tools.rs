@@ -264,10 +264,10 @@ fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
         keywords_op: input
             .keywords_op
             .as_deref()
-            .and_then(|s| match s.to_uppercase().as_str() {
-                "AND" => Some(BoolOp::And),
-                "NOT" => Some(BoolOp::Not),
-                _ => Some(BoolOp::Or),
+            .map(|s| match s.to_uppercase().as_str() {
+                "AND" => BoolOp::And,
+                "NOT" => BoolOp::Not,
+                _ => BoolOp::Or,
             }),
         title: input.title.clone(),
         authors: input.authors.clone(),

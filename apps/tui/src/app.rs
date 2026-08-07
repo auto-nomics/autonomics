@@ -1501,7 +1501,6 @@ impl App {
 
         // Pre-extract data needed after the `ts` borrow ends.
         let mut send_text: Option<String> = None;
-        let mut pending_arena_topic: Option<String> = None;
 
         match key.code {
             // Esc: leave input mode, return to browse. Any in-progress
@@ -1535,21 +1534,8 @@ impl App {
                     );
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
 
-                    // ── Slash-command dispatch ──
-                    if text.starts_with("/arena ") {
-                        let topic = text["/arena ".len()..].trim().to_string();
-                        if !topic.is_empty() {
-                            ts.push_user_message(format!("/arena {topic}"));
-                            ts.scroll_to_bottom();
-                            // Defer the arena start — it needs &self
-                            // fields that conflict with the `ts` borrow.
-                            pending_arena_topic = Some(topic);
-                        }
-                        // Don't send the slash command to the agent.
-                    } else {
-                        ts.push_user_message(text.clone());
-                        send_text = Some(text);
-                    }
+                    ts.push_user_message(text.clone());
+                    send_text = Some(text);
                     ts.scroll_to_bottom();
                 }
                 ts.input_mode = InputMode::Browse;
@@ -1593,11 +1579,6 @@ impl App {
             if let Some(h) = self.handles.get(active_idx) {
                 h.send_message(text);
             }
-        }
-
-        // Dispatch arena start outside the `ts` borrow.
-        if let Some(topic) = pending_arena_topic {
-            self.start_arena(&topic);
         }
     }
 

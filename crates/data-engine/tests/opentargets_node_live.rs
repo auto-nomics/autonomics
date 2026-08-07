@@ -6,8 +6,8 @@
 //! cargo test -p data-engine --test opentargets_node_live -- --ignored
 //! ```
 
-use data_engine::node_registry::registry::{NodeCtx, NodeFactory, NodeRegistry};
-use data_engine::nodes::source_opentargets::{
+use data_engine::node_registry::{NodeCtx, NodeFactory, NodeRegistry};
+use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };
 use datafusion::prelude::SessionContext;
@@ -24,7 +24,7 @@ fn node_ctx() -> NodeCtx {
 
 /// Build the full registry and return a built node by kind + spec.
 fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::DagNode> {
-    let registry = NodeRegistry::new(
+    let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
         Arc::new(datalake::Datalake::default()),
@@ -37,7 +37,7 @@ fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::
 fn factories_are_registered() {
     // The two factories must be reachable through the registry (kind-agnostic
     // tool layer depends on this).
-    let registry = NodeRegistry::new(
+    let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
         Arc::new(datalake::Datalake::default()),
