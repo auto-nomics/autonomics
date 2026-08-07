@@ -49,6 +49,9 @@ pub enum HostError {
 
     #[error("agent storage error: {0}")]
     Storage(#[from] agentik_core::storage::StorageError),
+
+    #[error("bibliography shared init failed: {0}")]
+    BibShared(#[from] bib_base::Error),
 }
 
 pub type HostResult<T> = std::result::Result<T, HostError>;
@@ -69,6 +72,12 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     pub datalake: Arc<Datalake>,
     pub storage: Arc<dyn AgentStorage>,
+    /// Bibliography storage + literature gateway, opened **once** per
+    /// process and shared by every spawned agent. Replaces the previous
+    /// `bib_db_path: PathBuf` field on `RuntimeHost`, which forced each
+    /// `spawn_agent` call to reopen the libSQL connection and rebuild the
+    /// HTTP client stack.
+    pub bib: Arc<bib_base::BibShared>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
 }
@@ -140,7 +149,8 @@ impl SharedInfra {
             datalake,
             storage,
             runtime_handle: tokio::runtime::Handle::current(),
-        })
+            bib: Arc::new(bib_base::BibShared::open(&config.bib_db_path).await?),
+    })
     }
 }
 
@@ -277,15 +287,12 @@ impl AgentHandle {
 /// ```
 pub struct RuntimeHost {
     infra: SharedInfra,
-    /// Bib DB path (shared across all agents).
-    bib_db_path: std::path::PathBuf,
 }
 
 impl Clone for RuntimeHost {
     fn clone(&self) -> Self {
         Self {
             infra: self.infra.clone(),
-            bib_db_path: self.bib_db_path.clone(),
         }
     }
 }
@@ -294,10 +301,7 @@ impl RuntimeHost {
     /// Open shared infrastructure from a global config.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
         let infra = SharedInfra::open(config).await?;
-        Ok(Self {
-            infra,
-            bib_db_path: config.bib_db_path.clone(),
-        })
+        Ok(Self { infra })
     }
 
     /// Returns a reference to the shared storage.
@@ -445,10 +449,18 @@ impl RuntimeHost {
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
 
         if profile.enable_bibliography {
-            match bib_tools(&self.bib_db_path.to_string_lossy()).await {
-                Ok(t) => tools.extend(t),
-                Err(e) => tracing::warn!(error = %e, "bibliography tools disabled"),
-            }
+            // Reuse the process-wide `BibShared` handle: every agent
+            // spawned by this host shares the same libSQL connection
+            // and HTTP gateway stack instead of reopening both per
+            // agent. Opening once per process avoids N independent
+            // connections for an N-agent network and removes the
+            // repeated schema-migration work on each spawn.
+            let bib_shared = self.infra.bib.clone();
+            let bib_tools = bib_base::bib_all_registrations(
+                bib_shared.bib.clone(),
+                bib_shared.gateway.clone(),
+            );
+            tools.extend(bib_tools);
         }
 
         Ok(tools)
