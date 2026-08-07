@@ -455,10 +455,17 @@ impl RuntimeHost {
             // agent. Opening once per process avoids N independent
             // connections for an N-agent network and removes the
             // repeated schema-migration work on each spawn.
+            // Reuse the process-wide `BibShared` handle: every agent
+            // spawned by this host shares the same libSQL connection,
+            // the same NCBI E-utilities / arXiv / Europe PMC clients,
+            // and the same `reqwest::Client` pool. Passing the shared
+            // `EuropePmcClient` through `bib_all_registrations` avoids
+            // constructing one per agent.
             let bib_shared = self.infra.bib.clone();
             let bib_tools = bib_base::bib_all_registrations(
                 bib_shared.bib.clone(),
                 bib_shared.gateway.clone(),
+                Some(bib_shared.europe_pmc.clone()),
             );
             tools.extend(bib_tools);
         }

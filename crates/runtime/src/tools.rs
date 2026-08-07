@@ -67,10 +67,17 @@ pub const DEFAULT_BIB_DB: &str = "bib.db";
 ///
 /// `db_path` selects the libSQL file backing [`BibBase`]; pass
 /// [`DEFAULT_BIB_DB`] for the conventional location.
+///
+/// **Note**: this is the single-agent helper. In a multi-agent host,
+/// open a [`bib_base::BibShared`] once and reuse its handles — see
+/// [`crate::RuntimeHost`]. Each call here builds a fresh
+/// `EutilsClient`, `ArxivClient`, `reqwest::Client` and
+/// `EuropePmcClient`, which is fine for one agent but wasteful for
+/// many.
 pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>, bib_base::Error> {
     let bib = Arc::new(BibBase::open(db_path).await?);
     let gateway = Arc::new(LiteratureGateway::with_default_sources());
-    Ok(bib_base::bib_all_registrations(bib, gateway))
+    Ok(bib_base::bib_all_registrations(bib, gateway, None))
 }
 
 /// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,

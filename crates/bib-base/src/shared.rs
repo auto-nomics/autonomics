@@ -1,25 +1,39 @@
 //! Process-level shared bibliography infrastructure.
 //!
-//! [`BibShared`] aggregates the storage handle ([`BibBase`]) and the
-//! literature query gateway ([`LiteratureGateway`]) into a single
-//! cheaply-cloneable bundle so that every agent spawned by the same
-//! `RuntimeHost` can reuse one `Arc<BibBase>` and one
-//! `Arc<LiteratureGateway>`.
+//! [`BibShared`] aggregates the storage handle ([`BibBase`]), the
+//! literature query gateway ([`LiteratureGateway`]) **and** the underlying
+//! HTTP clients / rate-limiters used by the gateway's sources into a
+//! single cheaply-cloneable bundle.
 //!
-//! Without this aggregation each `spawn_agent` call would call
-//! [`BibBase::open`] + [`LiteratureGateway::with_default_sources`] afresh,
-//! opening N independent libSQL connections and N HTTP client stacks for
-//! an N-agent network. Sharing one instance avoids that and is safe
-//! because both inner types are already designed to be shared behind
-//! `Arc` (`BibBase`'s `Connection` is Arc-backed and `LiteratureGateway`
-//! is read-only after construction).
+//! Why fold the HTTP clients in here?
+//!
+//! Without this, every [`BibShared::open`] call would also call
+//! `EutilsClient::from_env`, `ArxivClient::new`, and `reqwest::Client::new`
+//! afresh. In a multi-agent network this means N independent reqwest
+//! connection pools, N independent arXiv rate-limit windows
+//! (`ArxivClient` keeps a `Mutex<Option<Instant>>` for the 3 s arXiv
+//! policy), and N independent `EuropePmcClient`s inside the library
+//! tool registrations. Folding the clients into `BibShared` means the
+//! process has **one** shared connection pool and **one** shared rate
+//! limiter regardless of how many agents run.
+//!
+//! `BibShared` is `Clone` and every field is `Arc`-backed, so handing a
+//! clone to each spawned agent is cheap.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::bib_base::BibBase;
 use crate::query::LiteratureGateway;
 use crate::Result;
+
+/// Default `reqwest::Client` builder used for sources that need a raw
+/// HTTP client (currently only `BiorxivSource`).
+fn default_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("autonomics-bib-base")
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Aggregated, process-level bibliography handle. Cheap to clone
 /// (`Arc`-backed).
@@ -29,28 +43,76 @@ pub struct BibShared {
     /// fulltexts, annotations, …).
     pub bib: Arc<BibBase>,
     /// Multi-source literature search/fetch gateway.
+    ///
+    /// Built with the shared `eutils` / `arxiv` / `http` clients below so
+    /// every `Arc<LiteratureGateway>` clone shares a single connection
+    /// pool and a single arXiv rate-limit window.
     pub gateway: Arc<LiteratureGateway>,
+
+    /// Shared NCBI E-utilities (PubMed) client.
+    pub eutils: Arc<eutils::EutilsClient>,
+    /// Shared arXiv API client. Its internal `last_request` mutex is what
+    /// enforces the 3-second arXiv rate limit; sharing one instance
+    /// process-wide means that limit is enforced globally instead of
+    /// per-agent.
+    pub arxiv: Arc<arxiv::ArxivClient>,
+    /// Shared raw `reqwest::Client` used by `BiorxivSource` (and any
+    /// future source that wants a bare HTTP client).
+    pub http: Arc<reqwest::Client>,
+    /// Shared Europe PMC client used by the `bib_save` tool's
+    /// open-access full-text auto-fetch.
+    pub europe_pmc: Arc<europepmc::EuropePmcClient>,
 }
 
 impl BibShared {
-    /// Open (or create) the bibliography DB at `path` and pair it with a
-    /// gateway pre-loaded with all built-in literature sources.
+    /// Open (or create) the bibliography DB at `path`, pair it with a
+    /// gateway pre-loaded with all built-in literature sources, and
+    /// allocate the shared HTTP clients. **All resources are opened
+    /// exactly once here**; subsequent `Clone`s share the same handles.
     ///
-    /// The DB connection is opened **once** here; subsequent calls share
-    /// the same `Arc<BibBase>`. Accepts anything that can be referenced as
-    /// a path (`&str`, `String`, `PathBuf`, `&Path`) for caller
-    /// ergonomics.
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// Accepts anything that can be referenced as a path (`&str`,
+    /// `String`, `PathBuf`, `&Path`) for caller ergonomics.
+    pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let bib = Arc::new(BibBase::open(path.as_ref().to_string_lossy().as_ref()).await?);
-        let gateway = Arc::new(LiteratureGateway::with_default_sources());
-        Ok(Self { bib, gateway })
+        let eutils = Arc::new(eutils::EutilsClient::from_env());
+        let arxiv = Arc::new(arxiv::ArxivClient::new());
+        let http = Arc::new(default_http_client());
+        let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
+        let gateway = Arc::new(LiteratureGateway::with_shared_clients(
+            eutils.clone(),
+            arxiv.clone(),
+            http.clone(),
+        ));
+        Ok(Self {
+            bib,
+            gateway,
+            eutils,
+            arxiv,
+            http,
+            europe_pmc,
+        })
     }
 
     /// Open an in-memory shared bundle (useful for tests).
     pub async fn open_in_memory() -> Result<Self> {
         let bib = Arc::new(BibBase::open_in_memory().await?);
-        let gateway = Arc::new(LiteratureGateway::with_default_sources());
-        Ok(Self { bib, gateway })
+        let eutils = Arc::new(eutils::EutilsClient::from_env());
+        let arxiv = Arc::new(arxiv::ArxivClient::new());
+        let http = Arc::new(default_http_client());
+        let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
+        let gateway = Arc::new(LiteratureGateway::with_shared_clients(
+            eutils.clone(),
+            arxiv.clone(),
+            http.clone(),
+        ));
+        Ok(Self {
+            bib,
+            gateway,
+            eutils,
+            arxiv,
+            http,
+            europe_pmc,
+        })
     }
 }
 
@@ -59,6 +121,10 @@ impl std::fmt::Debug for BibShared {
         f.debug_struct("BibShared")
             .field("bib", &"Arc<BibBase>")
             .field("gateway", &"Arc<LiteratureGateway>")
+            .field("eutils", &"Arc<EutilsClient>")
+            .field("arxiv", &"Arc<ArxivClient>")
+            .field("http", &"Arc<reqwest::Client>")
+            .field("europe_pmc", &"Arc<EuropePmcClient>")
             .finish()
     }
 }
