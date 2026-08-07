@@ -37,12 +37,12 @@ pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
         }),
-        ToolRegistration::from(ConnectAgentsTool {
-            control: ctrl.clone(),
-        }),
-        ToolRegistration::from(DisconnectAgentsTool {
-            control: ctrl.clone(),
-        }),
+        // ── Topology-edge tools disabled ──
+        // Multi-agent cooperation is now fully delegate-driven. Agents
+        // discover peers via route_task/get_agent_info and delegate via
+        // delegate_to. No explicit topology graph needed.
+        // ToolRegistration::from(ConnectAgentsTool { control: ctrl.clone() }),
+        // ToolRegistration::from(DisconnectAgentsTool { control: ctrl.clone() }),
         ToolRegistration::from(SetTerminationTool {
             control: ctrl.clone(),
         }),
@@ -52,9 +52,7 @@ pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
         ToolRegistration::from(ShutdownAgentTool {
             control: ctrl.clone(),
         }),
-        ToolRegistration::from(ResetNetworkTool {
-            control: ctrl.clone(),
-        }),
+        // ToolRegistration::from(ResetNetworkTool { control: ctrl.clone() }),
         ToolRegistration::from(InjectPromptsTool { control: ctrl }),
     ]
 }
@@ -286,7 +284,10 @@ impl ToolFunction for ListAgentsTool {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Connect Agents
+// Connect Agents (disabled — delegate-driven cooperation)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[allow(dead_code)]
 // ═══════════════════════════════════════════════════════════════════════
 
 #[tool(
@@ -307,6 +308,7 @@ struct ConnectAgentsInput {
     #[serde(default)]
     pattern: Option<String>,
 }
+#[allow(dead_code)]
 
 struct ConnectAgentsTool {
     control: HostControl,
@@ -346,6 +348,7 @@ impl ToolFunction for ConnectAgentsTool {
 #[tool(
     name = "disconnect_agents",
     description = "Remove all topology edges from one agent to another."
+#[allow(dead_code)]
 )]
 struct DisconnectAgentsInput {
     from: String,
@@ -513,6 +516,7 @@ impl ToolFunction for ShutdownAgentTool {
     description = "Reset routing state (message buffers, round counts, finished flag) \
                    while keeping the topology graph intact. Use this to restart \
                    a run on the same topology."
+#[allow(dead_code)]
 )]
 struct ResetNetworkInput {}
 
