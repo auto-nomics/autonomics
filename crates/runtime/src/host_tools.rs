@@ -3,6 +3,12 @@
 //! Each tool wraps a [`HostControl`] command and exposes it to the LLM as
 //! a callable function. Agents use these tools to spawn peers, manage
 //! topology, send messages, and query system status.
+//!
+//! Some tools (connect_agents, disconnect_agents, reset_network) are
+//! currently disabled — multi-agent cooperation is delegate-driven.
+//! Their struct definitions are kept for future use.
+
+#![allow(dead_code)]
 
 use agentik_core::tools::{ToolFunction, ToolRegistration};
 use agentik_network::{EdgeTrigger, TerminationSpec};
@@ -287,7 +293,6 @@ impl ToolFunction for ListAgentsTool {
 // Connect Agents (disabled — delegate-driven cooperation)
 // ═══════════════════════════════════════════════════════════════════════
 
-#[allow(dead_code)]
 // ═══════════════════════════════════════════════════════════════════════
 
 #[tool(
@@ -308,7 +313,6 @@ struct ConnectAgentsInput {
     #[serde(default)]
     pattern: Option<String>,
 }
-#[allow(dead_code)]
 
 struct ConnectAgentsTool {
     control: HostControl,
@@ -348,7 +352,6 @@ impl ToolFunction for ConnectAgentsTool {
 #[tool(
     name = "disconnect_agents",
     description = "Remove all topology edges from one agent to another."
-#[allow(dead_code)]
 )]
 struct DisconnectAgentsInput {
     from: String,
@@ -516,7 +519,6 @@ impl ToolFunction for ShutdownAgentTool {
     description = "Reset routing state (message buffers, round counts, finished flag) \
                    while keeping the topology graph intact. Use this to restart \
                    a run on the same topology."
-#[allow(dead_code)]
 )]
 struct ResetNetworkInput {}
 
