@@ -31,10 +31,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -258,7 +258,7 @@ impl NodeFactory for CpassocNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: CpassocConfig = serde_json::from_value(spec)?;
         let node = CpassocNode::new(config);
         Ok(Box::new(node))
@@ -267,9 +267,9 @@ impl NodeFactory for CpassocNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<CpassocConfig>(spec, "cpassoc")?;
         let out = ctx.output_var.to_string();
         let input = ctx.fresh_var("sumstats");
@@ -300,7 +300,7 @@ impl NodeFactory for CpassocNodeFactory {
             format!(")"),
             format!("print(head({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -512,7 +512,7 @@ impl DagNode for CpassocNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Sort inputs by port number so trait order is deterministic.
         let mut sorted_inputs: Vec<NodeInput> = inputs.to_vec();
@@ -832,7 +832,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &one_input,
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await;
         assert!(res.is_err(), "missing trait-2 input must error");

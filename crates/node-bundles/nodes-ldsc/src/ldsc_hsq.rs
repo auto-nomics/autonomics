@@ -15,11 +15,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -231,7 +231,7 @@ impl NodeFactory for LdscHsqNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscHsqConfig = serde_json::from_value(spec)?;
         let node = LdscHsqNode::new(config);
         Ok(Box::new(node))
@@ -367,9 +367,9 @@ impl DagNode for LdscHsqNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -432,7 +432,7 @@ impl LdscHsqNode {
         //    overestimates M and inflates h² because the panel row set can
         //    differ from the M_5_50 SNP set.  See memory note
         //    `ldsc-hsq-node-m-and-liability`.
-        let m = super::ldsc_common::read_m_5_50(ctx, ld_table, 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, ld_table, 1)
             .await
             .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 
@@ -496,8 +496,8 @@ impl LdscHsqNode {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -822,7 +822,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await;
         assert!(res.is_err(), "missing input must error");

@@ -719,18 +719,28 @@ pub async fn op_tree(
 
     entries.sort_by(|a, b| a.1.cmp(&b.1));
 
-    // Index immediate children by parent path. Always use the virtual
-    // root ('/') as the top-level parent so we can render the tree from
-    // there.
+    // Index immediate children by parent path. Top-level entries
+    // (depth == 1 relative to the scan root) are always parented to '/'.
+    // OpenDAL returns each top-level directory as a trailing-slash
+    // entry like 'd/', so computing parent from `rfind('/')` would
+    // wrongly assign `d/` as a child of `d` (its own directory name).
+    // Using the recorded depth sidesteps that.
     let mut children_of: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    for (_, p, _) in &entries {
-        let pp = match p.rfind('/') {
-            Some(0) => "/".to_string(),
-            Some(i) => p[..i].to_string(),
-            None => "/".to_string(),
+    children_of.insert("/".to_string(), Vec::new());
+    for (depth, p, _) in &entries {
+        let parent = if *depth == 1 {
+            "/".to_string()
+        } else if let Some(idx) = p.rfind('/') {
+            if idx == 0 {
+                "/".to_string()
+            } else {
+                p[..idx].to_string()
+            }
+        } else {
+            "/".to_string()
         };
-        children_of.entry(pp).or_default().push(p.clone());
+        children_of.entry(parent).or_default().push(p.clone());
     }
     for v in children_of.values_mut() {
         v.sort();
@@ -739,31 +749,68 @@ pub async fn op_tree(
     let meta_by_path: std::collections::HashMap<String, bool> =
         entries.iter().map(|(_, p, d)| (p.clone(), *d)).collect();
 
-    let mut out = String::new();
-    out.push_str(&vpath);
-    out.push('\n');
-    panic!("DBG children_of keys: {:?}, entries: {:?}, scan={:?}", children_of.keys().collect::<Vec<_>>(), entries, scan);
 
-    // `ancestor_has_more[i]` is true when the i-th ancestor of the
-    // current node has a later sibling — i.e. we should keep drawing
-    // the `│` guide at that level instead of blank space.
+    // Collect all entry paths and the parent-directory path each one
+    // belongs to. The walker below uses these to render the tree.
+    let all_paths: Vec<String> = entries.iter().map(|(_, p, _)| p.clone()).collect();
+
     fn walk(
         parent: &str,
         ancestor_has_more: &mut Vec<bool>,
-        children_of: &std::collections::BTreeMap<String, Vec<String>>,
+        all_paths: &[String],
         meta_by_path: &std::collections::HashMap<String, bool>,
         out: &mut String,
     ) {
-        let Some(children) = children_of.get(parent) else { return };
+        // The `parent` for the root is '/'; for a directory it's the
+        // directory path (e.g. 'd'). A child of `parent` is any entry
+        // whose immediate parent directory is `parent`. For a directory
+        // entry like `d/`, its immediate children are all entries with
+        // path `parent/segment` (depth relative to scan root = depth of
+        // parent + 1).
+        let mut children: Vec<&String> = all_paths
+            .iter()
+            .filter(|p| {
+                if parent == "/" {
+                    // Top-level: the first path segment is non-empty.
+                    // OpenDAL returns directories with a trailing slash
+                    // (e.g. `d/`), so trim it before checking for
+                    // further segments.
+                    let trimmed = p.trim_start_matches('/').trim_end_matches('/');
+                    !trimmed.is_empty() && !trimmed.contains('/')
+                } else {
+                    // Entry belongs to `parent` if it is exactly one
+                    // path segment deeper (e.g. parent='d' matches
+                    // 'd/a.txt' but not 'd/a/b.txt'). The directory
+                    // entry 'd/' is filtered here too — `p` may have a
+                    // trailing slash and equal `parent + '/'`, in which
+                    // case it represents `parent` itself and must not
+                    // be re-descended into.
+                    let trimmed = p.trim_start_matches('/').trim_end_matches('/');
+                    let parent_trimmed = parent.trim_start_matches('/').trim_end_matches('/');
+                    trimmed != parent_trimmed
+                        && trimmed.starts_with(&format!("{}/", parent_trimmed))
+                        && !trimmed[parent_trimmed.len() + 1..].contains('/')
+                }
+            })
+            .collect();
+        children.sort();
+            if children.is_empty() {
+            return;
+        }
         let n = children.len();
         for (i, child) in children.iter().enumerate() {
             let is_last = i + 1 == n;
-            let is_dir = meta_by_path.get(child).copied().unwrap_or(false);
-            let name = child.rsplit('/').next().unwrap_or(child);
+            let child_path = child.as_str();
+            let is_dir = meta_by_path.get(*child).copied().unwrap_or(false);
+            // Display name: the last path segment, with '/' for dirs.
+            // We trim trailing '/' so a directory entry like 'd/'
+            // produces the segment name 'd' rather than an empty string.
+            let trimmed = child_path.trim_end_matches('/');
+            let seg = trimmed.rsplit('/').next().unwrap_or(trimmed);
             let display = if is_dir {
-                format!("{name}/")
+                format!("{seg}/")
             } else {
-                name.to_string()
+                seg.to_string()
             };
             let connector = if is_last { "└── " } else { "├── " };
             for more in ancestor_has_more.iter() {
@@ -775,19 +822,27 @@ pub async fn op_tree(
 
             if is_dir {
                 ancestor_has_more.push(!is_last);
-                walk(child, ancestor_has_more, children_of, meta_by_path, out);
+                // Recurse with the directory path (no trailing slash)
+                // so subsequent prefix lookups match child entries.
+                walk(child.trim_end_matches('/'), ancestor_has_more, &all_paths, &meta_by_path, out);
                 ancestor_has_more.pop();
             }
         }
     }
 
+    let mut out = String::new();
+    out.push_str(&vpath);
+    out.push('\n');
+
     let mut ancestor_has_more: Vec<bool> = Vec::new();
-    walk("/", &mut ancestor_has_more, &children_of, &meta_by_path, &mut out);
+    walk("/", &mut ancestor_has_more, &all_paths, &meta_by_path, &mut out);
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": vpath,
         "content": out,
         "entries": entries.len(),
+        "_dbg_co": format!("{:?}", children_of),
+        "_dbg_meta": format!("{:?}", meta_by_path),
     })))
 }
 

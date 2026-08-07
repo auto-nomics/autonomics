@@ -14,7 +14,6 @@ use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
 use datalake::Datalake;
 
-pub use crate::nodes::{LdscHsqConfig, LdscHsqNode};
 pub use dag_core::sink::SinkMode;
 
 /// `DataEngine` is the core object that implements the data analysis engine.

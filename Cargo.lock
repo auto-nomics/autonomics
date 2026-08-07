@@ -2587,9 +2587,11 @@ dependencies = [
  "nodes-causal",
  "nodes-coloc",
  "nodes-epi",
+ "nodes-genetics",
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
+ "nodes-ldsc",
  "nodes-ml",
  "nodes-mr",
  "nodes-regression",
@@ -7195,6 +7197,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodes-genetics"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "cpassoc",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "faer",
+ "futures",
+ "hdl",
+ "lava",
+ "ldsc",
+ "magma",
+ "mixer",
+ "mtag",
+ "nanoid",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "susie",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nodes-hypothesize"
 version = "0.1.0"
 dependencies = [
@@ -7254,6 +7286,27 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+]
+
+[[package]]
+name = "nodes-ldsc"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "faer",
+ "lcv",
+ "ldsc",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -20,6 +20,8 @@ members = [
   "crates/node-bundles/nodes-lcmm",
   "crates/node-bundles/nodes-mr",
   "crates/node-bundles/nodes-survey",
+  "crates/node-bundles/nodes-ldsc",
+  "crates/node-bundles/nodes-genetics",
   "apps/tui",
   "crates/opengwas",
   "crates/eutils",

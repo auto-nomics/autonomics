@@ -18,10 +18,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -151,7 +151,7 @@ impl NodeFactory for MagmaAnnotateNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaAnnotateNode::new(config)))
     }
@@ -159,9 +159,9 @@ impl NodeFactory for MagmaAnnotateNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        _ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        _ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<MagmaAnnotateConfig>(spec, "magma_annotate")?;
         let out = "magma_annotate_result";
         let code = vec![
@@ -176,7 +176,7 @@ impl NodeFactory for MagmaAnnotateNodeFactory {
             format!("))"),
             format!("# NOTE: Output written to magma_annotation.genes.annot"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -207,7 +207,7 @@ impl DagNode for MagmaAnnotateNode {
         &mut self,
         node_ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let genes = magma::annotation::read_gene_loc(std::path::Path::new(&self.config.gene_loc))
             .map_err(MagmaNodeError::from)?;
@@ -340,7 +340,7 @@ impl NodeFactory for MagmaGeneNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaGeneNode::new(config)))
     }
@@ -348,9 +348,9 @@ impl NodeFactory for MagmaGeneNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<MagmaGeneConfig>(spec, "magma_gene")?;
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
@@ -375,7 +375,7 @@ impl NodeFactory for MagmaGeneNodeFactory {
             format!("))"),
             format!("# NOTE: Output in {out}.genes.raw and {out}.genes.out"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -406,7 +406,7 @@ impl DagNode for MagmaGeneNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         if inputs.is_empty() {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
@@ -570,7 +570,7 @@ impl NodeFactory for MagmaSetNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaSetNode::new(config)))
     }
@@ -578,8 +578,8 @@ impl NodeFactory for MagmaSetNodeFactory {
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -595,7 +595,7 @@ impl NodeFactory for MagmaSetNodeFactory {
             format!("  \"--out\", \"{out}\""),
             format!("))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -626,7 +626,7 @@ impl DagNode for MagmaSetNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Load gene data from .genes.raw file or construct from DataFrame
         let gene_data = if let Some(ref raw_path) = self.config.gene_raw {
@@ -812,7 +812,7 @@ impl NodeFactory for MagmaMetaNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaMetaNode::new(config)))
     }
@@ -820,9 +820,9 @@ impl NodeFactory for MagmaMetaNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<MagmaMetaConfig>(spec, "magma_meta")?;
         let out = ctx.output_var.to_string();
         let cohort_files = s
@@ -838,7 +838,7 @@ impl NodeFactory for MagmaMetaNodeFactory {
             format!("  \"--out\", \"{out}\""),
             format!("))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -869,7 +869,7 @@ impl DagNode for MagmaMetaNode {
         &mut self,
         node_ctx: &NodeCtx,
         _inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         if self.config.cohort_files.len() < 2 {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
@@ -1089,7 +1089,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("annotate should succeed");
@@ -1135,7 +1135,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &input,
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("gene analysis should succeed");
@@ -1178,7 +1178,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("set analysis should succeed");
@@ -1215,7 +1215,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("covar analysis should succeed");
@@ -1241,7 +1241,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("meta analysis should succeed");
@@ -1265,7 +1265,7 @@ mod tests {
             window_kb: 35.0,
         });
         let _annot_res = annotate
-            .execute(&ctx, &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
             .await
             .expect("annotate should succeed");
 
@@ -1297,7 +1297,7 @@ mod tests {
             .execute(
                 &ctx,
                 &[NodeInput { port: 0, data: df }],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("gene analysis should succeed");
@@ -1321,7 +1321,7 @@ mod tests {
             col_set: 0,
         });
         let set_res = set_node
-            .execute(&ctx, &[], &crate::dag::node_event::NodeReporter::noop())
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
             .await
             .expect("set analysis should succeed");
 

@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -219,7 +219,7 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: UnivariateMixerNodeSpec = serde_json::from_value(spec)?;
         let node = UnivariateMixerNode::new(config);
         Ok(Box::new(node))
@@ -228,9 +228,9 @@ impl NodeFactory for UnivariateMixerNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<UnivariateMixerNodeSpec>(spec, "univariate_mixer")?;
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
@@ -252,7 +252,7 @@ impl NodeFactory for UnivariateMixerNodeFactory {
             format!("  '--out', '{out}'"),
             "))".to_string(),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -276,11 +276,11 @@ impl DagNode for UnivariateMixerNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        use crate::dag::runtime::RuntimeStatus;
+        use dag_core::dag::runtime::RuntimeStatus;
         let t0 = std::time::Instant::now();
         reporter.status(RuntimeStatus::Running);
         reporter.info(format!(

@@ -25,7 +25,6 @@ pub mod runtime;
 
 // Convenience re-exports (backward compat with existing `use data_engine::*`).
 pub use dag_core::{DagNode, NodeCtx, NodeFactory, NodeId, NodeInput, NodePorts, NodeRegistry};
-pub use nodes::{LdscHsqConfig, LdscHsqNode};
 
 // Codegen tests require concrete node types, so they live here not in dag-core.
 #[cfg(test)]

@@ -827,11 +827,11 @@ mod tests {
         let content = json["content"].as_str().unwrap();
         assert!(
             content.contains("├── ") || content.contains("└── "),
-            "expected tree connectors in:\n{content}"
+            "expected tree connectors in: {content}"
         );
-        assert!(content.contains("d/"), "expected 'd/' marker in:\n{content}");
-        assert!(content.contains("a.txt"), "expected a.txt in:\n{content}");
-        assert!(content.contains("b.txt"), "expected b.txt in:\n{content}");
+        assert!(content.contains("d/"), "expected 'd/' marker in: {content}");
+        assert!(content.contains("a.txt"), "expected a.txt in: {content}");
+        assert!(content.contains("b.txt"), "expected b.txt in: {content}");
     }
 
     #[tokio::test]

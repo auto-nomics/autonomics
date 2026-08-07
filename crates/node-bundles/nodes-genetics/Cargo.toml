@@ -1,0 +1,40 @@
+[package]
+name = "nodes-genetics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Statistical genetics DAG node bundle (LAVA, HDL-L, MTAG, CPASSOC, SuSiE, MAGMA, MiXeR)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+lava = { path = "../../../bio_crates/lava" }
+hdl = { path = "../../../bio_crates/hdl" }
+mtag = { path = "../../../bio_crates/mtag" }
+cpassoc = { path = "../../../bio_crates/cpassoc" }
+susie = { path = "../../../bio_crates/susie" }
+magma = { path = "../../../bio_crates/magma" }
+mixer = { path = "../../../bio_crates/mixer" }
+ldsc = { path = "../../../bio_crates/ldsc" }
+statrs = "0.18"
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+faer.workspace = true
+tracing.workspace = true
+futures.workspace = true
+datalake = { path = "../../datalake" }
+nanoid = "0.5.0"
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }
+
+[lints]
+workspace = true

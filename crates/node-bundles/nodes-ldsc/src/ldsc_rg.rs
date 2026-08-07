@@ -27,10 +27,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -253,7 +253,7 @@ impl NodeFactory for LdscRgNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscRgConfig = serde_json::from_value(spec)?;
         let node = LdscRgNode::new(config);
         Ok(Box::new(node))
@@ -262,9 +262,9 @@ impl NodeFactory for LdscRgNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<LdscRgConfig>(spec, "ldsc_rg")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
@@ -305,7 +305,7 @@ impl NodeFactory for LdscRgNodeFactory {
             format!("cat({result}, sep = \"\\n\")"),
             format!("{out} <- list(rg = NA_real_, rg_se = NA_real_)"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -373,9 +373,9 @@ impl DagNode for LdscRgNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Two inputs: trait 1 on port 0, trait 2 on port 1.
         let input1 = inputs
@@ -540,7 +540,7 @@ impl LdscRgNode {
         // matching the h² node and S-LDSC. Using COUNT(*) of the panel
         // overestimates M because the panel row set can differ from the
         // M_5_50 SNP set used when LD scores were computed.
-        let m = super::ldsc_common::read_m_5_50(ctx, ld_table, 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, ld_table, 1)
             .await
             .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
         let two_step = two_step.or(
@@ -650,8 +650,8 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -1082,12 +1082,12 @@ mod tests {
             1000.0,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![super::super::meta::NodeInput { port: 0, data: df }];
+        let one_input = vec![dag_core::node::NodeInput { port: 0, data: df }];
         let res = node
             .execute(
                 &node_ctx(),
                 &one_input,
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await;
         assert!(res.is_err(), "missing trait-2 input must error");

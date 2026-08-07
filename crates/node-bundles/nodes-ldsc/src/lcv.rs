@@ -23,10 +23,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -236,7 +236,7 @@ impl NodeFactory for LcvNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LcvConfig = serde_json::from_value(spec)?;
         let node = LcvNode::new(config);
         Ok(Box::new(node))
@@ -245,9 +245,9 @@ impl NodeFactory for LcvNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<LcvConfig>(spec, "lcv")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
@@ -283,7 +283,7 @@ impl NodeFactory for LcvNodeFactory {
             format!("{out} <- {gcp}"),
             format!("cat(\"GCP:\", {out}$gcp, \"p-value:\", {out}$p_value, \"\\n\")"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -337,7 +337,7 @@ impl DagNode for LcvNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input1 = inputs.iter().find(|i| i.port == 0).ok_or_else(|| {
             LcvNodeError::Lcv(lcv::LcvError::Input(
@@ -557,8 +557,8 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -800,12 +800,12 @@ mod tests {
             1000.0,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![super::super::meta::NodeInput { port: 0, data: df }];
+        let one_input = vec![dag_core::node::NodeInput { port: 0, data: df }];
         let res = node
             .execute(
                 &node_ctx(),
                 &one_input,
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await;
         assert!(res.is_err(), "missing trait-2 input must error");

@@ -1,8 +1,8 @@
 //! Registration of all built-in node factories into a [`NodeRegistry`].
 //!
-//! [`dag_core::NodeRegistry`] is the infrastructure; this module populates it
-//! with every concrete factory implemented in `data-engine` and all enabled
-//! bundle plugins. Called once at engine startup by [`crate::data_engine::DataEngine`].
+//! All node implementations live in bundle crates under `crates/node-bundles/`.
+//! This module registers them via Cargo features. Called once at engine startup
+//! by [`crate::data_engine::DataEngine`].
 
 use std::sync::Arc;
 
@@ -17,6 +17,12 @@ use dag_core::registry::NodeRegistry;
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
 ///
 /// Node bundles are registered via Cargo features (default: all enabled).
+/// To create a minimal engine, disable default features and select only
+/// the bundles you need:
+///
+/// ```toml
+/// data-engine = { default-features = false, features = ["bundle-mr", "bundle-io"] }
+/// ```
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
     iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
@@ -29,6 +35,12 @@ pub fn build_default_registry(
         datalake,
         opendal,
     );
+
+    // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
+    #[cfg(feature = "bundle-ldsc")]
+    registry.register_plugin(&nodes_ldsc::Plugin);
+    #[cfg(feature = "bundle-genetics")]
+    registry.register_plugin(&nodes_genetics::Plugin);
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
@@ -61,52 +73,6 @@ pub fn build_default_registry(
     registry.register_plugin(&nodes_ml::Plugin);
     #[cfg(feature = "bundle-hypothesize")]
     registry.register_plugin(&nodes_hypothesize::Plugin);
-
-    // ── Phase 4 (pending): LDSC + genetics nodes remain inline ────────
-    // These will be extracted in the next phase.
-    use crate::nodes::{
-        bivariate_mixer::BivariateMixerNodeFactory,
-        cpassoc::CpassocNodeFactory,
-        hdl_l::HdlLNodeFactory,
-        hdl_l_scan::HdlLScanNodeFactory,
-        lava::{
-            LavaBivarNodeFactory, LavaLocusNodeFactory, LavaMultiregNodeFactory, LavaPcorNodeFactory,
-            LavaUnivNodeFactory,
-        },
-        lcv::LcvNodeFactory,
-        ldsc_hsq::LdscHsqNodeFactory,
-        ldsc_rg::LdscRgNodeFactory,
-        ldsc_sldsc::LdscSldscNodeFactory,
-        liability::LiabilityNodeFactory,
-        magma::{
-            MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
-        },
-        mtag::MtagNodeFactory,
-        susie_rss::SusieRssNodeFactory,
-        univariate_mixer::UnivariateMixerNodeFactory,
-    };
-
-    registry.register(Box::new(LdscHsqNodeFactory {}));
-    registry.register(Box::new(LdscRgNodeFactory {}));
-    registry.register(Box::new(LcvNodeFactory {}));
-    registry.register(Box::new(LdscSldscNodeFactory {}));
-    registry.register(Box::new(LiabilityNodeFactory {}));
-    registry.register(Box::new(LavaLocusNodeFactory {}));
-    registry.register(Box::new(LavaUnivNodeFactory {}));
-    registry.register(Box::new(LavaBivarNodeFactory {}));
-    registry.register(Box::new(LavaPcorNodeFactory {}));
-    registry.register(Box::new(LavaMultiregNodeFactory {}));
-    registry.register(Box::new(HdlLNodeFactory {}));
-    registry.register(Box::new(HdlLScanNodeFactory {}));
-    registry.register(Box::new(UnivariateMixerNodeFactory {}));
-    registry.register(Box::new(BivariateMixerNodeFactory {}));
-    registry.register(Box::new(MtagNodeFactory {}));
-    registry.register(Box::new(CpassocNodeFactory {}));
-    registry.register(Box::new(SusieRssNodeFactory {}));
-    registry.register(Box::new(MagmaAnnotateNodeFactory {}));
-    registry.register(Box::new(MagmaGeneNodeFactory {}));
-    registry.register(Box::new(MagmaSetNodeFactory {}));
-    registry.register(Box::new(MagmaMetaNodeFactory {}));
 
     registry
 }

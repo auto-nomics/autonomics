@@ -29,10 +29,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::NodeFactory,
+    registry::NodeFactory,
 };
 
 // =====================================================================
@@ -181,8 +181,8 @@ impl NodeFactory for LiabilityNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+        _node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let cfg: LiabilityConfig = serde_json::from_value(spec)?;
         Ok(Box::new(LiabilityNode::new(cfg)))
     }
@@ -190,9 +190,9 @@ impl NodeFactory for LiabilityNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<LiabilityConfig>(spec, "liability")?;
         let input = input_0(ctx);
         let out = ctx.output_var.to_string();
@@ -213,7 +213,7 @@ impl NodeFactory for LiabilityNodeFactory {
             format!("}}"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -311,9 +311,9 @@ impl DagNode for LiabilityNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LiabilityNodeError::NoInput)?;
         let batches = input
@@ -349,9 +349,9 @@ mod tests {
     use arrow_array::{Float64Array, StringArray};
 
     /// Build a single-row h² summary `RecordBatch` matching
-    /// [`crate::nodes::ldsc_hsq::output_schema`] with the given h² / h²_se.
+    /// [`crate::ldsc_hsq::output_schema`] with the given h² / h²_se.
     fn h2_summary_batch(h2: f64, h2_se: f64) -> RecordBatch {
-        let schema = crate::nodes::ldsc_hsq::output_schema();
+        let schema = crate::ldsc_hsq::output_schema();
         RecordBatch::try_new(
             schema,
             vec![
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn output_schema_is_h2_summary_plus_two_liability_cols() {
         let s = output_schema();
-        let base = crate::nodes::ldsc_hsq::output_schema();
+        let base = crate::ldsc_hsq::output_schema();
         assert_eq!(s.fields().len(), base.fields().len() + 2);
         // First len(base) fields identical to the upstream h² summary.
         for (i, f) in base.fields().iter().enumerate() {

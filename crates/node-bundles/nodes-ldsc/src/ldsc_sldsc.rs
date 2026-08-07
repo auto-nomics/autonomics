@@ -37,10 +37,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::NodeFactory,
+    registry::NodeFactory,
 };
 
 // =====================================================================
@@ -243,8 +243,8 @@ impl NodeFactory for LdscSldscNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+        node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscSldscConfig = serde_json::from_value(spec)?;
         let _ = &node_ctx; // ctx injected at execute() time
         let node = LdscSldscNode::new(config);
@@ -254,9 +254,9 @@ impl NodeFactory for LdscSldscNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<LdscSldscConfig>(spec, "sldsc")?;
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
@@ -280,7 +280,7 @@ impl NodeFactory for LdscSldscNodeFactory {
             format!("cat({result}, sep = \"\\n\")"),
             format!("{out} <- list(coef = NA, coef_se = NA)"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -318,9 +318,9 @@ impl DagNode for LdscSldscNode {
 
     async fn execute(
         &mut self,
-        ctx: &crate::node_registry::registry::NodeCtx,
+        ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input =
             inputs
@@ -375,7 +375,7 @@ impl LdscSldscNode {
             let mut names = Vec::new();
             let mut values = Vec::new();
             for batch in &m_batches {
-                let name_vals = super::meta::string_opt_values(batch.column(0).as_ref()).ok_or(
+                let name_vals = dag_core::node::string_opt_values(batch.column(0).as_ref()).ok_or(
                     LdscSldscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
                         "M table 'annotation' column is not a string type".into(),
                     )),

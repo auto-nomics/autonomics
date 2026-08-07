@@ -27,10 +27,10 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_KIND: &str = "hdl_l";
 
@@ -156,15 +156,15 @@ impl NodeFactory for HdlLNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(HdlLNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<HdlLSpec>(spec, "hdl_l")?;
         let input1 = ctx
             .input_vars
@@ -195,7 +195,7 @@ impl NodeFactory for HdlLNodeFactory {
             format!(")"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["HDL".into()]
@@ -215,12 +215,12 @@ fn arr_f64(arr: &dyn Array, i: usize) -> f64 {
 }
 
 /// Extract string values from a column, accepting both `StringArray` (Utf8)
-/// and `StringViewArray` (Utf8View) — see [`super::meta::string_opt_values`].
+/// and `StringViewArray` (Utf8View) — see [`dag_core::node::string_opt_values`].
 fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        for v in super::meta::string_opt_values(col.as_ref())? {
+        for v in dag_core::node::string_opt_values(col.as_ref())? {
             out.push(v.unwrap_or_default());
         }
     }
@@ -368,7 +368,7 @@ impl DagNode for HdlLNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let err = |msg: String| DagError::NodeError {
@@ -502,7 +502,7 @@ impl DagNode for HdlLNode {
         })?;
 
         // wrap into a PortOutputs via an isolated SessionContext (like lava nodes)
-        let ctx = crate::node_registry::registry::new_isolated_ctx(
+        let ctx = dag_core::registry::new_isolated_ctx(
             node_ctx.runtime_env.clone(),
             node_ctx.iceberg_catalog.clone(),
         );
@@ -635,7 +635,7 @@ mod tests {
             alpha: default_alpha(),
         });
 
-        let reporter = crate::dag::node_event::NodeReporter::noop();
+        let reporter = dag_core::dag::node_event::NodeReporter::noop();
         let res = node
             .execute(
                 &ctx,

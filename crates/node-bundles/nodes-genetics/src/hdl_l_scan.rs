@@ -1,7 +1,7 @@
 //! HDL-L scan node — genome-wide (or chromosome-wide) local genetic
 //! correlation scanning across many adjacent genomic windows.
 //!
-//! One node replaces an entire batch of [`super::hdl_l::HdlLNode`] instances for
+//! One node replaces an entire batch of [`crate::hdl_l::HdlLNode`] instances for
 //! scanning. It loads the per-chromosome PLINK `.bim/.fam` **once** (vs. once
 //! per window for the single-region node), parses both GWAS sumstat inputs
 //! **once**, then iterates the user-defined windows. Each window is processed
@@ -37,13 +37,13 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use super::hdl_l::{
+use crate::hdl_l::{
     MAX_REGION_WIDTH, REF_PREFIX_TEMPLATE, collect_input_batches, parse_sumstats, result_schema,
 };
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagError, graph::PortOutputs};
-use crate::node_registry::registry::{NodeCtx, NodeFactory};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_SCAN_KIND: &str = "hdl_l_scan";
 
@@ -310,15 +310,15 @@ impl NodeFactory for HdlLScanNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(HdlLScanNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<HdlLScanSpec>(spec, "hdl_l_scan")?;
         let input1 = ctx
             .input_vars
@@ -365,7 +365,7 @@ impl NodeFactory for HdlLScanNodeFactory {
             format!("{out} <- do.call(rbind, {out})"),
             format!("print(head({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["HDL".into()]
@@ -391,7 +391,7 @@ impl DagNode for HdlLScanNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let err = |msg: String| DagError::NodeError {
@@ -529,7 +529,7 @@ impl DagNode for HdlLScanNode {
         ));
 
         let batch = build_result_batch(&outcomes, &self.spec)?;
-        let ctx = crate::node_registry::registry::new_isolated_ctx(
+        let ctx = dag_core::registry::new_isolated_ctx(
             node_ctx.runtime_env.clone(),
             node_ctx.iceberg_catalog.clone(),
         );

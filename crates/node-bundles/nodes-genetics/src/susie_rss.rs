@@ -25,11 +25,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::runtime::RuntimeStatus;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // ─── errors ──────────────────────────────────────────────────────────────────
@@ -208,16 +208,16 @@ impl NodeFactory for SusieRssNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(SusieRssNode::new(serde_json::from_value(spec)?)))
     }
 
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<SusieRssSpec>(spec, "susie_rss")?;
         let out = ctx.output_var.to_string();
         let z = ctx.fresh_var("z_scores");
@@ -243,7 +243,7 @@ impl NodeFactory for SusieRssNodeFactory {
             ),
             format!("print(summary({out}))"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -257,7 +257,7 @@ fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        for v in super::meta::string_opt_values(col.as_ref())? {
+        for v in dag_core::node::string_opt_values(col.as_ref())? {
             out.push(v.unwrap_or_default());
         }
     }
@@ -384,10 +384,10 @@ async fn load_ld_pairs(
                 continue;
             }
             let r2 = arr_f64(r2s.as_ref(), i);
-            let a = super::meta::string_opt_values(a_ids.as_ref())
+            let a = dag_core::node::string_opt_values(a_ids.as_ref())
                 .and_then(|v| v.get(i).cloned().flatten())
                 .unwrap_or_default();
-            let b = super::meta::string_opt_values(b_ids.as_ref())
+            let b = dag_core::node::string_opt_values(b_ids.as_ref())
                 .and_then(|v| v.get(i).cloned().flatten())
                 .unwrap_or_default();
             // Only keep pairs where at least one endpoint is in our SNP set.
@@ -471,7 +471,7 @@ impl DagNode for SusieRssNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
 

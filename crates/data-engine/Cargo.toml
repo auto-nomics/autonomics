@@ -74,9 +74,11 @@ nodes-causal = { path = "../node-bundles/nodes-causal", optional = true }
 nodes-lcmm = { path = "../node-bundles/nodes-lcmm", optional = true }
 nodes-mr = { path = "../node-bundles/nodes-mr", optional = true }
 nodes-survey = { path = "../node-bundles/nodes-survey", optional = true }
+nodes-ldsc = { path = "../node-bundles/nodes-ldsc", optional = true }
+nodes-genetics = { path = "../node-bundles/nodes-genetics", optional = true }
 
 [features]
-default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey"]
+default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml = ["dep:nodes-ml"]
 bundle-viz = ["dep:nodes-viz"]
@@ -90,6 +92,8 @@ bundle-causal = ["dep:nodes-causal"]
 bundle-lcmm = ["dep:nodes-lcmm"]
 bundle-mr = ["dep:nodes-mr"]
 bundle-survey = ["dep:nodes-survey"]
+bundle-ldsc = ["dep:nodes-ldsc"]
+bundle-genetics = ["dep:nodes-genetics"]
 
 [dev-dependencies]
 datalake = { path = "../datalake" }

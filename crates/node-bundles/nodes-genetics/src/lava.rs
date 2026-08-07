@@ -26,11 +26,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::runtime::RuntimeStatus;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -138,12 +138,12 @@ pub struct LavaPhenoMeta {
 // ============================ column extractors ============================
 
 /// Extract string values from a column, accepting both `StringArray` (Utf8)
-/// and `StringViewArray` (Utf8View) — see [`super::meta::string_opt_values`].
+/// and `StringViewArray` (Utf8View) — see [`dag_core::node::string_opt_values`].
 fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        for v in super::meta::string_opt_values(col.as_ref())? {
+        for v in dag_core::node::string_opt_values(col.as_ref())? {
             out.push(v.unwrap_or_default());
         }
     }
@@ -154,7 +154,7 @@ fn col_opt_str(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<String>
     let mut out = Vec::new();
     for b in batches {
         let col = b.column_by_name(name)?;
-        out.extend(super::meta::string_opt_values(col.as_ref())?);
+        out.extend(dag_core::node::string_opt_values(col.as_ref())?);
     }
     Some(out)
 }
@@ -376,7 +376,7 @@ async fn collect_input_batches(
 }
 
 fn read_batch(
-    node_ctx: &crate::node_registry::registry::NodeCtx,
+    node_ctx: &dag_core::registry::NodeCtx,
     batch: RecordBatch,
 ) -> Result<PortOutputs, LavaNodeError> {
     let ctx = node_ctx.session();
@@ -465,14 +465,14 @@ impl NodeFactory for LavaLocusNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaLocusNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -489,7 +489,7 @@ impl NodeFactory for LavaLocusNodeFactory {
             format!("{out} <- lava::{r_func}(input = {input})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["lava".into()]
@@ -513,9 +513,9 @@ impl DagNode for LavaLocusNode {
 
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         reporter.info(format!(
@@ -797,14 +797,14 @@ impl NodeFactory for LavaUnivNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaUnivNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -821,7 +821,7 @@ impl NodeFactory for LavaUnivNodeFactory {
             format!("{out} <- lava::{r_func}(input = {input})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["lava".into()]
@@ -843,9 +843,9 @@ impl DagNode for LavaUnivNode {
     }
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let batches = collect_input_batches(
@@ -978,14 +978,14 @@ impl NodeFactory for LavaBivarNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaBivarNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -1002,7 +1002,7 @@ impl NodeFactory for LavaBivarNodeFactory {
             format!("{out} <- lava::{r_func}(input = {input})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["lava".into()]
@@ -1024,9 +1024,9 @@ impl DagNode for LavaBivarNode {
     }
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let batches = collect_input_batches(
@@ -1185,14 +1185,14 @@ impl NodeFactory for LavaPcorNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaPcorNode::new(serde_json::from_value(spec)?)))
     }
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -1209,7 +1209,7 @@ impl NodeFactory for LavaPcorNodeFactory {
             format!("{out} <- lava::{r_func}(input = {input})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["lava".into()]
@@ -1231,9 +1231,9 @@ impl DagNode for LavaPcorNode {
     }
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let batches = collect_input_batches(
@@ -1393,7 +1393,7 @@ impl NodeFactory for LavaMultiregNodeFactory {
         &self,
         spec: serde_json::Value,
         _ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(LavaMultiregNode::new(serde_json::from_value(
             spec,
         )?)))
@@ -1401,8 +1401,8 @@ impl NodeFactory for LavaMultiregNodeFactory {
     fn codegen_r(
         &self,
         _spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         let input = ctx
             .input_vars
             .first()
@@ -1419,7 +1419,7 @@ impl NodeFactory for LavaMultiregNodeFactory {
             format!("{out} <- lava::{r_func}(input = {input})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["lava".into()]
@@ -1441,9 +1441,9 @@ impl DagNode for LavaMultiregNode {
     }
     async fn execute(
         &mut self,
-        node_ctx: &crate::node_registry::registry::NodeCtx,
+        node_ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        reporter: &crate::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         reporter.status(RuntimeStatus::Running);
         let batches = collect_input_batches(
