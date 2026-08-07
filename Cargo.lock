@@ -104,6 +104,7 @@ dependencies = [
  "agentik-sdk",
  "arc-swap",
  "clap",
+ "petgraph",
  "runtime",
  "serde",
  "serde_json",

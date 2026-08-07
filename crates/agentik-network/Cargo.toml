@@ -8,6 +8,7 @@ description = "Pure multi-agent topology routing state machine"
 
 [dependencies]
 agentik-sdk = { path = "../agentik-sdk" }
+petgraph = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

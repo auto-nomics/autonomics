@@ -33,42 +33,23 @@ pub struct NetworkSpec {
 
 impl NetworkSpec {
     /// Validate internal consistency:
-    /// - Every edge references existing nodes.
-    /// - Termination conditions reference existing nodes.
     /// - At least one node exists.
     /// - Node names are unique.
+    /// - Every edge references existing nodes.
+    /// - Termination conditions reference existing nodes.
+    ///
+    /// Builds a [`NetworkGraph`](crate::NetworkGraph) under the hood for
+    /// structural validation (duplicate detection, dangling edges).
     pub fn validate(&self) -> Result<(), String> {
-        if self.nodes.is_empty() {
-            return Err("network must have at least one node".into());
-        }
+        // Structural validation via the graph index.
+        let graph = crate::graph::NetworkGraph::from_spec(self)?;
 
+        // Termination references — the graph ensures node names exist.
         let names: std::collections::HashSet<&str> =
             self.nodes.iter().map(|n| n.name.as_str()).collect();
-
-        // Unique names.
-        if names.len() != self.nodes.len() {
-            return Err("duplicate node names".into());
-        }
-
-        // Edge references.
-        for edge in &self.edges {
-            if !names.contains(edge.from.as_str()) {
-                return Err(format!(
-                    "edge references unknown source node: {}",
-                    edge.from
-                ));
-            }
-            if !names.contains(edge.to.as_str()) {
-                return Err(format!(
-                    "edge references unknown target node: {}",
-                    edge.to
-                ));
-            }
-        }
-
-        // Termination references.
         self.termination.validate(&names)?;
 
+        let _ = graph; // suppress unused warning
         Ok(())
     }
 }

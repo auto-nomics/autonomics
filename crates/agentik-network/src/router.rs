@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use agentik_sdk::types::AgentEvent;
 
+use crate::graph::NetworkGraph;
 use crate::spec::{EdgeSpec, EdgeTrigger, NetworkSpec, TerminationSpec};
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -99,6 +100,8 @@ pub enum NetworkOutcome {
 /// perform any I/O. It is purely computational.
 pub struct AgentNetwork {
     spec: NetworkSpec,
+    /// Petgraph-backed structural index for O(out-degree) routing queries.
+    graph: NetworkGraph,
     /// Accumulated LLM response text per node, cleared on each `Done`.
     response_buffers: HashMap<String, String>,
     /// How many times each node has completed a turn (emitted `Done`).
@@ -111,12 +114,19 @@ impl AgentNetwork {
     /// Create a routing state machine from a validated spec.
     pub fn new(spec: NetworkSpec) -> Result<Self, String> {
         spec.validate()?;
+        let graph = NetworkGraph::from_spec(&spec)?;
         Ok(Self {
             spec,
+            graph,
             response_buffers: HashMap::new(),
             completion_counts: HashMap::new(),
             finished: None,
         })
+    }
+
+    /// Borrow the petgraph-backed structural index.
+    pub fn graph(&self) -> &NetworkGraph {
+        &self.graph
     }
 
     /// Returns the initial prompts that the host should inject to kick-start
@@ -201,12 +211,14 @@ impl AgentNetwork {
     }
 
     /// Compute routing actions for a completed node's response.
+    ///
+    /// Uses the petgraph index for O(out-degree) edge look-up instead of
+    /// scanning all edges.
     fn route_output(&self, from: &str, response: &str, round: usize) -> Vec<RoutingAction> {
-        self.spec
-            .edges
-            .iter()
-            .filter(|e| e.from == from)
-            .filter(|e| edge_should_fire(e, response))
+        self.graph
+            .out_edges(from)
+            .into_iter()
+            .filter(|edge| edge_should_fire(edge, response))
             .map(|edge| {
                 let message = match &edge.transform {
                     Some(t) => t.render(response, round, &edge.from, &edge.to),
