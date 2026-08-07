@@ -1,16 +1,12 @@
 //! Runtime for agentik agents.
 //!
-//! Two entry points:
-//! - [`AgentRuntime`] — legacy single-agent runtime (one struct, one agent).
-//! - [`RuntimeHost`] — multi-agent host with shared infrastructure.
-//!
-//! New code should prefer [`RuntimeHost`].
+//! [`RuntimeHost`] is the single entry point — a multi-agent host that owns
+//! shared infrastructure, a persistent [`AgentNetwork`] for topology routing,
+//! and an agent registry for multiplexed event access.
 
 pub mod config;
 pub mod host;
-pub mod runtime;
 pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use host::{AgentHandle, HostError, HostResult, RuntimeHost, SharedInfra, TaggedEvent};
-pub use runtime::AgentRuntime;

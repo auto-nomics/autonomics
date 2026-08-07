@@ -1,4 +1,4 @@
-//! Configuration for [`AgentRuntime`](crate::AgentRuntime).
+//! Configuration for [`RuntimeHost`](crate::RuntimeHost).
 //!
 //! Every hard-coded path, env-var override, and prompt string that was
 //! previously scattered across `runtime.rs` / `tools.rs` / `app.rs` is
@@ -120,7 +120,7 @@ pub const ENV_HTTP_PROXY: &str = "AUTONOMICS_HTTP_PROXY";
 ///
 /// Built via [`RuntimeConfig::builder()`] (or [`RuntimeConfig::default()`]
 /// for the current hard-coded defaults) and consumed by
-/// [`AgentRuntime::with_config`](crate::AgentRuntime::with_config).
+/// [`RuntimeHost::open`](crate::RuntimeHost::open).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeConfig {
     /// Human-readable name for this runtime instance (useful in multi-agent
