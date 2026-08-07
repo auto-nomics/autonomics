@@ -51,13 +51,8 @@ pub enum MrpressoNodeError {
     LengthMismatch { name: String },
 }
 
-impl From<MrpressoNodeError> for DagError {
-    fn from(e: MrpressoNodeError) -> Self {
-        DagError::NodeError {
-            node_type: MRPRESSO_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for MrpressoNodeError {
+    fn node_type(&self) -> &str { MRPRESSO_NODE_KIND }
 }
 
 // =====================================================================

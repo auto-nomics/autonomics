@@ -78,13 +78,8 @@ impl From<ColumnError> for FineGrayError {
     }
 }
 
-impl From<FineGrayError> for DagError {
-    fn from(e: FineGrayError) -> Self {
-        DagError::NodeError {
-            node_type: FINE_GRAY_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for FineGrayError {
+    fn node_type(&self) -> &str { FINE_GRAY_NODE_KIND }
 }
 
 // ── spec ────────────────────────────────────────────────────────────────────

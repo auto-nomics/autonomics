@@ -51,13 +51,8 @@ pub enum CpassocNodeError {
     ReadBatch(#[from] datafusion::error::DataFusionError),
 }
 
-impl From<CpassocNodeError> for DagError {
-    fn from(e: CpassocNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "cpassoc".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for CpassocNodeError {
+    fn node_type(&self) -> &str { "cpassoc" }
 }
 
 // =====================================================================

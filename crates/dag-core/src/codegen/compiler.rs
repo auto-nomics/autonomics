@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::dag::graph::DAG;
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
-use crate::node_registry::registry::NodeRegistry;
+use crate::registry::NodeRegistry;
 
 use super::context::{CodegenError, CodegenTarget, make_ctx, sanitize_var_name, topo_sort};
 

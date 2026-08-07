@@ -22,7 +22,6 @@ use super::error::DagError;
 use super::runtime::{DirtyState, NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport};
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
-use crate::nodes::sink_file::FileSinkNode;
 
 /// Output DataFrames keyed by output port index.
 pub type PortOutputs = HashMap<u8, DataFrame>;
@@ -167,7 +166,7 @@ impl DAG {
     pub async fn run(
         &mut self,
         cfg: &SchedulerConfig,
-        engine_ctx: &crate::node_registry::registry::NodeCtx,
+        engine_ctx: &crate::registry::NodeCtx,
         event_sink: Option<mpsc::Sender<NodeEvent>>,
     ) -> Result<RunReport> {
         // The immutable engine ingredients, wrapped in an Arc so each spawned
@@ -516,19 +515,16 @@ impl DAG {
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
 
-                // Extract file sink path via downcast.
+                // Extract file sink path / artifact path via DagNode trait hooks.
                 let file_path = self
                     .nodes
                     .get(id)
-                    .and_then(|n| n.as_any().downcast_ref::<FileSinkNode>())
-                    .map(|sn| sn.sink_path().to_string());
+                    .and_then(|n| n.sink_path().map(|s| s.to_string()));
 
-                // Extract rendered-artifact path from a VizNode via downcast.
                 let artifact_path = self
                     .nodes
                     .get(id)
-                    .and_then(|n| n.as_any().downcast_ref::<crate::nodes::VizNode>())
-                    .map(|vn| vn.output_path().to_string());
+                    .and_then(|n| n.artifact_path().map(|s| s.to_string()));
 
                 let error = self.errors.get(id).map(|e| e.to_report());
                 let skipped_because = skipped_because.get(id).cloned();
@@ -1227,10 +1223,61 @@ fn schema_compatible(
 #[cfg(test)]
 mod tests {
     use crate::dag::{NodeInput, NodePorts};
-    use crate::nodes::EchoNode;
     use std::assert_matches;
 
     use super::*;
+
+    /// Minimal echo node for graph tests — passes through inputs unchanged.
+    #[derive(Clone)]
+    struct EchoNode {
+        meta: NodePorts,
+    }
+
+    impl Default for EchoNode {
+        fn default() -> Self {
+            Self {
+                meta: NodePorts::new().add_output_port(None).set_fixed_input(false),
+            }
+        }
+    }
+
+    impl EchoNode {
+        fn from_ports(ports: NodePorts) -> Self {
+            Self { meta: ports }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for EchoNode {
+        fn ports(&self) -> &NodePorts {
+            &self.meta
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            for inp in inputs {
+                outputs.insert(inp.port, inp.data.clone());
+            }
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "echo"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
 
     fn get_diamond_dag() -> DAG {
         let mut dag = DAG::default();
@@ -1251,16 +1298,16 @@ mod tests {
     }
 
     /// A minimal `NodeCtx` for graph tests that only exercise scheduling with
-    /// ctx-ignoring nodes (EchoNode / PortedNode). The real engine ingredients
-    /// are wired by `DataEngine`; here a bare `RuntimeEnv` is sufficient.
-    fn test_ctx() -> crate::node_registry::registry::NodeCtx {
+    /// ctx-ignoring nodes. The real engine ingredients are wired by
+    /// `DataEngine`; here a bare `RuntimeEnv` is sufficient.
+    fn test_ctx() -> crate::registry::NodeCtx {
         use datafusion::prelude::SessionContext;
-        crate::node_registry::registry::NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
-            opendal: None,
-        }
+        crate::registry::NodeCtx::new(
+            SessionContext::new().runtime_env(),
+            None,
+            std::sync::Arc::new(datalake::Datalake::default()),
+            None,
+        )
     }
 
     #[test]
@@ -1393,7 +1440,7 @@ mod tests {
         }
         async fn execute(
             &mut self,
-            _ctx: &crate::node_registry::registry::NodeCtx,
+            _ctx: &crate::registry::NodeCtx,
             _inputs: &[NodeInput],
             _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, super::DagError> {
@@ -1903,7 +1950,7 @@ mod tests {
         }
         async fn execute(
             &mut self,
-            _ctx: &crate::node_registry::registry::NodeCtx,
+            _ctx: &crate::registry::NodeCtx,
             inputs: &[NodeInput],
             _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, DagError> {

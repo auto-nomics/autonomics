@@ -52,13 +52,8 @@ pub enum MvmrNodeError {
     LengthMismatch { name: String },
 }
 
-impl From<MvmrNodeError> for DagError {
-    fn from(e: MvmrNodeError) -> Self {
-        DagError::NodeError {
-            node_type: MVMR_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for MvmrNodeError {
+    fn node_type(&self) -> &str { MVMR_NODE_KIND }
 }
 
 // =====================================================================

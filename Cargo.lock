@@ -2422,6 +2422,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "dag-core"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "datafusion",
+ "datalake",
+ "derive_more",
+ "fs",
+ "futures",
+ "nanoid",
+ "petgraph",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "turso",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2530,6 +2558,7 @@ dependencies = [
  "coloc",
  "cpassoc",
  "csv",
+ "dag-core",
  "datafusion",
  "datalake",
  "derive_more",

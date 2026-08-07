@@ -16,6 +16,24 @@ pub fn r_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Build an R string vector: `["a", "b"]` → `"a", "b"`.
+pub fn r_vec(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|s| r_str(s))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Build an R numeric vector: `[1.0, 2.5]` → `1, 2.5`.
+pub fn r_vec_f64(items: &[f64]) -> String {
+    items
+        .iter()
+        .map(|v| format!("{v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Build an R formula string: `y ~ x1 + x2 + x3`.
 pub fn r_formula(response: &str, predictors: &[String], intercept: bool) -> String {
     let rhs = if predictors.is_empty() {

@@ -1,9 +1,22 @@
 //! Node abstractions and built-in implementations.
 //!
-//! [`meta`] defines the [`DagNode`] trait, [`NodePorts`], and [`NodeInput`] —
-//! the contract every node fulfils. Concrete implementations live in
-//! [`source_file`], [`source_iceberg`], [`sql_node`], [`sink_file`], and
-//! [`sink_iceberg`].
+//! Core traits ([`DagNode`], [`NodePorts`], [`NodeInput`]) and shared helpers
+//! ([`numeric_util`], [`sink_common`]) are re-exported from [`dag_core`] via
+//! thin shim modules so existing `super::meta::*` / `super::numeric_util::*`
+//! paths keep working.
+
+// ── Re-export shims for modules now living in dag-core ────────────────────
+// These keep `use super::meta::*`, `use super::numeric_util::*`, etc.
+// working in all node files without touching every import.
+pub mod meta {
+    pub use dag_core::node::*;
+}
+pub mod numeric_util {
+    pub use dag_core::arrow_util::*;
+}
+pub mod sink_common {
+    pub use dag_core::sink::*;
+}
 
 pub mod bivariate_mixer;
 pub mod bkmr;
@@ -36,17 +49,15 @@ pub mod linear_regression;
 pub mod logistic_regression;
 pub mod magma;
 pub mod mediation;
-pub mod meta;
 pub mod mrlap;
 pub mod mrpresso;
 pub mod mtag;
 pub mod mvmr;
-pub mod numeric_util;
-pub mod sink_common;
 pub mod sink_file;
 pub mod sink_iceberg;
 pub mod source_file;
 pub mod source_iceberg;
+pub mod source_opengwas;
 pub mod source_opengwas_tophits;
 pub mod source_opentargets;
 pub mod sql_node;
@@ -104,6 +115,15 @@ pub use source_opentargets::{
 };
 pub use source_opengwas_tophits::{
     OpengwasTophitsNode, OpengwasTophitsNodeFactory, OpengwasTophitsSpec,
+};
+pub use source_opengwas::{
+    OpengwasAssociationsNode, OpengwasAssociationsNodeFactory, OpengwasAssociationsSpec,
+    OpengwasPhewasNode, OpengwasPhewasNodeFactory, OpengwasPhewasSpec,
+    OpengwasGwasinfoNode, OpengwasGwasinfoNodeFactory, OpengwasGwasinfoSpec,
+    OpengwasGwasinfoSearchNode, OpengwasGwasinfoSearchNodeFactory, OpengwasGwasinfoSearchSpec,
+    OpengwasVariantsRsidNode, OpengwasVariantsRsidNodeFactory, OpengwasVariantsRsidSpec,
+    OpengwasVariantsChrposNode, OpengwasVariantsChrposNodeFactory, OpengwasVariantsChrposSpec,
+    OpengwasLdClumpNode, OpengwasLdClumpNodeFactory, OpengwasLdClumpSpec,
 };
 pub use sql_node::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 pub use susie_rss::{SusieRssNode, SusieRssNodeFactory, SusieRssSpec};

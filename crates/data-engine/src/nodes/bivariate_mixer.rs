@@ -53,13 +53,8 @@ pub enum BivariateMixerError {
     Json(#[from] serde_json::Error),
 }
 
-impl From<BivariateMixerError> for DagError {
-    fn from(e: BivariateMixerError) -> Self {
-        DagError::NodeError {
-            node_type: "bivariate_mixer".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for BivariateMixerError {
+    fn node_type(&self) -> &str { "bivariate_mixer" }
 }
 
 // =====================================================================

@@ -47,13 +47,8 @@ impl From<ColumnError> for CmestNodeError {
         Self::Column(e.to_string())
     }
 }
-impl From<CmestNodeError> for DagError {
-    fn from(e: CmestNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "cmest".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for CmestNodeError {
+    fn node_type(&self) -> &str { "cmest" }
 }
 
 /// Build the standardized output RecordBatch for any cmest variant.

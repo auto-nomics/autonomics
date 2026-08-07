@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dag-core = { path = "../dag-core" }
 thiserror.workspace = true
 biofusion = { path = "../biofusion" }
 datalake = { path = "../datalake" }

@@ -109,13 +109,17 @@ pub enum FileSourceError {
     },
 }
 
-impl From<FileSourceError> for DagError {
-    fn from(e: FileSourceError) -> Self {
-        match e {
+impl FileSourceError {
+    pub fn to_dag_error(self) -> DagError {
+        match self {
             FileSourceError::Read { source, .. } => DagError::DataFusion(source),
             FileSourceError::UnknownFormat(msg) => DagError::Schedule(msg),
         }
     }
+}
+
+impl ::dag_core::dag::NodeError for FileSourceError {
+    fn node_type(&self) -> &str { "source_file" }
 }
 
 #[derive(Clone)]

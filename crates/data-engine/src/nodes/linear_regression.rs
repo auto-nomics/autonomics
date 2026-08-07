@@ -38,13 +38,8 @@ pub enum LinearRegressionError {
     Regression(String),
 }
 
-impl From<LinearRegressionError> for DagError {
-    fn from(e: LinearRegressionError) -> Self {
-        DagError::NodeError {
-            node_type: "linear_regression".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LinearRegressionError {
+    fn node_type(&self) -> &str { "linear_regression" }
 }
 
 // =====================================================================

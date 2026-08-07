@@ -12,12 +12,17 @@ use datalake::Datalake;
 
 use crate::codegen::{CodegenTarget, DagCompiler};
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
-use crate::node_registry::registry::NodeRegistry;
+use crate::node_registry::NodeRegistry;
 
 fn test_registry() -> NodeRegistry {
     let ctx = SessionContext::new();
     let runtime_env = ctx.runtime_env();
-    NodeRegistry::new(runtime_env, None, Arc::new(Datalake::default()), None)
+    crate::default_registry::build_default_registry(
+        runtime_env,
+        None,
+        Arc::new(Datalake::default()),
+        None,
+    )
 }
 
 const XVAL_DIR: &str = "/tmp/autonomics_xval";

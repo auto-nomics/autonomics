@@ -54,13 +54,8 @@ impl From<ColumnError> for MediationError {
     }
 }
 
-impl From<MediationError> for DagError {
-    fn from(e: MediationError) -> Self {
-        DagError::NodeError {
-            node_type: "mediation".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for MediationError {
+    fn node_type(&self) -> &str { "mediation" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

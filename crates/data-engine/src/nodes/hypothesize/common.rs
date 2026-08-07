@@ -32,13 +32,8 @@ pub enum HypoNodeError {
     ReadBatch(String),
 }
 
-impl From<HypoNodeError> for DagError {
-    fn from(e: HypoNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "hypothesize".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for HypoNodeError {
+    fn node_type(&self) -> &str { "hypothesize" }
 }
 
 // ─── Standard test-row schema ───────────────────────────────────────────────

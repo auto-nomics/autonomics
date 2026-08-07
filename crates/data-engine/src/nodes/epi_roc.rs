@@ -50,13 +50,8 @@ impl From<ColumnError> for EpiRocError {
     }
 }
 
-impl From<EpiRocError> for DagError {
-    fn from(e: EpiRocError) -> Self {
-        DagError::NodeError {
-            node_type: "epi_roc".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for EpiRocError {
+    fn node_type(&self) -> &str { "epi_roc" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

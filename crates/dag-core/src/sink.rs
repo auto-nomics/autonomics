@@ -1,5 +1,5 @@
-//! Shared types for the [`crate::nodes::sink_file`] and
-//! [`crate::nodes::sink_iceberg`] nodes.
+//! Shared types for the [`crate::sink`] and
+//! [`crate::sink`] nodes.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

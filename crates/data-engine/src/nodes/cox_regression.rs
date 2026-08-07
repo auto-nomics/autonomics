@@ -55,13 +55,8 @@ impl From<ColumnError> for CoxRegressionError {
     }
 }
 
-impl From<CoxRegressionError> for DagError {
-    fn from(e: CoxRegressionError) -> Self {
-        DagError::NodeError {
-            node_type: "cox_regression".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for CoxRegressionError {
+    fn node_type(&self) -> &str { "cox_regression" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

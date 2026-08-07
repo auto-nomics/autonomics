@@ -56,13 +56,8 @@ pub enum ColocNodeError {
     MissingSnpCol(String),
 }
 
-impl From<ColocNodeError> for DagError {
-    fn from(e: ColocNodeError) -> Self {
-        DagError::NodeError {
-            node_type: COLOC_ABF_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for ColocNodeError {
+    fn node_type(&self) -> &str { COLOC_ABF_NODE_KIND }
 }
 
 // =====================================================================

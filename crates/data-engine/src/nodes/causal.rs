@@ -35,13 +35,8 @@ impl From<ColumnError> for CausalError {
         Self::Column(e.to_string())
     }
 }
-impl From<CausalError> for DagError {
-    fn from(e: CausalError) -> Self {
-        DagError::NodeError {
-            node_type: "causal".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for CausalError {
+    fn node_type(&self) -> &str { "causal" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

@@ -49,13 +49,8 @@ impl From<ColumnError> for EpiWqsError {
     }
 }
 
-impl From<EpiWqsError> for DagError {
-    fn from(e: EpiWqsError) -> Self {
-        DagError::NodeError {
-            node_type: "epi_wqs".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for EpiWqsError {
+    fn node_type(&self) -> &str { "epi_wqs" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

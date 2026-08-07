@@ -41,13 +41,8 @@ impl From<ColumnError> for SurvivalError {
     }
 }
 
-impl From<SurvivalError> for DagError {
-    fn from(e: SurvivalError) -> Self {
-        DagError::NodeError {
-            node_type: "survival".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for SurvivalError {
+    fn node_type(&self) -> &str { "survival" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

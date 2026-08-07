@@ -57,13 +57,8 @@ pub enum MtagNodeError {
     Datalake(String),
 }
 
-impl From<MtagNodeError> for DagError {
-    fn from(e: MtagNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "mtag".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for MtagNodeError {
+    fn node_type(&self) -> &str { "mtag" }
 }
 
 impl From<datalake::error::Error> for MtagNodeError {

@@ -50,13 +50,8 @@ pub enum SusieNodeError {
     NoLdOverlap,
 }
 
-impl From<SusieNodeError> for DagError {
-    fn from(e: SusieNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "susie_rss".into(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for SusieNodeError {
+    fn node_type(&self) -> &str { "susie_rss" }
 }
 
 fn missing(name: &str) -> SusieNodeError {

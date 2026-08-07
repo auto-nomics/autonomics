@@ -61,13 +61,8 @@ pub enum LdscSldscNodeError {
     Unimplemented(String),
 }
 
-impl From<LdscSldscNodeError> for DagError {
-    fn from(e: LdscSldscNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "sldsc".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LdscSldscNodeError {
+    fn node_type(&self) -> &str { "sldsc" }
 }
 
 // =====================================================================

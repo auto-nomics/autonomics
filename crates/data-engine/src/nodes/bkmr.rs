@@ -47,13 +47,8 @@ pub enum BkmrNodeError {
     EmptyInput,
 }
 
-impl From<BkmrNodeError> for DagError {
-    fn from(e: BkmrNodeError) -> Self {
-        DagError::NodeError {
-            node_type: BKMR_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for BkmrNodeError {
+    fn node_type(&self) -> &str { BKMR_NODE_KIND }
 }
 
 // =====================================================================

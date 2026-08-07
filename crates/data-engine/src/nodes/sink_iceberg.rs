@@ -38,9 +38,9 @@ pub enum IcebergSinkError {
     Iceberg { msg: String },
 }
 
-impl From<IcebergSinkError> for DagError {
-    fn from(e: IcebergSinkError) -> Self {
-        match e {
+impl IcebergSinkError {
+    pub fn to_dag_error(self) -> DagError {
+        match self {
             IcebergSinkError::Write { source, .. } => DagError::DataFusion(source),
             IcebergSinkError::InvalidInput { message } => DagError::Schedule(message),
             IcebergSinkError::Iceberg { msg } => DagError::NodeError {
@@ -49,6 +49,10 @@ impl From<IcebergSinkError> for DagError {
             },
         }
     }
+}
+
+impl ::dag_core::dag::NodeError for IcebergSinkError {
+    fn node_type(&self) -> &str { "sink_iceberg" }
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -82,6 +82,31 @@ pub enum DagError {
     History(String),
 }
 
+// ── NodeError trait + blanket From impl ────────────────────────────────────
+
+/// Marker trait for node-specific error types that convert into [`DagError`].
+///
+/// Node error types impl this trait (providing their `kind` string) and the
+/// blanket `From<E: NodeError> for DagError` below handles the conversion.
+/// This avoids orphan-rule conflicts: without this trait, a downstream crate
+/// cannot `impl From<MyError> for DagError` because neither `From` nor
+/// `DagError` is local to that crate.
+pub trait NodeError: std::error::Error + Send + Sync + 'static {
+    /// The node kind string (e.g. `"hlme"`, `"ldsc_rg"`).
+    fn node_type(&self) -> &str;
+}
+
+/// Blanket conversion: any [`NodeError`] can be turned into a [`DagError`]
+/// via `?` in a node's `execute()` method.
+impl<E: NodeError> From<E> for DagError {
+    fn from(e: E) -> Self {
+        DagError::NodeError {
+            node_type: e.node_type().to_string(),
+            msg: e.to_string(),
+        }
+    }
+}
+
 /// Maximum number of characters retained in an agent-facing error message.
 ///
 /// Some error variants — chiefly [`DagError::DataFusion`] — can carry

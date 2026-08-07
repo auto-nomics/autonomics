@@ -20,13 +20,17 @@ pub enum SqlNodeError {
     RegisterView(#[source] datafusion::error::DataFusionError),
 }
 
-impl From<SqlNodeError> for DagError {
-    fn from(e: SqlNodeError) -> Self {
-        match e {
+impl SqlNodeError {
+    pub fn to_dag_error(self) -> DagError {
+        match self {
             SqlNodeError::RegisterView(source) => DagError::DataFusion(source),
             SqlNodeError::InvalidInput { message } => DagError::Schedule(message),
         }
     }
+}
+
+impl ::dag_core::dag::NodeError for SqlNodeError {
+    fn node_type(&self) -> &str { "sql" }
 }
 
 /// A transform node: registers each upstream input as a named table and runs a

@@ -44,13 +44,17 @@ pub enum FileSinkError {
     },
 }
 
-impl From<FileSinkError> for DagError {
-    fn from(e: FileSinkError) -> Self {
-        match e {
+impl FileSinkError {
+    pub fn to_dag_error(self) -> DagError {
+        match self {
             FileSinkError::Write { source, .. } => DagError::DataFusion(source),
             FileSinkError::InvalidInput { message } => DagError::Schedule(message),
         }
     }
+}
+
+impl ::dag_core::dag::NodeError for FileSinkError {
+    fn node_type(&self) -> &str { "sink_file" }
 }
 
 pub struct FileSinkNode {
@@ -241,6 +245,10 @@ impl DagNode for FileSinkNode {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn sink_path(&self) -> Option<&str> {
+        Some(&self.path)
     }
 
     async fn execute(

@@ -55,13 +55,8 @@ pub enum LiabilityNodeError {
     MissingColumn(String),
 }
 
-impl From<LiabilityNodeError> for DagError {
-    fn from(e: LiabilityNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "liability".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LiabilityNodeError {
+    fn node_type(&self) -> &str { "liability" }
 }
 
 // =====================================================================

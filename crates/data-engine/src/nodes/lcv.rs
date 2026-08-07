@@ -45,13 +45,8 @@ pub enum LcvNodeError {
     Datalake(String),
 }
 
-impl From<LcvNodeError> for DagError {
-    fn from(e: LcvNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "lcv".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LcvNodeError {
+    fn node_type(&self) -> &str { "lcv" }
 }
 
 impl From<datalake::error::Error> for LcvNodeError {

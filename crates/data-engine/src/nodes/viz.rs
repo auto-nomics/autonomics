@@ -41,16 +41,22 @@ pub enum VizError {
     OpendalWrite(String),
 }
 
-impl From<VizError> for DagError {
-    fn from(e: VizError) -> Self {
-        let msg = e.to_string();
-        match e {
+impl VizError {
+    pub fn to_dag_error(self) -> DagError {
+        let msg = self.to_string();
+        match self {
             VizError::InvalidInput { message } => DagError::Schedule(message),
             _ => DagError::NodeError {
                 node_type: "visualization".to_string(),
                 msg,
             },
         }
+    }
+}
+
+impl ::dag_core::dag::NodeError for VizError {
+    fn node_type(&self) -> &str {
+        "visualization"
     }
 }
 
@@ -211,6 +217,10 @@ impl DagNode for VizNode {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn artifact_path(&self) -> Option<&str> {
+        Some(&self.output_path)
     }
 
     async fn execute(

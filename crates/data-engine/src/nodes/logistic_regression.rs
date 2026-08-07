@@ -59,13 +59,8 @@ impl From<ColumnError> for LogisticRegressionError {
     }
 }
 
-impl From<LogisticRegressionError> for DagError {
-    fn from(e: LogisticRegressionError) -> Self {
-        DagError::NodeError {
-            node_type: "logistic_regression".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LogisticRegressionError {
+    fn node_type(&self) -> &str { "logistic_regression" }
 }
 
 // ── Spec ───────────────────────────────────────────────────────────────────

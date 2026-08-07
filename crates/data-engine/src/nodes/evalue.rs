@@ -38,13 +38,8 @@ pub enum EvalueNodeError {
     ReadBatch(#[from] datafusion::error::DataFusionError),
 }
 
-impl From<EvalueNodeError> for DagError {
-    fn from(e: EvalueNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "evalue".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for EvalueNodeError {
+    fn node_type(&self) -> &str { "evalue" }
 }
 
 // =====================================================================

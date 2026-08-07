@@ -49,13 +49,8 @@ pub enum LdscRgNodeError {
     Datalake(String),
 }
 
-impl From<LdscRgNodeError> for DagError {
-    fn from(e: LdscRgNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "ldsc_rg".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LdscRgNodeError {
+    fn node_type(&self) -> &str { "ldsc_rg" }
 }
 
 impl From<datalake::error::Error> for LdscRgNodeError {

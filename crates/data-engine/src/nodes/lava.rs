@@ -47,13 +47,8 @@ pub enum LavaNodeError {
     EmptyInput,
 }
 
-impl From<LavaNodeError> for DagError {
-    fn from(e: LavaNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "lava".into(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for LavaNodeError {
+    fn node_type(&self) -> &str { "lava" }
 }
 
 fn missing(name: &str) -> LavaNodeError {

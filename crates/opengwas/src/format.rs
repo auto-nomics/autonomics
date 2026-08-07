@@ -3,6 +3,12 @@
 //! Every formatter preserves **all** non-null fields from the source data.
 //! Tabular results become Markdown tables; metadata becomes structured
 //! key-value cards.
+//!
+//! Table-fetching endpoints (associations, phewas, tophits, variants, ld_clump,
+//! gwasinfo) have been migrated to DAG source nodes. Their formatters are kept
+//! here for potential reuse but are currently unused outside of tests.
+
+#![allow(dead_code)]
 
 use serde_json::Value;
 

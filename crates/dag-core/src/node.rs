@@ -291,12 +291,12 @@ pub trait DagNode: Send + Sync {
     /// `ctx` is the framework-injected, immutable engine ingredients. A node
     /// that needs a `SessionContext` (e.g. to register upstream DataFrames as
     /// views and run SQL) obtains a **fresh**, isolated one via
-    /// [`NodeCtx::session`](crate::node_registry::registry::NodeCtx::session)
+    /// [`NodeCtx::session`](crate::registry::NodeCtx::session)
     /// and never stores one as a field — that is what keeps mutable catalog
     /// state from leaking across runs or between `clone_box` copies of a node.
     async fn execute(
         &mut self,
-        ctx: &crate::node_registry::registry::NodeCtx,
+        ctx: &crate::registry::NodeCtx,
         inputs: &[NodeInput],
         reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError>;
@@ -316,6 +316,20 @@ pub trait DagNode: Send + Sync {
     /// Downcast helper for concrete-type introspection (e.g. extracting
     /// sink-specific details at report time).
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Optional: the file path this node writes to, if it is a file sink.
+    /// Used by the scheduler's run report to surface output locations.
+    /// Default `None`; overridden by file sink nodes.
+    fn sink_path(&self) -> Option<&str> {
+        None
+    }
+
+    /// Optional: the artifact path this node produces (e.g. a rendered plot).
+    /// Used by the scheduler's run report. Default `None`; overridden by
+    /// artifact-producing nodes (e.g. VizNode).
+    fn artifact_path(&self) -> Option<&str> {
+        None
+    }
 
     // fn write_output(&self, port_id: &str, df: DataFrame) -> Result<(), DagError>;
     // fn get_input(&self, port_id: &str) -> Result<DataFrame, DagError>;
@@ -339,7 +353,7 @@ impl Clone for Box<dyn DagNode> {
 /// This helper accepts either layout so node code is immune to the upstream
 /// physical representation. Returns `None` only when the column is neither
 /// string type.
-pub(crate) fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<String>>> {
+pub fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<String>>> {
     use arrow_array::{StringArray, StringViewArray};
     if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
         Some(

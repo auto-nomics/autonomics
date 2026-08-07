@@ -50,13 +50,8 @@ impl From<ColumnError> for EpiLassoError {
     }
 }
 
-impl From<EpiLassoError> for DagError {
-    fn from(e: EpiLassoError) -> Self {
-        DagError::NodeError {
-            node_type: "epi_lasso".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for EpiLassoError {
+    fn node_type(&self) -> &str { "epi_lasso" }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

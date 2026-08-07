@@ -1,0 +1,269 @@
+use std::sync::Arc;
+
+use datafusion::{
+    catalog::CatalogProvider,
+    common::HashMap,
+    execution::{runtime_env::RuntimeEnv, session_state::SessionStateBuilder},
+    prelude::{SessionConfig, SessionContext},
+};
+use datalake::Datalake;
+
+use serde::Serialize;
+
+use super::error::{Error, Result};
+use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
+use crate::dag::DagNode;
+use crate::node::NodePorts;
+
+/// Build a fresh, isolated [`SessionContext`].
+///
+/// Each call creates a **new** `CatalogList` (so `register_table("port_0", ...)`
+/// never collides with another node's registration), while sharing the
+/// engine-wide [`RuntimeEnv`] so object stores remain reachable.
+///
+/// If an `iceberg_catalog` is provided, it is registered under `"iceberg"`
+/// on the fresh context.
+pub fn new_isolated_ctx(
+    runtime_env: Arc<RuntimeEnv>,
+    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
+) -> SessionContext {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_config(SessionConfig::new())
+        .with_runtime_env(runtime_env)
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+    if let Some(cat) = iceberg_catalog {
+        ctx.register_catalog("iceberg", cat);
+    }
+    ctx
+}
+
+pub trait NodeFactory: Send + Sync {
+    fn kind(&self) -> &'static str;
+    fn desc(&self) -> &'static str;
+    fn doc(&self) -> &'static str;
+    fn spec_schema(&self) -> schemars::Schema;
+    /// The static port layout for this node kind — the input/output ports
+    /// every instance of this kind will declare. Queryable without
+    /// instantiating a node (mirrors [`NodeFactory::spec_schema`]).
+    fn ports(&self) -> NodePorts;
+    fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> Result<Box<dyn DagNode>>;
+
+    // ── reverse-compilation (codegen) ────────────────────────────────────
+    //
+    // Default implementations return `NotSupported`, so existing factories
+    // compile unchanged. Override per-kind to enable R/Python codegen.
+
+    /// Compile this node kind's spec into R code that calls the original
+    /// reference R package.
+    fn codegen_r(
+        &self,
+        _spec: &serde_json::Value,
+        _ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        Err(CodegenError::NotSupported {
+            kind: self.kind().to_string(),
+            target: CodegenTarget::R,
+        })
+    }
+
+    /// Compile this node kind's spec into Python code.
+    fn codegen_python(
+        &self,
+        _spec: &serde_json::Value,
+        _ctx: &mut CodegenCtx,
+    ) -> std::result::Result<NodeCodegen, CodegenError> {
+        Err(CodegenError::NotSupported {
+            kind: self.kind().to_string(),
+            target: CodegenTarget::Python,
+        })
+    }
+
+    /// R packages this node's generated code requires (e.g. `["TwoSampleMR"]`).
+    fn r_packages(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Python packages this node's generated code requires.
+    fn python_packages(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// Ingredients for building an isolated [`SessionContext`] per node execution.
+///
+/// Instead of sharing a single `SessionContext` (which causes CatalogList
+/// collisions on `register_table`), nodes receive the `RuntimeEnv` and an
+/// optional `Iceberg` catalog, and construct their own context at execution
+/// time via [`new_isolated_ctx`].
+#[derive(Clone)]
+pub struct NodeCtx {
+    /// Shared object-store registry — all nodes reference the same
+    /// `RuntimeEnv` so file:// / s3:// stores registered by the engine
+    /// builder are reachable.
+    pub runtime_env: Arc<RuntimeEnv>,
+    /// Optional Iceberg `CatalogProvider`. Nodes that need to query
+    /// `iceberg.*` tables receive `Some`; others receive `None`.
+    pub iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
+    /// Iceberg REST catalog handle, used by LDSC nodes for table-level
+    /// operations (create/drop/load) that go through the Iceberg API
+    /// directly rather than DataFusion SQL.
+    pub datalake: Arc<Datalake>,
+    /// The opendal-backed file storage registered with the engine, used by
+    /// artifact-producing nodes (e.g. `VizNode`) to write outputs into the
+    /// engine's virtualized filesystem rather than the host filesystem.
+    /// `None` when no opendal fs was registered.
+    pub opendal: Option<Arc<fs::OpendalFileStorage>>,
+}
+
+impl NodeCtx {
+    /// Convenience constructor from the four engine-level ingredients.
+    pub fn new(
+        runtime_env: Arc<RuntimeEnv>,
+        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
+        datalake: Arc<Datalake>,
+        opendal: Option<Arc<fs::OpendalFileStorage>>,
+    ) -> Self {
+        Self {
+            runtime_env,
+            iceberg_catalog,
+            datalake,
+            opendal,
+        }
+    }
+
+    /// Build a **fresh**, isolated [`SessionContext`] from these ingredients.
+    ///
+    /// Each call returns a brand-new context with its own `CatalogList` (so
+    /// `register_table("port_0", …)` / `register_table("sumstats", …)` never
+    /// collide across nodes or across executions) while sharing the engine-wide
+    /// [`RuntimeEnv`]. This is the *only* way a `DagNode` should obtain a
+    /// `SessionContext` inside `execute`: the framework injects a `&NodeCtx`,
+    /// the node calls `ctx.session()`, and the resulting context is dropped at
+    /// the end of the execution — no mutable catalog state ever leaks across
+    /// runs or between `clone_box` copies of a node.
+    pub fn session(&self) -> SessionContext {
+        new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone())
+    }
+}
+
+/// Summary of a registered node kind returned by [`NodeRegistry::list_nodes`].
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeInfo {
+    pub kind: String,
+    pub desc: String,
+}
+
+/// The single source of truth of "which node kinds exist and how to build one from spec."
+///
+/// This object handles DagNode building and generalize operation of different nodes into uniformed
+/// methods.
+pub struct NodeRegistry {
+    node_ctx: NodeCtx,
+    nodes: HashMap<String, Box<dyn NodeFactory>>,
+}
+
+impl NodeRegistry {
+    /// Create an **empty** registry with the given node context.
+    ///
+    /// Node factories are registered separately via [`Self::register`] or
+    /// [`Self::register_plugin`]. The engine host (data-engine crate) is
+    /// responsible for populating the registry with concrete factories.
+    pub fn new(node_ctx: NodeCtx) -> Self {
+        Self {
+            node_ctx,
+            nodes: Default::default(),
+        }
+    }
+
+    /// Convenience: create an empty registry from the four engine-level
+    /// ingredients (wraps [`NodeCtx::new`] + [`Self::new`]).
+    pub fn with_ingredients(
+        runtime_env: Arc<RuntimeEnv>,
+        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
+        datalake: Arc<Datalake>,
+        opendal: Option<Arc<fs::OpendalFileStorage>>,
+    ) -> Self {
+        Self::new(NodeCtx::new(runtime_env, iceberg_catalog, datalake, opendal))
+    }
+
+    /// Register a single node factory.
+    pub fn register(&mut self, factory: Box<dyn NodeFactory>) {
+        self.nodes.insert(factory.kind().to_string(), factory);
+    }
+
+    /// Register all factories from a [`NodePlugin`](crate::plugin::NodePlugin).
+    pub fn register_plugin(&mut self, plugin: &dyn crate::plugin::NodePlugin) {
+        plugin.register(self);
+    }
+
+    /// Borrow the shared [`NodeCtx`] (handed to every factory's `build`).
+    pub fn ctx(&self) -> &NodeCtx {
+        &self.node_ctx
+    }
+
+    fn get_node_factory(&self, node_kind: &str) -> Result<&dyn NodeFactory> {
+        self.nodes
+            .get(node_kind)
+            .map(|b| b.as_ref())
+            .ok_or(Error::FactoryNotFound {
+                kind: node_kind.to_string(),
+            })
+    }
+
+    pub fn build_node(&self, node_kind: &str, spec: serde_json::Value) -> Result<Box<dyn DagNode>> {
+        let node_factory = self.get_node_factory(node_kind)?;
+        // Repair common LLM spec pathologies (object-wrapped arrays like
+        // `{"item": x}`, numeric strings for number fields) against the
+        // factory's own JSON Schema before deserializing. Schema-driven, so
+        // well-formed specs pass through unchanged.
+        let schema = serde_json::to_value(node_factory.spec_schema()).map_err(|e| {
+            Error::Unknown(format!(
+                "failed to serialize spec schema for kind '{node_kind}': {e}"
+            ))
+        })?;
+        let spec = super::spec_normalize::normalize_against_schema(spec, &schema);
+        // If the factory still can't deserialize the spec, upgrade the bare
+        // serde error into an agent-facing SpecRejection carrying the kind,
+        // the expected schema, and concrete remediation guidance.
+        let node = node_factory
+            .build(spec, self.node_ctx.clone())
+            .map_err(|err| match err {
+                super::error::Error::SpecDeserialize { source } => {
+                    super::error::Error::spec_rejection_from(node_kind, &schema, source)
+                }
+                other => other,
+            })?;
+        Ok(node)
+    }
+
+    /// Return the JSON Schema that validates [`kind`]'s node spec.
+    pub fn get_node_spec(&self, node_kind: &str) -> Result<schemars::Schema> {
+        Ok(self.get_node_factory(node_kind)?.spec_schema())
+    }
+
+    /// Look up a node factory by kind string. Used by the DAG compiler.
+    pub fn get_factory(&self, kind: &str) -> Result<&dyn NodeFactory> {
+        self.get_node_factory(kind)
+    }
+
+    pub fn get_node_ports(&self, node_kind: &str) -> Result<NodePorts> {
+        Ok(self.get_node_factory(node_kind)?.ports())
+    }
+
+    pub fn get_node_doc(&self, node_kind: &str) -> Result<String> {
+        Ok(self.get_node_factory(node_kind)?.doc().to_string())
+    }
+
+    /// Return metadata of every registered node kind (kind + JSON Schema + ports).
+    pub fn list_nodes(&self) -> Vec<NodeInfo> {
+        self.nodes
+            .iter()
+            .map(|(kind, factory)| NodeInfo {
+                kind: kind.clone(),
+                desc: factory.desc().to_string(),
+            })
+            .collect()
+    }
+}

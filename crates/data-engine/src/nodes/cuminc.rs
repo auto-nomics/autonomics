@@ -71,13 +71,8 @@ impl From<ColumnError> for CumincError {
     }
 }
 
-impl From<CumincError> for DagError {
-    fn from(e: CumincError) -> Self {
-        DagError::NodeError {
-            node_type: CUMINC_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for CumincError {
+    fn node_type(&self) -> &str { CUMINC_NODE_KIND }
 }
 
 // ── spec ────────────────────────────────────────────────────────────────────

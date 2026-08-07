@@ -48,13 +48,8 @@ pub enum UnivariateMixerError {
     Json(#[from] serde_json::Error),
 }
 
-impl From<UnivariateMixerError> for DagError {
-    fn from(e: UnivariateMixerError) -> Self {
-        DagError::NodeError {
-            node_type: "univariate_mixer".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for UnivariateMixerError {
+    fn node_type(&self) -> &str { "univariate_mixer" }
 }
 
 // =====================================================================

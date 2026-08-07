@@ -1,4 +1,4 @@
-use super::*;
+use crate::codegen::{CodegenError, CodegenTarget, DagCompiler};
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
 
 use std::sync::Arc;
@@ -7,10 +7,10 @@ use datafusion::prelude::SessionContext;
 use datalake::Datalake;
 
 /// Minimal registry for codegen tests (no Iceberg / opendal needed).
-fn test_registry() -> crate::node_registry::registry::NodeRegistry {
+fn test_registry() -> crate::node_registry::NodeRegistry {
     let ctx = SessionContext::new();
     let runtime_env = ctx.runtime_env();
-    crate::node_registry::registry::NodeRegistry::new(
+    crate::default_registry::build_default_registry(
         runtime_env,
         None,
         Arc::new(Datalake::default()),
@@ -200,7 +200,7 @@ fn var_flow_branch_merge() {
 
 #[test]
 fn sanitize_var_name_basics() {
-    use super::context::sanitize_var_name;
+    use crate::codegen::context::sanitize_var_name;
 
     // Already valid
     assert_eq!(sanitize_var_name("my_node"), "my_node");

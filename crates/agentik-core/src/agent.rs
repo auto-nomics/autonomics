@@ -288,6 +288,7 @@ impl Agent {
                         // Rebuild a session from storage, restoring its memory from
                         // per-session snapshot + WAL messages.
                         let mut s = Session::new(rec.session_id, self.shared.clone());
+                        s.cancel_token = self.cancel_token.clone();
                         s.title = rec.title;
                         s.created_at = rec.started_at;
 
@@ -504,7 +505,7 @@ impl Agent {
         fork_from: Option<Uuid>,
         title: Option<String>,
     ) {
-        let session = match fork_from {
+        let mut session = match fork_from {
             Some(parent_id) => {
                 if let Some(parent) = self.sessions.get(&parent_id) {
                     let mut s = Session::fork_from(parent, id, self.shared.clone());
@@ -523,6 +524,9 @@ impl Agent {
                 s
             }
         };
+        // Ensure the new session shares the agent's cancel token so that
+        // AgentHandle::cancel() can interrupt an in-flight run_session.
+        session.cancel_token = self.cancel_token.clone();
         self.sessions.insert(id, session);
 
         // Persist the session title so it survives restarts. The WAL session

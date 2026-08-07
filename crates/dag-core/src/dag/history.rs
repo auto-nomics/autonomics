@@ -39,7 +39,7 @@ use super::error::DagError;
 // ── content-addressable data model ───────────────────────────────────────────
 
 /// A pure-data, fully serializable description of a DAG's topology + node
-/// configuration — sufficient to reconstruct the DAG from a [`crate::node_registry::NodeRegistry`].
+/// configuration — sufficient to reconstruct the DAG from a [`crate::registry::NodeRegistry`].
 ///
 /// This is the "tree" object (to borrow git terminology): its content hash
 /// identifies a unique DAG configuration.
@@ -54,7 +54,7 @@ pub struct DagManifest {
 pub struct NodeEntry {
     pub id: NodeId,
     /// Factory kind string (e.g. `"source_file"`, `"sql"`), matching
-    /// [`crate::node_registry::registry::NodeFactory::kind`].
+    /// [`crate::registry::NodeFactory::kind`].
     pub kind: String,
     /// The original (post-normalization) spec JSON used to build this node.
     pub spec: serde_json::Value,

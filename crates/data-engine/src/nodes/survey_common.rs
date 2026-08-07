@@ -287,13 +287,10 @@ impl std::fmt::Display for SurveyNodeError {
     }
 }
 
-impl From<SurveyNodeError> for DagError {
-    fn from(e: SurveyNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "survey".to_string(),
-            msg: e.0,
-        }
-    }
+impl std::error::Error for SurveyNodeError {}
+
+impl ::dag_core::dag::NodeError for SurveyNodeError {
+    fn node_type(&self) -> &str { "survey" }
 }
 
 /// Public wrapper for [`extract_string_column`] — used by svyby to extract

@@ -70,13 +70,8 @@ pub enum TwoSampleMrNodeError {
     Clump(String),
 }
 
-impl From<TwoSampleMrNodeError> for DagError {
-    fn from(e: TwoSampleMrNodeError) -> Self {
-        DagError::NodeError {
-            node_type: TWO_SAMPLE_MR_NODE_KIND.to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for TwoSampleMrNodeError {
+    fn node_type(&self) -> &str { TWO_SAMPLE_MR_NODE_KIND }
 }
 
 // =====================================================================

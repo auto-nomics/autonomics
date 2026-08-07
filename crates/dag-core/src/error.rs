@@ -15,5 +15,5 @@ pub enum Error {
     Dag(#[from] crate::dag::DagError),
 
     #[error(transparent)]
-    NodeRegistry(#[from] crate::node_registry::error::Error),
+    NodeRegistry(#[from] crate::registry::error::Error),
 }

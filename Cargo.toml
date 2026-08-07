@@ -5,6 +5,7 @@ members = [
   "crates/agentik-core",
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",
+  "crates/dag-core",
   "crates/data-engine",
   "apps/tui",
   "crates/opengwas",

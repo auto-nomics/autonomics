@@ -1,18 +1,17 @@
 //! Agent tool layer wrapping the OpenGWAS SDK.
 //!
-//! Each tool maps to one or more SDK methods. Wire them into an agent's
-//! toolset via [`opengwas_registrations`].
+//! Table-fetching endpoints (associations, phewas, gwasinfo, gwasinfo_search,
+//! variants_rsid, variants_chrpos, ld_clump, tophits) have been migrated to
+//! DAG source nodes in `data-engine::nodes::source_opengwas`. The remaining
+//! tools cover non-tabular operations:
+//!
+//! - `gwasinfo_count` — scalar dataset count
+//! - `ld_matrix` — N×N LD matrix
+//! - `download_files` — bulk file download to storage
 
-mod associations;
 pub mod download;
-mod gwasinfo_by_id;
 mod gwasinfo_count;
-mod gwasinfo_search;
-mod ld_clump;
 mod ld_matrix;
-mod phewas;
-mod variants_chrpos;
-mod variants_rsid;
 
 use std::sync::Arc;
 
@@ -42,7 +41,11 @@ mod helpers {
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Build [`ToolRegistration`]s for all OpenGWAS tools.
+/// Build [`ToolRegistration`]s for the remaining OpenGWAS tools.
+///
+/// Table-fetching endpoints have been converted to DAG source nodes
+/// (`source_opengwas_*`). The tools left here are:
+/// `gwasinfo_count`, `ld_matrix`, and `download_files`.
 ///
 /// Pass a shared [`OpengwasClient`] so every tool reuses the same HTTP
 /// connection and SQLite cache, and a shared [`OpendalFileStorage`] for
@@ -53,28 +56,7 @@ pub fn opengwas_registrations(
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     vec![
-        R::from(gwasinfo_by_id::GwasinfoByIdTool {
-            client: client.clone(),
-        }),
-        R::from(gwasinfo_search::GwasinfoSearchTool {
-            client: client.clone(),
-        }),
         R::from(gwasinfo_count::GwasinfoCountTool {
-            client: client.clone(),
-        }),
-        R::from(associations::AssociationsTool {
-            client: client.clone(),
-        }),
-        R::from(phewas::PhewasTool {
-            client: client.clone(),
-        }),
-        R::from(variants_rsid::VariantsRsidTool {
-            client: client.clone(),
-        }),
-        R::from(variants_chrpos::VariantsChrposTool {
-            client: client.clone(),
-        }),
-        R::from(ld_clump::LdClumpTool {
             client: client.clone(),
         }),
         R::from(ld_matrix::LdMatrixTool {

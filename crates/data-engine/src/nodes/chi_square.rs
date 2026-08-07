@@ -47,13 +47,8 @@ impl From<ColumnError> for ChiSquareError {
     }
 }
 
-impl From<ChiSquareError> for DagError {
-    fn from(e: ChiSquareError) -> Self {
-        DagError::NodeError {
-            node_type: "chi_square".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for ChiSquareError {
+    fn node_type(&self) -> &str { "chi_square" }
 }
 
 /// Spec for [`ChiSquareNode`].

@@ -22,7 +22,7 @@ impl std::fmt::Display for CodegenTarget {
 
 // ── per-node compilation context ───────────────────────────────────────────
 
-/// Context passed into each [`crate::node_registry::registry::NodeFactory`]'s
+/// Context passed into each [`crate::registry::NodeFactory`]'s
 /// `codegen_r` / `codegen_python` method.
 ///
 /// Holds the variable names feeding each input port, the pre-allocated output
@@ -115,7 +115,7 @@ pub enum CodegenError {
 ///
 /// Replaces any character outside `[A-Za-z0-9_]` with `_`, and prefixes `n_`
 /// if the result starts with a digit (identifiers cannot start with digits).
-pub(crate) fn sanitize_var_name(id: &str) -> String {
+pub fn sanitize_var_name(id: &str) -> String {
     let mut out: String = id
         .chars()
         .map(|c| {

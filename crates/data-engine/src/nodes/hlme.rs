@@ -74,22 +74,8 @@ impl From<ColumnError> for HlmeNodeError {
     }
 }
 
-impl From<HlmeNodeError> for DagError {
-    fn from(e: HlmeNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "hlme".to_string(),
-            msg: e.to_string(),
-        }
-    }
-}
-
-impl From<lcmm::LcmmError> for DagError {
-    fn from(e: lcmm::LcmmError) -> Self {
-        DagError::NodeError {
-            node_type: "hlme".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for HlmeNodeError {
+    fn node_type(&self) -> &str { "hlme" }
 }
 
 // =====================================================================
@@ -741,7 +727,8 @@ impl DagNode for HlmeNode {
             ..Default::default()
         };
 
-        let fit = hlme_fit(&data, &spec, &b_init, &[], &control)?;
+        let fit = hlme_fit(&data, &spec, &b_init, &[], &control)
+            .map_err(HlmeNodeError::Lcmm)?;
 
         // Build output batches.
         let summary_batch = build_summary_batch(&fit, data.nobs);

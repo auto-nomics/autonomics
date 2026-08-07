@@ -8,6 +8,7 @@ use datafusion::{
 use fs::OpendalFileStorage;
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig, DirtyState};
+use crate::default_registry::build_default_registry;
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -69,7 +70,7 @@ impl DataEngine {
                 .unwrap_or_else(|| Arc::new(Datalake::default())),
             opendal: opendal.clone(),
         };
-        let node_registry = NodeRegistry::new(
+        let node_registry = build_default_registry(
             runtime_env.clone(),
             iceberg_catalog.clone(),
             datalake

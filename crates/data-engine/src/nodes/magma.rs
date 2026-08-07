@@ -38,13 +38,8 @@ pub enum MagmaNodeError {
     ReadBatch(#[from] datafusion::error::DataFusionError),
 }
 
-impl From<MagmaNodeError> for DagError {
-    fn from(e: MagmaNodeError) -> Self {
-        DagError::NodeError {
-            node_type: "magma".to_string(),
-            msg: e.to_string(),
-        }
-    }
+impl ::dag_core::dag::NodeError for MagmaNodeError {
+    fn node_type(&self) -> &str { "magma" }
 }
 
 // =====================================================================

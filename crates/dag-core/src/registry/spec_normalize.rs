@@ -2,7 +2,7 @@
 //!
 //! Tool-calling LLMs occasionally emit slightly malformed JSON for node specs
 //! — e.g. wrapping an array as `{"item": X}` or rendering numbers as strings.
-//! Because [`crate::node_registry::NodeFactory::build`] deserializes the spec
+//! Because [`crate::registry::NodeFactory::build`] deserializes the spec
 //! into a typed config, these pathologies fail at the tool boundary with an
 //! opaque "invalid type" error.
 //!
