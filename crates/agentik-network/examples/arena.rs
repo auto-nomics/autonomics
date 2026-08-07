@@ -1,37 +1,29 @@
 //! Arena example — run a 2-agent adversarial manuscript review loop.
 //!
+//! Demonstrates the separation of concerns:
+//! - [`RuntimeHost`] + [`AgentRegistry`] — agent lifecycle + transport.
+//! - [`AgentNetwork`] — pure topology routing (no I/O).
+//!
 //! ## Usage
 //!
 //! ```sh
-//! # Set your API key (e.g. DeepSeek)
 //! export DEEPSEEK_API_KEY="sk-..."
-//!
-//! # Run the arena
 //! cargo run --example arena -- -t "Write a 200-word abstract about the \
-//!     utility of LD score regression for estimating heritability from GWAS \
-//!     summary statistics" -m 3
+//!     utility of LD score regression" -m 3
 //! ```
-//!
-//! ## What happens
-//!
-//! 1. A "writer" agent drafts a manuscript from the topic prompt.
-//! 2. A "reviewer" agent critiques it.
-//! 3. If the reviewer writes `VERDICT: ACCEPT`, the loop ends.
-//! 4. Otherwise the writer revises and resubmits.
-//! 5. After `max_rounds` (default 3) revisions without acceptance, the
-//!    loop terminates.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentik_core::AgentProfile;
-use agentik_network::{AgentNetwork, NetworkEvent, NetworkOutcome, presets};
+use agentik_network::presets;
+use agentik_network::{AgentNetwork, RoutingAction};
 use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
 use agentik_sdk::AuthMethod;
 use arc_swap::ArcSwapOption;
 use clap::Parser;
-use runtime::RuntimeHost;
 use runtime::config::RuntimeConfig;
+use runtime::{AgentRegistry, RuntimeHost};
 
 /// CLI arguments for the arena example.
 #[derive(Parser)]
@@ -131,7 +123,6 @@ fn build_model(
 
     let provider_type = ProviderType::from(provider);
 
-    // Resolve API key from env var based on provider type.
     let api_key = match provider_type {
         ProviderType::Deepseek => std::env::var("DEEPSEEK_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
@@ -205,22 +196,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Topic:      {topic_preview}");
     println!();
 
-    // ── Build model ──────────────────────────────────────────
+    // ── Build model + host + registry ────────────────────────
     let model = build_model(&args.provider, &args.model)?;
     let global_model = Arc::new(ArcSwapOption::from_pointee(Some(model)));
 
-    // ── Open runtime host ────────────────────────────────────
     let config = RuntimeConfig::default();
     let host = RuntimeHost::open(&config).await?;
+    let mut registry = AgentRegistry::new();
 
-    // ── Build profiles map ───────────────────────────────────
-    let mut profiles = HashMap::new();
+    // ── Build profiles ───────────────────────────────────────
     let wp = writer_profile();
     let rp = reviewer_profile();
-    profiles.insert(wp.name.clone(), wp);
-    profiles.insert(rp.name.clone(), rp);
+    let profiles: HashMap<String, AgentProfile> = [
+        (wp.name.clone(), wp),
+        (rp.name.clone(), rp),
+    ]
+    .into_iter()
+    .collect();
 
-    // ── Build network spec ───────────────────────────────────
+    // ── Build network spec (pure topology) ───────────────────
     let spec = presets::arena(
         &args.topic,
         args.max_rounds,
@@ -229,86 +223,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(&args.accept),
     );
 
-    // ── Observer channel ─────────────────────────────────────
-    let (observer_tx, mut observer_rx) =
-        tokio::sync::mpsc::unbounded_channel::<NetworkEvent>();
+    let mut network = AgentNetwork::new(spec)?;
 
-    // Spawn an observer task that prints events as they arrive.
-    let printer = tokio::spawn(async move {
-        while let Some(ev) = observer_rx.recv().await {
-            match ev {
-                NetworkEvent::Started { name, node_count } => {
-                    println!("📋 Network '{name}' started with {node_count} nodes.");
-                }
-                NetworkEvent::MessageRouted { from, to, round } => {
+    // ── Spawn agents and register with the registry ──────────
+    for node_spec in network.spec().nodes.iter() {
+        let profile = profiles
+            .get(&node_spec.profile)
+            .ok_or_else(|| format!("profile not found: {}", node_spec.profile))?;
+        let handle = host
+            .spawn_agent(
+                &node_spec.name,
+                profile,
+                global_model.clone(),
+                None,
+            )
+            .await?;
+        registry.register(handle);
+        println!("  Spawned agent: {}", node_spec.name);
+    }
+
+    // ── Inject initial prompts ───────────────────────────────
+    for (node, prompt) in network.initial_messages() {
+        println!("\n🚀 Injecting prompt to {node}...");
+        registry.send_to(&node, prompt);
+    }
+
+    println!("\n{BAR}");
+    println!("Starting the adversarial loop...\n");
+
+    // ── Event loop ───────────────────────────────────────────
+    // The host drives the loop; AgentNetwork is a pure state machine.
+    let mut final_node = String::new();
+
+    while let Some((agent_name, event)) = registry.recv_any().await {
+        use agentik_sdk::types::AgentEvent;
+
+        // Print streaming text.
+        if let AgentEvent::LlmResponse(ref text) = event {
+            print!("[{agent_name}] {text}");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+
+        // Feed event to the routing state machine.
+        let actions = network.process_event(&agent_name, &event);
+
+        for action in actions {
+            match action {
+                RoutingAction::Forward { to, message } => {
                     println!("\n{DASH}");
-                    println!("📨 Round {round}: {from} → {to}");
+                    println!("📨 {agent_name} → {to}");
+                    registry.send_to(&to, message);
                 }
-                NetworkEvent::AgentText { node, text } => {
-                    print!("[{node}] {text}");
-                    use std::io::Write;
-                    let _ = std::io::stdout().flush();
-                }
-                NetworkEvent::ToolCall { node, tool } => {
-                    println!("\n  🔧 [{node}] calling tool: {tool}");
-                }
-                NetworkEvent::AgentError { node, error } => {
-                    eprintln!("\n  ❌ [{node}] error: {error}");
-                }
-                NetworkEvent::Finished { reason, rounds, final_node } => {
-                    println!("\n{BAR}");
-                    println!("🏁 Network finished after {rounds} rounds.");
-                    println!("   Reason: {reason}");
-                    if let Some(node) = final_node {
-                        println!("   Final node: {node}");
+                RoutingAction::Finished { reason } => {
+                    final_node = agent_name.clone();
+                    if let AgentEvent::Done = event {
+                        // The Done event's response was already processed.
                     }
+                    println!("\n{BAR}");
+                    println!("🏁 Network finished.");
+                    println!("   Reason: {reason:?}");
+                    println!("   Rounds: {}", network.rounds());
                 }
-                _ => {}
             }
         }
-    });
 
-    // ── Build + run ──────────────────────────────────────────
-    let network =
-        AgentNetwork::build(spec, &host, global_model, profiles, observer_tx).await?;
-
-    println!("\n🚀 Network built. Starting the adversarial loop...\n");
-
-    let outcome = network.run().await;
-
-    // ── Report outcome ───────────────────────────────────────
-    match &outcome {
-        NetworkOutcome::Terminated {
-            reason,
-            rounds,
-            final_node,
-            final_output,
-        } => {
-            println!("\n{BAR}");
-            println!("🏆 TERMINATED");
-            println!("   Rounds:     {rounds}");
-            println!("   Reason:     {reason:?}");
-            if let Some(node) = final_node {
-                println!("   Final node: {node}");
-            }
-            if let Some(output) = final_output {
-                println!("\n📜 Final output from {}:", final_node.as_deref().unwrap_or("?"));
-                println!("{DASH}");
-                let preview = if output.len() > 1000 {
-                    format!("{}...[truncated]", &output[..1000])
-                } else {
-                    output.clone()
-                };
-                println!("{preview}");
-            }
-        }
-        NetworkOutcome::Completed { rounds } => {
-            println!("\n✅ All agents finished after {rounds} rounds.");
+        if network.is_finished() {
+            break;
         }
     }
 
-    // Wait for the printer to drain.
-    let _ = printer.await;
+    // ── Cleanup ──────────────────────────────────────────────
+    registry.shutdown_all();
+
+    if !final_node.is_empty() {
+        println!("   Final node: {final_node}");
+    }
 
     Ok(())
 }

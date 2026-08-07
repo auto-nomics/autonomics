@@ -239,12 +239,44 @@ impl Toolset {
                 output: Some(output.clone()),
             };
 
+            // Create the run_mode watch channel BEFORE spawning so a receiver
+            // clone can be passed into the task. This lets the task arm its
+            // bg-phase timeout only AFTER the sync window expires (when `wait()`
+            // flips the mode to Bg), instead of racing two independent timers
+            // started simultaneously at spawn time.
+            let (run_mode_tx, run_mode_rx) =
+                tokio::sync::watch::channel(crate::tools::task_runtime::RunMode::Fg);
+            let bg_phase_rx = run_mode_rx.clone();
+
             let task_handle = tokio::spawn(async move {
-                let result = tokio::select! {
-                    r = implementation.execute_with_context(input, &ctx) => r,
-                    _ = cancel.cancelled() => Err(ToolError::Cancel),
-                    _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => Err(ToolError::Timeout { seconds: timeout_secs }),
+                // Pin the execution future so it can be polled across multiple
+                // `select!` rounds without being consumed.
+                let exec_fut = implementation.execute_with_context(input, &ctx);
+                tokio::pin!(exec_fut);
+
+                let mut bg_phase_rx = bg_phase_rx;
+
+                let result = loop {
+                    if *bg_phase_rx.borrow() == crate::tools::task_runtime::RunMode::Bg {
+                        // Sync window has expired — NOW arm the bg timeout.
+                        tokio::select! {
+                            r = &mut exec_fut => break r,
+                            _ = cancel.cancelled() => break Err(ToolError::Cancel),
+                            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+                                break Err(ToolError::Timeout { seconds: timeout_secs });
+                            }
+                        }
+                    } else {
+                        // Still inside the sync window — no timeout, just wait
+                        // for completion, cancellation, or the Fg→Bg transition.
+                        tokio::select! {
+                            r = &mut exec_fut => break r,
+                            _ = cancel.cancelled() => break Err(ToolError::Cancel),
+                            Ok(()) = bg_phase_rx.changed() => { /* loop back and re-check mode */ }
+                        }
+                    }
                 };
+
                 // Set tool_use_id at result construction time
                 match result {
                     Ok(mut tool_result) => {
@@ -264,6 +296,8 @@ impl Toolset {
                 sync_secs,
                 notify_tx.clone(),
                 output,
+                run_mode_tx,
+                run_mode_rx,
             ));
             spawned_names.insert(tc.id.clone(), tc.name.clone());
         }
@@ -508,6 +542,60 @@ mod tests {
         assert!(result.len() == 2)
     }
 
+    /// Regression test: when `sync_seconds` and `timeout_seconds` are close
+    /// together, the tool must still transition cleanly from sync → background
+    /// and complete successfully. Before the fix, both timers started at spawn
+    /// time and the bg timeout could fire prematurely during the sync window.
+    #[tokio::test]
+    async fn test_close_sync_and_timeout_no_spurious_timeout() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![MockCloseTimeoutTool.into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        let tool_call = ToolUse {
+            id: "tc1".to_string(),
+            name: "test_close_timeout_tool".to_string(),
+            input: json!({ "reason": "test" }),
+        };
+
+        // `execute` returns after the 1s sync window; tool is now in background.
+        let result = toolset.execute(&[tool_call], None).await.unwrap();
+        assert_eq!(result.len(), 1);
+
+        // The result should be a "pending task" notification (StillRunning),
+        // NOT a timeout error.
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        let entry = tasks
+            .iter()
+            .find(|t| t.id() == "tc1")
+            .expect("task should be retained as background");
+        assert!(
+            matches!(entry.status(), crate::tools::task_runtime::TaskStatus::Running),
+            "task should still be running after sync window"
+        );
+        drop(tasks);
+
+        // Wait for the background task to complete (2.5s total sleep).
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        let entry = tasks
+            .iter()
+            .find(|t| t.id() == "tc1")
+            .expect("task should still be in the list");
+        match entry.status() {
+            crate::tools::task_runtime::TaskStatus::Done(_) => { /* success */ }
+            crate::tools::task_runtime::TaskStatus::Failed(_) => {
+                panic!("expected Done, got Failed — spurious timeout?");
+            }
+            crate::tools::task_runtime::TaskStatus::Running => {
+                panic!("expected Done, still Running (test timed out?)");
+            }
+        }
+    }
+
     // A tool that opts into the per-invocation context and pushes live output.
     #[tool(name = "test_progress_tool", description = "emits progress")]
     struct MockProgressInput {
@@ -515,6 +603,45 @@ mod tests {
     }
 
     struct MockProgressTool;
+
+    // Regression: sync window (1s) and timeout (2s) are close together.
+    // Before the fix, both timers started simultaneously at spawn time, so the
+    // 2s timeout could fire while the tool was legitimately still in its sync
+    // window — producing a spurious ToolError::Timeout.  After the fix, the
+    // timeout timer only starts AFTER the sync window expires, so the tool
+    // transitions cleanly to background and completes successfully.
+    #[tool(name = "test_close_timeout_tool", description = "sync≈timeout")]
+    struct MockCloseTimeoutInput {
+        reason: String,
+    }
+
+    struct MockCloseTimeoutTool;
+
+    #[async_trait]
+    impl ToolFunction for MockCloseTimeoutTool {
+        type Input = MockCloseTimeoutInput;
+
+        fn sync_seconds(&self) -> u64 {
+            1
+        }
+
+        fn timeout_seconds(&self) -> u64 {
+            2
+        }
+
+        async fn run(
+            &self,
+            _input: MockCloseTimeoutInput,
+        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
+            // Sleep longer than both timers (3s > 2s timeout). The bg timeout
+            // (armed after the 1s sync window) gives us 2s, so total budget
+            // is 1+2 = 3s.  But since the tool sleeps for exactly 3s it's
+            // borderline — instead sleep 2.5s which is > sync (1s) but <
+            // sync+timeout (3s), so the tool should finish successfully.
+            tokio::time::sleep(Duration::from_millis(2500)).await;
+            Ok(crate::tools::ToolResult::success("done"))
+        }
+    }
 
     #[async_trait]
     impl ToolFunction for MockProgressTool {

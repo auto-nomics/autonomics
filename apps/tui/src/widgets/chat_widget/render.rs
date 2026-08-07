@@ -174,23 +174,6 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 Style::default().fg(Color::DarkGray),
             ))]
         }
-        ChatLine::Network { icon, text } => {
-            let mut lines = Vec::new();
-            let mut first = true;
-            for line in text.lines() {
-                let prefix = if first {
-                    format!("{icon} ")
-                } else {
-                    "   ".to_string()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("{prefix}{line}"),
-                    Style::default().fg(Color::Cyan),
-                )));
-                first = false;
-            }
-            lines
-        }
     }
 }
 

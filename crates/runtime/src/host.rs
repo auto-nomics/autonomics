@@ -97,7 +97,19 @@ impl SharedInfra {
             DataEngine::builder().register_opendal_fs(file_storage.clone())?;
 
         if config.enable_iceberg {
-            engine_builder = engine_builder.register_iceberg().await?;
+            match engine_builder.register_iceberg().await {
+                Ok(()) => {
+                    tracing::info!("iceberg datalake registered");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to connect to iceberg datalake; \
+                         iceberg/datalake tools disabled — \
+                         agent spawn/resume will still work"
+                    );
+                }
+            }
         }
 
         let mut engine = engine_builder.build();

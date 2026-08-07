@@ -11487,7 +11487,6 @@ name = "tui"
 version = "0.1.0"
 dependencies = [
  "agentik-core",
- "agentik-network",
  "agentik-sdk",
  "agentik-types",
  "arboard",

@@ -96,12 +96,6 @@ pub enum ChatLine {
         max_retries: u32,
     },
     Separator,
-    /// Network routing or status line (arena, pipeline, etc.).
-    /// Styled differently from assistant messages — prefixed with an icon.
-    Network {
-        icon: &'static str,
-        text: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

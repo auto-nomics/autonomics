@@ -36,8 +36,6 @@ pub enum CommandAction {
     ToggleCollapseToolCalls,
     /// Toggle collapse for tool result blocks.
     ToggleCollapseToolResults,
-    /// Start the adversarial arena (writer ↔ reviewer loop).
-    StartArena,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -212,12 +210,6 @@ fn default_commands() -> Vec<Command> {
             keywords: "exit close bye".into(),
             category: "app".into(),
             action: CommandAction::Quit,
-        },
-        Command {
-            title: "Start arena (multi-agent)".into(),
-            keywords: "arena adversarial writer reviewer network multi agent loop".into(),
-            category: "network".into(),
-            action: CommandAction::StartArena,
         },
     ]
 }

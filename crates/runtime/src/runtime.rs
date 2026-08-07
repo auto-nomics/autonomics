@@ -94,7 +94,7 @@ impl AgentRuntime {
                 DataEngine::builder().register_opendal_fs(file_storage.clone())?;
 
             if config.enable_iceberg {
-                engine_builder = engine_builder.register_iceberg().await?;
+                engine_builder.register_iceberg().await?;
             }
 
             let mut engine = engine_builder.build();

@@ -5,7 +5,7 @@ pub enum Error {
     #[error("{0}")]
     Custom(String),
 
-    #[error("Datalake error")]
+    #[error("Datalake error: {0}")]
     DatalakeError(#[from] datalake::error::Error),
 
     #[error("Iceberg datalake is missing")]

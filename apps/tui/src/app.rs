@@ -76,8 +76,6 @@ pub struct App {
     should_quit: bool,
     cancel_requested_at: Option<Instant>,
     dirty: bool,
-    /// True while a multi-agent network (arena, pipeline, …) is running.
-    network_running: bool,
 }
 
 impl App {
@@ -98,7 +96,17 @@ impl App {
             // Open storage directly for profile seeding/loading (the host
             // also opens it, but we need AgentProfileRegistry trait methods
             // which aren't on the AgentStorage trait object).
-            let storage = TursoAgentStorage::open(&config.agent_db).await.ok();
+            let storage = match TursoAgentStorage::open(&config.agent_db).await {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::error!(
+                        path = %config.agent_db.display(),
+                        error = %e,
+                        "failed to open agent storage for profile loading"
+                    );
+                    None
+                }
+            };
             let profiles = if let Some(ref s) = storage {
                 use agentik_core::storage::AgentProfileRegistry;
                 let _ = s.seed_defaults_if_empty().await;
@@ -107,9 +115,26 @@ impl App {
                 Vec::new()
             };
 
+            // Drop the temporary storage connection BEFORE opening the host
+            // to avoid holding two connections to the same SQLite DB
+            // simultaneously (can cause lock contention).
+            drop(storage);
+
             // Now open the host (it will open the same DB again — Turso WAL
             // mode supports concurrent connections from the same process).
-            let host = RuntimeHost::open(&config).await.ok();
+            let host = match RuntimeHost::open(&config).await {
+                Ok(h) => {
+                    tracing::info!("runtime host opened successfully");
+                    Some(h)
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "failed to open runtime host — agent spawn/resume will not work"
+                    );
+                    None
+                }
+            };
             (host, profiles)
         });
 
@@ -155,7 +180,6 @@ impl App {
             should_quit: false,
             cancel_requested_at: None,
             dirty: true,
-            network_running: false,
         }
     }
 
@@ -541,74 +565,6 @@ impl App {
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                 }
             },
-            crate::app_event::AppEvent::Network(ev) => {
-                self.apply_network_event(ev);
-            },
-        }
-    }
-
-    /// Convert a [`NetworkEvent`](agentik_network::NetworkEvent) into
-    /// `ChatLine::Network` entries in the active transcript.
-    fn apply_network_event(&mut self, ev: agentik_network::NetworkEvent) {
-        use agentik_network::NetworkEvent;
-        let ts = self.state.active_tab_state_mut();
-        match ev {
-            NetworkEvent::Started { name, node_count } => {
-                ts.push_line(ChatLine::Network {
-                    icon: "📋",
-                    text: format!("Network '{name}' started — {node_count} nodes."),
-                });
-                ts.push_line(ChatLine::Separator);
-            }
-            NetworkEvent::MessageRouted { from, to, round } => {
-                ts.push_line(ChatLine::Network {
-                    icon: "📨",
-                    text: format!("Round {round}: {from} → {to}"),
-                });
-            }
-            NetworkEvent::AgentText { node, text } => {
-                ts.push_line(ChatLine::Network {
-                    icon: "🤖",
-                    text: format!("[{node}]\n{text}"),
-                });
-                if ts.auto_scroll {
-                    ts.scroll_to_bottom();
-                }
-            }
-            NetworkEvent::ToolCall { node, tool } => {
-                ts.push_line(ChatLine::Network {
-                    icon: "🔧",
-                    text: format!("[{node}] calling tool: {tool}"),
-                });
-            }
-            NetworkEvent::AgentError { node, error } => {
-                ts.push_line(ChatLine::Network {
-                    icon: "❌",
-                    text: format!("[{node}] error: {error}"),
-                });
-            }
-            NetworkEvent::Finished {
-                reason,
-                rounds,
-                final_node,
-            } => {
-                ts.push_line(ChatLine::Separator);
-                let detail = if let Some(node) = final_node {
-                    format!("Network finished after {rounds} rounds.\n   Reason: {reason}\n   Final node: {node}")
-                } else {
-                    format!("Network finished after {rounds} rounds.\n   Reason: {reason}")
-                };
-                ts.push_line(ChatLine::Network {
-                    icon: "🏁",
-                    text: detail,
-                });
-                ts.push_line(ChatLine::Separator);
-                self.network_running = false;
-            }
-            _ => {}
-        }
-        if ts.auto_scroll {
-            ts.scroll_to_bottom();
         }
     }
 
@@ -1041,155 +997,23 @@ impl App {
         tracing::info!(profile = %profile.name, "spawning agent...");
     }
 
-    // ── Multi-agent network (arena) ─────────────────────────
-
-    /// Start an adversarial review loop between a writer and reviewer agent.
-    ///
-    /// The network runs in a background task. Its [`NetworkEvent`]s are
-    /// relayed through the `AppEvent` channel and displayed in the active
-    /// transcript as [`ChatLine::Network`] entries.
-    fn start_arena(&mut self, topic: &str) {
-        use agentik_network::{presets, AgentNetwork, NetworkEvent};
-        use std::collections::HashMap;
-
-        if self.network_running {
-            let ts = self.state.active_tab_state_mut();
-            ts.push_line(ChatLine::Network {
-                icon: "⚠️",
-                text: "A network is already running. Wait for it to finish.".into(),
-            });
-            return;
-        }
-
-        let Some(host) = self.host.clone() else {
-            tracing::warn!("no runtime host — cannot start arena");
-            return;
-        };
-        if self.state.active_model.load_full().is_none() {
-            let ts = self.state.active_tab_state_mut();
-            ts.push_line(ChatLine::Error(
-                "No model configured — set one up first (Ctrl+M).".into(),
-            ));
-            return;
-        }
-
-        // ── Build profiles ───────────────────────────────
-        let writer = AgentProfile {
-            id: uuid::Uuid::new_v4(),
-            name: "arena-writer".into(),
-            description: "Arena manuscript writer.".into(),
-            agent_identity: "\
-                You are a biomedical researcher writing a manuscript. \
-                You will receive reviewer feedback and must revise your work. \
-                Your goal is to produce a manuscript rigorous enough to be \
-                accepted by a top journal. Write in clear, precise academic \
-                prose with well-structured sections.".into(),
-            system_prompt: None,
-            enable_bibliography: true,
-            enable_opengwas: false,
-            enable_opentargets: false,
-            enable_gwascatalog: false,
-            enable_iceberg: false,
-            enable_dag_history: false,
-            preferred_model: None,
-            created_at: 0,
-            updated_at: 0,
-        };
-        let reviewer = AgentProfile {
-            id: uuid::Uuid::new_v4(),
-            name: "arena-reviewer".into(),
-            description: "Arena peer reviewer.".into(),
-            agent_identity: "\
-                You are a rigorous peer reviewer for a top biomedical journal. \
-                Evaluate the manuscript for methodological soundness, clarity, \
-                statistical rigor, and impact. \
-                If the manuscript meets your standards, end your review with \
-                exactly: VERDICT: ACCEPT \
-                Otherwise, provide specific actionable criticism and end with: \
-                VERDICT: REJECT".into(),
-            system_prompt: None,
-            enable_bibliography: true,
-            enable_opengwas: false,
-            enable_opentargets: false,
-            enable_gwascatalog: false,
-            enable_iceberg: false,
-            enable_dag_history: false,
-            preferred_model: None,
-            created_at: 0,
-            updated_at: 0,
-        };
-
-        let mut profiles: HashMap<String, AgentProfile> = HashMap::new();
-        profiles.insert(writer.name.clone(), writer);
-        profiles.insert(reviewer.name.clone(), reviewer);
-
-        let spec = presets::arena(
-            topic,
-            3,
-            "arena-writer",
-            "arena-reviewer",
-            Some("VERDICT: ACCEPT"),
-        );
-
-        let model = self.state.active_model.clone();
-        let app_tx = self.app_event_tx.clone();
-        let topic_display = if topic.len() > 60 {
-            format!("{}...", &topic[..60])
-        } else {
-            topic.to_string()
-        };
-
-        self.network_running = true;
-
-        // Spawn the network + event relay in one background task.
-        self.runtime_handle.spawn(async move {
-            let (observer_tx, mut observer_rx) =
-                tokio::sync::mpsc::unbounded_channel::<NetworkEvent>();
-
-            // Build the network.
-            match AgentNetwork::build(spec, &host, model, profiles, observer_tx).await {
-                Ok(network) => {
-                    // Relay network events to the TUI via AppEvent.
-                    let relay_tx = app_tx.clone();
-                    let relay = tokio::spawn(async move {
-                        while let Some(ev) = observer_rx.recv().await {
-                            relay_tx.send(crate::app_event::AppEvent::Network(ev));
-                        }
-                    });
-
-                    // Run the network to completion.
-                    network.run().await;
-
-                    // Wait for the relay to drain.
-                    let _ = relay.await;
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to build arena network");
-                    app_tx.send(crate::app_event::AppEvent::Network(NetworkEvent::AgentError {
-                        node: "arena".into(),
-                        error: format!("{e}"),
-                    }));
-                }
-            }
-        });
-
-        tracing::info!(topic = %topic_display, "arena network starting");
-    }
-
     /// Key handling in browse mode: Up/Down scroll line-by-line,
     /// PageDown/PageUp half-page, Home/End jump to top/bottom,
     /// Enter enters the composer (input mode).
     /// Query the agents table and open the resume picker.
     fn open_agent_picker(&mut self) {
+        tracing::info!("open_agent_picker called");
         let Some(host) = self.host.clone() else {
-            tracing::warn!("no host available for agent listing");
+            tracing::warn!("no host available for agent listing — RuntimeHost::open likely failed at startup");
             return;
         };
         let tx = self.app_event_tx.clone();
         self.runtime_handle.spawn(async move {
             let storage = host.storage();
+            tracing::debug!("querying list_agents from storage");
             match storage.list_agents().await {
                 Ok(records) => {
+                    tracing::info!(count = records.len(), "list_agents succeeded");
                     let _ = tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
                 }
                 Err(e) => {
@@ -1804,15 +1628,6 @@ impl App {
             CommandAction::ToggleCollapseToolResults => {
                 self.state.display_settings.toggle_tool_results();
                 self.persist_display_setting("collapse_tool_results", self.state.display_settings.collapse_tool_results);
-            }
-            CommandAction::StartArena => {
-                // Use a default topic. The user can also type
-                // `/arena <topic>` for a custom prompt.
-                self.start_arena(
-                    "Write a 300-word manuscript abstract on a topic of your \
-                     choice in biomedical genomics. Include methodology, key \
-                     findings, and significance.",
-                );
             }
         }
     }

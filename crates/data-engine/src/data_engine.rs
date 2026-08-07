@@ -715,13 +715,13 @@ impl DataEngineBuilder {
         })
     }
 
-    pub async fn register_iceberg(mut self) -> Result<Self> {
+    pub async fn register_iceberg(&mut self) -> Result<()> {
         let datalake = Arc::new(Datalake::default());
         let provider = datalake.get_provider().await?;
         self.iceberg_catalog = Some(Arc::new(provider));
         self.datalake = Some(datalake);
 
-        Ok(self)
+        Ok(())
     }
 
     pub fn build(self) -> DataEngine {
@@ -828,13 +828,11 @@ mod tests {
             .write("/iris.csv", test_data_file)
             .await
             .unwrap();
-        let engine = DataEngine::builder()
+        let mut builder = DataEngine::builder()
             .register_opendal_fs(file_session)
-            .unwrap()
-            .register_iceberg()
-            .await
-            .unwrap()
-            .build();
+            .unwrap();
+        builder.register_iceberg().await.unwrap();
+        let engine = builder.build();
 
         engine
             .ctx

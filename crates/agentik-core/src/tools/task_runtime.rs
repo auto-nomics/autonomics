@@ -171,6 +171,7 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         block_secs: u64,
     ) -> Self {
+        let (run_mode_tx, run_mode) = watch::channel(RunMode::Fg);
         Self::with_notify(
             seq,
             id,
@@ -180,6 +181,8 @@ impl TaskEntry {
             block_secs,
             None,
             Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
+            run_mode_tx,
+            run_mode,
         )
     }
 
@@ -189,6 +192,12 @@ impl TaskEntry {
     /// `output` is the shared progress buffer the executing tool pushes
     /// structured [`ProgressRecord`]s onto (so it must be created before the
     /// tool runs). When in doubt, pass a fresh `Arc::new(Mutex::new(Vec::new()))`.
+    ///
+    /// `run_mode_tx` / `run_mode` are the watch-channel halves that coordinate
+    /// the Fg→Bg transition. They must be created **before** the task is spawned
+    /// so that a receiver clone can be passed into the spawned future — this
+    /// lets the task arm its bg-phase timeout *only after* the sync window
+    /// expires, rather than racing two independent timers from spawn time.
     pub fn with_notify(
         seq: u64,
         id: TaskId,
@@ -198,10 +207,11 @@ impl TaskEntry {
         block_secs: u64,
         notify_tx: Option<BgTaskNotifyTx>,
         output: ProgressBuffer,
+        run_mode_tx: watch::Sender<RunMode>,
+        run_mode: watch::Receiver<RunMode>,
     ) -> Self {
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
-        let (run_mode_tx, run_mode) = watch::channel(RunMode::Fg);
         let (tool_result_tx, tool_result) = watch::channel::<Option<ToolResult>>(None);
 
         let tx = status_tx.clone();
