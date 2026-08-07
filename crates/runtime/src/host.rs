@@ -498,7 +498,7 @@ impl RuntimeHost {
         use crate::control::{HostCommand, HostStatus};
         match cmd {
             HostCommand::Spawn {
-                name,
+                name: _,
                 profile_name,
                 reply_tx,
             } => {
@@ -536,7 +536,7 @@ impl RuntimeHost {
                 to,
                 trigger,
             } => {
-                let _ = self.network.connect(&from, &to, trigger, None);
+                let _ = self.network.connect(&from, &to, trigger, agentik_network::EdgeKind::Delegate, None);
             }
             HostCommand::Disconnect { from, to } => {
                 self.network.disconnect(&from, &to);
@@ -625,9 +625,9 @@ impl RuntimeHost {
         self.network.remove_node(name);
     }
 
-    /// Connect two nodes with a trigger.
+    /// Connect two nodes with a trigger (defaults to Delegate semantics).
     pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<(), String> {
-        self.network.connect(from, to, trigger, None)
+        self.network.connect(from, to, trigger, agentik_network::EdgeKind::Delegate, None)
     }
 
     /// Remove all edges between two nodes.
@@ -738,7 +738,7 @@ impl RuntimeHost {
         let (name, event) = self.recv_any().await?;
         let actions = self.network.process_event(&name, &event);
         for action in &actions {
-            if let RoutingAction::Forward { to, message } = action {
+            if let RoutingAction::Send { to, message } = action {
                 self.send_to(to, message.clone());
             }
         }

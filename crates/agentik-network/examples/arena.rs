@@ -161,10 +161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     host.add_node_with_prompt("writer", "arena-writer", &args.topic)?;
     host.add_node("reviewer", "arena-reviewer")?;
 
-    // writer → reviewer (submit manuscript)
+    // writer → reviewer (delegate: writer submits, reviewer's response
+    // automatically returns to writer — no reverse edge needed).
     host.connect("writer", "reviewer", EdgeTrigger::OnDone)?;
-    // reviewer → writer (return feedback)
-    host.connect("reviewer", "writer", EdgeTrigger::OnDone)?;
 
     host.set_termination(TerminationSpec::Any {
         specs: vec![
@@ -188,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Inject initial prompts ──────────────────────────────
     host.inject_initial_prompts();
 
-    println!("\n🚀 Arena started. Topology: writer ↔ reviewer\n");
+    println!("\n🚀 Arena started. Topology: writer →[delegate] reviewer\n");
 
     // ── Event loop (driven by host.step()) ──────────────────
     use agentik_sdk::types::AgentEvent;
@@ -206,7 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for action in &actions {
             match action {
-                RoutingAction::Forward { to, .. } => {
+                RoutingAction::Send { to, .. } => {
                     println!("\n{DASH}");
                     println!("📨 {agent_name} → {to}");
                 }

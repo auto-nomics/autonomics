@@ -12,7 +12,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
-use crate::spec::{EdgeSpec, EdgeTrigger, NodeSpec};
+use crate::spec::{EdgeKind, EdgeSpec, EdgeTrigger, NodeSpec};
 
 /// A mutable petgraph-backed topology graph.
 ///
@@ -292,6 +292,7 @@ mod tests {
             from: from.into(),
             to: to.into(),
             trigger: EdgeTrigger::OnDone,
+            kind: EdgeKind::Delegate,
             transform: None,
         }
     }
@@ -365,6 +366,7 @@ mod tests {
             trigger: EdgeTrigger::OnPattern {
                 pattern: "ready".into(),
             },
+            kind: EdgeKind::Delegate,
             transform: None,
         })
         .unwrap();

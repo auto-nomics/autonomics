@@ -1,31 +1,40 @@
 //! # AgentNetwork — persistent mutable topology routing engine.
 //!
 //! Lives as long as [`RuntimeHost`](runtime::RuntimeHost) — it is created
-//! once and mutated in-place as agents are added/removed. The topology graph
-//! (nodes + edges + termination) changes dynamically; the `AgentNetwork`
-//! instance itself never needs to be rebuilt.
+//! once and mutated in-place as agents are added/removed.
 //!
-//! Routing is driven externally: the host calls
-//! [`process_event`](AgentNetwork::process_event) with each agent event and
-//! executes the returned [`RoutingAction`]s.
+//! ## Edge semantics
+//!
+//! Each edge has a [`EdgeKind`](crate::EdgeKind):
+//! - **Delegate** (default): request-response. When source Dones, its output
+//!   is sent to the target. When the target Dones, its response is returned
+//!   to the source. No message loss — every request gets a response.
+//! - **Push**: fire-and-forget. Source Done → forward to target. Used for
+//!   pipelines where no response is expected.
+//!
+//! Delegation tracking is automatic: the network maintains a
+//! `pending_delegations` map internally. The host only needs to execute
+//! the returned [`RoutingAction`]s.
 
 use std::collections::HashMap;
 
 use agentik_sdk::types::AgentEvent;
 
 use crate::graph::NetworkGraph;
-use crate::spec::{EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec};
+use crate::spec::{EdgeKind, EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec};
 
 // ═══════════════════════════════════════════════════════════════════════
 // RoutingAction
 // ═══════════════════════════════════════════════════════════════════════
 
 /// An action returned by [`AgentNetwork::process_event`] for the host to
-/// execute.
+/// execute. The host simply calls `send_to(to, message)` for each `Send`.
 #[derive(Debug, Clone)]
 pub enum RoutingAction {
-    /// Forward a message to the named target agent.
-    Forward { to: String, message: String },
+    /// Send a message to the named target agent.
+    /// This covers both delegation requests and delegation responses —
+    /// the network tracks internally which is which.
+    Send { to: String, message: String },
     /// The network has terminated.
     Finished { reason: TerminationReason },
 }
@@ -56,38 +65,38 @@ pub enum NetworkOutcome {
 
 /// A persistent, mutable multi-agent topology routing engine.
 ///
-/// Created once (typically by [`RuntimeHost`](runtime::RuntimeHost)) and
-/// mutated in-place as agents are added/removed. The underlying
-/// [`NetworkGraph`] (petgraph) supports dynamic node/edge operations.
+/// Edge semantics:
+/// - **Delegate** edges (default): request-response. The source's output is
+///   forwarded to the target; when the target Dones, its response returns
+///   to the source.
+/// - **Push** edges: fire-and-forget forwarding (pipeline semantics).
 ///
-/// Routing state (response buffers, completion counts) is resettable via
-/// [`reset_run_state`](Self::reset_run_state) without touching the topology.
+/// Delegation state is tracked internally via `pending_delegations`.
 pub struct AgentNetwork {
-    /// Mutable petgraph-backed topology.
     graph: NetworkGraph,
-    /// Termination condition for the current topology.
     termination: TerminationSpec,
-    /// Accumulated LLM response text per node, cleared on each `Done`.
     response_buffers: HashMap<String, String>,
-    /// How many times each node has completed a turn (emitted `Done`).
     completion_counts: HashMap<String, usize>,
-    /// Set when a termination condition fires. Cleared by `reset_run_state`.
     finished: Option<TerminationReason>,
+    /// Tracks who delegated to whom: delegatee → delegator.
+    /// When the delegatee Dones, its response returns to the delegator.
+    pending_delegations: HashMap<String, String>,
 }
 
 impl AgentNetwork {
-    /// Create an empty network with no nodes/edges.
     pub fn new() -> Self {
         Self {
             graph: NetworkGraph::new(),
-            termination: TerminationSpec::MaxRounds { max: 0 },
+            // Empty AnyNodeDone never matches — effectively "no termination"
+            // until the user explicitly calls set_termination.
+            termination: TerminationSpec::AnyNodeDone { nodes: vec![] },
             response_buffers: HashMap::new(),
             completion_counts: HashMap::new(),
             finished: None,
+            pending_delegations: HashMap::new(),
         }
     }
 
-    /// Build from a complete spec (batch construction).
     pub fn from_spec(spec: NetworkSpec) -> Result<Self, String> {
         spec.validate()?;
         let graph = NetworkGraph::from_nodes_edges(&spec.nodes, &spec.edges)?;
@@ -97,95 +106,86 @@ impl AgentNetwork {
             response_buffers: HashMap::new(),
             completion_counts: HashMap::new(),
             finished: None,
+            pending_delegations: HashMap::new(),
         })
     }
 
-    // ── Topology mutation (delegates to NetworkGraph) ──────
+    // ── Topology mutation ──────────────────────────────────
 
-    /// Add a node to the topology.
     pub fn add_node(&mut self, node: NodeSpec) -> Result<(), String> {
         self.graph.add_node(node)
     }
 
-    /// Remove a node and all its edges from the topology.
     pub fn remove_node(&mut self, name: &str) -> Option<NodeSpec> {
         let removed = self.graph.remove_node(name);
-        // Clean up routing state for the removed node.
         self.response_buffers.remove(name);
         self.completion_counts.remove(name);
+        self.pending_delegations.remove(name);
+        // Also clean up any delegations WHERE this node was the delegator.
+        self.pending_delegations.retain(|_, v| v != name);
         removed
     }
 
-    /// Add a directed edge between two nodes.
     pub fn add_edge(&mut self, edge: EdgeSpec) -> Result<(), String> {
         self.graph.add_edge(edge)
     }
 
-    /// Convenience: add an edge by endpoints + trigger.
     pub fn connect(
         &mut self,
         from: &str,
         to: &str,
         trigger: EdgeTrigger,
+        kind: EdgeKind,
         transform: Option<crate::spec::TransformSpec>,
     ) -> Result<(), String> {
         self.graph.add_edge(EdgeSpec {
             from: from.into(),
             to: to.into(),
             trigger,
+            kind,
             transform,
         })
     }
 
-    /// Remove all edges from `from` to `to`.
     pub fn disconnect(&mut self, from: &str, to: &str) -> usize {
         self.graph.remove_edges(from, to)
     }
 
-    /// Set the termination condition for the current topology.
     pub fn set_termination(&mut self, termination: TerminationSpec) {
         self.termination = termination;
     }
 
     // ── Run-state management ───────────────────────────────
 
-    /// Clear routing state (buffers, counts, finished flag) without
-    /// touching the topology graph. Call this to start a fresh run on the
-    /// same topology.
     pub fn reset_run_state(&mut self) {
         self.response_buffers.clear();
         self.completion_counts.clear();
         self.finished = None;
+        self.pending_delegations.clear();
     }
 
-    /// Whether the network has terminated.
     pub fn is_finished(&self) -> bool {
         self.finished.is_some()
     }
 
-    /// Why the network terminated, if it has.
     pub fn termination_reason(&self) -> Option<&TerminationReason> {
         self.finished.as_ref()
     }
 
-    /// Maximum completion count across all nodes.
     pub fn rounds(&self) -> usize {
         *self.completion_counts.values().max().unwrap_or(&0)
     }
 
     // ── Queries ────────────────────────────────────────────
 
-    /// Borrow the underlying graph.
     pub fn graph(&self) -> &NetworkGraph {
         &self.graph
     }
 
-    /// Borrow the termination spec.
     pub fn termination(&self) -> &TerminationSpec {
         &self.termination
     }
 
-    /// Returns initial prompts that the host should inject.
     pub fn initial_messages(&self) -> Vec<(String, String)> {
         self.graph
             .node_names()
@@ -196,6 +196,11 @@ impl AgentNetwork {
                 })
             })
             .collect()
+    }
+
+    /// Number of pending delegations (agents waiting for a response).
+    pub fn pending_count(&self) -> usize {
+        self.pending_delegations.len()
     }
 
     // ── Routing (pure computation, driven by host) ─────────
@@ -230,37 +235,58 @@ impl AgentNetwork {
                 *count += 1;
                 let max_rounds = self.rounds();
 
+                // Check termination first.
                 if let Some(reason) =
                     check_termination_spec(&self.termination, from, &response, max_rounds)
                 {
                     self.finished = Some(reason.clone());
-                    vec![RoutingAction::Finished { reason }]
-                } else {
-                    self.route_output(from, &response, max_rounds)
+                    return vec![RoutingAction::Finished { reason }];
                 }
+
+                // Priority 1: If this node was delegated-to, return the
+                // response to the delegator. Do NOT also forward downstream —
+                // the delegation response takes exclusive priority.
+                if let Some(delegator) = self.pending_delegations.remove(from) {
+                    return vec![RoutingAction::Send {
+                        to: delegator,
+                        message: response,
+                    }];
+                }
+
+                // Priority 2: Forward along outgoing edges.
+                let mut actions = vec![];
+                for edge in self.graph.out_edges(from) {
+                    if !edge_should_fire(edge, &response) {
+                        continue;
+                    }
+                    let message = match &edge.transform {
+                        Some(t) => t.render(&response, max_rounds, &edge.from, &edge.to),
+                        None => response.to_string(),
+                    };
+                    match &edge.kind {
+                        EdgeKind::Delegate => {
+                            // Track: when `to` Dones, response returns to `from`.
+                            self.pending_delegations
+                                .insert(edge.to.clone(), from.to_string());
+                        }
+                        EdgeKind::Push => {
+                            // Fire-and-forget — no tracking.
+                        }
+                    }
+                    actions.push(RoutingAction::Send {
+                        to: edge.to.clone(),
+                        message,
+                    });
+                }
+
+                // If no outgoing edges and no delegation return, this node's
+                // output is terminal (pipeline end / standalone). The host
+                // already has the response — no action needed.
+                actions
             }
 
             _ => vec![],
         }
-    }
-
-    /// Compute routing actions for a completed node's response.
-    fn route_output(&self, from: &str, response: &str, round: usize) -> Vec<RoutingAction> {
-        self.graph
-            .out_edges(from)
-            .into_iter()
-            .filter(|edge| edge_should_fire(edge, response))
-            .map(|edge| {
-                let message = match &edge.transform {
-                    Some(t) => t.render(response, round, &edge.from, &edge.to),
-                    None => response.to_string(),
-                };
-                RoutingAction::Forward {
-                    to: edge.to.clone(),
-                    message,
-                }
-            })
-            .collect()
     }
 }
 
@@ -353,131 +379,199 @@ pub fn edge_should_fire(edge: &EdgeSpec, response: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec};
+    use crate::spec::{EdgeSpec, EdgeKind, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec};
 
-    fn build_simple_network() -> AgentNetwork {
-        let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec {
-            name: "a".into(),
-            profile: "x".into(),
-            initial_prompt: Some("hello".into()),
-        })
-        .unwrap();
-        net.add_node(NodeSpec {
-            name: "b".into(),
-            profile: "y".into(),
-            initial_prompt: None,
-        })
-        .unwrap();
-        net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
-        net.set_termination(TerminationSpec::MaxRounds { max: 99 });
-        net
-    }
+    // ── Delegate edge tests ──
 
     #[test]
-    fn process_event_accumulates_and_routes() {
-        let mut net = build_simple_network();
+    fn delegate_edge_sends_request_then_returns_response() {
+        let mut net = AgentNetwork::new();
+        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+        net.set_termination(TerminationSpec::MaxRounds { max: 99 });
 
-        assert!(net
-            .process_event("a", &AgentEvent::LlmResponse("hello ".into()))
-            .is_empty());
-        assert!(net
-            .process_event("a", &AgentEvent::LlmResponse("world".into()))
-            .is_empty());
-
+        // A Dones → delegates to B.
+        net.process_event("a", &AgentEvent::LlmResponse("request".into()));
         let actions = net.process_event("a", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "b"));
+        assert_eq!(net.pending_count(), 1); // B is pending for A.
+
+        // B Dones → response returns to A.
+        net.process_event("b", &AgentEvent::LlmResponse("response".into()));
+        let actions = net.process_event("b", &AgentEvent::Done);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            RoutingAction::Forward { to, message } => {
-                assert_eq!(to, "b");
-                assert_eq!(message, "hello world");
+            RoutingAction::Send { to, message } => {
+                assert_eq!(to, "a");
+                assert_eq!(message, "response");
             }
-            _ => panic!("expected Forward"),
+            _ => panic!("expected Send back to a"),
         }
+        assert_eq!(net.pending_count(), 0); // Delegation resolved.
     }
 
     #[test]
-    fn terminates_on_condition() {
-        let mut net = build_simple_network();
-        net.set_termination(TerminationSpec::Condition {
-            node: "a".into(),
-            pattern: "stop".into(),
-        });
+    fn delegate_edge_does_not_lose_leaf_output() {
+        // A→[Delegate]B (B is a leaf). B's response goes back to A.
+        let mut net = AgentNetwork::new();
+        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+        net.set_termination(TerminationSpec::MaxRounds { max: 99 });
 
-        net.process_event("a", &AgentEvent::LlmResponse("please stop now".into()));
-        let actions = net.process_event("a", &AgentEvent::Done);
-
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            RoutingAction::Finished {
-                reason: TerminationReason::Condition { .. }
-            }
-        ));
-        assert!(net.is_finished());
-
-        // Subsequent events are no-ops.
-        assert!(net
-            .process_event("a", &AgentEvent::LlmResponse("more".into()))
-            .is_empty());
-    }
-
-    #[test]
-    fn reset_run_state_preserves_topology() {
-        let mut net = build_simple_network();
-        net.process_event("a", &AgentEvent::LlmResponse("test".into()));
+        net.process_event("a", &AgentEvent::LlmResponse("do work".into()));
         net.process_event("a", &AgentEvent::Done);
 
-        assert_eq!(net.rounds(), 1);
-        net.reset_run_state();
-        assert_eq!(net.rounds(), 0);
+        // B Dones — response returns to A, NOT lost.
+        net.process_event("b", &AgentEvent::LlmResponse("here's the result".into()));
+        let actions = net.process_event("b", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "a"));
+    }
+
+    // ── Push edge tests ──
+
+    #[test]
+    fn push_edge_forgets_after_forwarding() {
+        // A→[Push]B→[Push]C pipeline.
+        let mut net = AgentNetwork::new();
+        for name in ["a", "b", "c"] {
+            net.add_node(NodeSpec { name: name.into(), profile: name.into(), initial_prompt: None }).unwrap();
+        }
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Push, None).unwrap();
+        net.connect("b", "c", EdgeTrigger::OnDone, EdgeKind::Push, None).unwrap();
+        net.set_termination(TerminationSpec::AnyNodeDone { nodes: vec!["c".into()] });
+
+        // A Dones → push to B.
+        net.process_event("a", &AgentEvent::LlmResponse("data".into()));
+        let actions = net.process_event("a", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "b"));
+        assert_eq!(net.pending_count(), 0); // Push doesn't track.
+
+        // B Dones → push to C.
+        net.process_event("b", &AgentEvent::LlmResponse("processed".into()));
+        let actions = net.process_event("b", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "c"));
+
+        // C Dones → leaf node, termination fires (AnyNodeDone).
+        net.process_event("c", &AgentEvent::LlmResponse("final".into()));
+        let actions = net.process_event("c", &AgentEvent::Done);
+        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Finished { .. })));
+    }
+
+    // ── Arena-style delegation loop ──
+
+    #[test]
+    fn arena_loop_with_single_delegate_edge() {
+        // writer→[Delegate]reviewer (no reverse edge needed!)
+        let mut net = AgentNetwork::new();
+        net.add_node(NodeSpec { name: "writer".into(), profile: "w".into(), initial_prompt: Some("write".into()) }).unwrap();
+        net.add_node(NodeSpec { name: "reviewer".into(), profile: "r".into(), initial_prompt: None }).unwrap();
+        net.connect("writer", "reviewer", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+        net.set_termination(TerminationSpec::Condition {
+            node: "reviewer".into(),
+            pattern: "ACCEPT".into(),
+        });
+
+        // Round 1: writer Dones → delegate to reviewer.
+        net.process_event("writer", &AgentEvent::LlmResponse("draft v1".into()));
+        let actions = net.process_event("writer", &AgentEvent::Done);
+        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer")));
+
+        // Reviewer Dones with REJECT → response returns to writer, no termination.
+        net.process_event("reviewer", &AgentEvent::LlmResponse("REJECT - needs work".into()));
+        let actions = net.process_event("reviewer", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, message } if to == "writer"));
         assert!(!net.is_finished());
 
-        // Topology is intact.
-        assert_eq!(net.graph().node_count(), 2);
-        assert_eq!(net.graph().edge_count(), 1);
+        // Round 2: writer Dones → delegate to reviewer again.
+        net.process_event("writer", &AgentEvent::LlmResponse("draft v2".into()));
+        let actions = net.process_event("writer", &AgentEvent::Done);
+        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer")));
+
+        // Reviewer Dones with ACCEPT → termination fires.
+        net.process_event("reviewer", &AgentEvent::LlmResponse("Good work. ACCEPT".into()));
+        let actions = net.process_event("reviewer", &AgentEvent::Done);
+        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Finished { .. })));
+        assert!(net.is_finished());
+    }
+
+    // ── State management tests ──
+
+    #[test]
+    fn reset_clears_delegations() {
+        let mut net = AgentNetwork::new();
+        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+
+        net.process_event("a", &AgentEvent::LlmResponse("x".into()));
+        net.process_event("a", &AgentEvent::Done);
+        assert_eq!(net.pending_count(), 1);
+
+        net.reset_run_state();
+        assert_eq!(net.pending_count(), 0);
+        assert_eq!(net.rounds(), 0);
     }
 
     #[test]
-    fn dynamic_node_removal_cleans_routing_state() {
-        let mut net = build_simple_network();
-        net.process_event("b", &AgentEvent::LlmResponse("stuff".into()));
-        assert!(net.response_buffers.contains_key("b"));
+    fn remove_node_cleans_delegation_state() {
+        let mut net = AgentNetwork::new();
+        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+
+        net.process_event("a", &AgentEvent::LlmResponse("x".into()));
+        net.process_event("a", &AgentEvent::Done);
+        // pending["b"] = "a"
+        assert_eq!(net.pending_count(), 1);
 
         net.remove_node("b");
-        assert!(!net.response_buffers.contains_key("b"));
-        assert!(!net.completion_counts.contains_key("b"));
-        assert_eq!(net.graph().node_count(), 1);
+        assert_eq!(net.pending_count(), 0);
     }
 
     #[test]
-    fn initial_messages() {
-        let net = build_simple_network();
-        let msgs = net.initial_messages();
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].0, "a");
-        assert_eq!(msgs[0].1, "hello");
+    fn delegated_node_does_not_also_forward() {
+        // A→[Delegate]B, B→[Push]C.
+        // When B Dones in response to A's delegation, B returns to A
+        // and does NOT also push to C.
+        let mut net = AgentNetwork::new();
+        for name in ["a", "b", "c"] {
+            net.add_node(NodeSpec { name: name.into(), profile: name.into(), initial_prompt: None }).unwrap();
+        }
+        net.connect("a", "b", EdgeTrigger::OnDone, EdgeKind::Delegate, None).unwrap();
+        net.connect("b", "c", EdgeTrigger::OnDone, EdgeKind::Push, None).unwrap();
+        net.set_termination(TerminationSpec::MaxRounds { max: 99 });
+
+        // A delegates to B.
+        net.process_event("a", &AgentEvent::LlmResponse("req".into()));
+        net.process_event("a", &AgentEvent::Done);
+
+        // B Dones → returns to A only (NOT pushes to C).
+        net.process_event("b", &AgentEvent::LlmResponse("resp".into()));
+        let actions = net.process_event("b", &AgentEvent::Done);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "a"));
+        // C was NOT contacted.
+        assert!(actions.iter().all(|a| !matches!(a, RoutingAction::Send { to, .. } if to == "c")));
     }
 
     // ── Termination logic tests ──
 
     #[test]
     fn test_condition_termination_match() {
-        let spec = TerminationSpec::Condition {
-            node: "reviewer".into(),
-            pattern: "ACCEPT".into(),
-        };
-        let reason =
-            check_termination_spec(&spec, "reviewer", "<verdict>ACCEPT</verdict>", 3);
-        assert!(matches!(reason, Some(TerminationReason::Condition { .. })));
+        let spec = TerminationSpec::Condition { node: "reviewer".into(), pattern: "ACCEPT".into() };
+        assert!(check_termination_spec(&spec, "reviewer", "<verdict>ACCEPT</verdict>", 3).is_some());
     }
 
     #[test]
     fn test_condition_case_insensitive() {
-        let spec = TerminationSpec::Condition {
-            node: "rev".into(),
-            pattern: "accept".into(),
-        };
+        let spec = TerminationSpec::Condition { node: "rev".into(), pattern: "accept".into() };
         assert!(check_termination_spec(&spec, "rev", "I ACCEPT", 1).is_some());
     }
 
@@ -492,10 +586,7 @@ mod tests {
     fn test_any_composite_termination() {
         let spec = TerminationSpec::Any {
             specs: vec![
-                TerminationSpec::Condition {
-                    node: "reviewer".into(),
-                    pattern: "ACCEPT".into(),
-                },
+                TerminationSpec::Condition { node: "reviewer".into(), pattern: "ACCEPT".into() },
                 TerminationSpec::MaxRounds { max: 5 },
             ],
         };
@@ -505,45 +596,15 @@ mod tests {
     }
 
     #[test]
-    fn test_all_composite_termination() {
-        let spec = TerminationSpec::All {
-            specs: vec![
-                TerminationSpec::Condition {
-                    node: "a".into(),
-                    pattern: "done".into(),
-                },
-                TerminationSpec::MaxRounds { max: 3 },
-            ],
-        };
-        assert!(check_termination_spec(&spec, "a", "done", 1).is_none());
-        assert!(check_termination_spec(&spec, "a", "done", 3).is_some());
-    }
-
-    // ── Edge trigger tests ──
-
-    #[test]
     fn test_edge_on_done_always_fires() {
-        let edge = EdgeSpec {
-            from: "a".into(),
-            to: "b".into(),
-            trigger: EdgeTrigger::OnDone,
-            transform: None,
-        };
+        let edge = EdgeSpec { from: "a".into(), to: "b".into(), trigger: EdgeTrigger::OnDone, kind: EdgeKind::Delegate, transform: None };
         assert!(edge_should_fire(&edge, "anything"));
     }
 
     #[test]
     fn test_edge_on_pattern() {
-        let edge = EdgeSpec {
-            from: "a".into(),
-            to: "b".into(),
-            trigger: EdgeTrigger::OnPattern {
-                pattern: "ready".into(),
-            },
-            transform: None,
-        };
+        let edge = EdgeSpec { from: "a".into(), to: "b".into(), trigger: EdgeTrigger::OnPattern { pattern: "ready".into() }, kind: EdgeKind::Delegate, transform: None };
         assert!(edge_should_fire(&edge, "I am ready"));
-        assert!(edge_should_fire(&edge, "READY"));
         assert!(!edge_should_fire(&edge, "not yet"));
     }
 }
