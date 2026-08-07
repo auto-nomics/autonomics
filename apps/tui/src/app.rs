@@ -486,6 +486,19 @@ impl App {
                     }
                 }
 
+                // ── Host commands from agent tools (event-driven) ──
+                // Wakes only when an agent tool sends a HostCommand
+                // (list_agents, route_task, delegate_to, etc.).
+                _ = async {
+                    if let Some(h) = self.host.as_mut() {
+                        h.recv_and_process_command().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    self.dirty = true;
+                }
+
                 // ── App internal events ──
                 maybe_app = self.app_event_rx.recv() => {
                     match maybe_app {
@@ -775,6 +788,12 @@ impl App {
     }
 
     fn handle_key(&mut self, key: &KeyEvent) {
+        // Delete-agent confirmation popup captures keys when visible.
+        if self.state.delete_agent_confirm {
+            self.handle_delete_confirm_key(key);
+            return;
+        }
+
         // Ctrl+P: toggle the command palette. Handled globally so it works
         // from any tab / input mode. When opening, takes precedence over all
         // other handlers; when closing, behaves identically to Esc.
@@ -1063,6 +1082,24 @@ impl App {
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
             KeyCode::Enter => {
                 if let Some(item) = self.state.agent_picker.selected_item() {
+                    // If this agent is already open in a leaf, just switch focus
+                    // instead of spawning a duplicate.
+                    if let Some(idx) = self
+                        .state
+                        .sessions
+                        .iter()
+                        .position(|s| s.agent_id == item.id)
+                    {
+                        tracing::info!(
+                            agent_id = %item.id,
+                            leaf_idx = idx,
+                            "agent already open — switching focus instead of restoring"
+                        );
+                        self.state.active_agent_idx = idx;
+                        self.state.agent_picker.close();
+                        return;
+                    }
+
                     let config_json = item.config_json.clone();
                     let agent_name = item.name.clone();
                     self.state.agent_picker.close();
@@ -1609,6 +1646,11 @@ impl App {
                     self.close_active_agent();
                 }
             }
+            CommandAction::DeleteAgent => {
+                if !self.state.sessions.is_empty() {
+                    self.state.delete_agent_confirm = true;
+                }
+            }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
             }
@@ -1636,6 +1678,45 @@ impl App {
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
             rusqlite::params![key, if value { "1" } else { "0" }],
         );
+    }
+
+    /// Key handling while the delete-agent confirmation popup is open.
+    ///
+    /// y or Enter confirms; n or Esc cancels.
+    fn handle_delete_confirm_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                self.state.delete_agent_confirm = false;
+                self.delete_active_agent();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.state.delete_agent_confirm = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Permanently delete the active agent: remove all stored data (sessions,
+    /// snapshots, WAL messages, agent record) AND close the leaf.
+    ///
+    /// This is destructive — unlike `close_active_agent`, the conversation
+    /// history cannot be resumed later.
+    fn delete_active_agent(&mut self) {
+        let idx = self.state.active_agent_idx;
+        let agent_id = self.state.sessions.get(idx).map(|s| s.agent_id);
+
+        let Some(agent_id) = agent_id else {
+            tracing::warn!("delete_active_agent: no active session");
+            return;
+        };
+
+        // Delete all stored data for this agent (async, fire-and-forget).
+        self.delete_agent_record(agent_id);
+
+        // Close the leaf: shutdown the background task + remove UI state.
+        self.close_active_agent();
+
+        tracing::info!(%agent_id, "agent permanently deleted");
     }
 
     /// Close the active agent leaf: terminate the background agent process
@@ -1670,6 +1751,73 @@ impl App {
         // If idx was active_agent_idx, the clamp above handles it.
 
         self.dirty = true;
+    }
+
+    /// Render the delete-agent confirmation popup.
+    fn render_delete_confirm_popup(&self, area: ratatui::layout::Rect, buf: &mut ratatui::prelude::Buffer) {
+        use ratatui::{
+            layout::{Alignment, Rect},
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Clear, Paragraph, Widget},
+        };
+
+        let agent_name = self
+            .state
+            .sessions
+            .get(self.state.active_agent_idx)
+            .map(|s| s.name.as_str())
+            .unwrap_or("(unknown)");
+
+        // Fixed-size centered popup.
+        let pw = 52u16.min(area.width);
+        let ph = 5u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(pw)) / 2;
+        let y = area.y + (area.height.saturating_sub(ph)) / 3;
+        let popup_area = Rect::new(x, y, pw, ph);
+
+        Clear.render(popup_area, buf);
+
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .title(Span::styled(
+                " ⚠ Delete Agent ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ))
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(" Permanently delete ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    agent_name.to_string(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("?", Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(Span::styled(
+                " All conversation history will be erased.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(" Press ", Style::default().fg(Color::Gray)),
+                Span::styled("y", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
+                Span::styled("n", Style::default().fg(Color::Green)),
+                Span::styled(" or ", Style::default().fg(Color::Gray)),
+                Span::styled("Esc", Style::default().fg(Color::Green)),
+                Span::styled(" to cancel", Style::default().fg(Color::Gray)),
+            ]),
+        ];
+
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .render(inner, buf);
     }
 
     /// Open the session picker for the currently active agent.
@@ -1798,6 +1946,11 @@ impl App {
                 frame.buffer_mut(),
                 &mut self.state.command_palette,
             );
+        }
+
+        // ── Delete-agent confirmation popup ──
+        if self.state.delete_agent_confirm {
+            self.render_delete_confirm_popup(frame.area(), frame.buffer_mut());
         }
 
         // ── Profile picker popup ──

@@ -494,8 +494,17 @@ impl RuntimeHost {
     /// Drain and execute all pending commands from agent tools.
     /// Call this in the event loop (e.g. at each render tick).
     pub fn try_process_commands(&mut self) {
-        use crate::control::HostCommand;
         while let Ok(cmd) = self.cmd_rx.try_recv() {
+            self.process_command(cmd);
+        }
+    }
+
+    /// Await the next command from agent tools, then process it.
+    /// Event-driven — only wakes when a command arrives. Use as a
+    /// `select!` branch in the event loop instead of polling
+    /// [`try_process_commands`](Self::try_process_commands).
+    pub async fn recv_and_process_command(&mut self) {
+        if let Some(cmd) = self.cmd_rx.recv().await {
             self.process_command(cmd);
         }
     }

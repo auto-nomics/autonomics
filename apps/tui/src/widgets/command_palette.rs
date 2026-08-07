@@ -28,6 +28,8 @@ pub enum CommandAction {
     ResumeAgent,
     /// Close the active agent leaf and terminate its background process.
     CloseAgent,
+    /// Delete the active agent permanently (removes all stored data).
+    DeleteAgent,
     /// Open the session picker for the currently active agent.
     OpenSessions,
     /// Toggle collapse for thinking blocks.
@@ -138,6 +140,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "close kill terminate shutdown tab leaf".into(),
             category: "agent".into(),
             action: CommandAction::CloseAgent,
+        },
+        Command {
+            title: "Delete agent".into(),
+            keywords: "delete remove destroy purge storage permanent erase".into(),
+            category: "agent".into(),
+            action: CommandAction::DeleteAgent,
         },
         Command {
             title: "Select model".into(),

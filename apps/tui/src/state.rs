@@ -764,6 +764,9 @@ pub struct AppState {
     /// Global display preferences (collapse thinking/tool blocks).
     pub display_settings: DisplaySettings,
     pub active_model: Arc<ArcSwapOption<Model>>,
+    /// When `true`, the delete-active-agent confirmation popup is shown.
+    /// The user must press 'y' or Enter to confirm, 'n' or Esc to cancel.
+    pub delete_agent_confirm: bool,
 }
 
 impl Default for AppState {
@@ -786,6 +789,7 @@ impl Default for AppState {
             model_config_visible: false,
             display_settings: DisplaySettings::default(),
             active_model: Arc::new(ArcSwapOption::default()),
+            delete_agent_confirm: false,
         }
     }
 }
