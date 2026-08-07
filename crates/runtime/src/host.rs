@@ -575,6 +575,15 @@ impl RuntimeHost {
                 message,
                 reply_tx,
             } => {
+                // Validate target agent exists.
+                if !self.agents.contains_key(&to) {
+                    let _ = reply_tx.send(format!(
+                        "Error: agent '{to}' is not registered. \
+                         Use list_agents to see available agents, \
+                         or spawn_agent to create one first."
+                    ));
+                    return;
+                }
                 // Record the reply channel — when `to` Dones, its response
                 // is sent through reply_tx (handled in step()).
                 self.tool_delegations.insert(to.clone(), reply_tx);
