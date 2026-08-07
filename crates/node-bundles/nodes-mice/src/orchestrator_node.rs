@@ -317,9 +317,53 @@ impl DagNode for MiceOrchestratorNode {
             data.insert(field.name().clone(), vals);
         }
 
+        // Build method vector aligned to column_order: "" for columns not
+        // in impute_columns (so they're never imputed), the specified or
+        // default method for impute columns. This mirrors the codegen_r
+        // path, which builds the same ""-padded method vector for R's
+        // mice().
+        let method_vec: Vec<String> = col_order.iter().map(|col| {
+            if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
+                self.spec.methods.as_ref()
+                    .and_then(|m| m.get(idx).cloned())
+                    .unwrap_or_else(|| {
+                        // Infer default from data type (same logic as
+                        // mice::orchestrator::default_method_for).
+                        let mut levels: Vec<f64> = data[col].iter()
+                            .copied()
+                            .filter(|v| !v.is_nan())
+                            .collect();
+                        levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        levels.dedup();
+                        if levels.len() <= 2 { "logreg".to_string() } else { "pmm".to_string() }
+                    })
+            } else {
+                String::new() // "" → skip imputation for this column
+            }
+        }).collect();
+
+        // Build predictor matrix aligned to column_order. Non-impute
+        // columns get an empty predictor list (they're never targets).
+        let pred_matrix: Vec<Vec<String>> = match &self.spec.predictor_matrix {
+            Some(pm) => col_order.iter().map(|col| {
+                if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
+                    pm.get(idx).cloned().unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }).collect(),
+            None => col_order.iter().map(|col| {
+                if self.spec.impute_columns.iter().any(|c| c == col) {
+                    col_order.iter().filter(|c| *c != col).cloned().collect()
+                } else {
+                    Vec::new()
+                }
+            }).collect(),
+        };
+
         let config = mice::orchestrator::MiceConfig {
-            predictor_matrix: self.spec.predictor_matrix.clone(),
-            method: self.spec.methods.clone(),
+            predictor_matrix: Some(pred_matrix),
+            method: Some(method_vec),
             m: self.spec.m,
             maxit: self.spec.maxit,
             seed: self.spec.seed,
