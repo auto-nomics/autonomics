@@ -118,6 +118,51 @@ impl HostControl {
         self.fire(HostCommand::InjectPrompts);
     }
 
+    // ── Session management ──
+
+    pub fn cancel_agent(&self, name: &str) {
+        self.fire(HostCommand::CancelAgent { name: name.into() });
+    }
+
+    pub fn list_sessions(&self, name: &str) {
+        self.fire(HostCommand::ListSessions { name: name.into() });
+    }
+
+    pub fn create_session(
+        &self,
+        name: &str,
+        title: Option<String>,
+        fork_from: Option<uuid::Uuid>,
+    ) {
+        self.fire(HostCommand::CreateSession {
+            name: name.into(),
+            title,
+            fork_from,
+        });
+    }
+
+    pub fn switch_session(&self, name: &str, session_id: uuid::Uuid) {
+        self.fire(HostCommand::SwitchSession {
+            name: name.into(),
+            session_id,
+        });
+    }
+
+    pub fn close_session(&self, name: &str, session_id: uuid::Uuid) {
+        self.fire(HostCommand::CloseSession {
+            name: name.into(),
+            session_id,
+        });
+    }
+
+    pub fn rename_session(&self, name: &str, session_id: uuid::Uuid, title: String) {
+        self.fire(HostCommand::RenameSession {
+            name: name.into(),
+            session_id,
+            title,
+        });
+    }
+
     pub async fn spawn_agent(
         &self,
         name: &str,
@@ -225,6 +270,34 @@ pub enum HostCommand {
     GetAgentInfo {
         name: String,
         reply_tx: oneshot::Sender<Option<AgentInfo>>,
+    },
+
+    // ── Session management ──
+
+    /// Cancel the current turn of a named agent.
+    CancelAgent { name: String },
+
+    /// Request session list from a named agent.
+    ListSessions { name: String },
+
+    /// Create a new session in a named agent.
+    CreateSession {
+        name: String,
+        title: Option<String>,
+        fork_from: Option<uuid::Uuid>,
+    },
+
+    /// Switch the active session of a named agent.
+    SwitchSession { name: String, session_id: uuid::Uuid },
+
+    /// Close a session in a named agent.
+    CloseSession { name: String, session_id: uuid::Uuid },
+
+    /// Rename a session in a named agent.
+    RenameSession {
+        name: String,
+        session_id: uuid::Uuid,
+        title: String,
     },
 }
 

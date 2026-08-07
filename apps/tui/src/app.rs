@@ -422,6 +422,10 @@ impl App {
                 break Ok(());
             }
 
+            // Pre-extract host to avoid multiple `&mut self.host` borrows
+            // in the select! branches below.
+            let host_ptr = self.host.as_mut().map(|h| h as *mut RuntimeHost);
+
             tokio::select! {
                 biased;
 
@@ -452,17 +456,35 @@ impl App {
                     }
                 }
 
-                // ── Agent streaming events (poll active handle) ──
+                // ── Agent streaming events (host-managed) ──
+                // Consume events from RuntimeHost's multiplexed channel.
+                // This covers ALL agents — both TUI-spawned (registered
+                // via host) and tool-spawned. Events are routed to the
+                // session tab matching the agent name.
                 maybe_agent = async {
-                    if let Some(handle) = self.handles.get_mut(self.state.active_agent_idx) {
-                        handle.recv_event().await
+                    if let Some(p) = host_ptr {
+                        unsafe { (*p).recv_any().await }
+                    } else if let Some(handle) =
+                        self.handles.get_mut(self.state.active_agent_idx)
+                    {
+                        // Fallback when no host is available — wrap as tagged.
+                        handle.recv_event().await.map(|e| (String::new(), e))
                     } else {
-                        // No active session — park forever.
-                        std::future::pending::<Option<AgentEvent>>().await
+                        std::future::pending::<Option<runtime::TaggedEvent>>().await
                     }
                 } => {
-                    if let Some(event) = maybe_agent {
-                        let _idx = self.state.active_agent_idx;
+                    if let Some((agent_name, event)) = maybe_agent {
+                        // Route event to the matching session tab by name.
+                        let target_idx = if !agent_name.is_empty() {
+                            self.state
+                                .sessions
+                                .iter()
+                                .position(|s| s.name == agent_name)
+                                .unwrap_or(self.state.active_agent_idx)
+                        } else {
+                            self.state.active_agent_idx
+                        };
+
                         let is_session_list = matches!(event, AgentEvent::SessionList { .. });
                         if matches!(
                             event,
@@ -473,10 +495,22 @@ impl App {
                         ) {
                             state::apply_session_event(&mut self.state, event);
                         } else {
-                            state::apply_event(
-                                self.state.active_tab_state_mut(),
-                                event,
-                            );
+                            // Route to the correct tab's tab_state.
+                            let _ = target_idx;
+                            let tab_state = self
+                                .state
+                                .sessions
+                                .get_mut(target_idx)
+                                .map(|s| {
+                                    if s.active_sub_session_idx < s.sub_sessions.len() {
+                                        &mut s.sub_sessions[s.active_sub_session_idx].tab_state
+                                    } else {
+                                        &mut s.pending_tab_state
+                                    }
+                                });
+                            if let Some(ts) = tab_state {
+                                state::apply_event(ts, event);
+                            }
                         }
 
                         // After SessionList arrives, spawn background history
@@ -496,13 +530,30 @@ impl App {
                 // Wakes only when an agent tool sends a HostCommand
                 // (list_agents, route_task, delegate_to, etc.).
                 _ = async {
-                    if let Some(h) = self.host.as_mut() {
-                        h.recv_and_process_command().await;
+                    if let Some(p) = host_ptr {
+                        unsafe { (*p).recv_and_process_command().await; }
                     } else {
                         std::future::pending::<()>().await;
                     }
                 } => {
                     self.dirty = true;
+                }
+
+                // ── Host lifecycle events (agent registered / unregistered) ──
+                // Wakes when a new agent is registered with the host (e.g. by
+                // the spawn_agent tool) or shut down. Keeps the TUI's session
+                // list in sync with RuntimeHost's agent registry.
+                host_event = async {
+                    if let Some(p) = host_ptr {
+                        unsafe { (*p).recv_event().await }
+                    } else {
+                        std::future::pending::<Option<runtime::HostEvent>>().await
+                    }
+                } => {
+                    if let Some(ev) = host_event {
+                        self.apply_host_event(ev);
+                        self.dirty = true;
+                    }
                 }
 
                 // ── App internal events ──
@@ -584,6 +635,50 @@ impl App {
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                 }
             },
+        }
+    }
+
+    /// Apply a [`runtime::HostEvent`] (agent registered/unregistered) by
+    /// keeping the TUI's session list in sync with RuntimeHost's agent
+    /// registry. This is the key bridge that makes tool-spawned agents
+    /// visible in the TUI.
+    fn apply_host_event(&mut self, event: runtime::HostEvent) {
+        match event {
+            runtime::HostEvent::AgentRegistered { name, .. } => {
+                // Check if the TUI already knows about this agent.
+                if self.state.sessions.iter().any(|s| s.name == name) {
+                    return;
+                }
+                // Add a new session tab for the tool-spawned agent.
+                let agent_id = uuid::Uuid::new_v4(); // placeholder; real id comes from SessionList events
+                self.state.sessions.push(state::AgentSession {
+                    name: name.clone(),
+                    agent_id,
+                    sub_sessions: Vec::new(),
+                    active_sub_session_idx: 0,
+                    pending_tab_state: Default::default(),
+                });
+                self.state.active_agent_idx = self.state.sessions.len() - 1;
+
+                // Ask the host for the agent's session list. The response
+                // arrives as `AgentEvent::SessionList` through the host's
+                // event channel and is routed to this session's tab.
+                if let Some(host) = self.host.as_ref() {
+                    host.control().list_sessions(&name);
+                }
+                tracing::info!(agent = %name, "host-spawned agent registered to TUI");
+            }
+            runtime::HostEvent::AgentUnregistered { name } => {
+                self.state.sessions.retain(|s| s.name != name);
+                if self.state.active_agent_idx >= self.state.sessions.len() {
+                    self.state.active_agent_idx = self
+                        .state
+                        .sessions
+                        .len()
+                        .saturating_sub(1);
+                }
+                tracing::info!(agent = %name, "host agent unregistered from TUI");
+            }
         }
     }
 

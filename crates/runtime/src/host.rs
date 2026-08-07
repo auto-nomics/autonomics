@@ -459,6 +459,24 @@ pub struct RuntimeHost {
     )>,
     registration_tx:
         tokio::sync::mpsc::UnboundedSender<(AgentHandle, crate::control::AgentInfo)>,
+    /// Notification channel — fires when an agent is registered or
+    /// shut down. The TUI subscribes to this to keep its session list
+    /// in sync with RuntimeHost's agent registry.
+    notify_tx: tokio::sync::mpsc::UnboundedSender<HostEvent>,
+    notify_rx: tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
+}
+
+/// Lifecycle events emitted by RuntimeHost. The TUI subscribes to keep
+/// its session tabs in sync with backend agent state.
+#[derive(Debug, Clone)]
+pub enum HostEvent {
+    /// An agent was just registered with the host's relay.
+    AgentRegistered {
+        name: String,
+        info: crate::control::AgentInfo,
+    },
+    /// An agent was shut down and removed from the registry.
+    AgentUnregistered { name: String },
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -468,6 +486,12 @@ pub type TaggedEvent = (String, AgentEvent);
 enum AgentCommand {
     Message(String),
     Shutdown,
+    Cancel,
+    ListSessions,
+    CreateSession { title: Option<String>, fork_from: Option<uuid::Uuid> },
+    SwitchSession(uuid::Uuid),
+    CloseSession(uuid::Uuid),
+    RenameSession { id: uuid::Uuid, title: String },
 }
 
 /// Internal entry for one registered agent.
@@ -485,6 +509,7 @@ impl RuntimeHost {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (registration_tx, registration_rx) = mpsc::unbounded_channel();
+        let (notify_tx, notify_rx) = mpsc::unbounded_channel();
         let control = crate::control::HostControl::new(cmd_tx);
         infra.host_control = Some(control.clone());
         Ok(Self {
@@ -500,6 +525,8 @@ impl RuntimeHost {
             model: None,
             registration_rx,
             registration_tx,
+            notify_tx,
+            notify_rx,
         })
     }
 
@@ -543,7 +570,12 @@ impl RuntimeHost {
             reg = self.registration_rx.recv() => {
                 if let Some((handle, info)) = reg {
                     let name = handle.name.clone();
+                    let info_clone = info.clone();
                     self.register_agent(handle, info);
+                    let _ = self.notify_tx.send(HostEvent::AgentRegistered {
+                        name: name.clone(),
+                        info: info_clone,
+                    });
                     tracing::info!(agent = %name, "background spawn completed and registered");
                 }
             }
@@ -695,7 +727,61 @@ impl RuntimeHost {
                     });
                 let _ = reply_tx.send(info);
             }
+
+            // ── Session management (forwarded to relay) ──
+            HostCommand::CancelAgent { name } => {
+                self.send_agent_command(&name, AgentCommand::Cancel);
+            }
+            HostCommand::ListSessions { name } => {
+                self.send_agent_command(&name, AgentCommand::ListSessions);
+            }
+            HostCommand::CreateSession {
+                name,
+                title,
+                fork_from,
+            } => {
+                self.send_agent_command(
+                    &name,
+                    AgentCommand::CreateSession { title, fork_from },
+                );
+            }
+            HostCommand::SwitchSession { name, session_id } => {
+                self.send_agent_command(&name, AgentCommand::SwitchSession(session_id));
+            }
+            HostCommand::CloseSession { name, session_id } => {
+                self.send_agent_command(&name, AgentCommand::CloseSession(session_id));
+            }
+            HostCommand::RenameSession {
+                name,
+                session_id,
+                title,
+            } => {
+                self.send_agent_command(
+                    &name,
+                    AgentCommand::RenameSession {
+                        id: session_id,
+                        title,
+                    },
+                );
+            }
         }
+    }
+
+    /// Forward a command to a named agent's relay task.
+    fn send_agent_command(&self, name: &str, cmd: AgentCommand) {
+        if let Some(entry) = self.agents.get(name) {
+            let _ = entry.cmd_tx.send(cmd);
+        } else {
+            tracing::warn!(agent = %name, "send_agent_command: agent not registered");
+        }
+    }
+
+    /// Notify listeners that an agent has been shut down.
+    /// Called from `shutdown_agent` / `shutdown_all_agents`.
+    fn notify_unregistered(&self, name: &str) {
+        let _ = self.notify_tx.send(HostEvent::AgentUnregistered {
+            name: name.to_string(),
+        });
     }
 
     /// Route a task description to the best-matching agent.
@@ -921,18 +1007,33 @@ impl RuntimeHost {
         if let Some(entry) = self.agents.remove(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
+        self.notify_unregistered(name);
     }
 
     /// Shut down all registered agents.
     pub fn shutdown_all_agents(&mut self) {
+        let names: Vec<String> = self.agents.keys().cloned().collect();
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+        }
+        for name in names {
+            self.notify_unregistered(&name);
         }
     }
 
     /// Receive the next event from any registered agent.
     pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
         self.event_rx.recv().await
+    }
+
+    /// Receive the next host lifecycle event (agent registered / unregistered).
+    pub async fn recv_event(&mut self) -> Option<HostEvent> {
+        self.notify_rx.recv().await
+    }
+
+    /// Try to receive a host lifecycle event without blocking.
+    pub fn try_recv_event(&mut self) -> Option<HostEvent> {
+        self.notify_rx.try_recv().ok()
     }
 
     /// Try to receive an event without blocking.
@@ -1101,6 +1202,24 @@ async fn relay_loop(
             cmd = cmd_rx.recv() => match cmd {
                 Some(AgentCommand::Message(text)) => {
                     handle.send_message(text);
+                }
+                Some(AgentCommand::Cancel) => {
+                    handle.cancel();
+                }
+                Some(AgentCommand::ListSessions) => {
+                    handle.list_sessions();
+                }
+                Some(AgentCommand::CreateSession { title, fork_from }) => {
+                    let _ = handle.create_session(title, fork_from);
+                }
+                Some(AgentCommand::SwitchSession(id)) => {
+                    handle.switch_session(id);
+                }
+                Some(AgentCommand::CloseSession(id)) => {
+                    handle.close_session(id);
+                }
+                Some(AgentCommand::RenameSession { id, title }) => {
+                    handle.rename_session(id, title);
                 }
                 Some(AgentCommand::Shutdown) | None => {
                     handle.shutdown();
