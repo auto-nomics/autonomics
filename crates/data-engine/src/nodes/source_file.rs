@@ -283,6 +283,13 @@ impl DagNode for FileSourceNode {
             .or_else(|| FileFormat::from_path(&path))
             .ok_or_else(|| FileSourceError::UnknownFormat(path.clone()))?;
         let df = read_file(&ctx, &path, fmt).await?;
+
+        // Promote Float32 columns to Float64 — same rationale as
+        // IcebergSourceNode: Parquet files may store Float32, and downstream
+        // SQL JOINs/UNIONs with Float64 data trigger DataFusion type-coercion
+        // failures during `collect()`.
+        let df = super::source_iceberg::promote_floats(df)?;
+
         let mut res: PortOutputs = HashMap::new();
         res.insert(0, df);
         Ok(res)
