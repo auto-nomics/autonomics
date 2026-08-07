@@ -25,6 +25,11 @@ pub fn r_vec(items: &[String]) -> String {
         .join(", ")
 }
 
+/// Build an R character vector literal: `["a", "b"]` → `c("a", "b")`.
+pub fn vec_to_r_str(items: &[String]) -> String {
+    format!("c({})", r_vec(items))
+}
+
 /// Build an R numeric vector: `[1.0, 2.5]` → `1, 2.5`.
 pub fn r_vec_f64(items: &[f64]) -> String {
     items

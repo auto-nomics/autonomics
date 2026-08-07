@@ -2568,6 +2568,7 @@ dependencies = [
  "nodes-io",
  "nodes-lcmm",
  "nodes-ldsc",
+ "nodes-mice",
  "nodes-ml",
  "nodes-mr",
  "nodes-opengwas",
@@ -6665,6 +6666,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mice"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rand 0.8.7",
+ "rand_distr 0.4.3",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "miette"
 version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7277,6 +7290,27 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "nodes-mice"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "mice",
+ "rand 0.8.7",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

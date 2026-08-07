@@ -23,6 +23,7 @@ members = [
   "crates/node-bundles/nodes-survey",
   "crates/node-bundles/nodes-ldsc",
   "crates/node-bundles/nodes-genetics",
+  "crates/node-bundles/nodes-mice",
   "apps/tui",
   "crates/opengwas",
   "crates/eutils",
@@ -72,6 +73,7 @@ members = [
   "crates/kms-tools",
   "crates/agentik-network",
   "stat_crates/ml",
+  "stat_crates/mice",
   "bio_crates/lcmm",
 ]
 resolver = "3"

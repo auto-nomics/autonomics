@@ -1,0 +1,24 @@
+[package]
+name = "mice"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Multivariate Imputation by Chained Equations (MICE) — pure-Rust port of R's mice package."
+
+[lib]
+name = "mice"
+path = "src/lib.rs"
+
+[dependencies]
+faer.workspace = true
+statrs = "0.18"
+thiserror.workspace = true
+rand = "0.8"
+rand_distr = "0.4"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

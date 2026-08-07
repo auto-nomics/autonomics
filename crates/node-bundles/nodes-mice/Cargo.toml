@@ -1,0 +1,29 @@
+[package]
+name = "nodes-mice"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "MICE DAG node bundle (mice.* nodes) — multivariate imputation by chained equations."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+mice = { path = "../../../stat_crates/mice" }
+datalake = { path = "../../datalake" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow.workspace = true
+arrow-select.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+rand = "0.8"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }

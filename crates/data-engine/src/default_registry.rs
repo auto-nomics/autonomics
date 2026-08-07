@@ -42,6 +42,10 @@ pub fn build_default_registry(
     #[cfg(feature = "bundle-genetics")]
     registry.register_plugin(&nodes_genetics::Plugin);
 
+    // ── MICE bundle ──────────────────────────────────────────────────
+    #[cfg(feature = "bundle-mice")]
+    registry.register_plugin(&nodes_mice::Plugin);
+
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
     registry.register_plugin(&nodes_io::Plugin);
