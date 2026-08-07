@@ -415,10 +415,14 @@ impl DagNode for MiceOrchestratorNode {
             fields.push(Field::new(c, DataType::Float64, false));
         }
         let mut val_buf = vec![0.0_f64; total];
-        // Reshape completed.rows (row-major, total × ncols) into per-column arrays.
+        // Reshape completed.rows (row-major, total × full_ncols) into
+        // per-column arrays.  completed.rows includes the .imp and .id
+        // columns, so the stride is full_ncols (= ncols + 2), and data
+        // columns start at offset 2.
+        let full_ncols = completed.columns.len();
         for j in 0..ncols {
             for r in 0..total {
-                val_buf[r] = completed.rows[r * ncols + j];
+                val_buf[r] = completed.rows[r * full_ncols + j + 2];
             }
             columns.push(Arc::new(Float64Array::from(val_buf.clone())));
         }
