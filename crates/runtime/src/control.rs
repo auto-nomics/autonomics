@@ -231,8 +231,10 @@ pub enum HostCommand {
 /// Read-only snapshot of host + topology state, returned by GetStatus.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStatus {
-    /// All registered agents with their capabilities.
+    /// All registered (running) agents with their capabilities.
     pub agents: Vec<AgentInfo>,
+    /// Available profiles (blueprints that can be spawned).
+    pub profiles: Vec<AgentInfo>,
     /// All topology node names.
     pub nodes: Vec<String>,
     /// Total edge count.

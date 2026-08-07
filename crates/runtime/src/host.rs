@@ -445,6 +445,9 @@ pub struct RuntimeHost {
     /// Pending tool-delegation reply channels: maps delegatee name → reply.
     /// When the delegatee Dones, its response is sent through the channel.
     tool_delegations: HashMap<String, tokio::sync::oneshot::Sender<String>>,
+    /// Cached profiles (blueprints) loaded at startup. Used by GetStatus
+    /// and route_task so agents can discover what they can spawn.
+    profiles: Vec<agentik_core::AgentProfile>,
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -481,6 +484,7 @@ impl RuntimeHost {
             cmd_rx,
             control,
             tool_delegations: HashMap::new(),
+            profiles: Vec::new(),
         })
     }
 
@@ -489,6 +493,13 @@ impl RuntimeHost {
     /// and query system status.
     pub fn control(&self) -> crate::control::HostControl {
         self.control.clone()
+    }
+
+    /// Set cached profiles (blueprints). Called by the TUI after loading
+    /// profiles from storage at startup. Enables agents to discover
+    /// what profiles they can spawn via `list_agents` / `route_task`.
+    pub fn set_profiles(&mut self, profiles: Vec<agentik_core::AgentProfile>) {
+        self.profiles = profiles;
     }
 
     /// Drain and execute all pending commands from agent tools.
@@ -577,6 +588,11 @@ impl RuntimeHost {
                         .values()
                         .map(|e| e.info.clone())
                         .collect(),
+                    profiles: self
+                        .profiles
+                        .iter()
+                        .map(|p| capability_from_profile(&p.name, p))
+                        .collect(),
                     nodes: g.node_names().into_iter().map(String::from).collect(),
                     edge_count: g.edge_count(),
                     is_cyclic: g.is_cyclic(),
@@ -605,14 +621,26 @@ impl RuntimeHost {
                 let _ = reply_tx.send(result);
             }
             HostCommand::GetAgentInfo { name, reply_tx } => {
-                let info = self.agents.get(&name).map(|e| e.info.clone());
+                // Check running agents first, then fall back to profiles.
+                let info = self
+                    .agents
+                    .get(&name)
+                    .map(|e| e.info.clone())
+                    .or_else(|| {
+                        self.profiles
+                            .iter()
+                            .find(|p| p.name == name)
+                            .map(|p| capability_from_profile(&p.name, p))
+                    });
                 let _ = reply_tx.send(info);
             }
         }
     }
 
     /// Route a task description to the best-matching agent.
-    /// Uses tag matching + keyword overlap.
+    /// Considers both running agents and available profiles (blueprints).
+    /// Running agents get a small bonus score since they're immediately
+    /// available for delegation.
     fn route_task(&self, description: &str) -> crate::control::RouteResult {
         let desc_lower = description.to_lowercase();
         let desc_words: std::collections::HashSet<&str> = desc_lower
@@ -620,43 +648,55 @@ impl RuntimeHost {
             .filter(|w| w.len() > 2)
             .collect();
 
+        let score_info = |info: &crate::control::AgentInfo, is_running: bool| {
+            let matched_tags: Vec<String> = info
+                .tags
+                .iter()
+                .filter(|tag| desc_lower.contains(tag.as_str()))
+                .cloned()
+                .collect();
+
+            let tag_score = matched_tags.len() as f64 * 3.0;
+
+            let info_text = format!(
+                "{} {}",
+                info.summary.to_lowercase(),
+                info.expertise.join(" ").to_lowercase()
+            );
+            let info_words: std::collections::HashSet<&str> = info_text
+                .split_whitespace()
+                .filter(|w| w.len() > 2)
+                .collect();
+
+            let word_overlap = desc_words.intersection(&info_words).count() as f64;
+            let running_bonus = if is_running { 0.5 } else { 0.0 };
+            let score = tag_score + word_overlap + running_bonus;
+
+            crate::control::RouteCandidate {
+                agent: info.name.clone(),
+                score,
+                matched_tags,
+            }
+        };
+
+        // Score running agents.
         let mut candidates: Vec<crate::control::RouteCandidate> = self
             .agents
-            .iter()
-            .map(|(name, entry)| {
-                let matched_tags: Vec<String> = entry
-                    .info
-                    .tags
-                    .iter()
-                    .filter(|tag| desc_lower.contains(tag.as_str()))
-                    .cloned()
-                    .collect();
-
-                // Score: tag matches (weight 3) + keyword overlap with
-                // summary/expertise (weight 1 per match).
-                let tag_score = matched_tags.len() as f64 * 3.0;
-
-                let info_text = format!(
-                    "{} {}",
-                    entry.info.summary.to_lowercase(),
-                    entry.info.expertise.join(" ").to_lowercase()
-                );
-                let info_words: std::collections::HashSet<&str> = info_text
-                    .split_whitespace()
-                    .filter(|w| w.len() > 2)
-                    .collect();
-
-                let word_overlap = desc_words.intersection(&info_words).count() as f64;
-                let score = tag_score + word_overlap;
-
-                crate::control::RouteCandidate {
-                    agent: name.clone(),
-                    score,
-                    matched_tags,
-                }
-            })
-            .filter(|c| c.score > 0.0)
+            .values()
+            .map(|e| score_info(&e.info, true))
             .collect();
+
+        // Score profiles (excluding those already running under the same name).
+        let running_names: std::collections::HashSet<&str> =
+            self.agents.keys().map(|s| s.as_str()).collect();
+        candidates.extend(
+            self.profiles
+                .iter()
+                .filter(|p| !running_names.contains(p.name.as_str()))
+                .map(|p| score_info(&capability_from_profile(&p.name, p), false)),
+        );
+
+        let mut candidates: Vec<_> = candidates.into_iter().filter(|c| c.score > 0.0).collect();
 
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 

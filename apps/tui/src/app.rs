@@ -92,7 +92,7 @@ impl App {
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let config = runtime::RuntimeConfig::default();
-        let (host, profiles) = runtime.block_on(async {
+        let (mut host, profiles) = runtime.block_on(async {
             // Open storage directly for profile seeding/loading (the host
             // also opens it, but we need AgentProfileRegistry trait methods
             // which aren't on the AgentStorage trait object).
@@ -140,9 +140,14 @@ impl App {
 
         let mut state = AppState {
             active_model: model,
-            profiles,
+            profiles: profiles.clone(),
             ..Default::default()
         };
+
+        // Share profiles with RuntimeHost for capability discovery.
+        if let Some(ref mut host) = host {
+            host.set_profiles(profiles);
+        }
 
         Self::load_model_config(&conn, &mut state.model_config_state);
 
