@@ -190,6 +190,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let title: String = match ts.status {
             AgentStatus::Requesting => format!("{spinner} thinking…"),
             AgentStatus::Streaming => format!("{spinner} responding…"),
+            AgentStatus::Retrying => format!("{spinner} retrying…"),
             AgentStatus::Error => "error".to_string(),
             AgentStatus::Idle => match ts.input_mode {
                 InputMode::Browse => "browse".to_string(),

@@ -94,6 +94,23 @@ pub enum RuntimeStatus {
     Skipped,
 }
 
+/// Per-node dirty-mark state for incremental execution.
+///
+/// A node is `Dirty` when its spec, payload, wiring, or an upstream output has
+/// changed since its last successful run. An incremental `run` (see
+/// [`super::SchedulerConfig::incremental`]) skips `Clean` nodes and reuses
+/// their cached outputs instead of re-executing them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirtyState {
+    /// Output is cached and up-to-date. An incremental run skips this node.
+    #[default]
+    Clean,
+    /// Needs re-execution. Set by mutations and propagated to all transitive
+    /// descendants.
+    Dirty,
+}
+
 /// Scheduler tuning knobs.
 #[derive(Clone)]
 pub struct SchedulerConfig {
@@ -110,6 +127,16 @@ pub struct SchedulerConfig {
     /// schema without doing the I/O. Enable explicitly when downstream tooling
     /// (agents, dashboards, callers) needs row counts.
     pub compute_row_counts: bool,
+    /// When `true`, `run` only re-executes nodes marked [`DirtyState::Dirty`]
+    /// and skips `Clean` nodes whose cached outputs are retained from a
+    /// previous successful run. When `false` (default), every node is
+    /// re-executed unconditionally (current behavior).
+    ///
+    /// Mutations (`replace_node`, `add_edge`, `delete_edge`, …) automatically
+    /// mark affected nodes and their transitive descendants dirty. Callers can
+    /// also manually mark nodes dirty via [`crate::dag::DAG::mark_dirty`] —
+    /// useful when an external input (file, Iceberg table) has changed.
+    pub incremental: bool,
 }
 
 impl Default for SchedulerConfig {
@@ -120,6 +147,7 @@ impl Default for SchedulerConfig {
         Self {
             max_concurrency: cpus,
             compute_row_counts: false,
+            incremental: false,
         }
     }
 }

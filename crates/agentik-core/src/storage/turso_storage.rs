@@ -629,6 +629,32 @@ impl AgentStorage for TursoAgentStorage {
         Ok(())
     }
 
+    async fn delete_session(&self, session_id: Uuid) -> Result<(), StorageError> {
+        let sid = session_id.to_string();
+        // Delete messages belonging to this session.
+        self.conn
+            .execute(
+                "DELETE FROM messages WHERE session_id = ?1",
+                params_from_iter([Value::Text(sid.clone())]),
+            )
+            .await?;
+        // Delete snapshots belonging to this session.
+        self.conn
+            .execute(
+                "DELETE FROM snapshots WHERE session_id = ?1",
+                params_from_iter([Value::Text(sid.clone())]),
+            )
+            .await?;
+        // Delete the session row itself.
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE id = ?1",
+                params_from_iter([Value::Text(sid)]),
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn get_messages_since(
         &self,
         agent_id: Uuid,
@@ -688,7 +714,7 @@ impl AgentStorage for TursoAgentStorage {
             .conn
             .query(
                 "SELECT id, title, started_at FROM sessions
-                 WHERE agent_id = ?1
+                 WHERE agent_id = ?1 AND ended_at IS NULL
                  ORDER BY started_at ASC",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -1209,6 +1235,87 @@ mod tests {
 
         let msgs = store.get_messages_since(agent_id, watermark).await.unwrap();
         assert_eq!(msgs.len(), 1, "only messages after watermark should be returned");
+    }
+
+    #[tokio::test]
+    async fn test_list_session_records_excludes_ended() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let s1 = Uuid::new_v4();
+        let s2 = Uuid::new_v4();
+        let s3 = Uuid::new_v4();
+
+        // s1: active (no end)
+        store.start_session(agent_id, s1).await.unwrap();
+        // s2: ended
+        store.start_session(agent_id, s2).await.unwrap();
+        store.end_session(s2).await.unwrap();
+        // s3: active (no end)
+        store.start_session(agent_id, s3).await.unwrap();
+
+        let records = store.list_session_records(agent_id).await.unwrap();
+        // Only s1 and s3 should be returned; s2 is ended.
+        assert_eq!(records.len(), 2, "ended sessions should be excluded");
+        let ids: Vec<Uuid> = records.iter().map(|r| r.session_id).collect();
+        assert!(ids.contains(&s1));
+        assert!(ids.contains(&s3));
+        assert!(!ids.contains(&s2));
+    }
+
+    #[tokio::test]
+    async fn test_delete_session_removes_messages_and_row() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        store.start_session(agent_id, session_id).await.unwrap();
+        store
+            .append_message(session_id, &Message::user("hello"))
+            .await
+            .unwrap();
+
+        // Verify session + messages exist.
+        let msgs = store
+            .get_messages_since_for_session(session_id, 0)
+            .await
+            .unwrap();
+        assert_eq!(msgs.len(), 1);
+
+        // Delete the session.
+        store.delete_session(session_id).await.unwrap();
+
+        // Session row should be gone.
+        let records = store.list_session_records(agent_id).await.unwrap();
+        assert!(
+            records.iter().all(|r| r.session_id != session_id),
+            "session row should be deleted"
+        );
+
+        // Messages should be gone.
+        let msgs = store
+            .get_messages_since_for_session(session_id, 0)
+            .await
+            .unwrap();
+        assert!(msgs.is_empty(), "messages should be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_start_session_idempotent() {
+        // Repeatedly calling start_session with the same ID should not
+        // create duplicate rows. This models the fixed run_session() path
+        // where the same session ID is reused across conversation turns.
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        // Call start_session 5 times — should still be 1 row.
+        for _ in 0..5 {
+            store.start_session(agent_id, session_id).await.unwrap();
+        }
+
+        let records = store.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 1, "repeated start_session must be idempotent");
+        assert_eq!(records[0].session_id, session_id);
     }
 
     // ── Restore ──────────────────────────────────────────────

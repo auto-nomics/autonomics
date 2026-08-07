@@ -144,6 +144,30 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             }
             lines
         }
+        ChatLine::RetryableError {
+            message,
+            attempt,
+            max_retries,
+        } => {
+            let header = format!(
+                "↻ Retry {attempt}/{max_retries}: "
+            );
+            let mut lines = Vec::new();
+            let mut first = true;
+            for line in message.lines() {
+                let prefix = if first {
+                    header.as_str()
+                } else {
+                    "              "
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{line}"),
+                    Style::default().fg(Color::Yellow),
+                )));
+                first = false;
+            }
+            lines
+        }
         ChatLine::Separator => {
             vec![Line::from(Span::styled(
                 "─".repeat(area.width as usize),

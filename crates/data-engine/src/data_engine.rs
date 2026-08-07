@@ -7,7 +7,7 @@ use datafusion::{
 };
 use fs::OpendalFileStorage;
 
-use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
+use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig, DirtyState};
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -644,6 +644,36 @@ impl DataEngine {
         node_id: impl Into<String>,
     ) -> Option<crate::dag::graph::PortOutputs> {
         self.dag.output(node_id.into().as_ref())
+    }
+
+    // ── incremental execution API ──────────────────────────────────────
+
+    /// Mark a node (and all its transitive descendants) as dirty, so the next
+    /// [`Self::run`] will re-execute them even in incremental mode.
+    ///
+    /// Use this when an external input (file, Iceberg table, API response) has
+    /// changed outside the engine and the node's cached output is stale.
+    pub fn mark_node_dirty(&mut self, node_id: &str) {
+        self.dag.mark_dirty(node_id);
+    }
+
+    /// Mark every node dirty — forces a full re-run on the next [`Self::run`]
+    /// regardless of incremental mode.
+    pub fn mark_all_dirty(&mut self) {
+        self.dag.mark_all_dirty();
+    }
+
+    /// Whether a node is currently marked dirty (needs re-execution).
+    pub fn is_node_dirty(&self, node_id: &str) -> bool {
+        self.dag.is_dirty(node_id)
+    }
+
+    /// Enable or disable incremental execution mode.
+    ///
+    /// When enabled, subsequent [`Self::run`] calls only re-execute dirty nodes
+    /// and skip clean nodes whose outputs are cached from a previous run.
+    pub fn set_incremental(&mut self, enabled: bool) {
+        self.config.incremental = enabled;
     }
 
     /// Query a node's runtime status. Returns `None` when the DAG has never

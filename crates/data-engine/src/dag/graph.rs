@@ -19,7 +19,7 @@ use tracing::{debug, warn};
 use super::utils::{build_inputs, cascade_skip};
 
 use super::error::DagError;
-use super::runtime::{NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport};
+use super::runtime::{DirtyState, NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport};
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::nodes::sink_file::FileSinkNode;
@@ -72,6 +72,11 @@ pub struct DAG {
     /// / [`Self::replace_node_with_spec`]. Enables manifest export for
     /// snapshot persistence without modifying the `DagNode` trait.
     specs: HashMap<NodeId, (String, serde_json::Value)>,
+    /// Per-node dirty-mark state for incremental execution. A node is `Dirty`
+    /// when its spec/payload/topology/upstream has changed since its last
+    /// successful execution. `run` with `SchedulerConfig::incremental = true`
+    /// skips `Clean` nodes and reuses their cached outputs.
+    dirty: HashMap<NodeId, DirtyState>,
 }
 
 impl DAG {
@@ -85,6 +90,50 @@ impl DAG {
         self.outputs.get(id).cloned()
     }
 
+    // ── dirty-mark API (incremental execution) ──────────────────────────
+
+    /// Whether `id` is marked dirty (needs re-execution in an incremental run).
+    ///
+    /// A node with no dirty entry (e.g. freshly constructed DAG) is considered
+    /// dirty — it has no cached output.
+    pub fn is_dirty(&self, id: &str) -> bool {
+        self.dirty.get(id) != Some(&DirtyState::Clean)
+    }
+
+    /// Mark `id` **and all its transitive descendants** as [`DirtyState::Dirty`].
+    ///
+    /// This is the core propagation primitive: any mutation that could
+    /// invalidate a node's cached output calls this to ensure the node and
+    /// everything downstream will be re-executed on the next incremental run.
+    ///
+    /// Stops at nodes already dirty (no redundant re-propagation).
+    pub fn mark_dirty(&mut self, id: &str) {
+        let mut queue: VecDeque<NodeId> = VecDeque::from([id.to_string()]);
+        while let Some(nid) = queue.pop_front() {
+            if self.dirty.get(&nid) == Some(&DirtyState::Dirty) {
+                continue;
+            }
+            self.dirty.insert(nid.clone(), DirtyState::Dirty);
+            for succ in self.successors(&nid) {
+                queue.push_back(succ);
+            }
+        }
+    }
+
+    /// Mark **every** node dirty — forces a full re-run on the next
+    /// incremental `run`. Equivalent to the default (non-incremental) behavior.
+    pub fn mark_all_dirty(&mut self) {
+        for id in self.nodes.keys() {
+            self.dirty.insert(id.clone(), DirtyState::Dirty);
+        }
+    }
+
+    /// Mark a single node [`DirtyState::Clean`] after it has been successfully
+    /// executed. Internal — called from the scheduler loop.
+    fn mark_clean(&mut self, id: &str) {
+        self.dirty.insert(id.to_string(), DirtyState::Clean);
+    }
+
     /// Remove all nodes, edges, statuses, outputs, and errors — a full reset.
     pub fn clear(&mut self) {
         self.nodes.clear();
@@ -94,20 +143,27 @@ impl DAG {
         self.outputs.clear();
         self.errors.clear();
         self.specs.clear();
+        self.dirty.clear();
     }
 
-    /// Reset all node statuses to [`RuntimeStatus::Pending`], preparing for a
-    /// re-run.
+    /// Reset all node statuses to [`RuntimeStatus::Pending`] and mark every
+    /// node dirty, preparing for a full re-run.
     pub fn reset(&mut self) {
         for id in self.nodes.keys() {
             self.statuses.insert(id.clone(), RuntimeStatus::Pending);
         }
+        self.mark_all_dirty();
     }
 
     /// Execute every node of the DAG according to its dependencies.
     ///
     /// Uses [`DagNode::clone_box`] to copy node payloads into spawned tasks so
     /// the original nodes stay in the DAG for re-runs / iterative optimisation.
+    ///
+    /// When [`SchedulerConfig::incremental`] is `true`, only nodes marked
+    /// [`DirtyState::Dirty`] (and their dirty descendants) are re-executed.
+    /// Clean nodes are skipped and their cached outputs from the previous run
+    /// are reused.
     pub async fn run(
         &mut self,
         cfg: &SchedulerConfig,
@@ -122,9 +178,17 @@ impl DAG {
         // stores or shares a `SessionContext`.
         let engine_ctx = Arc::new(engine_ctx.clone());
 
-        // Release output data to avoid memory leak
-        self.outputs.clear();
-        self.statuses.clear();
+        let incremental = cfg.incremental;
+
+        if !incremental {
+            // Full re-run: clear all cached state.
+            self.outputs.clear();
+            self.statuses.clear();
+            self.mark_all_dirty();
+        }
+        // In incremental mode, keep cached outputs + statuses for clean nodes.
+        // Only dirty nodes will be re-executed; clean nodes retain their
+        // `Success` status and cached `outputs` from the previous run.
 
         self.validate()?;
         // Topological order is computed mainly to validate the graph and to seed a
@@ -142,30 +206,57 @@ impl DAG {
         let mut pending: HashMap<NodeId, usize> = HashMap::new();
         for id in &all_ids {
             successors.insert(id.clone(), self.successors(id));
-            pending.insert(id.clone(), self.predecessors(id).len());
+            let preds = self.predecessors(id);
+            // In incremental mode, only dirty predecessors count as
+            // "unresolved" — clean predecessors already have cached outputs.
+            let pending_count = if incremental {
+                preds.iter().filter(|p| self.is_dirty(p)).count()
+            } else {
+                preds.len()
+            };
+            pending.insert(id.clone(), pending_count);
             let inc = self.incoming_edges_with_ports(id);
             incoming.insert(id.clone(), inc);
         }
 
-        // Initialise runtime state.
-        self.statuses.clear();
-        for id in &all_ids {
-            self.statuses.insert(id.clone(), RuntimeStatus::Pending);
+        // Initialise runtime state for nodes that will execute.
+        if incremental {
+            // Only dirty nodes get reset to Pending; clean nodes keep Success.
+            for id in &all_ids {
+                if self.is_dirty(id) {
+                    self.statuses.insert(id.clone(), RuntimeStatus::Pending);
+                }
+            }
+        } else {
+            self.statuses.clear();
+            for id in &all_ids {
+                self.statuses.insert(id.clone(), RuntimeStatus::Pending);
+            }
         }
-        // let mut outputs: HashMap<NodeId, Vec<DataFrame>> = HashMap::new();
-        // let mut errors: HashMap<NodeId, DagError> = HashMap::new();
 
         let sem = Arc::new(Semaphore::new(cfg.max_concurrency.max(1)));
-        let (tx, mut rx) = mpsc::channel::<NodeEvent>(all_ids.len().max(1));
+        let dirty_count = if incremental {
+            all_ids.iter().filter(|id| self.is_dirty(id)).count()
+        } else {
+            all_ids.len()
+        };
+        let (tx, mut rx) = mpsc::channel::<NodeEvent>(dirty_count.max(1));
 
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
         let mut skipped_because: HashMap<NodeId, NodeId> = HashMap::new();
 
-        // Seed the ready queue with source nodes.
+        // Seed the ready queue: dirty nodes whose dirty predecessors have all
+        // completed (pending == 0). In non-incremental mode every node is
+        // dirty, so this is equivalent to the original "source nodes first".
         let mut ready: VecDeque<NodeId> = all_ids
             .iter()
-            .filter(|id| pending[*id] == 0)
+            .filter(|id| {
+                if incremental && !self.is_dirty(id) {
+                    return false; // clean node — skip dispatch entirely
+                }
+                pending[*id] == 0
+            })
             .cloned()
             .collect();
         let mut in_flight: usize = 0;
@@ -286,6 +377,8 @@ impl DAG {
                 } => {
                     self.outputs.insert(id.clone(), outs);
                     self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                    self.mark_clean(&id);
+                    self.errors.remove(&id);
                     durations.insert(id.clone(), duration);
                     debug!(node = %id, "node succeeded");
                     // External terminal observation (no DataFrame payload).
@@ -299,6 +392,11 @@ impl DAG {
                         ));
                     }
                     for succ in &successors[&id] {
+                        // In incremental mode, clean successors are never
+                        // dispatched — only decrement pending for dirty ones.
+                        if incremental && !self.is_dirty(succ) {
+                            continue;
+                        }
                         let left = {
                             let c = pending.entry(succ.clone()).or_insert(0);
                             *c = c.saturating_sub(1);
@@ -517,7 +615,9 @@ impl DAG {
         }
         let idx = self.graph.add_node(id.clone());
         self.id_to_idx.insert(id.clone(), idx);
-        self.nodes.insert(id, node);
+        self.nodes.insert(id.clone(), node);
+        // New node has no cached output — must be executed.
+        self.dirty.insert(id, DirtyState::Dirty);
         Ok(())
     }
 
@@ -568,10 +668,11 @@ impl DAG {
             }
             self.graph.add_edge(a, b, EdgeLabel { from_port, to_port });
         }
+        // The target node's input set changed — it and all descendants need
+        // re-execution.
+        self.mark_dirty(&to);
         Ok(())
     }
-
-    /// Validate that `from` and `to` refer to existing nodes.
     fn resolve_nodes(&self, from: &str, to: &str) -> Result<()> {
         if !self.nodes.contains_key(from) {
             return Err(DagError::UnknownNode(from.to_string()));
@@ -627,6 +728,7 @@ impl DAG {
         self.statuses.remove(id);
         self.outputs.remove(id);
         self.specs.remove(id);
+        self.dirty.remove(id);
         Ok(())
     }
 
@@ -667,6 +769,8 @@ impl DAG {
         match edge_id {
             Some(id) => {
                 self.graph.remove_edge(id);
+                // The target lost an input — it and its descendants are stale.
+                self.mark_dirty(&to);
                 Ok(())
             }
             None => Err(DagError::EdgeNotFound {
@@ -765,6 +869,8 @@ impl DAG {
         self.outputs.remove(id);
         self.errors.remove(id);
         self.statuses.insert(id.to_string(), RuntimeStatus::Pending);
+        // Propagate dirty to this node + all transitive descendants.
+        self.mark_dirty(id);
         Ok(())
     }
 
@@ -1769,5 +1875,440 @@ mod tests {
             .unwrap();
         assert!(r2.ok, "re-run should succeed (no cross-run ctx leak)");
         assert_eq!(dag.status("b"), Some(RuntimeStatus::Success));
+    }
+
+    // ── incremental execution tests ────────────────────────────────────
+
+    /// An EchoNode that counts how many times `execute` was called.
+    /// Shared counter lets tests assert exactly which nodes were skipped.
+    #[derive(Clone)]
+    struct CountingEcho {
+        meta: NodePorts,
+        counter: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for CountingEcho {
+        fn ports(&self) -> &NodePorts {
+            &self.meta
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+        fn kind(&self) -> &'static str {
+            "counting_echo"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &crate::node_registry::registry::NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut out: PortOutputs = HashMap::new();
+            for inp in inputs {
+                out.insert(inp.port, inp.data.clone());
+            }
+            Ok(out)
+        }
+    }
+
+    impl CountingEcho {
+        fn new(counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+            Self {
+                meta: NodePorts::new().add_output_port(None).set_fixed_input(false),
+                counter,
+            }
+        }
+    }
+
+    /// Shorthand to read an atomic counter's current value.
+    fn cnt(ctr: &Arc<std::sync::atomic::AtomicUsize>) -> usize {
+        ctr.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn incremental_cfg() -> SchedulerConfig {
+        SchedulerConfig {
+            incremental: true,
+            ..SchedulerConfig::default()
+        }
+    }
+
+    /// First run in incremental mode should execute all nodes (all are dirty
+    /// because they were just added).
+    #[tokio::test]
+    async fn incremental_first_run_executes_all() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node(
+            "b".into(),
+            Box::new(CountingEcho::new(ctr_b.clone())),
+        )
+        .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.validate().unwrap();
+
+        let ctx = test_ctx();
+        let report = dag.run(&incremental_cfg(), &ctx, None).await.unwrap();
+        assert!(report.ok);
+        assert_eq!(cnt(&ctr_a), 1, "node a should execute once");
+        assert_eq!(cnt(&ctr_b), 1, "node b should execute once");
+        // After successful run, both should be clean.
+        assert!(!dag.is_dirty("a"));
+        assert!(!dag.is_dirty("b"));
+    }
+
+    /// A second incremental run with no changes should skip ALL nodes and reuse
+    /// cached outputs.
+    #[tokio::test]
+    async fn incremental_rerun_no_changes_skips_all() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node(
+            "b".into(),
+            Box::new(CountingEcho::new(ctr_b.clone())),
+        )
+        .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+
+        // Second run — nothing changed, all clean.
+        let r2 = dag.run(&cfg, &ctx, None).await.unwrap();
+        assert!(r2.ok);
+        assert_eq!(cnt(&ctr_a), 1, "node a should NOT re-execute");
+        assert_eq!(cnt(&ctr_b), 1, "node b should NOT re-execute");
+        assert_eq!(dag.status("a"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("b"), Some(RuntimeStatus::Success));
+        // Output still cached.
+        assert!(dag.output("a").is_some());
+        assert!(dag.output("b").is_some());
+    }
+
+    /// After `replace_node` on `a`, only `a` and its descendant `b` should
+    /// re-execute; `c` (an independent branch) should be skipped.
+    #[tokio::test]
+    async fn incremental_replace_reexecutes_only_descendants() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_c = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+        dag.add_node("c".into(), Box::new(CountingEcho::new(ctr_c.clone())))
+            .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        // c is independent (no edge from a).
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+        assert_eq!(cnt(&ctr_c), 1);
+
+        // Replace node "a" with a fresh CountingEcho (new counter).
+        let ctr_a2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        dag.replace_node(
+            "a",
+            Box::new(CountingEcho::new(ctr_a2.clone())),
+        )
+        .unwrap();
+
+        // "a" and "b" should be dirty; "c" should be clean.
+        assert!(dag.is_dirty("a"), "a should be dirty after replace");
+        assert!(dag.is_dirty("b"), "b (descendant) should be dirty");
+        assert!(!dag.is_dirty("c"), "c (independent) should be clean");
+
+        // Second run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(
+            cnt(&ctr_a2),
+            1,
+            "replaced a should execute once"
+        );
+        assert_eq!(
+            cnt(&ctr_b),
+            2,
+            "b should re-execute (descendant of replaced a)"
+        );
+        assert_eq!(
+            cnt(&ctr_c),
+            1,
+            "c should NOT re-execute (independent branch)"
+        );
+    }
+
+    /// After `add_edge`, the target node and its descendants should be dirty.
+    #[tokio::test]
+    async fn incremental_add_edge_marks_target_dirty() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run — two independent nodes.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+
+        // Connect a → b.
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        assert!(dag.is_dirty("b"), "b should be dirty after add_edge");
+        assert!(!dag.is_dirty("a"), "a should remain clean");
+
+        // Second run — only b should re-execute.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1, "a should NOT re-execute");
+        assert_eq!(cnt(&ctr_b), 2, "b should re-execute");
+    }
+
+    /// After `delete_edge`, the target node and its descendants should be dirty.
+    #[tokio::test]
+    async fn incremental_delete_edge_marks_target_dirty() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_c = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+        dag.add_node("c".into(), Box::new(CountingEcho::new(ctr_c.clone())))
+            .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.add_edge("b", "c", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+        assert_eq!(cnt(&ctr_c), 1);
+
+        // Delete edge a → b.
+        dag.delete_edge("a", "b", 0, 0).unwrap();
+        assert!(dag.is_dirty("b"), "b should be dirty after delete_edge");
+        assert!(dag.is_dirty("c"), "c (descendant) should be dirty");
+        assert!(!dag.is_dirty("a"), "a should remain clean");
+
+        // Second run — only b and c should re-execute.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1, "a should NOT re-execute");
+        assert_eq!(cnt(&ctr_b), 2, "b should re-execute");
+        assert_eq!(cnt(&ctr_c), 2, "c should re-execute");
+    }
+
+    /// Manual `mark_dirty` propagates to all transitive descendants.
+    #[tokio::test]
+    async fn incremental_manual_mark_dirty_propagates() {
+        let mut dag = DAG::default();
+        // a → b → c → d (linear chain)
+        let ctrs: Vec<Arc<std::sync::atomic::AtomicUsize>> = (0..4)
+            .map(|_| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+            .collect();
+        for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            dag.add_node(
+                (*id).into(),
+                Box::new(CountingEcho::new(ctrs[i].clone())),
+            )
+            .unwrap();
+        }
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.add_edge("b", "c", 0, 0).unwrap();
+        dag.add_edge("c", "d", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        for ctr in &ctrs {
+            assert_eq!(ctr.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        // Manually mark "b" dirty — should propagate to c and d, not a.
+        dag.mark_dirty("b");
+        assert!(!dag.is_dirty("a"));
+        assert!(dag.is_dirty("b"));
+        assert!(dag.is_dirty("c"));
+        assert!(dag.is_dirty("d"));
+
+        // Second run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(
+            ctrs[0].load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a should NOT re-execute"
+        );
+        assert_eq!(
+            ctrs[1].load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "b should re-execute"
+        );
+        assert_eq!(
+            ctrs[2].load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "c should re-execute"
+        );
+        assert_eq!(
+            ctrs[3].load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "d should re-execute"
+        );
+    }
+
+    /// `mark_all_dirty` forces a full re-run even in incremental mode.
+    #[tokio::test]
+    async fn incremental_mark_all_forces_full_rerun() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+
+        // Mark all dirty.
+        dag.mark_all_dirty();
+        assert!(dag.is_dirty("a"));
+        assert!(dag.is_dirty("b"));
+
+        // Second run — everything re-executes.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 2);
+        assert_eq!(cnt(&ctr_b), 2);
+    }
+
+    /// Incremental mode with a diamond DAG: marking one branch dirty re-runs
+    /// only that branch + the merge node, not the other branch.
+    #[tokio::test]
+    async fn incremental_diamond_partial_rerun() {
+        let mut dag = DAG::default();
+        // Diamond: a → b → d, a → c → d
+        let ctrs: Vec<Arc<std::sync::atomic::AtomicUsize>> = (0..4)
+            .map(|_| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
+            .collect();
+        for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            dag.add_node(
+                (*id).into(),
+                Box::new(CountingEcho::new(ctrs[i].clone())),
+            )
+            .unwrap();
+        }
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.add_edge("a", "c", 0, 0).unwrap();
+        // Use distinct input ports on "d" (0 and 1) — strict 1:1 validation
+        // rejects two edges to the same port even on variadic nodes.
+        dag.add_edge("b", "d", 0, 0).unwrap();
+        dag.add_edge("c", "d", 0, 1).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        for ctr in &ctrs {
+            assert_eq!(ctr.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        // Replace "b" — should mark b + d dirty (not a, not c).
+        let ctr_b2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        dag.replace_node("b", Box::new(CountingEcho::new(ctr_b2.clone())))
+            .unwrap();
+
+        assert!(!dag.is_dirty("a"));
+        assert!(dag.is_dirty("b"));
+        assert!(!dag.is_dirty("c"));
+        assert!(dag.is_dirty("d"));
+
+        // Second run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(
+            ctrs[0].load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a should NOT re-execute"
+        );
+        assert_eq!(cnt(&ctr_b2), 1, "replaced b should execute once");
+        assert_eq!(
+            ctrs[2].load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "c should NOT re-execute"
+        );
+        assert_eq!(
+            ctrs[3].load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "d should re-execute (merge of dirty b + clean c)"
+        );
+    }
+
+    /// Non-incremental mode ignores dirty marks and always re-runs everything.
+    #[tokio::test]
+    async fn non_incremental_ignores_dirty_marks() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = SchedulerConfig::default(); // incremental = false
+
+        // First run.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+
+        // Second run in non-incremental mode — everything re-executes.
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 2, "a should re-execute (non-incremental)");
+        assert_eq!(cnt(&ctr_b), 2, "b should re-execute (non-incremental)");
     }
 }

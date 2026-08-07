@@ -365,20 +365,17 @@ impl Session {
         let cancelled = self.cancel_token.clone();
 
         // ── Reuse or start a persisted WAL session ───────────
-        // resume() may have already opened a WAL session and set
-        // current_session. Reuse it so we don't orphan the old one.
-        let wal_session_id = match self.memory.current_session {
-            Some(id) => id,
-            None => {
-                let id = Uuid::new_v4();
-                if let Some(storage) = &self.shared.storage {
-                    let _ = storage.start_session(self.shared.id, id).await;
-                    let _ = storage.touch_agent(self.shared.id).await;
-                }
-                self.memory.current_session = Some(id);
-                id
+        // The WAL session ID is always the Session's own ID. This is
+        // consistent with `resume()` and prevents session proliferation
+        // (each turn would otherwise create a new sessions-table row).
+        let wal_session_id = self.id;
+        if self.memory.current_session.is_none() {
+            if let Some(storage) = &self.shared.storage {
+                let _ = storage.start_session(self.shared.id, wal_session_id).await;
+                let _ = storage.touch_agent(self.shared.id).await;
             }
-        };
+            self.memory.current_session = Some(wal_session_id);
+        }
 
         let mut iteration = 0;
         let mut consecutive_retries = 0;
@@ -427,6 +424,11 @@ impl Session {
                         consecutive_retries,
                         self.shared.config.max_retries
                     );
+                    self.shared.send_event(AgentEvent::RetryableError {
+                        message: format!("{e}"),
+                        attempt: consecutive_retries as u32,
+                        max_retries: self.shared.config.max_retries as u32,
+                    });
                     let delay = Duration::from_secs(1) * (1 << (consecutive_retries - 1));
                     tokio::time::sleep(delay).await;
                     let _ = self.memory.remember(Message::user(e.retry_message()));
@@ -496,11 +498,14 @@ impl Session {
             self.lifecycle.set_idle();
         }
 
-        // ── End persisted session ─────────────────────────────
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.end_session(wal_session_id).await;
-        }
-        self.memory.current_session = None;
+        // ── Keep the WAL session open for reuse ──────────────
+        // Previously this called end_session() and cleared current_session,
+        // which caused the next run_session() to generate a *new* UUID and
+        // create a fresh sessions-table row — leading to session
+        // proliferation (one row per conversation turn).  By keeping the
+        // session open we ensure the same WAL row is reused across turns.
+        // The session is properly ended only when pause() is called (on
+        // session switch or agent shutdown).
     }
 
     /// After a mid-workflow cancellation, patch orphaned tool_use blocks.

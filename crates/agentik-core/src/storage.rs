@@ -305,6 +305,10 @@ pub trait AgentStorage: Send + Sync {
         message: &Message,
     ) -> Result<(), StorageError>;
     async fn end_session(&self, session_id: Uuid) -> Result<(), StorageError>;
+
+    /// Permanently delete a session and its messages from storage.
+    /// Used when the user explicitly closes a session.
+    async fn delete_session(&self, session_id: Uuid) -> Result<(), StorageError>;
     async fn get_messages_since(
         &self,
         agent_id: Uuid,

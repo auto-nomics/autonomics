@@ -83,6 +83,16 @@ pub enum AgentEvent {
     /// Agent finished its workflow.
     Done,
 
+    /// A retryable error occurred. The agent will back off and retry.
+    ///
+    /// `attempt` is 1-based (the attempt that just failed);
+    /// `max_retries` is the configured ceiling.
+    RetryableError {
+        message: String,
+        attempt: u32,
+        max_retries: u32,
+    },
+
     /// An error occurred.
     Error(String),
 

@@ -580,6 +580,11 @@ impl Agent {
             s.pause().await;
         }
         self.sessions.remove(&id);
+        // Permanently delete the session from storage so it doesn't
+        // reappear as an empty session on restart.
+        if let Some(storage) = &self.shared.storage {
+            let _ = storage.delete_session(id).await;
+        }
         self.shared.send_event(AgentEvent::SessionClosed { id });
         if self.active_session_id == Some(id) {
             self.active_session_id = self.sessions.keys().next().copied();

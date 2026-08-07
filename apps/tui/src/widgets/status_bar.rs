@@ -39,6 +39,7 @@ impl Widget for StatusBar<'_> {
                 AgentStatus::Idle => ("○", Color::Gray, "idle"),
                 AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
                 AgentStatus::Streaming => ("●", Color::Green, "streaming"),
+                AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
                 AgentStatus::Error => ("✗", Color::Red, "error"),
             }
         };

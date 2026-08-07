@@ -22,4 +22,4 @@ pub use crate::nodes::{DagNode, NodeId, NodeInput, NodePorts};
 pub use error::DagError;
 pub use graph::DAG;
 pub use history::{DagHistory, DagManifest, Snapshot};
-pub use runtime::{RunReport, RuntimeStatus, SchedulerConfig};
+pub use runtime::{DirtyState, RunReport, RuntimeStatus, SchedulerConfig};

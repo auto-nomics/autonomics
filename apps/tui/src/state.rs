@@ -89,6 +89,12 @@ pub enum ChatLine {
         name: String,
     },
     Error(String),
+    /// A retryable error occurred; the agent is backing off before retrying.
+    RetryableError {
+        message: String,
+        attempt: u32,
+        max_retries: u32,
+    },
     Separator,
     /// Network routing or status line (arena, pipeline, etc.).
     /// Styled differently from assistant messages — prefixed with an icon.
@@ -104,6 +110,8 @@ pub enum AgentStatus {
     Idle,
     Requesting,
     Streaming,
+    /// A retryable error occurred; the agent is in back-off before retrying.
+    Retrying,
     Error,
 }
 
@@ -488,6 +496,21 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 .tool_tasks
                 .retain(|t| matches!(t.status, ToolTaskStatus::Running));
             state.push_line(ChatLine::Separator);
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
+        }
+        AgentEvent::RetryableError {
+            message,
+            attempt,
+            max_retries,
+        } => {
+            state.push_line(ChatLine::RetryableError {
+                message,
+                attempt,
+                max_retries,
+            });
+            state.status = AgentStatus::Retrying;
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
