@@ -26,13 +26,10 @@ use crate::bib_base::BibBase;
 use crate::query::LiteratureGateway;
 use crate::Result;
 
-/// Default `reqwest::Client` builder used for sources that need a raw
-/// HTTP client (currently only `BiorxivSource`).
-fn default_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent("autonomics-bib-base")
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+/// Build the shared `reqwest::Client` from [`BibHttpOptions`]. Used by
+/// `BiorxivSource` and any future source that wants a bare HTTP client.
+fn http_client_from(opts: crate::BibHttpOptions) -> Arc<reqwest::Client> {
+    Arc::new(opts.build_client())
 }
 
 /// Aggregated, process-level bibliography handle. Cheap to clone
@@ -72,11 +69,28 @@ impl BibShared {
     ///
     /// Accepts anything that can be referenced as a path (`&str`,
     /// `String`, `PathBuf`, `&Path`) for caller ergonomics.
+    /// Open (or create) the bibliography DB at `path` and pair it with
+    /// a gateway pre-loaded with all built-in literature sources. Uses
+    /// the default [`BibHttpOptions`](crate::BibHttpOptions) for the
+    /// shared HTTP client. Use [`open_with`](Self::open_with) when you
+    /// need custom timeouts, proxy, or user agent.
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Self::open_with(path, crate::BibHttpOptions::default()).await
+    }
+
+    /// Open (or create) the bibliography DB at `path` and pair it with
+    /// a gateway pre-loaded with all built-in literature sources. The
+    /// `http_opts` configure the shared `reqwest::Client` (user agent,
+    /// timeouts, proxy, TLS). All resources are opened **exactly once
+    /// here**; subsequent `Clone`s share the same handles.
+    pub async fn open_with(
+        path: impl AsRef<std::path::Path>,
+        http_opts: crate::BibHttpOptions,
+    ) -> Result<Self> {
         let bib = Arc::new(BibBase::open(path.as_ref().to_string_lossy().as_ref()).await?);
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
-        let http = Arc::new(default_http_client());
+        let http = http_client_from(http_opts);
         let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
         let gateway = Arc::new(LiteratureGateway::with_shared_clients(
             eutils.clone(),
@@ -93,12 +107,19 @@ impl BibShared {
         })
     }
 
-    /// Open an in-memory shared bundle (useful for tests).
+    /// Open an in-memory shared bundle (useful for tests) with default
+    /// HTTP options.
     pub async fn open_in_memory() -> Result<Self> {
+        Self::open_in_memory_with(crate::BibHttpOptions::default()).await
+    }
+
+    /// Open an in-memory shared bundle (useful for tests) with custom
+    /// HTTP options.
+    pub async fn open_in_memory_with(http_opts: crate::BibHttpOptions) -> Result<Self> {
         let bib = Arc::new(BibBase::open_in_memory().await?);
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
-        let http = Arc::new(default_http_client());
+        let http = http_client_from(http_opts);
         let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
         let gateway = Arc::new(LiteratureGateway::with_shared_clients(
             eutils.clone(),

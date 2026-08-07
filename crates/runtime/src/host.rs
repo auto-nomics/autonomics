@@ -149,7 +149,7 @@ impl SharedInfra {
             datalake,
             storage,
             runtime_handle: tokio::runtime::Handle::current(),
-            bib: Arc::new(bib_base::BibShared::open(&config.bib_db_path).await?),
+            bib: Arc::new(bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone()).await?),
     })
     }
 }

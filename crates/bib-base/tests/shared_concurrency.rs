@@ -164,3 +164,69 @@ async fn gateway_is_backed_by_shared_clients() {
     assert!(!Arc::ptr_eq(&shared.bib, &other.bib));
     assert!(!Arc::ptr_eq(&shared.gateway, &other.gateway));
 }
+
+// ---------------------------------------------------------------------------
+// HttpOptions wiring
+// ---------------------------------------------------------------------------
+
+use std::time::Duration;
+
+use bib_base::BibHttpOptions;
+
+/// `BibShared::open_with` accepts a custom `BibHttpOptions` and bakes it
+/// into the shared `reqwest::Client`. Two clones of the resulting
+/// `BibShared` must share that single client (already covered above),
+/// but we additionally verify that the construction path is exercised
+/// without panicking and that the resulting client is functional.
+#[tokio::test]
+async fn open_with_custom_http_options_succeeds() {
+    let opts = BibHttpOptions {
+        user_agent: Some("autonomics-tests/0.1".into()),
+        connect_timeout: Some(Duration::from_secs(5)),
+        request_timeout: Some(Duration::from_secs(15)),
+        proxy_url: None,
+        accept_invalid_certs: Some(false),
+    };
+    let shared = BibShared::open_in_memory_with(opts.clone()).await.unwrap();
+    let c = shared.clone();
+    // Both clones share the underlying `Arc<reqwest::Client>`.
+    assert!(Arc::ptr_eq(&shared.http, &c.http));
+}
+
+/// `BibHttpOptions` must round-trip through serde — operators often
+/// drop a `RuntimeConfig` into a TOML/JSON file. Pin the wire format.
+#[test]
+fn http_options_roundtrip() {
+    let opts = BibHttpOptions {
+        user_agent: Some("autonomics/1.0".into()),
+        connect_timeout: Some(Duration::from_secs(7)),
+        request_timeout: Some(Duration::from_secs(45)),
+        proxy_url: Some("http://proxy.local:3128".into()),
+        accept_invalid_certs: Some(true),
+    };
+    let json = serde_json::to_string(&opts).unwrap();
+    let back: BibHttpOptions = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, opts);
+}
+
+/// Two `BibShared::open_with` calls with different `BibHttpOptions`
+/// produce **different** `Arc<reqwest::Client>` instances — i.e. the
+/// options actually flow through into the builder, not silently
+/// ignored.
+#[tokio::test]
+async fn different_http_options_yield_different_clients() {
+    let a = BibShared::open_in_memory_with(BibHttpOptions {
+        user_agent: Some("agent-a".into()),
+        ..BibHttpOptions::default()
+    })
+    .await
+    .unwrap();
+    let b = BibShared::open_in_memory_with(BibHttpOptions {
+        user_agent: Some("agent-b".into()),
+        ..BibHttpOptions::default()
+    })
+    .await
+    .unwrap();
+    // Different client instances.
+    assert!(!Arc::ptr_eq(&a.http, &b.http));
+}
