@@ -42,7 +42,7 @@ impl NetworkSpec {
     /// structural validation (duplicate detection, dangling edges).
     pub fn validate(&self) -> Result<(), String> {
         // Structural validation via the graph index.
-        let graph = crate::graph::NetworkGraph::from_spec(self)?;
+        let graph = crate::graph::NetworkGraph::from_nodes_edges(&self.nodes, &self.edges)?;
 
         // Termination references — the graph ensures node names exist.
         let names: std::collections::HashSet<&str> =

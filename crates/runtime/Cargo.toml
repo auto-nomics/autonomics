@@ -9,6 +9,7 @@ description = "Sync-to-async bridge for running an agentik agent from a sync con
 [dependencies]
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
+agentik-network = { path = "../agentik-network" }
 opengwas = { path = "../opengwas" }
 opentargets = { path = "../opentargets" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }

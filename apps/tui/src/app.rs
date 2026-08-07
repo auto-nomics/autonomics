@@ -915,7 +915,7 @@ impl App {
             "spawn_agent_from_profile called"
         );
 
-        let Some(host) = self.host.clone() else {
+        let Some(host) = self.host.as_ref().map(|h| h.spawner()) else {
             tracing::warn!("no runtime host available");
             return;
         };
@@ -1003,13 +1003,12 @@ impl App {
     /// Query the agents table and open the resume picker.
     fn open_agent_picker(&mut self) {
         tracing::info!("open_agent_picker called");
-        let Some(host) = self.host.clone() else {
+        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
             tracing::warn!("no host available for agent listing — RuntimeHost::open likely failed at startup");
             return;
         };
         let tx = self.app_event_tx.clone();
         self.runtime_handle.spawn(async move {
-            let storage = host.storage();
             tracing::debug!("querying list_agents from storage");
             match storage.list_agents().await {
                 Ok(records) => {
@@ -1094,13 +1093,12 @@ impl App {
     /// Delete an agent record from storage and update the picker list.
     fn delete_agent_record(&mut self, agent_id: uuid::Uuid) {
         tracing::info!(%agent_id, "deleting agent record");
-        let Some(host) = self.host.clone() else {
+        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
             tracing::warn!("no host available for deletion");
             return;
         };
         let tx = self.app_event_tx.clone();
         self.runtime_handle.spawn(async move {
-            let storage = host.storage();
             match storage.delete_agent(agent_id).await {
                 Ok(()) => {
                     tracing::info!(%agent_id, "agent deleted from storage");
@@ -1864,14 +1862,13 @@ impl App {
     /// Key handling while the model config popup is open.
     /// Persist a model spec into the agent's stored record so it survives restarts.
     fn persist_agent_model(&mut self, agent_name: &str, model_spec: &str) {
-        let Some(host) = self.host.clone() else {
+        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
             tracing::warn!("no host available for model persistence");
             return;
         };
         let name = agent_name.to_string();
         let spec = model_spec.to_string();
         self.runtime_handle.spawn(async move {
-            let storage = host.storage();
             // Read the current record.
             let Some(mut record) = storage
                 .get_agent_by_name(&name)

@@ -1,20 +1,25 @@
 //! Runtime host: process-level shared infrastructure + per-agent handles.
 //!
 //! [`RuntimeHost`] owns heavy shared resources (DataEngine, storage, file
-//! system) that are created **once** per process. Individual agents are
-//! spawned via [`RuntimeHost::spawn_agent`], which returns an [`AgentHandle`]
-//! — a lightweight per-agent control struct (channels + task handle).
+//! system) that are created **once** per process. It also owns a persistent
+//! [`AgentNetwork`] for multi-agent topology routing.
 //!
-//! This replaces the old [`AgentRuntime`](crate::AgentRuntime) pattern where
-//! every agent duplicated the entire infrastructure.
+//! Individual agents are spawned via [`RuntimeHost::spawn_agent`], which
+//! returns an [`AgentHandle`] — a lightweight per-agent control struct
+//! (channels + task handle). Agents can be registered with the host's
+//! internal registry for multiplexed event access via
+//! [`recv_any`](Self::recv_any) and topology-aware message routing via
+//! [`AgentNetwork`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentik_core::Agent;
+use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
 use agentik_core::storage::{AgentStorage, restore_memory};
-use agentik_core::TursoAgentStorage;
+use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
@@ -24,6 +29,8 @@ use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use datalake::Datalake;
 use fs::OpendalFileStorage;
 use thiserror::Error;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::RuntimeConfig;
@@ -93,8 +100,7 @@ impl SharedInfra {
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
 
         // ── DataEngine ───────────────────────────────────────────────
-        let mut engine_builder =
-            DataEngine::builder().register_opendal_fs(file_storage.clone())?;
+        let mut engine_builder = DataEngine::builder().register_opendal_fs(file_storage.clone())?;
 
         if config.enable_iceberg {
             match engine_builder.register_iceberg().await {
@@ -161,8 +167,136 @@ impl SharedInfra {
             datalake,
             storage,
             runtime_handle: tokio::runtime::Handle::current(),
-            bib: Arc::new(bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone()).await?),
-    })
+            bib: Arc::new(
+                bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
+                    .await?,
+            ),
+        })
+    }
+
+    /// Spawn a new agent from an [`AgentProfile`](agentik_core::AgentProfile).
+    ///
+    /// This method only needs [`SharedInfra`] — it does not touch the
+    /// topology network or agent registry. Callers can clone `SharedInfra`
+    /// (cheap, all `Arc`) into async tasks.
+    pub async fn spawn_agent(
+        &self,
+        agent_name: &str,
+        profile: &agentik_core::AgentProfile,
+        global_model: Arc<ArcSwapOption<Model>>,
+        model_override: Option<Model>,
+    ) -> HostResult<AgentHandle> {
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel_token = CancellationToken::new();
+
+        let model = match model_override {
+            Some(m) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
+            None => Arc::new(ArcSwapOption::from_pointee(
+                global_model.load_full().as_deref().cloned(),
+            )),
+        };
+
+        let tool_list = self.tools_from_profile(profile).await?;
+
+        let config_json = serde_json::to_value(profile).unwrap_or_default();
+        let storage = self.storage.clone();
+
+        let mut builder = Agent::builder()
+            .with_model(model.clone())
+            .with_agent_event_tx(event_tx)
+            .with_name(agent_name)
+            .with_config_json(config_json)
+            .with_system_prompt_identity(&profile.agent_identity)
+            .with_storage(storage.clone());
+
+        if let Some(ref prompt) = profile.system_prompt {
+            builder = builder.with_system_prompt_section(prompt);
+        } else {
+            builder = builder.with_system_prompt_section(crate::config::default_system_prompt());
+        }
+
+        builder = builder
+            .with_tools(tool_list)
+            .with_cancel_token(cancel_token.clone());
+
+        if let Ok(Some(record)) = storage.get_agent_by_name(agent_name).await {
+            tracing::info!(
+                agent = %agent_name,
+                agent_id = %record.id,
+                "restoring agent from storage"
+            );
+            builder = builder.with_id(record.id);
+
+            if let Ok(memory) = restore_memory(storage.as_ref(), record.id).await {
+                builder = builder.with_memory(memory);
+                tracing::info!("memory restored from snapshot + WAL");
+            }
+        }
+
+        let mut agent = builder.build().await?;
+        let agent_id = agent.id();
+        let agent_name = agent.name().to_string();
+        let internal_tx = agent.internal_event_tx();
+        let model_handle = agent.model_handle().clone();
+
+        let agent_task = self.runtime_handle.spawn(async move {
+            agent.run().await;
+        });
+
+        Ok(AgentHandle {
+            agent_id,
+            name: agent_name,
+            internal_tx,
+            event_rx,
+            agent_task,
+            cancel_token,
+            model: model_handle,
+        })
+    }
+
+    /// Assemble the tool set for a profile, respecting its feature flags.
+    async fn tools_from_profile(
+        &self,
+        profile: &agentik_core::AgentProfile,
+    ) -> HostResult<Vec<agentik_core::tools::ToolRegistration>> {
+        use crate::tools::*;
+        use agentik_core::tools::ToolRegistration;
+
+        let file_storage = self.file_storage.clone();
+        let datalake = self.datalake.clone();
+        let engine_client = self.engine_manager.client_for_session(&profile.name);
+
+        let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());
+
+        if profile.enable_opengwas {
+            match opengwas_tools_with_token(file_storage.clone(), None) {
+                Ok(t) => tools.extend(t),
+                Err(e) => tracing::warn!(error = %e, "OpenGWAS tools disabled"),
+            }
+        }
+
+        if profile.enable_opentargets {
+            tools.extend(opentargets_tools());
+        }
+
+        if profile.enable_gwascatalog {
+            tools.extend(gwascatalog_tools(file_storage));
+        }
+
+        tools.extend(datalake_tools(datalake));
+        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+
+        if profile.enable_bibliography {
+            let bib_shared = self.bib.clone();
+            let bib_tools = bib_base::bib_all_registrations(
+                bib_shared.bib.clone(),
+                bib_shared.gateway.clone(),
+                Some(bib_shared.europe_pmc.clone()),
+            );
+            tools.extend(bib_tools);
+        }
+
+        Ok(tools)
     }
 }
 
@@ -189,7 +323,9 @@ impl AgentHandle {
     pub fn send_message(&self, text: String) {
         let _ = self
             .internal_tx
-            .send(InternalEvent::MessageInject(vec![ContentBlock::Text { text }]));
+            .send(InternalEvent::MessageInject(vec![ContentBlock::Text {
+                text,
+            }]));
     }
 
     pub fn cancel(&mut self) {
@@ -265,7 +401,9 @@ impl AgentHandle {
 
     /// Rename a session.
     pub fn rename_session(&self, id: uuid::Uuid, title: String) {
-        let _ = self.internal_tx.send(InternalEvent::RenameSession { id, title });
+        let _ = self
+            .internal_tx
+            .send(InternalEvent::RenameSession { id, title });
     }
 }
 
@@ -273,47 +411,57 @@ impl AgentHandle {
 // RuntimeHost — top-level multi-agent manager
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Top-level runtime that owns shared infrastructure and manages multiple
-/// agents.
+/// Top-level runtime that owns shared infrastructure, a persistent
+/// [`AgentNetwork`] for topology routing, and an agent registry for
+/// multiplexed event access.
 ///
 /// Created once per process via [`RuntimeHost::open`]. Individual agents
-/// are spawned via [`RuntimeHost::spawn_agent`]. The TUI holds one
-/// `RuntimeHost` and switches between agents using the returned
-/// [`AgentHandle`]s.
+/// are spawned via [`RuntimeHost::spawn_agent`]. For multi-agent topologies,
+/// use the topology control API ([`add_node`](Self::add_node),
+/// [`connect`](Self::connect), etc.) combined with
+/// [`recv_any`](Self::recv_any) for unified event polling.
 ///
-/// # Example
-///
-/// ```ignore
-/// let host = RuntimeHost::open(&config).await?;
-/// let default_model = Arc::new(ArcSwapOption::from_pointee(Some(model)));
-///
-/// // Spawn agent from a profile
-/// let mut handle = host.spawn_agent(
-///     &profile,
-///     default_model.clone(),
-///     None,  // no per-agent model override
-/// ).await?;
-///
-/// handle.send_message("hello".into());
-/// while let Some(ev) = handle.recv_event().await { /* ... */ }
-/// ```
+/// **Not `Clone`** — owns the agent network and registry. Pass `&self` or
+/// `&mut self` to consumers rather than cloning.
 pub struct RuntimeHost {
     infra: SharedInfra,
+    /// Persistent topology routing engine — same lifetime as the host.
+    network: AgentNetwork,
+    /// Per-agent relay entries for multiplexed event access.
+    agents: HashMap<String, AgentEntry>,
+    /// Multiplexed event channel — each relay task pushes here.
+    event_tx: UnboundedSender<TaggedEvent>,
+    /// Receiver half (owned, drained via `recv_any`).
+    event_rx: UnboundedReceiver<TaggedEvent>,
 }
 
-impl Clone for RuntimeHost {
-    fn clone(&self) -> Self {
-        Self {
-            infra: self.infra.clone(),
-        }
-    }
+/// An `AgentEvent` tagged with the agent name that produced it.
+pub type TaggedEvent = (String, AgentEvent);
+
+/// Commands sent to a per-agent relay task.
+enum AgentCommand {
+    Message(String),
+    Shutdown,
+}
+
+/// Internal entry for one registered agent.
+struct AgentEntry {
+    cmd_tx: UnboundedSender<AgentCommand>,
+    _relay_task: JoinHandle<()>,
 }
 
 impl RuntimeHost {
-    /// Open shared infrastructure from a global config.
+    /// Open shared infrastructure and create an empty agent network.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
         let infra = SharedInfra::open(config).await?;
-        Ok(Self { infra })
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        Ok(Self {
+            infra,
+            network: AgentNetwork::new(),
+            agents: HashMap::new(),
+            event_tx,
+            event_rx,
+        })
     }
 
     /// Returns a reference to the shared storage.
@@ -326,17 +474,187 @@ impl RuntimeHost {
         self.infra.clone()
     }
 
+    /// Returns a reference to the persistent topology network.
+    pub fn network(&self) -> &AgentNetwork {
+        &self.network
+    }
+
+    /// Returns a mutable reference to the topology network.
+    pub fn network_mut(&mut self) -> &mut AgentNetwork {
+        &mut self.network
+    }
+
+    // ── Topology control ───────────────────────────────────
+
+    /// Add a node to the topology.
+    pub fn add_node(&mut self, name: &str, profile: &str) -> Result<(), String> {
+        self.network.add_node(NodeSpec {
+            name: name.into(),
+            profile: profile.into(),
+            initial_prompt: None,
+        })
+    }
+
+    /// Add a node with an initial prompt.
+    pub fn add_node_with_prompt(
+        &mut self,
+        name: &str,
+        profile: &str,
+        prompt: impl Into<String>,
+    ) -> Result<(), String> {
+        self.network.add_node(NodeSpec {
+            name: name.into(),
+            profile: profile.into(),
+            initial_prompt: Some(prompt.into()),
+        })
+    }
+
+    /// Remove a node from the topology (and clean up routing state).
+    pub fn remove_node(&mut self, name: &str) {
+        self.network.remove_node(name);
+    }
+
+    /// Connect two nodes with a trigger.
+    pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<(), String> {
+        self.network.connect(from, to, trigger, None)
+    }
+
+    /// Remove all edges between two nodes.
+    pub fn disconnect(&mut self, from: &str, to: &str) -> usize {
+        self.network.disconnect(from, to)
+    }
+
+    /// Set the termination condition.
+    pub fn set_termination(&mut self, termination: TerminationSpec) {
+        self.network.set_termination(termination);
+    }
+
+    /// Reset routing state (buffers, counts, finished) while keeping the
+    /// topology graph intact.
+    pub fn reset_run_state(&mut self) {
+        self.network.reset_run_state();
+    }
+
+    // ── Agent registration + multiplexed transport ─────────
+
+    /// Register an [`AgentHandle`] with the host's internal multiplexer.
+    ///
+    /// After registration, use [`send_to`](Self::send_to) for message
+    /// delivery and [`recv_any`](Self::recv_any) for unified event polling.
+    /// The host takes ownership of the handle — do not use it directly
+    /// after registration.
+    pub fn register_agent(&mut self, handle: AgentHandle) {
+        let name = handle.name.clone();
+        let relay_name = name.clone();
+        let event_tx = self.event_tx.clone();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
+
+        let relay_task = self.infra.runtime_handle.spawn(async move {
+            relay_loop(handle, cmd_rx, event_tx, relay_name).await;
+        });
+
+        self.agents.insert(
+            name,
+            AgentEntry {
+                cmd_tx,
+                _relay_task: relay_task,
+            },
+        );
+    }
+
+    /// Spawn an agent and immediately register it with the host's
+    /// multiplexer. Returns the agent name.
+    pub async fn spawn_and_register(
+        &mut self,
+        agent_name: &str,
+        profile: &agentik_core::AgentProfile,
+        global_model: Arc<ArcSwapOption<Model>>,
+        model_override: Option<Model>,
+    ) -> HostResult<String> {
+        let handle = self
+            .spawn_agent(agent_name, profile, global_model, model_override)
+            .await?;
+        let name = handle.name.clone();
+        self.register_agent(handle);
+        Ok(name)
+    }
+
+    /// Send a message to a named agent (via the relay task).
+    pub fn send_to(&self, name: &str, message: String) {
+        if let Some(entry) = self.agents.get(name) {
+            let _ = entry.cmd_tx.send(AgentCommand::Message(message));
+        }
+    }
+
+    /// Inject initial prompts for all nodes that have them.
+    pub fn inject_initial_prompts(&mut self) {
+        let messages = self.network.initial_messages();
+        for (node, prompt) in messages {
+            self.send_to(&node, prompt);
+        }
+    }
+
+    /// Shut down a named agent and remove it from the registry.
+    pub fn shutdown_agent(&mut self, name: &str) {
+        if let Some(entry) = self.agents.remove(name) {
+            let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+        }
+    }
+
+    /// Shut down all registered agents.
+    pub fn shutdown_all_agents(&mut self) {
+        for (_, entry) in self.agents.drain() {
+            let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+        }
+    }
+
+    /// Receive the next event from any registered agent.
+    pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
+        self.event_rx.recv().await
+    }
+
+    /// Try to receive an event without blocking.
+    pub fn try_recv_any(&mut self) -> Option<TaggedEvent> {
+        self.event_rx.try_recv().ok()
+    }
+
+    /// One iteration of the event loop: receive an event, process it
+    /// through the topology network, and execute routing actions.
+    ///
+    /// Returns `(agent_name, raw_event, routing_actions)` or `None` if
+    /// all agents are done.
+    pub async fn step(&mut self) -> Option<(String, AgentEvent, Vec<RoutingAction>)> {
+        let (name, event) = self.recv_any().await?;
+        let actions = self.network.process_event(&name, &event);
+        for action in &actions {
+            if let RoutingAction::Forward { to, message } = action {
+                self.send_to(to, message.clone());
+            }
+        }
+        Some((name, event, actions))
+    }
+
+    /// Check if a named agent is registered.
+    pub fn contains_agent(&self, name: &str) -> bool {
+        self.agents.contains_key(name)
+    }
+
+    /// Number of registered agents.
+    pub fn agent_count(&self) -> usize {
+        self.agents.len()
+    }
+
+    /// Names of all registered agents.
+    pub fn agent_names(&self) -> Vec<&str> {
+        self.agents.keys().map(|s| s.as_str()).collect()
+    }
+
     /// Spawn a new agent from an [`AgentProfile`](agentik_core::AgentProfile).
     ///
-    /// - `global_model`: the process-wide default model. Used when
-    ///   `model_override` is `None`.
-    /// - `model_override`: an optional per-agent model (e.g. resolved from
-    ///   the profile's `preferred_model`). When `Some`, the agent gets its
-    ///   own `ArcSwapOption` slot instead of sharing the global one.
-    /// - `agent_name`: the **unique** name for this agent instance. The
-    ///   profile name is used for configuration (identity, prompts, tools)
-    ///   but the agent's identity is independent — multiple agents can
-    ///   share the same profile with different names.
+    /// Delegates to [`SharedInfra::spawn_agent`] — which only needs the
+    /// shared infrastructure, not the topology network or registry.
+    /// This allows callers to clone [`SharedInfra`] (cheap, all `Arc`)
+    /// into async tasks without cloning the non-`Clone` [`RuntimeHost`].
     pub async fn spawn_agent(
         &self,
         agent_name: &str,
@@ -344,144 +662,77 @@ impl RuntimeHost {
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> HostResult<AgentHandle> {
-        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cancel_token = CancellationToken::new();
-
-        // Resolve model: per-agent override, or a fresh independent slot
-        // cloned from the current global model. Using a dedicated ArcSwapOption
-        // for each agent is critical — sharing the global Arc would cause
-        // `set_model` on one agent to mutate the model for all agents.
-        let model = match model_override {
-            Some(m) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
-            None => Arc::new(ArcSwapOption::from_pointee(
-                global_model.load_full().as_deref().cloned(),
-            )),
-        };
-
-        // ── Assemble tools from profile flags ──────────────────────
-        let tool_list = self.tools_from_profile(profile).await?;
-
-        // ── Build agent ─────────────────────────────────────────────
-        let config_json = serde_json::to_value(profile).unwrap_or_default();
-        let storage = self.infra.storage.clone();
-
-        let mut builder = Agent::builder()
-            .with_model(model.clone())
-            .with_agent_event_tx(event_tx)
-            .with_name(agent_name)
-            .with_config_json(config_json)
-            .with_system_prompt_identity(&profile.agent_identity)
-            .with_storage(storage.clone());
-
-        // System prompt: profile override or built-in default.
-        if let Some(ref prompt) = profile.system_prompt {
-            builder = builder.with_system_prompt_section(prompt);
-        } else {
-            builder = builder.with_system_prompt_section(
-                crate::config::default_system_prompt(),
-            );
-        }
-
-        builder = builder
-            .with_tools(tool_list)
-            .with_cancel_token(cancel_token.clone());
-
-        // ── Restore from storage if this agent name already exists ──
-        if let Ok(Some(record)) = storage.get_agent_by_name(agent_name).await {
-            tracing::info!(
-                agent = %agent_name,
-                agent_id = %record.id,
-                "restoring agent from storage"
-            );
-            builder = builder.with_id(record.id);
-
-            if let Ok(memory) = restore_memory(storage.as_ref(), record.id).await {
-                builder = builder.with_memory(memory);
-                tracing::info!("memory restored from snapshot + WAL");
-            }
-        }
-
-        let mut agent = builder.build().await?;
-        let agent_id = agent.id();
-        let agent_name = agent.name().to_string();
-        let internal_tx = agent.internal_event_tx();
-        let model_handle = agent.model_handle().clone();
-
-        let agent_task = self.infra.runtime_handle.spawn(async move {
-            agent.run().await;
-        });
-
-        Ok(AgentHandle {
-            agent_id,
-            name: agent_name,
-            internal_tx,
-            event_rx,
-            agent_task,
-            cancel_token,
-            model: model_handle,
-        })
+        self.infra
+            .spawn_agent(agent_name, profile, global_model, model_override)
+            .await
     }
 
-    /// Assemble the tool set for a profile, respecting its feature flags.
+    /// Returns a clonable [`SharedInfra`] that can spawn agents from
+    /// within async tasks. Use this instead of cloning [`RuntimeHost`]
+    /// (which is not `Clone`).
     ///
-    /// Each agent gets a **dedicated** `SessionServer` (its own tokio task +
-    /// channel) via `DataEngineManager::client_for_session`, providing full
-    /// cross-agent isolation — a DAG run in one agent never blocks another.
-    async fn tools_from_profile(
-        &self,
-        profile: &agentik_core::AgentProfile,
-    ) -> HostResult<Vec<agentik_core::tools::ToolRegistration>> {
-        use agentik_core::tools::ToolRegistration;
-        use crate::tools::*;
+    /// ```ignore
+    /// let infra = host.spawner();
+    /// tokio::spawn(async move {
+    ///     infra.spawn_agent(...).await
+    /// });
+    /// ```
+    pub fn spawner(&self) -> SharedInfra {
+        self.infra.clone()
+    }
+}
 
-        let file_storage = self.infra.file_storage.clone();
-        let datalake = self.infra.datalake.clone();
-        // Create (or reuse) a dedicated per-agent session actor.
-        let engine_client = self.infra.engine_manager.client_for_session(&profile.name);
+// ═══════════════════════════════════════════════════════════════════════
+// Relay loop — per-agent event/command bridge
+// ═══════════════════════════════════════════════════════════════════════
 
-        // Filesystem / shell tools — always enabled.
-        let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());
+/// Owns one [`AgentHandle`] and bridges:
+/// - **Inbound**: `AgentCommand`s from the host → `send_message`/`shutdown`
+/// - **Outbound**: `AgentEvent`s from the agent → tagged events to host
+async fn relay_loop(
+    mut handle: AgentHandle,
+    mut cmd_rx: UnboundedReceiver<AgentCommand>,
+    event_tx: UnboundedSender<TaggedEvent>,
+    name: String,
+) {
+    tracing::debug!(agent = %name, "relay task started");
 
-        if profile.enable_opengwas {
-            match opengwas_tools_with_token(file_storage.clone(), None) {
-                Ok(t) => tools.extend(t),
-                Err(e) => tracing::warn!(error = %e, "OpenGWAS tools disabled"),
+    loop {
+        tokio::select! {
+            biased;
+
+            event = handle.recv_event() => match event {
+                Some(ev) => {
+                    if event_tx.send((name.clone(), ev)).is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            },
+
+            cmd = cmd_rx.recv() => match cmd {
+                Some(AgentCommand::Message(text)) => {
+                    handle.send_message(text);
+                }
+                Some(AgentCommand::Shutdown) | None => {
+                    handle.shutdown();
+                    break;
+                }
             }
         }
+    }
 
-        if profile.enable_opentargets {
-            tools.extend(opentargets_tools());
+    tracing::debug!(agent = %name, "relay task exited");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Drop — best-effort shutdown
+// ═══════════════════════════════════════════════════════════════════════
+
+impl Drop for RuntimeHost {
+    fn drop(&mut self) {
+        for (_, entry) in self.agents.drain() {
+            let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
-
-        if profile.enable_gwascatalog {
-            tools.extend(gwascatalog_tools(file_storage));
-        }
-
-        tools.extend(datalake_tools(datalake));
-        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
-
-        if profile.enable_bibliography {
-            // Reuse the process-wide `BibShared` handle: every agent
-            // spawned by this host shares the same libSQL connection
-            // and HTTP gateway stack instead of reopening both per
-            // agent. Opening once per process avoids N independent
-            // connections for an N-agent network and removes the
-            // repeated schema-migration work on each spawn.
-            // Reuse the process-wide `BibShared` handle: every agent
-            // spawned by this host shares the same libSQL connection,
-            // the same NCBI E-utilities / arXiv / Europe PMC clients,
-            // and the same `reqwest::Client` pool. Passing the shared
-            // `EuropePmcClient` through `bib_all_registrations` avoids
-            // constructing one per agent.
-            let bib_shared = self.infra.bib.clone();
-            let bib_tools = bib_base::bib_all_registrations(
-                bib_shared.bib.clone(),
-                bib_shared.gateway.clone(),
-                Some(bib_shared.europe_pmc.clone()),
-            );
-            tools.extend(bib_tools);
-        }
-
-        Ok(tools)
     }
 }

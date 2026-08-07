@@ -8,11 +8,9 @@
 
 pub mod config;
 pub mod host;
-pub mod registry;
 pub mod runtime;
 pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
-pub use host::{AgentHandle, HostError, HostResult, RuntimeHost, SharedInfra};
-pub use registry::{AgentRegistry, TaggedEvent};
+pub use host::{AgentHandle, HostError, HostResult, RuntimeHost, SharedInfra, TaggedEvent};
 pub use runtime::AgentRuntime;

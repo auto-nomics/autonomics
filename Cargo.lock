@@ -9653,6 +9653,7 @@ name = "runtime"
 version = "0.1.0"
 dependencies = [
  "agentik-core",
+ "agentik-network",
  "agentik-sdk",
  "arc-swap",
  "bib-base",
