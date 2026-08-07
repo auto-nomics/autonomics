@@ -1258,7 +1258,7 @@ mod tests {
             _ctx: &crate::registry::NodeCtx,
             inputs: &[NodeInput],
             _reporter: &crate::dag::node_event::NodeReporter,
-        ) -> Result<PortOutputs, DagError> {
+        ) -> std::result::Result<PortOutputs, DagError> {
             let mut outputs = PortOutputs::new();
             for inp in inputs {
                 outputs.insert(inp.port, inp.data.clone());
