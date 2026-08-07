@@ -7217,6 +7217,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "async-trait",
@@ -7348,6 +7349,7 @@ name = "nodes-sql"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-schema",
  "async-trait",
  "dag-core",
  "datafusion",

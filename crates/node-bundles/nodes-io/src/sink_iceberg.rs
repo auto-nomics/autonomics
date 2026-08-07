@@ -52,7 +52,9 @@ impl IcebergSinkError {
 }
 
 impl ::dag_core::dag::NodeError for IcebergSinkError {
-    fn node_type(&self) -> &str { "sink_iceberg" }
+    fn node_type(&self) -> &str {
+        "sink_iceberg"
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -422,10 +424,8 @@ mod tests {
     use datafusion::prelude::{DataFrame, SessionContext};
     use datalake::Datalake;
 
-    use crate::nodes::{
-        IcebergSinkNode,
-        meta::{DagNode, NodeInput},
-    };
+    use crate::sink_iceberg::IcebergSinkNode;
+    use dag_core::{DagNode, NodeInput, SinkMode};
 
     /// Build a small in-memory [`DataFrame`] for sink tests.
     ///
@@ -563,7 +563,7 @@ mod tests {
         let datalake = Arc::new(Datalake::default());
         let mut node = IcebergSinkNode::new(
             "gwas.test4".to_string(),
-            crate::nodes::sink_common::SinkMode::Overwrite,
+            SinkMode::Overwrite,
             datalake,
         );
 

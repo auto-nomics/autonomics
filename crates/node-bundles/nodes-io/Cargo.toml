@@ -31,6 +31,7 @@ datafusion.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+arrow-buffer.workspace = true
 
 [lints]
 workspace = true

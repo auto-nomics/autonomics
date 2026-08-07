@@ -23,6 +23,7 @@ tracing.workspace = true
 futures.workspace = true
 schemars.workspace = true
 turso.workspace = true
+mixer = { path = "../../bio_crates/mixer" }
 
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
