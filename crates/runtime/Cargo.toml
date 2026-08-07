@@ -10,6 +10,11 @@ description = "Sync-to-async bridge for running an agentik agent from a sync con
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-network = { path = "../agentik-network" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-types = { path = "../agentik-types" }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
 opengwas = { path = "../opengwas" }
 opentargets = { path = "../opentargets" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
@@ -24,7 +29,6 @@ tokio-util = "0.7"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 arc-swap.workspace = true
-serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 

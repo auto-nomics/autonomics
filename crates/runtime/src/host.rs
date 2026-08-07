@@ -80,13 +80,14 @@ pub struct SharedInfra {
     pub datalake: Arc<Datalake>,
     pub storage: Arc<dyn AgentStorage>,
     /// Bibliography storage + literature gateway, opened **once** per
-    /// process and shared by every spawned agent. Replaces the previous
-    /// `bib_db_path: PathBuf` field on `RuntimeHost`, which forced each
-    /// `spawn_agent` call to reopen the libSQL connection and rebuild the
-    /// HTTP client stack.
+    /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
+    /// Optional host control for agent tools. Set by RuntimeHost when
+    /// available. When `Some`, spawned agents receive host management tools
+    /// (spawn_agent, send_to_agent, connect_agents, etc.).
+    pub host_control: Option<crate::control::HostControl>,
 }
 
 impl SharedInfra {
@@ -171,6 +172,7 @@ impl SharedInfra {
                 bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
                     .await?,
             ),
+            host_control: None,
         })
     }
 
@@ -295,6 +297,9 @@ impl SharedInfra {
             );
             tools.extend(bib_tools);
         }
+
+        // Host control tools (spawn_agent, send_to_agent, connect_agents, etc.)
+        tools.extend(crate::host_tools::host_tools(self.host_control.clone()));
 
         Ok(tools)
     }
@@ -433,6 +438,10 @@ pub struct RuntimeHost {
     event_tx: UnboundedSender<TaggedEvent>,
     /// Receiver half (owned, drained via `recv_any`).
     event_rx: UnboundedReceiver<TaggedEvent>,
+    /// Command channel from agent tools (HostControl).
+    cmd_rx: tokio::sync::mpsc::UnboundedReceiver<crate::control::HostCommand>,
+    /// Clonable control handle — passed to agent tools.
+    control: crate::control::HostControl,
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -453,15 +462,117 @@ struct AgentEntry {
 impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
-        let infra = SharedInfra::open(config).await?;
+        let mut infra = SharedInfra::open(config).await?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let control = crate::control::HostControl::new(cmd_tx);
+        infra.host_control = Some(control.clone());
         Ok(Self {
             infra,
             network: AgentNetwork::new(),
             agents: HashMap::new(),
             event_tx,
             event_rx,
+            cmd_rx,
+            control,
         })
+    }
+
+    /// Returns a clonable [`HostControl`] for passing to agent tools.
+    /// Agents use this to spawn peers, manage topology, send messages,
+    /// and query system status.
+    pub fn control(&self) -> crate::control::HostControl {
+        self.control.clone()
+    }
+
+    /// Drain and execute all pending commands from agent tools.
+    /// Call this in the event loop (e.g. at each render tick).
+    pub fn try_process_commands(&mut self) {
+        use crate::control::HostCommand;
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            self.process_command(cmd);
+        }
+    }
+
+    fn process_command(&mut self, cmd: crate::control::HostCommand) {
+        use crate::control::{HostCommand, HostStatus};
+        match cmd {
+            HostCommand::Spawn {
+                name,
+                profile_name,
+                reply_tx,
+            } => {
+                // Look up profile by name. In the current design, profiles
+                // are passed externally — we can't resolve them here.
+                // Return an error indicating the caller should use
+                // spawn_and_register directly, or we need a profile
+                // registry on the host.
+                let _ = reply_tx.send(Err(format!(
+                    "Agent spawn via tool requires a profile registry. \
+                     Profile '{profile_name}' cannot be resolved from within \
+                     the host command loop. Use host.spawn_and_register() \
+                     directly, or register profiles first."
+                )));
+            }
+            HostCommand::Shutdown { name } => {
+                self.shutdown_agent(&name);
+            }
+            HostCommand::AddNode {
+                name,
+                profile,
+                initial_prompt,
+            } => {
+                let _ = self.network.add_node(agentik_network::NodeSpec {
+                    name,
+                    profile,
+                    initial_prompt,
+                });
+            }
+            HostCommand::RemoveNode { name } => {
+                self.network.remove_node(&name);
+            }
+            HostCommand::Connect {
+                from,
+                to,
+                trigger,
+            } => {
+                let _ = self.network.connect(&from, &to, trigger, None);
+            }
+            HostCommand::Disconnect { from, to } => {
+                self.network.disconnect(&from, &to);
+            }
+            HostCommand::SendTo { name, message } => {
+                self.send_to(&name, message);
+            }
+            HostCommand::GetStatus { reply_tx } => {
+                let g = self.network.graph();
+                let status = HostStatus {
+                    agents: self
+                        .agents
+                        .keys()
+                        .cloned()
+                        .collect(),
+                    nodes: g.node_names().into_iter().map(String::from).collect(),
+                    edge_count: g.edge_count(),
+                    is_cyclic: g.is_cyclic(),
+                    roots: g.root_nodes().into_iter().map(String::from).collect(),
+                    leaves: g.leaf_nodes().into_iter().map(String::from).collect(),
+                    rounds: self.network.rounds(),
+                    is_finished: self.network.is_finished(),
+                    termination: format!("{:?}", self.network.termination()),
+                };
+                let _ = reply_tx.send(status);
+            }
+            HostCommand::SetTermination { spec } => {
+                self.network.set_termination(spec);
+            }
+            HostCommand::ResetRunState => {
+                self.network.reset_run_state();
+            }
+            HostCommand::InjectPrompts => {
+                self.inject_initial_prompts();
+            }
+        }
     }
 
     /// Returns a reference to the shared storage.
