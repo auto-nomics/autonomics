@@ -56,6 +56,11 @@ pub struct MiceOrchestratorNodeSpec {
     /// RNG seed.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Run the `m` imputation chains in parallel via rayon. Each chain
+    /// gets an independently seeded RNG, so results are statistically
+    /// equivalent to sequential mode but not bit-identical. Default `false`.
+    #[serde(default)]
+    pub parallel: bool,
 }
 
 fn default_m() -> usize {
@@ -321,6 +326,7 @@ impl DagNode for MiceOrchestratorNode {
             ridge: self.spec.ridge,
             donors: self.spec.donors,
             matchtype: self.spec.matchtype,
+            parallel: self.spec.parallel,
         };
 
         let mids = mice::orchestrator::mice(data, col_order, config).map_err(|e| DagError::NodeError {
@@ -431,6 +437,7 @@ mod tests {
             donors: 5,
             matchtype: 1,
             seed: Some(42),
+            parallel: false,
         };
         let mut node = MiceOrchestratorNode {
             meta: port_layout(),

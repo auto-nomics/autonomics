@@ -6672,6 +6672,7 @@ dependencies = [
  "faer",
  "rand 0.8.7",
  "rand_distr 0.4.3",
+ "rayon",
  "serde_json",
  "statrs",
  "thiserror 2.0.19",
