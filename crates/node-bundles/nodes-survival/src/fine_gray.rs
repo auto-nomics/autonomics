@@ -48,11 +48,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::ColumnError;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::ColumnError;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 /// Node kind string.
@@ -235,10 +235,10 @@ impl NodeFactory for FineGrayNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: FineGrayNodeSpec = serde_json::from_value(spec)?;
         if let Err(reason) = s.validate() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: FINE_GRAY_NODE_KIND.to_string(),
                 reason,
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(FineGrayNodeSpec))
@@ -254,9 +254,9 @@ impl NodeFactory for FineGrayNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<FineGrayNodeSpec>(spec, FINE_GRAY_NODE_KIND)?;
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
@@ -342,7 +342,7 @@ impl NodeFactory for FineGrayNodeFactory {
             ")".to_string(),
         ]);
 
-        Ok(crate::codegen::NodeCodegen {
+        Ok(dag_core::codegen::NodeCodegen {
             code,
             output_vars: vec![out, base_var],
             extra_packages: vec![],
@@ -456,7 +456,7 @@ impl DagNode for FineGrayNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -469,8 +469,8 @@ impl DagNode for FineGrayNode {
             .map_err(|e| FineGrayError::Collect(e.to_string()))?;
 
         let s = &self.spec;
-        let ftime = super::numeric_util::extract_numeric_lenient(&batches, &s.time_column)?;
-        let fstatus = super::numeric_util::extract_numeric_lenient(&batches, &s.status_column)?;
+        let ftime = dag_core::arrow_util::extract_numeric_lenient(&batches, &s.time_column)?;
+        let fstatus = dag_core::arrow_util::extract_numeric_lenient(&batches, &s.status_column)?;
 
         // Covariates as row-major matrices, as `cmprsk::crr` expects.
         let read_block = |cols: &[String]| -> Result<Vec<Vec<f64>>, ColumnError> {
@@ -479,7 +479,7 @@ impl DagNode for FineGrayNode {
             }
             let mut columns = Vec::with_capacity(cols.len());
             for name in cols {
-                columns.push(super::numeric_util::extract_numeric_lenient(
+                columns.push(dag_core::arrow_util::extract_numeric_lenient(
                     &batches, name,
                 )?);
             }
@@ -493,7 +493,7 @@ impl DagNode for FineGrayNode {
 
         let cengroup = match &s.cengroup_column {
             None => None,
-            Some(c) => Some(super::numeric_util::extract_numeric_lenient(&batches, c)?),
+            Some(c) => Some(dag_core::arrow_util::extract_numeric_lenient(&batches, c)?),
         };
 
         let tf = if s.time_functions.is_empty() {

@@ -43,11 +43,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::ColumnError;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::ColumnError;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 /// Node kind string.
@@ -149,7 +149,7 @@ impl NodeFactory for CumincNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CumincNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CumincNode {
             meta: port_layout(),
@@ -160,9 +160,9 @@ impl NodeFactory for CumincNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CumincNodeSpec>(spec, CUMINC_NODE_KIND)?;
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
@@ -227,7 +227,7 @@ impl NodeFactory for CumincNodeFactory {
             format!("print({tests_var})"),
         ]);
 
-        Ok(crate::codegen::NodeCodegen {
+        Ok(dag_core::codegen::NodeCodegen {
             code,
             output_vars: vec![out, tests_var],
             extra_packages: vec![],
@@ -267,10 +267,10 @@ fn read_factor(
     batches: &[RecordBatch],
     name: &str,
 ) -> Result<(Vec<f64>, Vec<String>), ColumnError> {
-    let dtype = super::numeric_util::column_dtype(batches, name)?;
+    let dtype = dag_core::arrow_util::column_dtype(batches, name)?;
     match dtype {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-            let raw = super::numeric_util::extract_string_column(batches, name)?;
+            let raw = dag_core::arrow_util::extract_string_column(batches, name)?;
             let mut levels: Vec<String> = raw.clone();
             levels.sort();
             levels.dedup();
@@ -281,7 +281,7 @@ fn read_factor(
             Ok((codes, levels))
         }
         _ => {
-            let raw = super::numeric_util::extract_numeric_lenient(batches, name)?;
+            let raw = dag_core::arrow_util::extract_numeric_lenient(batches, name)?;
             let mut levels: Vec<f64> = raw.iter().copied().filter(|v| v.is_finite()).collect();
             levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             levels.dedup();
@@ -372,7 +372,7 @@ impl DagNode for CumincNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -385,8 +385,8 @@ impl DagNode for CumincNode {
             .map_err(|e| CumincError::Collect(e.to_string()))?;
 
         let s = &self.spec;
-        let ftime = super::numeric_util::extract_numeric_lenient(&batches, &s.time_column)?;
-        let fstatus = super::numeric_util::extract_numeric_lenient(&batches, &s.status_column)?;
+        let ftime = dag_core::arrow_util::extract_numeric_lenient(&batches, &s.time_column)?;
+        let fstatus = dag_core::arrow_util::extract_numeric_lenient(&batches, &s.status_column)?;
 
         let group = match &s.group_column {
             None => None,

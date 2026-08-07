@@ -7,9 +7,9 @@ use datafusion::common::HashMap;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use crate::{
+use dag_core::{
     dag::{DagError, DagNode, NodeInput, NodePorts, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 /// A no-op transform node that echoes each upstream [`DataFrame`] to its
@@ -63,7 +63,7 @@ impl NodeFactory for EchoNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let _spec: EchoNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(EchoNode::default()))
     }
@@ -106,9 +106,9 @@ impl DagNode for EchoNode {
 
     async fn execute(
         &mut self,
-        _ctx: &crate::node_registry::registry::NodeCtx,
+        _ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let mut out: PortOutputs = HashMap::new();
         for inp in inputs {
@@ -120,8 +120,8 @@ impl DagNode for EchoNode {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -154,7 +154,7 @@ mod tests {
                     port: 0,
                     data: df.clone(),
                 }],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
@@ -190,7 +190,7 @@ mod tests {
                     NodeInput { port: 0, data: df1 },
                     NodeInput { port: 1, data: df2 },
                 ],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

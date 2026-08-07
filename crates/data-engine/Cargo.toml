@@ -63,11 +63,23 @@ chrono.workspace = true
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
 nodes-ml = { path = "../node-bundles/nodes-ml", optional = true }
+nodes-viz = { path = "../node-bundles/nodes-viz", optional = true }
+nodes-sql = { path = "../node-bundles/nodes-sql", optional = true }
+nodes-regression = { path = "../node-bundles/nodes-regression", optional = true }
+nodes-survival = { path = "../node-bundles/nodes-survival", optional = true }
+nodes-coloc = { path = "../node-bundles/nodes-coloc", optional = true }
+nodes-epi = { path = "../node-bundles/nodes-epi", optional = true }
 
 [features]
-default = ["bundle-hypothesize", "bundle-ml"]
+default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml = ["dep:nodes-ml"]
+bundle-viz = ["dep:nodes-viz"]
+bundle-sql = ["dep:nodes-sql"]
+bundle-regression = ["dep:nodes-regression"]
+bundle-survival = ["dep:nodes-survival"]
+bundle-coloc = ["dep:nodes-coloc"]
+bundle-epi = ["dep:nodes-epi"]
 
 [dev-dependencies]
 datalake = { path = "../datalake" }

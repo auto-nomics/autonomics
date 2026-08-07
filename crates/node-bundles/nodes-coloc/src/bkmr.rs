@@ -23,10 +23,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // =====================================================================
@@ -240,7 +240,7 @@ impl NodeFactory for BkmrNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: BkmrConfig = serde_json::from_value(spec)?;
         Ok(Box::new(BkmrNode::new(config)))
     }
@@ -248,9 +248,9 @@ impl NodeFactory for BkmrNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<BkmrConfig>(spec, "bkmr")?;
         let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
@@ -285,7 +285,7 @@ impl NodeFactory for BkmrNodeFactory {
             format!("print(summary({out}))"),
         ];
 
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -315,7 +315,7 @@ impl DagNode for BkmrNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(BkmrNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> = input
@@ -568,7 +568,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
@@ -601,7 +601,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[input],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();

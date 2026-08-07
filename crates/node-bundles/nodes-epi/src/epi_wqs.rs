@@ -24,11 +24,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::{ColumnError, extract_numeric_lenient};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -134,10 +134,10 @@ impl NodeFactory for EpiWqsNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: EpiWqsNodeSpec = serde_json::from_value(spec)?;
         if s.exposures.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "epi_wqs".to_string(),
                 reason: "exposures must be a non-empty array".to_string(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(EpiWqsNodeSpec))
@@ -145,7 +145,7 @@ impl NodeFactory for EpiWqsNodeFactory {
             });
         }
         if !(0.1..=0.9).contains(&s.train_frac) {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "epi_wqs".to_string(),
                 reason: format!("train_frac must be in [0.1, 0.9], got {}", s.train_frac),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(EpiWqsNodeSpec))
@@ -166,9 +166,9 @@ impl NodeFactory for EpiWqsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<EpiWqsNodeSpec>(spec, "epi_wqs")?;
         let out = ctx.output_var.to_string();
         let wqs_fit = ctx.fresh_var("wqs_fit");
@@ -199,7 +199,7 @@ impl NodeFactory for EpiWqsNodeFactory {
             format!("{out} <- summary({wqs_fit})"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["gWQS".into()]
@@ -224,7 +224,7 @@ impl DagNode for EpiWqsNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()

@@ -28,11 +28,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::ColumnError;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::ColumnError;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 // ── Error ──────────────────────────────────────────────────────────────────
@@ -138,10 +138,10 @@ impl NodeFactory for LogisticRegressionNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: LogisticRegressionNodeSpec = serde_json::from_value(spec)?;
         if s.predictors.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "logistic_regression".to_string(),
                 reason: "predictors must be a non-empty array".to_string(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(
@@ -151,7 +151,7 @@ impl NodeFactory for LogisticRegressionNodeFactory {
             });
         }
         if s.predictors.contains(&s.outcome) {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "logistic_regression".to_string(),
                 reason: format!("outcome '{}' must not also appear in predictors", s.outcome),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(
@@ -170,9 +170,9 @@ impl NodeFactory for LogisticRegressionNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<LogisticRegressionNodeSpec>(spec, "logistic_regression")?;
         let out = ctx.output_var.to_string();
         let fit = ctx.fresh_var("glm_fit");
@@ -198,7 +198,7 @@ impl NodeFactory for LogisticRegressionNodeFactory {
             format!("{out}$converged <- {fit}$converged"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -226,7 +226,7 @@ impl DagNode for LogisticRegressionNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LogisticRegressionError::Column(
             "no input connected".to_string(),
@@ -239,7 +239,7 @@ impl DagNode for LogisticRegressionNode {
             .map_err(|e| LogisticRegressionError::Collect(e.to_string()))?;
 
         // --- Extract all columns leniently (NaN for nulls) ---
-        let y_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.outcome)
+        let y_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.outcome)
             .map_err(LogisticRegressionError::from)?;
 
         // Validate binary outcome.
@@ -256,7 +256,7 @@ impl DagNode for LogisticRegressionNode {
         let mut x_raw: Vec<Vec<f64>> = Vec::with_capacity(self.predictors.len());
         for name in &self.predictors {
             x_raw.push(
-                super::numeric_util::extract_numeric_lenient(&batches, name)
+                dag_core::arrow_util::extract_numeric_lenient(&batches, name)
                     .map_err(LogisticRegressionError::from)?,
             );
         }

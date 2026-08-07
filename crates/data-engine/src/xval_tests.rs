@@ -570,7 +570,7 @@ fn evalue_codegen_or() {
 #[test]
 #[ignore = "requires R + EValue package; run with DIFFTESTS=1"]
 fn evalue_rr_xval() {
-    use crate::nodes::evalue::{EvalueConfig, MeasureType};
+    use nodes_epi::evalue::{EvalueConfig, MeasureType};
 
     // ── Rust computation ──
     let _cfg = EvalueConfig {

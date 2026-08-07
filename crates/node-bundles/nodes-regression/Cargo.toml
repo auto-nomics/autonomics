@@ -1,0 +1,28 @@
+[package]
+name = "nodes-regression"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Linear, logistic, cox regression + chi-square DAG node bundle."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+statkit = { path = "../../../stat_crates/statkit" }
+epi = { path = "../../../stat_crates/epi" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+faer.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }

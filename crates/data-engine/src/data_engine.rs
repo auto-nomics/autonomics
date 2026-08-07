@@ -16,7 +16,7 @@ use datalake::Datalake;
 
 pub use crate::nodes::{
     FileFormat, FileSinkNode, FileSourceNode, IcebergSinkNode, IcebergSourceNode, LdscHsqConfig,
-    LdscHsqNode, LinearRegressionNode, SinkMode, SqlNode, WriteFormat,
+    LdscHsqNode, SinkMode, WriteFormat,
 };
 
 /// `DataEngine` is the core object that implements the data analysis engine.
@@ -1013,7 +1013,7 @@ mod tests {
         engine
             .add_node(
                 "join",
-                super::SqlNode::from_ports(
+                nodes_sql::sql_node::SqlNode::from_ports(
                     NodePorts::new()
                         .add_input_port(None)
                         .add_input_port(None)

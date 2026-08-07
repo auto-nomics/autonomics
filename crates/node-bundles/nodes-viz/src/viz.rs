@@ -7,7 +7,7 @@
 //! PNG **into the engine's opendal-virtualized filesystem** (not the host
 //! filesystem), so the artifact lives in the same isolated space as source/
 //! sink data. The rendered virtual path is surfaced to the agent via
-//! `NodeReport.artifact_path` (see [`crate::dag::graph`]).
+//! `NodeReport.artifact_path` (see [`dag_core::dag::graph`]).
 
 use std::sync::Arc;
 
@@ -18,9 +18,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::dag::DagError;
+use dag_core::dag::graph::PortOutputs;
 
 /// Errors raised by the visualization node.
 #[derive(Debug, Error)]
@@ -124,7 +124,7 @@ impl VizNode {
 
 pub struct VizNodeFactory {}
 
-impl crate::node_registry::registry::NodeFactory for VizNodeFactory {
+impl dag_core::registry::NodeFactory for VizNodeFactory {
     fn kind(&self) -> &'static str {
         "visualization"
     }
@@ -154,8 +154,8 @@ impl crate::node_registry::registry::NodeFactory for VizNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        node_ctx: crate::node_registry::registry::NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+        node_ctx: dag_core::registry::NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: VizNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(VizNode::new(node_spec, node_ctx.opendal.clone())))
     }
@@ -163,9 +163,9 @@ impl crate::node_registry::registry::NodeFactory for VizNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<VizNodeSpec>(spec, "visualization")?;
         let input = input_0(ctx);
         let width = s.width.unwrap_or(7.0);
@@ -180,7 +180,7 @@ impl crate::node_registry::registry::NodeFactory for VizNodeFactory {
                 s.output_path, width, height, dpi
             ),
         ];
-        Ok(crate::codegen::NodeCodegen {
+        Ok(dag_core::codegen::NodeCodegen {
             code,
             output_vars: vec![], // viz has no output port
             extra_packages: vec![],
@@ -225,9 +225,9 @@ impl DagNode for VizNode {
 
     async fn execute(
         &mut self,
-        _ctx: &crate::node_registry::registry::NodeCtx,
+        _ctx: &dag_core::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let storage = self.opendal.clone().ok_or(VizError::NoOpendalFs)?;
 
@@ -287,8 +287,8 @@ impl DagNode for VizNode {
 
 #[cfg(test)]
 mod tests {
-    fn node_ctx() -> crate::node_registry::registry::NodeCtx {
-        crate::node_registry::registry::NodeCtx {
+    fn node_ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
@@ -346,7 +346,7 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[NodeInput { port: 0, data: df }],
-                &crate::dag::node_event::NodeReporter::noop(),
+                &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("execute should succeed");

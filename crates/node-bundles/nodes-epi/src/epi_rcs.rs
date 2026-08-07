@@ -28,11 +28,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::{ColumnError, extract_numeric_lenient};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -124,10 +124,10 @@ impl NodeFactory for EpiRcsNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: EpiRcsNodeSpec = serde_json::from_value(spec)?;
         if !(3..=7).contains(&s.n_knots) {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "epi_rcs".to_string(),
                 reason: format!("n_knots must be 3–7, got {}", s.n_knots),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(EpiRcsNodeSpec))
@@ -146,9 +146,9 @@ impl NodeFactory for EpiRcsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<EpiRcsNodeSpec>(spec, "epi_rcs")?;
         let out = ctx.output_var.to_string();
         let fit = ctx.fresh_var("rcs_fit");
@@ -190,7 +190,7 @@ impl NodeFactory for EpiRcsNodeFactory {
             format!("print({out})"),
             format!("options(datadist = NULL)"),
         ];
-        Ok(crate::codegen::NodeCodegen {
+        Ok(dag_core::codegen::NodeCodegen {
             code,
             output_vars: vec![out, out2],
             extra_packages: vec![],
@@ -219,7 +219,7 @@ impl DagNode for EpiRcsNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()

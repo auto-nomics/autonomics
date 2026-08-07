@@ -104,7 +104,7 @@ impl ToolFunction for VfsBashTool {
             }
             "stat" => ops::op_stat(op, input.path.as_deref()).await,
             "mkdir" => ops::op_mkdir(op, input.path.as_deref()).await,
-            "rm" => ops::op_rm(op, input.path.as_deref()).await,
+            "rm" => ops::op_rm(op, input.path.as_deref(), input.recursive).await,
             "cp" => ops::op_cp(op, input.src.as_deref(), input.dst.as_deref()).await,
             "mv" => ops::op_mv(op, input.src.as_deref(), input.dst.as_deref()).await,
             "wc" => ops::op_wc(op, input.path.as_deref()).await,
@@ -541,6 +541,206 @@ mod tests {
         let result = tool.run(r).await.unwrap();
         assert_eq!(result.is_error, Some(true));
     }
+    // ─── rm safety contract (Bug 3 + Bug 4) ────────────────────────
+
+    #[tokio::test]
+    async fn rm_nonexistent_returns_error() {
+        let tool = make_tool();
+        let mut r = input("rm");
+        r.path = Some("/does_not_exist.txt".into());
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("No such file"),
+            "expected 'No such file' in error, got: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rm_root_refused() {
+        let tool = make_tool();
+        let mut r = input("rm");
+        r.path = Some("/".into());
+        r.recursive = Some(true);
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("virtual filesystem root") || s.to_lowercase().contains("root"),
+            "expected root-refusal message, got: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rm_empty_dir_succeeds_without_flag() {
+        let tool = make_tool();
+        let mut m = input("mkdir");
+        m.path = Some("/empty".into());
+        tool.run(m).await.unwrap();
+
+        let mut r = input("rm");
+        r.path = Some("/empty".into());
+        // no recursive flag
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, None, "empty-dir rm must succeed");
+        let json = result_json(result);
+        assert_eq!(json["deleted"], true);
+        assert_eq!(json["recursive"], false);
+    }
+
+    #[tokio::test]
+    async fn rm_nonempty_dir_fails_without_recursive() {
+        let tool = make_tool();
+        let mut m = input("mkdir");
+        m.path = Some("/full".into());
+        tool.run(m).await.unwrap();
+        let mut w = input("write");
+        w.path = Some("/full/a.txt".into());
+        w.content = Some("data".into());
+        tool.run(w).await.unwrap();
+
+        let mut r = input("rm");
+        r.path = Some("/full".into());
+        // no recursive flag — must NOT wipe the subtree
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+
+        // /full/a.txt must still exist
+        let mut s = input("stat");
+        s.path = Some("/full/a.txt".into());
+        let result = tool.run(s).await.unwrap();
+        assert_eq!(result.is_error, None, "non-empty-dir rm must not delete contents");
+    }
+
+    #[tokio::test]
+    async fn rm_nonempty_dir_succeeds_with_recursive_true() {
+        let tool = make_tool();
+        let mut m = input("mkdir");
+        m.path = Some("/full2".into());
+        tool.run(m).await.unwrap();
+        let mut w = input("write");
+        w.path = Some("/full2/a.txt".into());
+        w.content = Some("data".into());
+        tool.run(w).await.unwrap();
+
+        let mut r = input("rm");
+        r.path = Some("/full2".into());
+        r.recursive = Some(true);
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, None);
+        let json = result_json(result);
+        assert_eq!(json["deleted"], true);
+        assert_eq!(json["recursive"], true);
+    }
+
+    #[tokio::test]
+    async fn rm_file_succeeds() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/f.txt".into());
+        w.content = Some("x".into());
+        tool.run(w).await.unwrap();
+
+        let mut r = input("rm");
+        r.path = Some("/f.txt".into());
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, None);
+
+        // subsequent rm on the same file must now error
+        let mut r2 = input("rm");
+        r2.path = Some("/f.txt".into());
+        let result = tool.run(r2).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    // ─── cat/read error handling (Bug 1 + Bug 2) ───────────────────
+
+    #[tokio::test]
+    async fn cat_nonexistent_returns_error() {
+        let tool = make_tool();
+        let mut c = input("cat");
+        c.path = Some("/no_such_file_xyz".into());
+        let result = tool.run(c).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn cat_directory_returns_error() {
+        let tool = make_tool();
+        let mut m = input("mkdir");
+        m.path = Some("/d".into());
+        tool.run(m).await.unwrap();
+
+        let mut c = input("cat");
+        c.path = Some("/d".into());
+        let result = tool.run(c).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("is a directory"),
+            "expected 'is a directory', got: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_nonexistent_returns_error() {
+        let tool = make_tool();
+        let mut r = input("read");
+        r.path = Some("/nope_xyz".into());
+        let result = tool.run(r).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn cat_empty_file_returns_empty_marker() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/empty.txt".into());
+        w.content = Some(String::new());
+        tool.run(w).await.unwrap();
+
+        let mut c = input("cat");
+        c.path = Some("/empty.txt".into());
+        let result = tool.run(c).await.unwrap();
+        assert_eq!(result.is_error, None);
+        let json = result_json(result);
+        assert_eq!(json["content"], "(file is empty)");
+        assert_eq!(json["total_size"], 0);
+    }
+
+    // ─── write atomicity (Bug 5 + Bug 6) ───────────────────────────
+
+    #[tokio::test]
+    async fn write_overwrite_growing_payloads_consistent() {
+        let tool = make_tool();
+        // 10 successive overwrites, each longer than the previous one.
+        // Old code could sporadically fail with "writer got too little data".
+        for i in 1..=10 {
+            let payload = "x".repeat(i * 16);
+            let mut w = input("write");
+            w.path = Some("/grow.txt".into());
+            w.content = Some(payload.clone());
+            let result = tool.run(w).await.unwrap();
+            assert_eq!(
+                result.is_error,
+                None,
+                "write #{i} of {} bytes failed",
+                payload.len()
+            );
+
+            let mut c = input("cat");
+            c.path = Some("/grow.txt".into());
+            let result = tool.run(c).await.unwrap();
+            let json = result_json(result);
+            assert_eq!(
+                json["content"].as_str().unwrap().len(),
+                payload.len(),
+                "content length mismatch on write #{i}"
+            );
+        }
+    }
+
 
     #[tokio::test]
     async fn read_allows_cjk_and_emoji() {

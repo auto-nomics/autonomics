@@ -25,11 +25,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::{ColumnError, extract_numeric_lenient};
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -128,10 +128,10 @@ impl NodeFactory for EpiLassoNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: EpiLassoNodeSpec = serde_json::from_value(spec)?;
         if s.predictors.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "epi_lasso".to_string(),
                 reason: "predictors must be a non-empty array".to_string(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(EpiLassoNodeSpec))
@@ -151,9 +151,9 @@ impl NodeFactory for EpiLassoNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<EpiLassoNodeSpec>(spec, "epi_lasso")?;
         let out = ctx.output_var.to_string();
         let cv_fit = ctx.fresh_var("cv_fit");
@@ -188,7 +188,7 @@ impl NodeFactory for EpiLassoNodeFactory {
             format!("# NOTE: bootstrap_freq not generated in R reference"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["glmnet".into()]
@@ -213,7 +213,7 @@ impl DagNode for EpiLassoNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()

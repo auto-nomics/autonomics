@@ -16,24 +16,12 @@ use dag_core::registry::{NodeCtx, NodeRegistry};
 
 use crate::nodes::{
     bivariate_mixer::BivariateMixerNodeFactory,
-    bkmr::BkmrNodeFactory,
     causal::CausalNodeFactory,
-    chi_square::ChiSquareNodeFactory,
     cmest::{
         CmestBinaryMNodeFactory, CmestBinaryYNodeFactory, CmestGformulaNodeFactory,
         CmestMultiNodeFactory, CmestNodeFactory, CmestWeightingNodeFactory,
     },
-    coloc::ColocAbfNodeFactory,
-    cox_regression::CoxRegressionNodeFactory,
     cpassoc::CpassocNodeFactory,
-    cuminc::CumincNodeFactory,
-    echo_node::EchoNodeFactory,
-    epi_lasso::EpiLassoNodeFactory,
-    epi_rcs::EpiRcsNodeFactory,
-    epi_roc::EpiRocNodeFactory,
-    epi_wqs::EpiWqsNodeFactory,
-    evalue::EvalueNodeFactory,
-    fine_gray::FineGrayNodeFactory,
     hdl_l::HdlLNodeFactory,
     hdl_l_scan::HdlLScanNodeFactory,
     hlme::{HlmeCompareNodeFactory, HlmeNodeFactory, HlmePredictNodeFactory},
@@ -46,8 +34,6 @@ use crate::nodes::{
     ldsc_rg::LdscRgNodeFactory,
     ldsc_sldsc::LdscSldscNodeFactory,
     liability::LiabilityNodeFactory,
-    linear_regression::LinearRegressionNodeFactory,
-    logistic_regression::LogisticRegressionNodeFactory,
     magma::{
         MagmaAnnotateNodeFactory, MagmaGeneNodeFactory, MagmaMetaNodeFactory, MagmaSetNodeFactory,
     },
@@ -62,7 +48,6 @@ use crate::nodes::{
     source_iceberg::IcebergSourceNodeFactory,
     source_opengwas_tophits::OpengwasTophitsNodeFactory,
     source_opentargets::{OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory},
-    sql_node::SqlNodeFactory,
     survey_calibrate::{CalibrateFactory, PostStratifyFactory, RakeFactory, TrimWeightsFactory},
     survey_describe::{
         SvyMeanFactory, SvyQuantileFactory, SvyRatioFactory, SvyTableFactory, SvyTotalFactory,
@@ -75,11 +60,9 @@ use crate::nodes::{
     survey_survival::{SvyKmFactory, SvyLogrankFactory},
     survey_test::{SvyChisqFactory, SvyCiPropFactory, SvyRankTestFactory, SvyTtestFactory},
     survey_utility::{RegTermTestFactory, SvyByFactory, SvyContrastFactory, SvyStandardizeFactory},
-    survival::SurvivalNodeFactory,
     susie_rss::SusieRssNodeFactory,
     two_sample_mr::TwoSampleMrNodeFactory,
     univariate_mixer::UnivariateMixerNodeFactory,
-    viz::VizNodeFactory,
 };
 
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
@@ -101,7 +84,6 @@ pub fn build_default_registry(
         opendal,
     );
 
-    registry.register(Box::new(SqlNodeFactory {}));
     registry.register(Box::new(FileSourceNodeFactory {}));
     registry.register(Box::new(IcebergSourceNodeFactory {}));
     registry.register(Box::new(FileSinkNodeFactory {}));
@@ -111,31 +93,30 @@ pub fn build_default_registry(
     registry.register(Box::new(LcvNodeFactory {}));
     registry.register(Box::new(LdscSldscNodeFactory {}));
     registry.register(Box::new(LiabilityNodeFactory {}));
-    registry.register(Box::new(LinearRegressionNodeFactory {}));
-    registry.register(Box::new(LogisticRegressionNodeFactory {}));
+    // ── Phase 2 bundles ──────────────────────────────────────────────
+    #[cfg(feature = "bundle-regression")]
+    registry.register_plugin(&nodes_regression::Plugin);
+    #[cfg(feature = "bundle-survival")]
+    registry.register_plugin(&nodes_survival::Plugin);
+    #[cfg(feature = "bundle-coloc")]
+    registry.register_plugin(&nodes_coloc::Plugin);
+    #[cfg(feature = "bundle-epi")]
+    registry.register_plugin(&nodes_epi::Plugin);
+    #[cfg(feature = "bundle-viz")]
+    registry.register_plugin(&nodes_viz::Plugin);
+    #[cfg(feature = "bundle-sql")]
+    registry.register_plugin(&nodes_sql::Plugin);
+    // ── remaining inline registrations ──────────────────────────────
     registry.register(Box::new(MediationNodeFactory {}));
-    registry.register(Box::new(ChiSquareNodeFactory {}));
     registry.register(Box::new(CmestNodeFactory {}));
     registry.register(Box::new(CmestMultiNodeFactory {}));
     registry.register(Box::new(CmestBinaryYNodeFactory {}));
     registry.register(Box::new(CmestBinaryMNodeFactory {}));
     registry.register(Box::new(CmestWeightingNodeFactory {}));
     registry.register(Box::new(CmestGformulaNodeFactory {}));
-    registry.register(Box::new(CoxRegressionNodeFactory {}));
-    registry.register(Box::new(FineGrayNodeFactory {}));
-    registry.register(Box::new(CumincNodeFactory {}));
-    registry.register(Box::new(SurvivalNodeFactory {}));
-    registry.register(Box::new(EpiRcsNodeFactory {}));
-    registry.register(Box::new(EpiRocNodeFactory {}));
-    registry.register(Box::new(EpiLassoNodeFactory {}));
-    registry.register(Box::new(EpiWqsNodeFactory {}));
-    registry.register(Box::new(EchoNodeFactory {}));
-    registry.register(Box::new(ColocAbfNodeFactory {}));
-    registry.register(Box::new(BkmrNodeFactory {}));
     registry.register(Box::new(HlmeNodeFactory {}));
     registry.register(Box::new(HlmePredictNodeFactory {}));
     registry.register(Box::new(HlmeCompareNodeFactory {}));
-    registry.register(Box::new(EvalueNodeFactory {}));
     registry.register(Box::new(TwoSampleMrNodeFactory {}));
     registry.register(Box::new(MrlapNodeFactory {}));
     registry.register(Box::new(MrpressoNodeFactory {}));
@@ -152,7 +133,6 @@ pub fn build_default_registry(
     registry.register(Box::new(MtagNodeFactory {}));
     registry.register(Box::new(MvmrNodeFactory {}));
     registry.register(Box::new(CpassocNodeFactory {}));
-    registry.register(Box::new(VizNodeFactory {}));
     registry.register(Box::new(OpentargetsAssociationsNodeFactory {}));
     registry.register(Box::new(OpentargetsSearchNodeFactory {}));
     registry.register(Box::new(OpengwasTophitsNodeFactory {}));

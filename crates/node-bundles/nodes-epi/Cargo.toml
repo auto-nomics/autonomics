@@ -1,0 +1,28 @@
+[package]
+name = "nodes-epi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Epidemiology DAG node bundle (RCS, ROC, LASSO, WQS, E-value)."
+
+[dependencies]
+dag-core = { path = "../../dag-core" }
+epi = { path = "../../../stat_crates/epi" }
+evalue = { path = "../../../bio_crates/evalue" }
+statrs = "0.18"
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror.workspace = true
+datafusion.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+datalake = { path = "../../datalake" }

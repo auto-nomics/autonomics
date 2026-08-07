@@ -57,11 +57,21 @@ pub async fn op_cat(
     let raw_path = path.ok_or("missing 'path' for cat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
-    let total_size = op
-        .stat(&vpath)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "cat: '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("cat: '{raw_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "cat: '{raw_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
+    let total_size = meta.content_length();
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": raw_path,
@@ -159,6 +169,13 @@ pub async fn op_tail(
 // ══════════════════ writing ops ══════════════════
 
 /// `write` — create or overwrite a file.
+///
+/// The implementation performs an explicit delete-then-write to sidestep
+/// the OpenDAL Fs backend race that produces `writer got too little data`
+/// when an existing file is overwritten with a longer payload. After the
+/// write we retry-stat to defend against the same backend's brief
+/// final-consistency window where a freshly written file is not yet
+/// visible to a follow-up stat.
 pub async fn op_write(
     op: &opendal::Operator,
     path: Option<&str>,
@@ -169,14 +186,40 @@ pub async fn op_write(
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let size = content.len() as u64;
 
+    // Atomic-replace path: drop any existing entry first so the Fs
+    // backend's overwrite path cannot race with its size bookkeeping.
+    if let Err(e) = op.delete(&vpath).await {
+        if !matches!(e.kind(), opendal::ErrorKind::NotFound) {
+            return Ok(AgentToolResult::error(format!(
+                "write: failed to clear {raw_path}: {e}"
+            )));
+        }
+    }
+
     op.write(&vpath, content.into_bytes())
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
-        "path": raw_path,
-        "size": size,
-    })))
+    // Visibility probe: the Fs backend occasionally returns a stale
+    // NotFound on the stat that immediately follows a write in the same
+    // process. Retry a handful of times before declaring a real failure.
+    for attempt in 0..5 {
+        if op.stat(&vpath).await.is_ok() {
+            return Ok(AgentToolResult::success_json(serde_json::json!({
+                "path": raw_path,
+                "size": size,
+            })));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(
+            5 * (attempt as u64 + 1),
+        ))
+        .await;
+    }
+
+    Ok(AgentToolResult::error(format!(
+        "write: wrote {size} bytes to {raw_path} but the file is not yet visible to a follow-up stat. \
+         The backend may be in an inconsistent state; retry or verify with a separate tool call."
+    )))
 }
 
 /// `edit` — exact string replacement.
@@ -448,24 +491,66 @@ pub async fn op_mkdir(
     })))
 }
 
-/// `rm` — delete a file or directory (recursive).
-#[allow(deprecated)]
+/// `rm` — delete a file or directory.
+///
+/// Safety contract:
+/// - The virtual root (`/`) is always refused.
+/// - Missing targets are reported as errors (no silent success).
+/// - Non-empty directories are refused unless `recursive=true` is passed;
+///   empty directories can be removed without the flag.
 pub async fn op_rm(
     op: &opendal::Operator,
     path: Option<&str>,
+    recursive: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = path.ok_or("missing 'path' for rm")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
-    // delete_with().recursive(true) is the recommended API (remove_all is deprecated).
+    if vpath == "/" {
+        return Ok(AgentToolResult::error(
+            "Refusing to rm '/': that is the virtual filesystem root. \
+             Use a sub-path like '/tmp' instead.",
+        ));
+    }
+
+    let meta = match op.stat(&vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "rm: cannot remove '{raw_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("rm: {e}"))),
+    };
+
+    let recursive_flag = recursive.unwrap_or(false);
+
+    if meta.is_dir() && !recursive_flag {
+        // Empty-directory removal: succeeds only if the directory has no
+        // entries. Non-empty directories are explicitly refused here so
+        // the caller sees a clear message instead of a silent wipe.
+        return match op.delete(&vpath).await {
+            Ok(()) => Ok(AgentToolResult::success_json(serde_json::json!({
+                "path": raw_path,
+                "deleted": true,
+                "recursive": false,
+            }))),
+            Err(e) => Ok(AgentToolResult::error(format!(
+                "rm: cannot remove '{raw_path}': {e}. \
+                 If the directory is non-empty, pass recursive=true to remove it and its contents."
+            ))),
+        };
+    }
+
     op.delete_with(&vpath)
-        .recursive(true)
+        .recursive(recursive_flag)
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": raw_path,
         "deleted": true,
+        "recursive": recursive_flag,
     })))
 }
 
@@ -597,11 +682,21 @@ async fn read_text_numbered(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let total_size = op
-        .stat(vpath)
-        .await
-        .map(|m| m.content_length())
-        .unwrap_or(0);
+    let meta = match op.stat(vpath).await {
+        Ok(m) => m,
+        Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
+            return Ok(AgentToolResult::error(format!(
+                "read: '{display_path}': No such file or directory"
+            )));
+        }
+        Err(e) => return Ok(AgentToolResult::error(format!("read: '{display_path}': {e}"))),
+    };
+    if meta.is_dir() {
+        return Ok(AgentToolResult::error(format!(
+            "read: '{display_path}' is a directory. Use 'ls' or 'tree' to list its contents."
+        )));
+    }
+    let total_size = meta.content_length();
     if total_size == 0 {
         return Ok(AgentToolResult::success_json(serde_json::json!({
             "path": display_path,

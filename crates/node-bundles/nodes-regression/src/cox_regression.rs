@@ -30,11 +30,11 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use super::meta::{DagNode, NodeInput, NodePorts};
-use super::numeric_util::ColumnError;
-use crate::{
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::arrow_util::ColumnError;
+use dag_core::{
     dag::{DagError, graph::PortOutputs},
-    node_registry::registry::{NodeCtx, NodeFactory},
+    registry::{NodeCtx, NodeFactory},
 };
 
 #[derive(Debug, Error)]
@@ -108,10 +108,10 @@ impl NodeFactory for CoxRegressionNodeFactory {
         &self,
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
-    ) -> crate::node_registry::error::Result<Box<dyn DagNode>> {
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: CoxRegressionNodeSpec = serde_json::from_value(spec)?;
         if s.predictors.is_empty() {
-            return Err(crate::node_registry::error::Error::SpecRejection {
+            return Err(dag_core::registry::error::Error::SpecRejection {
                 kind: "cox_regression".to_string(),
                 reason: "predictors must be a non-empty array".to_string(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(CoxRegressionNodeSpec))
@@ -129,9 +129,9 @@ impl NodeFactory for CoxRegressionNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut crate::codegen::CodegenCtx,
-    ) -> std::result::Result<crate::codegen::NodeCodegen, crate::codegen::CodegenError> {
-        use crate::codegen::helpers::*;
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
+        use dag_core::codegen::helpers::*;
         let s = parse_spec::<CoxRegressionNodeSpec>(spec, "cox_regression")?;
         let out = ctx.output_var.to_string();
         let fit = ctx.fresh_var("cox_fit");
@@ -160,7 +160,7 @@ impl NodeFactory for CoxRegressionNodeFactory {
             format!("{out}$converged <- TRUE"),
             format!("print({out})"),
         ];
-        Ok(crate::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -186,7 +186,7 @@ impl DagNode for CoxRegressionNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &crate::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs
             .first()
@@ -198,8 +198,8 @@ impl DagNode for CoxRegressionNode {
             .await
             .map_err(|e| CoxRegressionError::Collect(e.to_string()))?;
 
-        let time_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.time_column)?;
-        let event_raw = super::numeric_util::extract_numeric_lenient(&batches, &self.event_column)?;
+        let time_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.time_column)?;
+        let event_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.event_column)?;
 
         // Validate binary event indicator.
         for &v in &event_raw {
@@ -214,7 +214,7 @@ impl DagNode for CoxRegressionNode {
 
         let mut x_raw: Vec<Vec<f64>> = Vec::with_capacity(self.predictors.len());
         for name in &self.predictors {
-            x_raw.push(super::numeric_util::extract_numeric_lenient(
+            x_raw.push(dag_core::arrow_util::extract_numeric_lenient(
                 &batches, name,
             )?);
         }

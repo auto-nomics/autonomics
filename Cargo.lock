@@ -2584,8 +2584,14 @@ dependencies = [
  "mtag",
  "mvmr",
  "nanoid",
+ "nodes-coloc",
+ "nodes-epi",
  "nodes-hypothesize",
  "nodes-ml",
+ "nodes-regression",
+ "nodes-sql",
+ "nodes-survival",
+ "nodes-viz",
  "opengwas",
  "opentargets",
  "parquet",
@@ -7125,6 +7131,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodes-coloc"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "bkmr",
+ "coloc",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "nodes-epi"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "epi",
+ "evalue",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "nodes-hypothesize"
 version = "0.1.0"
 dependencies = [
@@ -7157,6 +7203,82 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "nodes-regression"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "epi",
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statkit",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "nodes-sql"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "nodes-survival"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "cmprsk",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "epi",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "nodes-viz"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "fs",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "visualization",
 ]
 
 [[package]]
