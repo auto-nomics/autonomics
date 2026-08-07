@@ -2570,6 +2570,7 @@ dependencies = [
  "nodes-ldsc",
  "nodes-ml",
  "nodes-mr",
+ "nodes-opengwas",
  "nodes-regression",
  "nodes-sql",
  "nodes-survey",
@@ -7229,7 +7230,6 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "mr",
- "opengwas",
  "opentargets",
  "parquet",
  "schemars 1.2.2",
@@ -7319,6 +7319,24 @@ dependencies = [
  "serde",
  "serde_json",
  "statrs",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nodes-opengwas"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "opengwas",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

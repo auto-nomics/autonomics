@@ -110,11 +110,12 @@ impl NodeRegistry {
 
 ### 3.3 Node Bundle Crates
 
-按领域拆分为 14 个独立 crate，统一放在 `crates/node-bundles/` 下:
+按领域拆分为 15 个独立 crate，统一放在 `crates/node-bundles/` 下:
 
 | crate | 节点 | 依赖的算法 crate | LOC (≈) |
 |-------|------|-----------------|---------|
-| **nodes-io** | source_file, source_iceberg, sink_file, sink_iceberg, source_opengwas_tophits, source_opentargets | opengwas, opentargets, datalake | 3,100 |
+| **nodes-io** | source_file, source_iceberg, sink_file, sink_iceberg, source_opentargets | opentargets, datalake | ~2,100 |
+| **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |

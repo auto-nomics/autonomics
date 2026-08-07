@@ -1,25 +1,16 @@
 [package]
-name = "nodes-io"
+name = "nodes-opengwas"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Source and sink DAG node bundle."
+description = "OpenGWAS source DAG node bundle."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
-biofusion = { path = "../../biofusion" }
-datalake = { path = "../../datalake" }
-fs = { path = "../../fs" }
-opentargets = { path = "../../opentargets" }
-mr = { path = "../../../bio_crates/mr" }
-iceberg.workspace = true
-iceberg-catalog-rest.workspace = true
+opengwas = { path = "../../opengwas" }
 arrow-array.workspace = true
-arrow.workspace = true
 arrow-schema.workspace = true
-arrow-select.workspace = true
-parquet.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -30,7 +21,6 @@ datafusion.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
-arrow-buffer.workspace = true
 
 [lints]
 workspace = true

@@ -1,22 +1,17 @@
-//! OpenGWAS tophits source node.
-//!
-//! [`OpengwasTophitsNode`] (`source_opengwas_tophits`) calls the OpenGWAS
-//! `POST /tophits` endpoint and emits the top-associated SNPs as a
-//! DataFusion `DataFrame`. The schema is inferred dynamically from the
-//! JSON response.
-//!
-//! This is a zero-input / single-output source node. It requires the
-//! `OPENGWAS_TOKEN` environment variable.
+//! `source_opengwas_tophits` — top-associated SNPs from OpenGWAS `/tophits`.
 
 use async_trait::async_trait;
-use datafusion::common::HashMap;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
+use dag_core::codegen;
 use dag_core::dag::{DagError, graph::PortOutputs};
-use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::node::{DagNode, NodePorts};
-use crate::source_opengwas::{build_json_batch, extract_rows, make_client, single_output_port};
+use dag_core::registry::{NodeCtx, NodeFactory};
+
+use opengwas::types::TophitsRequest;
+
+use crate::shared::{build_json_batch, extract_rows, make_client, single_output_port};
 
 // ---------------------------------------------------------------------------
 // Spec
@@ -123,9 +118,9 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
     fn codegen_r(
         &self,
         spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
+        ctx: &mut codegen::CodegenCtx,
+    ) -> std::result::Result<codegen::NodeCodegen, codegen::CodegenError> {
+        use codegen::helpers::*;
         let s = parse_spec::<OpengwasTophitsSpec>(spec, SOURCE_OPENGWAS_TOPHITS_KIND)?;
         let out = ctx.output_var.to_string();
         let ids = s.id.join("\", \"");
@@ -139,7 +134,7 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
             ),
             format!("{out} <- ao[ao$pval.outcome <= {}, ]", s.pval),
         ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
+        Ok(codegen::NodeCodegen::simple(code, out))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -173,7 +168,7 @@ impl DagNode for OpengwasTophitsNode {
     ) -> Result<PortOutputs, DagError> {
         let client = make_client()?;
 
-        let req = opengwas::types::TophitsRequest {
+        let req = TophitsRequest {
             id: self.spec.id.clone(),
             pval: Some(self.spec.pval),
             preclumped: None,
@@ -204,7 +199,7 @@ impl DagNode for OpengwasTophitsNode {
             .read_batch(batch)
             .map_err(|e| DagError::Schedule(format!("failed to read tophits batch: {e}")))?;
 
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = datafusion::common::HashMap::new();
         res.insert(0, df);
         Ok(res)
     }

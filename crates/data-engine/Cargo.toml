@@ -35,6 +35,7 @@ nodes-survival = { path = "../node-bundles/nodes-survival", optional = true }
 nodes-coloc = { path = "../node-bundles/nodes-coloc", optional = true }
 nodes-epi = { path = "../node-bundles/nodes-epi", optional = true }
 nodes-io = { path = "../node-bundles/nodes-io", optional = true }
+nodes-opengwas = { path = "../node-bundles/nodes-opengwas", optional = true }
 nodes-causal = { path = "../node-bundles/nodes-causal", optional = true }
 nodes-lcmm = { path = "../node-bundles/nodes-lcmm", optional = true }
 nodes-mr = { path = "../node-bundles/nodes-mr", optional = true }
@@ -43,7 +44,7 @@ nodes-ldsc = { path = "../node-bundles/nodes-ldsc", optional = true }
 nodes-genetics = { path = "../node-bundles/nodes-genetics", optional = true }
 
 [features]
-default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics"]
+default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml = ["dep:nodes-ml"]
 bundle-viz = ["dep:nodes-viz"]
@@ -53,6 +54,7 @@ bundle-survival = ["dep:nodes-survival"]
 bundle-coloc = ["dep:nodes-coloc"]
 bundle-epi = ["dep:nodes-epi"]
 bundle-io = ["dep:nodes-io"]
+bundle-opengwas = ["dep:nodes-opengwas"]
 bundle-causal = ["dep:nodes-causal"]
 bundle-lcmm = ["dep:nodes-lcmm"]
 bundle-mr = ["dep:nodes-mr"]

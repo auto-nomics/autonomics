@@ -16,6 +16,7 @@ members = [
   "crates/node-bundles/nodes-coloc",
   "crates/node-bundles/nodes-epi",
   "crates/node-bundles/nodes-io",
+  "crates/node-bundles/nodes-opengwas",
   "crates/node-bundles/nodes-causal",
   "crates/node-bundles/nodes-lcmm",
   "crates/node-bundles/nodes-mr",
