@@ -27,6 +27,7 @@ pub mod calibrate;
 pub mod describe;
 pub mod design;
 pub mod error;
+pub mod family;
 pub mod model;
 pub mod nonlinear;
 pub mod survival;
@@ -40,7 +41,8 @@ pub use describe::{
 };
 pub use design::{LonelyPsu, SurveyDesign, SurveyDesignBuilder};
 pub use error::{Result, SurveyError};
-pub use model::{RegTermTest, SvyGlmFit, reg_term_test, svyglm_linear};
+pub use family::{Family, FamilySpec, Link};
+pub use model::{reg_term_test, svyglm, svyglm_linear, RegTermTest, SvyGlmFit};
 pub use nonlinear::{
     SvyIvregFit, SvyLoglinFit, SvyNlsFit, SvyOlrFit, svy_ivreg, svy_loglin, svy_nls, svy_olr,
 };
