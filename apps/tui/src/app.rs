@@ -624,6 +624,9 @@ impl App {
                     tracing::info!(profile = %profile_name, agent = %name, "agent spawned and registered with host");
                 }
                 Err(e) => {
+                    // Clear the focus flag so a stale request doesn't
+                    // mis-attach to a later, unrelated registration.
+                    self.state.pending_focus_agent_name = None;
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                 }
             },
@@ -636,12 +639,20 @@ impl App {
     /// visible in the TUI.
     fn apply_host_event(&mut self, event: runtime::HostEvent) {
         match event {
-            runtime::HostEvent::AgentRegistered { path, .. } => {
+            runtime::HostEvent::AgentRegistered { path, info } => {
                 let name = path.as_str().to_string();
                 // Check if the TUI already knows about this agent.
                 if self.state.sessions.iter().any(|s| s.name == name) {
                     return;
                 }
+                // Did the user explicitly ask to land on this leaf?
+                // Matches by short name (`info.name`) since the spawn
+                // was requested with the picker-visible short name.
+                let steal_focus = self
+                    .state
+                    .pending_focus_agent_name
+                    .as_deref()
+                    .is_some_and(|wanted| wanted == info.name);
                 // Add a new session tab for the tool-spawned agent.
                 // Do NOT steal focus — the user may be interacting with
                 // another agent. The new tab appears but focus stays
@@ -654,6 +665,16 @@ impl App {
                     active_sub_session_idx: 0,
                     pending_tab_state: Default::default(),
                 });
+                if steal_focus {
+                    let new_idx = self.state.sessions.len() - 1;
+                    self.state.active_agent_idx = new_idx;
+                    self.state.pending_focus_agent_name = None;
+                    tracing::info!(
+                        agent = %name,
+                        leaf_idx = new_idx,
+                        "stole focus to user-restored leaf"
+                    );
+                }
 
                 // Ask the host for the agent's session list. The response
                 // arrives as `AgentEvent::SessionList` through the host's
@@ -1043,6 +1064,10 @@ impl App {
             agent = %agent_name,
             "spawn_agent_from_profile called"
         );
+        // Mark this spawn as user-initiated so the matching
+        // `AgentRegistered` event can steal focus to the new leaf.
+        // (Host-spawned agents don't set this and remain non-stealing.)
+        self.state.pending_focus_agent_name = Some(agent_name.to_string());
 
         let Some(host) = self.host.as_ref() else {
             tracing::warn!("no runtime host available");

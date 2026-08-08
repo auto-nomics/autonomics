@@ -765,6 +765,13 @@ pub struct AppState {
     /// When `true`, the delete-active-agent confirmation popup is shown.
     /// The user must press 'y' or Enter to confirm, 'n' or Esc to cancel.
     pub delete_agent_confirm: bool,
+    /// When `Some(name)`, the next [`HostEvent::AgentRegistered`] whose
+    /// short name matches will steal focus to the newly-created leaf.
+    /// Set when the user explicitly invokes `spawn_agent_from_profile`
+    /// (via the agent picker or the profile picker + name input). Cleared
+    /// after the matching registration arrives, on spawn failure, or on
+    /// pick-list close so stale flags never mis-route focus.
+    pub pending_focus_agent_name: Option<String>,
 }
 
 impl Default for AppState {
@@ -788,6 +795,7 @@ impl Default for AppState {
             display_settings: DisplaySettings::default(),
             active_model: Arc::new(ArcSwapOption::default()),
             delete_agent_confirm: false,
+            pending_focus_agent_name: None,
         }
     }
 }
