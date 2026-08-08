@@ -16,7 +16,7 @@ use bib_types::{
 };
 
 fn sample_article(id: &str) -> Article {
-    let mut art = Article::new(id, &format!("Paper {id}"));
+    let mut art = Article::new(id, format!("Paper {id}"));
     art.authors.push(Author {
         last_name: "Smith".into(),
         fore_name: Some("John A".into()),

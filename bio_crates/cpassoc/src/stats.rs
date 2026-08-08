@@ -88,8 +88,8 @@ pub fn shom(x: &Mat<f64>, sample_size: &[f64], corr_matrix: &Mat<f64>) -> Vec<f6
 /// `T = (W · Σ · x)² / (W · Σ · W)`  where `Σ = ginv(R)`.
 pub fn shom_single(x: &[f64], w: &[f64], corr_matrix: faer::MatRef<f64>) -> f64 {
     let (num, den) = weighted_score(corr_matrix, w, x);
-    let t = num * num / den;
-    t
+
+    num * num / den
 }
 
 // ─── SHet ───────────────────────────────────────────────────────────────────

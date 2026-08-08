@@ -979,15 +979,13 @@ pub fn check_dataset(d: &Dataset, suffix: &str) -> Result<()> {
     }
 
     // Check for missing values (NaN/Inf) in numeric vectors.
-    for vec in [&d.beta, &d.varbeta, &d.pvalues, &d.maf] {
-        if let Some(v) = vec {
-            for &x in v {
-                if x.is_nan() {
-                    return Err(ColocError::MissingValues {
-                        suffix,
-                        element: "numeric".into(),
-                    });
-                }
+    for v in [&d.beta, &d.varbeta, &d.pvalues, &d.maf].into_iter().flatten() {
+        for &x in v {
+            if x.is_nan() {
+                return Err(ColocError::MissingValues {
+                    suffix,
+                    element: "numeric".into(),
+                });
             }
         }
     }
@@ -1002,7 +1000,7 @@ pub fn check_dataset(d: &Dataset, suffix: &str) -> Result<()> {
         if varbeta.iter().any(|&v| v.is_infinite()) {
             return Err(ColocError::InfiniteValues(suffix));
         }
-        if varbeta.iter().any(|&v| v == 0.0) {
+        if varbeta.contains(&0.0) {
             return Err(ColocError::ZeroVarbeta(suffix));
         }
     }
@@ -1044,11 +1042,10 @@ pub fn check_dataset(d: &Dataset, suffix: &str) -> Result<()> {
     }
 
     // For quant without sdY, need MAF + N.
-    if d.r#type == TraitType::Quant && d.sd_y.is_none() {
-        if d.maf.is_none() || d.n.is_none() {
+    if d.r#type == TraitType::Quant && d.sd_y.is_none()
+        && (d.maf.is_none() || d.n.is_none()) {
             return Err(ColocError::MissingSdYOrMafN(suffix));
         }
-    }
 
     Ok(())
 }
@@ -1075,7 +1072,7 @@ fn normal_inv_cdf(p: f64) -> f64 {
         -3.969683028665376e+01,
         2.209460984245205e+02,
         -2.759285104469687e+02,
-        1.383577518672690e+02,
+        1.383_577_518_672_69e2,
         -3.066479806614716e+01,
         2.506628277459239e+00,
     ];

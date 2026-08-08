@@ -462,7 +462,7 @@ mod tests {
     fn rejects_no_events() {
         let time = vec![10.0, 20.0, 30.0];
         let event = vec![0.0, 0.0, 0.0];
-        let x = vec![1.0, 2.0, 3.0];
+        let x = [1.0, 2.0, 3.0];
         assert!(cox(&time, &event, &[&x[..]]).is_err());
     }
 
@@ -470,7 +470,7 @@ mod tests {
     fn rejects_invalid_event() {
         let time = vec![10.0, 20.0, 30.0];
         let event = vec![1.0, 0.5, 0.0];
-        let x = vec![1.0, 2.0, 3.0];
+        let x = [1.0, 2.0, 3.0];
         assert!(cox(&time, &event, &[&x[..]]).is_err());
     }
 

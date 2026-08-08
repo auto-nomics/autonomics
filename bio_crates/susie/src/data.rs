@@ -12,23 +12,22 @@ use faer::Mat;
 
 /// How z-scores relate to the model's σ²=1 scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ZMethod {
     /// Wald z = bhat/shat; PVE-adjusted onto σ²=1 scale (default).
+    #[default]
     Wald,
     /// Score z already on σ²=1 scale (e.g. LMM GWAS); no adjustment.
     Score,
 }
 
-impl Default for ZMethod {
-    fn default() -> Self {
-        ZMethod::Wald
-    }
-}
 
 /// Prior-variance optimization strategy (mirrors susieR's `estimate_prior_method`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum PriorMethod {
     /// R `optim(method="Brent")` on log(V).
+    #[default]
     Optim,
     /// One EM update: V = Σ α_j · μ²_j (posterior second moment).
     Em,
@@ -37,11 +36,6 @@ pub enum PriorMethod {
     Simple,
 }
 
-impl Default for PriorMethod {
-    fn default() -> Self {
-        PriorMethod::Optim
-    }
-}
 
 /// Input bundle for [`crate::susie_rss`].
 #[derive(Debug, Clone)]

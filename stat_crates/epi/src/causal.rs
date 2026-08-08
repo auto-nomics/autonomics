@@ -116,7 +116,7 @@ pub fn iptw(
     let p_bar = n_treated as f64 / n as f64;
 
     // ── Step 1: Estimate propensity scores via logistic regression ────────
-    let cov_slices: Vec<&[f64]> = covariates.iter().copied().collect();
+    let cov_slices: Vec<&[f64]> = covariates.to_vec();
     let ps_fit = regression::logistic(&cov_slices, treatment, true).map_err(epi_from_stat)?;
 
     // Trim propensity scores.
@@ -305,7 +305,7 @@ pub fn psm(
     }
 
     // ── Propensity scores ────────────────────────────────────────────────
-    let cov_slices: Vec<&[f64]> = covariates.iter().copied().collect();
+    let cov_slices: Vec<&[f64]> = covariates.to_vec();
     let ps_fit = regression::logistic(&cov_slices, treatment, true).map_err(epi_from_stat)?;
     let ps = &ps_fit.fitted;
 
@@ -522,11 +522,8 @@ mod tests {
         };
         let result = psm(&t, &y, &[&c[..]], &opts);
         // May or may not error depending on data, but should not panic.
-        match result {
-            Ok(r) => {
-                let _ = r;
-            }
-            Err(_) => {}
+        if let Ok(r) = result {
+            let _ = r;
         }
     }
 
@@ -534,7 +531,7 @@ mod tests {
     fn iptw_rejects_non_binary() {
         let t = vec![0.0, 0.5, 1.0];
         let y = vec![1.0, 2.0, 3.0];
-        let c = vec![1.0, 2.0, 3.0];
+        let c = [1.0, 2.0, 3.0];
         assert!(iptw(&t, &y, &[&c[..]], &IptwOptions::default()).is_err());
     }
 }

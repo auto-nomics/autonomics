@@ -518,10 +518,12 @@ fn default_clump_pop() -> String {
 /// access required.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "type")]
+#[derive(Default)]
 pub enum ClumpMode {
     /// Remote OpenGWAS `/ld/clump` endpoint (1000 Genomes reference panel).
     /// Requires the `OPENGWAS_TOKEN` environment variable.
     #[serde(rename = "opengwas")]
+    #[default]
     Opengwas,
     /// Local Iceberg `ld_matrix.eur_chr{N}` pairwise r² tables.
     ///
@@ -532,11 +534,6 @@ pub enum ClumpMode {
     IcebergLd,
 }
 
-impl Default for ClumpMode {
-    fn default() -> Self {
-        Self::Opengwas
-    }
-}
 
 /// LD clumping parameters for selecting independent instruments via the
 /// OpenGWAS `/ld/clump` endpoint (1000 Genomes reference panel).
@@ -1000,7 +997,7 @@ impl NodeFactory for TwoSampleMrNodeFactory {
         code.push(String::new());
         match &spec.clump.mode {
             ClumpMode::Opengwas => {
-                code.push(format!("# LD clumping via OpenGWAS (requires API token)"));
+                code.push("# LD clumping via OpenGWAS (requires API token)".to_string());
                 code.push(format!(
                     "{exp_dat} <- clump_data({exp_dat}, clump_r2 = {}, clump_kb = {}, clump_p1 = {}, pop = \"{}\")",
                     spec.clump.r2, spec.clump.kb, spec.clump.p1, spec.clump.pop,
@@ -1013,12 +1010,8 @@ impl NodeFactory for TwoSampleMrNodeFactory {
                 // we emit a note since R's clump_data() only supports
                 // OpenGWAS. The exposure data entering this point has
                 // already been clumped by the Rust node.
-                code.push(format!(
-                    "# LD clumping performed via Iceberg ld_matrix table"
-                ));
-                code.push(format!(
-                    "# (Rust runtime uses greedy clumping on pre-computed r²;"
-                ));
+                code.push("# LD clumping performed via Iceberg ld_matrix table".to_string());
+                code.push("# (Rust runtime uses greedy clumping on pre-computed r²;".to_string());
                 code.push(format!(
                     "#  {exp_dat} is already clumped to independent instruments)"
                 ));
@@ -1027,7 +1020,7 @@ impl NodeFactory for TwoSampleMrNodeFactory {
 
         // Harmonise
         code.push(String::new());
-        code.push(format!("# Allele harmonisation"));
+        code.push("# Allele harmonisation".to_string());
         code.push(format!(
             "{harm} <- harmonise_data({exp_dat}, {out_dat}, action = {})",
             match spec.action {
@@ -1052,7 +1045,7 @@ impl NodeFactory for TwoSampleMrNodeFactory {
         };
 
         code.push(String::new());
-        code.push(format!("# Mendelian randomisation"));
+        code.push("# Mendelian randomisation".to_string());
         code.push(format!("{out} <- mr({harm}, method_list = {methods})"));
         code.push(format!("print({out})"));
 

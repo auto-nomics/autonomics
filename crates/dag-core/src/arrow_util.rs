@@ -181,12 +181,9 @@ pub fn extract_binary_strict(
         for batch in batches {
             if let Some(arr) = batch.column(idx).as_any().downcast_ref::<BooleanArray>() {
                 for v in arr.iter() {
-                    match v {
-                        Some(b) => {
-                            values.push(if b { 1.0 } else { 0.0 });
-                            kept.push(global_row);
-                        }
-                        None => {}
+                    if let Some(b) = v {
+                        values.push(if b { 1.0 } else { 0.0 });
+                        kept.push(global_row);
                     }
                     global_row += 1;
                 }

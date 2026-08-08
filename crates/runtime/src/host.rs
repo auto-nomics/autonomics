@@ -59,6 +59,9 @@ pub enum HostError {
 
     #[error("bibliography shared init failed: {0}")]
     BibShared(#[from] bib_base::Error),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type HostResult<T> = std::result::Result<T, HostError>;
@@ -183,7 +186,7 @@ impl SharedInfra {
     /// (cheap, all `Arc`) into async tasks.
     pub async fn spawn_agent(
         &self,
-        agent_name: &str,
+        agent_path: &agentik_types::AgentPath,
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
@@ -198,7 +201,7 @@ impl SharedInfra {
             )),
         };
 
-        let tool_list = self.tools_from_profile(agent_name, profile).await?;
+        let tool_list = self.tools_from_profile(agent_path, profile).await?;
 
         let config_json = serde_json::to_value(profile).unwrap_or_default();
         let storage = self.storage.clone();
@@ -206,7 +209,7 @@ impl SharedInfra {
         let mut builder = Agent::builder()
             .with_model(model.clone())
             .with_agent_event_tx(event_tx)
-            .with_name(agent_name)
+            .with_path(agent_path.clone())
             .with_config_json(config_json)
             .with_system_prompt_identity(&profile.agent_identity)
             .with_storage(storage.clone());
@@ -221,9 +224,9 @@ impl SharedInfra {
             .with_tools(tool_list)
             .with_cancel_token(cancel_token.clone());
 
-        if let Ok(Some(record)) = storage.get_agent_by_name(agent_name).await {
+        if let Ok(Some(record)) = storage.get_agent_by_name(agent_path.name()).await {
             tracing::info!(
-                agent = %agent_name,
+                agent = %agent_path,
                 agent_id = %record.id,
                 "restoring agent from storage"
             );
@@ -237,7 +240,6 @@ impl SharedInfra {
 
         let mut agent = builder.build().await?;
         let agent_id = agent.id();
-        let agent_name = agent.name().to_string();
         let internal_tx = agent.internal_event_tx();
         let model_handle = agent.model_handle().clone();
 
@@ -247,7 +249,7 @@ impl SharedInfra {
 
         Ok(AgentHandle {
             agent_id,
-            name: agent_name,
+            path: agent_path.clone(),
             internal_tx,
             event_rx,
             agent_task,
@@ -259,7 +261,7 @@ impl SharedInfra {
     /// Assemble the tool set for a profile, respecting its feature flags.
     async fn tools_from_profile(
         &self,
-        agent_name: &str,
+        agent_path: &agentik_types::AgentPath,
         profile: &agentik_core::AgentProfile,
     ) -> HostResult<Vec<agentik_core::tools::ToolRegistration>> {
         use crate::tools::*;
@@ -299,9 +301,9 @@ impl SharedInfra {
             tools.extend(bib_tools);
         }
 
-        // Host control tools (spawn_agent, send_to_agent, connect_agents, etc.)
-        // Pass the agent's own name so list_agents / route_task can exclude self.
-        tools.extend(crate::host_tools::host_tools(self.host_control.clone(), agent_name));
+        // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
+        // Pass the agent's own path so list_agents / route_task can exclude self.
+        tools.extend(crate::host_tools::host_tools(self.host_control.clone(), agent_path));
 
         Ok(tools)
     }
@@ -318,12 +320,19 @@ impl SharedInfra {
 /// [`shutdown`](Self::shutdown) explicitly.
 pub struct AgentHandle {
     pub agent_id: uuid::Uuid,
-    pub name: String,
+    pub path: agentik_types::AgentPath,
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     agent_task: tokio::task::JoinHandle<()>,
     cancel_token: CancellationToken,
     model: Arc<ArcSwapOption<Model>>,
+}
+
+impl AgentHandle {
+    /// Convenience: short name (last path segment).
+    pub fn name(&self) -> &str {
+        self.path.name()
+    }
 }
 
 impl AgentHandle {
@@ -474,11 +483,11 @@ pub struct RuntimeHost {
 pub enum HostEvent {
     /// An agent was just registered with the host's relay.
     AgentRegistered {
-        name: String,
+        path: agentik_types::AgentPath,
         info: crate::control::AgentInfo,
     },
     /// An agent was shut down and removed from the registry.
-    AgentUnregistered { name: String },
+    AgentUnregistered { path: String },
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -501,6 +510,10 @@ enum AgentCommand {
 struct AgentEntry {
     cmd_tx: UnboundedSender<AgentCommand>,
     _relay_task: JoinHandle<()>,
+    /// Full hierarchical path — source of truth for identity.
+    /// Mirrors the HashMap key but kept here for typed access within entries.
+    #[allow(dead_code)]
+    path: agentik_types::AgentPath,
     /// Capability metadata for routing and discovery.
     info: crate::control::AgentInfo,
     /// Shared model slot — same Arc as the relay's AgentHandle.
@@ -576,14 +589,14 @@ impl RuntimeHost {
             }
             reg = self.registration_rx.recv() => {
                 if let Some((handle, info)) = reg {
-                    let name = handle.name.clone();
+                    let path = handle.path.clone();
                     let info_clone = info.clone();
                     self.register_agent(handle, info);
                     let _ = self.notify_tx.send(HostEvent::AgentRegistered {
-                        name: name.clone(),
+                        path: path.clone(),
                         info: info_clone,
                     });
-                    tracing::info!(agent = %name, "background spawn completed and registered");
+                    tracing::info!(agent = %path, "background spawn completed and registered");
                 }
             }
         }
@@ -594,9 +607,25 @@ impl RuntimeHost {
         match cmd {
             HostCommand::Spawn {
                 name,
+                caller_path,
                 profile_name,
                 reply_tx,
             } => {
+                // Derive child path from caller's path + the LLM-provided segment.
+                let child_path = match caller_path.join(&name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = reply_tx.send(Err(format!("invalid agent name `{name}`: {e}")));
+                        return;
+                    }
+                };
+                // Reject duplicate paths.
+                if self.agents.contains_key(child_path.as_str()) {
+                    let _ = reply_tx.send(Err(format!(
+                        "agent at path `{child_path}` already exists"
+                    )));
+                    return;
+                }
                 // Look up profile from cache.
                 let Some(profile) = self.profiles.iter().find(|p| p.name == profile_name).cloned() else {
                     let _ = reply_tx.send(Err(format!(
@@ -615,14 +644,14 @@ impl RuntimeHost {
                 let infra = self.infra.clone();
                 let model = model.clone();
                 let reg_tx = self.registration_tx.clone();
-                let info = capability_from_profile(&name, &profile);
-                let agent_name = name.clone();
+                let info = capability_from_profile(child_path.name(), child_path.as_str(), &profile);
+                let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra.spawn_agent(&agent_name, &profile, model, None).await {
+                    match infra.spawn_agent(&path_for_spawn, &profile, model, None).await {
                         Ok(handle) => {
-                            let registered_name = handle.name.clone();
-                            let _ = reply_tx.send(Ok(registered_name));
+                            let registered_path = handle.path.as_str().to_string();
+                            let _ = reply_tx.send(Ok(registered_path));
                             let _ = reg_tx.send((handle, info));
                         }
                         Err(e) => {
@@ -633,10 +662,26 @@ impl RuntimeHost {
             }
             HostCommand::SpawnWithProfile {
                 name,
+                caller_path,
                 profile,
                 model_override,
                 reply_tx,
             } => {
+                // Derive child path from caller's path + the LLM-provided segment.
+                let child_path = match caller_path.join(&name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = reply_tx.send(Err(format!("invalid agent name `{name}`: {e}")));
+                        return;
+                    }
+                };
+                // Reject duplicate paths.
+                if self.agents.contains_key(child_path.as_str()) {
+                    let _ = reply_tx.send(Err(format!(
+                        "agent at path `{child_path}` already exists"
+                    )));
+                    return;
+                }
                 // Resolve model: use override if provided, else global model.
                 let model = match (model_override, self.model.as_ref()) {
                     (Some(m), _) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
@@ -649,14 +694,14 @@ impl RuntimeHost {
 
                 let infra = self.infra.clone();
                 let reg_tx = self.registration_tx.clone();
-                let info = capability_from_profile(&name, &profile);
-                let agent_name = name.clone();
+                let info = capability_from_profile(child_path.name(), child_path.as_str(), &profile);
+                let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra.spawn_agent(&agent_name, &profile, model, None).await {
+                    match infra.spawn_agent(&path_for_spawn, &profile, model, None).await {
                         Ok(handle) => {
-                            let registered_name = handle.name.clone();
-                            let _ = reply_tx.send(Ok(registered_name));
+                            let registered_path = handle.path.as_str().to_string();
+                            let _ = reply_tx.send(Ok(registered_path));
                             let _ = reg_tx.send((handle, info));
                         }
                         Err(e) => {
@@ -666,7 +711,8 @@ impl RuntimeHost {
                 });
             }
             HostCommand::Shutdown { name } => {
-                self.shutdown_agent(&name);
+                let resolved = self.resolve_agent(&name).unwrap_or(name);
+                self.shutdown_agent(&resolved);
             }
             HostCommand::AddNode {
                 name,
@@ -693,26 +739,30 @@ impl RuntimeHost {
                 self.network.disconnect(&from, &to);
             }
             HostCommand::DeliverMessage { name, message } => {
-                self.send_to(&name, message);
+                let resolved = self.resolve_agent(&name).unwrap_or(name);
+                self.send_to(&resolved, message);
             }
             HostCommand::Delegate {
                 to,
                 message,
                 reply_tx,
             } => {
-                // Validate target agent exists.
-                if !self.agents.contains_key(&to) {
-                    let _ = reply_tx.send(format!(
-                        "Error: agent '{to}' is not registered. \
-                         Use list_agents to see available agents, \
-                         or spawn_agent to create one first."
-                    ));
-                    return;
-                }
+                // Resolve target: full path or short name.
+                let resolved = match self.resolve_agent(&to) {
+                    Some(path) => path,
+                    None => {
+                        let _ = reply_tx.send(format!(
+                            "Error: agent '{to}' is not registered. \
+                             Use list_agents to see available agents, \
+                             or spawn_agent to create one first."
+                        ));
+                        return;
+                    }
+                };
                 // Record the reply channel — when `to` Dones, its response
                 // is sent through reply_tx (handled in step()).
-                self.tool_delegations.insert(to.clone(), reply_tx);
-                self.send_to(&to, message);
+                self.tool_delegations.insert(resolved.clone(), reply_tx);
+                self.send_to(&resolved, message);
             }
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
@@ -725,7 +775,7 @@ impl RuntimeHost {
                     profiles: self
                         .profiles
                         .iter()
-                        .map(|p| capability_from_profile(&p.name, p))
+                        .map(|p| capability_from_profile(&p.name, &p.name, p))
                         .collect(),
                     nodes: g.node_names().into_iter().map(String::from).collect(),
                     edge_count: g.edge_count(),
@@ -756,16 +806,17 @@ impl RuntimeHost {
                 let _ = reply_tx.send(result);
             }
             HostCommand::GetAgentInfo { name, reply_tx } => {
-                // Check running agents first, then fall back to profiles.
-                let info = self
-                    .agents
-                    .get(&name)
-                    .map(|e| e.info.clone())
+                // Resolve agent name, then check running agents first,
+                // fall back to profiles (by short name).
+                let resolved = self.resolve_agent(&name);
+                let info = resolved
+                    .as_ref()
+                    .and_then(|key| self.agents.get(key).map(|e| e.info.clone()))
                     .or_else(|| {
                         self.profiles
                             .iter()
                             .find(|p| p.name == name)
-                            .map(|p| capability_from_profile(&p.name, p))
+                            .map(|p| capability_from_profile(&p.name, &p.name, p))
                     });
                 let _ = reply_tx.send(info);
             }
@@ -812,7 +863,11 @@ impl RuntimeHost {
                 self.send_agent_command(&name, AgentCommand::SetModel(model));
             }
             HostCommand::GetAgentModel { name, reply_tx } => {
-                let info = self.agents.get(&name).and_then(|e| {
+                let resolved = self.resolve_agent(&name);
+                let info = resolved
+                    .as_ref()
+                    .and_then(|key| self.agents.get(key))
+                    .and_then(|e| {
                     e.model.load_full().as_deref().map(|m| {
                         (m.model_info.model_name.clone(), m.model_info.context_length)
                     })
@@ -822,20 +877,59 @@ impl RuntimeHost {
         }
     }
 
-    /// Forward a command to a named agent's relay task.
-    fn send_agent_command(&self, name: &str, cmd: AgentCommand) {
-        if let Some(entry) = self.agents.get(name) {
-            let _ = entry.cmd_tx.send(cmd);
-        } else {
-            tracing::warn!(agent = %name, "send_agent_command: agent not registered");
+    /// Resolve an agent reference to its full path key in the registry.
+    ///
+    /// Accepts:
+    /// 1. **Full path** (`/root/researcher/worker`) — exact match.
+    /// 2. **Short name** (`researcher`) — matches when unambiguous.
+    ///
+    /// Returns the HashMap key string, or `None` if no match / ambiguous.
+    fn resolve_agent(&self, target: &str) -> Option<String> {
+        // 1. Exact full-path match.
+        if target.starts_with("/root")
+            && self.agents.contains_key(target) {
+                return Some(target.to_string());
+            }
+        // 2. Short-name match: collect all agents whose last path segment
+        //    equals `target`.
+        let matches: Vec<&String> = self
+            .agents
+            .keys()
+            .filter(|key| {
+                key.rsplit('/').next().unwrap_or(key) == target
+            })
+            .collect();
+        match matches.len() {
+            1 => Some(matches[0].clone()),
+            0 => None,
+            _ => {
+                tracing::warn!(
+                    target = %target,
+                    candidates = ?matches,
+                    "ambiguous agent name — use full path to disambiguate"
+                );
+                None
+            }
         }
+    }
+
+    /// Forward a command to a named agent's relay task.
+    /// `name` is resolved via [`resolve_agent`](Self::resolve_agent).
+    fn send_agent_command(&self, name: &str, cmd: AgentCommand) {
+        if let Some(resolved) = self.resolve_agent(name) {
+            if let Some(entry) = self.agents.get(&resolved) {
+                let _ = entry.cmd_tx.send(cmd);
+                return;
+            }
+        }
+        tracing::warn!(agent = %name, "send_agent_command: agent not registered");
     }
 
     /// Notify listeners that an agent has been shut down.
     /// Called from `shutdown_agent` / `shutdown_all_agents`.
     fn notify_unregistered(&self, name: &str) {
         let _ = self.notify_tx.send(HostEvent::AgentUnregistered {
-            name: name.to_string(),
+            path: name.to_string(),
         });
     }
 
@@ -902,7 +996,7 @@ impl RuntimeHost {
                 .iter()
                 .filter(|p| !running_names.contains(p.name.as_str()))
                 .filter(|p| Some(p.name.as_str()) != exclude)
-                .map(|p| score_info(&capability_from_profile(&p.name, p), false)),
+                .map(|p| score_info(&capability_from_profile(&p.name, &p.name, p), false)),
         );
 
         let mut candidates: Vec<_> = candidates.into_iter().filter(|c| c.score > 0.0).collect();
@@ -1012,8 +1106,8 @@ impl RuntimeHost {
     /// The host takes ownership of the handle — do not use it directly
     /// after registration.
     pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
-        let name = handle.name.clone();
-        let relay_name = name.clone();
+        let path = handle.path.clone();
+        let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
@@ -1023,10 +1117,11 @@ impl RuntimeHost {
         });
 
         self.agents.insert(
-            name,
+            path.as_str().to_string(),
             AgentEntry {
                 cmd_tx,
                 _relay_task: relay_task,
+                path,
                 info,
                 model,
             },
@@ -1042,16 +1137,23 @@ impl RuntimeHost {
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> HostResult<String> {
+        let path = agentik_types::AgentPath::root()
+            .join(agent_name)
+            .map_err(|e| HostError::Other(e.to_string()))?;
         let handle = self
-            .spawn_agent(agent_name, profile, global_model, model_override)
+            .spawn_agent(&path, profile, global_model, model_override)
             .await?;
-        let name = handle.name.clone();
-        let info = capability_from_profile(agent_name, profile);
+        let name = handle.path.as_str().to_string();
+        let info = capability_from_profile(handle.path.name(), handle.path.as_str(), profile);
         self.register_agent(handle, info);
         Ok(name)
     }
 
     /// Send a message to a named agent (via the relay task).
+    ///
+    /// `name` should already be a resolved full path. Callers that receive
+    /// user/LLM-provided names should call [`resolve_agent`](Self::resolve_agent)
+    /// first.
     pub fn send_to(&self, name: &str, message: String) {
         if let Some(entry) = self.agents.get(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Message(message));
@@ -1195,13 +1297,13 @@ impl RuntimeHost {
     /// into async tasks without cloning the non-`Clone` [`RuntimeHost`].
     pub async fn spawn_agent(
         &self,
-        agent_name: &str,
+        agent_path: &agentik_types::AgentPath,
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> HostResult<AgentHandle> {
         self.infra
-            .spawn_agent(agent_name, profile, global_model, model_override)
+            .spawn_agent(agent_path, profile, global_model, model_override)
             .await
     }
 
@@ -1228,6 +1330,7 @@ impl RuntimeHost {
 /// expertise, and tool list from the profile's feature flags.
 fn capability_from_profile(
     name: &str,
+    path: &str,
     profile: &agentik_core::AgentProfile,
 ) -> crate::control::AgentInfo {
     let mut tags = Vec::new();
@@ -1264,6 +1367,7 @@ fn capability_from_profile(
 
     crate::control::AgentInfo {
         name: name.into(),
+        path: path.into(),
         summary: profile.description.clone(),
         tags,
         expertise,

@@ -522,7 +522,7 @@ fn compute_sigma_and_fml(
 
     let sigma_base = &lambda * &phi; // p×k
     let lt2 = lambda.transpose(); // k×p
-    let mut sigma = &sigma_base * &lt2; // p×p
+    let mut sigma = &sigma_base * lt2; // p×p
 
     // Add Θ (diagonal).
     for i in 0..p {
@@ -541,7 +541,7 @@ fn compute_sigma_and_fml(
 
 /// Natural log of determinant via Cholesky: log|Σ| = 2·Σ log(L_ii).
 fn log_det(m: &Mat<f64>, n: usize) -> f64 {
-    if let Some(llt) = Llt::new(m.as_ref(), Side::Lower).ok() {
+    if let Ok(llt) = Llt::new(m.as_ref(), Side::Lower) {
         // faer's Llt exposes the Cholesky factor L via .L().
         let l = llt.L();
         let mut sum = 0.0;

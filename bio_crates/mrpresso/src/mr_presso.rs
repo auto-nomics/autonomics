@@ -403,7 +403,7 @@ pub fn mr_presso(input: &MrpressoInput) -> Result<MrpressoOutput> {
                 &e_obs,
                 &sd_y,
                 &w,
-                &outlier.as_ref().unwrap(),
+                outlier.as_ref().unwrap(),
                 input.nb_distribution,
                 input.signif_threshold,
                 &mut rng,
@@ -592,8 +592,8 @@ fn distortion_test(
     }
 
     // Observed: mod_all (all data) vs mod_noOutliers — raw data + weights.
-    let all = wls_summary(&e_obs, n, p, &y_obs, &w).ok();
-    let no_out = wls_summary_excluding(&e_obs, n, p, &y_obs, &w, &ref_out).ok();
+    let all = wls_summary(e_obs, n, p, y_obs, w).ok();
+    let no_out = wls_summary_excluding(e_obs, n, p, y_obs, w, &ref_out).ok();
     let (coef_all, coef_no): (Vec<f64>, Vec<f64>) = match (&all, &no_out) {
         (Some(a), Some(b)) => (a.coef.clone(), b.coef.clone()),
         _ => {

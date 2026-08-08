@@ -379,10 +379,8 @@ impl DagNode for UnivariateMixerNode {
             .arg(self.spec.downsample_factor.to_string());
 
         // ── 4. Run mixer.py fit1 ───────────────────────────────────────
-        reporter.info(format!(
-            "fit1: invoking gsa-mixer subprocess (no mid-phase progress; \
-             LD loading + optimization dominates runtime)"
-        ));
+        reporter.info("fit1: invoking gsa-mixer subprocess (no mid-phase progress; \
+             LD loading + optimization dominates runtime)".to_string());
 
         // Run in a blocking thread to avoid stalling the async runtime.
         let output = tokio::task::spawn_blocking(move || cmd.output())

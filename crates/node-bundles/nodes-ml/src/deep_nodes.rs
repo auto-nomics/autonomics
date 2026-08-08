@@ -177,7 +177,7 @@ impl DagNode for AutoencoderNode {
         let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len()).map(|i| batches.first().unwrap().column(i).clone()).collect();
         for d in 0..self.latent_dim {
             let col: Vec<f64> = result.encoded.iter().map(|row| row[d]).collect();
-            fields.push(Arc::new(Field::new(&format!("ae_{d}"), DataType::Float64, true)));
+            fields.push(Arc::new(Field::new(format!("ae_{d}"), DataType::Float64, true)));
             arrays.push(Arc::new(Float64Array::from(col)));
         }
         // Add reconstruction error as a constant column

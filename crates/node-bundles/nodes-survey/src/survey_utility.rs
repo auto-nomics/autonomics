@@ -383,7 +383,7 @@ fn parse_contrast(
     }
 
     // Parse simple expression patterns.
-    let e = expr.replace('`', "").replace(' ', "");
+    let e = expr.replace(['`', ' '], "");
     // Unary transforms.
     for (prefix, kind) in [("exp(", "exp"), ("log(", "log")] {
         if e.starts_with(prefix) && e.ends_with(')') {
@@ -413,7 +413,7 @@ fn parse_contrast(
     // Linear: tokenise on +/- into signed `coeff*var` terms.
     let mut coeffs = vec![0.0_f64; variables.len()];
     let mut ok = true;
-    let tokens: Vec<&str> = e.split_inclusive(|c| c == '+' || c == '-').collect();
+    let tokens: Vec<&str> = e.split_inclusive(['+', '-']).collect();
     for token in tokens {
         let (sign, body) = if let Some(stripped) = token.strip_prefix('-') {
             (-1.0, stripped)
@@ -723,7 +723,7 @@ impl DagNode for SvyStandardizeNode {
 
         // Output: data + standardized weight column.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+        let combined = arrow::compute::concat_batches(schema_ref, &batches).map_err(|e| {
             DagError::NodeError {
                 node_type: "svystandardize".into(),
                 msg: format!("concat failed: {e}"),
@@ -743,7 +743,7 @@ impl DagNode for SvyStandardizeNode {
                 .collect::<Vec<_>>(),
         ));
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().iter().cloned().collect();
+            combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =

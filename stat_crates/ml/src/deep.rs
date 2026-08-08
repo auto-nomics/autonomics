@@ -166,11 +166,11 @@ pub fn mlp_fit(
                     let new_delta: Vec<f64> = (0..w_next.nrows() - 1) // skip bias row
                         .map(|j| {
                             let z_j = z[j];
-                            let d_j = (0..delta.len())
+
+                            (0..delta.len())
                                 .map(|k| w_next[(j + 1, k)] * delta[k]) // +1 for bias row
                                 .sum::<f64>()
-                                * activations[l].derivative(z_j);
-                            d_j
+                                * activations[l].derivative(z_j)
                         })
                         .collect();
                     delta = new_delta;

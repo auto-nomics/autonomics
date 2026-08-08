@@ -167,8 +167,7 @@ impl NodeFactory for HdlLNodeFactory {
         use dag_core::codegen::helpers::*;
         let s = parse_spec::<HdlLSpec>(spec, "hdl_l")?;
         let input1 = ctx
-            .input_vars
-            .get(0)
+            .input_vars.first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx
@@ -682,13 +681,13 @@ mod tests {
 
         if h11 > 0.0 && h22 > 0.0 {
             assert!(
-                rg >= -1.01 && rg <= 1.01,
+                (-1.01..=1.01).contains(&rg),
                 "rg should be in [-1, 1], got {rg}"
             );
             let p_h12 = col_f64(std::slice::from_ref(row), "p_h12").unwrap()[0];
             eprintln!("p_h12 = {p_h12:.3e}");
             assert!(
-                p_h12 >= 0.0 && p_h12 <= 1.0,
+                (0.0..=1.0).contains(&p_h12),
                 "p-value out of range: {p_h12}"
             );
         } else {

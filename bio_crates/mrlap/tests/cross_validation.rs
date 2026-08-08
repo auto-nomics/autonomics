@@ -93,7 +93,7 @@ fn tidy_matches_r() {
     use std::collections::HashMap;
     let map: HashMap<&str, &Vec<String>> = golden
         .iter()
-        .map(|r| (col(&h, r, "rsid").into(), r))
+        .map(|r| (col(&h, r, "rsid"), r))
         .collect();
     for t in &tidy_rows {
         let g = map.get(t.rsid.as_str()).unwrap();
@@ -121,7 +121,7 @@ fn harmonise_matches_r() {
     use std::collections::HashMap;
     let map: HashMap<&str, &Vec<String>> = golden
         .iter()
-        .map(|r| (col(&h, r, "rsid").into(), r))
+        .map(|r| (col(&h, r, "rsid"), r))
         .collect();
     assert_eq!(harm.len(), golden.len(), "harmonised row count");
     for row in &harm {

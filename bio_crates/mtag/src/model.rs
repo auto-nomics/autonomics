@@ -12,6 +12,7 @@ use crate::omega::{OmegaConfig, estimate_omega};
 
 /// Full configuration for an MTAG analysis run.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct MtagConfig {
     /// Data loading / harmonisation options.
     pub data: DataConfig,
@@ -27,18 +28,6 @@ pub struct MtagConfig {
     pub no_overlap: bool,
 }
 
-impl Default for MtagConfig {
-    fn default() -> Self {
-        Self {
-            data: DataConfig::default(),
-            omega: OmegaConfig::default(),
-            residcov_path: None,
-            gencov_path: None,
-            std_betas: false,
-            no_overlap: false,
-        }
-    }
-}
 
 /// Complete MTAG analysis result.
 pub struct MtagAnalysis {

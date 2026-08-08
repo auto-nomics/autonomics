@@ -312,7 +312,7 @@ where
             }
             // Bisect the bracket.
             if alpha_hi.is_infinite() {
-                alpha = 2.0 * alpha;
+                alpha *= 2.0;
             } else {
                 alpha = 0.5 * (alpha_lo + alpha_hi);
             }

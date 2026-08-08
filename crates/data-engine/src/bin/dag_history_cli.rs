@@ -133,8 +133,8 @@ async fn cmd_log(history: &DagHistory, rest: &[String]) -> Result<()> {
 
     println!("ref: {ref_name}\n");
     println!(
-        "{:<14} {:<26} {:<14} {}",
-        "SNAPSHOT", "TIMESTAMP", "MANIFEST", "MESSAGE"
+        "{:<14} {:<26} {:<14} MESSAGE",
+        "SNAPSHOT", "TIMESTAMP", "MANIFEST"
     );
     println!("{}", "─".repeat(90));
 
@@ -237,7 +237,7 @@ async fn cmd_refs(history: &DagHistory) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<14} {}", "NAME", "SNAPSHOT", "TYPE");
+    println!("{:<20} {:<14} TYPE", "NAME", "SNAPSHOT");
     println!("{}", "─".repeat(50));
     for (name, snap_id, pinned) in &refs {
         let ty = if *pinned { "tag" } else { "branch" };
@@ -408,8 +408,8 @@ fn diff_manifests(old: &DagManifest, new: &DagManifest) {
     }
     // 修改节点（kind 或 spec 变了）
     for n in &new.nodes {
-        if let Some(old_n) = old_nodes.get(n.id.as_str()) {
-            if old_n.kind != n.kind || old_n.spec != n.spec {
+        if let Some(old_n) = old_nodes.get(n.id.as_str())
+            && (old_n.kind != n.kind || old_n.spec != n.spec) {
                 println!("  ~ node {} ({})", n.id, n.kind);
                 // 简要显示 spec 变化
                 let old_keys: std::collections::HashSet<&str> = old_n
@@ -434,7 +434,6 @@ fn diff_manifests(old: &DagManifest, new: &DagManifest) {
                 }
                 changes += 1;
             }
-        }
     }
 
     // 新增边

@@ -280,7 +280,7 @@ pub fn gaussian_mixture(data: &Mat<f64>, opts: &GmmOptions) -> Result<GmmModel> 
     if opts.k < 1 {
         return Err(ClusterError::InvalidK(opts.k));
     }
-    let (n, d) = data.shape();
+    let (n, _d) = data.shape();
     if n < opts.k {
         return Err(ClusterError::TooFewSamples { n, k: opts.k });
     }

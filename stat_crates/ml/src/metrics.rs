@@ -287,10 +287,10 @@ mod tests {
     fn test_confusion_matrix() {
         let cm = confusion_matrix(&[0., 1., 2., 0., 1.], &[0., 1., 2., 1., 1.], 3).unwrap();
         // cm[actual * 3 + predicted]
-        assert_eq!(cm[0 * 3 + 0], 1); // actual=0 pred=0
-        assert_eq!(cm[0 * 3 + 1], 1); // actual=0 pred=1
-        assert_eq!(cm[1 * 3 + 1], 2); // actual=1 pred=1
-        assert_eq!(cm[2 * 3 + 2], 1); // actual=2 pred=2
+        assert_eq!(cm[0], 1); // actual=0 pred=0
+        assert_eq!(cm[1], 1); // actual=0 pred=1
+        assert_eq!(cm[4], 2); // actual=1 pred=1
+        assert_eq!(cm[8], 1); // actual=2 pred=2
     }
 
     #[test]

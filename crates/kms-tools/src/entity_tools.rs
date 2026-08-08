@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_types::tools::{ToolResult, ToolResultContent};
+use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
 use kms::{EntityFilter, KmsService, Language, Nomenclature};
 use serde_json::json;

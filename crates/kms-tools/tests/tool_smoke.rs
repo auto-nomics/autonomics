@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolFunction, ToolRegistration};
-use agentik_types::tools::{ToolUse, ToolResultContent};
+use agentik_types::tools::ToolResultContent;
 use kms::KmsService;
 use kms_tools::{kms_readonly_registrations, kms_registrations};
 use serde_json::json;

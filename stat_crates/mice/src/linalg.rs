@@ -174,11 +174,11 @@ pub fn chol_factor(x: &[f64]) -> Result<Vec<f64>> {
         )));
     }
     let m = Mat::from_fn(p, p, |i, j| x[i * p + j]);
-    let llt = Llt::new(m.as_ref(), Side::Lower)
+    let _llt = Llt::new(m.as_ref(), Side::Lower)
         .map_err(|e| MiceError::Numerical(format!("chol_factor: {e:?}")))?;
-    let mut out = vec![0.0_f64; p * p];
-    for j in 0..p {
-        for k in 0..p {
+    let out = vec![0.0_f64; p * p];
+    for _j in 0..p {
+        for _k in 0..p {
             // faer's L is stored in the lower triangle (including diagonal).
             // The upper triangle (j < k) is zero.
             // Access L from Llt via factor(): faer 0.24 stores L lower-triangular in factor().

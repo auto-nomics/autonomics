@@ -105,7 +105,12 @@ impl Agent {
     }
 
     pub fn name(&self) -> &str {
-        &self.shared.name
+        self.shared.name()
+    }
+
+    /// The agent's full hierarchical path (e.g. `/root/researcher`).
+    pub fn path(&self) -> &agentik_types::AgentPath {
+        self.shared.path()
     }
 
     pub fn model_handle(&self) -> &Arc<ArcSwapOption<Model>> {
@@ -228,7 +233,7 @@ impl Agent {
                 .as_ref()
                 .upsert_agent(AgentRecord {
                     id: self.shared.id,
-                    name: self.shared.name.clone(),
+                    name: self.shared.name().to_string(),
                     config_json: self.shared.config_json.clone(),
                     created_at: now,
                     last_active: now,

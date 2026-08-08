@@ -60,8 +60,10 @@ use serde::{Deserialize, Serialize};
 /// Alternative hypothesis, matching R's `alternative` argument.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Alternative {
     /// `H₁: θ ≠ θ₀` — two-sided (default).
+    #[default]
     TwoSided,
     /// `H₁: θ < θ₀`.
     Less,
@@ -91,11 +93,6 @@ impl Alternative {
     }
 }
 
-impl Default for Alternative {
-    fn default() -> Self {
-        Alternative::TwoSided
-    }
-}
 
 /// Errors returned by `hypothesize`.
 #[derive(Debug, Clone, thiserror::Error)]

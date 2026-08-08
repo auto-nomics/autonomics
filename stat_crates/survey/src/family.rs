@@ -308,7 +308,7 @@ impl FamilySpec {
         match self.family {
             Family::Binomial | Family::QuasiBinomial => {
                 for (i, &v) in y.iter().enumerate() {
-                    if v < 0.0 || v > 1.0 {
+                    if !(0.0..=1.0).contains(&v) {
                         return Err(format!(
                             "y[{i}] = {v} is outside [0,1] for binomial family"
                         ));
@@ -379,7 +379,7 @@ fn normal_inv_cdf(p: f64) -> f64 {
         -3.969683028665376e+01,
         2.209460984245205e+02,
         -2.759285104469687e+02,
-        1.383577518672690e+02,
+        1.383_577_518_672_69e2,
         -3.066479806614716e+01,
         2.506628277459239e+00,
     ];

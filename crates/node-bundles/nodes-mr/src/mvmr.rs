@@ -332,7 +332,7 @@ impl NodeFactory for MvmrNodeFactory {
 
         if cfg.strength {
             code.push(String::new());
-            code.push(format!("# Conditional F-statistics (strength_mvmr)"));
+            code.push("# Conditional F-statistics (strength_mvmr)".to_string());
             code.push(format!(
                 "{str_out} <- strength_mvmr({mvmr_dat}, gencov = {})",
                 cfg.gencov
@@ -342,7 +342,7 @@ impl NodeFactory for MvmrNodeFactory {
 
         if cfg.strhet {
             code.push(String::new());
-            code.push(format!("# Conditional F-statistics (strhet_mvmr)"));
+            code.push("# Conditional F-statistics (strhet_mvmr)".to_string());
             code.push(format!(
                 "{strhet_out} <- strhet_mvmr({mvmr_dat}, gencov = {})",
                 cfg.gencov
@@ -352,7 +352,7 @@ impl NodeFactory for MvmrNodeFactory {
 
         if cfg.pleiotropy {
             code.push(String::new());
-            code.push(format!("# Instrument validity Q statistic"));
+            code.push("# Instrument validity Q statistic".to_string());
             code.push(format!(
                 "{pleio_out} <- pleiotropy_mvmr({mvmr_dat}, gencov = {})",
                 cfg.gencov

@@ -84,7 +84,7 @@ pub fn adaboost(
         return Err(SvmEnsembleError::Empty);
     }
 
-    let mut rng = ChaCha8Rng::seed_from_u64(42);
+    let _rng = ChaCha8Rng::seed_from_u64(42);
     let y: Vec<f64> = labels.iter().map(|&l| if l != 0 { 1.0 } else { -1.0 }).collect();
 
     // Initialize sample weights uniformly

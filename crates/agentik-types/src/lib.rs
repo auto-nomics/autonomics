@@ -5,6 +5,7 @@ pub mod files_api;
 pub mod lifecycle;
 pub mod messages;
 pub mod models_api;
+pub mod path;
 pub mod plan;
 pub mod reasoning;
 pub mod shared;
@@ -13,6 +14,7 @@ pub mod tools;
 
 pub use agent_events::{SessionInfo};
 pub use errors::{AnthropicError, Result};
+pub use path::{AgentPath, PathError};
 pub use reasoning::{
     ReasoningConfig, ReasoningEffort, ThinkingConfig, ThinkingKind, anthropic_budget_for_effort,
 };

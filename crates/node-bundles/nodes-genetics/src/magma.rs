@@ -1191,7 +1191,7 @@ mod tests {
         let batches = df.clone().collect().await.unwrap();
         let pvals = extract_f64_col(&batches, "pval").unwrap();
         for &p in &pvals {
-            assert!(p >= 0.0 && p <= 1.0, "p-value out of range: {p}");
+            assert!((0.0..=1.0).contains(&p), "p-value out of range: {p}");
         }
     }
 

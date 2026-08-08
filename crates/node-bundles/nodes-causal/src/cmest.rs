@@ -114,7 +114,9 @@ fn build_cmest_batch(
         Field::new("mediator_weight", DataType::Float64, true),
     ]));
 
-    let batch = RecordBatch::try_new(
+
+
+    RecordBatch::try_new(
         schema,
         vec![
             Arc::new(StringArray::from(mediator_col)),
@@ -136,9 +138,7 @@ fn build_cmest_batch(
             Arc::new(Float64Array::from(weights)),
         ],
     )
-    .expect("cmest output schema");
-
-    batch
+    .expect("cmest output schema")
 }
 
 /// Shared: extract numeric columns + complete-case filter.

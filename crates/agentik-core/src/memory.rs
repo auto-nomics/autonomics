@@ -733,7 +733,7 @@ mod tests {
         // One segment with a giant user message — no historical segments.
         let mut memory = Memory::new();
         memory
-            .remember(Message::user(&"x".repeat(200_000)))
+            .remember(Message::user("x".repeat(200_000)))
             .unwrap();
 
         // `should_compact` would return true (200K chars ≈ 50K tokens >> any
@@ -750,7 +750,7 @@ mod tests {
         memory.remember(Message::user("tiny history")).unwrap();
         memory.items.push(MemoryItem::default());
         memory
-            .remember(Message::user(&"x".repeat(200_000)))
+            .remember(Message::user("x".repeat(200_000)))
             .unwrap();
 
         // Historical tokens (~3) are well below DEFAULT_KEEP_TOKENS (8000),

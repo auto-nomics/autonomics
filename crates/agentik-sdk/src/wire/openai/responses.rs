@@ -94,11 +94,10 @@ impl WireProtocol for OpenAiResponsesWire {
                         }));
                     }
                     // If there's also text content, emit it as a message item.
-                    if let Some(content) = msg.get("content") {
-                        if !content.is_null() {
+                    if let Some(content) = msg.get("content")
+                        && !content.is_null() {
                             input.push(responses_message_item(role, content));
                         }
-                    }
                     continue;
                 }
 
@@ -117,11 +116,10 @@ impl WireProtocol for OpenAiResponsesWire {
         });
 
         // `instructions` replaces the Chat Completions `system` message.
-        if let Some(system) = &params.system {
-            if !system.is_empty() {
+        if let Some(system) = &params.system
+            && !system.is_empty() {
                 body["instructions"] = json!(system);
             }
-        }
 
         if params.max_tokens > 0 {
             body["max_output_tokens"] = json!(params.max_tokens);
@@ -137,8 +135,8 @@ impl WireProtocol for OpenAiResponsesWire {
         }
 
         // Tools: flat function descriptors.
-        if let Some(tools) = &params.tools {
-            if !tools.is_empty() {
+        if let Some(tools) = &params.tools
+            && !tools.is_empty() {
                 let openai_tools: Vec<Value> = tools
                     .iter()
                     .map(|t| {
@@ -157,7 +155,6 @@ impl WireProtocol for OpenAiResponsesWire {
                     .collect();
                 body["tools"] = Value::Array(openai_tools);
             }
-        }
 
         if let Some(choice) = &params.tool_choice {
             body["tool_choice"] = translate_tool_choice(choice, /*chat_form*/ false);

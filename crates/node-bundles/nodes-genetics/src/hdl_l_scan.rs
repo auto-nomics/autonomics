@@ -321,8 +321,7 @@ impl NodeFactory for HdlLScanNodeFactory {
         use dag_core::codegen::helpers::*;
         let s = parse_spec::<HdlLScanSpec>(spec, "hdl_l_scan")?;
         let input1 = ctx
-            .input_vars
-            .get(0)
+            .input_vars.first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

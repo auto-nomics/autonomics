@@ -180,7 +180,7 @@ impl DagNode for KsTestNode {
             h::ks_two_sample(&x, &y, alt)
         } else {
             // One-sample vs standard normal CDF.
-            h::ks_one_sample(&x, |z| h::normal_cdf(z))
+            h::ks_one_sample(&x, h::normal_cdf)
         }
         .map_err(|e| HypoNodeError::Test(e.to_string()))?;
         emit_test_row(ctx, &result)

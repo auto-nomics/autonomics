@@ -583,7 +583,7 @@ pub fn svy_ranktest(
     // Regress score on group indicator [1, g] with weights.
     let g: Vec<f64> = group.to_vec();
     let ones = vec![1.0_f64; n_eff];
-    let x = vec![ones, g];
+    let x = [ones, g];
     let x_refs: Vec<&[f64]> = x.iter().map(|v| v.as_slice()).collect();
     let reg = statkit::regression::wls(&x_refs, &score, &w, false)
         .map_err(|e| SurveyError::InvalidInput(format!("rank-score OLS failed: {e}")))?;
@@ -1054,7 +1054,7 @@ mod tests {
         // R golden (fpc, ~x, quantiles 0.25/0.5/0.75):
         //   0.25 → 3.7, 0.5 → 4.2, 0.75 → 6.8
         let d = fpc_design(false);
-        let res = svy_quantile(&FPC_X.to_vec(), &d, &[0.25, 0.5, 0.75], 0.05).unwrap();
+        let res = svy_quantile(FPC_X.as_ref(), &d, &[0.25, 0.5, 0.75], 0.05).unwrap();
         assert!((res[0].0 - 3.7).abs() < 1e-9, "q0.25: {}", res[0].0);
         assert!((res[1].0 - 4.2).abs() < 1e-9, "q0.5: {}", res[1].0);
         assert!((res[2].0 - 6.8).abs() < 1e-9, "q0.75: {}", res[2].0);
@@ -1149,7 +1149,7 @@ mod tests {
         // R golden (fpc, ~x): t=7.349765, df=5, p=0.0007318758,
         //   estimate=5.448148, CI=(3.542657, 7.353639)
         let d = fpc_design(false);
-        let t = svy_ttest_onesample(&FPC_X.to_vec(), &d, 0.0).unwrap();
+        let t = svy_ttest_onesample(FPC_X.as_ref(), &d, 0.0).unwrap();
         assert_eq!(t.df, 5);
         assert!(
             (t.estimate - 5.448148).abs() < 1e-5,

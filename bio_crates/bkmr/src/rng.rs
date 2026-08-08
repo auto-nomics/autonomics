@@ -180,7 +180,7 @@ impl Rng {
         #[allow(clippy::excessive_precision)]
         // constants
         const SQRT32: f64 = 5.656854;
-        const EXP_M1: f64 = 0.36787944117144232159;
+        const EXP_M1: f64 = 0.367_879_441_171_442_33;
         const Q1: f64 = 0.04166669;
         const Q2: f64 = 0.02083148;
         const Q3: f64 = 0.00801191;

@@ -34,7 +34,7 @@ pub fn fisher_exact(
     }
 
     // Support of the hypergeometric: a ranges from lo to hi.
-    let lo = n1.saturating_sub(m2).max(0);
+    let lo = n1.saturating_sub(m2);
     let hi = n1.min(m1);
 
     if lo > hi {

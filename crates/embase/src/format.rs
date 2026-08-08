@@ -94,7 +94,7 @@ pub fn format_search(resp: &SearchResponse) -> String {
                 let cleaned = strip_html_tags(desc);
                 let truncated = truncate_at(&cleaned, 500);
                 out.push('\n');
-                out.push_str(&truncated);
+                out.push_str(truncated);
                 if cleaned.len() > 500 {
                     out.push_str("...");
                 }

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
-use crate::session::{AgentShared, Session};
+use crate::session::AgentShared;
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
@@ -27,8 +27,8 @@ pub struct AgentBuilder {
     agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
     /// Stable agent UUID. If `None`, a fresh v4 UUID is generated at build time.
     id: Option<Uuid>,
-    /// Human-readable name for the agent (used in the registry).
-    name: Option<String>,
+    /// Hierarchical agent path. If `None`, defaults to `/root` at build time.
+    path: Option<agentik_types::AgentPath>,
     /// Opaque configuration JSON persisted to the registry (e.g. RuntimeConfig).
     config_json: Option<serde_json::Value>,
     /// Pre-built memory (used to restore from a snapshot). When set, overrides
@@ -52,7 +52,7 @@ impl Clone for AgentBuilder {
             system_prompt_identity: self.system_prompt_identity.clone(),
             agent_event_tx: self.agent_event_tx.clone(),
             id: self.id,
-            name: self.name.clone(),
+            path: self.path.clone(),
             config_json: self.config_json.clone(),
             memory: self.memory.clone(),
             skill: self.skill.clone(),
@@ -74,7 +74,7 @@ impl AgentBuilder {
             system_prompt_identity: None,
             agent_event_tx: None,
             id: None,
-            name: None,
+            path: None,
             config_json: None,
             memory: None,
             skill: None,
@@ -140,9 +140,21 @@ impl AgentBuilder {
         self
     }
 
-    /// Set the human-readable agent name (used in the persistence registry).
+    /// Set the agent's hierarchical path directly.
+    pub fn with_path(mut self, path: agentik_types::AgentPath) -> Self {
+        self.path = Some(path);
+        self
+    }
+
+    /// Backward-compatible: validates `name` as a segment and joins it to
+    /// `/root`, producing e.g. `/root/researcher`.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+        let name = name.into();
+        self.path = Some(
+            agentik_types::AgentPath::root()
+                .join(&name)
+                .unwrap_or_else(|_| agentik_types::AgentPath::root()),
+        );
         self
     }
 
@@ -208,7 +220,7 @@ impl AgentBuilder {
         // ── Build AgentShared ───────────────────────────────
         let shared = Arc::new(AgentShared {
             id: agent_id,
-            name: self.name.unwrap_or_else(|| "agent".to_string()),
+            path: self.path.unwrap_or_else(agentik_types::AgentPath::root),
             config_json: self.config_json.unwrap_or(serde_json::json!({})),
             model,
             config: self.config,

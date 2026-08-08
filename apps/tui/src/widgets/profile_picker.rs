@@ -31,6 +31,7 @@ impl ProfileItem {
 }
 
 /// State for the profile picker.
+#[derive(Default)]
 pub struct ProfilePickerState {
     pub visible: bool,
     /// Search query string.
@@ -41,18 +42,6 @@ pub struct ProfilePickerState {
     list_state: ListState,
 }
 
-impl Default for ProfilePickerState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            query: String::new(),
-            items: Vec::new(),
-            filtered: Vec::new(),
-            selected: 0,
-            list_state: ListState::default(),
-        }
-    }
-}
 
 impl ProfilePickerState {
     pub fn open(&mut self) {
@@ -191,11 +180,13 @@ impl StatefulWidget for ProfilePicker {
             .width(self.popup_width);
         let inner = popup.render(area, buf);
 
-        // Top-level vertical: search row (1) + content row (rest) + footer (1).
+        // Top-level vertical: search row (1) + separator (1) + content row
+        // (rest) + footer (1).
         let v_regions = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
+                Constraint::Length(1), // separator line
                 Constraint::Min(3),
                 Constraint::Length(1),
             ])
@@ -220,6 +211,14 @@ impl StatefulWidget for ProfilePicker {
         };
         Widget::render(Paragraph::new(input_line), v_regions[0], buf);
 
+        Widget::render(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+            v_regions[1],
+            buf,
+        );
+
         // ── Content area: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
@@ -227,7 +226,7 @@ impl StatefulWidget for ProfilePicker {
                 Constraint::Length(self.list_width),
                 Constraint::Min(10),
             ])
-            .split(v_regions[1]);
+            .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
         self.render_preview_block(h_regions[1], buf, state);
@@ -236,7 +235,7 @@ impl StatefulWidget for ProfilePicker {
         let hint = " Enter spawn  ↑↓ navigate  Esc cancel";
         let p = Paragraph::new(hint)
             .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
-        Widget::render(p, v_regions[2], buf);
+        Widget::render(p, v_regions[3], buf);
     }
 }
 

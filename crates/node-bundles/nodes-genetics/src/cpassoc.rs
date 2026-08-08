@@ -653,7 +653,7 @@ mod tests {
         // Output: one port.
         assert_eq!(node.ports().output_ports().len(), 1);
         // Input: declared with at least 1 port (for schema), but variadic.
-        assert!(node.ports().input_ports().len() >= 1);
+        assert!(!node.ports().input_ports().is_empty());
     }
 
     fn sumstats_batch(z: &[f64], rsids: &[String], n_samp: f64) -> RecordBatch {

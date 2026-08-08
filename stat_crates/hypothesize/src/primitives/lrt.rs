@@ -47,7 +47,7 @@ where
     let dof = match dof {
         Some(d) => d,
         None => match (null_df, alt_df) {
-            (Some(a), Some(b)) => b.saturating_sub(a).max(0),
+            (Some(a), Some(b)) => b.saturating_sub(a),
             _ => {
                 return Err(HypoError::InvalidInput(
                     "'dof' is required when inputs are not both LogLik".into(),

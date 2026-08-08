@@ -208,7 +208,7 @@ impl GeneSetData {
             .filter_map(|name| {
                 let members = set_map.get(&name)?;
                 // Deduplicate
-                let mut unique: Vec<usize> = members.iter().copied().collect();
+                let mut unique: Vec<usize> = members.to_vec();
                 unique.sort_unstable();
                 unique.dedup();
                 Some((name, unique))

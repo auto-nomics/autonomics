@@ -171,7 +171,7 @@ impl SnpPvalData {
         let n_idx = n_col.and_then(|nc| headers.iter().position(|&h| h == nc));
 
         let mut snps = HashMap::new();
-        for (_lineno, line) in lines.enumerate() {
+        for line in lines {
             if line.trim().is_empty() {
                 continue;
             }

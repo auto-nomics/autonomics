@@ -187,10 +187,12 @@ impl HostControl {
     pub async fn spawn_agent(
         &self,
         name: &str,
+        caller_path: &agentik_types::AgentPath,
         profile_name: &str,
     ) -> Result<String, String> {
         self.ask(|tx| HostCommand::Spawn {
             name: name.into(),
+            caller_path: caller_path.clone(),
             profile_name: profile_name.into(),
             reply_tx: tx,
         })
@@ -203,11 +205,13 @@ impl HostControl {
     pub async fn spawn_with_profile(
         &self,
         name: &str,
+        caller_path: &agentik_types::AgentPath,
         profile: agentik_core::AgentProfile,
         model_override: Option<Model>,
     ) -> Result<String, String> {
         self.ask(|tx| HostCommand::SpawnWithProfile {
             name: name.into(),
+            caller_path: caller_path.clone(),
             profile: Box::new(profile),
             model_override,
             reply_tx: tx,
@@ -249,17 +253,22 @@ impl HostControl {
 /// Commands sent from agent tools to RuntimeHost via [`HostControl`].
 #[allow(clippy::large_enum_variant)]
 pub enum HostCommand {
-    /// Spawn and register an agent. Reply: Ok(name) or Err(msg).
+    /// Spawn and register an agent. Reply: Ok(path_string) or Err(msg).
+    /// `caller_path` is the parent agent's path; the child's path is
+    /// derived as `caller_path.join(name)`.
     Spawn {
         name: String,
+        caller_path: agentik_types::AgentPath,
         profile_name: String,
         reply_tx: oneshot::Sender<Result<String, String>>,
     },
 
     /// Spawn and register an agent from a full profile + optional model
     /// override. Used by the TUI for spawn-from-profile / restore flows.
+    /// `caller_path` is the parent agent's path.
     SpawnWithProfile {
         name: String,
+        caller_path: agentik_types::AgentPath,
         profile: Box<agentik_core::AgentProfile>,
         model_override: Option<Model>,
         reply_tx: oneshot::Sender<Result<String, String>>,
@@ -397,8 +406,10 @@ pub struct HostStatus {
 /// Information about one registered agent, including capability metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInfo {
-    /// Agent name (unique within the host).
+    /// Agent short name (last path segment, e.g. `researcher`).
     pub name: String,
+    /// Full hierarchical path (e.g. `/root/researcher/worker`).
+    pub path: String,
     /// Human/LLM-readable capability summary.
     pub summary: String,
     /// Capability tags for quick filtering.

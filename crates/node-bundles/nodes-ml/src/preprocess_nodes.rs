@@ -70,7 +70,7 @@ fn replace_columns(
     }
 
     // Add transformed columns
-    let (nrows, ncols) = new_data.shape();
+    let (nrows, _ncols) = new_data.shape();
     let mut all_fields: Vec<Arc<Field>> = fields.iter().map(|(f, _)| f.clone()).collect();
     let mut all_arrays: Vec<Arc<dyn Array>> =
         fields.into_iter().flat_map(|(_, arrays)| arrays).collect();
@@ -408,7 +408,7 @@ impl DagNode for OneHotEncodeNode {
         let categories: Vec<String> = match &self.categories {
             Some(c) => c.clone(),
             None => {
-                let mut seen: Vec<String> = values.iter().cloned().collect();
+                let mut seen: Vec<String> = values.to_vec();
                 seen.sort();
                 seen.dedup();
                 seen
@@ -480,7 +480,7 @@ impl DagNode for LabelEncodeNode {
         let batches = collect_batches(inputs).await?;
         let values = common::extract_string_column(&batches, &self.column)?;
         // Build label map
-        let mut sorted_cats: Vec<String> = values.iter().cloned().collect();
+        let mut sorted_cats: Vec<String> = values.to_vec();
         sorted_cats.sort();
         sorted_cats.dedup();
         let map: std::collections::HashMap<&String, u32> = sorted_cats.iter().enumerate().map(|(i, c)| (c, i as u32)).collect();

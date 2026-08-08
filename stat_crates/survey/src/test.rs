@@ -41,8 +41,8 @@ pub fn svy_chisq(row: &[String], col: &[String], design: &SurveyDesign) -> Resul
     let w = design.weights();
 
     // Unique levels in order of appearance.
-    let row_levels = unique(&row);
-    let col_levels = unique(&col);
+    let row_levels = unique(row);
+    let col_levels = unique(col);
     let nr = row_levels.len();
     let nc = col_levels.len();
     let ncell = nr * nc;
@@ -126,7 +126,7 @@ pub fn svy_chisq(row: &[String], col: &[String], design: &SurveyDesign) -> Resul
     let delta = solve_sym(&denom, &numr)?;
 
     // trace(Delta), trace(Delta²)
-    let t = nint as usize;
+    let t = nint;
     let mut tr_delta = 0.0;
     let mut tr_delta2 = 0.0;
     for i in 0..t {

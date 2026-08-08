@@ -84,6 +84,7 @@ impl Hunk {
 
 /// A contiguous change region within an update hunk.
 #[derive(Debug, PartialEq, Clone)]
+#[derive(Default)]
 pub struct UpdateFileChunk {
     /// A single line of context (e.g. a function signature) used to narrow
     /// down the position of the chunk in the file.
@@ -174,10 +175,10 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
 /// In lenient mode, strip `<<'EOF'...EOF` heredoc wrappers that some models emit.
 fn strip_heredoc<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a str], ParseError> {
     // First try strict boundaries.
-    if let Ok(()) = (|| {
+    if let Ok(()) = {
         let (first, last) = boundary_pair(lines);
         check_boundaries(first, last)
-    })() {
+    } {
         return Ok(lines);
     }
 
@@ -522,16 +523,6 @@ impl Parser {
     }
 }
 
-impl Default for UpdateFileChunk {
-    fn default() -> Self {
-        Self {
-            change_context: None,
-            old_lines: Vec::new(),
-            new_lines: Vec::new(),
-            is_end_of_file: false,
-        }
-    }
-}
 
 /// Ensure there is at least one chunk to push lines into.
 fn ensure_chunk(chunks: &mut Vec<UpdateFileChunk>) {

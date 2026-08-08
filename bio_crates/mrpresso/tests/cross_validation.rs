@@ -104,7 +104,7 @@ fn num(v: &Value) -> Option<f64> {
 /// single-element vectors).
 fn num_vec(v: &Value) -> Vec<f64> {
     match v.as_array() {
-        Some(a) => a.iter().map(|x| num_or_nan(x)).collect(),
+        Some(a) => a.iter().map(num_or_nan).collect(),
         None => vec![num_or_nan(v)],
     }
 }

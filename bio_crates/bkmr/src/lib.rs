@@ -52,15 +52,12 @@ pub type Result<T> = std::result::Result<T, BkmrError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RPrior {
     Gamma,
+    #[default]
     Invunif,
     Unif,
-}
-impl Default for RPrior {
-    fn default() -> Self {
-        RPrior::Invunif
-    }
 }
 impl std::str::FromStr for RPrior {
     type Err = BkmrError;
@@ -76,15 +73,12 @@ impl std::str::FromStr for RPrior {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RMethod {
+    #[default]
     Varying,
     Equal,
     Fixed,
-}
-impl Default for RMethod {
-    fn default() -> Self {
-        RMethod::Varying
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

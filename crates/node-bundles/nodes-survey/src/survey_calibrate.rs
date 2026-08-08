@@ -126,7 +126,7 @@ impl DagNode for PostStratifyNode {
         // Build output batch: original data + new weight column.
         // Concatenate input batches via arrow::compute.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+        let combined = arrow::compute::concat_batches(schema_ref, &batches).map_err(|e| {
             DagError::NodeError {
                 node_type: "post_stratify".into(),
                 msg: format!("concat failed: {e}"),
@@ -148,7 +148,7 @@ impl DagNode for PostStratifyNode {
         ));
 
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().iter().cloned().collect();
+            combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =
@@ -357,7 +357,7 @@ impl DagNode for RakeNode {
 
         // Build output: original data + raked weight column.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+        let combined = arrow::compute::concat_batches(schema_ref, &batches).map_err(|e| {
             DagError::NodeError {
                 node_type: "rake".into(),
                 msg: format!("concat failed: {e}"),
@@ -379,7 +379,7 @@ impl DagNode for RakeNode {
         ));
 
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().iter().cloned().collect();
+            combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =
@@ -606,7 +606,7 @@ impl DagNode for CalibrateNode {
 
         // Output: original data + calibrated weight column.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+        let combined = arrow::compute::concat_batches(schema_ref, &batches).map_err(|e| {
             DagError::NodeError {
                 node_type: "calibrate".into(),
                 msg: format!("concat failed: {e}"),
@@ -626,7 +626,7 @@ impl DagNode for CalibrateNode {
                 .collect::<Vec<_>>(),
         ));
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().iter().cloned().collect();
+            combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
         let output_batch =
             RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
@@ -812,7 +812,7 @@ impl DagNode for TrimWeightsNode {
 
         // Build output: original data + trimmed weight column.
         let schema_ref = batches[0].schema_ref();
-        let combined = arrow::compute::concat_batches(&schema_ref, &batches).map_err(|e| {
+        let combined = arrow::compute::concat_batches(schema_ref, &batches).map_err(|e| {
             DagError::NodeError {
                 node_type: "trim_weights".into(),
                 msg: format!("concat failed: {e}"),
@@ -832,7 +832,7 @@ impl DagNode for TrimWeightsNode {
                 .collect::<Vec<_>>(),
         ));
         let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().iter().cloned().collect();
+            combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =

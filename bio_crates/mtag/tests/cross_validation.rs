@@ -71,7 +71,7 @@ fn json_to_3d(v: &Value) -> Vec<Mat<f64>> {
     v.as_array()
         .unwrap()
         .iter()
-        .map(|m| json_to_mat(m))
+        .map(json_to_mat)
         .collect()
 }
 

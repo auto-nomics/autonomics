@@ -81,7 +81,7 @@ impl BedFile {
 
         let mut bed = File::open(&bed_path).map_err(MagmaError::Io)?;
         let bed_size = bed.metadata()?.len() as usize;
-        let block_count = (n_indiv + 3) / 4;
+        let block_count = n_indiv.div_ceil(4);
         let exp_size = 3 + block_count * n_snp;
         if bed_size != exp_size {
             return Err(MagmaError::Input(format!(

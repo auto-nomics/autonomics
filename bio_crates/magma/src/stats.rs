@@ -152,7 +152,7 @@ pub fn imhof_pvalue(obs: f64, lambdas: &[f64]) -> f64 {
 
     let prob = 0.5 + sum / std::f64::consts::PI;
 
-    if !prob.is_finite() || prob < 0.0 || prob > 1.0 {
+    if !prob.is_finite() || !(0.0..=1.0).contains(&prob) {
         return ref_pval;
     }
 

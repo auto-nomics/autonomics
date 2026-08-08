@@ -48,7 +48,7 @@ fn build_embedding_output(
     let n_dims = embedding.first().map(|r| r.len()).unwrap_or(0);
     for d in 0..n_dims {
         let col_data: Vec<f64> = embedding.iter().map(|row| row[d]).collect();
-        fields.push(Arc::new(Field::new(&format!("{prefix}_{d}"), DataType::Float64, true)));
+        fields.push(Arc::new(Field::new(format!("{prefix}_{d}"), DataType::Float64, true)));
         arrays.push(Arc::new(Float64Array::from(col_data)));
     }
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| DagError::NodeError {

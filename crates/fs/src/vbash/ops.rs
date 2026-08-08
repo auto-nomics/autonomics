@@ -824,7 +824,7 @@ pub async fn op_tree(
                 ancestor_has_more.push(!is_last);
                 // Recurse with the directory path (no trailing slash)
                 // so subsequent prefix lookups match child entries.
-                walk(child.trim_end_matches('/'), ancestor_has_more, &all_paths, &meta_by_path, out);
+                walk(child.trim_end_matches('/'), ancestor_has_more, all_paths, meta_by_path, out);
                 ancestor_has_more.pop();
             }
         }
@@ -951,7 +951,7 @@ async fn read_image(
         .map_err(|e| e.to_string())?;
 
     let media_type = image_media_type(ext);
-    let data = base64::engine::general_purpose::STANDARD.encode(&buf.to_vec());
+    let data = base64::engine::general_purpose::STANDARD.encode(buf.to_vec());
 
     Ok(AgentToolResult::with_blocks(vec![ToolResultBlock::Image {
         source: ToolImageSource::Base64 {

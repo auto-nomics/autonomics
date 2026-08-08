@@ -843,7 +843,7 @@ impl DagNode for SvyQuantileNode {
             .spec
             .variables
             .iter()
-            .flat_map(|v| std::iter::repeat(v.clone()).take(p))
+            .flat_map(|v| std::iter::repeat_n(v.clone(), p))
             .collect();
 
         let batch = RecordBatch::try_new(

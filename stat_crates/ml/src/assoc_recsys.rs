@@ -83,11 +83,10 @@ pub fn apriori(
         for i in 0..prev_level.len() {
             for j in (i + 1)..prev_level.len() {
                 let union: HashSet<String> = prev_level[i].union(&prev_level[j]).cloned().collect();
-                if union.len() == k {
-                    if !candidates.contains(&union) {
+                if union.len() == k
+                    && !candidates.contains(&union) {
                         candidates.push(union);
                     }
-                }
             }
         }
 

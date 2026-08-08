@@ -135,6 +135,6 @@ mod tests {
     fn brent_handles_flat_region() {
         let f = |_x: f64| 0.0_f64;
         let xmin = brent_minimize(&f, 0.0, 1.0);
-        assert!(xmin >= 0.0 && xmin <= 1.0);
+        assert!((0.0..=1.0).contains(&xmin));
     }
 }

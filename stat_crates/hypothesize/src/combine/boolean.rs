@@ -23,7 +23,7 @@ use crate::{
 /// Validate p-values lie in `[0, 1]` (Boolean combinators accept 0).
 fn validate_loose(pvals: &[f64]) -> Result<()> {
     for &p in pvals {
-        if !(p >= 0.0 && p <= 1.0) {
+        if !(0.0..=1.0).contains(&p) {
             return Err(HypoError::PvalOutOfRange(p));
         }
     }

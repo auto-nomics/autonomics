@@ -6,7 +6,7 @@
 //! cargo test -p data-engine --test opentargets_node_live -- --ignored
 //! ```
 
-use data_engine::node_registry::{NodeCtx, NodeFactory, NodeRegistry};
+use data_engine::node_registry::{NodeCtx, NodeFactory};
 use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };

@@ -283,7 +283,7 @@ pub fn compute_correlation(geno: &Mat<f64>, freqs: &[f64], n_indiv: usize) -> Ma
 
     // R = (1/(n-1)) * X^T * X
     let xt = x.transpose();
-    let r_raw = &xt * &x;
+    let r_raw = xt * &x;
     let scale = 1.0 / (n_indiv as f64 - 1.0);
     let n_snp = r_raw.nrows();
     let mut r = Mat::from_fn(n_snp, n_snp, |i, j| r_raw[(i, j)] * scale);

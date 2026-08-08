@@ -75,8 +75,8 @@ impl DagNode for ExpSmoothingNode {
             .map_err(|e| DagError::NodeError { node_type: "ml_exp_smoothing".into(), msg: e.to_string() })?;
         let n = data.len();
         let total = n + self.n_forecast;
-        let fitted_padded: Vec<f64> = result.fitted.into_iter().chain(std::iter::repeat(f64::NAN).take(self.n_forecast)).collect();
-        let forecast_padded: Vec<f64> = std::iter::repeat(f64::NAN).take(n).chain(result.forecast.into_iter()).collect();
+        let fitted_padded: Vec<f64> = result.fitted.into_iter().chain(std::iter::repeat_n(f64::NAN, self.n_forecast)).collect();
+        let forecast_padded: Vec<f64> = std::iter::repeat_n(f64::NAN, n).chain(result.forecast).collect();
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("index", DataType::UInt32, false),

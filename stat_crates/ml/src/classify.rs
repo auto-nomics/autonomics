@@ -164,8 +164,8 @@ pub fn decision_tree(
     data: &Mat<f64>,
     labels: &[usize],
     max_depth: usize,
-    min_samples_split: usize,
-    min_samples_leaf: usize,
+    _min_samples_split: usize,
+    _min_samples_leaf: usize,
 ) -> Result<DecisionTreeResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
@@ -183,7 +183,7 @@ pub fn decision_tree(
     let y = ndarray::Array1::from_vec(labels.to_vec());
     let dataset = DatasetBase::new(x, y);
 
-    let mut params = DecisionTree::params()
+    let params = DecisionTree::params()
         .max_depth(Some(max_depth));
     // linfa-trees builder methods
     let model = params

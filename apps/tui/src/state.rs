@@ -545,21 +545,28 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
 }
 
 /// Apply session lifecycle events to the full AppState (mutates the
-/// `sub_sessions` list of the currently active agent).
+/// `sub_sessions` list of the agent identified by `agent_idx`).
+///
+/// `agent_idx` is the session-tab index that the event was routed to by
+/// agent name.  When it differs from `active_agent_idx` (e.g. a delegation
+/// triggers `SessionActivated` on a background agent), only the target
+/// agent's sub-sessions are touched — the foreground agent's view is
+/// untouched.
 pub fn apply_session_event(
     state: &mut AppState,
     event: AgentEvent,
+    agent_idx: usize,
 ) {
     let active_agent_id = state
         .sessions
-        .get(state.active_agent_idx)
+        .get(agent_idx)
         .map(|s| s.agent_id);
     let active_session_id = state
         .sessions
-        .get(state.active_agent_idx)
+        .get(agent_idx)
         .and_then(|s| s.sub_sessions.get(s.active_sub_session_idx))
         .map(|s| s.id);
-    let session = match state.sessions.get_mut(state.active_agent_idx) {
+    let session = match state.sessions.get_mut(agent_idx) {
         Some(s) => s,
         None => return,
     };
@@ -695,6 +702,7 @@ impl SubSession {
 /// Global display preferences affecting how chat lines are rendered.
 /// Persisted in the `settings` table.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
@@ -704,16 +712,6 @@ pub struct DisplaySettings {
     pub version: u64,
 }
 
-impl Default for DisplaySettings {
-    fn default() -> Self {
-        Self {
-            collapse_thinking: false,
-            collapse_tool_calls: false,
-            collapse_tool_results: false,
-            version: 0,
-        }
-    }
-}
 
 impl DisplaySettings {
     pub fn toggle_thinking(&mut self) {

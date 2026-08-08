@@ -415,7 +415,7 @@ fn gamma_fit_convergence() {
     let shet_stats = stats::shet(&x2(), &sample_size2(), &corr2(), ShetOptions::default());
     for &s in &shet_stats {
         let p = distr::shet_pvalue(s, params);
-        assert!(p >= 0.0 && p <= 1.0, "p-value {p} out of [0,1]");
+        assert!((0.0..=1.0).contains(&p), "p-value {p} out of [0,1]");
     }
 }
 

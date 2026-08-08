@@ -344,6 +344,22 @@ impl DagNode for EvalueNode {
     }
 }
 
+impl Default for EvalueConfig {
+    fn default() -> Self {
+        Self {
+            measure: MeasureType::RR,
+            est: 1.0,
+            lo: None,
+            hi: None,
+            se: None,
+            sd: None,
+            delta: default_delta(),
+            true_val: None,
+            rare: default_false(),
+        }
+    }
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -462,21 +478,5 @@ mod tests {
             .unwrap()
             .value(0);
         assert!(evalue_point.is_finite());
-    }
-}
-
-impl Default for EvalueConfig {
-    fn default() -> Self {
-        Self {
-            measure: MeasureType::RR,
-            est: 1.0,
-            lo: None,
-            hi: None,
-            se: None,
-            sd: None,
-            delta: default_delta(),
-            true_val: None,
-            rare: default_false(),
-        }
     }
 }

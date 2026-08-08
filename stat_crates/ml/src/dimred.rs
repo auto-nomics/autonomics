@@ -405,7 +405,7 @@ fn mat_mat_t(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     c
 }
 
-fn tmat_mat(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+fn tmat_mat(a: &[Vec<f64>], _b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     // A^T × A
     let n = a.len();
     let k = a[0].len();

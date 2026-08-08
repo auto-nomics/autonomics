@@ -209,7 +209,7 @@ fn fit_multi(
     let mut alpha1_all = Vec::with_capacity(k); // α₁ for each mediator
     let mut m_under_control_all = Vec::with_capacity(k); // E[M_j | X=0, C=C̄]
 
-    for (_j, m_j) in mediators.iter().enumerate() {
+    for m_j in mediators.iter() {
         let mut preds: Vec<&[f64]> = vec![x];
         for c in covariates {
             preds.push(c);
@@ -565,7 +565,7 @@ pub fn cmest_weighting(
     }
 
     // Step 1: Propensity model P(X=1|C) via logistic.
-    let cov_slices: Vec<&[f64]> = covariates.iter().copied().collect();
+    let cov_slices: Vec<&[f64]> = covariates.to_vec();
     let ps_fit = regression::logistic(&cov_slices, x, true).map_err(epi_from_stat)?;
     let ps = &ps_fit.fitted;
     let p_bar = x.iter().filter(|&&v| v == 1.0).count() as f64 / n as f64;

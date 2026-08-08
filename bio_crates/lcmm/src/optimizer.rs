@@ -459,7 +459,7 @@ fn searpas<F: Fn(&[f64]) -> f64>(
             }
         }
         let vw = out_vm.exp();
-        let _ = (vlw_prev, fim);
+        let _ = (vlw_prev, fi1);
         (out_fim, vw)
     }
 }

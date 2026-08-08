@@ -1429,7 +1429,7 @@ mod tests {
             .collect();
         // Snapshot had empty memory, so all 3 messages should be replayed.
         assert!(
-            all_msgs.len() >= 1,
+            !all_msgs.is_empty(),
             "restored memory should contain replayed messages"
         );
 

@@ -120,26 +120,24 @@ async fn susie_rss_node_runs_on_iceberg_chr22() {
         total_rows += b.num_rows();
 
         // PIP column
-        if let Some(pip_col) = b.column_by_name("pip") {
-            if let Some(arr) = pip_col.as_any().downcast_ref::<Float64Array>() {
+        if let Some(pip_col) = b.column_by_name("pip")
+            && let Some(arr) = pip_col.as_any().downcast_ref::<Float64Array>() {
                 for i in 0..arr.len() {
                     if !arr.is_null(i) {
                         max_pip = max_pip.max(arr.value(i));
                     }
                 }
             }
-        }
 
         // CS membership
-        if let Some(cs_col) = b.column_by_name("cs") {
-            if let Some(arr) = cs_col.as_any().downcast_ref::<Int64Array>() {
+        if let Some(cs_col) = b.column_by_name("cs")
+            && let Some(arr) = cs_col.as_any().downcast_ref::<Int64Array>() {
                 for i in 0..arr.len() {
                     if !arr.is_null(i) && arr.value(i) > 0 {
                         n_in_cs += 1;
                     }
                 }
             }
-        }
     }
 
     eprintln!("输出行数: {total_rows}, 最大 PIP: {max_pip:.4}, CS 内 SNP 数: {n_in_cs}");

@@ -493,10 +493,9 @@ impl App {
                                 | AgentEvent::SessionClosed { .. }
                                 | AgentEvent::SessionList { .. }
                         ) {
-                            state::apply_session_event(&mut self.state, event);
+                            state::apply_session_event(&mut self.state, event, target_idx);
                         } else {
                             // Route to the correct tab's tab_state.
-                            let _ = target_idx;
                             let tab_state = self
                                 .state
                                 .sessions
@@ -637,7 +636,8 @@ impl App {
     /// visible in the TUI.
     fn apply_host_event(&mut self, event: runtime::HostEvent) {
         match event {
-            runtime::HostEvent::AgentRegistered { name, .. } => {
+            runtime::HostEvent::AgentRegistered { path, .. } => {
+                let name = path.as_str().to_string();
                 // Check if the TUI already knows about this agent.
                 if self.state.sessions.iter().any(|s| s.name == name) {
                     return;
@@ -663,8 +663,8 @@ impl App {
                 }
                 tracing::info!(agent = %name, "host-spawned agent registered to TUI (no focus steal)");
             }
-            runtime::HostEvent::AgentUnregistered { name } => {
-                self.state.sessions.retain(|s| s.name != name);
+            runtime::HostEvent::AgentUnregistered { path } => {
+                self.state.sessions.retain(|s| s.name != path);
                 if self.state.active_agent_idx >= self.state.sessions.len() {
                     self.state.active_agent_idx = self
                         .state
@@ -672,7 +672,7 @@ impl App {
                         .len()
                         .saturating_sub(1);
                 }
-                tracing::info!(agent = %name, "host agent unregistered from TUI");
+                tracing::info!(agent = %path, "host agent unregistered from TUI");
             }
         }
     }
@@ -1075,7 +1075,12 @@ impl App {
                 "async spawn task started"
             );
             let result = control
-                .spawn_with_profile(&agent_name_owned, profile_clone, model_override)
+                .spawn_with_profile(
+                    &agent_name_owned,
+                    &agentik_types::AgentPath::root(),
+                    profile_clone,
+                    model_override,
+                )
                 .await;
             let event = match result {
                 Ok(name) => {
@@ -1093,7 +1098,7 @@ impl App {
                     }
                 }
             };
-            let _ = tx.send(event);
+            tx.send(event);
         });
 
         tracing::info!(profile = %profile.name, "spawning agent...");
@@ -1115,7 +1120,7 @@ impl App {
             match storage.list_agents().await {
                 Ok(records) => {
                     tracing::info!(count = records.len(), "list_agents succeeded");
-                    let _ = tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
+                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to list agents");
@@ -1139,11 +1144,12 @@ impl App {
                     self.state.agent_picker.delete_confirm_input.push(c);
                 }
                 KeyCode::Enter => {
+                    // Only commit when the typed confirmation matches
+                    // "yes" (case-insensitive). Partial / empty / typo
+                    // input is silently ignored so the user can keep
+                    // typing without losing context. Esc cancels.
                     if let Some(agent_id) = self.state.agent_picker.check_delete_confirm() {
                         self.delete_agent_record(agent_id);
-                    } else {
-                        // Wrong input — cancel confirmation.
-                        self.state.agent_picker.cancel_delete();
                     }
                 }
                 _ => {}
@@ -1159,7 +1165,7 @@ impl App {
             KeyCode::Up => self.state.agent_picker.move_up(),
             KeyCode::Down => self.state.agent_picker.move_down(),
             KeyCode::Backspace => self.state.agent_picker.pop_char(),
-            KeyCode::Char('d') if !ctrl => {
+            KeyCode::Char('d') if ctrl => {
                 self.state.agent_picker.start_delete_confirm();
             }
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
@@ -1222,7 +1228,7 @@ impl App {
             match storage.delete_agent(agent_id).await {
                 Ok(()) => {
                     tracing::info!(%agent_id, "agent deleted from storage");
-                    let _ = tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
+                    tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
                 }
                 Err(e) => {
                     tracing::error!(%agent_id, error = %e, "failed to delete agent");

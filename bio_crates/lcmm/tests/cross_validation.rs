@@ -265,7 +265,7 @@ fn m2a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![
         vec![1.0; n], csv.time.clone(), csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
-        csv.x2.iter().map(|&v| v as f64).collect(),
+        csv.x2.iter().map(|&v| v).collect(),
         csv.x3.clone(),
     ];
     let data = build_longdata(csv, 6, &x0, 2);
@@ -289,7 +289,7 @@ fn m3a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![
         vec![1.0; n], csv.time.clone(), csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
-        csv.x2.iter().map(|&v| v as f64).collect(),
+        csv.x2.iter().map(|&v| v).collect(),
         csv.x3.clone(),
     ];
     let data = build_longdata(csv, 6, &x0, 3);

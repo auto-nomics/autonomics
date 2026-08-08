@@ -604,7 +604,7 @@ mod tests {
         assert_eq!(counts.len(), 2);
         assert_eq!(freqs.len(), 2);
         for &f in &freqs {
-            assert!(f >= 0.0 && f <= 1.0);
+            assert!((0.0..=1.0).contains(&f));
         }
     }
 

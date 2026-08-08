@@ -138,9 +138,7 @@ impl NodeFactory for SurvivalNodeFactory {
             format!(")"),
         ];
         if has_group {
-            code.push(format!(
-                "# NOTE: group-stratified KM; log-rank test omitted in codegen"
-            ));
+            code.push("# NOTE: group-stratified KM; log-rank test omitted in codegen".to_string());
         }
         code.push(format!("print(head({out}))"));
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))

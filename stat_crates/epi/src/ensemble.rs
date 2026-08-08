@@ -248,7 +248,7 @@ fn grow_tree(
 
     let pure = n_pos == 0 || n_pos == n_node;
     let too_small = n_node < 2 * opts.min_samples_leaf;
-    let too_deep = opts.max_depth.map_or(false, |d| depth >= d);
+    let too_deep = opts.max_depth.is_some_and(|d| depth >= d);
 
     if pure || too_small || too_deep {
         let prob = n_pos as f64 / n_node as f64;
@@ -425,7 +425,7 @@ pub fn feature_importance(rf: &RfResult, features: &[Vec<f64>], labels: &[f64]) 
         let correct = permuted
             .iter()
             .zip(labels)
-            .filter(|&(ref x, &y)| predict(rf, x) as f64 == y)
+            .filter(|&(x, &y)| predict(rf, x) as f64 == y)
             .count();
         let acc = correct as f64 / features.len() as f64;
         importances[f] = baseline - acc;

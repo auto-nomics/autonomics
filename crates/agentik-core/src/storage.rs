@@ -375,8 +375,7 @@ pub trait AgentProfileRegistry: Send + Sync {
         // ── Legacy migration: rename `default` → `researcher` ──
         if let Some(legacy) = existing
             .iter()
-            .find(|p| p.name == "default")
-            .map(|p| p.clone())
+            .find(|p| p.name == "default").cloned()
         {
             let mut renamed = legacy;
             renamed.name = "researcher".into();

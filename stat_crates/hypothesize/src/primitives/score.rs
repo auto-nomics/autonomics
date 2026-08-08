@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn multivariate_diagonal() {
         // U = (1, 2), I = diag(1, 1) → S = 1 + 4 = 5
-        let t = score_multi(&[1.0, 2.0], &vec![vec![1.0, 0.0], vec![0.0, 1.0]], None).unwrap();
+        let t = score_multi(&[1.0, 2.0], &[vec![1.0, 0.0], vec![0.0, 1.0]], None).unwrap();
         assert!((t.stat - 5.0).abs() < 1e-12);
         assert!((t.p_value - chisq_sf(5.0, 2.0)).abs() < 1e-12);
     }

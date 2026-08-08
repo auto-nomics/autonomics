@@ -272,7 +272,7 @@ impl NodeFactory for LdscHsqNodeFactory {
         // ldsc.py is on PATH.
         let tmp_sumstats = ctx.fresh_var("ldsc_sumstats");
         let tmp_result = ctx.fresh_var("ldsc_result");
-        code.push(format!("# Write sumstats to temp file for LDSC CLI"));
+        code.push("# Write sumstats to temp file for LDSC CLI".to_string());
         code.push(format!(
             r#"{tmp_sumstats} <- tempfile(fileext = ".sumstats")"#
         ));
@@ -296,10 +296,8 @@ impl NodeFactory for LdscHsqNodeFactory {
             n_blocks = cfg.n_blocks,
         ));
 
-        code.push(format!(
-            "# NOTE: Parse LDSC stdout for h², intercept, ratio. The Rust node\n\
-             # returns a structured DataFrame with these fields directly."
-        ));
+        code.push("# NOTE: Parse LDSC stdout for h², intercept, ratio. The Rust node\n\
+             # returns a structured DataFrame with these fields directly.".to_string());
         code.push(format!("cat({tmp_result}, sep = \"\\n\")"));
         code.push(format!("# {out} holds the parsed LDSC h² result"));
         code.push(format!(

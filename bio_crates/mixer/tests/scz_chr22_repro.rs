@@ -134,7 +134,7 @@ fn scz_chr22_repro_vs_original_mixer() {
     let fixtures = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
     let sumstats_path = Path::new("/tmp/scz_chr22_mixer/scz_chr22.sumstats.tsv");
 
-    let sumstats = read_sumstats(&sumstats_path);
+    let sumstats = read_sumstats(sumstats_path);
     let af = read_af(&fixtures.join("hm3_af.tsv.gz"));
     let ld = read_ld(&fixtures.join("hm3_ld.tsv.gz"));
 

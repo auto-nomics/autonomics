@@ -474,7 +474,7 @@ mod tests {
         let x: Vec<f64> = (1..=100)
             .map(|i| normal_inv((i as f64 - 0.5) / 100.0))
             .collect();
-        let t = ks_one_sample(&x, |z| normal_cdf(z)).unwrap();
+        let t = ks_one_sample(&x, normal_cdf).unwrap();
         // Perfect quantiles → D ≈ 0
         assert!(t.stat < 0.01, "D = {}", t.stat);
         assert!(t.p_value > 0.5);

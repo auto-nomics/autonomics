@@ -276,6 +276,12 @@ fn extract_href(attrs: &str) -> Option<String> {
     }
 }
 
+impl Default for GwasCatalogClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,11 +341,5 @@ mod tests {
                 "GCST90000061_buildGRCh37.tsv-meta.yaml",
             ]
         );
-    }
-}
-
-impl Default for GwasCatalogClient {
-    fn default() -> Self {
-        Self::new()
     }
 }

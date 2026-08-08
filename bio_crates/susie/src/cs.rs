@@ -86,7 +86,7 @@ pub fn compute_cs(alpha: &[Vec<f64>], xtx: &Mat<f64>, params: &SusieParams) -> C
     for (vars, l, cov) in &raw_sets {
         let mut sorted_vars = vars.clone();
         sorted_vars.sort();
-        if !seen.iter().any(|s| *s == sorted_vars) {
+        if !seen.contains(&sorted_vars) {
             seen.push(sorted_vars);
             deduped.push((vars.clone(), *l, *cov));
         }

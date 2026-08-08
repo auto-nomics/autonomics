@@ -7,7 +7,7 @@ use datafusion::{
 };
 use fs::OpendalFileStorage;
 
-use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig, DirtyState};
+use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
 use crate::default_registry::build_default_registry;
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
@@ -203,7 +203,7 @@ impl DataEngine {
         target: crate::codegen::CodegenTarget,
     ) -> Result<crate::codegen::CompiledScript> {
         let compiler = crate::codegen::DagCompiler {
-            registry: &*self.node_registry,
+            registry: &self.node_registry,
         };
         compiler
             .compile_dag(&self.dag, target)
@@ -227,11 +227,11 @@ impl DataEngine {
     /// state without trace, it starts a new independent lineage.
     pub async fn new_dag_ref(&mut self, name: &str) -> Result<()> {
         // Reject if the ref already exists.
-        if let Some(history) = &self.history {
-            if history
+        if let Some(history) = &self.history
+            && history
                 .ref_head(name)
                 .await
-                .map_err(|e| Error::Dag(e))?
+                .map_err(Error::Dag)?
                 .is_some()
             {
                 return Err(Error::Custom(format!(
@@ -239,7 +239,6 @@ impl DataEngine {
                      or branch_from_snapshot to create a new lineage from a snapshot."
                 )));
             }
-        }
         self.dag.clear();
         self.history_ref = name.to_string();
         Ok(())
@@ -262,7 +261,7 @@ impl DataEngine {
         let head = history
             .ref_head(name)
             .await
-            .map_err(|e| Error::Dag(e))?
+            .map_err(Error::Dag)?
             .ok_or_else(|| {
                 Error::Custom(format!(
                     "ref '{name}' does not exist. Use new_dag_ref to create it, \
@@ -284,7 +283,7 @@ impl DataEngine {
     /// is attached.
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
         let mut refs = match &self.history {
-            Some(h) => h.list_refs().await.map_err(|e| Error::Dag(e))?,
+            Some(h) => h.list_refs().await.map_err(Error::Dag)?,
             None => vec![],
         };
         // Include the current ref even if it has no snapshots yet (just created
@@ -308,7 +307,7 @@ impl DataEngine {
             .as_ref()
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
         let r = ref_name.unwrap_or(&self.history_ref);
-        history.log(r, limit).await.map_err(|e| Error::Dag(e))
+        history.log(r, limit).await.map_err(Error::Dag)
     }
 
     /// Fetch a single snapshot by id or short-hash prefix.
@@ -320,7 +319,7 @@ impl DataEngine {
         history
             .resolve_snapshot(snapshot_id)
             .await
-            .map_err(|e| Error::Dag(e))
+            .map_err(Error::Dag)
     }
 
     /// Diff two snapshots' manifests. Returns a textual diff.
@@ -333,12 +332,12 @@ impl DataEngine {
         let old_snap = history
             .resolve_snapshot(old_id)
             .await
-            .map_err(|e| Error::Dag(e))?
+            .map_err(Error::Dag)?
             .ok_or_else(|| Error::Custom(format!("snapshot '{old_id}' not found")))?;
         let new_snap = history
             .resolve_snapshot(new_id)
             .await
-            .map_err(|e| Error::Dag(e))?
+            .map_err(Error::Dag)?
             .ok_or_else(|| Error::Custom(format!("snapshot '{new_id}' not found")))?;
 
         let old_m = old_snap
@@ -370,7 +369,7 @@ impl DataEngine {
         let snap = history
             .resolve_snapshot(snapshot_id)
             .await
-            .map_err(|e| Error::Dag(e))?
+            .map_err(Error::Dag)?
             .ok_or_else(|| Error::Custom(format!("snapshot '{snapshot_id}' not found")))?;
 
         let manifest = snap
@@ -402,7 +401,7 @@ impl DataEngine {
         history
             .branch_from_snapshot(new_ref_name, snapshot_id)
             .await
-            .map_err(|e| Error::Dag(e))?;
+            .map_err(Error::Dag)?;
 
         // Switch the engine to the new ref.
         self.history_ref = new_ref_name.to_string();
@@ -411,7 +410,7 @@ impl DataEngine {
         let snap = history
             .resolve_snapshot(snapshot_id)
             .await
-            .map_err(|e| Error::Dag(e))?
+            .map_err(Error::Dag)?
             .ok_or_else(|| Error::Custom(format!("snapshot '{snapshot_id}' not found")))?;
 
         let manifest = snap
@@ -546,8 +545,8 @@ impl DataEngine {
     ///
     /// Returns the previous ref name.
     pub fn set_history_ref(&mut self, ref_name: impl Into<String>) -> String {
-        let old = std::mem::replace(&mut self.history_ref, ref_name.into());
-        old
+
+        std::mem::replace(&mut self.history_ref, ref_name.into())
     }
 
     /// The current history ref name that [`Self::run`] commits to.
@@ -776,12 +775,11 @@ fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagMani
         }
     }
     for n in &new.nodes {
-        if let Some(old_n) = old_nodes.get(n.id.as_str()) {
-            if old_n.kind != n.kind || old_n.spec != n.spec {
+        if let Some(old_n) = old_nodes.get(n.id.as_str())
+            && (old_n.kind != n.kind || old_n.spec != n.spec) {
                 out.push_str(&format!("  ~ node {} ({})\n", n.id, n.kind));
                 changes += 1;
             }
-        }
     }
     for e in new_edges.difference(&old_edges) {
         out.push_str(&format!("  + edge {e}\n"));

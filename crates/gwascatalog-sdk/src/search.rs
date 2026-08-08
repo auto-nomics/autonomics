@@ -211,7 +211,7 @@ impl GwasCatalogClient {
 
         // Build full URL — the `get` helper takes &[(&str, String)] but
         // array params have owned key strings, so we build manually.
-        let mut url = format!("{}", self.search_base());
+        let mut url = self.search_base().to_string();
         let mut first = true;
         let add = |url: &mut String, first: &mut bool, k: &str, v: &str| {
             url.push(if *first { '?' } else { '&' });

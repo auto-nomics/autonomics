@@ -45,7 +45,7 @@ use crate::tools::{ToolRegistry, Toolset};
 /// runtime mutation use interior mutability (`ArcSwap`, etc.).
 pub(crate) struct AgentShared {
     pub id: Uuid,
-    pub name: String,
+    pub path: agentik_types::AgentPath,
     pub config_json: serde_json::Value,
     pub model: Arc<ArcSwapOption<Model>>,
     pub config: AgentConfig,
@@ -75,6 +75,16 @@ pub(crate) struct AgentShared {
 }
 
 impl AgentShared {
+    /// The agent's short name (last path segment).
+    pub fn name(&self) -> &str {
+        self.path.name()
+    }
+
+    /// The full hierarchical agent path.
+    pub fn path(&self) -> &agentik_types::AgentPath {
+        &self.path
+    }
+
     /// Load the current event sender, if any.
     pub fn event_tx(&self) -> Option<UnboundedSender<AgentEvent>> {
         self.event_tx.load_full().as_deref().cloned()
@@ -692,11 +702,13 @@ impl Session {
             .unwrap_or("You are a helpful assistant.");
         builder = builder.with_identity(format!(
             "{identity}\n\n\
-             Your name is **{}**. \
-             When other agents delegate tasks to you, they address you by this name. \
+             Your agent path is `{path}`. Your short name is **{name}**. \
+             Other agents can address you by your short name or full path. \
+             When spawning child agents, their path is derived from yours. \
              Do not delegate tasks to yourself — use `list_agents` or `route_task` \
              to find a *different* agent suited for the task.",
-            self.shared.name
+            path = self.shared.path.as_str(),
+            name = self.shared.name(),
         ));
 
         if let Some(ref extra) = self.shared.system_prompt_section {

@@ -227,13 +227,12 @@ pub fn misclassification(target: &str, rare_outcome: bool, rare_exposure: bool) 
         );
     }
 
-    if target == "exposure" {
-        if !rare_outcome {
+    if target == "exposure"
+        && !rare_outcome {
             return Err(EvalueError::Invalid(
                 "Exposure misclassification with non-rare outcomes not currently available; set rare_outcome = TRUE.".into(),
             ));
         }
-    }
 
     let (n, d) = match kind {
         BiasKind::OutcomeMisclassification => (1, 0),
@@ -253,7 +252,7 @@ pub fn misclassification(target: &str, rare_outcome: bool, rare_exposure: bool) 
         increased_risk: false,
         decreased_risk: false,
         su: false,
-        rare_outcome: if target == "exposure" { true } else { false },
+        rare_outcome: target == "exposure",
         rare_exposure,
         n,
         d,
@@ -639,7 +638,7 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
         next_b = biases
             .iter()
             .filter(|b| !matches!(b.kind, BiasKind::Selection | BiasKind::Confounding))
-            .map(|b| bias_name(b))
+            .map(bias_name)
             .collect::<Vec<_>>()
             .join("");
         new_biases = vec!["confounding and selection".into()];
@@ -650,7 +649,7 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
             }
         }
     } else {
-        new_biases = biases.iter().map(|b| bias_name(b)).collect();
+        new_biases = biases.iter().map(bias_name).collect();
     }
 
     let mut arg_rows = arg_tab();
@@ -728,7 +727,7 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
                 Some("(A*)|(Y*)")
             };
 
-            if let Some(_) = to_remove_pattern {
+            if to_remove_pattern.is_some() {
                 // Remove rows whose output contains A*= or Y*= patterns
                 // depending on whether we have misclassification
                 if !yes_misclass && next_b != "selection" {
@@ -788,10 +787,7 @@ pub fn multi_bias(biases: &[Bias]) -> Result<MultiBias> {
                     .collect();
             } else if first_b == "selection" || yes_selection {
                 // Keep only S rows
-                filtered = filtered
-                    .into_iter()
-                    .filter(|r| r.output.contains('S'))
-                    .collect();
+                filtered.retain(|r| r.output.contains('S'));
             }
         }
 

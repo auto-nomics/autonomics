@@ -144,7 +144,7 @@ pub fn augment(y: &[f64], ry: &[bool], x: &[Vec<f64>], wy: &[bool]) -> Result<Au
         // Pattern: for each predictor j (p times), each level kᵢ (k levels)
         // contributes 2 rows with y = kᵢ.
         let mut idx = 0;
-        for j in 0..p {
+        for _j in 0..p {
             for li in 0..k {
                 for _ in 0..2 {
                     synth_y.push(levels[li]);

@@ -27,6 +27,7 @@ pub struct AgentRecordItem {
 }
 
 /// State for the agent resume picker.
+#[derive(Default)]
 pub struct AgentPickerState {
     pub visible: bool,
     /// Search query string.
@@ -44,20 +45,20 @@ pub struct AgentPickerState {
     pub delete_confirm_input: String,
 }
 
-impl Default for AgentPickerState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            query: String::new(),
-            items: Vec::new(),
-            filtered: Vec::new(),
-            selected: 0,
-            list_state: ListState::default(),
-            delete_confirm_id: None,
-            delete_confirm_input: String::new(),
-        }
-    }
-}
+// impl Default for AgentPickerState {
+//     fn default() -> Self {
+//         Self {
+//             visible: false,
+//             query: String::new(),
+//             items: Vec::new(),
+//             filtered: Vec::new(),
+//             selected: 0,
+//             list_state: ListState::default(),
+//             delete_confirm_id: None,
+//             delete_confirm_input: String::new(),
+//         }
+//     }
+// }
 
 impl AgentPickerState {
     pub fn open(&mut self) {
@@ -90,7 +91,7 @@ impl AgentPickerState {
     /// Check if the typed confirmation matches "yes". Returns the agent ID
     /// if confirmed, consuming the confirmation state.
     pub fn check_delete_confirm(&mut self) -> Option<uuid::Uuid> {
-        if self.delete_confirm_input.trim() == "yes" {
+        if self.delete_confirm_input.trim().eq_ignore_ascii_case("yes") {
             let id = self.delete_confirm_id.take();
             self.delete_confirm_input.clear();
             id
@@ -242,6 +243,7 @@ impl StatefulWidget for AgentPicker {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
+                Constraint::Length(1), // seperate line
                 Constraint::Min(3),
                 Constraint::Length(1),
             ])
@@ -250,7 +252,7 @@ impl StatefulWidget for AgentPicker {
         // ── Search input row (spans both blocks) ──
         let input_line = if state.query.is_empty() {
             Line::from(vec![
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
+                Span::styled("> ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     " search agents…",
                     Style::default()
@@ -260,17 +262,25 @@ impl StatefulWidget for AgentPicker {
             ])
         } else {
             Line::from(vec![
-                Span::styled("/", Style::default().fg(self.accent)),
+                Span::styled("> ", Style::default().fg(self.accent)),
                 Span::styled(state.query.clone(), Style::default().fg(Color::White)),
             ])
         };
         Widget::render(Paragraph::new(input_line), v_regions[0], buf);
 
+        Widget::render(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+            v_regions[1],
+            buf,
+        );
+
         // ── Content area: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
-            .split(v_regions[1]);
+            .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
         self.render_preview_block(h_regions[1], buf, state);
@@ -279,18 +289,18 @@ impl StatefulWidget for AgentPicker {
         let hint = if state.delete_confirm_id.is_some() {
             let item_name = state.selected_item().map(|i| i.name).unwrap_or_default();
             format!(
-                " Type 'yes' to delete '{}'  Enter confirm  Esc cancel",
+                " Type 'yes' to delete '{}' (case-insensitive)  Enter confirm  Esc cancel",
                 item_name
             )
         } else {
-            " Enter resume  d delete  ↑↓ navigate  Esc cancel".to_string()
+            " Enter resume  Ctrl+D delete (yes)  ↑↓ navigate  Esc cancel".to_string()
         };
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
         );
-        Widget::render(p, v_regions[2], buf);
+        Widget::render(p, v_regions[3], buf);
 
         // ── Delete confirmation overlay (small inline prompt at bottom of preview) ──
         if state.delete_confirm_id.is_some() {

@@ -95,7 +95,7 @@ fn split_fixture_by_chrom(merged_prefix: &Path, out_dir: &Path) -> std::io::Resu
     let fam_txt = std::fs::read_to_string(merged_prefix.with_extension("fam"))?;
     // PLINK .fam is one row per individual; line_size = ceil(n_indiv/4) bytes per SNP.
     let n_indiv = fam_txt.lines().filter(|l| !l.trim().is_empty()).count();
-    let line_size = (n_indiv + 3) / 4;
+    let line_size = n_indiv.div_ceil(4);
 
     // group bim rows by chromosome, preserving intra-chr order
     let mut by_chr: BTreeMap<i64, Vec<(usize, String)>> = BTreeMap::new();

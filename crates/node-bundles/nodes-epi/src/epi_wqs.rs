@@ -173,7 +173,7 @@ impl NodeFactory for EpiWqsNodeFactory {
         let out = ctx.output_var.to_string();
         let wqs_fit = ctx.fresh_var("wqs_fit");
         let input = input_0(ctx).to_string();
-        let exp_cols = s.exposures.iter().map(|c| c.clone()).collect::<Vec<_>>();
+        let exp_cols = s.exposures.to_vec();
         let covars = if s.covariates.is_empty() {
             String::new()
         } else {

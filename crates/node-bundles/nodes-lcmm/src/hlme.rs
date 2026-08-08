@@ -270,7 +270,7 @@ fn build_model_data(
     let mut idprob = vec![0u8; nv];
     let mut idea = vec![0u8; nv];
     let mut idg = vec![0u8; nv];
-    let mut idcor = vec![0u8; nv];
+    let idcor = vec![0u8; nv];
 
     // Intercept column assignment.
     if cfg.intercept {
@@ -1084,7 +1084,7 @@ impl NodeFactory for HlmePredictNodeFactory {
             "library(lcmm)".to_string(),
             format!("newdata <- {newdata_df}"),
             format!("{out} <- predictY(model, newdata = newdata, var.time = {}, draws = FALSE)",
-                r_str(&cfg.columns.first().map(|s| s.as_str()).unwrap_or("Time"))),
+                r_str(cfg.columns.first().map(|s| s.as_str()).unwrap_or("Time"))),
         ];
 
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))
@@ -1757,7 +1757,7 @@ mod cross_validation {
             idiag: true, nwg: false, maxiter: 500, init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
-        assert_eq!(spec.idiag, true, "m1_idiag: idiag should be true");
+        assert!(spec.idiag, "m1_idiag: idiag should be true");
         check_spec(
             "m1_idiag", &spec, 1, true, false,
             &[0,0,0,0], &[1,1,0,0], &[1,1,1,1],

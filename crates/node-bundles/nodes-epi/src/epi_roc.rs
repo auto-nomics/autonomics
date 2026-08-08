@@ -164,7 +164,7 @@ impl NodeFactory for EpiRocNodeFactory {
             code.push(format!(
                 "  score2 = \"{s2}\", auc2 = as.numeric(auc({roc2}))"
             ));
-            code.push(format!(")"));
+            code.push(")".to_string());
         } else {
             let ci_var = ctx.fresh_var("ci");
             code.push(format!("{ci_var} <- ci.auc({roc1})"));
@@ -172,7 +172,7 @@ impl NodeFactory for EpiRocNodeFactory {
             code.push(format!("  auc = as.numeric(auc({roc1})),"));
             code.push(format!("  ci_lower = as.numeric({ci_var})[1],"));
             code.push(format!("  ci_upper = as.numeric({ci_var})[3]"));
-            code.push(format!(")"));
+            code.push(")".to_string());
         }
         code.push(format!("print({out})"));
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))

@@ -268,8 +268,7 @@ impl NodeFactory for LdscRgNodeFactory {
         let cfg = parse_spec::<LdscRgConfig>(spec, "ldsc_rg")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
-            .input_vars
-            .get(0)
+            .input_vars.first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

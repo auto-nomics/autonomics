@@ -21,34 +21,37 @@ use crate::control::HostControl;
 /// Build the full set of host control tools for an agent.
 /// Returns an empty vec if `control` is `None`.
 ///
-/// `self_name` is the calling agent's own name. It is used to exclude
-/// the agent from its own `list_agents` / `route_task` results, preventing
-/// self-delegation.
+/// `self_path` is the calling agent's own hierarchical path. It is used to:
+/// - Exclude the agent from its own `list_agents` / `route_task` results
+///   (preventing self-delegation).
+/// - Derive child paths when the agent spawns sub-agents
+///   (`self_path.join("worker")` → `/root/agent/worker`).
 pub fn host_tools(
     control: Option<HostControl>,
-    self_name: &str,
+    self_path: &agentik_types::AgentPath,
 ) -> Vec<ToolRegistration> {
     let Some(ctrl) = control else {
         return vec![];
     };
-    let self_name = self_name.to_string();
+    let self_path = self_path.clone();
     vec![
         ToolRegistration::from(SpawnAgentTool {
             control: ctrl.clone(),
+            caller_path: self_path.clone(),
         }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
         }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
-            self_name: self_name.clone(),
+            self_path: self_path.clone(),
         }),
         ToolRegistration::from(GetAgentInfoTool {
             control: ctrl.clone(),
         }),
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
-            self_name,
+            self_path,
         }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
@@ -76,12 +79,15 @@ pub fn host_tools(
 
 #[tool(
     name = "spawn_agent",
-    description = "Spawn a new agent and register it with the host. \
+    description = "Spawn a new child agent and register it with the host. \
+                   The child's path is automatically derived from your path \
+                   (e.g. spawning 'worker' becomes /root/you/worker). \
                    The agent will be created from an existing profile name \
-                   and immediately available for message routing."
+                   and immediately available for delegation."
 )]
 struct SpawnAgentInput {
-    /// Unique name for the new agent instance.
+    /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
+    /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
     agent_name: String,
     /// Name of the AgentProfile to instantiate (must already exist).
     profile_name: String,
@@ -89,6 +95,7 @@ struct SpawnAgentInput {
 
 struct SpawnAgentTool {
     control: HostControl,
+    caller_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -101,11 +108,11 @@ impl ToolFunction for SpawnAgentTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
-            .spawn_agent(&input.agent_name, &input.profile_name)
+            .spawn_agent(&input.agent_name, &self.caller_path, &input.profile_name)
             .await
         {
-            Ok(name) => Ok(ToolResult::success(format!(
-                "Agent '{name}' spawned and registered."
+            Ok(path) => Ok(ToolResult::success(format!(
+                "Agent at path `{path}` spawned and registered."
             ))),
             Err(e) => Ok(ToolResult::success(format!("Spawn failed: {e}"))),
         }
@@ -125,7 +132,8 @@ impl ToolFunction for SpawnAgentTool {
                    Multiple delegates can run concurrently."
 )]
 struct DelegateToInput {
-    /// Name of the target agent to delegate to.
+    /// Name of the target agent. Accepts a short name (e.g. "researcher")
+    /// or full path (e.g. "/root/researcher/worker").
     agent_name: String,
     /// The task or question to send to the target agent.
     task: String,
@@ -183,7 +191,7 @@ struct RouteTaskInput {
 
 struct RouteTaskTool {
     control: HostControl,
-    self_name: String,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -193,7 +201,7 @@ impl ToolFunction for RouteTaskTool {
     async fn run(&self, input: RouteTaskInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
-            .route_task(&input.description, Some(&self.self_name))
+            .route_task(&input.description, Some(self.self_path.as_str()))
             .await
         {
             Some(result) => Ok(ToolResult::success_json(
@@ -245,13 +253,16 @@ impl ToolFunction for GetAgentInfoTool {
 
 #[tool(
     name = "list_agents",
-    description = "List all registered agents and current network topology status as JSON."
+    description = "List all registered agents (excluding yourself) and current \
+                   network topology status as JSON. Each agent entry includes \
+                   both `name` (short name) and `path` (full hierarchical path). \
+                   Use the path with `delegate_to` when names are ambiguous."
 )]
 struct ListAgentsInput {}
 
 struct ListAgentsTool {
     control: HostControl,
-    self_name: String,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -265,8 +276,8 @@ impl ToolFunction for ListAgentsTool {
         match self.control.get_status().await {
             Some(mut status) => {
                 // Exclude self from the agent list to prevent self-delegation.
-                status.agents.retain(|a| a.name != self.self_name);
-                status.profiles.retain(|p| p.name != self.self_name);
+                status.agents.retain(|a| a.path != self.self_path.as_str());
+                status.profiles.retain(|p| p.name != self.self_path.name());
                 Ok(ToolResult::success_json(
                     serde_json::to_value(&status).unwrap_or_default(),
                 ))

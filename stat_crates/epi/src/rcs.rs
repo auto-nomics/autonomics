@@ -374,7 +374,7 @@ mod tests {
         let res = rcs_logistic(&x, &y, 4, &[]).unwrap();
         let peak = find_peak_risk(&res.spline_fit, &res.knots, &[], 0.0, 10.0, 1000);
         // Peak should be somewhere in the data range.
-        assert!(peak >= 0.0 && peak <= 10.0);
+        assert!((0.0..=10.0).contains(&peak));
     }
 
     #[test]

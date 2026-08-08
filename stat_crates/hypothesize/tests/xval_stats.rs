@@ -285,7 +285,7 @@ fn ks_one_sample_normal_perfect_match() {
     let quantiles: Vec<f64> = (1..=n)
         .map(|i| normal_inv(i as f64 / (n + 1) as f64))
         .collect();
-    let t = h::ks_one_sample(&quantiles, |z| normal_cdf(z)).unwrap();
+    let t = h::ks_one_sample(&quantiles, normal_cdf).unwrap();
     // Discrete approx: D ≤ 1/(n+1) ≈ 0.0196
     assert!(
         t.stat < 0.02,
@@ -373,7 +373,7 @@ fn wilcoxon_signed_rank_matches_r_wilcox() {
     // abs: [3.2, 1.5, 0.4, 1.5, 3.1] → sorted [0.4, 1.5, 1.5, 3.1, 3.2]
     // avg ranks (map back to original order): 3.2→5, 1.5→2.5, 0.4→1, 1.5→2.5, 3.1→4
     let ranks_orig = vec![5.0, 2.5, 1.0, 2.5, 4.0];
-    let original = vec![-3.2, -1.5, 0.4, 1.5, 3.1];
+    let original = [-3.2, -1.5, 0.4, 1.5, 3.1];
     let w_plus: f64 = original
         .iter()
         .zip(&ranks_orig)

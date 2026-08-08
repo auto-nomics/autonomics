@@ -54,7 +54,7 @@ impl TraitData {
         col_chr: Option<&str>,
         col_bp: Option<&str>,
     ) -> Result<Self> {
-        let content = std::fs::read_to_string(path).map_err(|e| MtagError::Io(e))?;
+        let content = std::fs::read_to_string(path).map_err(MtagError::Io)?;
         Self::from_str(
             &content, col_snp, col_z, col_n, col_freq, col_a1, col_a2, col_chr, col_bp,
         )

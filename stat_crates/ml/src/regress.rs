@@ -36,7 +36,7 @@ pub fn linear_regression(data: &Mat<f64>, target: &[f64]) -> Result<RegressResul
     use linfa::traits::{Fit, Predict};
     use linfa_linear::LinearRegression;
 
-    let (nrows, ncols) = data.shape();
+    let (nrows, _ncols) = data.shape();
     if nrows == 0 {
         return Err(RegressError::Empty);
     }
@@ -117,7 +117,7 @@ pub fn elastic_net(
 // LARS (linfa-lars — Least Angle Regression)
 // ═══════════════════════════════════════════════════════════════════════
 
-pub fn lars(data: &Mat<f64>, target: &[f64], n_features: usize) -> Result<RegressResult> {
+pub fn lars(data: &Mat<f64>, target: &[f64], _n_features: usize) -> Result<RegressResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
     use linfa_lars::Lars;

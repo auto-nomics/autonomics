@@ -96,7 +96,7 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
     let p = cols.len();
 
     // Null (intercept-only) log-likelihood.
-    let n1: f64 = y.iter().map(|&v| v).sum();
+    let n1: f64 = y.iter().copied().sum();
     let n0 = n as f64 - n1;
     let p_bar = n1 / n as f64;
     let null_ll = if p_bar > 0.0 && p_bar < 1.0 {

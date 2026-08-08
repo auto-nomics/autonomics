@@ -27,6 +27,7 @@ pub struct PickerSession {
 }
 
 /// State for the session picker popup.
+#[derive(Default)]
 pub struct SessionPickerState {
     pub visible: bool,
     pub agent_id: Option<uuid::Uuid>,
@@ -37,19 +38,6 @@ pub struct SessionPickerState {
     pub list_state: ListState,
 }
 
-impl Default for SessionPickerState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            agent_id: None,
-            agent_name: String::new(),
-            items: Vec::new(),
-            active_id: None,
-            selected: 0,
-            list_state: ListState::default(),
-        }
-    }
-}
 
 impl SessionPickerState {
     /// Open the picker for the given agent.
