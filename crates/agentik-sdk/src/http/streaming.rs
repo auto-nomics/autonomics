@@ -31,7 +31,7 @@ impl Default for StreamConfig {
     fn default() -> Self {
         Self {
             buffer_size: 1000,
-            event_timeout: Some(30),
+            event_timeout: Some(300),
             retry_on_error: true,
             max_retries: Some(3),
         }
@@ -447,7 +447,7 @@ mod tests {
     fn test_stream_config_default() {
         let config = StreamConfig::default();
         assert_eq!(config.buffer_size, 1000);
-        assert_eq!(config.event_timeout, Some(30));
+        assert_eq!(config.event_timeout, Some(300));
         assert!(config.retry_on_error);
         assert_eq!(config.max_retries, Some(3));
     }

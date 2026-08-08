@@ -259,8 +259,8 @@ impl MessageStream {
         let aborted = Arc::new(AtomicBool::new(false));
         let request_id = http_stream.request_id().map(|s| s.to_string());
 
-        // Idle timeout (per chunk). Default 30s, matching StreamConfig.
-        let event_timeout_secs = config.event_timeout.unwrap_or(30);
+        // Idle timeout (per chunk). Default 300s (5 minutes), matching StreamConfig.
+        let event_timeout_secs = config.event_timeout.unwrap_or(300);
         let max_retries = config.max_retries.unwrap_or(3);
         let retry_on_error = config.retry_on_error;
 
