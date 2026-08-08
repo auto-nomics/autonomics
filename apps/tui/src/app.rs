@@ -643,7 +643,10 @@ impl App {
                     return;
                 }
                 // Add a new session tab for the tool-spawned agent.
-                let agent_id = uuid::Uuid::new_v4(); // placeholder; real id comes from SessionList events
+                // Do NOT steal focus — the user may be interacting with
+                // another agent. The new tab appears but focus stays
+                // where the user left it.
+                let agent_id = uuid::Uuid::new_v4();
                 self.state.sessions.push(state::AgentSession {
                     name: name.clone(),
                     agent_id,
@@ -651,7 +654,6 @@ impl App {
                     active_sub_session_idx: 0,
                     pending_tab_state: Default::default(),
                 });
-                self.state.active_agent_idx = self.state.sessions.len() - 1;
 
                 // Ask the host for the agent's session list. The response
                 // arrives as `AgentEvent::SessionList` through the host's
@@ -659,7 +661,7 @@ impl App {
                 if let Some(host) = self.host.as_ref() {
                     host.control().list_sessions(&name);
                 }
-                tracing::info!(agent = %name, "host-spawned agent registered to TUI");
+                tracing::info!(agent = %name, "host-spawned agent registered to TUI (no focus steal)");
             }
             runtime::HostEvent::AgentUnregistered { name } => {
                 self.state.sessions.retain(|s| s.name != name);
