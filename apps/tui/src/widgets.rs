@@ -9,6 +9,7 @@ pub mod name_input;
 pub mod popup;
 pub mod profile_picker;
 pub mod searchable_picker;
+pub mod session_list;
 pub mod session_picker;
 pub mod sidebar;
 pub mod status_bar;
