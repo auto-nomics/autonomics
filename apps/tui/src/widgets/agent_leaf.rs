@@ -10,6 +10,7 @@ use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
+    session_list::SessionSummary,
     sidebar::{SideBar, SidebarData},
     status_bar::StatusBar,
 };
@@ -40,9 +41,7 @@ pub struct AgentLeaf<'a> {
     pub active_model: Option<&'a str>,
     pub agent_name: Option<&'a str>,
     pub context_window: Option<u64>,
-    pub session_title: Option<&'a str>,
-    pub session_index: usize,
-    pub session_count: usize,
+    pub sessions: &'a [SessionSummary],
     pub display: &'a DisplaySettings,
 }
 
@@ -165,17 +164,25 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 data: SidebarData {
                     plan: &ts.plan,
                     tool_tasks: &ts.tool_tasks,
-                    session_title: self.session_title,
-                    session_index: self.session_index,
-                    session_count: self.session_count,
+                    sessions: self.sessions,
                 },
             };
             sidebar.render(sb_area, buf);
         }
 
         // ── Input area (boxed composer, ❯ prompt) ──
+        let queued = ts.pending_queue_len();
         let placeholder: &str = if running {
-            "agent running… (Ctrl+C to cancel)"
+            match ts.input_mode {
+                InputMode::Input => "Type to queue a message… (Ctrl+C to cancel)",
+                InputMode::Browse => {
+                    if queued > 0 {
+                        "Agent running — message queued. Enter to compose…"
+                    } else {
+                        "Agent running… (Ctrl+C to cancel)"
+                    }
+                }
+            }
         } else {
             match ts.input_mode {
                 InputMode::Browse => "Type a message, or press Enter to edit…",
@@ -187,20 +194,31 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         } else {
             ""
         };
-        let title: String = match ts.status {
-            AgentStatus::Requesting => format!("{spinner} thinking…"),
-            AgentStatus::Streaming => format!("{spinner} responding…"),
-            AgentStatus::Retrying => format!("{spinner} retrying…"),
-            AgentStatus::Error => "error".to_string(),
-            AgentStatus::Idle => match ts.input_mode {
+        let title: String = if running {
+            let base = match ts.status {
+                AgentStatus::Requesting => format!("{spinner} thinking…"),
+                AgentStatus::Streaming => format!("{spinner} responding…"),
+                AgentStatus::Retrying => format!("{spinner} retrying…"),
+                _ => format!("{spinner} running…"),
+            };
+            if queued > 0 {
+                format!("{base} ({queued} queued)")
+            } else {
+                base
+            }
+        } else {
+            match ts.input_mode {
                 InputMode::Browse => "browse".to_string(),
                 InputMode::Input => "compose".to_string(),
-            },
+            }
         };
 
+        // The composer is interactive even while the agent is running:
+        // the user can type and enqueue messages. Only hide the caret
+        // when not in Input mode.
         let input_widget = InputWidget {
             disabled: running,
-            editable: !running && ts.input_mode == InputMode::Input,
+            editable: ts.input_mode == InputMode::Input,
             title: &title,
             placeholder,
         };
@@ -220,6 +238,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             buf,
             ts.input_mode,
             running,
+            queued,
             ts.in_history_search,
             &ts.history_search_query,
             ts.history_search_selected,
@@ -269,6 +288,7 @@ fn render_footer_hint(
     buf: &mut Buffer,
     mode: InputMode,
     running: bool,
+    queued: usize,
     searching: bool,
     query: &str,
     selected: usize,
@@ -287,7 +307,18 @@ fn render_footer_hint(
             )
         }
     } else if running {
-        " Ctrl+C cancel  Ctrl+R history ".to_string()
+        match mode {
+            InputMode::Input => {
+                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+C cancel ".to_string()
+            }
+            InputMode::Browse => {
+                if queued > 0 {
+                    format!(" {queued} queued  Enter compose  Ctrl+C cancel ")
+                } else {
+                    " Enter compose  Ctrl+C cancel  Ctrl+R history ".to_string()
+                }
+            }
+        }
     } else {
         match mode {
             InputMode::Browse => {

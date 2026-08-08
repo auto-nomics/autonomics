@@ -33,12 +33,8 @@ pub struct AgentWorkspace<'a> {
     pub active_model: Option<&'a str>,
     /// Context window size of the active model (tokens), when known.
     pub context_window: Option<u64>,
-    /// Active session title.
-    pub session_title: Option<&'a str>,
-    /// 1-based index of the active session.
-    pub session_index: usize,
-    /// Total number of sessions.
-    pub session_count: usize,
+    /// Sub-sessions for sidebar rendering.
+    pub sessions: &'a [crate::widgets::session_list::SessionSummary],
     /// Global display settings (collapse toggles).
     pub display: &'a DisplaySettings,
 }
@@ -87,9 +83,7 @@ impl AgentWorkspace<'_> {
             active_model: self.active_model,
             agent_name,
             context_window: self.context_window,
-            session_title: self.session_title,
-            session_index: self.session_index,
-            session_count: self.session_count,
+            sessions: self.sessions,
             display: self.display,
         };
         leaf.render_ref(areas[1], buf, tab_state);

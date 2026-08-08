@@ -373,10 +373,11 @@ impl App {
         let runtime = self._runtime.take().expect("runtime already consumed");
         let result = runtime.block_on(self.run_loop(&mut terminal));
 
-        // Ensure the agent and engine tasks are torn down even if the main
-        // loop exited without a cooperative shutdown (e.g. force-quit).
+        // Gracefully shut down all agents: pause sessions, persist
+        // snapshots, flush WAL. Must be inside `block_on` so the agent
+        // tasks can run to completion before the runtime is dropped.
         if let Some(host) = self.host.as_mut() {
-            host.shutdown_all_agents();
+            runtime.block_on(host.shutdown_all_agents_and_wait());
         }
 
         // Restore terminal on exit (whether normal or error).
@@ -486,6 +487,12 @@ impl App {
                         };
 
                         let is_session_list = matches!(event, AgentEvent::SessionList { .. });
+                        // Done / Error transition the agent to Idle — after
+                        // applying, we check for pending queued messages.
+                        let may_have_pending = matches!(
+                            event,
+                            AgentEvent::Done | AgentEvent::Error(_)
+                        );
                         if matches!(
                             event,
                             AgentEvent::SessionActivated { .. }
@@ -516,6 +523,46 @@ impl App {
                         // loads for sessions that have empty tab_state.messages.
                         if is_session_list {
                             self.spawn_session_history_loads();
+                        }
+
+                        // ── Drain pending message queue ──
+                        // When the agent finishes a response cycle (Done /
+                        // Error → Idle), deliver any messages the user typed
+                        // while it was busy. Each message triggers a new turn;
+                        // the agent processes them sequentially.
+                        if may_have_pending {
+                            let agent_name = self
+                                .state
+                                .sessions
+                                .get(target_idx)
+                                .map(|s| s.name.clone());
+                            let pending: Vec<String> = self
+                                .state
+                                .sessions
+                                .get_mut(target_idx)
+                                .map(|s| {
+                                    if s.active_sub_session_idx < s.sub_sessions.len() {
+                                        s.sub_sessions[s.active_sub_session_idx]
+                                            .tab_state
+                                            .drain_pending_queue()
+                                    } else {
+                                        s.pending_tab_state.drain_pending_queue()
+                                    }
+                                })
+                                .unwrap_or_default();
+                            if !pending.is_empty() {
+                                tracing::info!(
+                                    count = pending.len(),
+                                    "draining pending message queue after agent idle"
+                                );
+                                if let Some(name) = agent_name {
+                                    if let Some(host) = self.host.as_ref() {
+                                        for msg in pending {
+                                            host.control().deliver_message(&name, msg);
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         self.dirty = true;
@@ -833,10 +880,10 @@ impl App {
             Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => 0,
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Paste(s) => {
-                // Insert paste into the agent chat input area when in input mode and agent is idle.
+                // Insert paste into the agent chat input area when in input mode.
                 if true {
                     let ts = self.state.active_tab_state_mut();
-                    if ts.input_mode == InputMode::Input && ts.status == state::AgentStatus::Idle {
+                    if ts.input_mode == InputMode::Input {
                         ts.input.insert_str(s);
                     }
                 }
@@ -1009,6 +1056,18 @@ impl App {
                 }
             }
             self.cancel_requested_at = Some(Instant::now());
+            // Clear any pending queued messages — the user cancelled, so
+            // we don't want queued messages to immediately re-trigger
+            // the agent when the cancel Error event arrives.
+            let cleared = self
+                .state
+                .active_tab_state_mut()
+                .pending_queue
+                .len();
+            if cleared > 0 {
+                self.state.active_tab_state_mut().pending_queue.clear();
+                tracing::info!(cleared, "cleared pending queue on user cancel");
+            }
             return;
         }
 
@@ -1342,24 +1401,28 @@ impl App {
     }
 
     /// Key handling while the session picker popup is open.
+    ///
+    /// Matches the agent picker pattern: plain characters feed the search
+    /// filter; `Ctrl+`-modified keys trigger actions (new, close, rename).
     fn handle_session_picker_key(&mut self, key: &KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
                 self.state.session_picker.close();
             }
             KeyCode::Up => self.state.session_picker.move_up(),
             KeyCode::Down => self.state.session_picker.move_down(),
-            KeyCode::Char('n') => {
-                // Open name input for the new session instead of creating
-                // immediately with a default name.
+            KeyCode::Backspace => self.state.session_picker.pop_char(),
+            // Ctrl+N: new session
+            KeyCode::Char('n') if ctrl => {
                 self.state.session_picker.close();
                 self.state.pending_session_name = true;
                 self.state
                     .name_input
                     .open(" New Session ", "New session");
             }
-            KeyCode::Char('d') => {
-                // Close the currently selected session.
+            // Ctrl+D: close the selected session
+            KeyCode::Char('d') if ctrl => {
                 if let Some(id) = self.state.session_picker.selected_id() {
                     let agent_name = self
                         .state
@@ -1374,17 +1437,22 @@ impl App {
                 }
                 self.state.session_picker.close();
             }
-            KeyCode::Char('r') => {
-                // Rename the currently selected session.
+            // Ctrl+R: rename the selected session
+            KeyCode::Char('r') if ctrl => {
                 let selected_id = self.state.session_picker.selected_id();
                 if let Some(id) = selected_id {
                     // Pre-fill with current title.
                     let current_title = self
                         .state
                         .session_picker
-                        .items
-                        .get(self.state.session_picker.selected)
-                        .and_then(|s| s.title.clone())
+                        .selected_id()
+                        .and_then(|sid| {
+                            self.state.session_picker
+                                .items
+                                .iter()
+                                .find(|s| s.id == sid)
+                                .and_then(|s| s.title.clone())
+                        })
                         .unwrap_or_default();
                     self.state.pending_session_rename_id = Some(id);
                     self.state.session_picker.close();
@@ -1392,6 +1460,10 @@ impl App {
                         .name_input
                         .open(" Rename Session ", current_title);
                 }
+            }
+            // Regular characters → search filter
+            KeyCode::Char(c) if !ctrl => {
+                self.state.session_picker.push_char(c);
             }
             KeyCode::Enter => {
                 // Switch to the selected session.
@@ -1475,6 +1547,10 @@ impl App {
     }
 
     /// Key handling in input mode: typing goes to input, Enter sends, Esc exits.
+    ///
+    /// When the agent is busy, Enter enqueues the message into a pending
+    /// queue instead of sending immediately — the queue is drained when
+    /// the agent finishes its current response cycle.
     fn handle_input_key(&mut self, key: &KeyEvent) {
         use crate::widgets::input_area::{history_clear_recall, history_down, history_up};
 
@@ -1487,11 +1563,10 @@ impl App {
 
         let active_idx = self.state.active_agent_idx;
         let ts = self.state.active_tab_state_mut();
-        let idle = ts.status == state::AgentStatus::Idle;
 
         // Ctrl+R: enter incremental history search (codex-style).
-        if idle
-            && !ts.input_history.is_empty()
+        // Available in both idle and running states.
+        if !ts.input_history.is_empty()
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('r')
         {
@@ -1505,6 +1580,9 @@ impl App {
         }
 
         // Pre-extract data needed after the `ts` borrow ends.
+        // `send_text` is delivered to the agent after the `ts` borrow ends.
+        // Enqueued messages are stored in `pending_queue` directly inside
+        // the match arm — no post-borrow dispatch needed for them.
         let mut send_text: Option<String> = None;
 
         match key.code {
@@ -1522,16 +1600,12 @@ impl App {
                     .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
                 {
                     // Alt is a fallback for terminals that don't report Shift on Enter.
-                    if idle {
-                        ts.input.insert_newline();
-                    }
+                    ts.input.insert_newline();
                     return;
                 }
                 if ts.can_send() {
+                    // Agent idle — deliver immediately.
                     let text = ts.take_input();
-                    // Push to in-memory history before clearing the
-                    // recall state — `take_input()` already cleared the
-                    // textbox, but recall metadata is independent.
                     crate::widgets::input_area::history_push(
                         &mut ts.input_history,
                         text.clone(),
@@ -1542,40 +1616,47 @@ impl App {
                     ts.push_user_message(text.clone());
                     send_text = Some(text);
                     ts.scroll_to_bottom();
+                } else if ts.can_enqueue() {
+                    // Agent busy — push to pending queue for deferred delivery.
+                    let text = ts.take_input();
+                    crate::widgets::input_area::history_push(
+                        &mut ts.input_history,
+                        text.clone(),
+                        ts.input_history_capacity,
+                    );
+                    history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
+
+                    ts.push_user_message(text.clone());
+                    ts.enqueue_pending(text);
+                    ts.scroll_to_bottom();
                 }
                 ts.input_mode = InputMode::Browse;
             }
             // Up/Down: recall history (Up) / advance towards draft (Down)
             KeyCode::Up => {
-                if idle {
-                    let _ = history_up(
-                        &mut ts.input,
-                        &ts.input_history,
-                        &mut ts.input_draft,
-                        &mut ts.input_recall,
-                    );
-                }
+                let _ = history_up(
+                    &mut ts.input,
+                    &ts.input_history,
+                    &mut ts.input_draft,
+                    &mut ts.input_recall,
+                );
             }
             KeyCode::Down => {
-                if idle {
-                    let _ = history_down(
-                        &mut ts.input,
-                        &ts.input_history,
-                        &mut ts.input_draft,
-                        &mut ts.input_recall,
-                    );
-                }
+                let _ = history_down(
+                    &mut ts.input,
+                    &ts.input_history,
+                    &mut ts.input_draft,
+                    &mut ts.input_recall,
+                );
             }
             // Any other key: collapse in-progress recall so subsequent
             // edits are treated as user-driven (not as a recalled entry
             // we'd accidentally re-push when sent).
             _ => {
-                if idle {
-                    if ts.input_recall.is_some() {
-                        history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
-                    }
-                    ts.input.handle_key(*key);
+                if ts.input_recall.is_some() {
+                    history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                 }
+                ts.input.handle_key(*key);
             }
         }
 
@@ -2046,11 +2127,24 @@ impl App {
             agent_session
                 .sub_sessions
                 .iter()
-                .map(|s| crate::widgets::session_picker::PickerSession {
-                    id: s.id,
-                    title: s.title.clone(),
-                    message_count: s.tab_state.messages.len(),
-                    last_active: s.last_active,
+                .map(|s| {
+                    let stats = crate::widgets::session_picker::compute_session_stats(
+                        &s.tab_state.messages,
+                    );
+                    crate::widgets::session_picker::PickerSession {
+                        id: s.id,
+                        title: s.title.clone(),
+                        message_count: s.tab_state.messages.len(),
+                        last_active: s.last_active,
+                        created_at: 0,
+                        user_message_count: stats.user_message_count,
+                        assistant_message_count: stats.assistant_message_count,
+                        tool_call_count: stats.tool_call_count,
+                        input_tokens: stats.input_tokens,
+                        output_tokens: stats.output_tokens,
+                        first_user_message: stats.first_user_message,
+                        last_assistant_message: stats.last_assistant_message,
+                    }
                 })
                 .collect();
         let active_id = agent_session
@@ -2125,6 +2219,7 @@ impl App {
                         title: sub.title.clone(),
                         message_count: sub.tab_state.messages.len(),
                         is_active: i == s.active_sub_session_idx,
+                        created_at: sub.created_at,
                     })
                     .collect()
             })

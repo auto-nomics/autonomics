@@ -158,6 +158,12 @@ pub struct AgentTabState {
     /// context-window progress bar.
     pub latest_turn_context_used: u64,
     pub input_mode: InputMode,
+    /// Messages the user typed while the agent was busy. Each entry is
+    /// delivered to the agent when the current response cycle finishes
+    /// (on `AgentEvent::Done` / `AgentEvent::Error`). The chat view
+    /// already shows them as user messages (pushed at enqueue time) —
+    /// the queue only tracks what still needs to reach the agent.
+    pub pending_queue: VecDeque<String>,
     /// When true, `clamp_scroll` forces offset to the bottom each frame.
     pub auto_scroll: bool,
     /// True while an incremental Ctrl+R history search is in progress.
@@ -229,6 +235,7 @@ impl Default for AgentTabState {
             latest_turn_cache_creation_tokens: 0,
             latest_turn_context_used: 0,
             input_mode: InputMode::Browse,
+            pending_queue: VecDeque::new(),
             auto_scroll: true,
             in_history_search: false,
             history_search_query: String::new(),
@@ -254,6 +261,29 @@ impl AgentTabState {
     /// Returns true when the user can type and send messages.
     pub fn can_send(&self) -> bool {
         self.status == AgentStatus::Idle && !self.input.is_empty()
+    }
+
+    /// Returns true when the composer has text that can be enqueued for
+    /// later delivery (agent is busy). The text is taken from the input
+    /// field; the queue is drained when the agent returns to idle.
+    pub fn can_enqueue(&self) -> bool {
+        !self.input.is_empty()
+    }
+
+    /// Number of messages waiting in the pending queue.
+    pub fn pending_queue_len(&self) -> usize {
+        self.pending_queue.len()
+    }
+
+    /// Push a message onto the pending queue (to be delivered when the
+    /// agent goes idle).
+    pub fn enqueue_pending(&mut self, text: String) {
+        self.pending_queue.push_back(text);
+    }
+
+    /// Drain all pending messages, returning them in FIFO order.
+    pub fn drain_pending_queue(&mut self) -> Vec<String> {
+        self.pending_queue.drain(..).collect()
     }
 
     /// Take the current input text and clear the input field.
@@ -584,10 +614,12 @@ pub fn apply_session_event(
                         // Keep the existing tab_state, update metadata.
                         old.title = info.title;
                         old.last_active = info.last_active;
+                        old.created_at = info.created_at;
                         old
                     } else {
                         let mut sub = SubSession::new(info.id, info.title);
                         sub.last_active = info.last_active;
+                        sub.created_at = info.created_at;
                         sub
                     }
                 })
@@ -598,11 +630,24 @@ pub fn apply_session_event(
             {
                 let picker_items: Vec<crate::widgets::session_picker::PickerSession> =
                     subs.iter()
-                        .map(|s| crate::widgets::session_picker::PickerSession {
-                            id: s.id,
-                            title: s.title.clone(),
-                            message_count: s.tab_state.messages.len(),
-                            last_active: s.last_active,
+                        .map(|s| {
+                            let stats = crate::widgets::session_picker::compute_session_stats(
+                                &s.tab_state.messages,
+                            );
+                            crate::widgets::session_picker::PickerSession {
+                                id: s.id,
+                                title: s.title.clone(),
+                                message_count: s.tab_state.messages.len(),
+                                last_active: s.last_active,
+                                created_at: 0, // not tracked on SubSession
+                                user_message_count: stats.user_message_count,
+                                assistant_message_count: stats.assistant_message_count,
+                                tool_call_count: stats.tool_call_count,
+                                input_tokens: stats.input_tokens,
+                                output_tokens: stats.output_tokens,
+                                first_user_message: stats.first_user_message,
+                                last_assistant_message: stats.last_assistant_message,
+                            }
                         })
                         .collect();
                 state.session_picker.set_sessions(picker_items, active_session_id);
@@ -682,6 +727,9 @@ pub struct SubSession {
     /// Epoch-millis of the last activity in this session, as reported by
     /// the agent's session list. Drives the picker's "Last active" field.
     pub last_active: i64,
+    /// Epoch-millis when this session was created. Used for ordering in the
+    /// sidebar session list (newest first).
+    pub created_at: i64,
     /// Conversation-level state — chat history, token counts, scroll, etc.
     /// Owned per-session so each session has its own memory of what
     /// happened in it.
@@ -694,6 +742,7 @@ impl SubSession {
             id,
             title,
             last_active: 0,
+            created_at: chrono::Utc::now().timestamp_millis(),
             tab_state: AgentTabState::default(),
         }
     }
@@ -837,5 +886,57 @@ impl AppState {
     /// Returns the status of the active session (or Idle if none).
     pub fn active_status(&self) -> AgentStatus {
         self.active_tab_state().status.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_queue_enqueue_and_drain() {
+        let mut ts = AgentTabState::default();
+        assert_eq!(ts.pending_queue_len(), 0);
+        assert!(ts.drain_pending_queue().is_empty());
+
+        ts.enqueue_pending("hello".into());
+        ts.enqueue_pending("world".into());
+        assert_eq!(ts.pending_queue_len(), 2);
+
+        let drained = ts.drain_pending_queue();
+        assert_eq!(drained, vec!["hello", "world"]);
+        assert_eq!(ts.pending_queue_len(), 0);
+    }
+
+    #[test]
+    fn can_send_vs_can_enqueue() {
+        let mut ts = AgentTabState::default();
+        // Idle + empty → neither
+        assert!(!ts.can_send());
+        assert!(!ts.can_enqueue());
+
+        // Idle + text → can send (immediate)
+        ts.input.insert_str("hi");
+        assert!(ts.can_send());
+        assert!(ts.can_enqueue());
+
+        // Running + text → can enqueue only
+        ts.status = AgentStatus::Streaming;
+        assert!(!ts.can_send());
+        assert!(ts.can_enqueue());
+
+        // Running + empty → neither
+        ts.input.clear();
+        assert!(!ts.can_send());
+        assert!(!ts.can_enqueue());
+    }
+
+    #[test]
+    fn apply_done_drains_nothing_without_queue() {
+        let mut ts = AgentTabState::default();
+        ts.status = AgentStatus::Streaming;
+        apply_event(&mut ts, AgentEvent::Done);
+        assert_eq!(ts.status, AgentStatus::Idle);
+        assert_eq!(ts.pending_queue_len(), 0);
     }
 }

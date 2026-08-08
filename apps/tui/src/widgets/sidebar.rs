@@ -33,14 +33,16 @@ use ratatui::{
 };
 
 use crate::state::{PlanState, ToolTaskInfo, ToolTaskStatus};
+// Re-export SessionSummary so callers (agent_leaf, agent_workspace, app) can
+// construct SidebarData without a separate import from session_list.
+pub use crate::widgets::session_list::SessionSummary;
+use crate::widgets::session_list::SessionList;
 
 /// Data bundle the sidebar needs from the agent tab state.
 pub struct SidebarData<'a> {
     pub plan: &'a PlanState,
     pub tool_tasks: &'a [ToolTaskInfo],
-    pub session_title: Option<&'a str>,
-    pub session_index: usize,
-    pub session_count: usize,
+    pub sessions: &'a [SessionSummary],
 }
 
 /// Right-hand sidebar widget showing plan, sessions, and tasks.
@@ -113,13 +115,10 @@ impl Widget for SideBar<'_> {
             height: session_area.height.saturating_sub(1),
             ..session_area
         };
-        render_session_section(
-            session_body,
-            buf,
-            self.data.session_title,
-            self.data.session_index,
-            self.data.session_count,
-        );
+        SessionList {
+            sessions: self.data.sessions,
+        }
+        .render(session_body, buf);
 
         // ── Divider ──
         render_divider(div1, buf);
@@ -157,47 +156,6 @@ fn render_plan_section(area: Rect, buf: &mut Buffer, plan: &PlanState) {
             step,
         );
     }
-}
-
-/// Render the session info, or a placeholder if none.
-fn render_session_section(
-    area: Rect,
-    buf: &mut Buffer,
-    title: Option<&str>,
-    index: usize,
-    count: usize,
-) {
-    if area.height == 0 {
-        return;
-    }
-    if count == 0 {
-        render_placeholder(area, buf, "(no sessions)");
-        return;
-    }
-    let title_text = title.unwrap_or("(untitled)");
-
-    let mut spans = vec![
-        Span::styled("💬 ", Style::default()),
-        Span::styled(
-            title_text.to_string(),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
-
-    if count > 1 {
-        spans.push(Span::styled(
-            format!("  [{}/{}]", index, count),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-
-    let line = Line::from(spans);
-    Paragraph::new(line).render(
-        Rect { x: area.x, y: area.y, width: area.width, height: 1 },
-        buf,
-    );
 }
 
 /// Render the background tasks list, or a placeholder if empty.
