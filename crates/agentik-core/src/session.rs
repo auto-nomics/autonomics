@@ -457,7 +457,15 @@ impl Session {
                         }
                         _ = tokio::time::sleep(delay) => {}
                     }
-                    let _ = self.memory.remember(Message::user(e.retry_message()));
+                    // Do NOT inject API request errors back into the agent's
+                    // context: doing so pollutes the conversation with
+                    // noisy "The previous API request failed: ..." user
+                    // messages on every retry (we observed retries 8/10
+                    // accumulating hundreds of such messages). Tool
+                    // errors are still fed back so the agent can self-correct.
+                    if !matches!(e, AgentError::ApiRequestError(_)) {
+                        let _ = self.memory.remember(Message::user(e.retry_message()));
+                    }
                     continue;
                 }
                 Err(e) => {
