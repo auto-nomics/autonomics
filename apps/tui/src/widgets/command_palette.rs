@@ -32,6 +32,8 @@ pub enum CommandAction {
     DeleteAgent,
     /// Open the session picker for the currently active agent.
     OpenSessions,
+    /// Create a new conversation session within the active agent.
+    NewSession,
     /// Toggle collapse for thinking blocks.
     ToggleCollapseThinking,
     /// Toggle collapse for tool call blocks.
@@ -157,7 +159,7 @@ fn default_commands() -> Vec<Command> {
             title: "New session".into(),
             keywords: "new conversation clear transcript reset chat branch".into(),
             category: "agent".into(),
-            action: CommandAction::ClearTranscript,
+            action: CommandAction::NewSession,
         },
         Command {
             title: "Search history".into(),

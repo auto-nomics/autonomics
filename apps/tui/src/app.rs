@@ -1189,12 +1189,24 @@ impl App {
             }
             KeyCode::Up => self.state.agent_picker.move_up(),
             KeyCode::Down => self.state.agent_picker.move_down(),
+            KeyCode::Left | KeyCode::Tab => self.state.agent_picker.toggle_expand(),
+            KeyCode::Right => self.state.agent_picker.toggle_expand(),
             KeyCode::Backspace => self.state.agent_picker.pop_char(),
             KeyCode::Char('d') if ctrl => {
                 self.state.agent_picker.start_delete_confirm();
             }
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
             KeyCode::Enter => {
+                // If cursor is on a folder, toggle expand/collapse.
+                let on_leaf = self
+                    .state
+                    .agent_picker
+                    .selected_item()
+                    .is_some();
+                if !on_leaf {
+                    self.state.agent_picker.toggle_expand();
+                    return;
+                }
                 if let Some(item) = self.state.agent_picker.selected_item() {
                     // If this agent is already open in a leaf, just switch focus
                     // instead of spawning a duplicate.
@@ -1805,6 +1817,19 @@ impl App {
             CommandAction::OpenSessions => {
                 self.open_session_picker();
             }
+            CommandAction::NewSession => {
+                // Prompt for a session name, then create a real backend
+                // session via host.control().create_session(...). This flows
+                // through handle_name_input_key → pending_session_name.
+                if self.state.sessions.is_empty() {
+                    tracing::warn!("no active agent — cannot create session");
+                    return;
+                }
+                self.state.pending_session_name = true;
+                self.state
+                    .name_input
+                    .open(" New Session ", "New session");
+            }
             CommandAction::ToggleCollapseThinking => {
                 self.state.display_settings.toggle_thinking();
                 self.persist_display_setting("collapse_thinking", self.state.display_settings.collapse_thinking);
@@ -2085,31 +2110,31 @@ impl App {
             .collect();
         let active_idx = self.state.active_agent_idx;
 
-        // Read session info from the active agent for the session bar.
-        // Clone strings to avoid holding an immutable borrow across the
-        // mutable `active_tab_state_mut()` call below.
-        let (session_title, session_index, session_count) = self
+        // Build session summaries for the sidebar. Collect as owned data to
+        // avoid holding an immutable borrow across the mutable
+        // `active_tab_state_mut()` call below.
+        let session_summaries: Vec<crate::widgets::session_list::SessionSummary> = self
             .state
             .sessions
             .get(active_idx)
-            .and_then(|s| {
-                s.sub_sessions.get(s.active_sub_session_idx).map(|sub| {
-                    (
-                        sub.title.clone(),
-                        s.active_sub_session_idx + 1,
-                        s.sub_sessions.len(),
-                    )
-                })
+            .map(|s| {
+                s.sub_sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sub)| crate::widgets::session_list::SessionSummary {
+                        title: sub.title.clone(),
+                        message_count: sub.tab_state.messages.len(),
+                        is_active: i == s.active_sub_session_idx,
+                    })
+                    .collect()
             })
-            .unwrap_or((None, 0, 0));
+            .unwrap_or_default();
 
         let display = self.state.display_settings.clone();
         let workspace = AgentWorkspace {
             active_model: model_name.as_deref(),
             context_window,
-            session_title: session_title.as_deref(),
-            session_index,
-            session_count,
+            sessions: &session_summaries,
             display: &display,
         };
         workspace.render(
