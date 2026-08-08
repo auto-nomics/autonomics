@@ -353,10 +353,22 @@ impl AgentHandle {
         self.cancel_token = new_token;
     }
 
-    /// Force-stop the agent: abort the background task.
+    /// Gracefully signal the agent to shut down.
+    ///
+    /// Sends `InternalEvent::Shutdown` — the agent's `run()` loop will
+    /// process it, pause all sessions (persisting snapshots + ending WAL
+    /// sessions), and then exit. The caller should subsequently await
+    /// [`join`](Self::join) to ensure the task has fully completed before
+    /// the runtime is dropped.
     pub fn shutdown(&mut self) {
         let _ = self.internal_tx.send(InternalEvent::Shutdown);
-        self.agent_task.abort();
+    }
+
+    /// Consume and await the background agent task. Call this after
+    /// [`shutdown`](Self::shutdown) to ensure all sessions are paused and
+    /// snapshots are persisted before the runtime is torn down.
+    pub async fn join(self) {
+        let _ = self.agent_task.await;
     }
 
     pub fn poll_event(&mut self) -> Option<AgentEvent> {
@@ -1186,7 +1198,40 @@ impl RuntimeHost {
         self.notify_unregistered(name);
     }
 
-    /// Shut down all registered agents.
+    /// Shut down all registered agents and await their graceful exit.
+    ///
+    /// Each agent's relay task calls `handle.join()` which waits for the
+    /// agent's `run()` loop to process the `Shutdown` event, pause all
+    /// sessions (persist snapshots + end WAL sessions), and flush pending
+    /// `persist_worker` operations.
+    ///
+    /// **Must be called from within the tokio runtime** (e.g. inside a
+    /// `block_on`) so that background tasks can make progress while we
+    /// await their completion.
+    pub async fn shutdown_all_agents_and_wait(&mut self) {
+        let names: Vec<String> = self.agents.keys().cloned().collect();
+        let mut relay_tasks = Vec::new();
+        for (_, entry) in self.agents.drain() {
+            let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+            relay_tasks.push(entry._relay_task);
+        }
+        for name in names {
+            self.notify_unregistered(&name);
+        }
+        // Wait for all relay tasks to finish. Each relay loop calls
+        // `handle.join().await` before exiting, which in turn waits for
+        // the agent's `run()` to complete its session-pause shutdown.
+        for task in relay_tasks {
+            let _ = task.await;
+        }
+    }
+
+    /// Shut down all registered agents (fire-and-forget).
+    ///
+    /// **Prefer [`shutdown_all_agents_and_wait`](Self::shutdown_all_agents_and_wait)
+    /// when the runtime is still alive** — this method does NOT wait for
+    /// agents to gracefully pause their sessions. It exists for scenarios
+    /// where the caller cannot await (e.g. sync code paths).
     pub fn shutdown_all_agents(&mut self) {
         let names: Vec<String> = self.agents.keys().cloned().collect();
         for (_, entry) in self.agents.drain() {
@@ -1435,6 +1480,13 @@ async fn relay_loop(
             }
         }
     }
+
+    // After breaking out of the relay loop, wait for the agent's `run()`
+    // task to finish. The agent needs time to process the Shutdown event,
+    // pause all sessions (persist snapshots + end WAL sessions), and flush
+    // any remaining persist_worker messages. Without this await, dropping
+    // the runtime would kill the task mid-shutdown, causing data loss.
+    handle.join().await;
 
     tracing::debug!(agent = %name, "relay task exited");
 }
