@@ -82,28 +82,33 @@ impl MimoProvider {
             ModelInfoBuilder::new(MODEL_MIMO_V2_5_PRO)
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.0, 3.0)
                 .build(),
             ModelInfoBuilder::new(MODEL_MIMO_V2_PRO)
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.0, 3.0)
                 .build(),
             // Omni series — multi-modal understanding
             ModelInfoBuilder::new(MODEL_MIMO_V2_5)
                 .context(1_000_000, 131_072)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.4, 2.0)
                 .build(),
             ModelInfoBuilder::new(MODEL_MIMO_V2_OMNI)
                 .context(262_144, 131_072)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.4, 2.0)
                 .build(),
             // Flash series — lightweight, fast
             ModelInfoBuilder::new(MODEL_MIMO_V2_FLASH)
                 .context(262_144, 65_536)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.1, 0.3)
                 .build(),
         ]

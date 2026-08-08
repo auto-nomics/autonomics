@@ -86,6 +86,7 @@ impl ZaiProvider {
             ModelInfoBuilder::new(MODEL_GLM_5_1)
                 .context(200_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.40, 4.40)
                 .build(),
             // ── Multimodal coding: GLM-5V-Turbo ──────────────────────────
@@ -93,12 +94,14 @@ impl ZaiProvider {
             ModelInfoBuilder::new(MODEL_GLM_5V_TURBO)
                 .context(200_000, 32_000)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.40, 4.40)
                 .build(),
             // ── GLM-5 base — Agentic Engineering foundation ──────────────
             ModelInfoBuilder::new(MODEL_GLM_5)
                 .context(200_000, 32_000)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(1.40, 4.40)
                 .build(),
             // ── GLM-5-Turbo — fast variant, no thinking mode ─────────────
@@ -112,18 +115,21 @@ impl ZaiProvider {
             ModelInfoBuilder::new(MODEL_GLM_4_7)
                 .context(200_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.57, 2.27)
                 .build(),
             // GLM-4.6 — advanced coding & complex reasoning, 128K output
             ModelInfoBuilder::new(MODEL_GLM_4_6)
                 .context(200_000, 131_072)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.50, 2.00)
                 .build(),
             // GLM-4.5 — 355B MoE foundational model, 96K max output
             ModelInfoBuilder::new(MODEL_GLM_4_5)
                 .context(128_000, 96_000)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.50, 2.00)
                 .build(),
             // ── Air / mid-tier ───────────────────────────────────────────
@@ -154,6 +160,7 @@ impl ZaiProvider {
             ModelInfoBuilder::new(MODEL_GLM_4_1V_THINKING_FLASH)
                 .context(64_000, 8_000)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.50, 0.50)
                 .build(),
             ModelInfoBuilder::new(MODEL_GLM_4_6V_FLASH)

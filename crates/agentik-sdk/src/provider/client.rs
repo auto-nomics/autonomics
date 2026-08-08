@@ -146,16 +146,27 @@ impl ApiClient for AnthropicApiClient {
     }
 }
 
-/// Translate the model's thinking configuration (if enabled) into the
-/// appropriate request-builder calls.
+/// Translate the model's thinking configuration into the appropriate
+/// request-builder calls.
 ///
-/// When `supports_thinking && thinking_enabled`, this injects both the
-/// Anthropic-style `ThinkingConfig` (token budget) and an OpenAI-style
-/// `reasoning_effort` so the request works regardless of which wire
-/// protocol the client routes through.
+/// Three cases:
+/// 1. `supports_thinking && thinking_enabled` → inject `thinking: { enabled,
+///    budget }` + `reasoning_effort: max`.
+/// 2. `supports_thinking && !thinking_enabled` → inject `thinking: { disabled }`.
+///    Some providers (MiMo, DeepSeek, GLM) **default to thinking ON** when the
+///    field is absent, which wastes tokens and produces empty-signature thinking
+///    blocks that get stripped on replay — causing context discontinuity and
+///    unreliable tool calling. Explicitly disabling avoids this.
+/// 3. `!supports_thinking` → no thinking field at all (the provider may not
+///    recognise it).
 fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> MessageCreateBuilder {
-    if !model_info.supports_thinking || !model_info.thinking_enabled {
+    if !model_info.supports_thinking {
         return builder;
+    }
+    if !model_info.thinking_enabled {
+        // Explicitly disable thinking so providers that default to thinking-ON
+        // (e.g. MiMo) don't enter thinking mode unexpectedly.
+        return builder.thinking(agentik_types::ThinkingConfig::disabled());
     }
     // Derive a thinking token budget. The Anthropic Messages API requires
     // `budget_tokens < max_tokens`; we default to half the output budget

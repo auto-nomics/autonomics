@@ -43,12 +43,14 @@ impl DeepseekProvider {
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_PRO)
                 .context(128_000, 32_000)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.5, 2.0)
                 .build(),
             // V4 Flash — fast, low-cost, still supports thinking.
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_FLASH)
                 .context(1_000_000, 32_000)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.1, 0.3)
                 .build(),
             // ── Deprecated aliases (kept for backwards compatibility) ─────
@@ -62,6 +64,7 @@ impl DeepseekProvider {
             ModelInfoBuilder::new(MODEL_DEEPSEEK_REASONER)
                 .context(64_000, 8_000)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.1, 0.3)
                 .build(),
         ]

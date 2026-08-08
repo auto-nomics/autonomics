@@ -51,6 +51,7 @@ impl MoonshotProvider {
             ModelInfoBuilder::new(MODEL_KIMI_K3)
                 .context(1_048_576, 65_536)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(2.78, 13.89)
                 .build(),
             // ── Coding: Kimi K2.7-Code — 256K context ────────────────────
@@ -75,6 +76,7 @@ impl MoonshotProvider {
             ModelInfoBuilder::new(MODEL_KIMI_K2_6)
                 .context(262_144, 16_384)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.90, 3.75)
                 .build(),
         ]

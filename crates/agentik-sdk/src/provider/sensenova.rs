@@ -34,12 +34,14 @@ impl SensenovaProvider {
             ModelInfoBuilder::new(MODEL_SENSENOVA_6_7_FLASH_LITE)
                 .context(262_144, 65_536)
                 .capabilities(true, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.0, 0.0)
                 .build(),
             // DeepSeek V4 Flash — 256K context, 64K output, thinking mode
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_FLASH)
                 .context(262_144, 65_536)
                 .capabilities(false, true, true, true)
+                .thinking_enabled(None)
                 .pricing(0.0, 0.0)
                 .build(),
         ]
