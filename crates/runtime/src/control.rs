@@ -219,9 +219,15 @@ impl HostControl {
     }
 
     /// Route a task to the best-matching agent.
-    pub async fn route_task(&self, description: &str) -> Option<RouteResult> {
+    /// `exclude` is the caller's own name to prevent self-routing.
+    pub async fn route_task(
+        &self,
+        description: &str,
+        exclude: Option<&str>,
+    ) -> Option<RouteResult> {
         self.ask(|tx| HostCommand::RouteTask {
             description: description.into(),
+            exclude: exclude.map(String::from),
             reply_tx: tx,
         })
         .await
@@ -307,8 +313,10 @@ pub enum HostCommand {
 
     /// Route a task description to the best-matching agent.
     /// Reply: routing recommendation with candidates.
+    /// `exclude` is the caller's own name (to prevent self-routing).
     RouteTask {
         description: String,
+        exclude: Option<String>,
         reply_tx: oneshot::Sender<RouteResult>,
     },
 

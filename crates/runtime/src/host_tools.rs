@@ -20,10 +20,18 @@ use crate::control::HostControl;
 
 /// Build the full set of host control tools for an agent.
 /// Returns an empty vec if `control` is `None`.
-pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
+///
+/// `self_name` is the calling agent's own name. It is used to exclude
+/// the agent from its own `list_agents` / `route_task` results, preventing
+/// self-delegation.
+pub fn host_tools(
+    control: Option<HostControl>,
+    self_name: &str,
+) -> Vec<ToolRegistration> {
     let Some(ctrl) = control else {
         return vec![];
     };
+    let self_name = self_name.to_string();
     vec![
         ToolRegistration::from(SpawnAgentTool {
             control: ctrl.clone(),
@@ -36,12 +44,14 @@ pub fn host_tools(control: Option<HostControl>) -> Vec<ToolRegistration> {
         }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
+            self_name: self_name.clone(),
         }),
         ToolRegistration::from(GetAgentInfoTool {
             control: ctrl.clone(),
         }),
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
+            self_name,
         }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
@@ -212,6 +222,7 @@ struct RouteTaskInput {
 
 struct RouteTaskTool {
     control: HostControl,
+    self_name: String,
 }
 
 #[async_trait]
@@ -219,7 +230,11 @@ impl ToolFunction for RouteTaskTool {
     type Input = RouteTaskInput;
 
     async fn run(&self, input: RouteTaskInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self.control.route_task(&input.description).await {
+        match self
+            .control
+            .route_task(&input.description, Some(&self.self_name))
+            .await
+        {
             Some(result) => Ok(ToolResult::success_json(
                 serde_json::to_value(&result).unwrap_or_default(),
             )),
@@ -275,6 +290,7 @@ struct ListAgentsInput {}
 
 struct ListAgentsTool {
     control: HostControl,
+    self_name: String,
 }
 
 #[async_trait]
@@ -286,9 +302,14 @@ impl ToolFunction for ListAgentsTool {
         _input: ListAgentsInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_status().await {
-            Some(status) => Ok(ToolResult::success_json(
-                serde_json::to_value(&status).unwrap_or_default(),
-            )),
+            Some(mut status) => {
+                // Exclude self from the agent list to prevent self-delegation.
+                status.agents.retain(|a| a.name != self.self_name);
+                status.profiles.retain(|p| p.name != self.self_name);
+                Ok(ToolResult::success_json(
+                    serde_json::to_value(&status).unwrap_or_default(),
+                ))
+            }
             None => Ok(ToolResult::success("Failed to get host status.")),
         }
     }

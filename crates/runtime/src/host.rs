@@ -198,7 +198,7 @@ impl SharedInfra {
             )),
         };
 
-        let tool_list = self.tools_from_profile(profile).await?;
+        let tool_list = self.tools_from_profile(agent_name, profile).await?;
 
         let config_json = serde_json::to_value(profile).unwrap_or_default();
         let storage = self.storage.clone();
@@ -259,6 +259,7 @@ impl SharedInfra {
     /// Assemble the tool set for a profile, respecting its feature flags.
     async fn tools_from_profile(
         &self,
+        agent_name: &str,
         profile: &agentik_core::AgentProfile,
     ) -> HostResult<Vec<agentik_core::tools::ToolRegistration>> {
         use crate::tools::*;
@@ -299,7 +300,8 @@ impl SharedInfra {
         }
 
         // Host control tools (spawn_agent, send_to_agent, connect_agents, etc.)
-        tools.extend(crate::host_tools::host_tools(self.host_control.clone()));
+        // Pass the agent's own name so list_agents / route_task can exclude self.
+        tools.extend(crate::host_tools::host_tools(self.host_control.clone(), agent_name));
 
         Ok(tools)
     }
@@ -747,9 +749,10 @@ impl RuntimeHost {
             }
             HostCommand::RouteTask {
                 description,
+                exclude,
                 reply_tx,
             } => {
-                let result = self.route_task(&description);
+                let result = self.route_task(&description, exclude.as_deref());
                 let _ = reply_tx.send(result);
             }
             HostCommand::GetAgentInfo { name, reply_tx } => {
@@ -840,7 +843,11 @@ impl RuntimeHost {
     /// Considers both running agents and available profiles (blueprints).
     /// Running agents get a small bonus score since they're immediately
     /// available for delegation.
-    fn route_task(&self, description: &str) -> crate::control::RouteResult {
+    fn route_task(
+        &self,
+        description: &str,
+        exclude: Option<&str>,
+    ) -> crate::control::RouteResult {
         let desc_lower = description.to_lowercase();
         let desc_words: std::collections::HashSet<&str> = desc_lower
             .split_whitespace()
@@ -878,20 +885,23 @@ impl RuntimeHost {
             }
         };
 
-        // Score running agents.
+        // Score running agents (excluding the caller itself).
         let mut candidates: Vec<crate::control::RouteCandidate> = self
             .agents
             .values()
+            .filter(|e| Some(e.info.name.as_str()) != exclude)
             .map(|e| score_info(&e.info, true))
             .collect();
 
-        // Score profiles (excluding those already running under the same name).
+        // Score profiles (excluding those already running under the same name
+        // and the caller itself).
         let running_names: std::collections::HashSet<&str> =
             self.agents.keys().map(|s| s.as_str()).collect();
         candidates.extend(
             self.profiles
                 .iter()
                 .filter(|p| !running_names.contains(p.name.as_str()))
+                .filter(|p| Some(p.name.as_str()) != exclude)
                 .map(|p| score_info(&capability_from_profile(&p.name, p), false)),
         );
 
