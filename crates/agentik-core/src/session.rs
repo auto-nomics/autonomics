@@ -686,15 +686,12 @@ impl Session {
         let mut builder =
             system_prompt_builder::SystemPromptBuilder::default().build_tooluse_guidance();
 
-        if let Some(ref identity) = self.shared.system_prompt_identity {
-            builder = builder.with_identity(identity);
-        }
-
-        // Inject the agent's own metadata so it knows its identity in
-        // multi-agent interactions. The agent uses this name when other
-        // agents delegate tasks to it, and to avoid self-delegation.
-        builder = builder.with_agent_metadata(format!(
-            "## Your Identity\n\
+        // Combine identity + agent name into a single section so the agent
+        // knows both its role and its concrete name in multi-agent interactions.
+        let identity = self.shared.system_prompt_identity.as_deref()
+            .unwrap_or("You are a helpful assistant.");
+        builder = builder.with_identity(format!(
+            "{identity}\n\n\
              Your name is **{}**. \
              When other agents delegate tasks to you, they address you by this name. \
              Do not delegate tasks to yourself — use `list_agents` or `route_task` \
