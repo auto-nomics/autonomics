@@ -52,7 +52,7 @@
 //! CREATE INDEX idx_messages_agent_ts ON messages(session_id, ts);
 //! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use turso::{Value, params_from_iter};
@@ -74,17 +74,41 @@ pub struct TursoAgentStorage {
 
 impl TursoAgentStorage {
     /// Open (or create) an on-disk agent database at `path`.
+    ///
+    /// If the on-disk files are in a torn-WAL state (e.g. the process was
+    /// SIGKILL'd mid-transaction and the WAL index points past EOF), the
+    /// matching `-wal` / `-shm` / `-twal` / `-tshm` sidecars are
+    /// quarantined and the open is retried once. The main `.db` file is
+    /// never touched — checkpointed pages in it remain durable.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        let path_str = path
-            .as_ref()
+        let path_ref = path.as_ref();
+        let path_str = path_ref
             .to_str()
             .ok_or_else(|| StorageError::Other("agent db path is not valid UTF-8".into()))?;
 
-        if let Some(parent) = path.as_ref().parent() {
+        if let Some(parent) = path_ref.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| StorageError::Other(format!("create db parent dir: {e}").into()))?;
         }
 
+        match Self::try_open_local(path_str).await {
+            Ok(s) => Ok(s),
+            Err(e) if is_torn_wal_error(&e) => {
+                tracing::warn!(
+                    db = %path_str,
+                    error = %e,
+                    "WAL torn on open — quarantining -wal/-shm sidecars and retrying once"
+                );
+                quarantine_wal_sidecars(path_ref);
+                Self::try_open_local(path_str).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Internal: actually open the database without recovery. Split out so
+    /// the recovery wrapper can call it twice.
+    async fn try_open_local(path_str: &str) -> Result<Self, StorageError> {
         let db = turso::Builder::new_local(path_str)
             .experimental_multiprocess_wal(true)
             .build()
@@ -581,8 +605,9 @@ impl AgentStorage for TursoAgentStorage {
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO sessions (id, agent_id, started_at, ended_at)
-                 VALUES (?1, ?2, ?3, NULL)",
+                "INSERT INTO sessions (id, agent_id, started_at, ended_at)
+                 VALUES (?1, ?2, ?3, NULL)
+                 ON CONFLICT(id) DO UPDATE SET ended_at = NULL",
                 params_from_iter([
                     Value::Text(session_id.to_string()),
                     Value::Text(agent_id.to_string()),
@@ -714,7 +739,7 @@ impl AgentStorage for TursoAgentStorage {
             .conn
             .query(
                 "SELECT id, title, started_at FROM sessions
-                 WHERE agent_id = ?1 AND ended_at IS NULL
+                 WHERE agent_id = ?1
                  ORDER BY started_at ASC",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -1238,7 +1263,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_session_records_excludes_ended() {
+    async fn test_list_session_records_includes_paused() {
+        // Sessions that have been "ended" (paused) must still appear in
+        // list_session_records. The agent calls end_session on all sessions
+        // during shutdown; if those sessions were excluded from listing, they
+        // would disappear on restart.
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
         let s1 = Uuid::new_v4();
@@ -1247,19 +1276,19 @@ mod tests {
 
         // s1: active (no end)
         store.start_session(agent_id, s1).await.unwrap();
-        // s2: ended
+        // s2: ended (paused by shutdown)
         store.start_session(agent_id, s2).await.unwrap();
         store.end_session(s2).await.unwrap();
         // s3: active (no end)
         store.start_session(agent_id, s3).await.unwrap();
 
         let records = store.list_session_records(agent_id).await.unwrap();
-        // Only s1 and s3 should be returned; s2 is ended.
-        assert_eq!(records.len(), 2, "ended sessions should be excluded");
+        // All three must be returned, including the paused one.
+        assert_eq!(records.len(), 3, "paused sessions must be included");
         let ids: Vec<Uuid> = records.iter().map(|r| r.session_id).collect();
         assert!(ids.contains(&s1));
+        assert!(ids.contains(&s2));
         assert!(ids.contains(&s3));
-        assert!(!ids.contains(&s2));
     }
 
     #[tokio::test]
@@ -1655,5 +1684,269 @@ mod tests {
         let loaded2 = store.load_plan(agent_id).await.unwrap().unwrap();
         assert_eq!(loaded2.update.plan.len(), 1);
         assert_eq!(loaded2.revision, 1);
+    }
+
+    #[tokio::test]
+    async fn test_full_rename_restart_cycle_with_messages() {
+        // Comprehensive regression test: simulate the full agent lifecycle
+        // that triggers the "rename → restart → session disappears" bug.
+        //
+        // 1. Agent starts, session is created with messages
+        // 2. Session is renamed (title updated in DB)
+        // 3. Agent is shut down (sessions paused: end_session called)
+        // 4. Agent is restarted with the same agent_id
+        // 5. All sessions including the renamed one must be listable with
+        //    their titles and messages intact.
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        // 1. Start session + add messages.
+        store.start_session(agent_id, session_id).await.unwrap();
+        store
+            .append_message(
+                session_id,
+                &Message::user("hello world"),
+            )
+            .await
+            .unwrap();
+        store
+            .append_message(
+                session_id,
+                &Message::assistant_text("hi there").with_model("test-model"),
+            )
+            .await
+            .unwrap();
+
+        // 2. Rename the session.
+        store
+            .update_session_title(session_id, "Important Analysis")
+            .await
+            .unwrap();
+
+        // 3. Pause: the agent calls end_session on shutdown.
+        store.end_session(session_id).await.unwrap();
+
+        // 4. Restart: list_session_records must find the session.
+        let records = store.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 1, "renamed session must survive restart");
+        assert_eq!(records[0].session_id, session_id);
+        assert_eq!(
+            records[0].title.as_deref(),
+            Some("Important Analysis"),
+            "renamed title must be preserved"
+        );
+
+        // 5. Messages must be recoverable.
+        let messages = store
+            .get_messages_since_for_session(session_id, 0)
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 2, "all messages must survive restart");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_sessions_rename_one_all_survive() {
+        // Test that renaming one session doesn't somehow corrupt or
+        // displace other sessions in the same agent.
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let s1 = Uuid::new_v4();
+        let s2 = Uuid::new_v4();
+        let s3 = Uuid::new_v4();
+
+        // Create three sessions.
+        store.start_session(agent_id, s1).await.unwrap();
+        store.start_session(agent_id, s2).await.unwrap();
+        store.start_session(agent_id, s3).await.unwrap();
+
+        // Rename s2.
+        store.update_session_title(s2, "Renamed").await.unwrap();
+
+        // Pause all (agent shutdown).
+        store.end_session(s1).await.unwrap();
+        store.end_session(s2).await.unwrap();
+        store.end_session(s3).await.unwrap();
+
+        // All three must survive with correct titles.
+        let records = store.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 3);
+        for rec in &records {
+            if rec.session_id == s2 {
+                assert_eq!(rec.title.as_deref(), Some("Renamed"));
+            }
+        }
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Torn-WAL recovery helpers
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Return `true` if `e`'s Display looks like turso's open-time "short read
+/// on WAL frame" error — i.e. the WAL index (SHM) claims a frame is valid
+/// but the WAL file is shorter than expected (truncated, missing, or torn).
+///
+/// We match on the exact literal turso emits from its WAL reader so we do
+/// not falsely trigger recovery on unrelated I/O errors (disk full,
+/// permission denied, broken pipe, etc.).
+fn is_torn_wal_error(e: &StorageError) -> bool {
+    e.to_string().contains("short read on WAL frame")
+}
+
+/// Quarantine every WAL / SHM sidecar present next to `db_path` by
+/// renaming it to `<db_path>-<suffix>.corrupt-<unix_secs>`. The main DB
+/// file at `db_path` is never touched. Safe to call when no sidecars
+/// exist (no-op). On rename failure we log and continue so the retry can
+/// still attempt the open.
+fn quarantine_wal_sidecars(db_path: &Path) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Suffixes turso / SQLite may use. `-tshm` is the turso convention
+    // observed in the wild; the others are standard SQLite.
+    for suffix in ["-wal", "-shm", "-twal", "-tshm"] {
+        let sidecar = append_suffix(db_path, suffix);
+        if !sidecar.exists() {
+            continue;
+        }
+        let target = append_suffix(db_path, &format!("{suffix}.corrupt-{ts}"));
+        match std::fs::rename(&sidecar, &target) {
+            Ok(()) => tracing::warn!(
+                from = %sidecar.display(),
+                to = %target.display(),
+                "quarantined torn WAL sidecar"
+            ),
+            Err(e) => tracing::warn!(
+                from = %sidecar.display(),
+                to = %target.display(),
+                error = %e,
+                "failed to quarantine torn WAL sidecar (continuing)"
+            ),
+        }
+    }
+}
+
+/// Append `suffix` to `p` literally, without touching any existing
+/// extension. (`Path::with_extension` would *replace* the extension,
+/// turning `agent.db` into `agent-wal`, which is not what we want.)
+fn append_suffix(p: &Path, suffix: &str) -> PathBuf {
+    let mut s = p.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tests for torn-WAL recovery
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod wal_recovery_tests {
+    use super::*;
+    use crate::storage::StorageError;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Std-only equivalent of `tempfile::tempdir()`: creates a uniquely
+    /// named subdir under `std::env::temp_dir()` and returns its path.
+    /// We don't auto-cleanup; tests are expected to be idempotent and
+    /// leave no sidecars behind on success.
+    fn fresh_tmpdir(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let pid = std::process::id();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "agentik-turso-test-{label}-{pid}-{n}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn is_torn_wal_error_matches_known_phrase() {
+        // Real shape of the error observed in production:
+        //   "storage error: open agent database: I/O error: short read on WAL
+        //    frame at offset 1751032: expected 4096 bytes, got 0"
+        let e = StorageError::Other(
+            "open agent database: I/O error: short read on WAL frame at offset 1751032: expected 4096 bytes, got 0"
+                .into(),
+        );
+        assert!(is_torn_wal_error(&e));
+    }
+
+    #[test]
+    fn is_torn_wal_error_rejects_unrelated_io() {
+        // Disk-full / permission-denied must NOT trigger recovery.
+        for msg in [
+            "open agent database: I/O error: disk full",
+            "open agent database: permission denied",
+            "open agent database: database is locked",
+            "create db parent dir: not a directory",
+            "connect agent database: broken pipe",
+        ] {
+            let e = StorageError::Other(msg.into());
+            assert!(
+                !is_torn_wal_error(&e),
+                "false positive on unrelated error: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn quarantine_renames_present_sidecars_only() {
+        let tmp = fresh_tmpdir("quarantine_renames_present_sidecars_only");
+        let db = tmp.join("agent.db");
+        std::fs::write(&db, b"main-db-bytes").unwrap();
+
+        // Drop a mix of sidecars — only the ones that exist should move.
+        std::fs::write(append_suffix(&db, "-tshm"), b"shm").unwrap();
+        std::fs::write(append_suffix(&db, "-wal"), b"wal").unwrap();
+        // No -shm or -twal — should be skipped silently.
+
+        quarantine_wal_sidecars(&db);
+
+        // Main DB untouched.
+        assert!(db.exists());
+        assert_eq!(std::fs::read(&db).unwrap(), b"main-db-bytes");
+
+        // Each present sidecar got a .corrupt-<ts> twin and is gone.
+        let tshm = append_suffix(&db, "-tshm");
+        let wal = append_suffix(&db, "-wal");
+        assert!(!tshm.exists(), "-tshm should have been moved");
+        assert!(!wal.exists(), "-wal should have been moved");
+
+        // Verify the quarantine target pattern matches what we created.
+        let mut found_tshm = false;
+        let mut found_wal = false;
+        for entry in std::fs::read_dir(&tmp).unwrap() {
+            let name = entry.unwrap().file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with("agent.db-tshm.corrupt-") {
+                found_tshm = true;
+            }
+            if s.starts_with("agent.db-wal.corrupt-") {
+                found_wal = true;
+            }
+        }
+        assert!(found_tshm, "expected -tshm.corrupt-* quarantine file");
+        assert!(found_wal, "expected -wal.corrupt-* quarantine file");
+    }
+
+    #[test]
+    fn quarantine_is_noop_when_no_sidecars() {
+        let tmp = fresh_tmpdir("quarantine_is_noop_when_no_sidecars");
+        let db = tmp.join("agent.db");
+        std::fs::write(&db, b"only-main").unwrap();
+
+        // Must not panic, must not delete the main file.
+        quarantine_wal_sidecars(&db);
+        assert!(db.exists());
+        assert_eq!(std::fs::read(&db).unwrap(), b"only-main");
     }
 }
