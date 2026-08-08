@@ -44,9 +44,11 @@ impl HostControl {
 
     // ── Convenience methods ────────────────────────────────
 
-    /// Send a message to a named agent (fire-and-forget, no response).
-    pub fn send_to(&self, name: &str, message: impl Into<String>) {
-        self.fire(HostCommand::SendTo {
+    /// Deliver a user-typed message to a named agent (used by the TUI).
+    /// This is NOT inter-agent fire-and-forget — it is the user → agent
+    /// communication channel.
+    pub fn deliver_message(&self, name: &str, message: impl Into<String>) {
+        self.fire(HostCommand::DeliverMessage {
             name: name.into(),
             message: message.into(),
         });
@@ -286,8 +288,9 @@ pub enum HostCommand {
     /// Disconnect two nodes.
     Disconnect { from: String, to: String },
 
-    /// Send a message to a named agent (fire-and-forget).
-    SendTo { name: String, message: String },
+    /// Deliver a user message to a named agent (TUI → agent).
+    /// Not inter-agent communication — use Delegate for that.
+    DeliverMessage { name: String, message: String },
 
     /// Delegate a task to an agent and wait for its Done response.
     /// Reply: the target agent's response text.

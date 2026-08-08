@@ -687,12 +687,12 @@ impl RuntimeHost {
                 to,
                 trigger,
             } => {
-                let _ = self.network.connect(&from, &to, trigger, agentik_network::EdgeKind::Delegate, None);
+                let _ = self.network.connect(&from, &to, trigger, None);
             }
             HostCommand::Disconnect { from, to } => {
                 self.network.disconnect(&from, &to);
             }
-            HostCommand::SendTo { name, message } => {
+            HostCommand::DeliverMessage { name, message } => {
                 self.send_to(&name, message);
             }
             HostCommand::Delegate {
@@ -982,9 +982,9 @@ impl RuntimeHost {
         self.network.remove_node(name);
     }
 
-    /// Connect two nodes with a trigger (defaults to Delegate semantics).
+    /// Connect two nodes with a trigger (request-response delegation).
     pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<(), String> {
-        self.network.connect(from, to, trigger, agentik_network::EdgeKind::Delegate, None)
+        self.network.connect(from, to, trigger, None)
     }
 
     /// Remove all edges between two nodes.

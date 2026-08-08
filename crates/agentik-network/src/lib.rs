@@ -24,4 +24,4 @@ pub use router::{
     edge_should_fire, check_termination_spec, AgentNetwork, NetworkOutcome, RoutingAction,
     TerminationReason,
 };
-pub use spec::{EdgeKind, EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec, TransformSpec};
+pub use spec::{EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec, TransformSpec};

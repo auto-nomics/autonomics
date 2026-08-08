@@ -36,9 +36,6 @@ pub fn host_tools(
         ToolRegistration::from(SpawnAgentTool {
             control: ctrl.clone(),
         }),
-        ToolRegistration::from(SendToAgentTool {
-            control: ctrl.clone(),
-        }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
         }),
@@ -112,42 +109,6 @@ impl ToolFunction for SpawnAgentTool {
             ))),
             Err(e) => Ok(ToolResult::success(format!("Spawn failed: {e}"))),
         }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Send To Agent
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "send_to_agent",
-    description = "Send a text message to a named agent. \
-                   The message appears as a user-style input to the target agent."
-)]
-struct SendToAgentInput {
-    /// Name of the target agent.
-    agent_name: String,
-    /// Message text to deliver.
-    message: String,
-}
-
-struct SendToAgentTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for SendToAgentTool {
-    type Input = SendToAgentInput;
-
-    async fn run(
-        &self,
-        input: SendToAgentInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.send_to(&input.agent_name, input.message);
-        Ok(ToolResult::success(format!(
-            "Message delivered to '{}'.",
-            input.agent_name
-        )))
     }
 }
 

@@ -605,6 +605,9 @@ impl App {
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
                 self.state.agent_picker.remove_by_id(agent_id);
+                // If this agent's leaf is currently open, close it too — all
+                // stored data has been erased so there's nothing to resume.
+                self.close_agent_leaf_by_id(agent_id);
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
             crate::app_event::AppEvent::HistoryLoaded { agent_id, session_id, messages } => {
@@ -1540,7 +1543,7 @@ impl App {
                 .map(|s| s.name.clone());
             if let Some(name) = name {
                 if let Some(host) = self.host.as_ref() {
-                    host.control().send_to(&name, text);
+                    host.control().deliver_message(&name, text);
                 }
             }
         }
@@ -1860,6 +1863,45 @@ impl App {
             self.state.active_agent_idx = 0;
         } else if self.state.active_agent_idx >= self.state.sessions.len() {
             self.state.active_agent_idx = self.state.sessions.len() - 1;
+        }
+
+        self.dirty = true;
+    }
+
+    /// Close a specific agent's leaf by `agent_id`, if one is currently open.
+    ///
+    /// Unlike `close_active_agent` which always targets `active_agent_idx`,
+    /// this searches by agent identity — used when a deletion originates from
+    /// the agent picker (where the deleted agent may not be the focused one).
+    fn close_agent_leaf_by_id(&mut self, agent_id: uuid::Uuid) {
+        let Some(idx) = self
+            .state
+            .sessions
+            .iter()
+            .position(|s| s.agent_id == agent_id)
+        else {
+            return; // No open leaf for this agent — nothing to close.
+        };
+
+        let name = self.state.sessions[idx].name.clone();
+
+        // Shutdown the agent via the host (relay task handles cleanup).
+        if let Some(host) = self.host.as_mut() {
+            host.shutdown_agent(&name);
+        }
+        tracing::info!(agent = %name, %agent_id, "agent leaf closed by id — background process terminated");
+
+        // Remove UI session.
+        self.state.sessions.remove(idx);
+
+        // Adjust active index: clamp to the new last position.
+        if self.state.sessions.is_empty() {
+            self.state.active_agent_idx = 0;
+        } else if self.state.active_agent_idx >= self.state.sessions.len() {
+            self.state.active_agent_idx = self.state.sessions.len() - 1;
+        } else if idx < self.state.active_agent_idx {
+            // Removed a leaf before the active one — shift index down.
+            self.state.active_agent_idx -= 1;
         }
 
         self.dirty = true;

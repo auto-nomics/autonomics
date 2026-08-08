@@ -92,27 +92,9 @@ pub struct EdgeSpec {
     /// When this edge should fire (forward a message).
     pub trigger: EdgeTrigger,
 
-    /// Edge semantics: request-response (Delegate) or fire-and-forget (Push).
-    #[serde(default)]
-    pub kind: EdgeKind,
-
     /// Optional message transform applied before forwarding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<TransformSpec>,
-}
-
-/// Defines the communication semantics of an edge.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum EdgeKind {
-    /// Request-response: source's output is forwarded to target; when the
-    /// target Dones, its response is returned to the source. No message
-    /// loss — every delegation gets a response.
-    #[default]
-    Delegate,
-    /// Fire-and-forget: source Done → forward to target, no response
-    /// expected. Used for pipelines where data flows one direction.
-    Push,
 }
 
 /// Determines when an edge forwards a message from its source to its target.
@@ -253,14 +235,12 @@ mod tests {
                     from: "a".into(),
                     to: "b".into(),
                     trigger: EdgeTrigger::OnDone,
-                    kind: EdgeKind::Delegate,
                     transform: None,
                 },
                 EdgeSpec {
                     from: "b".into(),
                     to: "a".into(),
                     trigger: EdgeTrigger::OnDone,
-                    kind: EdgeKind::Delegate,
                     transform: None,
                 },
             ],
@@ -288,7 +268,6 @@ mod tests {
             from: "a".into(),
             to: "nonexistent".into(),
             trigger: EdgeTrigger::OnDone,
-                    kind: EdgeKind::Delegate,
             transform: None,
         });
         assert!(spec.validate().is_err());
