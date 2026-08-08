@@ -1086,8 +1086,50 @@ impl RuntimeHost {
     }
 
     /// Receive the next event from any registered agent.
+    ///
+    /// This also handles delegation plumbing:
+    /// - `LlmResponse` events are accumulated in the network's response
+    ///   buffer (so `accumulated_response` works when Done arrives).
+    /// - `Done` events trigger the tool delegation reply: the accumulated
+    ///   response is sent to the waiting `delegate_to` tool via its
+    ///   `reply_tx` channel.
+    ///
+    /// The raw event is still returned to the caller for UI rendering.
     pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
-        self.event_rx.recv().await
+        let (name, event) = self.event_rx.recv().await?;
+
+        // For Done events: capture accumulated response BEFORE process_event
+        // (process_event drains the response buffer).
+        let delegation_response = if matches!(event, AgentEvent::Done) {
+            if self.tool_delegations.contains_key(&name) {
+                Some(self.network.accumulated_response(&name).to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Feed the event through the network (accumulates LlmResponse,
+        // handles topology-edge delegation routing, termination checks).
+        let actions = self.network.process_event(&name, &event);
+
+        // If we captured a delegation response, send it to the waiting tool.
+        if let Some(response) = delegation_response {
+            if let Some(reply_tx) = self.tool_delegations.remove(&name) {
+                let _ = reply_tx.send(response);
+                tracing::info!(agent = %name, "delegation response delivered to caller tool");
+            }
+        }
+
+        // Execute any routing actions (topology-edge based forwarding).
+        for action in &actions {
+            if let agentik_network::RoutingAction::Send { to, message } = action {
+                self.send_to(to, message.clone());
+            }
+        }
+
+        Some((name, event))
     }
 
     /// Receive the next host lifecycle event (agent registered / unregistered).
@@ -1110,30 +1152,14 @@ impl RuntimeHost {
     ///
     /// Returns `(agent_name, raw_event, routing_actions)` or `None` if
     /// all agents are done.
-    pub async fn step(&mut self) -> Option<(String, AgentEvent, Vec<RoutingAction>)> {
+    ///
+    /// **Note**: delegation plumbing (response accumulation + tool reply)
+    /// is handled inside `recv_any()`. This method is kept for callers
+    /// that need the routing actions.
+    pub async fn step(&mut self) -> Option<(String, AgentEvent)> {
         // Drain any pending tool commands first.
         self.try_process_commands();
-
-        let (name, event) = self.recv_any().await?;
-
-        // If a Done event arrives and there's a pending tool delegation,
-        // capture the accumulated response and send it to the waiting tool.
-        // This must happen BEFORE process_event (which drains the buffer).
-        if matches!(event, AgentEvent::Done) {
-            if let Some(reply_tx) = self.tool_delegations.remove(&name) {
-                let response = self.network.accumulated_response(&name).to_string();
-                let _ = reply_tx.send(response);
-            }
-        }
-
-        // Process the event through the topology network.
-        let actions = self.network.process_event(&name, &event);
-        for action in &actions {
-            if let RoutingAction::Send { to, message } = action {
-                self.send_to(to, message.clone());
-            }
-        }
-        Some((name, event, actions))
+        self.recv_any().await
     }
 
     /// Check if a named agent is registered.

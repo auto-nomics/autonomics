@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use agentik_core::AgentProfile;
-use agentik_network::{EdgeTrigger, RoutingAction, TerminationSpec};
+use agentik_network::{EdgeTrigger, TerminationSpec};
 use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
 use agentik_sdk::AuthMethod;
 use arc_swap::ArcSwapOption;
@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use agentik_sdk::types::AgentEvent;
 
     while !host.network().is_finished() {
-        let Some((agent_name, event, actions)) = host.step().await else {
+        let Some((agent_name, event)) = host.step().await else {
             break;
         };
 
@@ -203,18 +203,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = std::io::stdout().flush();
         }
 
-        for action in &actions {
-            match action {
-                RoutingAction::Send { to, .. } => {
-                    println!("\n{DASH}");
-                    println!("📨 {agent_name} → {to}");
-                }
-                RoutingAction::Finished { reason } => {
-                    println!("\n{BAR}");
-                    println!("🏁 Finished: {reason:?}");
-                    println!("   Rounds: {}", host.network().rounds());
-                }
+        if host.network().is_finished() {
+            if let Some(reason) = host.network().termination_reason() {
+                println!("\n{BAR}");
+                println!("🏁 Finished: {reason:?}");
+                println!("   Rounds: {}", host.network().rounds());
             }
+            break;
         }
     }
 
