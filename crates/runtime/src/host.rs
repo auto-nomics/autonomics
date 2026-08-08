@@ -492,6 +492,7 @@ enum AgentCommand {
     SwitchSession(uuid::Uuid),
     CloseSession(uuid::Uuid),
     RenameSession { id: uuid::Uuid, title: String },
+    SetModel(Model),
 }
 
 /// Internal entry for one registered agent.
@@ -500,6 +501,10 @@ struct AgentEntry {
     _relay_task: JoinHandle<()>,
     /// Capability metadata for routing and discovery.
     info: crate::control::AgentInfo,
+    /// Shared model slot — same Arc as the relay's AgentHandle.
+    /// Allows querying and hot-swapping the model without direct
+    /// access to the moved AgentHandle.
+    model: Arc<ArcSwapOption<Model>>,
 }
 
 impl RuntimeHost {
@@ -607,6 +612,40 @@ impl RuntimeHost {
                 // Spawn in background — agent creation is async.
                 let infra = self.infra.clone();
                 let model = model.clone();
+                let reg_tx = self.registration_tx.clone();
+                let info = capability_from_profile(&name, &profile);
+                let agent_name = name.clone();
+
+                self.infra.runtime_handle.spawn(async move {
+                    match infra.spawn_agent(&agent_name, &profile, model, None).await {
+                        Ok(handle) => {
+                            let registered_name = handle.name.clone();
+                            let _ = reply_tx.send(Ok(registered_name));
+                            let _ = reg_tx.send((handle, info));
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(Err(e.to_string()));
+                        }
+                    }
+                });
+            }
+            HostCommand::SpawnWithProfile {
+                name,
+                profile,
+                model_override,
+                reply_tx,
+            } => {
+                // Resolve model: use override if provided, else global model.
+                let model = match (model_override, self.model.as_ref()) {
+                    (Some(m), _) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
+                    (None, Some(g)) => g.clone(),
+                    (None, None) => {
+                        let _ = reply_tx.send(Err("No model configured on host.".into()));
+                        return;
+                    }
+                };
+
+                let infra = self.infra.clone();
                 let reg_tx = self.registration_tx.clone();
                 let info = capability_from_profile(&name, &profile);
                 let agent_name = name.clone();
@@ -763,6 +802,19 @@ impl RuntimeHost {
                         title,
                     },
                 );
+            }
+
+            // ── Model management ──
+            HostCommand::SetAgentModel { name, model } => {
+                self.send_agent_command(&name, AgentCommand::SetModel(model));
+            }
+            HostCommand::GetAgentModel { name, reply_tx } => {
+                let info = self.agents.get(&name).and_then(|e| {
+                    e.model.load_full().as_deref().map(|m| {
+                        (m.model_info.model_name.clone(), m.model_info.context_length)
+                    })
+                });
+                let _ = reply_tx.send(info);
             }
         }
     }
@@ -952,6 +1004,7 @@ impl RuntimeHost {
     pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
         let name = handle.name.clone();
         let relay_name = name.clone();
+        let model = handle.model.clone(); // Clone Arc before moving handle
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
 
@@ -965,6 +1018,7 @@ impl RuntimeHost {
                 cmd_tx,
                 _relay_task: relay_task,
                 info,
+                model,
             },
         );
     }
@@ -992,6 +1046,16 @@ impl RuntimeHost {
         if let Some(entry) = self.agents.get(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Message(message));
         }
+    }
+
+    /// Query the model info for a named agent (for TUI rendering).
+    pub fn agent_model_info(&self, name: &str) -> Option<(String, u64)> {
+        self.agents.get(name).and_then(|e| {
+            e.model
+                .load_full()
+                .as_deref()
+                .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
+        })
     }
 
     /// Inject initial prompts for all nodes that have them.
@@ -1220,6 +1284,9 @@ async fn relay_loop(
                 }
                 Some(AgentCommand::RenameSession { id, title }) => {
                     handle.rename_session(id, title);
+                }
+                Some(AgentCommand::SetModel(model)) => {
+                    handle.set_model(model);
                 }
                 Some(AgentCommand::Shutdown) | None => {
                     handle.shutdown();

@@ -19,7 +19,7 @@ pub(crate) enum AppEvent {
     /// A new agent was spawned (or failed to spawn) from a profile.
     AgentSpawned {
         profile_name: String,
-        result: std::result::Result<runtime::AgentHandle, String>,
+        result: std::result::Result<String, String>,
     },
     /// Agent records loaded from storage (for the resume picker).
     AgentRecordsLoaded(Vec<agentik_core::storage::AgentRecord>),

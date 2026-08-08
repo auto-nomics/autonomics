@@ -375,8 +375,8 @@ impl App {
 
         // Ensure the agent and engine tasks are torn down even if the main
         // loop exited without a cooperative shutdown (e.g. force-quit).
-        for h in &mut self.handles {
-            h.shutdown();
+        if let Some(host) = self.host.as_mut() {
+            host.shutdown_all_agents();
         }
 
         // Restore terminal on exit (whether normal or error).
@@ -614,22 +614,12 @@ impl App {
                 profile_name,
                 result,
             } => match result {
-                Ok(handle) => {
-                    let agent_id = handle.agent_id;
-                    let name = handle.name.clone();
-                    self.handles.push(handle);
-                    // Request the session list so we can sync the session tab bar.
-                    // SessionList arrival triggers per-session history loading.
-                    self.handles.last().map(|h| h.list_sessions());
-                    self.state.sessions.push(AgentSession {
-                        name,
-                        agent_id,
-                        sub_sessions: Vec::new(),
-                        active_sub_session_idx: 0,
-                        pending_tab_state: Default::default(),
-                    });
-                    self.state.active_agent_idx = self.state.sessions.len() - 1;
-                    tracing::info!(profile = %profile_name, "agent spawned successfully");
+                Ok(name) => {
+                    // The host has already registered the agent and sent
+                    // HostEvent::AgentRegistered (or will shortly). The
+                    // apply_host_event handler creates the session tab and
+                    // requests the session list. Here we just log success.
+                    tracing::info!(profile = %profile_name, agent = %name, "agent spawned and registered with host");
                 }
                 Err(e) => {
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
@@ -967,16 +957,30 @@ impl App {
             if let Some(ts) = self.cancel_requested_at {
                 if ts.elapsed() < FORCE_QUIT_WINDOW {
                     tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                    if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
-                        h.shutdown();
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().shutdown_agent(&an);
+                        }
                     }
                     self.should_quit = true;
                     return;
                 }
             }
             // First Ctrl+C: cooperative cancel.
-            if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
-                h.cancel();
+            let agent_name = self
+                .state
+                .sessions
+                .get(self.state.active_agent_idx)
+                .map(|s| s.name.clone());
+            if let Some(an) = agent_name {
+                if let Some(host) = self.host.as_ref() {
+                    host.control().cancel_agent(&an);
+                }
             }
             self.cancel_requested_at = Some(Instant::now());
             return;
@@ -1035,7 +1039,7 @@ impl App {
             "spawn_agent_from_profile called"
         );
 
-        let Some(host) = self.host.as_ref().map(|h| h.spawner()) else {
+        let Some(host) = self.host.as_ref() else {
             tracing::warn!("no runtime host available");
             return;
         };
@@ -1044,7 +1048,6 @@ impl App {
             return;
         }
 
-        let global_model = self.state.active_model.clone();
         let model_override = profile
             .preferred_model
             .as_deref()
@@ -1054,60 +1057,34 @@ impl App {
             "model resolution complete"
         );
 
+        let control = host.control();
         let profile_clone = profile.clone();
         let agent_name_owned = agent_name.to_string();
         let profile_name_owned = profile.name.clone();
         let tx = self.app_event_tx.clone();
 
-        let join_handle = self.runtime_handle.spawn(async move {
+        self.runtime_handle.spawn(async move {
             tracing::debug!(
                 profile = %profile_clone.name,
                 agent = %agent_name_owned,
                 "async spawn task started"
             );
-            host.spawn_agent(
-                &agent_name_owned,
-                &profile_clone,
-                global_model,
-                model_override,
-            )
-            .await
-            .map_err(|e| e.to_string())
-        });
-
-        self.runtime_handle.spawn(async move {
-            let result = join_handle.await;
+            let result = control
+                .spawn_with_profile(&agent_name_owned, profile_clone, model_override)
+                .await;
             let event = match result {
-                Ok(Ok(handle)) => {
-                    tracing::info!(profile = %profile_name_owned, "agent spawned successfully");
+                Ok(name) => {
+                    tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with host");
                     crate::app_event::AppEvent::AgentSpawned {
                         profile_name: profile_name_owned,
-                        result: Ok(handle),
+                        result: Ok(name),
                     }
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     tracing::error!(profile = %profile_name_owned, error = %e, "agent spawn failed");
                     crate::app_event::AppEvent::AgentSpawned {
                         profile_name: profile_name_owned,
                         result: Err(e),
-                    }
-                }
-                Err(join_err) => {
-                    let msg = if join_err.is_panic() {
-                        let panic_msg = join_err.into_panic();
-                        let msg = panic_msg
-                            .downcast_ref::<&str>()
-                            .copied()
-                            .or_else(|| panic_msg.downcast_ref::<String>().map(|s| s.as_str()))
-                            .unwrap_or("(non-string panic)");
-                        format!("agent spawn panicked: {msg}")
-                    } else {
-                        "agent spawn cancelled".to_string()
-                    };
-                    tracing::error!(profile = %profile_name_owned, "{msg}");
-                    crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_owned,
-                        result: Err(msg),
                     }
                 }
             };
@@ -1272,10 +1249,15 @@ impl App {
                     } else {
                         name
                     };
-                    if let Some(handle) =
-                        self.handles.get(self.state.active_agent_idx)
-                    {
-                        handle.rename_session(session_id, title);
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().rename_session(&an, session_id, title);
+                        }
                     }
                 } else if self.state.pending_session_name {
                     // ── Session naming mode (new session) ──
@@ -1285,10 +1267,15 @@ impl App {
                     } else {
                         name
                     };
-                    if let Some(handle) =
-                        self.handles.get(self.state.active_agent_idx)
+                    if let Some(an) = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone())
                     {
-                        handle.create_session(Some(title), None);
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().create_session(&an, Some(title), None);
+                        }
                     }
                 } else {
                     // ── Agent naming mode ──
@@ -1326,10 +1313,15 @@ impl App {
             KeyCode::Char('d') => {
                 // Close the currently selected session.
                 if let Some(id) = self.state.session_picker.selected_id() {
-                    if let Some(handle) =
-                        self.handles.get(self.state.active_agent_idx)
-                    {
-                        handle.close_session(id);
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().close_session(&an, id);
+                        }
                     }
                 }
                 self.state.session_picker.close();
@@ -1356,10 +1348,15 @@ impl App {
             KeyCode::Enter => {
                 // Switch to the selected session.
                 if let Some(id) = self.state.session_picker.selected_id() {
-                    if let Some(handle) =
-                        self.handles.get(self.state.active_agent_idx)
-                    {
-                        handle.switch_session(id);
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().switch_session(&an, id);
+                        }
                     }
                 }
                 self.state.session_picker.close();
@@ -1536,8 +1533,15 @@ impl App {
 
         // Dispatch send_message outside the `ts` borrow.
         if let Some(text) = send_text {
-            if let Some(h) = self.handles.get(active_idx) {
-                h.send_message(text);
+            let name = self
+                .state
+                .sessions
+                .get(active_idx)
+                .map(|s| s.name.clone());
+            if let Some(name) = name {
+                if let Some(host) = self.host.as_ref() {
+                    host.control().send_to(&name, text);
+                }
             }
         }
     }
@@ -1658,8 +1662,15 @@ impl App {
             }
             CommandAction::CancelAgent => {
                 if !matches!(self.state.active_status(), AgentStatus::Idle) {
-                    if let Some(h) = self.handles.get_mut(self.state.active_agent_idx) {
-                        h.cancel();
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().cancel_agent(&an);
+                        }
                     }
                     self.cancel_requested_at = Some(Instant::now());
                 }
@@ -1827,19 +1838,21 @@ impl App {
     /// remains in storage and can be resumed later via the resume picker.
     fn close_active_agent(&mut self) {
         let idx = self.state.active_agent_idx;
-
-        // Shutdown the agent's background task (sends Shutdown + aborts).
-        if let Some(handle) = self.handles.get_mut(idx) {
-            let name = handle.name.clone();
-            handle.shutdown();
-            tracing::info!(agent = %name, idx, "agent leaf closed — background process terminated");
-        } else {
-            tracing::warn!(idx, "close_active_agent: no handle at index");
+        let Some(session) = self.state.sessions.get(idx) else {
+            tracing::warn!(idx, "close_active_agent: no session at index");
             return;
-        }
+        };
+        let name = session.name.clone();
 
-        // Remove handle and UI session in parallel.
-        self.handles.remove(idx);
+        // Shutdown the agent via the host (relay task handles cleanup).
+        if let Some(host) = self.host.as_mut() {
+            host.shutdown_agent(&name);
+        } else {
+            tracing::warn!("close_active_agent: no host available");
+        }
+        tracing::info!(agent = %name, idx, "agent leaf closed — background process terminated");
+
+        // Remove UI session.
         self.state.sessions.remove(idx);
 
         // Adjust active index: clamp to the new last position.
@@ -1848,8 +1861,6 @@ impl App {
         } else if self.state.active_agent_idx >= self.state.sessions.len() {
             self.state.active_agent_idx = self.state.sessions.len() - 1;
         }
-        // If idx was before active_agent_idx, it hasn't changed (elements shifted down).
-        // If idx was active_agent_idx, the clamp above handles it.
 
         self.dirty = true;
     }
@@ -1929,10 +1940,6 @@ impl App {
         };
         let agent_id = agent_session.agent_id;
         let agent_name = agent_session.name.clone();
-        let Some(handle) = self.handles.get(self.state.active_agent_idx) else {
-            tracing::warn!("no handle for active agent");
-            return;
-        };
         // Seed picker with whatever sub_sessions are already known; the
         // SessionList event will refresh the list shortly.
         let initial_items: Vec<crate::widgets::session_picker::PickerSession> =
@@ -1957,19 +1964,24 @@ impl App {
             .session_picker
             .set_sessions(initial_items, active_id);
         // Ask the agent for a fresh list (will arrive via SessionList event).
-        handle.list_sessions();
+        if let Some(host) = self.host.as_ref() {
+            host.control().list_sessions(&agent_name);
+        }
         tracing::info!(agent = %agent_name, "session picker opened");
     }
 
     fn render(&mut self, frame: &mut Frame) {
         // ── Workspace (full screen) ──
-        // Read the model name from the active agent's own model slot (not
-        // the global active_model), so per-agent model switches are reflected.
+        // Read the model name from the active agent's model slot via the
+        // host's agent registry, so per-agent model switches are reflected.
         let model_info = self
-            .handles
+            .state
+            .sessions
             .get(self.state.active_agent_idx)
-            .and_then(|h| h.model_handle().load_full())
-            .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
+            .map(|s| s.name.clone())
+            .and_then(|name| {
+                self.host.as_ref().and_then(|h| h.agent_model_info(&name))
+            })
             .or_else(|| {
                 // Fallback to global model when no agent is active.
                 self.state
@@ -2172,22 +2184,24 @@ impl App {
                 provider_name,
                 model_name,
             } => {
-                // Build the model and apply to the active agent's handle.
+                // Build the model and apply to the active agent via host.
                 let spec = format!("{provider_name}:{model_name}");
                 if let Some(model) = Self::build_model_from_spec(&self.conn, &spec) {
-                    if let Some(handle) = self.handles.get(self.state.active_agent_idx) {
-                        handle.set_model(model);
-                        tracing::info!(
-                            agent_idx = self.state.active_agent_idx,
-                            model = %spec,
-                            "model hot-swapped for active agent"
-                        );
-
-                        // Persist the model spec into the agent's record so it
-                        // survives restarts. We update the `preferred_model`
-                        // field inside the stored `config_json`.
-                        let agent_name = handle.name.clone();
-                        self.persist_agent_model(&agent_name, &spec);
+                    let agent_name = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.clone());
+                    if let Some(an) = agent_name {
+                        if let Some(host) = self.host.as_ref() {
+                            host.control().set_agent_model(&an, model);
+                            tracing::info!(
+                                agent = %an,
+                                model = %spec,
+                                "model hot-swapped for active agent"
+                            );
+                            self.persist_agent_model(&an, &spec);
+                        }
                     }
                 }
                 self.state.model_config_visible = false;

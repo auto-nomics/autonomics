@@ -9,6 +9,7 @@
 //! `oneshot` reply channel; the tool `await`s it.
 
 use agentik_network::{EdgeTrigger, TerminationSpec};
+use agentik_sdk::model::Model;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -163,6 +164,24 @@ impl HostControl {
         });
     }
 
+    // ── Model management ──
+
+    pub fn set_agent_model(&self, name: &str, model: Model) {
+        self.fire(HostCommand::SetAgentModel {
+            name: name.into(),
+            model,
+        });
+    }
+
+    pub async fn agent_model_info(&self, name: &str) -> Option<(String, u64)> {
+        self.ask(|tx| HostCommand::GetAgentModel {
+            name: name.into(),
+            reply_tx: tx,
+        })
+        .await
+        .flatten()
+    }
+
     pub async fn spawn_agent(
         &self,
         name: &str,
@@ -171,6 +190,24 @@ impl HostControl {
         self.ask(|tx| HostCommand::Spawn {
             name: name.into(),
             profile_name: profile_name.into(),
+            reply_tx: tx,
+        })
+        .await
+        .unwrap_or(Err("host command channel closed".into()))
+    }
+
+    /// Spawn and register an agent from a full profile + optional model
+    /// override. Used by the TUI.
+    pub async fn spawn_with_profile(
+        &self,
+        name: &str,
+        profile: agentik_core::AgentProfile,
+        model_override: Option<Model>,
+    ) -> Result<String, String> {
+        self.ask(|tx| HostCommand::SpawnWithProfile {
+            name: name.into(),
+            profile: Box::new(profile),
+            model_override,
             reply_tx: tx,
         })
         .await
@@ -202,12 +239,21 @@ impl HostControl {
 }
 
 /// Commands sent from agent tools to RuntimeHost via [`HostControl`].
-#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum HostCommand {
     /// Spawn and register an agent. Reply: Ok(name) or Err(msg).
     Spawn {
         name: String,
         profile_name: String,
+        reply_tx: oneshot::Sender<Result<String, String>>,
+    },
+
+    /// Spawn and register an agent from a full profile + optional model
+    /// override. Used by the TUI for spawn-from-profile / restore flows.
+    SpawnWithProfile {
+        name: String,
+        profile: Box<agentik_core::AgentProfile>,
+        model_override: Option<Model>,
         reply_tx: oneshot::Sender<Result<String, String>>,
     },
 
@@ -298,6 +344,17 @@ pub enum HostCommand {
         name: String,
         session_id: uuid::Uuid,
         title: String,
+    },
+
+    // ── Model management ──
+
+    /// Hot-swap the model of a named agent.
+    SetAgentModel { name: String, model: Model },
+
+    /// Query model info (name + context length) for a named agent.
+    GetAgentModel {
+        name: String,
+        reply_tx: oneshot::Sender<Option<(String, u64)>>,
     },
 }
 
