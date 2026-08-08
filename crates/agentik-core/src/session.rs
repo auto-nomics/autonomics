@@ -690,6 +690,18 @@ impl Session {
             builder = builder.with_identity(identity);
         }
 
+        // Inject the agent's own metadata so it knows its identity in
+        // multi-agent interactions. The agent uses this name when other
+        // agents delegate tasks to it, and to avoid self-delegation.
+        builder = builder.with_agent_metadata(format!(
+            "## Your Identity\n\
+             Your name is **{}**. \
+             When other agents delegate tasks to you, they address you by this name. \
+             Do not delegate tasks to yourself — use `list_agents` or `route_task` \
+             to find a *different* agent suited for the task.",
+            self.shared.name
+        ));
+
         if let Some(ref extra) = self.shared.system_prompt_section {
             builder = builder.with_extra_section(extra);
         }

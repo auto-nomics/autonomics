@@ -1,16 +1,27 @@
 /// Layers (in order)
 /// 1. Agent identity: specify the role and identity of the agent
-/// 2. SOP: specify the usages, examples of available tools (when to use, how to use).
+/// 2. Agent metadata: the agent's own name, so it knows who it is when
+///    interacting with other agents (delegation, messaging, etc.).
+/// 3. SOP: specify the usages, examples of available tools (when to use, how to use).
 ///    Does NOT include schema of tools (passed directly to LlmClient).
 #[derive(Default)]
 pub struct SystemPromptBuilder {
     identity: String,
+    agent_metadata: String,
     tooluse_guidance: String,
     extra_section: String,
 }
 impl SystemPromptBuilder {
     pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
         self.identity = identity.into();
+        self
+    }
+
+    /// Set the agent metadata section (name, profile description, etc.).
+    /// Inserted between identity and extra_section so the agent always
+    /// knows its own name for multi-agent interactions.
+    pub fn with_agent_metadata(mut self, metadata: impl Into<String>) -> Self {
+        self.agent_metadata = metadata.into();
         self
     }
 
@@ -41,6 +52,10 @@ impl SystemPromptBuilder {
 
         if !self.identity.is_empty() {
             system_prompt.push_str(&self.identity);
+            system_prompt.push('\n');
+        }
+        if !self.agent_metadata.is_empty() {
+            system_prompt.push_str(&self.agent_metadata);
             system_prompt.push('\n');
         }
         if !self.extra_section.is_empty() {
