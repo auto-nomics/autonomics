@@ -217,9 +217,7 @@ pub fn svy_coxph(
         }
         let t = time[i];
         let mut tie_end = idx;
-        let mut d = 0.0;
         while tie_end < n && time[order[tie_end]] == t && event[order[tie_end]] == 1.0 {
-            d += ws[order[tie_end]];
             tie_end += 1;
         }
         // Risk set.
@@ -421,13 +419,13 @@ pub fn svy_survreg(
     let w_k: Vec<f64> = keep.iter().map(|&i| ws[i]).collect();
     let reg = statkit::regression::wls(&x_refs, &y_k, &w_k, false)
         .map_err(|e| SurveyError::InvalidInput(format!("survreg WLS init failed: {e}")))?;
-    let mut beta = reg.coefficients.clone();
+    let beta = reg.coefficients.clone();
 
     // Scale = residual standard deviation (Weibull shape parameter).
     let resid_init: Vec<f64> = y_k.iter().zip(&reg.fitted).map(|(y, f)| y - f).collect();
     let sigma2 = resid_init.iter().zip(&w_k).map(|(r, wi)| r * r * wi).sum::<f64>()
         / w_k.iter().sum::<f64>();
-    let mut scale = sigma2.sqrt();
+    let scale = sigma2.sqrt();
 
     // For simplicity, don't iterate on scale (Weibull AFT with known scale ≈ WLS on log(time)).
     // The design variance uses estfun sandwich.

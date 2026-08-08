@@ -62,7 +62,9 @@ fn default_std_errors() -> String {
     "linearized".to_string()
 }
 
-/// Survey-weighted GLM node — **implemented** (Gaussian / OLS path).
+/// Survey-weighted GLM node — supports all R `glm` families (gaussian,
+/// binomial, poisson, Gamma, inverse.gaussian, quasi families) with
+/// arbitrary link functions, via IRLS + design-based variance.
 #[derive(Clone)]
 pub struct SvyGlmNode {
     meta: NodePorts,
@@ -99,17 +101,18 @@ impl DagNode for SvyGlmNode {
         inputs: &[NodeInput],
         _reporter: &crate::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        // Only Gaussian/OLS path is implemented in Rust.
-        if self.spec.family != "gaussian" {
-            return Err(DagError::NodeError {
-                node_type: "svyglm".into(),
-                msg: format!(
-                    "Rust execution only supports Gaussian family; \
-                     requested family='{}' — use codegen_r to generate R code.",
-                    self.spec.family
-                ),
-            });
-        }
+        // Parse the family + link specification.
+        let family_spec = survey::FamilySpec::new(
+            &self.spec.family,
+            self.spec.link.as_deref(),
+        )
+        .ok_or_else(|| DagError::NodeError {
+            node_type: "svyglm".into(),
+            msg: format!(
+                "unsupported family='{}' link='{:?}'",
+                self.spec.family, self.spec.link
+            ),
+        })?;
 
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyglm".into(),
@@ -130,8 +133,16 @@ impl DagNode for SvyGlmNode {
         let y = super::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let x = super::survey_common::extract_variables(&batches, &self.spec.predictors)?;
 
-        let fit = survey::svyglm_linear(
-            &y[0], &x, &design, self.spec.intercept, None,
+        // Validate response for the chosen family (e.g. binomial needs y in [0,1]).
+        if let Err(msg) = family_spec.validate_y(&y[0]) {
+            return Err(DagError::NodeError {
+                node_type: "svyglm".into(),
+                msg,
+            });
+        }
+
+        let fit = survey::svyglm(
+            &y[0], &x, &design, self.spec.intercept, None, &family_spec, None,
         )
         .map_err(|e| DagError::NodeError {
             node_type: "svyglm".into(),
@@ -142,23 +153,8 @@ impl DagNode for SvyGlmNode {
         let p = fit.coefficients.len();
         let se = fit.se();
         let t_stats = fit.t_stats();
-        // Two-sided p-value from t-distribution: use approximation
-        // p ≈ 2 * pt(-|t|, df) — use statrs if available, otherwise
-        // large-sample normal approximation.
+        let p_values = fit.p_values();
         let df = fit.df as f64;
-        let p_values: Vec<f64> = t_stats
-            .iter()
-            .map(|&t| {
-                if df > 30.0 {
-                    // Normal approximation: 2 * (1 - Φ(|t|))
-                    2.0 * (1.0 - normal_cdf(t.abs()))
-                } else {
-                    // Student-t: approximate via 2 * (1 - Φ(|t| * (df-2)/df))
-                    // crude; for >30 df the normal approximation suffices.
-                    2.0 * (1.0 - normal_cdf(t.abs()))
-                }
-            })
-            .collect();
 
         let term_names: Vec<String> = if self.spec.intercept {
             let mut names = vec!["(Intercept)".to_string()];
@@ -209,12 +205,6 @@ impl DagNode for SvyGlmNode {
         res.insert(0, df_out);
         Ok(res)
     }
-}
-
-/// Crude standard normal CDF for two-sided p-values.
-fn normal_cdf(x: f64) -> f64 {
-    use statrs::distribution::{ContinuousCDF, Normal};
-    Normal::new(0.0, 1.0).unwrap().cdf(x)
 }
 
 pub struct SvyGlmFactory;

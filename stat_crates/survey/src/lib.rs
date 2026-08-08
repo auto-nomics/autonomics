@@ -27,6 +27,7 @@ pub mod calibrate;
 pub mod design;
 pub mod describe;
 pub mod error;
+pub mod family;
 pub mod model;
 pub mod nonlinear;
 pub mod survival;
@@ -37,7 +38,8 @@ pub use calibrate::{calibrate_linear, post_stratify, rake, svy_standardize, trim
 pub use design::{LonelyPsu, SurveyDesign, SurveyDesignBuilder};
 pub use describe::{svy_ciprop, svy_quantile, svy_ranktest, svycontrast, svymean, svyratio, svytotal, svyvar, svy_ttest_onesample, svy_ttest_twosample, Contrast, SurveyStat, SvyRankTest, SvyTtest};
 pub use error::{Result, SurveyError};
-pub use model::{reg_term_test, svyglm_linear, RegTermTest, SvyGlmFit};
+pub use family::{Family, FamilySpec, Link};
+pub use model::{reg_term_test, svyglm, svyglm_linear, RegTermTest, SvyGlmFit};
 pub use nonlinear::{svy_nls, svy_ivreg, svy_olr, svy_loglin, SvyNlsFit, SvyIvregFit, SvyOlrFit, SvyLoglinFit};
 pub use survival::{svy_km, svy_coxph, svy_logrank, svy_survreg, SvyKm, SvyCoxphFit, SvyLogrankTest, SvySurvregFit};
 pub use test::{svy_chisq, SvyChisq};
