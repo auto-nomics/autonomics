@@ -1,8 +1,20 @@
 //! Agent resume picker — standalone widget for listing and restoring
 //! previously registered agents with their conversation history.
 //!
-//! Built on top of the generic [`Popup`](super::popup::Popup) container, but
-//! self-contained: state + rendering + key handling all live here.
+//! Agents are displayed as a **collapsible tree** based on their
+//! [`AgentPath`](agentik_types::AgentPath) hierarchical paths:
+//!
+//! ```text
+//! ▼ root
+//!   ├─ ● researcher        (agent leaf)
+//!   ├─ ▼ analyst            (expanded folder)
+//!   │   └─ ● worker         (agent leaf)
+//!   └─ ● writer             (agent leaf)
+//! ```
+//!
+//! Built on top of the generic [`Popup`](super::popup::Popup) container.
+
+use std::collections::HashSet;
 
 use agentik_core::storage::AgentRecord;
 use ratatui::{
@@ -15,6 +27,10 @@ use ratatui::{
 
 use crate::widgets::popup::Popup;
 
+// ═══════════════════════════════════════════════════════════════════════
+// Data types
+// ═══════════════════════════════════════════════════════════════════════
+
 /// One selectable agent record entry.
 #[derive(Clone)]
 pub struct AgentRecordItem {
@@ -26,6 +42,27 @@ pub struct AgentRecordItem {
     pub config_json: serde_json::Value,
 }
 
+/// One visible row in the tree — either a collapsible folder or a leaf agent.
+#[derive(Clone, Debug)]
+struct TreeNode {
+    /// Full path of this node (e.g. `/root/researcher`).
+    path: String,
+    /// Short name — last path segment.
+    name: String,
+    /// Depth in the tree (0 = root).
+    depth: usize,
+    /// `true` if this is a leaf (an actual agent record).
+    is_leaf: bool,
+    /// Agent record index, if this is a leaf.
+    item_idx: Option<usize>,
+    /// `true` if this folder is currently expanded.
+    expanded: bool,
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════
+
 /// State for the agent resume picker.
 #[derive(Default)]
 pub struct AgentPickerState {
@@ -34,8 +71,11 @@ pub struct AgentPickerState {
     pub query: String,
     /// All registered agents (loaded from storage).
     items: Vec<AgentRecordItem>,
-    /// Indices into `items` that match the current query.
-    filtered: Vec<usize>,
+    /// Flat list of tree rows in display order (only visible / non-collapsed
+    /// nodes).  Rebuilt whenever the tree or collapse state changes.
+    rows: Vec<TreeNode>,
+    /// Set of folder paths that are collapsed by the user.
+    collapsed: HashSet<String>,
     selected: usize,
     list_state: ListState,
     /// When `Some`, a delete confirmation is in progress for this agent ID.
@@ -45,27 +85,13 @@ pub struct AgentPickerState {
     pub delete_confirm_input: String,
 }
 
-// impl Default for AgentPickerState {
-//     fn default() -> Self {
-//         Self {
-//             visible: false,
-//             query: String::new(),
-//             items: Vec::new(),
-//             filtered: Vec::new(),
-//             selected: 0,
-//             list_state: ListState::default(),
-//             delete_confirm_id: None,
-//             delete_confirm_input: String::new(),
-//         }
-//     }
-// }
-
 impl AgentPickerState {
     pub fn open(&mut self) {
         self.visible = true;
         self.query.clear();
+        self.collapsed.clear();
         self.selected = 0;
-        self.refilter();
+        self.rebuild_rows();
     }
 
     pub fn close(&mut self) {
@@ -74,7 +100,8 @@ impl AgentPickerState {
         self.delete_confirm_input.clear();
     }
 
-    /// Enter delete confirmation mode for the currently selected agent.
+    // ── Delete confirmation ──
+
     pub fn start_delete_confirm(&mut self) {
         if let Some(item) = self.selected_item() {
             self.delete_confirm_id = Some(item.id);
@@ -82,14 +109,11 @@ impl AgentPickerState {
         }
     }
 
-    /// Cancel delete confirmation.
     pub fn cancel_delete(&mut self) {
         self.delete_confirm_id = None;
         self.delete_confirm_input.clear();
     }
 
-    /// Check if the typed confirmation matches "yes". Returns the agent ID
-    /// if confirmed, consuming the confirmation state.
     pub fn check_delete_confirm(&mut self) -> Option<uuid::Uuid> {
         if self.delete_confirm_input.trim().eq_ignore_ascii_case("yes") {
             let id = self.delete_confirm_id.take();
@@ -100,21 +124,24 @@ impl AgentPickerState {
         }
     }
 
-    /// Remove an agent from the local list (after successful DB deletion).
     pub fn remove_by_id(&mut self, id: uuid::Uuid) {
         self.items.retain(|i| i.id != id);
-        self.refilter();
+        self.rebuild_rows();
     }
+
+    // ── Search ──
 
     pub fn push_char(&mut self, c: char) {
         self.query.push(c);
-        self.refilter();
+        self.rebuild_rows();
     }
 
     pub fn pop_char(&mut self) {
         self.query.pop();
-        self.refilter();
+        self.rebuild_rows();
     }
+
+    // ── Navigation ──
 
     pub fn move_up(&mut self) {
         if self.selected > 0 {
@@ -124,23 +151,42 @@ impl AgentPickerState {
     }
 
     pub fn move_down(&mut self) {
-        let max = self.filtered.len().saturating_sub(1);
+        let max = self.rows.len().saturating_sub(1);
         if self.selected < max {
             self.selected += 1;
         }
         self.sync_list_state();
     }
 
-    /// Returns a clone of the currently selected item, if any.
+    /// Expand or collapse the folder at the current cursor position.
+    /// No-op on leaf nodes.
+    pub fn toggle_expand(&mut self) {
+        if let Some(node) = self.rows.get(self.selected) {
+            if !node.is_leaf {
+                if self.collapsed.contains(&node.path) {
+                    self.collapsed.remove(&node.path);
+                } else {
+                    self.collapsed.insert(node.path.clone());
+                }
+                self.rebuild_rows();
+            }
+        }
+    }
+
+    /// Returns a clone of the currently selected agent item, if the cursor
+    /// is on a leaf row.
     pub fn selected_item(&self) -> Option<AgentRecordItem> {
-        let &idx = self.filtered.get(self.selected)?;
+        let node = self.rows.get(self.selected)?;
+        let idx = node.item_idx?;
         self.items.get(idx).cloned()
     }
 
-    /// Number of items currently displayed (post-filter).
+    /// Number of rows currently displayed.
     pub fn filtered_len(&self) -> usize {
-        self.filtered.len()
+        self.rows.len()
     }
+
+    // ── Data ──
 
     /// Populate the picker from agent records.
     pub fn set_records(&mut self, records: &[AgentRecord]) {
@@ -153,12 +199,14 @@ impl AgentPickerState {
                 config_json: r.config_json.clone(),
             })
             .collect();
-        self.refilter();
+        self.rebuild_rows();
     }
+
+    // ── Internal ──
 
     fn sync_list_state(&mut self) {
         self.list_state.select(
-            if self.filtered.is_empty() || self.selected >= self.filtered.len() {
+            if self.rows.is_empty() || self.selected >= self.rows.len() {
                 None
             } else {
                 Some(self.selected)
@@ -166,26 +214,185 @@ impl AgentPickerState {
         );
     }
 
-    fn refilter(&mut self) {
+    /// Rebuild the flat `rows` vector from `items`, honoring:
+    /// - Collapse state (collapsed folders hide their children)
+    /// - Search filter (matching agents are shown, ancestors auto-expanded)
+    fn rebuild_rows(&mut self) {
         let needle = self.query.trim().to_lowercase();
-        if needle.is_empty() {
-            self.filtered = (0..self.items.len()).collect();
+
+        // Determine which agent indices match the search filter.
+        let matching: Option<HashSet<usize>> = if needle.is_empty() {
+            None // no filter — all agents visible
         } else {
-            self.filtered = self
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| item.name.to_lowercase().contains(&needle))
-                .map(|(i, _)| i)
-                .collect();
+            Some(
+                self.items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| {
+                        item.name.to_lowercase().contains(&needle)
+                    })
+                    .map(|(i, _)| i)
+                    .collect(),
+            )
+        };
+
+        // Collect all paths (including intermediate folders) from agent names.
+        // Each agent name is a full AgentPath like `/root/researcher/worker`.
+        let agent_paths: Vec<(usize, Vec<String>)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                matching
+                    .as_ref()
+                    .map(|m| m.contains(i))
+                    .unwrap_or(true)
+            })
+            .map(|(i, item)| {
+                let segments: Vec<String> = item
+                    .name
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect();
+                (i, segments)
+            })
+            .collect();
+
+        // When filtering, force-expand all folders that lead to matches.
+        let mut force_expand: HashSet<String> = HashSet::new();
+        if let Some(ref matches) = matching {
+            for (_, segs) in &agent_paths {
+                let mut acc = String::new();
+                for seg in segs {
+                    if !acc.is_empty() {
+                        acc.push('/');
+                    }
+                    acc.push_str(seg);
+                    force_expand.insert(acc.clone());
+                }
+            }
+            let _ = matches; // suppress unused warning
         }
-        self.selected = 0;
+
+        // Build the tree. We use a simple recursive approach: collect all
+        // unique prefixes, then emit them in sorted order.
+        let mut rows = Vec::new();
+
+        // Special case: if there's only one top-level group and it's `root`,
+        // we still show it as a collapsible node.
+        // Group agent paths by their parent chain and emit in order.
+        build_tree(&agent_paths, &self.collapsed, &force_expand, &mut rows, 0);
+
+        self.rows = rows;
+        // Clamp selection.
+        if self.selected >= self.rows.len() {
+            self.selected = self.rows.len().saturating_sub(1);
+        }
+        // If we had a selection and the list didn't change much, try to
+        // keep it stable. Otherwise, reset to first leaf.
         self.sync_list_state();
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Tree builder
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Recursively build the visible `rows` list from agent paths.
+///
+/// - `entries`: `(item_idx, segments)` for each agent.
+/// - `collapsed`: user-collapsed folder paths.
+/// - `force_expand`: paths that must be expanded (search-match ancestors).
+fn build_tree(
+    entries: &[(usize, Vec<String>)],
+    collapsed: &HashSet<String>,
+    force_expand: &HashSet<String>,
+    rows: &mut Vec<TreeNode>,
+    depth: usize,
+) {
+    // Collect unique child segments at this depth.
+    // Each entry: (segment, full_path, child_entries)
+    // A child can be either a leaf (the full path matches an agent) or
+    // an intermediate folder.
+    let mut seen: Vec<(String, String, Vec<(usize, Vec<String>)>)> = Vec::new();
+
+    for &(item_idx, ref segs) in entries {
+        if depth >= segs.len() {
+            continue;
+        }
+        let segment = segs[depth].clone();
+        let mut full_path = String::new();
+        for s in &segs[..=depth] {
+            if !full_path.is_empty() {
+                full_path.push('/');
+            }
+            full_path.push_str(s);
+        }
+
+        // Find or create the group.
+        let pos = seen.iter().position(|(s, _, _)| s == &segment);
+        let idx = match pos {
+            Some(i) => i,
+            None => {
+                seen.push((segment.clone(), full_path.clone(), Vec::new()));
+                seen.len() - 1
+            }
+        };
+
+        // Pass remaining segments to children.
+        if depth + 1 <= segs.len() {
+            seen[idx].2.push((item_idx, segs.clone()));
+        }
+    }
+
+    for (segment, full_path, children) in &seen {
+        // Is this node a leaf? It's a leaf if any entry's segments end here.
+        let leaf_entry = children.iter().find(|(_, segs)| segs.len() == depth + 1);
+
+        let is_leaf = leaf_entry.is_some();
+        let item_idx = leaf_entry.map(|(idx, _)| *idx);
+
+        // Intermediate children (depth+1 onward).
+        let deeper_children: Vec<(usize, Vec<String>)> = children
+            .iter()
+            .filter(|(_, segs)| segs.len() > depth + 1)
+            .cloned()
+            .collect();
+
+        let has_children = !deeper_children.is_empty();
+        let is_collapsed = collapsed.contains(full_path)
+            && !force_expand.contains(full_path);
+        let expanded = !is_collapsed;
+
+        rows.push(TreeNode {
+            path: full_path.clone(),
+            name: segment.clone(),
+            depth,
+            is_leaf,
+            item_idx,
+            expanded: has_children && expanded,
+        });
+
+        // Recurse into children if expanded.
+        if has_children && expanded {
+            build_tree(
+                &deeper_children,
+                collapsed,
+                force_expand,
+                rows,
+                depth + 1,
+            );
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Widget
+// ═══════════════════════════════════════════════════════════════════════
+
 /// Standalone widget that renders the agent resume picker as a centered popup
-/// with two blocks: a searchable agent list (left) and a preview pane (right).
+/// with two blocks: a tree agent list (left) and a preview pane (right).
 pub struct AgentPicker {
     pub accent: Color,
     /// Width of the popup (0 = auto, ~80% of frame).
@@ -199,7 +406,7 @@ impl AgentPicker {
         Self {
             accent: Color::Green,
             popup_width: 0,
-            list_width: 28,
+            list_width: 32,
         }
     }
 
@@ -238,18 +445,18 @@ impl StatefulWidget for AgentPicker {
             .width(self.popup_width);
         let inner = popup.render(area, buf);
 
-        // Top-level vertical: search row (1) + content row (rest) + footer (1).
+        // Top-level vertical: search row (1) + separator (1) + content (rest) + footer (1).
         let v_regions = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Length(1), // seperate line
+                Constraint::Length(1), // separator line
                 Constraint::Min(3),
                 Constraint::Length(1),
             ])
             .split(inner);
 
-        // ── Search input row (spans both blocks) ──
+        // ── Search input row ──
         let input_line = if state.query.is_empty() {
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(Color::DarkGray)),
@@ -263,7 +470,10 @@ impl StatefulWidget for AgentPicker {
         } else {
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(self.accent)),
-                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
+                Span::styled(
+                    state.query.clone(),
+                    Style::default().fg(Color::White),
+                ),
             ])
         };
         Widget::render(Paragraph::new(input_line), v_regions[0], buf);
@@ -279,7 +489,10 @@ impl StatefulWidget for AgentPicker {
         // ── Content area: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
+            .constraints([
+                Constraint::Length(self.list_width),
+                Constraint::Min(10),
+            ])
             .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
@@ -287,13 +500,17 @@ impl StatefulWidget for AgentPicker {
 
         // ── Footer ──
         let hint = if state.delete_confirm_id.is_some() {
-            let item_name = state.selected_item().map(|i| i.name).unwrap_or_default();
+            let item_name = state
+                .selected_item()
+                .map(|i| i.name)
+                .unwrap_or_default();
             format!(
-                " Type 'yes' to delete '{}' (case-insensitive)  Enter confirm  Esc cancel",
+                " Type 'yes' to delete '{}'  Enter confirm  Esc cancel",
                 item_name
             )
         } else {
-            " Enter resume  Ctrl+D delete (yes)  ↑↓ navigate  Esc cancel".to_string()
+            " Enter resume  →/← expand/fold  Ctrl+D delete  ↑↓ navigate  Esc cancel"
+                .to_string()
         };
         let p = Paragraph::new(hint).style(
             Style::default()
@@ -302,7 +519,7 @@ impl StatefulWidget for AgentPicker {
         );
         Widget::render(p, v_regions[3], buf);
 
-        // ── Delete confirmation overlay (small inline prompt at bottom of preview) ──
+        // ── Delete confirmation overlay ──
         if state.delete_confirm_id.is_some() {
             let confirm_area = Rect {
                 x: h_regions[1].x,
@@ -330,9 +547,8 @@ impl StatefulWidget for AgentPicker {
 }
 
 impl AgentPicker {
-    /// Render the left block: list of agents.
+    /// Render the left block: tree of agents.
     fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut AgentPickerState) {
-        // Block title.
         let block = Block::default()
             .borders(Borders::RIGHT)
             .border_style(Style::default().fg(Color::DarkGray))
@@ -345,7 +561,7 @@ impl AgentPicker {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if state.filtered.is_empty() {
+        if state.rows.is_empty() {
             let line = Line::from(Span::styled(
                 "  No agents found.",
                 Style::default().fg(Color::DarkGray),
@@ -361,26 +577,57 @@ impl AgentPicker {
         }
 
         let items: Vec<ListItem> = state
-            .filtered
+            .rows
             .iter()
             .enumerate()
-            .map(|(sel_i, &item_i)| {
-                let item = &state.items[item_i];
+            .map(|(sel_i, node)| {
                 let is_selected = sel_i == state.selected;
-                let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(self.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
+                let indent = "  ".repeat(node.depth);
 
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled("● ", Style::default().fg(self.accent)),
-                    Span::styled(item.name.clone(), style),
-                ])
+                if node.is_leaf {
+                    // Leaf agent — show with a colored bullet.
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(self.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    Line::from(vec![
+                        Span::styled(indent, Style::default()),
+                        Span::styled("● ", Style::default().fg(self.accent)),
+                        Span::styled(node.name.clone(), style),
+                    ])
+                } else {
+                    // Folder — show expand/collapse arrow.
+                    let arrow = if node.expanded { "▼" } else { "▶" };
+                    let folder_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(self.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    let name_style = if is_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(self.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::DIM)
+                    };
+                    Line::from(vec![
+                        Span::styled(indent, Style::default()),
+                        Span::styled(format!("{arrow} "), folder_style),
+                        Span::styled(node.name.clone(), name_style),
+                    ])
+                }
             })
             .map(ListItem::new)
             .collect();
@@ -406,8 +653,19 @@ impl AgentPicker {
         block.render(area, buf);
 
         let Some(item) = state.selected_item() else {
+            // Show folder info or "no agent selected".
+            let node = state.rows.get(state.selected);
+            let msg = if let Some(n) = node {
+                if n.is_leaf {
+                    "  No agent selected.".to_string()
+                } else {
+                    format!("  Folder: {}\n  Path: {}", n.name, n.path)
+                }
+            } else {
+                "  No agent selected.".to_string()
+            };
             let line = Line::from(Span::styled(
-                "  No agent selected.",
+                msg,
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::DIM),
@@ -424,7 +682,7 @@ impl AgentPicker {
 
         let mut lines: Vec<Line> = Vec::new();
 
-        // Name.
+        // Name (full path).
         lines.push(Line::from(vec![
             Span::styled("  Name      ", Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -461,7 +719,6 @@ impl AgentPicker {
                 .add_modifier(Modifier::BOLD),
         )));
 
-        // Pretty-print config_json, one line per key.
         if let Some(obj) = item.config_json.as_object() {
             for (key, val) in obj {
                 let val_str = match val {
