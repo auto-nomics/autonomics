@@ -86,9 +86,7 @@ fn convert_golden_best(gf: &GoldenFit, layout: &ParamLayout) -> Vec<f64> {
     if gf.idiag == 0 && nvc > 0 {
         // Full: cholesky has nea*(nea+1)/2 entries, same packed order as Fortran.
         // Directly replace the varcov section.
-        for k in 0..nvc {
-            b[i_nvc + k] = gf.cholesky[k];
-        }
+        b[i_nvc..i_nvc + nvc].copy_from_slice(&gf.cholesky[..nvc]);
     } else if gf.idiag == 1 && nvc > 0 {
         // Diagonal: cholesky has nea*(nea+1)/2 entries (with zeros off-diagonal).
         // Extract the diagonal positions: j*(j+1)/2 + j for j=0..nea-1.
@@ -265,7 +263,7 @@ fn m2a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![
         vec![1.0; n], csv.time.clone(), csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
-        csv.x2.iter().map(|&v| v).collect(),
+        csv.x2.to_vec(),
         csv.x3.clone(),
     ];
     let data = build_longdata(csv, 6, &x0, 2);
@@ -289,7 +287,7 @@ fn m3a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![
         vec![1.0; n], csv.time.clone(), csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
-        csv.x2.iter().map(|&v| v).collect(),
+        csv.x2.to_vec(),
         csv.x3.clone(),
     ];
     let data = build_longdata(csv, 6, &x0, 3);

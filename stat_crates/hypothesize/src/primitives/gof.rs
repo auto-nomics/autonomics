@@ -254,7 +254,7 @@ fn ks_asymptotic_two_sided(lambda: f64) -> f64 {
             break;
         }
     }
-    sum.max(0.0).min(1.0)
+    sum.clamp(0.0, 1.0)
 }
 
 // ─── Shapiro–Wilk normality test ────────────────────────────────────────────

@@ -294,9 +294,7 @@ impl<'a> HlmeLikelihood<'a> {
                 pi[g - 1] *= pi[ng - 1];
             }
         } else {
-            for v in &mut pi {
-                *v = 1.0;
-            }
+            pi.fill(1.0);
         }
 
         // Multiply by pprior (default all 1.0).

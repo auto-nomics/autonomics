@@ -73,22 +73,16 @@ pub fn marq_lev_alg<O: Objective>(
 
     let nfmax = m * (m + 1) / 2;
     let th = 1e-5_f64;
-    let ep = 1e-20_f64;
-
     let mut b = b0.to_vec();
     let mut ca = ctrl.epsa + 1.0;
     let mut cb = ctrl.epsb + 1.0;
-    let mut dd = ctrl.epsd + 1.0;
     let mut rl1 = -1e10_f64;
     let mut ni = 0_usize;
     let mut istop = 0_i32;
     let mut da = 1e-2_f64;
     let dm = 5.0_f64;
-    let mut old_dd = dd;
+    let mut old_dd = ctrl.epsd + 1.0;
     let mut old_b = b.clone();
-    let mut old_rl: f64 = 0.0;
-    let mut old_ca = 1.0_f64;
-    let mut old_cb = 1.0_f64;
     let gonflencountmax = 10_i32;
     let mut v_final: Vec<f64> = vec![0.0; m * (m + 1) / 2];
 
@@ -101,7 +95,6 @@ pub fn marq_lev_alg<O: Objective>(
                 );
             }
             istop = 4;
-            rl1 = -1e9;
             break;
         }
 
@@ -130,12 +123,10 @@ pub fn marq_lev_alg<O: Objective>(
                 eprintln!("mla: infinite function value with finite parameters");
             }
             istop = 4;
-            rl1 = -1e9;
             break;
         }
 
         rl1 = rl;
-        dd = 0.0;
 
         // Invert the Hessian (packed upper) to compute RDM. If singular, dd is
         // set above threshold to force another iteration.
@@ -145,15 +136,13 @@ pub fn marq_lev_alg<O: Objective>(
             None => (fu_int.clone(), -1_i32),
         };
 
-        if ier != -1 {
+        let dd = if ier != -1 {
             let grad = &v_packed[nfmax..nfmax + m];
-            dd = ghg(&hinv_packed, grad, m) / m as f64;
-            if dd.is_nan() {
-                dd = ctrl.epsd + 1.0;
-            }
+            let dd = ghg(&hinv_packed, grad, m) / m as f64;
+            if dd.is_nan() { ctrl.epsd + 1.0 } else { dd }
         } else {
-            dd = ctrl.epsd + 1.0;
-        }
+            ctrl.epsd + 1.0
+        };
 
         if ctrl.verbose {
             eprintln!(
@@ -162,9 +151,6 @@ pub fn marq_lev_alg<O: Objective>(
         }
 
         old_b = b.clone();
-        old_rl = rl;
-        old_ca = ca;
-        old_cb = cb;
         if dd <= old_dd {
             old_dd = dd;
         }
@@ -174,7 +160,6 @@ pub fn marq_lev_alg<O: Objective>(
         }
 
         // ---- Compute Marquardt-damped step --------------------------------
-        let _tr: f64 = (0..m).map(|i| v_packed[i * (i + 1) / 2 / 1 + 0].abs()).sum::<f64>() / m as f64;
         // NB: Fortran `tr = sum(|v[ii]|)/m` where ii = i*(i+1)/2 (1-indexed).
         // In 0-indexed packed: ii0 = i*(i+1)/2 for i in 0..m (diagonal entries).
         let tr: f64 = (0..m).map(|i| v_packed[i * (i + 1) / 2].abs()).sum::<f64>() / m as f64;
@@ -182,10 +167,7 @@ pub fn marq_lev_alg<O: Objective>(
         let mut ncount = 0_i32;
         let mut ga = 0.01_f64;
         let delta;
-        let mut damped_packed_final: Vec<f64> = Vec::new();
-
         // dchole-equivalent: add Marquardt damping to diagonal, factor, solve.
-        let mut idpos;
         let mut damped_packed;
         loop {
             damped_packed = v_packed[..nfmax].to_vec();
@@ -199,15 +181,9 @@ pub fn marq_lev_alg<O: Objective>(
                 }
             }
             // Solve (H + D) · delta = -grad via Cholesky.
-            match solve_damped(&damped_packed, &v_packed[nfmax..nfmax + m], m) {
-                Some(d) => {
-                    idpos = 0;
-                    delta = d;
-                    break;
-                }
-                None => {
-                    idpos = 1;
-                }
+            if let Some(d) = solve_damped(&damped_packed, &v_packed[nfmax..nfmax + m], m) {
+                delta = d;
+                break;
             }
             ncount += 1;
             if ncount <= 3 || ga >= 1.0 {
@@ -224,13 +200,10 @@ pub fn marq_lev_alg<O: Objective>(
                 // H) in this situation. We keep the current b and break.
                 istop = 3;
                 v_final = damped_packed.clone();
-                damped_packed_final = damped_packed.clone();
                 delta = vec![0.0; m];
-                idpos = 0;
                 break;
             }
         }
-        let _ = idpos;
 
         // istop=3: damping exhausted (partial H), break out of main loop.
         if istop == 3 {
@@ -284,15 +257,13 @@ pub fn marq_lev_alg<O: Objective>(
             b = (0..m).map(|i| b[i] + delta_ls[i]).collect();
             ni += 1;
             rl1 = rl_ls;
-            da = (dm - 3.0) * da;
+            da *= dm - 3.0;
             if ni >= ctrl.maxiter {
                 istop = 2;
                 v_final = damped_packed;
                 break;
             }
         }
-        // Suppress unused-warning while keeping the loop readable.
-        let _ = (nfmax, ep, old_ca, old_cb);
     }
 
     if !(2..=4).contains(&istop) {
@@ -306,7 +277,7 @@ pub fn marq_lev_alg<O: Objective>(
         fn_value,
         istop,
         niter: ni,
-        gconv: [old_ca, old_cb, old_dd],
+        gconv: [ca, cb, old_dd],
     })
 }
 
@@ -428,15 +399,11 @@ fn searpas<F: Fn(&[f64]) -> f64>(
         let vlw_prev = vlw1;
         let mut vlw1c = vlw2;
         vlw2 = vlw_prev;
-        let fim = fi1;
-        fi1 = fi2;
-        fi2 = fim;
-        let mut fi3 = 0.0;
-        let mut vlw3 = 0.0;
+        std::mem::swap(&mut fi1, &mut fi2);
+        let mut fi3;
         let mut out_vm = vlw2;
         let mut out_fim = fi2;
         for _ in 0..40 {
-            vlw3 = vlw2;
             vlw2 = vlw1c;
             fi3 = fi2;
             fi2 = fi1;

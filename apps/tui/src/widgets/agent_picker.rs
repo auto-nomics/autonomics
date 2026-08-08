@@ -236,6 +236,7 @@ impl StatefulWidget for AgentPicker {
         let popup = Popup::new(" Resume Agent ")
             .accent(self.accent)
             .width(self.popup_width);
+        let outer = popup.outer_rect(area);
         let inner = popup.render(area, buf);
 
         // Top-level vertical: search row (1) + content row (rest) + footer (1).
@@ -268,11 +269,18 @@ impl StatefulWidget for AgentPicker {
         };
         Widget::render(Paragraph::new(input_line), v_regions[0], buf);
 
+        // Separator spans the full popup width so it joins the left/right
+        // borders with no gap.
         Widget::render(
             Block::default()
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(Color::DarkGray)),
-            v_regions[1],
+            Rect {
+                x: outer.x,
+                y: outer.y + 2, // top border (1) + search row (1)
+                width: outer.width,
+                height: 1,
+            },
             buf,
         );
 
