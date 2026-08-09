@@ -89,6 +89,8 @@ pub enum ChatLine {
         name: String,
     },
     Error(String),
+    /// The user intentionally interrupted the current turn.
+    Cancelled,
     /// A retryable error occurred; the agent is backing off before retrying.
     RetryableError {
         message: String,
@@ -518,6 +520,17 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 .tool_tasks
                 .retain(|t| matches!(t.status, ToolTaskStatus::Running));
             state.push_line(ChatLine::Separator);
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
+        }
+        AgentEvent::TurnAborted => {
+            // User-initiated cancel. Distinct from Error — display a
+            // neutral "cancelled" indicator, not a red error.
+            state
+                .tool_tasks
+                .retain(|t| matches!(t.status, ToolTaskStatus::Running));
+            state.push_line(ChatLine::Cancelled);
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }

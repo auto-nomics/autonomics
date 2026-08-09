@@ -49,7 +49,19 @@ fn content_block_to_param(block: ContentBlock) -> ContentBlockParam {
             signature,
         },
         ContentBlock::Image { source } => ContentBlockParam::Image { source },
-        ContentBlock::ToolUse { id, name, input } => ContentBlockParam::ToolUse { id, name, input },
+        ContentBlock::ToolUse { id, name, input } => {
+            // Ensure input is a valid JSON object (dictionary). Some providers
+            // (e.g. GLM) may emit tool_use blocks where the streaming JSON
+            // accumulation failed to parse, leaving a String/Null instead of
+            // an object. Replaying such blocks to another model triggers
+            // "Input should be a valid dictionary" API errors.
+            let input = if input.is_object() {
+                input
+            } else {
+                serde_json::Value::Object(serde_json::Map::new())
+            };
+            ContentBlockParam::ToolUse { id, name, input }
+        }
         ContentBlock::ToolResult {
             tool_use_id,
             content,
@@ -62,21 +74,28 @@ fn content_block_to_param(block: ContentBlock) -> ContentBlockParam {
     }
 }
 
-fn message_to_content(msg: Message) -> MessageContent {
+fn message_to_content(msg: Message, preserve_thinking: bool) -> MessageContent {
     MessageContent::Blocks(
         msg.content
             .into_iter()
             // Drop thinking blocks with empty signatures — some providers
             // (ZAI, MiniMax) don't support signed thinking and choke on
             // the empty value, returning empty responses or errors.
+            //
+            // HOWEVER, when thinking is actively enabled for the current
+            // model (e.g. GLM-5.2 in thinking mode), providers require
+            // prior thinking blocks to be passed back unconditionally —
+            // stripping them causes a "content[].thinking must be passed
+            // back" API error and breaks multi-turn conversations.
             .filter(|block| {
-                !matches!(
-                    block,
-                    ContentBlock::Thinking {
-                        signature,
-                        ..
-                    } if signature.is_empty()
-                )
+                preserve_thinking
+                    || !matches!(
+                        block,
+                        ContentBlock::Thinking {
+                            signature,
+                            ..
+                        } if signature.is_empty()
+                    )
             })
             .map(content_block_to_param)
             .collect(),
@@ -98,8 +117,9 @@ impl ApiClient for AnthropicApiClient {
             .unwrap_or(u32::MAX);
         let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
 
+        let preserve_thinking = model_info.thinking_enabled;
         for msg in &messages {
-            let content = message_to_content(msg.clone());
+            let content = message_to_content(msg.clone(), preserve_thinking);
             builder = match msg.role {
                 Role::User => builder.message(Role::User, content),
                 Role::Assistant => builder.message(Role::Assistant, content),
@@ -126,8 +146,9 @@ impl ApiClient for AnthropicApiClient {
             .unwrap_or(u32::MAX);
         let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
 
+        let preserve_thinking = model_info.thinking_enabled;
         for msg in &messages {
-            let content = message_to_content(msg.clone());
+            let content = message_to_content(msg.clone(), preserve_thinking);
             builder = match msg.role {
                 Role::User => builder.message(Role::User, content),
                 Role::Assistant => builder.message(Role::Assistant, content),

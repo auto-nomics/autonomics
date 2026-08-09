@@ -418,10 +418,10 @@ impl Session {
             let result = tokio::select! {
                 biased;
                 _ = cancelled.cancelled() => {
+                    // User-initiated cancel: patch orphaned tool_use blocks,
+                    // then let the post-loop cleanup handle lifecycle +
+                    // conversation marker + event emission.
                     self.patch_orphaned_tool_use().await;
-                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
-                    self.persist_snapshot().await;
-                    self.shared.send_event(AgentEvent::Error("Task cancelled by user".into()));
                     was_cancelled = true;
                     break;
                 }
@@ -533,10 +533,19 @@ impl Session {
         }
 
         // Post-loop cleanup: ensure lifecycle reaches a terminal state.
-        if was_cancelled && self.lifecycle.is_running() {
-            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
-            self.shared
-                .send_event(AgentEvent::Error("Task cancelled by user".into()));
+        if was_cancelled {
+            // User-initiated cancel (Ctrl+C). This is NOT an error — the
+            // agent didn't fail, the user chose to stop. Transition to
+            // Cancelled, inject a conversation marker so the LLM knows the
+            // previous turn was interrupted, and emit TurnAborted.
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
+            self.persist_snapshot().await;
+            let _ = self.memory.remember(Message::user(
+                "[interrupted] The user interrupted the previous turn on purpose. \
+                 Any tool calls may have been partially executed. \
+                 Background tasks may still be running.",
+            ));
+            self.shared.send_event(AgentEvent::TurnAborted);
         } else if self.lifecycle.is_running() {
             // Loop exited via max_iterations or session management event.
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);

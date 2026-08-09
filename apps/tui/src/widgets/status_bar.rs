@@ -40,6 +40,7 @@ impl Widget for StatusBar<'_> {
             AgentStatus::Streaming => ("●", Color::Green, "streaming"),
             AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
             AgentStatus::Error => ("✗", Color::Red, "error"),
+            AgentStatus::Cancelled => ("⊘", Color::DarkGray, "cancelled"),
             AgentStatus::Compacting => ("⟳", Color::Magenta, "compacting"),
         };
 

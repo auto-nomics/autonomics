@@ -92,6 +92,14 @@ pub enum AgentEvent {
     /// Agent finished its workflow.
     Done,
 
+    /// The user intentionally interrupted the current turn (Ctrl+C).
+    /// Also emits `LifecycleChanged(Cancelled)`.
+    ///
+    /// Semantically distinct from `Error`: the agent didn't fail, the user
+    /// chose to stop. A conversation marker is injected into memory so the
+    /// LLM knows the previous turn was interrupted.
+    TurnAborted,
+
     /// A retryable error occurred. The agent will back off and retry.
     ///
     /// `attempt` is 1-based (the attempt that just failed);

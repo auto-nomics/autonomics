@@ -487,11 +487,12 @@ impl App {
                         };
 
                         let is_session_list = matches!(event, AgentEvent::SessionList { .. });
-                        // Done / Error transition the agent to Idle — after
-                        // applying, we check for pending queued messages.
+                        // Done / TurnAborted / Error all signal the end of a
+                        // turn — after applying, check for pending queued
+                        // messages the user typed while the agent was busy.
                         let may_have_pending = matches!(
                             event,
-                            AgentEvent::Done | AgentEvent::Error(_)
+                            AgentEvent::Done | AgentEvent::TurnAborted | AgentEvent::Error(_)
                         );
                         if matches!(
                             event,
@@ -1058,7 +1059,7 @@ impl App {
             self.cancel_requested_at = Some(Instant::now());
             // Clear any pending queued messages — the user cancelled, so
             // we don't want queued messages to immediately re-trigger
-            // the agent when the cancel Error event arrives.
+            // the agent when the TurnAborted event arrives.
             let cleared = self
                 .state
                 .active_tab_state_mut()

@@ -788,9 +788,13 @@ impl MessageStream {
                     if let Some(ContentBlock::ToolUse { input, .. }) = msg.content.get_mut(*index)
                         && let serde_json::Value::String(accumulated) = input
                     {
-                        *input = serde_json::from_str(accumulated).unwrap_or_else(|_| {
-                            serde_json::Value::String(std::mem::take(accumulated))
-                        });
+                        // If the accumulated JSON fails to parse (truncated
+                        // stream, malformed output), fall back to an empty
+                        // object rather than a string — a string input is not
+                        // a valid dictionary and causes API errors when the
+                        // message is replayed to any provider.
+                        *input = serde_json::from_str(&accumulated)
+                            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
                     }
                 }
                 MessageStreamEvent::MessageDelta { delta, usage } => {
