@@ -7,6 +7,7 @@ pub mod source_iceberg;
 pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
+pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -34,5 +35,12 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(
             source_semantic_scholar::S2AuthorSearchNodeFactory {},
         ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsAssociationsNodeFactory {},
+        ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsSearchNodeFactory {},
+        ));
+        registry.register(Box::new(CrossrefWorksNodeFactory {}));
     }
 }

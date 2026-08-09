@@ -80,6 +80,7 @@ members = [
   "crates/writing-types",
   "crates/writing-base",
   "crates/node-bundles/nodes-writing",
+  "crates/crossref",
 ]
 resolver = "3"
 
