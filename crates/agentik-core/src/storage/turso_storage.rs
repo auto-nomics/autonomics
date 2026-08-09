@@ -63,7 +63,7 @@ use agentik_types::AgentPlan;
 
 use crate::storage::{
     AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
-    ProfileOverrides, RelationKind, StorageError,
+    PersistedAgentGraph, ProfileOverrides, RelationKind, StorageError,
 };
 
 /// Turso-backed implementation of [`AgentStorage`].
@@ -212,6 +212,21 @@ impl TursoAgentStorage {
                     revision   INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS agent_graph (
+                    path         TEXT PRIMARY KEY,
+                    parent_path  TEXT,
+                    profile_path TEXT NOT NULL,
+                    agent_id     TEXT NOT NULL,
+                    status_json  TEXT NOT NULL,
+                    last_event   TEXT,
+                    created_at   INTEGER NOT NULL,
+                    updated_at   INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_graph_parent
+                    ON agent_graph(parent_path);
+                CREATE INDEX IF NOT EXISTS idx_agent_graph_updated
+                    ON agent_graph(updated_at DESC);
                 ",
             )
             .await
@@ -816,6 +831,161 @@ impl AgentStorage for TursoAgentStorage {
             }
         }
         Ok(messages)
+    }
+
+    // ── Persisted agent graph (Phase 4) ─────────────────────
+    //
+    // Keyed by hierarchical agent path so the dashboard can reconstruct
+    // the multi-agent topology across process restarts. Mirrors codex's
+    // `AgentGraphStore` (`codex-rs/agent-graph-store/src/store.rs:17-60`)
+    // but persists only the topology + latest status — conversation
+    // history is stored separately in `snapshots` + `messages`.
+
+    async fn upsert_agent_graph_entry(
+        &self,
+        entry: PersistedAgentGraph,
+    ) -> Result<(), StorageError> {
+        // ON CONFLICT(path) DO UPDATE refreshes every mutable field
+        // EXCEPT created_at (we preserve the original timestamp on
+        // re-registration, matching codex's semantics).
+        self.conn
+            .execute(
+                "INSERT INTO agent_graph
+                    (path, parent_path, profile_path, agent_id,
+                     status_json, last_event, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(path) DO UPDATE SET
+                     parent_path  = excluded.parent_path,
+                     profile_path = excluded.profile_path,
+                     agent_id     = excluded.agent_id,
+                     status_json  = excluded.status_json,
+                     last_event   = excluded.last_event,
+                     updated_at   = excluded.updated_at",
+                params_from_iter([
+                    Value::Text(entry.path),
+                    entry.parent_path.map(Value::Text).unwrap_or(Value::Null),
+                    Value::Text(entry.profile_path),
+                    Value::Text(entry.agent_id.to_string()),
+                    Value::Text(entry.status_json),
+                    entry.last_event.map(Value::Text).unwrap_or(Value::Null),
+                    Value::Integer(entry.created_at),
+                    Value::Integer(entry.updated_at),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn update_agent_graph_status(
+        &self,
+        path: &str,
+        status_json: &str,
+        last_event: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        // Fire-and-log semantics: if the row was deleted between the
+        // status observation and the write (e.g. concurrent shutdown),
+        // affected_rows == 0 and we silently no-op — the host's removal
+        // call already removed the entry.
+        self.conn
+            .execute(
+                "UPDATE agent_graph
+                 SET status_json = ?1, last_event = ?2, updated_at = ?3
+                 WHERE path = ?4",
+                params_from_iter([
+                    Value::Text(status_json.to_string()),
+                    last_event.map(|s| Value::Text(s.to_string())).unwrap_or(Value::Null),
+                    Value::Integer(now),
+                    Value::Text(path.to_string()),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn remove_agent_graph_entry(&self, path: &str) -> Result<(), StorageError> {
+        // Idempotent: deleting a non-existent path is not an error.
+        self.conn
+            .execute(
+                "DELETE FROM agent_graph WHERE path = ?1",
+                params_from_iter([Value::Text(path.to_string())]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_persisted_agents(
+        &self,
+    ) -> Result<Vec<PersistedAgentGraph>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT path, parent_path, profile_path, agent_id,
+                        status_json, last_event, created_at, updated_at
+                 FROM agent_graph
+                 ORDER BY updated_at DESC",
+                (),
+            )
+            .await?;
+
+        let mut out = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    let path = text_col(&row, 0)?;
+                    let parent_path = match row.get_value(1)? {
+                        Value::Text(s) => Some(s),
+                        Value::Null => None,
+                        other => {
+                            return Err(turso::Error::ToSqlConversionFailure(
+                                format!(
+                                    "expected TEXT or NULL at column 1, got {other:?}"
+                                )
+                                .into(),
+                            )
+                            .into());
+                        }
+                    };
+                    let profile_path = text_col(&row, 2)?;
+                    let agent_id_str = text_col(&row, 3)?;
+                    let agent_id = Uuid::parse_str(&agent_id_str).map_err(|e| {
+                        StorageError::Other(
+                            format!("invalid agent_id uuid in agent_graph: {e}").into(),
+                        )
+                    })?;
+                    let status_json = text_col(&row, 4)?;
+                    let last_event = match row.get_value(5)? {
+                        Value::Text(s) => Some(s),
+                        Value::Null => None,
+                        other => {
+                            return Err(turso::Error::ToSqlConversionFailure(
+                                format!(
+                                    "expected TEXT or NULL at column 5, got {other:?}"
+                                )
+                                .into(),
+                            )
+                            .into());
+                        }
+                    };
+                    let created_at = int_col(&row, 6)?;
+                    let updated_at = int_col(&row, 7)?;
+
+                    out.push(PersistedAgentGraph {
+                        path,
+                        parent_path,
+                        profile_path,
+                        agent_id,
+                        status_json,
+                        last_event,
+                        created_at,
+                        updated_at,
+                    });
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(out)
     }
 
     async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError> {
@@ -1828,6 +1998,227 @@ mod tests {
         let loaded2 = store.load_plan(agent_id).await.unwrap().unwrap();
         assert_eq!(loaded2.update.plan.len(), 1);
         assert_eq!(loaded2.revision, 1);
+    }
+
+    // ── Phase 4: agent graph persistence tests ──
+
+    #[tokio::test]
+    async fn test_agent_graph_upsert_and_list() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Initial list is empty.
+        assert!(store.list_persisted_agents().await.unwrap().is_empty());
+
+        // Upsert a root agent entry.
+        let entry = PersistedAgentGraph {
+            path: "/root/researcher".into(),
+            parent_path: None,
+            profile_path: "root/researcher".into(),
+            agent_id,
+            status_json: r#"{"Idle":null}"#.into(),
+            last_event: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.upsert_agent_graph_entry(entry).await.unwrap();
+
+        // List contains the entry.
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/root/researcher");
+        assert_eq!(rows[0].agent_id, agent_id);
+        assert_eq!(rows[0].parent_path, None);
+        assert_eq!(rows[0].status_json, r#"{"Idle":null}"#);
+        assert_eq!(rows[0].last_event, None);
+
+        // Upsert a child agent with a parent.
+        let child_id = Uuid::new_v4();
+        let child_entry = PersistedAgentGraph {
+            path: "/root/researcher/worker".into(),
+            parent_path: Some("/root/researcher".into()),
+            profile_path: "root/researcher/worker".into(),
+            agent_id: child_id,
+            status_json: r#"{"Running":null}"#.into(),
+            last_event: Some("web_search".into()),
+            created_at: now + 1,
+            updated_at: now + 1,
+        };
+        store.upsert_agent_graph_entry(child_entry).await.unwrap();
+
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows.len(), 2);
+        // Ordered by updated_at DESC — child comes first.
+        assert_eq!(rows[0].path, "/root/researcher/worker");
+        assert_eq!(rows[0].parent_path.as_deref(), Some("/root/researcher"));
+        assert_eq!(rows[0].last_event.as_deref(), Some("web_search"));
+        assert_eq!(rows[1].path, "/root/researcher");
+    }
+
+    #[tokio::test]
+    async fn test_agent_graph_upsert_preserves_created_at() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let original_created = 1_000_000_i64;
+
+        let entry = PersistedAgentGraph {
+            path: "/root/x".into(),
+            parent_path: None,
+            profile_path: "root/x".into(),
+            agent_id,
+            status_json: r#"{"Idle":null}"#.into(),
+            last_event: None,
+            created_at: original_created,
+            updated_at: original_created,
+        };
+        store.upsert_agent_graph_entry(entry).await.unwrap();
+
+        // Re-upsert with a later updated_at but a "fake" created_at.
+        // The ON CONFLICT path should preserve the original created_at
+        // (we never overwrite it from excluded.created_at).
+        let entry2 = PersistedAgentGraph {
+            path: "/root/x".into(),
+            parent_path: None,
+            profile_path: "root/x".into(),
+            agent_id,
+            status_json: r#"{"Running":null}"#.into(),
+            last_event: Some("tool_x".into()),
+            created_at: 9_999_999, // should be ignored on conflict
+            updated_at: 2_000_000,
+        };
+        store.upsert_agent_graph_entry(entry2).await.unwrap();
+
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].created_at, original_created);
+        assert_eq!(rows[0].updated_at, 2_000_000);
+        assert_eq!(rows[0].status_json, r#"{"Running":null}"#);
+        assert_eq!(rows[0].last_event.as_deref(), Some("tool_x"));
+    }
+
+    #[tokio::test]
+    async fn test_agent_graph_update_status_only() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        store
+            .upsert_agent_graph_entry(PersistedAgentGraph {
+                path: "/root/p".into(),
+                parent_path: None,
+                profile_path: "root/p".into(),
+                agent_id,
+                status_json: r#"{"Idle":null}"#.into(),
+                last_event: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+
+        // Update only status + last_event.
+        store
+            .update_agent_graph_status(
+                "/root/p",
+                r#"{"AwaitingTool":{"tool":"web_search"}}"#,
+                Some("web_search"),
+            )
+            .await
+            .unwrap();
+
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].status_json,
+            r#"{"AwaitingTool":{"tool":"web_search"}}"#
+        );
+        assert_eq!(rows[0].last_event.as_deref(), Some("web_search"));
+        // updated_at should be >= the original `now` (millisecond precision
+        // means a same-ms update is indistinguishable from a never-updated
+        // row, which is acceptable).
+        assert!(rows[0].updated_at >= now, "updated_at should not regress");
+
+        // Update with None last_event (clears it).
+        store
+            .update_agent_graph_status("/root/p", r#"{"Completed":null}"#, None)
+            .await
+            .unwrap();
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows[0].status_json, r#"{"Completed":null}"#);
+        assert_eq!(rows[0].last_event, None);
+
+        // Update on non-existent path is a silent no-op (no error).
+        store
+            .update_agent_graph_status("/root/nonexistent", r#"{"Idle":null}"#, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_agent_graph_remove_idempotent() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        store
+            .upsert_agent_graph_entry(PersistedAgentGraph {
+                path: "/root/q".into(),
+                parent_path: None,
+                profile_path: "root/q".into(),
+                agent_id,
+                status_json: r#"{"Idle":null}"#.into(),
+                last_event: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(store.list_persisted_agents().await.unwrap().len(), 1);
+
+        // Remove the entry.
+        store.remove_agent_graph_entry("/root/q").await.unwrap();
+        assert!(store.list_persisted_agents().await.unwrap().is_empty());
+
+        // Removing again is idempotent (no error).
+        store.remove_agent_graph_entry("/root/q").await.unwrap();
+        store.remove_agent_graph_entry("/root/never_existed").await.unwrap();
+        assert!(store.list_persisted_agents().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_agent_graph_invalid_uuid_is_rejected() {
+        // The `agent_id` column is stored as TEXT; if a row ever ends up
+        // with a malformed UUID (data corruption, manual DB edit, schema
+        // migration bug), `list_persisted_agents` should surface a clear
+        // error rather than panic.
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+
+        // Bypass the typed API to inject a row with an invalid UUID.
+        store
+            .conn
+            .execute(
+                "INSERT INTO agent_graph
+                    (path, parent_path, profile_path, agent_id,
+                     status_json, last_event, created_at, updated_at)
+                 VALUES (?1, NULL, ?2, ?3, ?4, NULL, ?5, ?5)",
+                params_from_iter([
+                    Value::Text("/root/broken".into()),
+                    Value::Text("root/broken".into()),
+                    Value::Text("not-a-uuid".into()),
+                    Value::Text(r#"{"Idle":null}"#.into()),
+                    Value::Integer(0),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let result = store.list_persisted_agents().await;
+        assert!(
+            result.is_err(),
+            "expected StorageError for malformed agent_id UUID"
+        );
     }
 
     #[tokio::test]

@@ -790,6 +790,25 @@ impl App {
                 }
                 tracing::info!(agent = %path, "host agent unregistered from TUI");
             }
+            // Phase 1: cross-agent runtime status update. The per-session
+            // `AgentTabState.status` is driven by the agent's own
+            // `LifecycleChanged` event stream (via the session tab), so
+            // this arm is a log-only bridge for now — it does NOT overwrite
+            // the tab's status, which has finer-grained variants. Future
+            // work: surface a status badge in the tab bar by reading
+            // `status` + `last_event` from the new AgentInfo payload.
+            runtime::HostEvent::AgentStatusChanged {
+                path,
+                status,
+                last_event,
+            } => {
+                tracing::debug!(
+                    agent = %path,
+                    status = %status.tag(),
+                    last_event = ?last_event,
+                    "host observed agent status change"
+                );
+            }
         }
     }
 

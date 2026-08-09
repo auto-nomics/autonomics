@@ -48,6 +48,9 @@ pub fn host_tools(
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
         }),
+        ToolRegistration::from(SendMessageTool {
+            control: ctrl.clone(),
+        }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
             self_path: self_path.clone(),
@@ -57,7 +60,10 @@ pub fn host_tools(
         }),
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
-            self_path,
+            self_path: self_path.clone(),
+        }),
+        ToolRegistration::from(WaitAgentTool {
+            control: ctrl.clone(),
         }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
@@ -72,6 +78,9 @@ pub fn host_tools(
             control: ctrl.clone(),
         }),
         ToolRegistration::from(ShutdownAgentTool {
+            control: ctrl.clone(),
+        }),
+        ToolRegistration::from(InterruptAgentTool {
             control: ctrl.clone(),
         }),
         // ToolRegistration::from(ResetNetworkTool { control: ctrl.clone() }),
@@ -260,6 +269,74 @@ impl ToolFunction for DelegateToTool {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Send Message — fire-and-forget inter-agent message (Phase 5)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "send_message",
+    description = "Send a fire-and-forget message to another agent. Unlike delegate_to, \
+                   this does NOT wait for the target's response — the message is \
+                   delivered and you continue immediately. Use this when:\n\
+                   - You want to notify another agent of something without needing a reply.\n\
+                   - You want to kick off background work on another agent and check \
+                     results later via wait_agent or get_agent_info.\n\
+                   - You need to send multiple messages to different agents in parallel.\n\
+                   The target agent processes the message in its own turn. If it is \
+                   currently busy, the message is queued and handled on its next turn."
+)]
+struct SendMessageInput {
+    /// Name of the target agent. Accepts a short name (e.g. "researcher") \
+    /// or full path (e.g. "/root/researcher/worker").
+    agent_name: String,
+    /// The message content to deliver.
+    message: String,
+}
+
+struct SendMessageTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for SendMessageTool {
+    type Input = SendMessageInput;
+
+    /// Synchronous fast-return — the tool completes as soon as the host
+    /// confirms delivery (name resolution + channel send). No waiting
+    /// for the target agent's response.
+    fn sync_seconds(&self) -> u64 {
+        30
+    }
+
+    /// 1-hour hard cap. Delivery is near-instant; the cap only matters
+    /// if the host command channel is jammed.
+    fn timeout_seconds(&self) -> u64 {
+        3600
+    }
+
+    async fn run(
+        &self,
+        input: SendMessageInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        match self
+            .control
+            .send_message(&input.agent_name, input.message)
+            .await
+        {
+            Some(Ok(())) => Ok(ToolResult::success(format!(
+                "Message delivered to '{}'.",
+                input.agent_name
+            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!(
+                "send_message failed: {e}"
+            ))),
+            None => Ok(ToolResult::success(
+                "send_message: host command channel closed (runtime shut down)",
+            )),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Route Task — find the best agent for a task
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -375,6 +452,89 @@ impl ToolFunction for ListAgentsTool {
                 ))
             }
             None => Ok(ToolResult::success("Failed to get host status.")),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Wait Agent — block until peer reaches Completed/Failed
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Default wait timeout — 5 minutes. Long enough for most delegated
+/// analyses, short enough that a runaway wait doesn't pin the caller
+/// forever.
+const DEFAULT_WAIT_TIMEOUT_MS: u64 = 300_000;
+
+/// Minimum wait timeout — 1 second. Prevents tight-loop waits when
+/// the LLM asks for `timeout_ms = 0`.
+const MIN_WAIT_TIMEOUT_MS: u64 = 1_000;
+
+/// Maximum wait timeout — 1 hour. Hard ceiling even if the LLM asks
+/// for more. Past this, the caller should use multiple sequential
+/// waits or `delegate_to` directly.
+const MAX_WAIT_TIMEOUT_MS: u64 = 3_600_000;
+
+#[tool(
+    name = "wait_agent",
+    description = "Block until the named agent reaches Completed or Failed status, \
+                   or until the timeout elapses. Use after delegate_to when you \
+                   want to wait for a background task's result instead of \
+                   polling list_agents. Returns JSON with the final status, \
+                   last event, and timed_out flag. Default timeout 5min, \
+                   clamped to [1s, 1h]."
+)]
+struct WaitAgentInput {
+    /// Name of the agent to wait for. Accepts a short name (e.g. \
+    /// "researcher") or full path (e.g. "/root/researcher/worker").
+    agent_name: String,
+    /// How long to wait in milliseconds. Defaults to 300000 (5 min). \
+    /// Clamped to [1000, 3600000] ([1s, 1h]).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+struct WaitAgentTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for WaitAgentTool {
+    type Input = WaitAgentInput;
+
+    /// Background execution — `delegate_to` style. The caller can fire
+    /// wait_agent and continue other work, retrieving the result via
+    /// `wait_task` / `view_task_results`. Matches codex's
+    /// `multi_agents::wait_agent` which uses the same pattern.
+    fn sync_seconds(&self) -> u64 {
+        0
+    }
+
+    /// Hard cap 24 hours. The inner wait is clamped to 1 hour, so
+    /// the 24h ceiling only matters if the host command channel itself
+    /// is jammed — let the timeout fire rather than pin a tool slot.
+    fn timeout_seconds(&self) -> u64 {
+        86400
+    }
+
+    async fn run(
+        &self,
+        input: WaitAgentInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        let timeout_ms = input
+            .timeout_ms
+            .unwrap_or(DEFAULT_WAIT_TIMEOUT_MS)
+            .clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
+
+        match self.control.wait_agent(&input.agent_name, timeout_ms).await {
+            Some(Ok(result)) => Ok(ToolResult::success_json(
+                serde_json::to_value(&result).unwrap_or_default(),
+            )),
+            Some(Err(e)) => Ok(ToolResult::success(format!(
+                "wait_agent failed: {e}"
+            ))),
+            None => Ok(ToolResult::success(
+                "wait_agent: host command channel closed (runtime shut down)",
+            )),
         }
     }
 }
@@ -574,7 +734,12 @@ impl ToolFunction for GetNetworkStatusTool {
 
 #[tool(
     name = "shutdown_agent",
-    description = "Shut down a named agent and remove it from the registry."
+    description = "Shut down a named agent and remove it from the registry. \
+                   The agent's process is terminated — it cannot receive \
+                   any more messages. Use this when the agent is no longer \
+                   needed (e.g. long-lived analysis session is complete). \
+                   For a softer cancellation that lets the agent accept a \
+                   new message afterwards, use interrupt_agent instead."
 )]
 struct ShutdownAgentInput {
     agent_name: String,
@@ -596,6 +761,78 @@ impl ToolFunction for ShutdownAgentTool {
         Ok(ToolResult::success(format!(
             "Agent '{}' shutdown requested.",
             input.agent_name
+        )))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Interrupt Agent — cancel current turn, keep agent alive
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "interrupt_agent",
+    description = "Interrupt the named agent's CURRENT turn without shutting it down. \
+                   The agent emits LifecycleChanged(Cancelled), aborts any in-flight \
+                   tool calls, and remains registered — a follow-up message via \
+                   delegate_to / send_message will start a fresh turn on the same \
+                   session. Use this when:\n\
+                   - You delegated a long task and want to cancel it (e.g. wrong \
+                     agent selected, task is taking too long, etc.)\n\
+                   - The agent is stuck in a retry loop and you want to break out.\n\
+                   - You want to redirect the agent's work mid-turn.\n\
+                   For full agent shutdown (removes from registry), use \
+                   shutdown_agent instead."
+)]
+struct InterruptAgentInput {
+    /// Name of the agent to interrupt. Accepts a short name (e.g. \
+    /// "researcher") or full path.
+    agent_name: String,
+    /// Optional human-readable reason logged alongside the cancel \
+    /// event. Useful when debugging why an agent got interrupted.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+struct InterruptAgentTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for InterruptAgentTool {
+    type Input = InterruptAgentInput;
+
+    /// Synchronous — interrupt is a fast fire-and-forget operation.
+    /// The agent's cancel_token is cancelled, which propagates
+    /// immediately to any in-flight LLM request or tool execution.
+    /// The agent then emits `LifecycleChanged(Cancelled)` through the
+    /// event stream; if you're tracking the result, follow up with
+    /// `wait_agent` to see the Cancelled status.
+    fn sync_seconds(&self) -> u64 {
+        0
+    }
+
+    /// 1 hour cap — interrupt itself should be near-instant; the cap
+    /// only matters if the host command channel is jammed.
+    fn timeout_seconds(&self) -> u64 {
+        3600
+    }
+
+    async fn run(
+        &self,
+        input: InterruptAgentInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        let reason = input.reason.as_deref().unwrap_or("user-requested interrupt");
+        tracing::info!(
+            agent = %input.agent_name,
+            reason = %reason,
+            "interrupt_agent: cancelling current turn"
+        );
+        self.control.cancel_agent(&input.agent_name);
+        Ok(ToolResult::success(format!(
+            "Interrupt requested for agent '{}'. \
+             The current turn will be cancelled; the agent remains \
+             available for new messages. Reason: {}",
+            input.agent_name, reason
         )))
     }
 }
@@ -654,5 +891,61 @@ impl ToolFunction for InjectPromptsTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         self.control.inject_prompts();
         Ok(ToolResult::success("Initial prompts injected."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Phase 5 — `SendMessageTool` struct-level tests that require access
+    //! to the private tool struct (not accessible from `host.rs`).
+
+    use super::*;
+    use crate::control::HostCommand;
+    use crate::host::HostEvent;
+    use agentik_core::tools::ToolFunction;
+
+    /// The `SendMessageTool` should be synchronous with a fast return
+    /// (not background like `delegate_to` or `wait_agent`). This ensures
+    /// the calling agent gets immediate delivery confirmation without
+    /// occupying a background task slot.
+    #[test]
+    fn send_message_tool_is_synchronous_fast_return() {
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+        let tool = SendMessageTool { control };
+
+        // sync_seconds > 0 → synchronous (agent waits for completion).
+        // Not 0 (which would mean background / fire-and-forget at the
+        // tool framework level).
+        assert!(
+            tool.sync_seconds() > 0,
+            "send_message must be synchronous, not background"
+        );
+
+        // timeout should be reasonable (1 hour — delivery is near-instant,
+        // the cap only catches a jammed host channel).
+        assert_eq!(tool.timeout_seconds(), 3600);
+    }
+
+    /// `DelegateToTool` and `SendMessageTool` should differ in sync
+    /// semantics: delegate is background (sync_seconds=0), send_message
+    /// is synchronous (sync_seconds > 0). This distinction is what makes
+    /// them useful for different coordination patterns.
+    #[test]
+    fn send_message_sync_vs_delegate_background() {
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+
+        let delegate = DelegateToTool {
+            control: control.clone(),
+        };
+        let sender = SendMessageTool { control };
+
+        // delegate_to is background (sync_seconds = 0).
+        assert_eq!(delegate.sync_seconds(), 0);
+        // send_message is synchronous.
+        assert!(sender.sync_seconds() > 0);
     }
 }

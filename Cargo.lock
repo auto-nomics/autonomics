@@ -9729,6 +9729,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "bib-base",
+ "chrono",
  "data-engine",
  "data-engine-tools",
  "datalake",

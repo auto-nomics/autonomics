@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use bib_base::query::{LiteratureGateway, PubmedSource};
 use bib_types::query::{BoolOp, StructuredSearch, YearRange};
+use bib_types::{IdKind, Identifier};
 
 fn pubmed_gateway() -> LiteratureGateway {
     LiteratureGateway::new().with_source(Arc::new(PubmedSource::new(Arc::new(
@@ -130,7 +131,7 @@ async fn pubmed_fetch_by_pmid() {
     let gw = pubmed_gateway();
 
     // PMID 37658030 — a real PubMed record.
-    let result = gw.fetch("37658030").await;
+    let result = gw.fetch(&Identifier::new(IdKind::Pmid, "37658030")).await;
 
     assert!(result.is_some(), "should fetch PMID 37658030");
     let (source, article) = result.unwrap();
@@ -174,7 +175,17 @@ async fn bib_save_batch_mixed_ids() {
 
     // Mix of real PMIDs — these are stable PubMed records.
     let input = BibSaveInput {
-        ids: vec!["37658030".into(), "37506997".into()],
+        articles: None,
+        ids: Some(vec![
+            bib_base::library_tools::ArticleIdInput {
+                id_type: "pmid".into(),
+                id: "37658030".into(),
+            },
+            bib_base::library_tools::ArticleIdInput {
+                id_type: "pmid".into(),
+                id: "37506997".into(),
+            },
+        ]),
         source: None,
         fetch_fulltext: Some(false),
     };
@@ -201,11 +212,21 @@ async fn bib_save_batch_mixed_ids() {
         assert!(r["title"].as_str().is_some());
     }
 
-    println!("✅ Batch save: {}", json["message"]);
+    println!("✅ Batch save (ids mode): {}", json["message"]);
 
     // Second call — both should be cached now.
     let input2 = BibSaveInput {
-        ids: vec!["37658030".into(), "37506997".into()],
+        articles: None,
+        ids: Some(vec![
+            bib_base::library_tools::ArticleIdInput {
+                id_type: "pmid".into(),
+                id: "37658030".into(),
+            },
+            bib_base::library_tools::ArticleIdInput {
+                id_type: "pmid".into(),
+                id: "37506997".into(),
+            },
+        ]),
         source: None,
         fetch_fulltext: Some(false),
     };

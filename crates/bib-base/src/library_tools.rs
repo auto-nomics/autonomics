@@ -33,10 +33,10 @@ use crate::query::LiteratureGateway;
 use crate::tools::parse_id_kind;
 
 // ===========================================================================
-// bib_save — fetch from external source and store in local library (batch)
+// bib_save — save articles to local library (direct metadata or fetch-by-id)
 // ===========================================================================
 
-/// A single typed article identifier for `bib_save`.
+/// A single typed article identifier for `bib_save`'s `ids` mode.
 #[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
 pub struct ArticleIdInput {
     #[schemars(description = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\"")]
@@ -45,36 +45,122 @@ pub struct ArticleIdInput {
     pub id: String,
 }
 
+/// Complete article metadata for `bib_save`'s `articles` mode — the fast path.
+///
+/// Pass the full metadata you already have from `lit_search` or `lit_fetch`
+/// results.  The article is stored immediately without any external
+/// re-fetch, saving a network round-trip per article.
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+pub struct ArticleInput {
+    #[schemars(description = "Article title (required)")]
+    pub title: String,
+
+    #[schemars(description = "DOI, e.g. \"10.1038/s41586-023-06236-2\"")]
+    #[serde(default)]
+    pub doi: Option<String>,
+
+    #[schemars(description = "PubMed ID")]
+    #[serde(default)]
+    pub pmid: Option<String>,
+
+    #[schemars(description = "Structured identifiers: [{\"kind\":\"doi\",\"value\":\"...\"}]. \
+                              Optional when `doi` or `pmid` top-level fields are provided.")]
+    #[serde(default)]
+    pub identifiers: Vec<IdentifierInput>,
+
+    #[schemars(description = "Authors as display-name strings, e.g. [\"Smith J\", \"Doe K\"]. \
+                              Matches the format returned by lit_search.")]
+    #[serde(default)]
+    pub authors: Vec<String>,
+
+    #[schemars(description = "Publication year")]
+    #[serde(default)]
+    pub year: Option<u16>,
+
+    #[schemars(description = "Journal or venue name")]
+    #[serde(default)]
+    pub journal: Option<String>,
+
+    #[schemars(description = "Journal volume")]
+    #[serde(default)]
+    pub volume: Option<String>,
+
+    #[schemars(description = "Issue number")]
+    #[serde(default)]
+    pub issue: Option<String>,
+
+    #[schemars(description = "Page range (e.g. \"1-15\")")]
+    #[serde(default)]
+    pub pages: Option<String>,
+
+    #[schemars(description = "Abstract text")]
+    #[serde(default)]
+    pub abstract_text: Option<String>,
+
+    #[schemars(description = "Keywords (MeSH terms or author keywords)")]
+    #[serde(default)]
+    pub keywords: Vec<String>,
+
+    #[schemars(description = "Publication types (e.g. [\"Journal Article\", \"Review\"])")]
+    #[serde(default)]
+    pub pub_types: Vec<String>,
+
+    #[schemars(description = "Source this article came from (e.g. \"pubmed\", \"arxiv\", \
+                              \"openalex\"). Used for provenance.")]
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// A structured identifier inside [`ArticleInput`].
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+pub struct IdentifierInput {
+    #[schemars(description = "Kind: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", \"biorxiv\"")]
+    pub kind: String,
+    #[schemars(description = "Identifier value")]
+    pub value: String,
+}
+
 #[tool(
     name = "bib_save",
-    description = "Save one or more articles to the local library by fetching their \
-                  metadata from external sources (PubMed, arXiv, OpenAlex, Crossref, \
-                  Semantic Scholar, bioRxiv). \
+    description = "Save one or more articles to the local library. \
                   \
-                  Each article is identified by a typed `{ id_type, id }` pair so the \
-                  gateway knows exactly which sources to query — no format guessing. \
-                  Articles are fetched concurrently and stored. \
+                  **Two modes** (provide exactly one): \
                   \
-                  Articles already in the library (matched by identifier) are \
-                  returned as cached without re-fetching. \
+                  1. **`articles` (preferred)** — pass complete article metadata directly. \
+                  No external fetch is needed; articles are stored immediately. This is the \
+                  fast path: pass the JSON you already have from `lit_search` or `lit_fetch` \
+                  results. \
                   \
-                  After saving the metadata, each newly stored article is \
-                  **automatically checked for an open-access full text** on \
-                  Europe PMC. When a full text is available it is downloaded \
-                  (JATS XML → plain text) and stored alongside the article, so \
-                  `bib_get_article` can return it immediately. Set \
-                  `fetch_fulltext=false` to skip this step. \
+                  2. **`ids`** — pass typed `{ id_type, id }` identifiers when you only have \
+                  an ID and need the gateway to fetch metadata from external sources \
+                  (PubMed, arXiv, OpenAlex, Crossref, Semantic Scholar, bioRxiv). \
+                  \
+                  Articles already in the library (matched by identifier) are returned as \
+                  cached without re-fetching. \
+                  \
+                  After saving metadata, each newly stored article is **automatically checked** \
+                  for an open-access full text on Europe PMC. When available it is downloaded \
+                  (JATS XML → plain text) and stored alongside the article. Set \
+                  `fetch_fulltext=false` to skip. \
                   \
                   **Examples**: \
-                  • ids=[{id_type:\"pmid\", id:\"37658030\"}] — save a single PMID \
-                  • ids=[{id_type:\"doi\", id:\"10.1038/...\"}, {id_type:\"arxiv\", id:\"2401.00001\"}] — batch"
+                  • articles=[{title:\"...\", doi:\"10.1038/...\", year:2024}] — direct save \
+                  • articles=[{title:\"...\", pmid:\"37658030\", authors:[\"Smith J\"]}] — direct save \
+                  • ids=[{id_type:\"pmid\", id:\"37658030\"}] — fetch + save by PMID \
+                  • ids=[{id_type:\"doi\", id:\"10.1038/...\"}, {id_type:\"arxiv\", id:\"2401.00001\"}] — batch fetch"
 )]
 pub struct BibSaveInput {
-    #[desc = "One or more typed article identifiers (id_type + id). Use the same identifiers \
-             you found in lit_search/lit_fetch results."]
-    pub ids: Vec<ArticleIdInput>,
+    #[desc = "Complete article metadata objects to save directly — no external fetch needed. \
+             Pass the article JSON from lit_search or lit_fetch results. Each object needs \
+             at least `title` and one identifier (doi, pmid, or identifiers array)."]
+    pub articles: Option<Vec<ArticleInput>>,
+
+    #[desc = "Typed identifiers to fetch + save (fetches metadata from external sources). \
+             Use when you only have an ID without full metadata. Mutually exclusive with `articles`."]
+    pub ids: Option<Vec<ArticleIdInput>>,
+
     #[desc = "Force a specific source for ALL ids (e.g. \"pubmed\", \"crossref\"). \
-             Default: auto-route each id to compatible sources."]
+             Only used in `ids` mode. Default: auto-route each id to compatible sources."]
     pub source: Option<String>,
     #[desc = "Attempt to download open-access full text from Europe PMC after saving. Default: true"]
     pub fetch_fulltext: Option<bool>,
@@ -117,33 +203,50 @@ impl ToolFunction for BibSaveTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        if input.ids.is_empty() {
+        let want_fulltext = input.fetch_fulltext.unwrap_or(true);
+
+        // Determine mode: `articles` (direct save) or `ids` (fetch-by-id).
+        let has_articles = input.articles.as_ref().is_some_and(|a| !a.is_empty());
+        let has_ids = input.ids.as_ref().is_some_and(|i| !i.is_empty());
+
+        if !has_articles && !has_ids {
             return Err(ToolError::ExecutionFailed {
-                source: "at least one article ID is required".into(),
+                source: "provide either `articles` (full metadata, preferred) or `ids` \
+                         (typed identifiers to fetch)"
+                    .into(),
             });
         }
 
-        let want_fulltext = input.fetch_fulltext.unwrap_or(true);
+        let results = if has_articles {
+            // ── Direct-save mode ───────────────────────────────────────────
+            let articles = input.articles.unwrap();
+            let futures: Vec<_> = articles
+                .iter()
+                .map(|a| self.save_article_direct(a, want_fulltext))
+                .collect();
+            futures::future::join_all(futures).await
+        } else {
+            // ── Fetch-by-id mode ───────────────────────────────────────────
+            let ids = input.ids.unwrap();
+            let mut identifiers: Vec<(String, Identifier)> = Vec::new();
+            for entry in &ids {
+                let kind =
+                    parse_id_kind(&entry.id_type).ok_or_else(|| ToolError::ExecutionFailed {
+                        source: format!(
+                            "unknown id_type '{}': expected one of doi, pmid, arxiv, openalex, s2, biorxiv",
+                            entry.id_type
+                        )
+                        .into(),
+                    })?;
+                identifiers.push((entry.id.clone(), Identifier::new(kind, entry.id.trim())));
+            }
 
-        // Parse each typed id into an Identifier, collecting errors.
-        let mut identifiers: Vec<(String, Identifier)> = Vec::new();
-        for entry in &input.ids {
-            let kind = parse_id_kind(&entry.id_type).ok_or_else(|| ToolError::ExecutionFailed {
-                source: format!(
-                    "unknown id_type '{}': expected one of doi, pmid, arxiv, openalex, s2, biorxiv",
-                    entry.id_type
-                )
-                .into(),
-            })?;
-            identifiers.push((entry.id.clone(), Identifier::new(kind, entry.id.trim())));
-        }
-
-        // Process each identifier concurrently.
-        let futures: Vec<_> = identifiers
-            .iter()
-            .map(|(raw, id)| self.save_one(raw, id, input.source.as_deref(), want_fulltext))
-            .collect();
-        let results = futures::future::join_all(futures).await;
+            let futures: Vec<_> = identifiers
+                .iter()
+                .map(|(raw, id)| self.save_one(raw, id, input.source.as_deref(), want_fulltext))
+                .collect();
+            futures::future::join_all(futures).await
+        };
 
         let total = results.len();
         let saved = results.iter().filter(|r| r.saved && !r.cached).count();
@@ -168,6 +271,105 @@ impl ToolFunction for BibSaveTool {
 }
 
 impl BibSaveTool {
+    /// Save a full article directly — no external fetch.  Never errors;
+    /// failures are captured in the returned [`SaveResult::error`].
+    async fn save_article_direct(&self, input: &ArticleInput, want_fulltext: bool) -> SaveResult {
+        // Build the canonical Article from the input.
+        let article = match article_input_to_article(input) {
+            Ok(a) => a,
+            Err(msg) => {
+                return SaveResult {
+                    id: input.title.clone(),
+                    saved: false,
+                    cached: false,
+                    article_id: None,
+                    source: input.source.clone(),
+                    title: Some(input.title.clone()),
+                    doi: input.doi.clone(),
+                    pmid: input.pmid.clone(),
+                    year: input.year,
+                    fulltext_fetched: false,
+                    error: Some(msg),
+                };
+            }
+        };
+
+        let raw_id = article
+            .doi()
+            .or(article.pmid())
+            .map(str::to_owned)
+            .unwrap_or_else(|| article.title.clone());
+
+        // Check if already in local library (dedup by any identifier).
+        let existing_identifier = article.identifiers.first();
+        if let Some(id) = existing_identifier {
+            if let Ok(Some(existing)) = self
+                .bib
+                .find_by_identifier(id.kind, &id.value)
+                .await
+            {
+                let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
+                let cached_doi = existing.doi().map(str::to_owned);
+                let cached_pmid = existing.pmid().map(str::to_owned);
+                return SaveResult {
+                    id: raw_id,
+                    saved: true,
+                    cached: true,
+                    article_id: Some(existing.id),
+                    source: input.source.clone(),
+                    title: Some(existing.title),
+                    doi: cached_doi,
+                    pmid: cached_pmid,
+                    year: existing.year,
+                    fulltext_fetched: has_ft,
+                    error: None,
+                };
+            }
+        }
+
+        let article_id = article.id.clone();
+        let title = article.title.clone();
+        let doi = article.doi().map(str::to_owned);
+        let pmid = article.pmid().map(str::to_owned);
+        let year = article.year;
+
+        match self.bib.upsert_article(&article).await {
+            Ok(()) => {
+                let ft_fetched = if want_fulltext {
+                    self.try_fetch_oa_fulltext(&article).await
+                } else {
+                    false
+                };
+                SaveResult {
+                    id: raw_id,
+                    saved: true,
+                    cached: false,
+                    article_id: Some(article_id),
+                    source: input.source.clone(),
+                    title: Some(title),
+                    doi,
+                    pmid,
+                    year,
+                    fulltext_fetched: ft_fetched,
+                    error: None,
+                }
+            }
+            Err(e) => SaveResult {
+                id: raw_id,
+                saved: false,
+                cached: false,
+                article_id: None,
+                source: input.source.clone(),
+                title: Some(title),
+                doi,
+                pmid,
+                year,
+                fulltext_fetched: false,
+                error: Some(format!("Database error: {e}")),
+            },
+        }
+    }
+
     /// Fetch + upsert a single article. Never errors — failures are captured
     /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
     async fn save_one(
@@ -300,6 +502,134 @@ impl BibSaveTool {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// ArticleInput → Article conversion
+// ---------------------------------------------------------------------------
+
+/// Convert an [`ArticleInput`] (agent-facing DTO) into a canonical
+/// [`bib_types::Article`].
+///
+/// Top-level `doi`/`pmid` fields are merged into `identifiers` alongside
+/// any structured `identifiers` array (duplicates skipped).  Author
+/// display-name strings are parsed into [`bib_types::Author`] structs.
+fn article_input_to_article(input: &ArticleInput) -> Result<bib_types::Article, String> {
+    use bib_types::{Article, ArticleSource, Author, IdKind, Identifier};
+
+    if input.title.trim().is_empty() {
+        return Err("article `title` is required and must not be empty".into());
+    }
+
+    // Collect identifiers from both structured array and top-level convenience fields.
+    let mut identifiers: Vec<Identifier> = Vec::new();
+    let mut seen: std::collections::HashSet<(IdKind, String)> = std::collections::HashSet::new();
+
+    // Helper closure to add without duplicating.
+    let mut push_id = |kind: IdKind, value: &str, ids: &mut Vec<Identifier>| {
+        let v = value.trim().to_owned();
+        if v.is_empty() {
+            return;
+        }
+        if seen.insert((kind, v.clone())) {
+            ids.push(Identifier::new(kind, v));
+        }
+    };
+
+    // Structured identifiers.
+    for id_input in &input.identifiers {
+        let kind = parse_id_kind(&id_input.kind).unwrap_or(IdKind::Other);
+        push_id(kind, &id_input.value, &mut identifiers);
+    }
+    // Convenience top-level fields.
+    if let Some(ref doi) = input.doi {
+        push_id(IdKind::Doi, doi, &mut identifiers);
+    }
+    if let Some(ref pmid) = input.pmid {
+        push_id(IdKind::Pmid, pmid, &mut identifiers);
+    }
+
+    if identifiers.is_empty() {
+        return Err(
+            "at least one identifier is required (doi, pmid, or identifiers array)".into(),
+        );
+    }
+
+    // Parse authors: "Family Given" or "Family" from display-name strings.
+    let authors: Vec<Author> = input
+        .authors
+        .iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|display| {
+            let trimmed = display.trim();
+            // Try to split into last + rest at the first space.
+            if let Some(space) = trimmed.find(' ') {
+                let (last, rest) = trimmed.split_at(space);
+                Author {
+                    last_name: last.to_owned(),
+                    fore_name: Some(rest.trim().to_owned()),
+                    initials: None,
+                    affiliation: None,
+                    orcid: None,
+                    corresponding: false,
+                }
+            } else {
+                Author {
+                    last_name: trimmed.to_owned(),
+                    fore_name: None,
+                    initials: None,
+                    affiliation: None,
+                    orcid: None,
+                    corresponding: false,
+                }
+            }
+        })
+        .collect();
+
+    // Derive the internal article ID from the primary identifier.
+    let primary = &identifiers[0];
+    let id = format!("{}:{}", primary.kind.as_str(), primary.value);
+
+    // Parse source.
+    let source = input
+        .source
+        .as_deref()
+        .map(|s| match s.to_lowercase().as_str() {
+            "pubmed" => ArticleSource::Pubmed,
+            "arxiv" => ArticleSource::Arxiv,
+            "biorxiv" => ArticleSource::Biorxiv,
+            "openalex" => ArticleSource::OpenAlex,
+            "crossref" | "doi" => ArticleSource::CrossRef,
+            "europepmc" | " europe_pmc" => ArticleSource::EuropePmc,
+            "semantic_scholar" | "s2" => ArticleSource::SemanticScholar,
+            "gwascatalog" => ArticleSource::GwasCatalog,
+            "manual" => ArticleSource::Manual,
+            _ => ArticleSource::Unknown,
+        })
+        .unwrap_or(ArticleSource::Unknown);
+
+    let now = chrono::Utc::now();
+    Ok(Article {
+        id,
+        title: input.title.trim().to_owned(),
+        authors,
+        identifiers,
+        abstract_text: input.abstract_text.clone().filter(|s| !s.is_empty()),
+        year: input.year,
+        month: None,
+        journal: input.journal.clone().filter(|s| !s.is_empty()),
+        volume: input.volume.clone().filter(|s| !s.is_empty()),
+        issue: input.issue.clone().filter(|s| !s.is_empty()),
+        pages: input.pages.clone().filter(|s| !s.is_empty()),
+        issn: None,
+        essn: None,
+        language: None,
+        pub_types: input.pub_types.clone(),
+        keywords: input.keywords.clone(),
+        source,
+        created_at: Some(now),
+        updated_at: Some(now),
+    })
 }
 
 // ===========================================================================
@@ -1360,4 +1690,430 @@ fn parse_export_format(s: Option<&str>) -> bib_types::ExportFormat {
 /// File extension for an export format.
 fn format_extension(format: bib_types::ExportFormat) -> &'static str {
     format.extension()
+}
+
+// ===========================================================================
+// Unit tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentik_sdk::types::ToolResultContent;
+    use bib_types::IdKind;
+
+    // ── article_input_to_article ──────────────────────────────────────────
+
+    #[test]
+    fn test_article_input_with_doi_only() {
+        let input = ArticleInput {
+            title: "GWAS of height".into(),
+            doi: Some("10.1038/ng.1234".into()),
+            pmid: None,
+            identifiers: vec![],
+            authors: vec!["Smith John".into(), "Doe Kate".into()],
+            year: Some(2024),
+            journal: Some("Nature Genetics".into()),
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: Some("A study of height.".into()),
+            keywords: vec!["GWAS".into()],
+            pub_types: vec!["Journal Article".into()],
+            source: Some("pubmed".into()),
+        };
+
+        let article = article_input_to_article(&input).unwrap();
+        assert_eq!(article.title, "GWAS of height");
+        assert_eq!(article.doi(), Some("10.1038/ng.1234"));
+        assert_eq!(article.authors.len(), 2);
+        assert_eq!(article.authors[0].last_name, "Smith");
+        assert_eq!(article.authors[0].fore_name.as_deref(), Some("John"));
+        assert_eq!(article.authors[1].last_name, "Doe");
+        assert_eq!(article.year, Some(2024));
+        assert_eq!(article.journal.as_deref(), Some("Nature Genetics"));
+        assert_eq!(article.source, bib_types::ArticleSource::Pubmed);
+        assert_eq!(article.id, "doi:10.1038/ng.1234");
+    }
+
+    #[test]
+    fn test_article_input_with_structured_identifiers() {
+        let input = ArticleInput {
+            title: "Deep learning for genomics".into(),
+            doi: None,
+            pmid: None,
+            identifiers: vec![
+                IdentifierInput {
+                    kind: "arxiv".into(),
+                    value: "2401.00001".into(),
+                },
+                IdentifierInput {
+                    kind: "doi".into(),
+                    value: "10.48550/arXiv.2401.00001".into(),
+                },
+            ],
+            authors: vec![],
+            year: Some(2024),
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: Some("arxiv".into()),
+        };
+
+        let article = article_input_to_article(&input).unwrap();
+        assert_eq!(article.identifiers.len(), 2);
+        assert_eq!(
+            article.identifier(IdKind::Arxiv),
+            Some("2401.00001")
+        );
+        assert_eq!(article.source, bib_types::ArticleSource::Arxiv);
+    }
+
+    #[test]
+    fn test_article_input_dedup_identifiers() {
+        // DOI provided both as top-level field and in identifiers array.
+        let input = ArticleInput {
+            title: "Test".into(),
+            doi: Some("10.1038/test".into()),
+            pmid: Some("12345".into()),
+            identifiers: vec![IdentifierInput {
+                kind: "doi".into(),
+                value: "10.1038/test".into(),
+            }],
+            authors: vec![],
+            year: None,
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: None,
+        };
+
+        let article = article_input_to_article(&input).unwrap();
+        // DOI should appear only once.
+        let doi_count = article
+            .identifiers
+            .iter()
+            .filter(|i| i.kind == IdKind::Doi)
+            .count();
+        assert_eq!(doi_count, 1);
+        // PMID should also be present.
+        assert_eq!(article.pmid(), Some("12345"));
+    }
+
+    #[test]
+    fn test_article_input_missing_title() {
+        let input = ArticleInput {
+            title: "  ".into(),
+            doi: Some("10.1038/x".into()),
+            pmid: None,
+            identifiers: vec![],
+            authors: vec![],
+            year: None,
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: None,
+        };
+
+        assert!(article_input_to_article(&input).is_err());
+    }
+
+    #[test]
+    fn test_article_input_missing_identifiers() {
+        let input = ArticleInput {
+            title: "No IDs".into(),
+            doi: None,
+            pmid: None,
+            identifiers: vec![],
+            authors: vec![],
+            year: None,
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: None,
+        };
+
+        assert!(article_input_to_article(&input).is_err());
+    }
+
+    #[test]
+    fn test_article_input_single_name_author() {
+        let input = ArticleInput {
+            title: "Single".into(),
+            doi: Some("10.1/x".into()),
+            pmid: None,
+            identifiers: vec![],
+            authors: vec!["Organization".into()],
+            year: None,
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: None,
+        };
+
+        let article = article_input_to_article(&input).unwrap();
+        assert_eq!(article.authors.len(), 1);
+        assert_eq!(article.authors[0].last_name, "Organization");
+        assert!(article.authors[0].fore_name.is_none());
+    }
+
+    // ── Direct save (no external fetch) ───────────────────────────────────
+
+    #[tokio::test]
+    async fn test_save_article_direct_basic() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let gateway = Arc::new(crate::default_gateway());
+        let epmc = Arc::new(EuropePmcClient::new());
+        let tool = BibSaveTool { bib, gateway, epmc };
+
+        let input = BibSaveInput {
+            articles: Some(vec![ArticleInput {
+                title: "Mendelian randomization study".into(),
+                doi: Some("10.1038/ng.2024.001".into()),
+                pmid: Some("39000001".into()),
+                identifiers: vec![],
+                authors: vec!["Smith Jane".into(), "Roe Richard".into()],
+                year: Some(2024),
+                journal: Some("Nature Genetics".into()),
+                volume: Some("56".into()),
+                issue: None,
+                pages: Some("100-110".into()),
+                abstract_text: Some("We investigate causal effects.".into()),
+                keywords: vec!["MR".into(), "genetics".into()],
+                pub_types: vec!["Journal Article".into()],
+                source: Some("pubmed".into()),
+            }]),
+            ids: None,
+            source: None,
+            fetch_fulltext: Some(false),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["saved"].as_u64(), Some(1));
+        assert_eq!(json["cached"].as_u64(), Some(0));
+
+        let r = &json["results"][0];
+        assert_eq!(r["saved"], true);
+        assert_eq!(r["cached"], false);
+        assert_eq!(r["doi"], "10.1038/ng.2024.001");
+        assert_eq!(r["pmid"], "39000001");
+        assert_eq!(r["year"], 2024);
+        assert!(r["article_id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_save_article_direct_cached() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let gateway = Arc::new(crate::default_gateway());
+        let epmc = Arc::new(EuropePmcClient::new());
+        let tool = BibSaveTool { bib, gateway, epmc };
+
+        let article = ArticleInput {
+            title: "Cached test".into(),
+            doi: Some("10.1038/cached.001".into()),
+            pmid: None,
+            identifiers: vec![],
+            authors: vec![],
+            year: Some(2023),
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            abstract_text: None,
+            keywords: vec![],
+            pub_types: vec![],
+            source: None,
+        };
+
+        // First save.
+        let input1 = BibSaveInput {
+            articles: Some(vec![article.clone()]),
+            ids: None,
+            source: None,
+            fetch_fulltext: Some(false),
+        };
+        let _ = tool.run(input1).await.unwrap();
+
+        // Second save — should be cached.
+        let input2 = BibSaveInput {
+            articles: Some(vec![article]),
+            ids: None,
+            source: None,
+            fetch_fulltext: Some(false),
+        };
+        let result2 = tool.run(input2).await.unwrap();
+        let json2 = match result2.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json2["saved"].as_u64(), Some(0));
+        assert_eq!(json2["cached"].as_u64(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_save_article_direct_batch() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let gateway = Arc::new(crate::default_gateway());
+        let epmc = Arc::new(EuropePmcClient::new());
+        let tool = BibSaveTool { bib, gateway, epmc };
+
+        let input = BibSaveInput {
+            articles: Some(vec![
+                ArticleInput {
+                    title: "Article A".into(),
+                    doi: Some("10.1/a".into()),
+                    pmid: None,
+                    identifiers: vec![],
+                    authors: vec![],
+                    year: Some(2020),
+                    journal: None,
+                    volume: None,
+                    issue: None,
+                    pages: None,
+                    abstract_text: None,
+                    keywords: vec![],
+                    pub_types: vec![],
+                    source: None,
+                },
+                ArticleInput {
+                    title: "Article B".into(),
+                    doi: None,
+                    pmid: Some("99999".into()),
+                    identifiers: vec![],
+                    authors: vec![],
+                    year: Some(2021),
+                    journal: None,
+                    volume: None,
+                    issue: None,
+                    pages: None,
+                    abstract_text: None,
+                    keywords: vec![],
+                    pub_types: vec![],
+                    source: None,
+                },
+                ArticleInput {
+                    title: "Article C (arXiv)".into(),
+                    doi: None,
+                    pmid: None,
+                    identifiers: vec![IdentifierInput {
+                        kind: "arxiv".into(),
+                        value: "2101.00001".into(),
+                    }],
+                    authors: vec![],
+                    year: Some(2021),
+                    journal: None,
+                    volume: None,
+                    issue: None,
+                    pages: None,
+                    abstract_text: None,
+                    keywords: vec![],
+                    pub_types: vec![],
+                    source: Some("arxiv".into()),
+                },
+            ]),
+            ids: None,
+            source: None,
+            fetch_fulltext: Some(false),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["total"], 3);
+        assert_eq!(json["saved"].as_u64(), Some(3));
+        assert_eq!(json["failed"].as_u64(), Some(0));
+
+        let results = json["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3);
+        for r in results {
+            assert_eq!(r["saved"], true);
+            assert!(r["article_id"].as_str().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_save_rejects_empty_input() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let gateway = Arc::new(crate::default_gateway());
+        let epmc = Arc::new(EuropePmcClient::new());
+        let tool = BibSaveTool { bib, gateway, epmc };
+
+        let input = BibSaveInput {
+            articles: None,
+            ids: None,
+            source: None,
+            fetch_fulltext: None,
+        };
+
+        assert!(tool.run(input).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_save_article_direct_error_no_id() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let gateway = Arc::new(crate::default_gateway());
+        let epmc = Arc::new(EuropePmcClient::new());
+        let tool = BibSaveTool { bib, gateway, epmc };
+
+        let input = BibSaveInput {
+            articles: Some(vec![ArticleInput {
+                title: "No identifiers".into(),
+                doi: None,
+                pmid: None,
+                identifiers: vec![],
+                authors: vec![],
+                year: None,
+                journal: None,
+                volume: None,
+                issue: None,
+                pages: None,
+                abstract_text: None,
+                keywords: vec![],
+                pub_types: vec![],
+                source: None,
+            }]),
+            ids: None,
+            source: None,
+            fetch_fulltext: Some(false),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["failed"].as_u64(), Some(1));
+        assert!(json["results"][0]["error"].as_str().is_some());
+    }
 }

@@ -18,11 +18,48 @@ use tokio::sync::oneshot;
 #[derive(Clone)]
 pub struct HostControl {
     pub(crate) cmd_tx: UnboundedSender<HostCommand>,
+    /// Broadcast sender for `HostEvent` stream. Cloned cheaply (Arc
+    /// internally); each subscriber gets its own lag-tracked receiver.
+    /// `None` for tests / pre-initialization contexts.
+    pub(crate) event_broadcast:
+        Option<tokio::sync::broadcast::Sender<crate::host::HostEvent>>,
 }
 
 impl HostControl {
-    pub fn new(cmd_tx: UnboundedSender<HostCommand>) -> Self {
-        Self { cmd_tx }
+    pub fn new(
+        cmd_tx: UnboundedSender<HostCommand>,
+        event_broadcast: tokio::sync::broadcast::Sender<crate::host::HostEvent>,
+    ) -> Self {
+        Self {
+            cmd_tx,
+            event_broadcast: Some(event_broadcast),
+        }
+    }
+
+    /// Construct a `HostControl` without a broadcast subscription (for
+    /// tests or contexts where event streaming isn't needed). The
+    /// `subscribe_events` and `wait_agent` methods will return `None`
+    /// / fail-soft when constructed this way.
+    #[cfg(test)]
+    pub fn new_without_broadcast(cmd_tx: UnboundedSender<HostCommand>) -> Self {
+        Self {
+            cmd_tx,
+            event_broadcast: None,
+        }
+    }
+
+    /// Subscribe to the host's event stream (agent registrations, status
+    /// changes, shutdowns). Returns `None` if the host doesn't have a
+    /// broadcast channel (e.g. unit-test `HostControl` constructed via
+    /// [`new_without_broadcast`](Self::new_without_broadcast)).
+    ///
+    /// Each subscriber gets its own independent lag counter — multiple
+    /// `wait_agent` calls can subscribe concurrently without interfering
+    /// with each other or with the TUI's mpsc event channel.
+    pub fn subscribe_events(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::host::HostEvent>> {
+        self.event_broadcast.as_ref().map(|tx| tx.subscribe())
     }
 
     /// Send a fire-and-forget command (no response needed).
@@ -58,6 +95,29 @@ impl HostControl {
     /// Returns the target agent's full response text.
     pub async fn delegate(&self, to: &str, message: impl Into<String>) -> Option<String> {
         self.ask(|tx| HostCommand::Delegate {
+            to: to.into(),
+            message: message.into(),
+            reply_tx: tx,
+        })
+        .await
+    }
+
+    /// Fire-and-forget inter-agent message (Phase 5). Delivers `message`
+    /// to agent `to` without waiting for a response. Returns:
+    /// - `Some(Ok(()))` — agent found, message enqueued
+    /// - `Some(Err(msg))` — agent not found or host resolved the name but
+    ///   the agent was unregistered concurrently
+    /// - `None` — host command channel closed (host shutting down)
+    ///
+    /// Unlike [`Self::delegate`], the caller continues immediately. If the
+    /// target agent is mid-turn, the message is queued and processed on
+    /// the next turn (same semantics as TUI's `deliver_message`).
+    pub async fn send_message(
+        &self,
+        to: &str,
+        message: impl Into<String>,
+    ) -> Option<Result<(), String>> {
+        self.ask(|tx| HostCommand::SendMessage {
             to: to.into(),
             message: message.into(),
             reply_tx: tx,
@@ -257,6 +317,41 @@ impl HostControl {
         .await
         .flatten()
     }
+
+    /// Block until `agent_name` reaches `Completed` / `Failed` or
+    /// `timeout_ms` elapses. Returns `None` if the host command channel
+    /// closed (host shutdown). On timeout, the returned `WaitAgentResult`
+    /// carries `timed_out = true` and the snapshot status at that moment.
+    ///
+    /// If the agent is already in a terminal status at call time, returns
+    /// immediately with that status — no polling, no wait task spawned.
+    /// This matches codex v1 `wait` semantics.
+    pub async fn wait_agent(
+        &self,
+        agent_name: &str,
+        timeout_ms: u64,
+    ) -> Option<Result<WaitAgentResult, String>> {
+        self.ask(|tx| HostCommand::WaitAgentStatus {
+            agent_name: agent_name.into(),
+            timeout_ms,
+            reply_tx: tx,
+        })
+        .await
+    }
+
+    /// List all agents persisted in the storage graph (Phase 4 query
+    /// entry). Includes agents that are not currently registered with
+    /// the host (e.g. leftover from a previous process run). The caller
+    /// is responsible for filtering / joining with the in-memory
+    /// registry.
+    ///
+    /// Returns `None` if the host command channel closed.
+    pub async fn list_persisted_agents(
+        &self,
+    ) -> Option<Vec<agentik_core::storage::PersistedAgentGraph>> {
+        self.ask(|tx| HostCommand::ListPersistedAgents { reply_tx: tx })
+            .await
+    }
 }
 
 /// Commands sent from agent tools to RuntimeHost via [`HostControl`].
@@ -322,6 +417,16 @@ pub enum HostCommand {
     /// Not inter-agent communication — use Delegate for that.
     DeliverMessage { name: String, message: String },
 
+    /// Fire-and-forget inter-agent message (Phase 5). Unlike Delegate,
+    /// the sender does NOT wait for the target's Done response — the
+    /// message is enqueued and the caller continues immediately.
+    /// Reply: Ok(()) on successful delivery, Err(msg) if agent not found.
+    SendMessage {
+        to: String,
+        message: String,
+        reply_tx: oneshot::Sender<Result<(), String>>,
+    },
+
     /// Delegate a task to an agent and wait for its Done response.
     /// Reply: the target agent's response text.
     Delegate {
@@ -357,6 +462,35 @@ pub enum HostCommand {
     GetAgentInfo {
         name: String,
         reply_tx: oneshot::Sender<Option<AgentInfo>>,
+    },
+
+    /// Block until a named agent reaches a terminal status (Completed
+    /// or Failed) or the timeout elapses. Reply: `Ok(WaitAgentResult)`
+    /// if the agent reached a final status, `Err(msg)` if the timeout
+    /// elapsed, the agent wasn't found, or the broadcast channel closed.
+    ///
+    /// Modeled after codex's `multi_agents_v1::wait` tool
+    /// (`codex-rs/core/src/tools/handlers/multi_agents/wait.rs:46-222`):
+    /// subscribe to the per-agent status stream, then poll until the
+    /// status is final. Autonomics uses the host's broadcast event
+    /// channel (`HostEvent::AgentStatusChanged`) instead of a per-agent
+    /// `watch::Sender<AgentStatus>` because the runtime already derives
+    /// status centrally in `RuntimeHost::observe_status`.
+    WaitAgentStatus {
+        agent_name: String,
+        timeout_ms: u64,
+        reply_tx: oneshot::Sender<Result<WaitAgentResult, String>>,
+    },
+
+    /// List all agents currently persisted in the storage graph
+    /// (`agent_graph` table). Includes both live agents (registered with
+    /// this host) AND agents persisted by previous process runs that may
+    /// have been shut down or orphaned. Reply: persisted rows ordered by
+    /// `updated_at DESC` (most recent first).
+    ///
+    /// Phase 4 query entry. Mirrors codex's `AgentGraphStore::list()`.
+    ListPersistedAgents {
+        reply_tx: oneshot::Sender<Vec<agentik_core::storage::PersistedAgentGraph>>,
     },
 
     // ── Session management ──
@@ -428,7 +562,59 @@ pub struct HostStatus {
     pub termination: String,
 }
 
-/// Information about one registered agent, including capability metadata.
+/// Runtime lifecycle state of a registered agent.
+///
+/// Derived from the [`agentik_sdk::AgentEvent`] stream by
+/// [`crate::RuntimeHost::recv_any`]. Surfaces the live activity of every
+/// spawned agent so callers (`list_agents`, `get_agent_info`) can answer
+/// "what is agent X doing right now?" without polling the agent itself.
+///
+/// Lifecycle:
+///
+/// ```text
+/// Idle ──► Running ──► AwaitingTool { tool } ──► Running ──► …
+///   │         │                                     │
+///   │         └──► Completed                        └──► Failed(msg)
+///   └──► Completed / Failed   (one-shot tasks that never turned)
+/// ```
+///
+/// `Completed` is a terminal state: a fresh agent turn starts back at
+/// `Running` (or `AwaitingTool`) on the next message. `Failed(msg)` is
+/// sticky until the agent is shut down — the message captures the most
+/// recent error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentStatus {
+    /// No message has been delivered yet, or the agent is between turns.
+    Idle,
+    /// The agent is mid-turn — either streaming an LLM response or about
+    /// to call another tool. `last_event` may carry a one-line summary.
+    Running,
+    /// The agent issued a tool call and is waiting for its result.
+    /// `tool` is the registered tool name (e.g. `run_bash`).
+    AwaitingTool { tool: String },
+    /// The agent emitted `Done` for the current turn. Stays until the
+    /// next message flips it back to `Running`. Not sticky across shutdown.
+    Completed,
+    /// The agent emitted `Error`. Sticky until shutdown.
+    Failed { message: String },
+}
+
+impl AgentStatus {
+    /// Short lowercase tag suitable for log lines and JSON.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            AgentStatus::Idle => "idle",
+            AgentStatus::Running => "running",
+            AgentStatus::AwaitingTool { .. } => "awaiting_tool",
+            AgentStatus::Completed => "completed",
+            AgentStatus::Failed { .. } => "failed",
+        }
+    }
+}
+
+/// Information about one registered agent, including capability metadata
+/// and live runtime status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInfo {
     /// Agent short name (last path segment, e.g. `researcher`).
@@ -443,6 +629,20 @@ pub struct AgentInfo {
     pub expertise: Vec<String>,
     /// Tool names available to this agent.
     pub tools: Vec<String>,
+    /// Live runtime status, derived from the agent's event stream.
+    /// Defaults to [`AgentStatus::Idle`] when no message has been
+    /// delivered yet.
+    #[serde(default = "default_agent_status")]
+    pub status: AgentStatus,
+    /// One-line summary of the most recent event (e.g. the tool name on
+    /// `AwaitingTool`, the failing message on `Failed`). `None` until
+    /// the first event arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
+}
+
+fn default_agent_status() -> AgentStatus {
+    AgentStatus::Idle
 }
 
 /// A routing recommendation returned by [`HostControl::route_task`].
@@ -463,4 +663,22 @@ pub struct RouteCandidate {
     pub agent: String,
     pub score: f64,
     pub matched_tags: Vec<String>,
+}
+
+/// Result of a `wait_agent` call: the agent's final status and
+/// whether the wait timed out before reaching it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitAgentResult {
+    /// Resolved agent full path (e.g. `/root/researcher`).
+    pub agent_path: String,
+    /// The final status observed. If `timed_out`, this is the status
+    /// at the time of timeout (typically `Running` or `AwaitingTool`).
+    pub status: AgentStatus,
+    /// Last event summary from when this status was observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
+    /// `true` if the timeout fired before the agent reached a terminal
+    /// status. In that case `status` is non-final and `last_event` is
+    /// the snapshot from timeout time.
+    pub timed_out: bool,
 }

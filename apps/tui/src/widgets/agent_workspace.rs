@@ -179,7 +179,7 @@ fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "✗",
         AgentStatus::Cancelled => "⊘",
-        AgentStatus::Waiting => "⏳",
+        AgentStatus::Waiting => "☐",
         AgentStatus::Compacting => "⟳",
     }
 }
