@@ -2,6 +2,8 @@
 
 pub mod chi_square;
 pub mod cox_regression;
+pub mod glinternet;
+pub mod hiernet;
 pub mod linear_regression;
 pub mod logistic_regression;
 
@@ -19,5 +21,7 @@ impl NodePlugin for Plugin {
         ));
         registry.register(Box::new(cox_regression::CoxRegressionNodeFactory {}));
         registry.register(Box::new(chi_square::ChiSquareNodeFactory {}));
+        registry.register(Box::new(glinternet::GlinternetNodeFactory));
+        registry.register(Box::new(hiernet::HierNetNodeFactory));
     }
 }

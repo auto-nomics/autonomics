@@ -76,6 +76,7 @@ members = [
   "crates/agentik-network",
   "stat_crates/ml",
   "stat_crates/mice",
+  "stat_crates/hierint",
   "bio_crates/lcmm",
   "crates/writing-types",
   "crates/writing-base",
