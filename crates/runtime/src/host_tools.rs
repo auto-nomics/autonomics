@@ -29,6 +29,7 @@ use crate::control::HostControl;
 pub fn host_tools(
     control: Option<HostControl>,
     self_path: &agentik_types::AgentPath,
+    caller_profile_path: &str,
 ) -> Vec<ToolRegistration> {
     let Some(ctrl) = control else {
         return vec![];
@@ -38,6 +39,11 @@ pub fn host_tools(
         ToolRegistration::from(SpawnAgentTool {
             control: ctrl.clone(),
             caller_path: self_path.clone(),
+            caller_profile_path: caller_profile_path.into(),
+        }),
+        ToolRegistration::from(DeriveProfileTool {
+            control: ctrl.clone(),
+            caller_profile_path: caller_profile_path.into(),
         }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
@@ -82,20 +88,26 @@ pub fn host_tools(
     description = "Spawn a new child agent and register it with the host. \
                    The child's path is automatically derived from your path \
                    (e.g. spawning 'worker' becomes /root/you/worker). \
-                   The agent will be created from an existing profile name \
-                   and immediately available for delegation."
+                   The agent will be created from a profile — either a child \
+                   of your own profile, a root-level profile, or your own \
+                   profile if no segment is specified."
 )]
 struct SpawnAgentInput {
     /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
     /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
     agent_name: String,
-    /// Name of the AgentProfile to instantiate (must already exist).
-    profile_name: String,
+    /// Profile to instantiate. If omitted, reuses your own profile. \
+    /// If a single segment (e.g. `genomics`), looks up a child profile \
+    /// relative to your profile, falling back to root-level. \
+    /// If a multi-segment path (e.g. `researcher/genomics`), treated as \
+    /// an absolute profile path.
+    profile_segment: Option<String>,
 }
 
 struct SpawnAgentTool {
     control: HostControl,
     caller_path: agentik_types::AgentPath,
+    caller_profile_path: String,
 }
 
 #[async_trait]
@@ -106,15 +118,89 @@ impl ToolFunction for SpawnAgentTool {
         &self,
         input: SpawnAgentInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self
-            .control
-            .spawn_agent(&input.agent_name, &self.caller_path, &input.profile_name)
-            .await
+        match self.control.spawn_agent(
+            &input.agent_name,
+            &self.caller_path,
+            &self.caller_profile_path,
+            input.profile_segment.as_deref(),
+        ).await
         {
             Ok(path) => Ok(ToolResult::success(format!(
                 "Agent at path `{path}` spawned and registered."
             ))),
             Err(e) => Ok(ToolResult::success(format!("Spawn failed: {e}"))),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Derive Profile (dynamic child profile creation)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tool(
+    name = "derive_profile",
+    description = "Derive a specialized child profile from your own profile. \
+                   The child inherits all your capabilities unless explicitly \
+                   overridden. The child's path is your_profile_path/segment. \
+                   After derivation, you can spawn agents from the new profile \
+                   using spawn_agent with the segment as profile_segment."
+)]
+struct DeriveProfileInput {
+    /// Segment name for the child profile (e.g. `genomics`, `mr_analysis`).
+    /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
+    segment: String,
+    /// Human-readable description of this specialized role.
+    description: Option<String>,
+    /// Override the agent identity prompt.
+    agent_identity: Option<String>,
+    /// Override tool capability flags (None = inherit parent).
+    enable_bibliography: Option<bool>,
+    enable_writing: Option<bool>,
+    enable_opengwas: Option<bool>,
+    enable_opentargets: Option<bool>,
+    enable_gwascatalog: Option<bool>,
+    enable_iceberg: Option<bool>,
+    enable_dag_history: Option<bool>,
+}
+
+struct DeriveProfileTool {
+    control: HostControl,
+    caller_profile_path: String,
+}
+
+#[async_trait]
+impl ToolFunction for DeriveProfileTool {
+    type Input = DeriveProfileInput;
+
+    async fn run(
+        &self,
+        input: DeriveProfileInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        let overrides = agentik_core::ProfileOverrides {
+            description: input.description,
+            agent_identity: input.agent_identity,
+            enable_bibliography: input.enable_bibliography,
+            enable_writing: input.enable_writing,
+            enable_opengwas: input.enable_opengwas,
+            enable_opentargets: input.enable_opentargets,
+            enable_gwascatalog: input.enable_gwascatalog,
+            enable_iceberg: input.enable_iceberg,
+            enable_dag_history: input.enable_dag_history,
+            ..Default::default()
+        };
+        match self
+            .control
+            .derive_profile(&self.caller_profile_path, &input.segment, overrides)
+            .await
+        {
+            Ok(path) => Ok(ToolResult::success(format!(
+                "Derived profile `{path}`. Use spawn_agent with \
+                 profile_segment=\"{}\" to instantiate.",
+                input.segment
+            ))),
+            Err(e) => Ok(ToolResult::success(format!(
+                "Derive failed: {e}"
+            ))),
         }
     }
 }

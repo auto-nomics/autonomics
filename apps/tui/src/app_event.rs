@@ -32,4 +32,14 @@ pub(crate) enum AppEvent {
         session_id: uuid::Uuid,
         messages: Vec<agentik_sdk::types::messages::Message>,
     },
+    /// The persistent task plan for a resumed agent, loaded from storage.
+    /// Restores the sidebar checklist so the user sees the same plan the
+    /// model already knows about (it's injected into the system prompt).
+    /// The backend bootstrap does *not* emit `AgentEvent::PlanUpdate`, so
+    /// without this the TUI's `PlanState` stays empty until the model
+    /// happens to call `update_plan` again.
+    PlanLoaded {
+        agent_id: uuid::Uuid,
+        plan: agentik_types::AgentPlan,
+    },
 }

@@ -78,15 +78,15 @@ fn message_to_content(msg: Message, preserve_thinking: bool) -> MessageContent {
     MessageContent::Blocks(
         msg.content
             .into_iter()
-            // Drop thinking blocks with empty signatures — some providers
-            // (ZAI, MiniMax) don't support signed thinking and choke on
-            // the empty value, returning empty responses or errors.
+            // Drop thinking blocks with empty signatures for models that
+            // don't support thinking at all — some providers choke on the
+            // thinking block type, returning empty responses or errors.
             //
-            // HOWEVER, when thinking is actively enabled for the current
-            // model (e.g. GLM-5.2 in thinking mode), providers require
-            // prior thinking blocks to be passed back unconditionally —
-            // stripping them causes a "content[].thinking must be passed
-            // back" API error and breaks multi-turn conversations.
+            // For models that DO support thinking, preserve all thinking
+            // blocks unconditionally. Even when thinking is "disabled" in
+            // config, providers like DeepSeek and GLM default to thinking-on
+            // and require prior thinking blocks to be passed back — stripping
+            // them causes "content[].thinking must be passed back" API errors.
             .filter(|block| {
                 preserve_thinking
                     || !matches!(
@@ -117,7 +117,12 @@ impl ApiClient for AnthropicApiClient {
             .unwrap_or(u32::MAX);
         let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
 
-        let preserve_thinking = model_info.thinking_enabled;
+        // Preserve thinking blocks for any model that supports thinking.
+        // Even when thinking is "disabled" in config, providers like DeepSeek
+        // and GLM may default to thinking-on and produce thinking blocks. If
+        // those blocks are stripped on replay, the API rejects the request
+        // with "content[].thinking must be passed back" errors.
+        let preserve_thinking = model_info.supports_thinking;
         for msg in &messages {
             let content = message_to_content(msg.clone(), preserve_thinking);
             builder = match msg.role {
@@ -146,7 +151,7 @@ impl ApiClient for AnthropicApiClient {
             .unwrap_or(u32::MAX);
         let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
 
-        let preserve_thinking = model_info.thinking_enabled;
+        let preserve_thinking = model_info.supports_thinking;
         for msg in &messages {
             let content = message_to_content(msg.clone(), preserve_thinking);
             builder = match msg.role {

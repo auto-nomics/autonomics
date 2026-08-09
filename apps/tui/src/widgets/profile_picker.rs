@@ -1,8 +1,11 @@
-//! Profile picker — standalone widget for selecting an agent profile.
+//! Profile picker — tree-view widget for selecting an agent profile.
 //!
-//! Two-column layout: a searchable profile list on the left, and a preview
-//! pane on the right showing the selected profile's configuration details.
-//! Self-contained (state + rendering + key handling all live here).
+//! Two-column layout: a collapsible tree on the left (organized by profile
+//! path hierarchy), and a preview pane on the right showing the selected
+//! profile's configuration details. Self-contained (state + rendering + key
+//! handling all live here).
+
+use std::collections::HashSet;
 
 use agentik_core::AgentProfile;
 use ratatui::{
@@ -23,11 +26,28 @@ pub struct ProfileItem {
 
 impl ProfileItem {
     pub fn name(&self) -> &str {
-        &self.profile.name
+        self.profile.name()
     }
     pub fn description(&self) -> &str {
         &self.profile.description
     }
+}
+
+/// One visible row in the tree — either a collapsible folder or a leaf profile.
+#[derive(Clone, Debug)]
+struct TreeNode {
+    /// Full path of this node (e.g. `researcher/genomics`).
+    path: String,
+    /// Short name — last path segment.
+    name: String,
+    /// Depth in the tree (0 = root).
+    depth: usize,
+    /// `true` if this is a leaf (an actual profile).
+    is_leaf: bool,
+    /// Profile item index, if this is a leaf.
+    item_idx: Option<usize>,
+    /// `true` if this folder is currently expanded.
+    expanded: bool,
 }
 
 /// State for the profile picker.
@@ -36,8 +56,13 @@ pub struct ProfilePickerState {
     pub visible: bool,
     /// Search query string.
     pub query: String,
+    /// All profiles.
     items: Vec<ProfileItem>,
-    filtered: Vec<usize>,
+    /// Flat list of tree rows in display order (only visible / non-collapsed
+    /// nodes). Rebuilt whenever the tree or collapse state changes.
+    rows: Vec<TreeNode>,
+    /// Set of folder paths that are collapsed by the user.
+    collapsed: HashSet<String>,
     selected: usize,
     list_state: ListState,
 }
@@ -46,8 +71,9 @@ impl ProfilePickerState {
     pub fn open(&mut self) {
         self.visible = true;
         self.query.clear();
+        self.collapsed.clear();
         self.selected = 0;
-        self.refilter();
+        self.rebuild_rows();
     }
 
     pub fn close(&mut self) {
@@ -56,12 +82,12 @@ impl ProfilePickerState {
 
     pub fn push_char(&mut self, c: char) {
         self.query.push(c);
-        self.refilter();
+        self.rebuild_rows();
     }
 
     pub fn pop_char(&mut self) {
         self.query.pop();
-        self.refilter();
+        self.rebuild_rows();
     }
 
     pub fn move_up(&mut self) {
@@ -72,22 +98,39 @@ impl ProfilePickerState {
     }
 
     pub fn move_down(&mut self) {
-        let max = self.filtered.len().saturating_sub(1);
+        let max = self.rows.len().saturating_sub(1);
         if self.selected < max {
             self.selected += 1;
         }
         self.sync_list_state();
     }
 
-    /// Returns a clone of the currently selected item, if any.
+    /// Expand or collapse the folder at the current cursor position.
+    /// No-op on leaf nodes.
+    pub fn toggle_expand(&mut self) {
+        if let Some(node) = self.rows.get(self.selected) {
+            if !node.is_leaf {
+                if self.collapsed.contains(&node.path) {
+                    self.collapsed.remove(&node.path);
+                } else {
+                    self.collapsed.insert(node.path.clone());
+                }
+                self.rebuild_rows();
+            }
+        }
+    }
+
+    /// Returns a clone of the currently selected profile item, if the cursor
+    /// is on a leaf row.
     pub fn selected_item(&self) -> Option<ProfileItem> {
-        let &idx = self.filtered.get(self.selected)?;
+        let node = self.rows.get(self.selected)?;
+        let idx = node.item_idx?;
         self.items.get(idx).cloned()
     }
 
-    /// Number of items currently displayed (post-filter).
+    /// Number of rows currently displayed.
     pub fn filtered_len(&self) -> usize {
-        self.filtered.len()
+        self.rows.len()
     }
 
     /// Populate the picker from profiles.
@@ -96,12 +139,14 @@ impl ProfilePickerState {
             .into_iter()
             .map(|p| ProfileItem { profile: p })
             .collect();
-        self.refilter();
+        self.rebuild_rows();
     }
+
+    // ── Internal ──
 
     fn sync_list_state(&mut self) {
         self.list_state.select(
-            if self.filtered.is_empty() || self.selected >= self.filtered.len() {
+            if self.rows.is_empty() || self.selected >= self.rows.len() {
                 None
             } else {
                 Some(self.selected)
@@ -109,26 +154,143 @@ impl ProfilePickerState {
         );
     }
 
-    fn refilter(&mut self) {
+    /// Rebuild the flat `rows` vector from `items`, honoring:
+    /// - Collapse state (collapsed folders hide their children)
+    /// - Search filter (matching profiles are shown, ancestors auto-expanded)
+    fn rebuild_rows(&mut self) {
         let needle = self.query.trim().to_lowercase();
-        if needle.is_empty() {
-            self.filtered = (0..self.items.len()).collect();
+
+        // Determine which profile indices match the search filter.
+        let matching: Option<HashSet<usize>> = if needle.is_empty() {
+            None
         } else {
-            self.filtered = self
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| {
-                    item.profile.name.to_lowercase().contains(&needle)
-                        || item.profile.description.to_lowercase().contains(&needle)
-                })
-                .map(|(i, _)| i)
-                .collect();
+            Some(
+                self.items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| {
+                        item.profile.path.to_lowercase().contains(&needle)
+                            || item.profile.description.to_lowercase().contains(&needle)
+                    })
+                    .map(|(i, _)| i)
+                    .collect(),
+            )
+        };
+
+        // Collect profile paths as segment vectors. Profile paths are like
+        // "researcher/genomics/mr_analysis" (no /root prefix).
+        let profile_paths: Vec<(usize, Vec<String>)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| matching.as_ref().map(|m| m.contains(i)).unwrap_or(true))
+            .map(|(i, item)| {
+                let segments: Vec<String> =
+                    item.profile.path.split('/').map(String::from).collect();
+                (i, segments)
+            })
+            .collect();
+
+        // When filtering, force-expand all folders that lead to matches.
+        let mut force_expand: HashSet<String> = HashSet::new();
+        if matching.is_some() {
+            for (_, segs) in &profile_paths {
+                let mut acc = String::new();
+                for seg in segs {
+                    if !acc.is_empty() {
+                        acc.push('/');
+                    }
+                    acc.push_str(seg);
+                    force_expand.insert(acc.clone());
+                }
+            }
         }
-        self.selected = 0;
+
+        let mut rows = Vec::new();
+        build_tree(&profile_paths, &self.collapsed, &force_expand, &mut rows, 0);
+
+        self.rows = rows;
+        if self.selected >= self.rows.len() {
+            self.selected = self.rows.len().saturating_sub(1);
+        }
         self.sync_list_state();
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tree builder
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Recursively build the visible `rows` list from profile paths.
+fn build_tree(
+    entries: &[(usize, Vec<String>)],
+    collapsed: &HashSet<String>,
+    force_expand: &HashSet<String>,
+    rows: &mut Vec<TreeNode>,
+    depth: usize,
+) {
+    let mut seen: Vec<(String, String, Vec<(usize, Vec<String>)>)> = Vec::new();
+
+    for &(item_idx, ref segs) in entries {
+        if depth >= segs.len() {
+            continue;
+        }
+        let segment = segs[depth].clone();
+        let mut full_path = String::new();
+        for s in &segs[..=depth] {
+            if !full_path.is_empty() {
+                full_path.push('/');
+            }
+            full_path.push_str(s);
+        }
+
+        let pos = seen.iter().position(|(s, _, _)| s == &segment);
+        let idx = match pos {
+            Some(i) => i,
+            None => {
+                seen.push((segment.clone(), full_path.clone(), Vec::new()));
+                seen.len() - 1
+            }
+        };
+
+        if depth + 1 <= segs.len() {
+            seen[idx].2.push((item_idx, segs.clone()));
+        }
+    }
+
+    for (segment, full_path, children) in &seen {
+        let leaf_entry = children.iter().find(|(_, segs)| segs.len() == depth + 1);
+        let is_leaf = leaf_entry.is_some();
+        let item_idx = leaf_entry.map(|(idx, _)| *idx);
+
+        let deeper_children: Vec<(usize, Vec<String>)> = children
+            .iter()
+            .filter(|(_, segs)| segs.len() > depth + 1)
+            .cloned()
+            .collect();
+
+        let has_children = !deeper_children.is_empty();
+        let is_collapsed = collapsed.contains(full_path) && !force_expand.contains(full_path);
+        let expanded = !is_collapsed;
+
+        rows.push(TreeNode {
+            path: full_path.clone(),
+            name: segment.clone(),
+            depth,
+            is_leaf,
+            item_idx,
+            expanded: has_children && expanded,
+        });
+
+        if has_children && expanded {
+            build_tree(&deeper_children, collapsed, force_expand, rows, depth + 1);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Widget
+// ═══════════════════════════════════════════════════════════════════════
 
 /// Standalone widget that renders the profile picker as a two-column popup.
 pub struct ProfilePicker {
@@ -183,19 +345,17 @@ impl StatefulWidget for ProfilePicker {
             .width(self.popup_width);
         let inner = popup.render(area, buf);
 
-        // Top-level vertical: search row (1) + separator (1) + content row
-        // (rest) + footer (1).
         let v_regions = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Length(1), // separator line
+                Constraint::Length(1),
                 Constraint::Min(3),
                 Constraint::Length(1),
             ])
             .split(inner);
 
-        // ── Search input row (spans both blocks) ──
+        // ── Search input row ──
         let input_line = if state.query.is_empty() {
             Line::from(vec![
                 Span::styled("/", Style::default().fg(Color::DarkGray)),
@@ -232,7 +392,7 @@ impl StatefulWidget for ProfilePicker {
         self.render_preview_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint = " Enter spawn  ↑↓ navigate  Esc cancel";
+        let hint = " Enter spawn  →/← expand/fold  ↑↓ navigate  Esc cancel";
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -243,7 +403,7 @@ impl StatefulWidget for ProfilePicker {
 }
 
 impl ProfilePicker {
-    /// Render the left block: list of profiles.
+    /// Render the left block: collapsible tree of profiles.
     fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut ProfilePickerState) {
         let block = Block::default()
             .borders(Borders::RIGHT)
@@ -257,7 +417,7 @@ impl ProfilePicker {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if state.filtered.is_empty() {
+        if state.rows.is_empty() {
             let line = Line::from(Span::styled(
                 "  No profiles found.",
                 Style::default().fg(Color::DarkGray),
@@ -273,25 +433,48 @@ impl ProfilePicker {
         }
 
         let items: Vec<ListItem> = state
-            .filtered
+            .rows
             .iter()
             .enumerate()
-            .map(|(sel_i, &item_i)| {
-                let item = &state.items[item_i];
+            .map(|(sel_i, node)| {
                 let is_selected = sel_i == state.selected;
-                let style = if is_selected {
+
+                // Indentation.
+                let indent = "  ".repeat(node.depth);
+
+                // Folder/leaf icon.
+                let (icon, icon_color) = if node.is_leaf {
+                    ("●", self.accent)
+                } else if node.expanded {
+                    ("▼", Color::Yellow)
+                } else {
+                    ("▶", Color::Yellow)
+                };
+
+                let name_style = if is_selected {
                     Style::default()
                         .fg(Color::Black)
                         .bg(self.accent)
                         .add_modifier(Modifier::BOLD)
-                } else {
+                } else if node.is_leaf {
                     Style::default().fg(Color::Gray)
+                } else {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                };
+
+                let icon_style = if is_selected {
+                    Style::default().fg(Color::Black).bg(self.accent)
+                } else {
+                    Style::default().fg(icon_color)
                 };
 
                 Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled("+ ", Style::default().fg(self.accent)),
-                    Span::styled(item.profile.name.clone(), style),
+                    Span::styled(indent, Style::default()),
+                    Span::styled(icon, icon_style),
+                    Span::raw(" "),
+                    Span::styled(node.name.clone(), name_style),
                 ])
             })
             .map(ListItem::new)
@@ -319,7 +502,11 @@ impl ProfilePicker {
 
         let Some(item) = state.selected_item() else {
             let line = Line::from(Span::styled(
-                "  No profile selected.",
+                if state.rows.is_empty() {
+                    "  No profiles found."
+                } else {
+                    "  Select a profile (●) to preview."
+                },
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::DIM),
@@ -337,16 +524,24 @@ impl ProfilePicker {
         let p = &item.profile;
         let mut lines: Vec<Line> = Vec::new();
 
-        // Name.
+        // Path.
         lines.push(Line::from(vec![
-            Span::styled("  Name       ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Path       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                p.name.clone(),
+                p.path.clone(),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+
+        // Parent path (if any).
+        if let Some(parent) = p.parent_path() {
+            lines.push(Line::from(vec![
+                Span::styled("  Parent     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(parent.to_string(), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
 
         // Description.
         if !p.description.is_empty() {
@@ -397,13 +592,14 @@ impl ProfilePicker {
             ]));
         };
         flag("bibliography", p.enable_bibliography);
+        flag("writing", p.enable_writing);
         flag("opengwas", p.enable_opengwas);
         flag("opentargets", p.enable_opentargets);
         flag("gwascatalog", p.enable_gwascatalog);
         flag("iceberg", p.enable_iceberg);
         flag("dag-history", p.enable_dag_history);
 
-        // Truncate to fit available height.
+        // Truncate to fit.
         let max_lines = inner.height as usize;
         if lines.len() > max_lines {
             lines.truncate(max_lines.saturating_sub(1));

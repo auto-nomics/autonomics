@@ -9,6 +9,7 @@ mod get_node_doc_tool;
 mod get_node_ports_tool;
 mod get_node_spec_tool;
 mod get_output_tool;
+mod inspect_node_tool;
 mod list_dag_refs_tool;
 mod list_node_factories_tool;
 mod new_dag_ref_tool;
@@ -84,6 +85,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(get_node_spec_tool::GetNodeSpecTool::new(client.clone())),
         ToolRegistration::from(get_node_ports_tool::GetNodePortsTool::new(client.clone())),
         ToolRegistration::from(get_node_doc_tool::GetNodeDocTool::new(client.clone())),
+        ToolRegistration::from(inspect_node_tool::InspectNodeTool::new(client.clone())),
         // ── DAG building ──────────────────────────────────────────────────
         ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
         ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),

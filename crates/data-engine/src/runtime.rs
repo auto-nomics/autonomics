@@ -234,6 +234,32 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(Ok(engine.node_status(&id)));
             }
+            DataEngineCmd::GetNode { id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; query the node after it completes".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.get_node(&id)));
+            }
+            DataEngineCmd::NodeExists { id, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; query the node after it completes".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.node_exists(&id)));
+            }
             DataEngineCmd::ViewDag { reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -584,6 +610,33 @@ impl DataEngineClient {
         id: String,
     ) -> Result<Option<crate::dag::runtime::RuntimeStatus>> {
         self.get_node_status(id).await
+    }
+
+    /// Get the retained `(kind, spec)` of an existing node instance by id.
+    ///
+    /// Returns `None` if the node does not exist or has no retained spec.
+    pub async fn get_node(&self, id: String) -> Result<Option<(String, serde_json::Value)>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetNode {
+                id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Whether a node with `id` exists in the DAG (regardless of whether it
+    /// has a retained spec). Routed through the actor so it reflects the live
+    /// DAG state.
+    pub async fn node_exists(&self, id: String) -> Result<bool> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::NodeExists { id, reply: reply_tx },
+            reply_rx,
+        )
+        .await
     }
 
     pub async fn remove_node(&self, id: String) -> Result<()> {

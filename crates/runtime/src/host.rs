@@ -18,7 +18,7 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
-use agentik_core::storage::{AgentStorage, restore_memory};
+use agentik_core::storage::{AgentStorage, AgentProfileRegistry, restore_memory};
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
@@ -33,8 +33,20 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::RuntimeConfig;
+use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::tools::DefaultToolSetError;
+
+// AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
+// can build a dynamic system prompt that only mentions tools the profile
+// actually enables.
+impl PromptCapabilities for agentik_core::AgentProfile {
+    fn enable_bibliography(&self) -> bool { self.enable_bibliography }
+    fn enable_opengwas(&self) -> bool { self.enable_opengwas }
+    fn enable_opentargets(&self) -> bool { self.enable_opentargets }
+    fn enable_gwascatalog(&self) -> bool { self.enable_gwascatalog }
+    fn enable_iceberg(&self) -> bool { self.enable_iceberg }
+    fn enable_dag_history(&self) -> bool { self.enable_dag_history }
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Error
@@ -85,6 +97,9 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     pub datalake: Arc<Datalake>,
     pub storage: Arc<dyn AgentStorage>,
+    /// Profile registry (same DB connection, separate trait object).
+    /// Used by RuntimeHost for dynamic profile derivation.
+    pub profile_storage: Arc<dyn AgentProfileRegistry>,
     /// Bibliography storage + literature gateway, opened **once** per
     /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
@@ -170,6 +185,11 @@ impl SharedInfra {
                 return Err(HostError::Storage(e));
             }
         };
+        // Profile registry — separate trait object on the same connection.
+        let profile_storage: Arc<dyn AgentProfileRegistry> = match TursoAgentStorage::open(&config.agent_db).await {
+            Ok(s) => Arc::new(s),
+            Err(e) => return Err(HostError::Storage(e)),
+        };
 
         let bib = Arc::new(
             bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
@@ -189,6 +209,7 @@ impl SharedInfra {
             file_storage,
             datalake,
             storage,
+            profile_storage,
             runtime_handle: tokio::runtime::Handle::current(),
             bib,
             writing,
@@ -234,7 +255,9 @@ impl SharedInfra {
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);
         } else {
-            builder = builder.with_system_prompt_section(crate::config::default_system_prompt());
+            builder = builder.with_system_prompt_section(
+                crate::config::build_system_prompt(profile),
+            );
         }
 
         builder = builder
@@ -267,6 +290,7 @@ impl SharedInfra {
         Ok(AgentHandle {
             agent_id,
             path: agent_path.clone(),
+            profile_path: profile.path.clone(),
             internal_tx,
             event_rx,
             agent_task,
@@ -286,7 +310,7 @@ impl SharedInfra {
 
         let file_storage = self.file_storage.clone();
         let datalake = self.datalake.clone();
-        let engine_client = self.engine_manager.client_for_session(&profile.name);
+        let engine_client = self.engine_manager.client_for_session(&profile.path);
 
         let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());
 
@@ -333,6 +357,7 @@ impl SharedInfra {
         tools.extend(crate::host_tools::host_tools(
             self.host_control.clone(),
             agent_path,
+            &profile.path,
         ));
 
         Ok(tools)
@@ -351,6 +376,9 @@ impl SharedInfra {
 pub struct AgentHandle {
     pub agent_id: uuid::Uuid,
     pub path: agentik_types::AgentPath,
+    /// Profile path this agent was instantiated from. Used to resolve
+    /// child profile lookups when this agent spawns sub-agents.
+    pub profile_path: String,
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     agent_task: tokio::task::JoinHandle<()>,
@@ -558,6 +586,10 @@ struct AgentEntry {
     /// Mirrors the HashMap key but kept here for typed access within entries.
     #[allow(dead_code)]
     path: agentik_types::AgentPath,
+    /// Profile path this agent was instantiated from. Used to resolve
+    /// child profile lookups when this agent spawns sub-agents.
+    #[allow(dead_code)]
+    profile_path: String,
     /// Capability metadata for routing and discovery.
     info: crate::control::AgentInfo,
     /// Shared model slot — same Arc as the relay's AgentHandle.
@@ -652,7 +684,8 @@ impl RuntimeHost {
             HostCommand::Spawn {
                 name,
                 caller_path,
-                profile_name,
+                caller_profile_path,
+                profile_segment,
                 reply_tx,
             } => {
                 // Derive child path from caller's path + the LLM-provided segment.
@@ -669,23 +702,54 @@ impl RuntimeHost {
                         reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
                     return;
                 }
-                // Look up profile from cache.
+
+                // ── Resolve profile ──
+                // 1. None → reuse caller's profile (by caller_profile_path).
+                // 2. Contains '/' → absolute profile path.
+                // 3. Single segment → relative: try "{caller}/{segment}",
+                //    fallback to root-level "{segment}".
+                let target_profile_path = match &profile_segment {
+                    None => caller_profile_path.clone(),
+                    Some(seg) if seg.contains('/') => seg.clone(),
+                    Some(seg) => {
+                        let relative = format!("{caller_profile_path}/{seg}");
+                        if self.profiles.iter().any(|p| p.path == relative) {
+                            relative
+                        } else {
+                            seg.clone()
+                        }
+                    }
+                };
+
                 let Some(profile) = self
                     .profiles
                     .iter()
-                    .find(|p| p.name == profile_name)
+                    .find(|p| p.path == target_profile_path)
                     .cloned()
                 else {
+                    // List available child profiles under the caller's path.
+                    let available_children: Vec<_> = self
+                        .profiles
+                        .iter()
+                        .filter(|p| p.parent_path() == Some(caller_profile_path.as_str()))
+                        .map(|p| p.name().to_string())
+                        .collect();
+                    let available_roots: Vec<_> = self
+                        .profiles
+                        .iter()
+                        .filter(|p| p.depth() == 0)
+                        .map(|p| p.name().to_string())
+                        .collect();
                     let _ = reply_tx.send(Err(format!(
-                        "Profile '{profile_name}' not found. Available: {}",
-                        self.profiles
-                            .iter()
-                            .map(|p| p.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "Profile '{target_profile_path}' not found. \
+                         Child profiles under '{caller_profile_path}': [{}]. \
+                         Root profiles: [{}].",
+                        available_children.join(", "),
+                        available_roots.join(", "),
                     )));
                     return;
                 };
+
                 // Need a model to spawn.
                 let Some(ref model) = self.model else {
                     let _ = reply_tx.send(Err("No model configured on host.".into()));
@@ -773,6 +837,59 @@ impl RuntimeHost {
                 let resolved = self.resolve_agent(&name).unwrap_or(name);
                 self.shutdown_agent(&resolved);
             }
+            HostCommand::DeriveProfile {
+                caller_profile_path,
+                segment,
+                overrides,
+                reply_tx,
+            } => {
+                // Look up parent profile in cache.
+                let Some(parent) = self
+                    .profiles
+                    .iter()
+                    .find(|p| p.path == caller_profile_path)
+                    .cloned()
+                else {
+                    let _ = reply_tx.send(Err(format!(
+                        "Your profile '{caller_profile_path}' not found in cache"
+                    )));
+                    return;
+                };
+                // Derive the child profile.
+                let child = match parent.derive_child(&segment, *overrides) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = reply_tx.send(Err(e));
+                        return;
+                    }
+                };
+                // Reject if path already exists.
+                if self.profiles.iter().any(|p| p.path == child.path) {
+                    let _ = reply_tx.send(Err(format!(
+                        "Profile '{}' already exists",
+                        child.path
+                    )));
+                    return;
+                }
+                // Persist to storage.
+                let profile_storage = self.infra.profile_storage.clone();
+                let child_for_persist = child.clone();
+                let child_path = child.path.clone();
+                self.infra.runtime_handle.spawn(async move {
+                    match profile_storage.create_profile(child_for_persist).await {
+                        Ok(()) => {
+                            let _ = reply_tx.send(Ok(child_path));
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(Err(format!(
+                                "Failed to persist derived profile: {e}"
+                            )));
+                        }
+                    }
+                });
+                // Add to in-memory cache immediately (non-async).
+                self.profiles.push(child);
+            }
             HostCommand::AddNode {
                 name,
                 profile,
@@ -826,7 +943,7 @@ impl RuntimeHost {
                     profiles: self
                         .profiles
                         .iter()
-                        .map(|p| capability_from_profile(&p.name, &p.name, p))
+                        .map(|p| capability_from_profile(p.name(), &p.path, p))
                         .collect(),
                     nodes: g.node_names().into_iter().map(String::from).collect(),
                     edge_count: g.edge_count(),
@@ -866,8 +983,8 @@ impl RuntimeHost {
                     .or_else(|| {
                         self.profiles
                             .iter()
-                            .find(|p| p.name == name)
-                            .map(|p| capability_from_profile(&p.name, &p.name, p))
+                            .find(|p| p.path == name)
+                            .map(|p| capability_from_profile(p.name(), &p.path, p))
                     });
                 let _ = reply_tx.send(info);
             }
@@ -1036,9 +1153,9 @@ impl RuntimeHost {
         candidates.extend(
             self.profiles
                 .iter()
-                .filter(|p| !running_names.contains(p.name.as_str()))
-                .filter(|p| Some(p.name.as_str()) != exclude)
-                .map(|p| score_info(&capability_from_profile(&p.name, &p.name, p), false)),
+                .filter(|p| !running_names.contains(p.path.as_str()))
+                .filter(|p| Some(p.path.as_str()) != exclude)
+                .map(|p| score_info(&capability_from_profile(p.name(), &p.path, p), false)),
         );
 
         let mut candidates: Vec<_> = candidates.into_iter().filter(|c| c.score > 0.0).collect();
@@ -1153,6 +1270,7 @@ impl RuntimeHost {
     /// after registration.
     pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
         let path = handle.path.clone();
+        let profile_path = handle.profile_path.clone();
         let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
         let event_tx = self.event_tx.clone();
@@ -1168,6 +1286,7 @@ impl RuntimeHost {
                 cmd_tx,
                 _relay_task: relay_task,
                 path,
+                profile_path,
                 info,
                 model,
             },

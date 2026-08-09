@@ -178,12 +178,14 @@ impl HostControl {
         &self,
         name: &str,
         caller_path: &agentik_types::AgentPath,
-        profile_name: &str,
+        caller_profile_path: &str,
+        profile_segment: Option<&str>,
     ) -> Result<String, String> {
         self.ask(|tx| HostCommand::Spawn {
             name: name.into(),
             caller_path: caller_path.clone(),
-            profile_name: profile_name.into(),
+            caller_profile_path: caller_profile_path.into(),
+            profile_segment: profile_segment.map(String::from),
             reply_tx: tx,
         })
         .await
@@ -204,6 +206,23 @@ impl HostControl {
             caller_path: caller_path.clone(),
             profile: Box::new(profile),
             model_override,
+            reply_tx: tx,
+        })
+        .await
+        .unwrap_or(Err("host command channel closed".into()))
+    }
+
+    /// Derive a specialized child profile from the caller's profile.
+    pub async fn derive_profile(
+        &self,
+        caller_profile_path: &str,
+        segment: &str,
+        overrides: agentik_core::ProfileOverrides,
+    ) -> Result<String, String> {
+        self.ask(|tx| HostCommand::DeriveProfile {
+            caller_profile_path: caller_profile_path.into(),
+            segment: segment.into(),
+            overrides: Box::new(overrides),
             reply_tx: tx,
         })
         .await
@@ -246,10 +265,14 @@ pub enum HostCommand {
     /// Spawn and register an agent. Reply: Ok(path_string) or Err(msg).
     /// `caller_path` is the parent agent's path; the child's path is
     /// derived as `caller_path.join(name)`.
+    /// `caller_profile_path` is the caller's profile path for child profile
+    /// lookup. `profile_segment` is None (reuse caller's profile), a relative
+    /// segment (e.g. "genomics"), or an absolute profile path.
     Spawn {
         name: String,
         caller_path: agentik_types::AgentPath,
-        profile_name: String,
+        caller_profile_path: String,
+        profile_segment: Option<String>,
         reply_tx: oneshot::Sender<Result<String, String>>,
     },
 
@@ -266,6 +289,14 @@ pub enum HostCommand {
 
     /// Shut down a named agent and remove from registry.
     Shutdown { name: String },
+
+    /// Derive a child profile from the caller's profile. Reply: Ok(profile_path) or Err(msg).
+    DeriveProfile {
+        caller_profile_path: String,
+        segment: String,
+        overrides: Box<agentik_core::ProfileOverrides>,
+        reply_tx: oneshot::Sender<Result<String, String>>,
+    },
 
     /// Add a topology node.
     AddNode {

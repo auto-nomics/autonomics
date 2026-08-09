@@ -572,6 +572,66 @@ mod tests {
         );
     }
 
+    /// An empty-string path must be rejected at the validation layer
+    /// before it reaches `normalize_path`, which would otherwise turn it
+    /// into `/` and attempt a destructive delete on the virtual root.
+    #[tokio::test]
+    async fn write_empty_path_is_rejected() {
+        let tool = make_tool();
+
+        // `path: Some("")` — the exact input that caused the
+        // "failed to clear / => directory not empty" bug.
+        let mut w = input("write");
+        w.path = Some(String::new());
+        w.content = Some("data".into());
+        let result = tool.run(w).await;
+        assert!(result.is_err(), "expected error for empty path");
+        let s = format!("{result:?}");
+        assert!(
+            s.contains("missing or empty"),
+            "expected 'missing or empty' in error, got: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_whitespace_only_path_is_rejected() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("   ".into());
+        w.content = Some("data".into());
+        let result = tool.run(w).await;
+        assert!(
+            result.is_err(),
+            "expected error for whitespace-only path"
+        );
+    }
+
+    #[tokio::test]
+    async fn cp_empty_dst_is_rejected() {
+        let tool = make_tool();
+        let mut c = input("cp");
+        c.src = Some("/src.txt".into());
+        c.dst = Some(String::new());
+        let result = tool.run(c).await;
+        assert!(result.is_err(), "expected error for empty dst");
+    }
+
+    #[tokio::test]
+    async fn edit_empty_path_is_rejected() {
+        let tool = make_tool();
+        let mut e = input("edit");
+        e.path = Some(String::new());
+        e.old_string = Some("a".into());
+        e.new_string = Some("b".into());
+        let result = tool.run(e).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let s = format!("{:?}", result.content);
+        assert!(
+            s.contains("missing or empty"),
+            "expected 'missing or empty' in error, got: {s}"
+        );
+    }
+
     #[tokio::test]
     async fn rm_empty_dir_succeeds_without_flag() {
         let tool = make_tool();

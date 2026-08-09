@@ -100,20 +100,53 @@ pub enum PersistOp {
 // Agent Profile (blueprint / preset)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// A named, persisted agent configuration template that can be instantiated
-/// into a running [`Agent`](crate::Agent).
+/// Optional delta fields when deriving a child profile from a parent.
+///
+/// Any `None` field inherits the parent's value. Used by
+/// [`AgentProfile::derive_child`] and the `derive_profile` agent tool.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ProfileOverrides {
+    pub description: Option<String>,
+    pub agent_identity: Option<String>,
+    /// `Some(None)` explicitly clears the parent's system prompt.
+    pub system_prompt: Option<Option<String>>,
+    /// `Some(None)` explicitly clears the parent's model preference.
+    pub preferred_model: Option<Option<String>>,
+    pub enable_bibliography: Option<bool>,
+    pub enable_writing: Option<bool>,
+    pub enable_opengwas: Option<bool>,
+    pub enable_opentargets: Option<bool>,
+    pub enable_gwascatalog: Option<bool>,
+    pub enable_iceberg: Option<bool>,
+    pub enable_dag_history: Option<bool>,
+}
+
+/// A hierarchical, persisted agent configuration template that can be
+/// instantiated into a running [`Agent`](crate::Agent).
+///
+/// Profiles form a tree mirroring the [`AgentPath`](agentik_types::AgentPath)
+/// hierarchy. The `path` field (e.g. `"researcher"`, `"researcher/genomics"`)
+/// defines the profile's position in the type tree. Each segment follows the
+/// same validation rules as `AgentPath` segments: lowercase `[a-z0-9_]`,
+/// 1–32 chars.
+///
+/// Child profiles inherit all capabilities from their parent and can override
+/// specific fields via [`ProfileOverrides`]. Use [`derive_child`](Self::derive_child)
+/// to create a specialized child profile.
 ///
 /// Unlike [`AgentRecord`] (which tracks *runtime state* — memory, sessions,
 /// last-active), an `AgentProfile` is a **blueprint**: it defines what an
 /// agent *is* (identity, prompts, tool capabilities, model preference) but
 /// holds no conversation history.
-///
-/// Users create profiles in the UI, pick one to instantiate, and the
-/// resulting running agent gets its own `AgentRecord` for persistence.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentProfile {
     pub id: Uuid,
-    pub name: String,
+    /// Hierarchical profile path using `/`-separated segments
+    /// (e.g. `"researcher"`, `"researcher/genomics"`). Stored in the SQL
+    /// `name` column for backward compatibility. Each segment validated
+    /// against the same `[a-z0-9_]` 1-32 char rule as `AgentPath`.
+    #[serde(alias = "name")]
+    pub path: String,
     pub description: String,
 
     // ── Prompt ──
@@ -142,12 +175,28 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
-    /// Create a new profile with sensible defaults (all tools enabled).
-    pub fn new(name: impl Into<String>) -> Self {
+    /// Last segment of the path — the profile's short name.
+    /// Mirrors `AgentPath::name()`.
+    pub fn name(&self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    /// Parent profile path, or `None` for root profiles.
+    pub fn parent_path(&self) -> Option<&str> {
+        self.path.rfind('/').map(|i| &self.path[..i])
+    }
+
+    /// Depth in the profile tree (0 = root profile).
+    pub fn depth(&self) -> usize {
+        self.path.matches('/').count()
+    }
+
+    /// Create a new root-level profile with sensible defaults (all tools enabled).
+    pub fn new(path: impl Into<String>) -> Self {
         let now = now_ms();
         Self {
             id: Uuid::new_v4(),
-            name: name.into(),
+            path: path.into(),
             description: String::new(),
             agent_identity: "You are a helpful assistant.".into(),
             system_prompt: None,
@@ -164,13 +213,70 @@ impl AgentProfile {
         }
     }
 
+    /// Derive a child profile from `self`, appending `segment` to the path
+    /// and applying `overrides`.
+    ///
+    /// The child inherits all resolved capabilities from the parent. Any
+    /// field in `overrides` that is `Some` replaces the inherited value.
+    pub fn derive_child(
+        &self,
+        segment: &str,
+        overrides: ProfileOverrides,
+    ) -> Result<Self, String> {
+        agentik_types::validate_segment(segment)
+            .map_err(|e| format!("invalid profile segment `{segment}`: {e}"))?;
+
+        let child_path = format!("{}/{}", self.path, segment);
+        let now = now_ms();
+
+        Ok(Self {
+            id: Uuid::new_v4(),
+            path: child_path,
+            description: overrides
+                .description
+                .unwrap_or_else(|| self.description.clone()),
+            agent_identity: overrides
+                .agent_identity
+                .unwrap_or_else(|| self.agent_identity.clone()),
+            system_prompt: overrides
+                .system_prompt
+                .unwrap_or_else(|| self.system_prompt.clone()),
+            enable_bibliography: overrides
+                .enable_bibliography
+                .unwrap_or(self.enable_bibliography),
+            enable_writing: overrides
+                .enable_writing
+                .unwrap_or(self.enable_writing),
+            enable_opengwas: overrides
+                .enable_opengwas
+                .unwrap_or(self.enable_opengwas),
+            enable_opentargets: overrides
+                .enable_opentargets
+                .unwrap_or(self.enable_opentargets),
+            enable_gwascatalog: overrides
+                .enable_gwascatalog
+                .unwrap_or(self.enable_gwascatalog),
+            enable_iceberg: overrides
+                .enable_iceberg
+                .unwrap_or(self.enable_iceberg),
+            enable_dag_history: overrides
+                .enable_dag_history
+                .unwrap_or(self.enable_dag_history),
+            preferred_model: overrides
+                .preferred_model
+                .unwrap_or_else(|| self.preferred_model.clone()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
     /// Return the built-in default profiles seeded on first run.
     pub fn defaults() -> Vec<AgentProfile> {
         let now = now_ms();
         vec![
             AgentProfile {
                 id: Uuid::new_v4(),
-                name: "researcher".into(),
+                path: "researcher".into(),
                 description: "Full-featured biomedical research assistant.".into(),
                 agent_identity: "You are a biomedical research assistant specializing \
                     in genomics, GWAS analysis, and literature mining."
@@ -189,11 +295,11 @@ impl AgentProfile {
             },
             AgentProfile {
                 id: Uuid::new_v4(),
-                name: "literature".into(),
+                path: "literature".into(),
                 description: "Literature search and evidence synthesis expert.".into(),
                 agent_identity: "You are a literature search expert specializing in \
                     systematic reviews, meta-analyses, and evidence synthesis. \
-                    Use PubMed, Embase, and bioRxiv tools to find and analyze publications."
+                    Use PubMed, arXiv, and bioRxiv tools to find and analyze publications."
                     .into(),
                 system_prompt: None,
                 enable_bibliography: true,
@@ -209,7 +315,7 @@ impl AgentProfile {
             },
             AgentProfile {
                 id: Uuid::new_v4(),
-                name: "gwas-analysis".into(),
+                path: "gwas-analysis".into(),
                 description: "GWAS data analysis and statistical genetics expert.".into(),
                 agent_identity: "You are a GWAS analysis expert specializing in \
                     statistical genetics. Use OpenGWAS, GWAS Catalog, and the \
@@ -229,7 +335,7 @@ impl AgentProfile {
             },
             AgentProfile {
                 id: Uuid::new_v4(),
-                name: "writer".into(),
+                path: "writer".into(),
                 description: "Manuscript writing, editing, and LaTeX compilation expert.".into(),
                 agent_identity: "You are a scientific manuscript writing assistant specializing \
                     in LaTeX document preparation, citation management, and compilation. \
@@ -392,12 +498,13 @@ pub struct SessionRecord {
 pub trait AgentProfileRegistry: Send + Sync {
     async fn create_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
     async fn get_profile(&self, id: Uuid) -> Result<Option<AgentProfile>, StorageError>;
-    async fn get_profile_by_name(&self, name: &str) -> Result<Option<AgentProfile>, StorageError>;
+    async fn get_profile_by_path(&self, path: &str) -> Result<Option<AgentProfile>, StorageError>;
     async fn list_profiles(&self) -> Result<Vec<AgentProfile>, StorageError>;
+    async fn list_child_profiles(&self, parent_path: &str) -> Result<Vec<AgentProfile>, StorageError>;
     async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
     async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError>;
 
-    /// Ensure every built-in default profile exists (by name), seeding any
+    /// Ensure every built-in default profile exists (by path), seeding any
     /// that are missing. Also migrates legacy profile names (e.g. the old
     /// `default` → `researcher` rename). Returns `true` if any change was
     /// made.
@@ -406,21 +513,21 @@ pub trait AgentProfileRegistry: Send + Sync {
         let mut changed = false;
 
         // ── Legacy migration: rename `default` → `researcher` ──
-        if let Some(legacy) = existing.iter().find(|p| p.name == "default").cloned() {
+        if let Some(legacy) = existing.iter().find(|p| p.path == "default").cloned() {
             let mut renamed = legacy;
-            renamed.name = "researcher".into();
+            renamed.path = "researcher".into();
             renamed.updated_at = now_ms();
             self.update_profile(renamed).await?;
             changed = true;
         }
 
         // ── Ensure every default profile exists ──
-        // Re-read after the migration so the name set reflects any renames.
+        // Re-read after the migration so the path set reflects any renames.
         let current = self.list_profiles().await?;
-        let names: std::collections::HashSet<String> =
-            current.iter().map(|p| p.name.clone()).collect();
+        let paths: std::collections::HashSet<String> =
+            current.iter().map(|p| p.path.clone()).collect();
         for profile in AgentProfile::defaults() {
-            if !names.contains(&profile.name) {
+            if !paths.contains(&profile.path) {
                 self.create_profile(profile).await?;
                 changed = true;
             }

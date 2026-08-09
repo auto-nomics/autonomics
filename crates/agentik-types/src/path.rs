@@ -206,7 +206,7 @@ impl fmt::Display for AgentPath {
 
 // ── Segment validation ───────────────────────────────────────────
 
-fn validate_segment(segment: &str) -> Result<(), PathError> {
+pub fn validate_segment(segment: &str) -> Result<(), PathError> {
     if segment.is_empty() {
         return Err(PathError::EmptySegment);
     }

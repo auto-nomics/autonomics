@@ -13,8 +13,8 @@
 //! | `bib_create_collection`| Create a new collection.                         |
 //! | `bib_add_to_collection`| Add one or more articles to a collection + roles. |
 //! | `bib_list_collection`  | List collections or articles within one.         |
-//! | `bib_search_library`   | LIKE search across local library.                |
-//! | `bib_get_article`      | Get full metadata + full text from local library.|
+//! | `bib_search_library`   | LIKE search across local library (multi-query).  |
+//! | `bib_get_article`      | Batch fetch metadata + full text (concurrent).   |
 //! | `bib_request_fulltext` | Mark an article as needing full-text upload.     |
 
 use std::sync::Arc;
@@ -631,8 +631,18 @@ impl ToolFunction for BibListCollectionTool {
 }
 
 // ===========================================================================
-// bib_search_library — LIKE search across local library
+// bib_search_library — LIKE search across local library (multi-query, concurrent)
 // ===========================================================================
+
+/// Result of a single query within a multi-query batch.
+#[derive(serde::Serialize)]
+struct SearchQueryResult {
+    query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    total: usize,
+    results: Vec<serde_json::Value>,
+}
 
 #[tool(
     name = "bib_search_library",
@@ -641,13 +651,22 @@ impl ToolFunction for BibListCollectionTool {
                   (notes/highlights/comments added via bib_add_note). \
                   Returns relevance-ranked results with snippets. \
                   \
+                  Pass one or more queries — each is run concurrently against the local \
+                  database and returns its own result group. Use multiple queries when \
+                  you want to find articles matching several independent terms in one \
+                  call instead of N separate tool calls. \
+                  \
                   Use this to find articles you've already saved (via bib_save). \
-                  For searching external databases, use lit_search instead."
+                  For searching external databases, use lit_search instead. \
+                  \
+                  **Examples**: \
+                  • queries=[\"Mendelian randomization\"] — single search \
+                  • queries=[\"GWAS\", \"polygenic risk score\", \"LDSC\"] — multi-search (concurrent)"
 )]
 pub struct BibSearchLibraryInput {
-    #[desc = "Search query (matched against title, abstract, and full text)"]
-    pub query: String,
-    #[desc = "Maximum results (default 20)"]
+    #[desc = "One or more search queries (each matched against title, abstract, full text, and annotations)"]
+    pub queries: Vec<String>,
+    #[desc = "Maximum results per query (default 20)"]
     pub limit: Option<usize>,
 }
 
@@ -660,14 +679,56 @@ impl ToolFunction for BibSearchLibraryTool {
     type Input = BibSearchLibraryInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let limit = input.limit.unwrap_or(20).clamp(1, 100);
-        let hits = self
-            .bib
-            .search_articles(&input.query, limit)
-            .await
-            .map_err(box_error)?;
+        if input.queries.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "at least one search query is required".into(),
+            });
+        }
 
-        let items: Vec<serde_json::Value> = hits
+        let limit = input.limit.unwrap_or(20).clamp(1, 100);
+
+        // Run each query concurrently; failures are isolated per query so
+        // one malformed term doesn't fail the whole batch.
+        let futures: Vec<_> = input
+            .queries
+            .iter()
+            .map(|q| self.search_one(q.trim(), limit))
+            .collect();
+        let groups = futures::future::join_all(futures).await;
+
+        let n_queries = groups.len();
+        let total_hits: usize = groups.iter().map(|g| g.total).sum();
+        let failed = groups.iter().filter(|g| g.error.is_some()).count();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "n_queries": n_queries,
+            "total_hits": total_hits,
+            "failed_queries": failed,
+            "groups": groups,
+            "message": format!(
+                "{n_queries} queries, {total_hits} total hits, {failed} failed."
+            ),
+        })))
+    }
+}
+
+impl BibSearchLibraryTool {
+    /// Run a single LIKE query. Never errors — failures land in
+    /// `SearchQueryResult::error`.
+    async fn search_one(&self, query: &str, limit: usize) -> SearchQueryResult {
+        let hits = match self.bib.search_articles(query, limit).await {
+            Ok(h) => h,
+            Err(e) => {
+                return SearchQueryResult {
+                    query: query.to_owned(),
+                    error: Some(e.to_string()),
+                    total: 0,
+                    results: Vec::new(),
+                };
+            }
+        };
+
+        let results: Vec<serde_json::Value> = hits
             .iter()
             .map(|h| {
                 serde_json::json!({
@@ -677,34 +738,112 @@ impl ToolFunction for BibSearchLibraryTool {
                 })
             })
             .collect();
+        let total = results.len();
 
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "query": input.query,
-            "total": items.len(),
-            "results": items,
-        })))
+        SearchQueryResult {
+            query: query.to_owned(),
+            error: None,
+            total,
+            results,
+        }
     }
 }
 
 // ===========================================================================
-// bib_get_article — full metadata + full text from local library
+// bib_get_article — full metadata + full text from local library (batch)
 // ===========================================================================
+
+/// Result of fetching a single article within a batch. Never errors at the
+/// tool level — failures (including "not found") are captured in `error` so
+/// one bad ID doesn't abort the whole batch. Mirrors the `SaveResult` pattern
+/// used by `bib_save`.
+#[derive(serde::Serialize)]
+struct GetArticleResult {
+    article_id: String,
+    found: bool,
+    title: Option<String>,
+    authors: Vec<String>,
+    year: Option<u16>,
+    month: Option<u8>,
+    journal: Option<String>,
+    volume: Option<String>,
+    issue: Option<String>,
+    pages: Option<String>,
+    doi: Option<String>,
+    pmid: Option<String>,
+    identifiers: Vec<serde_json::Value>,
+    #[serde(rename = "abstract", skip_serializing_if = "Option::is_none")]
+    abstract_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    keywords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub_types: Vec<String>,
+    has_fulltext: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    annotations: Vec<serde_json::Value>,
+    n_annotations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl GetArticleResult {
+    /// Build an error/missing stub for a requested ID. All data fields are
+    /// empty; `found` is false and `error` carries the reason.
+    fn err(article_id: impl Into<String>, found: bool, msg: impl Into<String>) -> Self {
+        Self {
+            article_id: article_id.into(),
+            found,
+            title: None,
+            authors: Vec::new(),
+            year: None,
+            month: None,
+            journal: None,
+            volume: None,
+            issue: None,
+            pages: None,
+            doi: None,
+            pmid: None,
+            identifiers: Vec::new(),
+            abstract_text: None,
+            keywords: Vec::new(),
+            pub_types: Vec::new(),
+            has_fulltext: false,
+            fulltext_source: None,
+            fulltext: None,
+            annotations: Vec::new(),
+            n_annotations: 0,
+            error: Some(msg.into()),
+        }
+    }
+}
 
 #[tool(
     name = "bib_get_article",
-    description = "Retrieve a full article from the local library, including metadata \
+    description = "Retrieve one or more articles from the local library, including metadata \
                   (title, authors, abstract, journal, identifiers), stored full text \
                   if available, and all user annotations (notes/highlights/comments). \
                   \
-                  The article must have been saved via `bib_save` first. \
-                  If full text has not been uploaded, the `has_fulltext` field will be false \
-                  and `fulltext` will be null. Annotations added via `bib_add_note` \
-                  are returned in the `annotations` array."
+                  Pass a list of article IDs — each is fetched concurrently from the \
+                  local database. Articles must have been saved via `bib_save` first; \
+                  missing IDs are returned with `found: false` rather than failing the \
+                  whole call. \
+                  \
+                  If full text has not been uploaded, the `has_fulltext` field will be \
+                  false and `fulltext` will be null. Set `include_fulltext=false` to \
+                  skip the full-text column (faster, smaller responses). \
+                  \
+                  **Examples**: \
+                  • article_ids=[\"a1\"] — fetch a single article \
+                  • article_ids=[\"a1\", \"a2\", \"a3\"] — batch (fetched concurrently)"
 )]
 pub struct BibGetArticleInput {
-    #[desc = "Article ID (from bib_save or bib_search_library results)"]
-    pub article_id: String,
-    #[desc = "If true and full text is available, include the full text content in the response. Default: true"]
+    #[desc = "One or more article IDs (from bib_save or bib_search_library results)"]
+    pub article_ids: Vec<String>,
+    #[desc = "If true and full text is available, include the full text content in each result. Default: true"]
     pub include_fulltext: Option<bool>,
 }
 
@@ -717,81 +856,138 @@ impl ToolFunction for BibGetArticleTool {
     type Input = BibGetArticleInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let article = self
-            .bib
-            .get_article(&input.article_id)
-            .await
-            .map_err(box_error)?
-            .ok_or_else(|| ToolError::ExecutionFailed {
-                source: format!(
-                    "Article '{}' not found in local library. Use bib_save to add it first.",
-                    input.article_id
-                )
-                .into(),
-            })?;
+        if input.article_ids.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "at least one article ID is required".into(),
+            });
+        }
 
         let include_ft = input.include_fulltext.unwrap_or(true);
 
-        // `has_fulltext` must reflect the true DB state regardless of
-        // whether the caller asked for the content. Previously it was
-        // derived from `fulltext.is_some()`, so `include_fulltext=false`
-        // falsely reported `has_fulltext:false` for articles that did
-        // have a full text.
-        let has_fulltext = self
-            .bib
-            .has_fulltext(&input.article_id)
-            .await
-            .map_err(box_error)?;
+        // Fetch each article concurrently. The local DB is fast, but batching
+        // still collapses N tool-call round-trips into one and lets the reads
+        // overlap on the connection pool.
+        let futures: Vec<_> = input
+            .article_ids
+            .iter()
+            .map(|id| self.get_one(id.trim(), include_ft))
+            .collect();
+        let results = futures::future::join_all(futures).await;
+
+        let total = results.len();
+        let found = results.iter().filter(|r| r.found).count();
+        let missing = total - found;
+        let with_fulltext = results.iter().filter(|r| r.has_fulltext).count();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "total": total,
+            "found": found,
+            "missing": missing,
+            "with_fulltext": with_fulltext,
+            "results": results,
+            "message": format!(
+                "{found} found, {missing} missing, {with_fulltext} with full text \
+                 out of {total} requested."
+            ),
+        })))
+    }
+}
+
+impl BibGetArticleTool {
+    /// Fetch a single article + its full text + annotations. Never errors —
+    /// failures are captured in `GetArticleResult::error` so one bad ID
+    /// doesn't abort the batch.
+    async fn get_one(&self, article_id: &str, include_ft: bool) -> GetArticleResult {
+        let article = match self.bib.get_article(article_id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return GetArticleResult::err(
+                    article_id,
+                    false,
+                    format!(
+                        "Article '{article_id}' not found in local library. \
+                         Use bib_save to add it first."
+                    ),
+                );
+            }
+            Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+        };
+
+        // `has_fulltext` must reflect the true DB state regardless of whether
+        // the caller asked for the content. Previously it was derived from
+        // `fulltext.is_some()`, so `include_fulltext=false` falsely reported
+        // `has_fulltext:false` for articles that did have a full text.
+        let has_fulltext = match self.bib.has_fulltext(article_id).await {
+            Ok(b) => b,
+            Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+        };
 
         let fulltext = if include_ft {
-            self.bib
-                .get_fulltext(&input.article_id)
-                .await
-                .map_err(box_error)?
+            match self.bib.get_fulltext(article_id).await {
+                Ok(ft) => ft,
+                Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+            }
         } else {
             None
         };
         let text_content = fulltext.as_ref().and_then(|ft| ft.text_content.clone());
 
-        // Annotations (notes/highlights/comments) — without this the
-        // write path (bib_add_note) is a data black hole: annotations are
-        // persisted but never reachable through any read tool.
-        let annotations = self
-            .bib
-            .list_annotations(&input.article_id)
-            .await
-            .map_err(box_error)?;
+        // Annotations (notes/highlights/comments) — without this the write
+        // path (bib_add_note) is a data black hole: annotations are persisted
+        // but never reachable through any read tool.
+        let annotations = match self.bib.list_annotations(article_id).await {
+            Ok(a) => a,
+            Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+        };
+        let n_annotations = annotations.len();
 
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "article_id": article.id,
-            "title": article.title,
-            "authors": article.authors.iter().map(|a| a.display_name()).collect::<Vec<_>>(),
-            "year": article.year,
-            "month": article.month,
-            "journal": article.journal,
-            "volume": article.volume,
-            "issue": article.issue,
-            "pages": article.pages,
-            "doi": article.doi(),
-            "pmid": article.pmid(),
-            "identifiers": article.identifiers.iter().map(|i| {
-                serde_json::json!({"kind": i.kind.as_str(), "value": i.value})
-            }).collect::<Vec<_>>(),
-            "abstract": article.abstract_text,
-            "keywords": article.keywords,
-            "pub_types": article.pub_types,
-            "has_fulltext": has_fulltext,
-            "fulltext_source": fulltext.as_ref().map(|ft| ft.source.as_str()),
-            "fulltext": text_content,
-            "annotations": annotations.iter().map(|a| serde_json::json!({
-                "id": a.id,
-                "kind": a.kind.as_str(),
-                "content": a.content,
-                "page": a.page,
-                "created_at": a.created_at.map(|t| t.to_rfc3339()),
-            })).collect::<Vec<_>>(),
-            "n_annotations": annotations.len(),
-        })))
+        // Borrow-derived values first, before any `article` fields are moved.
+        let doi = article.doi().map(str::to_owned);
+        let pmid = article.pmid().map(str::to_owned);
+        let authors: Vec<String> = article.authors.iter().map(|a| a.display_name()).collect();
+        let identifiers: Vec<serde_json::Value> = article
+            .identifiers
+            .iter()
+            .map(|i| serde_json::json!({"kind": i.kind.as_str(), "value": i.value}))
+            .collect();
+
+        GetArticleResult {
+            article_id: article.id.clone(),
+            found: true,
+            title: Some(article.title),
+            authors,
+            year: article.year,
+            month: article.month,
+            journal: article.journal,
+            volume: article.volume,
+            issue: article.issue,
+            pages: article.pages,
+            doi,
+            pmid,
+            identifiers,
+            abstract_text: article.abstract_text,
+            keywords: article.keywords.clone(),
+            pub_types: article.pub_types.clone(),
+            has_fulltext,
+            fulltext_source: fulltext
+                .as_ref()
+                .map(|ft| ft.source.as_str().to_owned()),
+            fulltext: text_content,
+            annotations: annotations
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "kind": a.kind.as_str(),
+                        "content": a.content,
+                        "page": a.page,
+                        "created_at": a.created_at.map(|t| t.to_rfc3339()),
+                    })
+                })
+                .collect(),
+            n_annotations,
+            error: None,
+        }
     }
 }
 

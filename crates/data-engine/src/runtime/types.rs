@@ -50,6 +50,19 @@ pub enum DataEngineCmd {
         id: String,
         reply: oneshot::Sender<EngineResult<Option<RuntimeStatus>>>,
     },
+    /// Query an existing node instance's retained `(kind, spec)`. Returns
+    /// `None` if `id` does not exist or the node has no retained spec (added
+    /// via the raw `add_node` path).
+    GetNode {
+        id: String,
+        reply: oneshot::Sender<EngineResult<Option<(String, serde_json::Value)>>>,
+    },
+    /// Whether a node with the given id exists in the DAG (regardless of
+    /// whether it has a retained spec).
+    NodeExists {
+        id: String,
+        reply: oneshot::Sender<EngineResult<bool>>,
+    },
     RemoveNode {
         id: String,
         reply: oneshot::Sender<EngineResult<()>>,

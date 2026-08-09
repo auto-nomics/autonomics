@@ -525,6 +525,138 @@ async fn test_get_output_synthetic_struct_column_baseline() {
     );
 }
 
+/// `inspect_node` returns the live `(kind, spec)` stored on a node instance.
+///
+/// This is the instance-level counterpart of `get_node_spec` (which returns a
+/// kind's parameter *schema*). The test verifies:
+///   1. After `add_node`, `inspect_node` returns the exact spec that was passed.
+///   2. After `update_node`, `inspect_node` reflects the updated spec.
+///   3. `inspect_node` on a non-existent id returns an error hint (not a crash
+///      and not a silent null).
+#[tokio::test]
+async fn test_inspect_node_returns_live_spec() {
+    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let csv_path =
+        std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
+    let csv_data = std::fs::read(csv_path).unwrap();
+    file_storage
+        .op
+        .write("/insurance.csv", csv_data)
+        .await
+        .unwrap();
+
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage)
+        .unwrap()
+        .build();
+    let (client, _handle) = spawn_with_engine(engine);
+
+    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    // 1. Add a SQL node with a known spec.
+    let original_query = "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5";
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "tc1",
+                "add_node",
+                json!({
+                    "id": "sql",
+                    "kind": "sql",
+                    "spec": {"sql_query": original_query}
+                }),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "add_node sql");
+
+    // 2. inspect_node must return the exact kind + spec.
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "tc2",
+                "inspect_node",
+                json!({"id": "sql"}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    check_ok(&results[0], "inspect_node sql");
+    let body = parse_tool_json(&results[0].content);
+    assert_eq!(body["id"], "sql", "inspect_node echoed the queried id");
+    assert_eq!(body["kind"], "sql", "inspect_node returned the node kind");
+    assert_eq!(
+        body["spec"]["sql_query"],
+        original_query,
+        "inspect_node returned the original spec before update"
+    );
+
+    // 3. Update the spec; inspect_node must reflect the change.
+    let updated_query = "SELECT age FROM port_0 LIMIT 10";
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "tc3",
+                "update_node",
+                json!({"id": "sql", "spec": {"sql_query": updated_query}}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "update_node sql");
+
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "tc4",
+                "inspect_node",
+                json!({"id": "sql"}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "inspect_node sql after update");
+    let body = parse_tool_json(&results[0].content);
+    assert_eq!(
+        body["spec"]["sql_query"],
+        updated_query,
+        "inspect_node reflects the updated spec, not the original"
+    );
+    assert_eq!(
+        body["kind"], "sql",
+        "inspect_node still reports the same kind after update"
+    );
+
+    // 4. inspect_node on a non-existent id returns an error hint, not a crash.
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "tc5",
+                "inspect_node",
+                json!({"id": "does_not_exist"}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].is_error.unwrap_or(false),
+        "inspect_node on a missing id should return an error result, got: {:?}",
+        results[0].content
+    );
+}
+
 /// Normalize the untagged `ToolResultContent` enum (Text | Json | Blocks) to
 /// a parsed `serde_json::Value`. `get_output` emits `success_json` (→ Json),
 /// but we handle all variants so the helper is robust.

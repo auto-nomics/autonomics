@@ -14,7 +14,7 @@ pub mod tools;
 
 pub use agent_events::SessionInfo;
 pub use errors::{AnthropicError, Result};
-pub use path::{AgentPath, PathError};
+pub use path::{AgentPath, PathError, validate_segment};
 pub use reasoning::{
     ReasoningConfig, ReasoningEffort, ThinkingConfig, ThinkingKind, anthropic_budget_for_effort,
 };
