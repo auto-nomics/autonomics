@@ -20,11 +20,21 @@
 ///   │          ▼                ▼                  │
 ///   │      Requesting       Requesting             │
 ///   │                                               │
-///   └──────────── Error ◀────────────────────── no ─┘
+///   │         Cancelled ◀──── user Ctrl+C ─────────┘
+///   │            │
+///   │            │ (next message)
+///   └────────────┴──→ Requesting
+///
+///   Error ◀─── fatal failure (persists until next message)
 /// ```
 ///
-/// `Error` is a "soft terminal" state — it persists until the next message
-/// re-enters `Requesting`, giving the user time to read the error.
+/// `Cancelled` is a soft-terminal state: the user intentionally interrupted
+/// the current turn. It is semantically distinct from `Error` (system
+/// failure) and behaves like `Idle` for interaction purposes — the user can
+/// immediately send a new message, which transitions back to `Requesting`.
+///
+/// `Error` is also a soft-terminal state — it persists until the next
+/// message re-enters `Requesting`, giving the user time to read the error.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum AgentLifecycleStatus {
@@ -52,6 +62,13 @@ pub enum AgentLifecycleStatus {
     /// free context-window space).
     Compacting,
 
+    /// The user intentionally interrupted the current turn (Ctrl+C).
+    /// Semantically distinct from `Error`: the agent didn't fail, the user
+    /// chose to stop. Behaves like `Idle` for interaction — the user can
+    /// immediately send a new message. A conversation marker is injected so
+    /// the LLM knows the previous turn was interrupted.
+    Cancelled,
+
     /// Legacy terminal state from older versions. New code never sets this;
     /// kept for deserialization of old snapshots. Functionally equivalent
     /// to [`Idle`](Self::Idle).
@@ -61,12 +78,12 @@ pub enum AgentLifecycleStatus {
 
 impl AgentLifecycleStatus {
     /// Returns `true` when the agent is actively processing (not idle, not
-    /// in a terminal/error state). Used by the session loop to decide whether
-    /// to continue iterating.
+    /// in a terminal/error/cancelled state). Used by the session loop to
+    /// decide whether to continue iterating.
     pub fn is_active(self) -> bool {
         !matches!(
             self,
-            Self::Idle | Self::Error | Self::Aborted
+            Self::Idle | Self::Error | Self::Cancelled | Self::Aborted
         )
     }
 

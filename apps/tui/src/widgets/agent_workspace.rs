@@ -183,6 +183,7 @@ fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Streaming => "◑",
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "✗",
+        AgentStatus::Cancelled => "⊘",
         AgentStatus::Compacting => "⟳",
     }
 }
@@ -193,6 +194,7 @@ fn status_color(status: &AgentStatus) -> Color {
         AgentStatus::Requesting | AgentStatus::Streaming => Color::Cyan,
         AgentStatus::Retrying => Color::Yellow,
         AgentStatus::Error => Color::Red,
+        AgentStatus::Cancelled => Color::DarkGray,
         AgentStatus::Compacting => Color::Magenta,
     }
 }

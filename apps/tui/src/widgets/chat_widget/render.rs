@@ -144,6 +144,12 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             }
             lines
         }
+        ChatLine::Cancelled => {
+            vec![Line::from(Span::styled(
+                "⊘ Turn cancelled by user",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        }
         ChatLine::RetryableError {
             message,
             attempt,
