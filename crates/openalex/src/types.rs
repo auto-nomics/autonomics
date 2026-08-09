@@ -8,6 +8,24 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+// ---------------------------------------------------------------------------
+// Serde helpers
+// ---------------------------------------------------------------------------
+
+/// Deserialize `null` as an empty `Vec<T>`.
+///
+/// OpenAlex returns `"issn": null` (not `"issn": []`) for sources without an
+/// ISSN.  Struct-level `#[serde(default)]` only covers *missing* fields, so we
+/// need this deserializer for fields that are *present but null*.
+pub(crate) fn null_to_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    let opt: Option<Vec<T>> = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 // ===========================================================================
 // Generic response envelope
 // ===========================================================================
@@ -69,7 +87,9 @@ pub struct Work {
     pub id: String,
     #[serde(default)]
     pub doi: Option<String>,
-    #[serde(rename = "display_name", alias = "title")]
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub publication_year: Option<u16>,
@@ -124,6 +144,17 @@ pub struct Work {
 }
 
 impl Work {
+    /// Return the best available title (`display_name` falls back to `title`).
+    ///
+    /// OpenAlex sends both `display_name` and `title` (always identical);
+    /// this method normalises the two fields into one.
+    pub fn title_or_name(&self) -> Option<&str> {
+        self.display_name
+            .as_deref()
+            .or(self.title.as_deref())
+            .filter(|s| !s.is_empty())
+    }
+
     /// Reconstruct the plain-text abstract from the inverted index, if present.
     pub fn abstract_text(&self) -> Option<String> {
         let inv = self.abstract_inverted_index.as_ref()?;
@@ -150,7 +181,7 @@ pub struct WorkIds {
     pub doi: Option<String>,
     pub pmid: Option<String>,
     pub pmcid: Option<String>,
-    pub mag: Option<u64>,
+    pub mag: Option<String>,
 }
 
 /// Bibliographic metadata (volume, issue, pages).
@@ -365,6 +396,7 @@ pub struct Source {
     pub id: String,
     pub display_name: String,
     pub issn_l: Option<String>,
+    #[serde(deserialize_with = "null_to_empty_vec")]
     pub issn: Vec<String>,
     pub host_organization: Option<String>,
     pub host_organization_name: Option<String>,
@@ -514,7 +546,7 @@ mod tests {
         let work: Work = serde_json::from_str(json).unwrap();
         assert_eq!(work.id, "https://openalex.org/W2741809807");
         assert_eq!(work.doi.as_deref(), Some("https://doi.org/10.7717/peerj.4375"));
-        assert_eq!(work.title.as_deref(), Some("The state of OA"));
+        assert_eq!(work.title_or_name(), Some("The state of OA"));
         assert_eq!(work.publication_year, Some(2018));
         assert_eq!(work.cited_by_count, 100);
         assert_eq!(work.type_.as_deref(), Some("article"));

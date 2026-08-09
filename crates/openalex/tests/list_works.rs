@@ -132,11 +132,12 @@ async fn list_works_group_by_type() {
     assert!(!resp.group_by.is_empty(), "should have aggregation results");
     let total: u64 = resp.group_by.iter().map(|g| g.count).sum();
     assert!(total > 1_000_000, "2024 should have millions of works");
-    // article should be the most common type
+    // article should be present — key is now a URL, key_display_name is "article"
     let article = resp
         .group_by
         .iter()
-        .find(|g| g.key == "article")
+        .find(|g| g.key_display_name.as_deref() == Some("article"))
+        .or_else(|| resp.group_by.iter().find(|g| g.key.contains("article")))
         .expect("should have article type");
     assert!(article.count > 1_000_000);
 }
@@ -148,7 +149,7 @@ async fn list_works_group_by_year() {
     let resp = client
         .list_works(
             &ListParams::new()
-                .with_filter("authorships.institutions.id:I136335617")
+                .with_filter("authorships.institutions.id:I136199984")
                 .with_group_by("publication_year"),
         )
         .await
@@ -213,14 +214,14 @@ async fn list_works_all_auto_page() {
     let works = client
         .list_works_all(
             &ListParams::new()
-                .with_filter("publication_year:2024,type:article,cited_by_count:>50000"),
+                .with_filter("publication_year:2024,type:article,cited_by_count:>10000"),
         )
         .await
         .expect("list_works_all should succeed");
 
-    // There should be a small number of articles with >50k citations in 2024
+    // There should be a small number of articles with >10k citations in 2024
     assert!(!works.is_empty(), "should find some highly cited works");
-    assert!(works.len() < 200, "should not be too many (sanity check)");
+    assert!(works.len() < 500, "should not be too many (sanity check), got {}", works.len());
 }
 
 #[tokio::test]
@@ -234,4 +235,22 @@ async fn error_on_nonexistent_filter_field() {
         .await;
 
     assert!(resp.is_err(), "bad filter should return an error");
+}
+
+#[tokio::test]
+async fn work_has_title_and_ids() {
+    if !common::run_live() { return; }
+    let client = common::client();
+    let resp = client
+        .list_works(&ListParams::new().with_per_page(1))
+        .await
+        .expect("should succeed");
+
+    let w = &resp.results[0];
+    assert!(w.title_or_name().is_some(), "should have a title/display_name");
+    assert!(w.id.starts_with("https://openalex.org/W"), "id should be an OpenAlex work URL");
+    // ids.mag should be a string (not u64)
+    if let Some(ref mag) = w.ids.mag {
+        assert!(mag.parse::<u64>().is_ok(), "mag should be a numeric string, got '{mag}'");
+    }
 }

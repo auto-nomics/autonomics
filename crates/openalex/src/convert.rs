@@ -56,8 +56,7 @@ pub fn work_to_article(work: &Work) -> Article {
         .unwrap_or_else(|| work.id.clone());
 
     let title = work
-        .title
-        .as_deref()
+        .title_or_name()
         .unwrap_or("(untitled)")
         .trim()
         .to_owned();
@@ -306,7 +305,7 @@ mod tests {
         Work {
             id: "https://openalex.org/W2741809807".into(),
             doi: Some("https://doi.org/10.7717/peerj.4375".into()),
-            title: Some("The state of OA".into()),
+            display_name: Some("The state of OA".into()),
             publication_year: Some(2018),
             publication_date: Some("2018-02-13".into()),
             ids: WorkIds {
@@ -516,12 +515,12 @@ mod tests {
                 Work {
                     id: "https://openalex.org/W1".into(),
                     doi: Some("https://doi.org/10.1/a".into()),
-                    title: Some("First".into()),
+                    display_name: Some("First".into()),
                     ..Default::default()
                 },
                 Work {
                     id: "https://openalex.org/W2".into(),
-                    title: Some("Second".into()),
+                    display_name: Some("Second".into()),
                     ..Default::default()
                 },
             ],

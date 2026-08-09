@@ -41,11 +41,11 @@ pub fn format_works(resp: &ListResponse<Work>) -> String {
 fn format_work_preview(idx: usize, work: &Work, out: &mut String) {
     out.push_str(&format!("### {}. ", idx));
     if let Some(ref doi) = work.doi {
-        out.push_str(&format!("[{}]({})\n", work.title.as_deref().unwrap_or("(untitled)"), doi));
+        out.push_str(&format!("[{}]({})\n", work.title_or_name().unwrap_or("(untitled)"), doi));
     } else {
         out.push_str(&format!(
             "{}\n",
-            work.title.as_deref().unwrap_or("(untitled)")
+            work.title_or_name().unwrap_or("(untitled)")
         ));
     }
 
@@ -323,7 +323,7 @@ mod tests {
                 pmid: Some("https://pubmed.ncbi.nlm.nih.gov/29456894".into()),
                 ..Default::default()
             },
-            title: Some("The state of OA".into()),
+            display_name: Some("The state of OA".into()),
             publication_year: Some(2018),
             type_: Some("article".into()),
             cited_by_count: 100,

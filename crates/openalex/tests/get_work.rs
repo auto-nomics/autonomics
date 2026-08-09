@@ -92,9 +92,9 @@ async fn get_work_not_found() {
 async fn get_author_by_id() {
     if !common::run_live() { return; }
     let client = common::client();
-    // Heather Piwowar — first author of the PeerJ article
+    // Heather Piwowar — first author of the PeerJ article W2741809807
     let author = client
-        .get_author("A1969205032")
+        .get_author("A5048491430")
         .await
         .expect("should fetch author");
 
