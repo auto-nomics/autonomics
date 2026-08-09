@@ -1097,7 +1097,7 @@ mod tests {
             snapshot_id: Uuid::new_v4(),
             ts,
             agent_id,
-            agent_status: AgentLifecycleStatus::IDLE,
+            agent_status: AgentLifecycleStatus::Idle,
             memory: Memory::new(),
             session_id: None,
         }

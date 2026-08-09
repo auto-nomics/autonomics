@@ -199,6 +199,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 AgentStatus::Requesting => format!("{spinner} thinking…"),
                 AgentStatus::Streaming => format!("{spinner} responding…"),
                 AgentStatus::Retrying => format!("{spinner} retrying…"),
+                AgentStatus::Compacting => format!("{spinner} compacting…"),
+                AgentStatus::Error => "error".to_string(),
                 _ => format!("{spinner} running…"),
             };
             if queued > 0 {

@@ -54,7 +54,15 @@ pub enum AgentEvent {
     Thinking(String),
 
     // ── Agent lifecycle ──
+    /// The agent's lifecycle status changed. This is the **authoritative**
+    /// source for the agent's current status — consumers should track
+    /// status from this event rather than inferring it from other events
+    /// (Requesting, TextDelta, Done, etc.) which carry additional
+    /// domain-specific data but are not a reliable status signal.
+    LifecycleChanged(crate::AgentLifecycleStatus),
+
     /// Agent is about to call the LLM API (waiting for response).
+    /// Also emits `LifecycleChanged(Requesting)`.
     Requesting,
 
     /// Agent is calling a tool. `input` carries the raw JSON arguments.
@@ -70,7 +78,8 @@ pub enum AgentEvent {
     /// A background tool task completed with its real result.
     ToolBackgroundComplete { seq: u64, ok: bool },
 
-    /// Agent is performing context compaction
+    /// Agent is performing context compaction.
+    /// Also emits `LifecycleChanged(Compacting)` / `LifecycleChanged(Requesting)`.
     Compact { event: CompactEvent },
 
     /// The agent's persistent task plan was updated via `update_plan`.

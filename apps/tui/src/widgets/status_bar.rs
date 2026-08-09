@@ -32,16 +32,15 @@ impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         // Compaction takes over the status display so the user can see the
         // agent is summarizing context, not idle/requesting.
-        let (indicator, indicator_color, status_text) = if self.is_compacting {
-            ("⟳", Color::Magenta, "compacting")
-        } else {
-            match self.status {
-                AgentStatus::Idle => ("○", Color::Gray, "idle"),
-                AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
-                AgentStatus::Streaming => ("●", Color::Green, "streaming"),
-                AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
-                AgentStatus::Error => ("✗", Color::Red, "error"),
+        let (indicator, indicator_color, status_text) = match self.status {
+            AgentStatus::Idle | AgentStatus::Aborted => {
+                ("○", Color::Gray, "idle")
             }
+            AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
+            AgentStatus::Streaming => ("●", Color::Green, "streaming"),
+            AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
+            AgentStatus::Error => ("✗", Color::Red, "error"),
+            AgentStatus::Compacting => ("⟳", Color::Magenta, "compacting"),
         };
 
         let out_tok = format_tokens(self.output_tokens);

@@ -231,6 +231,15 @@ impl Session {
         self.lifecycle.is_running()
     }
 
+    /// Transition the lifecycle to `status`, emitting
+    /// `AgentEvent::LifecycleChanged` if the status actually changed.
+    pub(crate) fn set_lifecycle(&mut self, status: agentik_types::AgentLifecycleStatus) {
+        if self.lifecycle.set_status(status) {
+            self.shared
+                .send_event(AgentEvent::LifecycleChanged(status));
+        }
+    }
+
     pub fn snapshot(&self) -> AgentSnapshot {
         AgentSnapshot {
             snapshot_id: Uuid::new_v4(),
@@ -274,11 +283,9 @@ impl Session {
 
     // ── Pause / Resume ────────────────────────────────────
 
-    /// Pause the session: lifecycle → IDLE, persist snapshot, end WAL session.
+    /// Pause the session: lifecycle → Idle, persist snapshot, end WAL session.
     pub async fn pause(&mut self) {
-        if self.lifecycle.is_running() {
-            self.lifecycle.set_idle();
-        }
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         self.persist_snapshot().await;
         if let Some(storage) = &self.shared.storage {
             if let Some(sid) = self.memory.current_session {
@@ -301,7 +308,7 @@ impl Session {
             }
             self.memory.current_session = Some(wal_id);
         }
-        self.lifecycle.set_idle();
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         self.last_active = chrono::Utc::now().timestamp_millis();
     }
 
@@ -339,7 +346,7 @@ impl Session {
                 true
             }
             InternalEvent::Shutdown => {
-                self.lifecycle.set_aborted();
+                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
                 false
             }
             InternalEvent::Done => {
@@ -369,7 +376,7 @@ impl Session {
         internal_event_tx: &UnboundedSender<InternalEvent>,
         rx: &mut UnboundedReceiver<InternalEvent>,
     ) {
-        self.lifecycle.set_running();
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared
             .send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
 
@@ -412,7 +419,7 @@ impl Session {
                 biased;
                 _ = cancelled.cancelled() => {
                     self.patch_orphaned_tool_use().await;
-                    self.lifecycle.set_aborted();
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
                     self.persist_snapshot().await;
                     self.shared.send_event(AgentEvent::Error("Task cancelled by user".into()));
                     was_cancelled = true;
@@ -443,6 +450,7 @@ impl Session {
                         consecutive_retries,
                         self.shared.config.max_retries
                     );
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Retrying);
                     self.shared.send_event(AgentEvent::RetryableError {
                         message: format!("{e}"),
                         attempt: consecutive_retries as u32,
@@ -457,6 +465,7 @@ impl Session {
                         }
                         _ = tokio::time::sleep(delay) => {}
                     }
+                    // Next iteration's agent_workflow will transition to Requesting.
                     // Do NOT inject API request errors back into the agent's
                     // context: doing so pollutes the conversation with
                     // noisy "The previous API request failed: ..." user
@@ -477,7 +486,7 @@ impl Session {
                     );
                     self.shared.send_event(AgentEvent::Error(format!("{e}")));
                     self.persist_snapshot().await;
-                    self.lifecycle.set_idle();
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
                     true
                 }
             };
@@ -523,13 +532,14 @@ impl Session {
             }
         }
 
-        // Post-loop cleanup
+        // Post-loop cleanup: ensure lifecycle reaches a terminal state.
         if was_cancelled && self.lifecycle.is_running() {
-            self.lifecycle.set_idle();
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
             self.shared
                 .send_event(AgentEvent::Error("Task cancelled by user".into()));
-        } else if !self.lifecycle.is_running() {
-            self.lifecycle.set_idle();
+        } else if self.lifecycle.is_running() {
+            // Loop exited via max_iterations or session management event.
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         }
 
         // ── Keep the WAL session open for reuse ──────────────
@@ -608,6 +618,7 @@ impl Session {
         let context = self.build_context().await?;
         let allowed = self.current_allowed_tools().await;
 
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared.send_event(AgentEvent::Requesting);
         let response_message = self.request(context, allowed.as_deref()).await?;
 
@@ -670,7 +681,7 @@ impl Session {
     }
 
     pub(crate) fn stop(&mut self) {
-        self.lifecycle.set_idle();
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
     }
 
     async fn poll_context_provider(&mut self) {
@@ -773,6 +784,7 @@ impl Session {
                 max_output_tokens = model.model_info.max_output_tokens,
                 "context pressure detected, compacting"
             );
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
             self.shared.send_event(AgentEvent::Compact {
                 event: CompactEvent::CompactStart { ts: Utc::now() },
             });
@@ -780,6 +792,7 @@ impl Session {
             self.shared.send_event(AgentEvent::Compact {
                 event: CompactEvent::CompactFinish { ts: Utc::now() },
             });
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
             if compacted {
                 context = self.build_context().await?;
             } else {
@@ -810,6 +823,13 @@ impl Session {
             };
 
             if let Some(agent_event) = AgentEvent::from_stream_event(&stream_event) {
+                // Transition to Streaming on the first content delta.
+                if matches!(
+                    agent_event,
+                    AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta(_)
+                ) {
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Streaming);
+                }
                 self.shared.send_event(agent_event);
             }
         }

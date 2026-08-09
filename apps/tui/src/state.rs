@@ -98,16 +98,11 @@ pub enum ChatLine {
     Separator,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum AgentStatus {
-    #[default]
-    Idle,
-    Requesting,
-    Streaming,
-    /// A retryable error occurred; the agent is in back-off before retrying.
-    Retrying,
-    Error,
-}
+/// Unified agent lifecycle status — re-exported from `agentik-types` so
+/// the TUI shares a single source of truth with the core layer.
+///
+/// See [`agentik_types::AgentLifecycleStatus`] for the full state diagram.
+pub use agentik_types::AgentLifecycleStatus as AgentStatus;
 
 /// Modal state of the agent tab's input surface.
 ///
@@ -371,8 +366,13 @@ impl AgentTabState {
 /// Apply an `AgentEvent` to `AgentTabState`, mutating the conversation view.
 pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
     match event {
+        // ── Lifecycle status changes ──
+        // The authoritative source for agent status. Emitted by the core
+        // before the corresponding domain event (Requesting, Done, etc.).
+        AgentEvent::LifecycleChanged(status) => {
+            state.status = status;
+        }
         AgentEvent::Requesting => {
-            state.status = AgentStatus::Requesting;
             // A new LLM call begins — clear the streaming-assistant handle so
             // usage from this call isn't attributed to a prior turn's line.
             state.streaming_assistant = None;
@@ -385,7 +385,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             // branch below).
         }
         AgentEvent::TextDelta(text) => {
-            state.status = AgentStatus::Streaming;
             // Append to last Assistant line, or create a new one
             let last_is_assistant = state
                 .messages
@@ -515,7 +514,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             }
         }
         AgentEvent::Done => {
-            state.status = AgentStatus::Idle;
             state
                 .tool_tasks
                 .retain(|t| matches!(t.status, ToolTaskStatus::Running));
@@ -534,7 +532,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 attempt,
                 max_retries,
             });
-            state.status = AgentStatus::Retrying;
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
@@ -544,7 +541,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
-            state.status = AgentStatus::Idle;
         }
         // Streaming protocol events — not surfaced directly to the chat view
         AgentEvent::StreamStart { .. }
@@ -932,10 +928,18 @@ mod tests {
     }
 
     #[test]
-    fn apply_done_drains_nothing_without_queue() {
+    fn apply_done_does_not_reset_status_under_unified_contract() {
+        // Under the unified lifecycle contract, the core layer emits
+        // `LifecycleChanged(Idle)` as the authoritative status event before
+        // `Done`. `apply_event(Done)` itself must NOT touch `status` — that
+        // would clobber an error state emitted via `LifecycleChanged(Error)`.
         let mut ts = AgentTabState::default();
         ts.status = AgentStatus::Streaming;
         apply_event(&mut ts, AgentEvent::Done);
+        assert_eq!(ts.status, AgentStatus::Streaming);
+
+        // `LifecycleChanged` is the only path that mutates `status`.
+        apply_event(&mut ts, AgentEvent::LifecycleChanged(AgentStatus::Idle));
         assert_eq!(ts.status, AgentStatus::Idle);
         assert_eq!(ts.pending_queue_len(), 0);
     }

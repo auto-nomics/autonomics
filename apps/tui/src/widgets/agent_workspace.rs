@@ -178,19 +178,21 @@ impl AgentWorkspace<'_> {
 
 fn status_icon(status: &AgentStatus) -> &'static str {
     match status {
-        AgentStatus::Idle => "●",
+        AgentStatus::Idle | AgentStatus::Aborted => "●",
         AgentStatus::Requesting => "◐",
         AgentStatus::Streaming => "◑",
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "✗",
+        AgentStatus::Compacting => "⟳",
     }
 }
 
 fn status_color(status: &AgentStatus) -> Color {
     match status {
-        AgentStatus::Idle => Color::Green,
+        AgentStatus::Idle | AgentStatus::Aborted => Color::Green,
         AgentStatus::Requesting | AgentStatus::Streaming => Color::Cyan,
         AgentStatus::Retrying => Color::Yellow,
         AgentStatus::Error => Color::Red,
+        AgentStatus::Compacting => Color::Magenta,
     }
 }

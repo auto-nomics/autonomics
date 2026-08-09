@@ -188,7 +188,7 @@ impl Agent {
     pub fn lifecycle_status(&self) -> agentik_types::AgentLifecycleStatus {
         self.active_session()
             .map(|s| *s.lifecycle.status())
-            .unwrap_or(agentik_types::AgentLifecycleStatus::IDLE)
+            .unwrap_or(agentik_types::AgentLifecycleStatus::Idle)
     }
 
     pub fn is_running(&self) -> bool {
@@ -613,7 +613,7 @@ impl Agent {
         match event {
             InternalEvent::Shutdown => {
                 if let Some(s) = self.active_session_mut() {
-                    s.lifecycle.set_aborted();
+                    s.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
                 }
                 false
             }
