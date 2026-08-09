@@ -1,0 +1,29 @@
+[package]
+name = "writing-base"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "LaTeX writing system: Turso storage, AST operations, LaTeX serialisation, citation resolution."
+
+[dependencies]
+writing-types = { path = "../writing-types" }
+bib-types = { path = "../bib-types" }
+bib-base = { path = "../bib-base" }
+turso.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Enables end-to-end tests that require the full pipeline.
+e2e = []
+
+[dev-dependencies]
+tokio = { workspace = true }
