@@ -12,6 +12,7 @@ biofusion = { path = "../../biofusion" }
 datalake = { path = "../../datalake" }
 fs = { path = "../../fs" }
 opentargets = { path = "../../opentargets" }
+semantic-scholar = { path = "../../semantic-scholar" }
 mr = { path = "../../../bio_crates/mr" }
 iceberg.workspace = true
 iceberg-catalog-rest.workspace = true

@@ -63,6 +63,7 @@ members = [
   "crates/embase",
   "crates/biorxiv",
   "crates/europepmc",
+  "crates/semantic-scholar",
   "bio_crates/susie",
   "bio_crates/evalue",
   "bio_crates/mrpresso",
