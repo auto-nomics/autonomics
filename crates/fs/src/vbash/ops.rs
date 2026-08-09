@@ -10,6 +10,35 @@ use futures::StreamExt;
 
 use crate::storage::OpendalFileStorage;
 
+/// Extract a non-empty path argument, returning a `ToolError` when it is
+/// `None` or a blank string.
+///
+/// A blank path (e.g. `""`, `"   "`) would be normalised to the virtual
+/// root `/` by [`OpendalFileStorage::normalize_path`], which is never a
+/// valid target for per-file operations — attempting a write or delete on
+/// it can destroy or corrupt the root directory.
+fn require_path<'a>(
+    path: Option<&'a str>,
+    op_name: &str,
+) -> Result<&'a str, ToolError> {
+    path.filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| ToolError::ValidationFailed {
+            message: format!("missing or empty 'path' for {op_name}"),
+        })
+}
+
+/// Same as [`require_path`] but for `src`/`dst` arguments used by `cp`/`mv`.
+fn require_named_path<'a>(
+    path: Option<&'a str>,
+    field: &str,
+    op_name: &str,
+) -> Result<&'a str, ToolError> {
+    path.filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| ToolError::ValidationFailed {
+            message: format!("missing or empty '{field}' for {op_name}"),
+        })
+}
+
 /// Default maximum lines for `read` when no explicit `limit` is given.
 const DEFAULT_MAX_LINES: usize = 2000;
 /// Image extensions recognised by the `read` op.
@@ -29,7 +58,7 @@ pub async fn op_read(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for read")?;
+    let raw_path = require_path(path, "read")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     let ext = std::path::Path::new(raw_path)
@@ -54,7 +83,7 @@ pub async fn op_cat(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for cat")?;
+    let raw_path = require_path(path, "cat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     let meta = match op.stat(&vpath).await {
@@ -118,7 +147,7 @@ pub async fn op_head(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for head")?;
+    let raw_path = require_path(path, "head")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
     let start = offset.unwrap_or(1).saturating_sub(1);
@@ -171,7 +200,7 @@ pub async fn op_tail(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for tail")?;
+    let raw_path = require_path(path, "tail")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
 
@@ -230,7 +259,7 @@ pub async fn op_write(
     path: Option<&str>,
     content: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for write")?;
+    let raw_path = require_path(path, "write")?;
     let content = content.unwrap_or("").to_string();
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let size = content.len() as u64;
@@ -281,8 +310,12 @@ pub async fn op_edit(
     replace_all: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = match path {
-        Some(p) => p,
-        None => return Ok(AgentToolResult::error("missing 'path' for edit")),
+        Some(p) if !p.trim().is_empty() => p,
+        _ => {
+            return Ok(AgentToolResult::error(
+                "missing or empty 'path' for edit",
+            ))
+        }
     };
     let old = match old_string {
         Some(s) => s,
@@ -356,7 +389,7 @@ pub async fn op_touch(
     op: &opendal::Operator,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for touch")?;
+    let raw_path = require_path(path, "touch")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     let exists = op.stat(&vpath).await.is_ok();
@@ -497,7 +530,7 @@ pub async fn op_stat(
     op: &opendal::Operator,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for stat")?;
+    let raw_path = require_path(path, "stat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let meta = match op.stat(&vpath).await {
         Ok(m) => m,
@@ -521,7 +554,7 @@ pub async fn op_mkdir(
     op: &opendal::Operator,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for mkdir")?;
+    let raw_path = require_path(path, "mkdir")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     // OpenDAL Fs backend requires a trailing '/' for directory creation.
@@ -551,7 +584,7 @@ pub async fn op_rm(
     path: Option<&str>,
     recursive: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for rm")?;
+    let raw_path = require_path(path, "rm")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     if vpath == "/" {
@@ -608,8 +641,8 @@ pub async fn op_cp(
     src: Option<&str>,
     dst: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_src = src.ok_or("missing 'src' for cp")?;
-    let raw_dst = dst.ok_or("missing 'dst' for cp")?;
+    let raw_src = require_named_path(src, "src", "cp")?;
+    let raw_dst = require_named_path(dst, "dst", "cp")?;
     let vsrc = OpendalFileStorage::normalize_path(raw_src);
     let vdst = OpendalFileStorage::normalize_path(raw_dst);
 
@@ -628,8 +661,8 @@ pub async fn op_mv(
     src: Option<&str>,
     dst: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_src = src.ok_or("missing 'src' for mv")?;
-    let raw_dst = dst.ok_or("missing 'dst' for mv")?;
+    let raw_src = require_named_path(src, "src", "mv")?;
+    let raw_dst = require_named_path(dst, "dst", "mv")?;
     let vsrc = OpendalFileStorage::normalize_path(raw_src);
     let vdst = OpendalFileStorage::normalize_path(raw_dst);
 
@@ -647,7 +680,7 @@ pub async fn op_wc(
     op: &opendal::Operator,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let raw_path = path.ok_or("missing 'path' for wc")?;
+    let raw_path = require_path(path, "wc")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
 
     let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
