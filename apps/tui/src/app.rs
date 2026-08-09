@@ -20,7 +20,7 @@ use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
-use crate::state::{self, AgentSession, AppState, ChatLine, InputMode};
+use crate::state::{self, AgentSession, AgentStatus, AppState, ChatLine, InputMode};
 use crate::widgets::agent_workspace::AgentWorkspace;
 use agentik_core::{AgentProfile, TursoAgentStorage};
 use runtime::{AgentHandle, RuntimeHost};
@@ -624,14 +624,17 @@ impl App {
                 // ── Fixed-rate render tick ──
                 _ = render_tick.tick() => {
                     let active_status = self.state.active_status();
-                    if !active_status.is_active() {
+                    let show_animation = active_status.is_active()
+                        || active_status == AgentStatus::Waiting;
+                    if !show_animation {
                         self.clear_cancel_pending();
                     } else {
                         let ts = self.state.active_tab_state_mut();
                         ts.frame = ts.frame.wrapping_add(1);
                     }
 
-                    let agent_active = active_status.is_active();
+                    let agent_active = active_status.is_active()
+                        || active_status == AgentStatus::Waiting;
                     if self.dirty || agent_active {
                         terminal.draw(|f| self.render(f))?;
                         self.dirty = false;

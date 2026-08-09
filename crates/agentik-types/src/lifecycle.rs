@@ -62,6 +62,14 @@ pub enum AgentLifecycleStatus {
     /// free context-window space).
     Compacting,
 
+    /// Agent is blocked inside `wait_task`, waiting for a background tool
+    /// task to finish. Semantically a "paused" state: the agent isn't
+    /// computing, it's idle-then-resume. The session loop is still alive
+    /// (cancel works, events drain), but the composer should enqueue
+    /// messages rather than send them directly. The lifecycle is reset to
+    /// `Requesting` once `wait_task` returns.
+    Waiting,
+
     /// The user intentionally interrupted the current turn (Ctrl+C).
     /// Semantically distinct from `Error`: the agent didn't fail, the user
     /// chose to stop. Behaves like `Idle` for interaction — the user can
@@ -78,12 +86,12 @@ pub enum AgentLifecycleStatus {
 
 impl AgentLifecycleStatus {
     /// Returns `true` when the agent is actively processing (not idle, not
-    /// in a terminal/error/cancelled state). Used by the session loop to
-    /// decide whether to continue iterating.
+    /// in a terminal/error/cancelled state, not waiting). Used by the session
+    /// loop to decide whether to continue iterating.
     pub fn is_active(self) -> bool {
         !matches!(
             self,
-            Self::Idle | Self::Error | Self::Cancelled | Self::Aborted
+            Self::Idle | Self::Error | Self::Cancelled | Self::Waiting | Self::Aborted
         )
     }
 

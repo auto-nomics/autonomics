@@ -49,7 +49,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
     type State = AgentTabState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
-        let running = ts.status.is_active();
+        let running = ts.status.is_active() || ts.status == AgentStatus::Waiting;
 
         // Dynamic input height: the boxed composer grows with content
         // (word-wrapped), capped at MAX_INPUT_ROWS text rows. The widget draws
@@ -200,6 +200,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 AgentStatus::Streaming => format!("{spinner} responding…"),
                 AgentStatus::Retrying => format!("{spinner} retrying…"),
                 AgentStatus::Compacting => format!("{spinner} compacting…"),
+                AgentStatus::Waiting => format!("{spinner} waiting…"),
                 AgentStatus::Error => "error".to_string(),
                 AgentStatus::Cancelled => "cancelled".to_string(),
                 _ => format!("{spinner} running…"),

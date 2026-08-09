@@ -40,6 +40,7 @@ impl Widget for StatusBar<'_> {
             AgentStatus::Error => ("✗", Color::Red, "error"),
             AgentStatus::Cancelled => ("⊘", Color::DarkGray, "cancelled"),
             AgentStatus::Compacting => ("⟳", Color::Magenta, "compacting"),
+            AgentStatus::Waiting => ("⏳", Color::Blue, "waiting"),
         };
 
         let out_tok = format_tokens(self.output_tokens);

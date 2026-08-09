@@ -671,10 +671,28 @@ impl Session {
             });
         }
 
+        // If any tool call is wait_task, transition to Waiting so the TUI
+        // shows a "waiting" indicator instead of "requesting". The lifecycle
+        // is reset to Requesting after execute() returns (wait_task has
+        // either completed or timed out). This is purely informational —
+        // wait_task still blocks inside execute(), but the session loop's
+        // tokio::select! still fires on cancel.
+        let has_wait_task = toolcalls.iter().any(|tc| tc.name == "wait_task");
+        if has_wait_task {
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Waiting);
+        }
+
         let tool_results = self
             .toolset
             .execute(&toolcalls, Some(internal_event_tx.clone()))
             .await?;
+
+        // Reset Waiting → Requesting so the session loop's is_running()
+        // check passes and the next iteration begins.
+        if has_wait_task {
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
+        }
+
         tracing::debug!(?tool_results, "tool execution results");
 
         for tr in &tool_results {

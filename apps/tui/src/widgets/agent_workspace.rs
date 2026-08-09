@@ -179,6 +179,7 @@ fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "✗",
         AgentStatus::Cancelled => "⊘",
+        AgentStatus::Waiting => "⏳",
         AgentStatus::Compacting => "⟳",
     }
 }
@@ -190,6 +191,7 @@ fn status_color(status: &AgentStatus) -> Color {
         AgentStatus::Retrying => Color::Yellow,
         AgentStatus::Error => Color::Red,
         AgentStatus::Cancelled => Color::DarkGray,
+        AgentStatus::Waiting => Color::Blue,
         AgentStatus::Compacting => Color::Magenta,
     }
 }

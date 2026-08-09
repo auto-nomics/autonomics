@@ -256,17 +256,22 @@ impl Default for AgentTabState {
 
 impl AgentTabState {
     /// Returns true when the user can type and send messages.
-    /// Sending is allowed in any non-active state (Idle, Error, Aborted) —
-    /// in Error the user can immediately retry or steer the agent.
+    /// Sending is allowed in any non-active state except Waiting —
+    /// in Error/Cancelled the user can immediately retry or steer the agent.
+    /// In Waiting the agent is blocked on wait_task, so messages must be
+    /// enqueued for delivery after the wait completes.
     pub fn can_send(&self) -> bool {
-        !self.status.is_active() && !self.input.is_empty()
+        !self.status.is_active()
+            && self.status != AgentStatus::Waiting
+            && !self.input.is_empty()
     }
 
     /// Returns true when the composer has text that can be enqueued for
-    /// later delivery (agent is busy). Only meaningful when the agent is
-    /// actively processing — in Error/Idle the user should send directly.
+    /// later delivery (agent is busy or waiting). Only meaningful when the
+    /// agent is actively processing or waiting on a background task.
     pub fn can_enqueue(&self) -> bool {
-        self.status.is_active() && !self.input.is_empty()
+        (self.status.is_active() || self.status == AgentStatus::Waiting)
+            && !self.input.is_empty()
     }
 
     /// Number of messages waiting in the pending queue.
@@ -931,6 +936,12 @@ mod tests {
         ts.input.insert_str("retry");
         assert!(ts.can_send());
         assert!(!ts.can_enqueue());
+
+        // Waiting + text → can enqueue only — the agent is blocked on
+        // wait_task; messages must queue for delivery after the wait.
+        ts.status = AgentStatus::Waiting;
+        assert!(!ts.can_send());
+        assert!(ts.can_enqueue());
     }
 
     #[test]
