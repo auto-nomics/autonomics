@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use writing_base::{CitationResolver, WritingStore, ast, render_document};
+use writing_base::{
+    CitationResolver, LatexEngine, NullEngine, WritingStore, XelatexEngine, ast, compile_document,
+    render_document,
+};
 use writing_types::*;
 
 // ---------------------------------------------------------------------------
@@ -1043,4 +1046,206 @@ async fn citation_persistence_e2e() {
     // Render and verify citation appears in LaTeX.
     let rendered = render_document(&loaded);
     assert!(rendered.main_tex.contains("\\citep{lewis2024polygenic}"));
+}
+
+// ---------------------------------------------------------------------------
+// Compilation e2e tests (Phase 3)
+// ---------------------------------------------------------------------------
+
+/// Full pipeline: build document → compile with NullEngine → validate.
+#[tokio::test]
+async fn compile_pipeline_null_engine() {
+    let doc = build_paper();
+    let engine = NullEngine;
+    let output = compile_document(&doc, None, &engine).await.unwrap();
+
+    assert!(output.success);
+    assert_eq!(output.engine_name, "null");
+    // NullEngine doesn't produce a real PDF but validates the pipeline.
+    assert!(output.pdf_bytes.is_none());
+}
+
+/// Real XeLaTeX compilation of a complex document to PDF.
+#[tokio::test]
+async fn compile_to_pdf_xelatex() {
+    // Remove bibliography dependency for this test — we don't have a real .bib.
+    // Build a simplified doc without citations.
+    let mut simple_doc = Document::new("compile-test", "Compilation Test");
+    simple_doc.metadata.abstract_text = Some("Testing compilation.".into());
+
+    let mut sec = Section::new(SectionLevel::Section, "Introduction");
+    sec.blocks.push(Block::Paragraph(ParagraphBlock::text(
+        "This document tests the LaTeX compilation pipeline.",
+    )));
+    simple_doc.root.children.push(sec);
+
+    let mut methods = Section::new(SectionLevel::Section, "Methods");
+    methods.blocks.push(Block::Equation(EquationBlock {
+        meta: BlockMeta::new().with_label("eq:model"),
+        latex: "y = X\\beta + \\epsilon".into(),
+        numbered: true,
+    }));
+
+    methods.blocks.push(Block::Table(TableBlock {
+        meta: BlockMeta::new().with_label("tab:results"),
+        caption: vec![Inline::text("Results table.")],
+        placement: Placement::Top,
+        source: TableSource::Cells {
+            header: vec!["Method".into(), "Beta".into(), "P".into()],
+            rows: vec![
+                vec![
+                    TableCell::plain("IVW"),
+                    TableCell::plain("0.42"),
+                    TableCell::plain("0.001"),
+                ],
+            ],
+            alignment: vec![
+                ColumnAlign::Left,
+                ColumnAlign::Center,
+                ColumnAlign::Center,
+            ],
+        },
+    }));
+    simple_doc.root.children.push(methods);
+
+    let engine = XelatexEngine::new().without_bibtex().with_passes(1);
+    if !engine.is_available() {
+        eprintln!("skipping: xelatex not available");
+        return;
+    }
+
+    let output = compile_document(&simple_doc, None, &engine).await;
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => panic!("compilation failed: {e}"),
+    };
+
+    assert!(output.success, "compilation failed:\n{}", output.log);
+    assert!(output.pdf_bytes.is_some(), "no PDF produced");
+    let pdf = output.pdf_bytes.unwrap();
+    assert!(pdf.len() > 1000, "PDF too small ({} bytes)", pdf.len());
+
+    // PDF should start with %PDF.
+    assert!(pdf.starts_with(b"%PDF"), "not a valid PDF file");
+
+    // Should have at least 1 page.
+    assert!(output.pages.unwrap_or(0) >= 1, "no pages in PDF");
+}
+
+/// Full pipeline with citations: resolve → compile with bibtex → PDF.
+#[tokio::test]
+async fn compile_with_citations_xelatex() {
+    use bib_base::BibBase;
+    use bib_types::{Article, Author, Identifier};
+
+    let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+
+    let mut a1 = Article::new("art-1", "A test article on genetics");
+    a1.authors.push(Author {
+        last_name: "TestAuthor".into(),
+        fore_name: Some("A".into()),
+        initials: Some("A".into()),
+        affiliation: None,
+        orcid: None,
+        corresponding: false,
+    });
+    a1.year = Some(2024);
+    a1.journal = Some("Nature".into());
+    a1.identifiers.push(Identifier::doi("10.1000/test"));
+    bib.upsert_article(&a1).await.unwrap();
+
+    let resolver = CitationResolver::new(bib);
+
+    let mut doc = Document::new("cite-compile", "Citation Compile Test");
+    let mut sec = Section::new(SectionLevel::Section, "Introduction");
+    sec.blocks.push(Block::Paragraph(ParagraphBlock::new(vec![
+        Inline::text("A prior study "),
+        Inline::Citation(CitationCluster {
+            keys: vec![CiteKey::new("testauthor2024a")],
+            style: CitationStyle::Parenthetical,
+            prefix: None,
+            suffix: None,
+            claim_id: None,
+        }),
+        Inline::text(" showed results."),
+    ])));
+    doc.root.children.push(sec);
+
+    let engine = XelatexEngine::new().with_passes(3);
+    if !engine.is_available() {
+        eprintln!("skipping: xelatex not available");
+        return;
+    }
+
+    let output = compile_document(&doc, Some(&resolver), &engine).await;
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => panic!("compilation failed: {e}"),
+    };
+
+    assert!(output.success, "compilation failed:\n{}", output.log);
+    assert!(output.pdf_bytes.is_some(), "no PDF produced");
+
+    // PDF should be valid.
+    let pdf = output.pdf_bytes.unwrap();
+    assert!(pdf.starts_with(b"%PDF"), "not a valid PDF");
+}
+
+/// Compile error detection: undefined command should produce errors.
+#[tokio::test]
+async fn compile_error_detection() {
+    let engine = XelatexEngine::new().without_bibtex().with_passes(1);
+    if !engine.is_available() {
+        return;
+    }
+
+    // Manually craft broken LaTeX.
+    let input = writing_base::CompileInput {
+        main_tex: r#"\documentclass{article}
+\begin{document}
+\undefinedcommand{blah}
+\end{document}
+"#
+        .into(),
+        ..Default::default()
+    };
+
+    let output = engine.compile(&input).await.unwrap();
+    // Should detect an error (undefined command).
+    assert!(
+        !output.success || output.has_errors() || output.pdf_bytes.is_none(),
+        "expected error for undefined command"
+    );
+}
+
+/// Log parser integration: compile a doc with a warning, verify parsing.
+#[tokio::test]
+async fn compile_log_parsing() {
+    let engine = XelatexEngine::new().without_bibtex().with_passes(1);
+    if !engine.is_available() {
+        return;
+    }
+
+    // Reference to a non-existent label generates a warning.
+    let input = writing_base::CompileInput {
+        main_tex: r#"\documentclass{article}
+\begin{document}
+See Section~\ref{nonexistent}.
+\end{document}
+"#
+        .into(),
+        ..Default::default()
+    };
+
+    let output = engine.compile(&input).await.unwrap();
+    // Should compile successfully but with warnings about undefined reference.
+    if output.success {
+        // The log should mention the undefined reference.
+        assert!(
+            output.log.contains("nonexistent") || output.log.contains("Warning"),
+            "expected reference warning in log"
+        );
+    }
 }

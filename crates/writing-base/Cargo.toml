@@ -15,7 +15,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "fs"] }
+async-trait.workspace = true
 tracing.workspace = true
 
 [lints]
@@ -26,4 +27,4 @@ workspace = true
 e2e = []
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs"] }

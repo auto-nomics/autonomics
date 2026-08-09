@@ -13,11 +13,16 @@
 
 pub mod ast;
 pub mod citation;
+pub mod compile;
 pub mod error;
 pub mod serialize;
 pub mod store;
 
 pub use citation::{CitationReport, CitationResolver, CiteKeyStatus};
+pub use compile::{
+    CompileInput, CompileIssue, CompileOutput, IssueSeverity, LatexEngine, NullEngine,
+    XelatexEngine, compile_document, default_engine,
+};
 pub use error::{Error, Result};
 pub use serialize::render_document;
 pub use store::{VersionSummary, WritingStore};
