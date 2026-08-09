@@ -165,10 +165,7 @@ pub enum TableSource {
         format: TableFormat,
     },
     /// Iceberg SQL query (resolved before compilation).
-    IcebergQuery {
-        sql: String,
-        format: TableFormat,
-    },
+    IcebergQuery { sql: String, format: TableFormat },
 }
 
 /// Column alignment.
@@ -275,18 +272,12 @@ mod tests {
     fn table_cells_round_trip() {
         let t = TableSource::Cells {
             header: vec!["Method".into(), "Beta".into(), "SE".into()],
-            rows: vec![
-                vec![
-                    TableCell::plain("IVW"),
-                    TableCell::raw("0.45^{***}"),
-                    TableCell::plain("0.03"),
-                ],
-            ],
-            alignment: vec![
-                ColumnAlign::Left,
-                ColumnAlign::Center,
-                ColumnAlign::Center,
-            ],
+            rows: vec![vec![
+                TableCell::plain("IVW"),
+                TableCell::raw("0.45^{***}"),
+                TableCell::plain("0.03"),
+            ]],
+            alignment: vec![ColumnAlign::Left, ColumnAlign::Center, ColumnAlign::Center],
         };
         let json = serde_json::to_string(&t).unwrap();
         let back: TableSource = serde_json::from_str(&json).unwrap();

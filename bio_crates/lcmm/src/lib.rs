@@ -103,7 +103,10 @@ impl ConvStatus {
     }
     /// R lcmm treats istop ∈ {1,2,3} as "usable for posterior computation".
     pub fn usable(self) -> bool {
-        matches!(self, ConvStatus::Converged | ConvStatus::MaxIter | ConvStatus::PartialH)
+        matches!(
+            self,
+            ConvStatus::Converged | ConvStatus::MaxIter | ConvStatus::PartialH
+        )
     }
 }
 

@@ -5,8 +5,8 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::format::{format_agency, format_work};
 use crate::CrossrefClient;
+use crate::format::{format_agency, format_work};
 
 /// Retrieve a single Crossref work by its DOI, or look up the registration
 /// agency for a DOI.

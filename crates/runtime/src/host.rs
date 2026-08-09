@@ -303,7 +303,10 @@ impl SharedInfra {
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
         // Pass the agent's own path so list_agents / route_task can exclude self.
-        tools.extend(crate::host_tools::host_tools(self.host_control.clone(), agent_path));
+        tools.extend(crate::host_tools::host_tools(
+            self.host_control.clone(),
+            agent_path,
+        ));
 
         Ok(tools)
     }
@@ -476,12 +479,8 @@ pub struct RuntimeHost {
     /// Channel for receiving spawned agent handles from background tasks.
     /// Background spawn tasks send (handle, info) here; the main loop
     /// drains and registers them.
-    registration_rx: tokio::sync::mpsc::UnboundedReceiver<(
-        AgentHandle,
-        crate::control::AgentInfo,
-    )>,
-    registration_tx:
-        tokio::sync::mpsc::UnboundedSender<(AgentHandle, crate::control::AgentInfo)>,
+    registration_rx: tokio::sync::mpsc::UnboundedReceiver<(AgentHandle, crate::control::AgentInfo)>,
+    registration_tx: tokio::sync::mpsc::UnboundedSender<(AgentHandle, crate::control::AgentInfo)>,
     /// Notification channel — fires when an agent is registered or
     /// shut down. The TUI subscribes to this to keep its session list
     /// in sync with RuntimeHost's agent registry.
@@ -511,10 +510,16 @@ enum AgentCommand {
     Shutdown,
     Cancel,
     ListSessions,
-    CreateSession { title: Option<String>, fork_from: Option<uuid::Uuid> },
+    CreateSession {
+        title: Option<String>,
+        fork_from: Option<uuid::Uuid>,
+    },
     SwitchSession(uuid::Uuid),
     CloseSession(uuid::Uuid),
-    RenameSession { id: uuid::Uuid, title: String },
+    RenameSession {
+        id: uuid::Uuid,
+        title: String,
+    },
     SetModel(Model),
 }
 
@@ -633,16 +638,24 @@ impl RuntimeHost {
                 };
                 // Reject duplicate paths.
                 if self.agents.contains_key(child_path.as_str()) {
-                    let _ = reply_tx.send(Err(format!(
-                        "agent at path `{child_path}` already exists"
-                    )));
+                    let _ =
+                        reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
                     return;
                 }
                 // Look up profile from cache.
-                let Some(profile) = self.profiles.iter().find(|p| p.name == profile_name).cloned() else {
+                let Some(profile) = self
+                    .profiles
+                    .iter()
+                    .find(|p| p.name == profile_name)
+                    .cloned()
+                else {
                     let _ = reply_tx.send(Err(format!(
                         "Profile '{profile_name}' not found. Available: {}",
-                        self.profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                        self.profiles
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )));
                     return;
                 };
@@ -656,11 +669,15 @@ impl RuntimeHost {
                 let infra = self.infra.clone();
                 let model = model.clone();
                 let reg_tx = self.registration_tx.clone();
-                let info = capability_from_profile(child_path.name(), child_path.as_str(), &profile);
+                let info =
+                    capability_from_profile(child_path.name(), child_path.as_str(), &profile);
                 let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra.spawn_agent(&path_for_spawn, &profile, model, None).await {
+                    match infra
+                        .spawn_agent(&path_for_spawn, &profile, model, None)
+                        .await
+                    {
                         Ok(handle) => {
                             let registered_path = handle.path.as_str().to_string();
                             let _ = reply_tx.send(Ok(registered_path));
@@ -689,9 +706,8 @@ impl RuntimeHost {
                 };
                 // Reject duplicate paths.
                 if self.agents.contains_key(child_path.as_str()) {
-                    let _ = reply_tx.send(Err(format!(
-                        "agent at path `{child_path}` already exists"
-                    )));
+                    let _ =
+                        reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
                     return;
                 }
                 // Resolve model: use override if provided, else global model.
@@ -706,11 +722,15 @@ impl RuntimeHost {
 
                 let infra = self.infra.clone();
                 let reg_tx = self.registration_tx.clone();
-                let info = capability_from_profile(child_path.name(), child_path.as_str(), &profile);
+                let info =
+                    capability_from_profile(child_path.name(), child_path.as_str(), &profile);
                 let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra.spawn_agent(&path_for_spawn, &profile, model, None).await {
+                    match infra
+                        .spawn_agent(&path_for_spawn, &profile, model, None)
+                        .await
+                    {
                         Ok(handle) => {
                             let registered_path = handle.path.as_str().to_string();
                             let _ = reply_tx.send(Ok(registered_path));
@@ -740,11 +760,7 @@ impl RuntimeHost {
             HostCommand::RemoveNode { name } => {
                 self.network.remove_node(&name);
             }
-            HostCommand::Connect {
-                from,
-                to,
-                trigger,
-            } => {
+            HostCommand::Connect { from, to, trigger } => {
                 let _ = self.network.connect(&from, &to, trigger, None);
             }
             HostCommand::Disconnect { from, to } => {
@@ -779,11 +795,7 @@ impl RuntimeHost {
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
                 let status = HostStatus {
-                    agents: self
-                        .agents
-                        .values()
-                        .map(|e| e.info.clone())
-                        .collect(),
+                    agents: self.agents.values().map(|e| e.info.clone()).collect(),
                     profiles: self
                         .profiles
                         .iter()
@@ -845,10 +857,7 @@ impl RuntimeHost {
                 title,
                 fork_from,
             } => {
-                self.send_agent_command(
-                    &name,
-                    AgentCommand::CreateSession { title, fork_from },
-                );
+                self.send_agent_command(&name, AgentCommand::CreateSession { title, fork_from });
             }
             HostCommand::SwitchSession { name, session_id } => {
                 self.send_agent_command(&name, AgentCommand::SwitchSession(session_id));
@@ -880,10 +889,11 @@ impl RuntimeHost {
                     .as_ref()
                     .and_then(|key| self.agents.get(key))
                     .and_then(|e| {
-                    e.model.load_full().as_deref().map(|m| {
-                        (m.model_info.model_name.clone(), m.model_info.context_length)
-                    })
-                });
+                        e.model
+                            .load_full()
+                            .as_deref()
+                            .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
+                    });
                 let _ = reply_tx.send(info);
             }
         }
@@ -898,18 +908,15 @@ impl RuntimeHost {
     /// Returns the HashMap key string, or `None` if no match / ambiguous.
     fn resolve_agent(&self, target: &str) -> Option<String> {
         // 1. Exact full-path match.
-        if target.starts_with("/root")
-            && self.agents.contains_key(target) {
-                return Some(target.to_string());
-            }
+        if target.starts_with("/root") && self.agents.contains_key(target) {
+            return Some(target.to_string());
+        }
         // 2. Short-name match: collect all agents whose last path segment
         //    equals `target`.
         let matches: Vec<&String> = self
             .agents
             .keys()
-            .filter(|key| {
-                key.rsplit('/').next().unwrap_or(key) == target
-            })
+            .filter(|key| key.rsplit('/').next().unwrap_or(key) == target)
             .collect();
         match matches.len() {
             1 => Some(matches[0].clone()),
@@ -949,11 +956,7 @@ impl RuntimeHost {
     /// Considers both running agents and available profiles (blueprints).
     /// Running agents get a small bonus score since they're immediately
     /// available for delegation.
-    fn route_task(
-        &self,
-        description: &str,
-        exclude: Option<&str>,
-    ) -> crate::control::RouteResult {
+    fn route_task(&self, description: &str, exclude: Option<&str>) -> crate::control::RouteResult {
         let desc_lower = description.to_lowercase();
         let desc_words: std::collections::HashSet<&str> = desc_lower
             .split_whitespace()
@@ -1013,7 +1016,11 @@ impl RuntimeHost {
 
         let mut candidates: Vec<_> = candidates.into_iter().filter(|c| c.score > 0.0).collect();
 
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let (best, reason) = if let Some(top) = candidates.first() {
             let reason = if top.matched_tags.is_empty() {

@@ -39,7 +39,9 @@ pub enum MagmaNodeError {
 }
 
 impl ::dag_core::dag::NodeError for MagmaNodeError {
-    fn node_type(&self) -> &str { "magma" }
+    fn node_type(&self) -> &str {
+        "magma"
+    }
 }
 
 // =====================================================================

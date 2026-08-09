@@ -23,8 +23,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -48,7 +48,9 @@ impl From<ColumnError> for CmestNodeError {
     }
 }
 impl ::dag_core::dag::NodeError for CmestNodeError {
-    fn node_type(&self) -> &str { "cmest" }
+    fn node_type(&self) -> &str {
+        "cmest"
+    }
 }
 
 /// Build the standardized output RecordBatch for any cmest variant.
@@ -113,8 +115,6 @@ fn build_cmest_batch(
         Field::new("n_obs", DataType::Int32, false),
         Field::new("mediator_weight", DataType::Float64, true),
     ]));
-
-
 
     RecordBatch::try_new(
         schema,

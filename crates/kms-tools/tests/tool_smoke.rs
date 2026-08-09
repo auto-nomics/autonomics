@@ -17,9 +17,12 @@ async fn setup() -> (Arc<KmsService>, Vec<ToolRegistration>) {
 }
 
 fn find_tool<'a>(tools: &'a [ToolRegistration], name: &str) -> &'a ToolRegistration {
-    tools.iter().find(|t| t.definition.name == name).unwrap_or_else(|| {
-        panic!("tool '{name}' not found in registrations");
-    })
+    tools
+        .iter()
+        .find(|t| t.definition.name == name)
+        .unwrap_or_else(|| {
+            panic!("tool '{name}' not found in registrations");
+        })
 }
 
 #[tokio::test]

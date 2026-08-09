@@ -228,17 +228,13 @@ impl DataEngine {
     pub async fn new_dag_ref(&mut self, name: &str) -> Result<()> {
         // Reject if the ref already exists.
         if let Some(history) = &self.history
-            && history
-                .ref_head(name)
-                .await
-                .map_err(Error::Dag)?
-                .is_some()
-            {
-                return Err(Error::Custom(format!(
-                    "ref '{name}' already exists. Use switch_dag_ref to activate it, \
+            && history.ref_head(name).await.map_err(Error::Dag)?.is_some()
+        {
+            return Err(Error::Custom(format!(
+                "ref '{name}' already exists. Use switch_dag_ref to activate it, \
                      or branch_from_snapshot to create a new lineage from a snapshot."
-                )));
-            }
+            )));
+        }
         self.dag.clear();
         self.history_ref = name.to_string();
         Ok(())
@@ -545,7 +541,6 @@ impl DataEngine {
     ///
     /// Returns the previous ref name.
     pub fn set_history_ref(&mut self, ref_name: impl Into<String>) -> String {
-
         std::mem::replace(&mut self.history_ref, ref_name.into())
     }
 
@@ -776,10 +771,11 @@ fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagMani
     }
     for n in &new.nodes {
         if let Some(old_n) = old_nodes.get(n.id.as_str())
-            && (old_n.kind != n.kind || old_n.spec != n.spec) {
-                out.push_str(&format!("  ~ node {} ({})\n", n.id, n.kind));
-                changes += 1;
-            }
+            && (old_n.kind != n.kind || old_n.spec != n.spec)
+        {
+            out.push_str(&format!("  ~ node {} ({})\n", n.id, n.kind));
+            changes += 1;
+        }
     }
     for e in new_edges.difference(&old_edges) {
         out.push_str(&format!("  + edge {e}\n"));

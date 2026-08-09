@@ -366,26 +366,22 @@ pub struct RecommendationsResponse {
 // ===========================================================================
 
 /// Default fields requested for paper search and details.
-pub const DEFAULT_PAPER_FIELDS: &str =
-    "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
+pub const DEFAULT_PAPER_FIELDS: &str = "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
      citationCount,influentialCitationCount,isOpenAccess,openAccessPdf,\
      fieldsOfStudy,publicationTypes,publicationDate,journal,tldr";
 
 /// Fields for bulk search (tldr/embedding not supported on this endpoint).
-pub const BULK_PAPER_FIELDS: &str =
-    "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
+pub const BULK_PAPER_FIELDS: &str = "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
      citationCount,influentialCitationCount,isOpenAccess,openAccessPdf,\
      fieldsOfStudy,publicationTypes,publicationDate,journal";
 
 /// Fields for author papers endpoint (tldr/embedding not supported).
-pub const AUTHOR_PAPER_FIELDS: &str =
-    "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
+pub const AUTHOR_PAPER_FIELDS: &str = "paperId,title,abstract,year,venue,authors,externalIds,referenceCount,\
      citationCount,influentialCitationCount,isOpenAccess,openAccessPdf,\
      fieldsOfStudy,publicationTypes,publicationDate,journal";
 
 /// Fields requested for citations/references (paper-level subset).
-pub const DEFAULT_CITATION_FIELDS: &str =
-    "paperId,title,abstract,year,venue,authors,citationCount,\
+pub const DEFAULT_CITATION_FIELDS: &str = "paperId,title,abstract,year,venue,authors,citationCount,\
      isOpenAccess,openAccessPdf,externalIds,contexts,intents,isInfluential";
 
 /// Default fields requested for author search and details.

@@ -11,8 +11,7 @@ use crate::mtag::{MtagResult, mtag_analysis};
 use crate::omega::{OmegaConfig, estimate_omega};
 
 /// Full configuration for an MTAG analysis run.
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MtagConfig {
     /// Data loading / harmonisation options.
     pub data: DataConfig,
@@ -27,7 +26,6 @@ pub struct MtagConfig {
     /// Whether to assume no sample overlap (Sigma is diagonal).
     pub no_overlap: bool,
 }
-
 
 /// Complete MTAG analysis result.
 pub struct MtagAnalysis {

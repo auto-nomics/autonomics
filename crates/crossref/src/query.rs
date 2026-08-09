@@ -69,10 +69,7 @@ pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
 
     // journal → query.container-title
     if let Some(t) = filtered(&sq.journal) {
-        q = q.with_field_query(
-            "query.container-title",
-            join_terms(&t, BoolOp::Or),
-        );
+        q = q.with_field_query("query.container-title", join_terms(&t, BoolOp::Or));
     }
 
     // affiliation → query.affiliation
@@ -123,11 +120,7 @@ fn join_terms(terms: &[String], op: BoolOp) -> String {
         BoolOp::Not => {
             // NOT doesn't make sense as a sole join; emit as AND-NOT.
             let first = parts.first().cloned().unwrap_or_default();
-            let rest: Vec<String> = parts
-                .iter()
-                .skip(1)
-                .map(|t| format!("NOT {t}"))
-                .collect();
+            let rest: Vec<String> = parts.iter().skip(1).map(|t| format!("NOT {t}")).collect();
             [first]
                 .into_iter()
                 .chain(rest)
@@ -210,10 +203,11 @@ mod tests {
         };
         let q = to_crossref_works_query(&sq).unwrap();
         assert!(q.query.is_none());
-        assert!(q
-            .field_queries
-            .iter()
-            .any(|(f, _)| f == "query.bibliographic"));
+        assert!(
+            q.field_queries
+                .iter()
+                .any(|(f, _)| f == "query.bibliographic")
+        );
     }
 
     #[test]
@@ -238,10 +232,11 @@ mod tests {
             ..Default::default()
         };
         let q = to_crossref_works_query(&sq).unwrap();
-        assert!(q
-            .field_queries
-            .iter()
-            .any(|(f, _) | f == "query.container-title"));
+        assert!(
+            q.field_queries
+                .iter()
+                .any(|(f, _)| f == "query.container-title")
+        );
     }
 
     #[test]
@@ -251,25 +246,43 @@ mod tests {
             ..Default::default()
         };
         let q = to_crossref_works_query(&sq).unwrap();
-        assert!(q.filters.iter().any(|(k, v)| k == "type" && v == "journal-article"));
+        assert!(
+            q.filters
+                .iter()
+                .any(|(k, v)| k == "type" && v == "journal-article")
+        );
     }
 
     #[test]
     fn year_range_maps_to_date_filters() {
         let sq = StructuredSearch {
             keywords: Some(vec!["cancer".into()]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let q = to_crossref_works_query(&sq).unwrap();
-        assert!(q.filters.iter().any(|(k, v)| k == "from-pub-date" && v == "2020-01-01"));
-        assert!(q.filters.iter().any(|(k, v)| k == "until-pub-date" && v == "2024-12-31"));
+        assert!(
+            q.filters
+                .iter()
+                .any(|(k, v)| k == "from-pub-date" && v == "2020-01-01")
+        );
+        assert!(
+            q.filters
+                .iter()
+                .any(|(k, v)| k == "until-pub-date" && v == "2024-12-31")
+        );
     }
 
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_crossref_works_query(&sq).unwrap_err();

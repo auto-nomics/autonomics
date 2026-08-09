@@ -14,9 +14,9 @@ pub mod testing;
 pub mod tools;
 
 pub use agent::Agent;
+pub use agentik_types::SessionInfo;
 pub use context::ContextProvider;
 pub use session::Session;
-pub use agentik_types::SessionInfo;
 pub use storage::turso_storage::TursoAgentStorage;
 pub use storage::{AgentProfile, AgentProfileRegistry};
 

@@ -22,8 +22,8 @@
 //! results are statistically equivalent to the sequential path but not
 //! bit-identical.
 
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -47,18 +47,13 @@ fn default_method_for(values: &[f64]) -> &'static str {
         .collect::<Vec<_>>();
     levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     levels.dedup();
-    if levels.len() <= 2 {
-        "logreg"
-    } else {
-        "pmm"
-    }
+    if levels.len() <= 2 { "logreg" } else { "pmm" }
 }
 
 /// Derive a deterministic, well-separated per-chain seed from a base seed
 /// and chain index using a splitmix64-style avalanching step.
 fn chain_seed(base: u64, index: usize) -> u64 {
-    let mut z = base
-        .wrapping_add((index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let mut z = base.wrapping_add((index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
@@ -170,14 +165,7 @@ fn run_chain(
                     config.ridge,
                     rng,
                 )?,
-                "norm" => impute_norm(
-                    &current[col],
-                    r,
-                    &x_rows,
-                    Some(&wy),
-                    config.ridge,
-                    rng,
-                )?,
+                "norm" => impute_norm(&current[col], r, &x_rows, Some(&wy), config.ridge, rng)?,
                 "mean" => impute_mean(&current[col], r, Some(&wy), rng),
                 "logreg" => impute_logreg(&current[col], r, &x_rows, Some(&wy), rng)?,
                 "sample" => impute_sample(&current[col], r, Some(&wy), rng),
@@ -270,7 +258,10 @@ pub fn mice(
         Some(methods) => {
             let mut m = HashMap::new();
             for (i, c) in column_order.iter().enumerate() {
-                let meth = methods.get(i).cloned().unwrap_or_else(|| default_method_for(&data[c]).to_string());
+                let meth = methods
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| default_method_for(&data[c]).to_string());
                 m.insert(c.clone(), meth);
             }
             m
@@ -480,14 +471,9 @@ fn run_sequential(
                         config.ridge,
                         &mut rng,
                     )?,
-                    "norm" => impute_norm(
-                        &current[col],
-                        r,
-                        &x_rows,
-                        Some(&wy),
-                        config.ridge,
-                        &mut rng,
-                    )?,
+                    "norm" => {
+                        impute_norm(&current[col], r, &x_rows, Some(&wy), config.ridge, &mut rng)?
+                    }
                     "mean" => impute_mean(&current[col], r, Some(&wy), &mut rng),
                     "logreg" => impute_logreg(&current[col], r, &x_rows, Some(&wy), &mut rng)?,
                     "sample" => impute_sample(&current[col], r, Some(&wy), &mut rng),
@@ -527,7 +513,11 @@ mod tests {
     fn make_data(n: usize) -> HashMap<String, Vec<f64>> {
         let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
         let z: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
-        let mut y: Vec<f64> = x.iter().zip(z.iter()).map(|(xi, zi)| 2.0 * xi + zi).collect();
+        let mut y: Vec<f64> = x
+            .iter()
+            .zip(z.iter())
+            .map(|(xi, zi)| 2.0 * xi + zi)
+            .collect();
         // Punch some holes.
         for &idx in &[3, 7, 12, 18, 25, 0, 5, 10, 15, 20] {
             if (idx as usize) < n {
@@ -600,7 +590,9 @@ mod tests {
         let mids2 = mice(data2, col_order, config).unwrap();
         // Same seed → identical results.
         for col in &mids1.column_names {
-            if let (Some(v1), Some(v2)) = (mids1.imp.by_column.get(col), mids2.imp.by_column.get(col)) {
+            if let (Some(v1), Some(v2)) =
+                (mids1.imp.by_column.get(col), mids2.imp.by_column.get(col))
+            {
                 assert_eq!(v1, v2, "parallel results differ for column {col}");
             }
         }
@@ -645,8 +637,10 @@ mod tests {
         let midpoint = (mean_seq + mean_par) / 2.0;
         let spread = (mean_seq - mean_par).abs();
         // Both should be in the same ballpark.
-        assert!(spread < midpoint.abs() * 0.5,
+        assert!(
+            spread < midpoint.abs() * 0.5,
             "seq mean {mean_seq}, par mean {par_mean}, spread too large",
-            par_mean = mean_par);
+            par_mean = mean_par
+        );
     }
 }

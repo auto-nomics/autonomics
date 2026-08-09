@@ -25,8 +25,8 @@
 //! `complete(action = "all", include = FALSE)`).
 
 pub mod common;
-pub mod error;
 pub mod complete_node;
+pub mod error;
 pub mod logreg_node;
 pub mod mean_node;
 pub mod norm_node;

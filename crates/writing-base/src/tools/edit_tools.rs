@@ -8,18 +8,30 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 use writing_types::*;
 
+use super::WritingToolState;
 use crate::ast;
 use crate::store::WritingStore;
-use super::WritingToolState;
 
 pub fn registrations(state: WritingToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DocInsertSectionTool { store: state.store.clone() }),
-        ToolRegistration::from(DocInsertBlockTool { store: state.store.clone() }),
-        ToolRegistration::from(DocDeleteBlockTool { store: state.store.clone() }),
-        ToolRegistration::from(DocMoveBlockTool { store: state.store.clone() }),
-        ToolRegistration::from(DocAppendTextTool { store: state.store.clone() }),
-        ToolRegistration::from(DocReplaceParagraphTool { store: state.store.clone() }),
+        ToolRegistration::from(DocInsertSectionTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocInsertBlockTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocDeleteBlockTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocMoveBlockTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocAppendTextTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocReplaceParagraphTool {
+            store: state.store.clone(),
+        }),
         ToolRegistration::from(DocEditScriptTool { store: state.store }),
     ]
 }
@@ -373,11 +385,12 @@ impl ToolFunction for DocEditScriptTool {
         let mut doc = load_doc(&self.store, &input.document_id).await?;
 
         // Parse operations JSON into EditOps.
-        let ops_arr = input.operations.as_array().ok_or_else(|| {
-            ToolError::ValidationFailed {
+        let ops_arr = input
+            .operations
+            .as_array()
+            .ok_or_else(|| ToolError::ValidationFailed {
                 message: "operations must be a JSON array".into(),
-            }
-        })?;
+            })?;
 
         let mut script = EditScript::new();
         for (i, op_json) in ops_arr.iter().enumerate() {
@@ -392,8 +405,12 @@ impl ToolFunction for DocEditScriptTool {
 
         let op_count = script.len();
         ast::apply_edit_script(&mut doc, &script).map_err(tool_err)?;
-        save_doc(&self.store, &mut doc, input.message.as_deref().unwrap_or("edit_script"))
-            .await?;
+        save_doc(
+            &self.store,
+            &mut doc,
+            input.message.as_deref().unwrap_or("edit_script"),
+        )
+        .await?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "applied": op_count,
@@ -407,15 +424,21 @@ impl ToolFunction for DocEditScriptTool {
 // ===========================================================================
 
 async fn load_doc(store: &WritingStore, id: &str) -> Result<Document, ToolError> {
-    store.get_document(id).await.map_err(|e| ToolError::ExecutionFailed {
-        source: Box::new(e),
-    })
+    store
+        .get_document(id)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed {
+            source: Box::new(e),
+        })
 }
 
 async fn save_doc(store: &WritingStore, doc: &mut Document, msg: &str) -> Result<(), ToolError> {
-    store.save_document(doc, msg, None).await.map_err(|e| ToolError::ExecutionFailed {
-        source: Box::new(e),
-    })
+    store
+        .save_document(doc, msg, None)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed {
+            source: Box::new(e),
+        })
 }
 
 fn tool_err(e: crate::Error) -> ToolError {
@@ -498,7 +521,9 @@ fn build_block(input: &DocInsertBlockInput) -> Result<Block, ToolError> {
             }))
         }
         other => Err(ToolError::ValidationFailed {
-            message: format!("unknown block type: '{other}'. Valid: paragraph, equation, list, quote, raw_latex"),
+            message: format!(
+                "unknown block type: '{other}'. Valid: paragraph, equation, list, quote, raw_latex"
+            ),
         }),
     }
 }
@@ -603,7 +628,10 @@ fn build_block_from_json(block_type: &str, json: &serde_json::Value) -> Result<B
                 .and_then(|v| v.as_str())
                 .ok_or("equation requires 'latex'")?
                 .into(),
-            numbered: json.get("numbered").and_then(|v| v.as_bool()).unwrap_or(true),
+            numbered: json
+                .get("numbered")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
         })),
         "raw_latex" => Ok(Block::RawLatex(RawLatexBlock {
             meta,
@@ -620,10 +648,11 @@ fn build_block_from_json(block_type: &str, json: &serde_json::Value) -> Result<B
             )],
         })),
         "list" => {
-            let ordered = json.get("ordered").and_then(|v| v.as_bool()).unwrap_or(false);
-            let items_arr = json
-                .get("items")
-                .and_then(|v| v.as_array());
+            let ordered = json
+                .get("ordered")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let items_arr = json.get("items").and_then(|v| v.as_array());
             let items: Vec<ListItem> = items_arr
                 .unwrap_or(&serde_json::Value::Array(vec![]).as_array().unwrap())
                 .iter()

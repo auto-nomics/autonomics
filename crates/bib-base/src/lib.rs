@@ -29,16 +29,16 @@ pub mod shared;
 pub mod tools;
 
 pub use bib_base::BibBase;
-pub use http_options::BibHttpOptions;
-pub use shared::BibShared;
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};
+pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
 pub use query::{
     ArxivSource, BiorxivSource, LiteratureGateway, LiteratureSource, PubmedSource, SourceBatch,
 };
+pub use shared::BibShared;
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
 ///

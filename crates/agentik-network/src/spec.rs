@@ -185,18 +185,14 @@ impl TerminationSpec {
             Self::AnyNodeDone { nodes } => {
                 for n in nodes {
                     if !known.contains(n.as_str()) {
-                        return Err(format!(
-                            "termination references unknown node: {n}"
-                        ));
+                        return Err(format!("termination references unknown node: {n}"));
                     }
                 }
                 Ok(())
             }
             Self::Condition { node, .. } => {
                 if !known.contains(node.as_str()) {
-                    return Err(format!(
-                        "termination references unknown node: {node}"
-                    ));
+                    return Err(format!("termination references unknown node: {node}"));
                 }
                 Ok(())
             }

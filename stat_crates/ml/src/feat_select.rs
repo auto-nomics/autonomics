@@ -108,10 +108,7 @@ pub fn select_k_best(
     let mut indexed: Vec<(usize, f64)> = scores.iter().copied().enumerate().collect();
     indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let k = k.min(indexed.len());
-    let (indices, s): (Vec<usize>, Vec<f64>) = indexed[..k]
-        .iter()
-        .map(|&(i, s)| (i, s))
-        .unzip();
+    let (indices, s): (Vec<usize>, Vec<f64>) = indexed[..k].iter().map(|&(i, s)| (i, s)).unzip();
     Ok((indices, s))
 }
 
@@ -155,7 +152,9 @@ mod tests {
         let data = mat_from_row_major(
             5,
             3,
-            &[1.0, 5.0, 3.0, 1.0, 5.0, 3.0, 1.0, 5.0, 4.0, 1.0, 5.0, 3.0, 1.0, 5.0, 3.0],
+            &[
+                1.0, 5.0, 3.0, 1.0, 5.0, 3.0, 1.0, 5.0, 4.0, 1.0, 5.0, 3.0, 1.0, 5.0, 3.0,
+            ],
         );
         // Column 0 has variance 0, column 1 has variance 0, column 2 has some variance
         let selected = variance_threshold(&data, 0.01);
@@ -183,7 +182,10 @@ mod tests {
         let data = mat_from_row_major(
             6,
             3,
-            &[1.0, 5.0, 1.0, 2.0, 5.0, 1.0, 3.0, 5.0, 1.0, 10.0, 1.0, 1.0, 9.0, 1.0, 1.0, 8.0, 1.0, 1.0],
+            &[
+                1.0, 5.0, 1.0, 2.0, 5.0, 1.0, 3.0, 5.0, 1.0, 10.0, 1.0, 1.0, 9.0, 1.0, 1.0, 8.0,
+                1.0, 1.0,
+            ],
         );
         let labels = vec![0, 0, 0, 1, 1, 1];
         let (indices, scores) = select_k_best(&data, &labels, 2).unwrap();

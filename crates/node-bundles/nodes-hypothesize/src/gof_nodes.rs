@@ -5,10 +5,10 @@
 use super::common::{
     HypoNodeError, collect_input, emit_test_row, extract_f64_column, extract_groups,
 };
-use dag_core::dag::DagError;
-use dag_core::registry::{NodeCtx, NodeFactory};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
+use dag_core::dag::DagError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::registry::{NodeCtx, NodeFactory};
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;

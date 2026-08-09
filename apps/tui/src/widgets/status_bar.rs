@@ -33,9 +33,7 @@ impl Widget for StatusBar<'_> {
         // Compaction takes over the status display so the user can see the
         // agent is summarizing context, not idle/requesting.
         let (indicator, indicator_color, status_text) = match self.status {
-            AgentStatus::Idle | AgentStatus::Aborted => {
-                ("○", Color::Gray, "idle")
-            }
+            AgentStatus::Idle | AgentStatus::Aborted => ("○", Color::Gray, "idle"),
             AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
             AgentStatus::Streaming => ("●", Color::Green, "streaming"),
             AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
@@ -49,9 +47,7 @@ impl Widget for StatusBar<'_> {
         // `in:` shows the absolute prompt size (input + cache_read + cache_creation).
         // Anthropic's `input_tokens` is uncached-only; adding the cache portions
         // here gives the user the full token count billed for the prompt.
-        let absolute_in = self.input_tokens
-            + self.cache_read_tokens
-            + self.cache_creation_tokens;
+        let absolute_in = self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens;
         let absolute_in_tok = format_tokens(absolute_in);
         let cache_hit = self.cache_read_tokens + self.cache_creation_tokens;
 
@@ -65,7 +61,10 @@ impl Widget for StatusBar<'_> {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  │  "),
-            Span::styled(format!("in: {}", absolute_in_tok), Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("in: {}", absolute_in_tok),
+                Style::default().fg(Color::Gray),
+            ),
         ];
         // Cache annotation: shown only when cache > 0.
         if cache_hit > 0 {
@@ -96,10 +95,7 @@ impl Widget for StatusBar<'_> {
                         _ => Color::Red,
                     };
                     spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        format!("{pct}%"),
-                        Style::default().fg(color),
-                    ));
+                    spans.push(Span::styled(format!("{pct}%"), Style::default().fg(color)));
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(bar, Style::default().fg(color)));
                     spans.push(Span::raw(" "));

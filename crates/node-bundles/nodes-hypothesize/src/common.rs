@@ -33,7 +33,9 @@ pub enum HypoNodeError {
 }
 
 impl ::dag_core::dag::NodeError for HypoNodeError {
-    fn node_type(&self) -> &str { "hypothesize" }
+    fn node_type(&self) -> &str {
+        "hypothesize"
+    }
 }
 
 // ─── Standard test-row schema ───────────────────────────────────────────────

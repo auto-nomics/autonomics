@@ -17,7 +17,12 @@ use rand::Rng;
 ///
 /// Returns the imputed vector (length `sum(wy)`), with each entry equal to
 /// the arithmetic mean of `y[ry]`.
-pub fn impute_mean<R: Rng + ?Sized>(y: &[f64], ry: &[bool], wy: Option<&[bool]>, _rng: &mut R) -> Vec<f64> {
+pub fn impute_mean<R: Rng + ?Sized>(
+    y: &[f64],
+    ry: &[bool],
+    wy: Option<&[bool]>,
+    _rng: &mut R,
+) -> Vec<f64> {
     let wy_owned;
     let wy = match wy {
         Some(v) => v,

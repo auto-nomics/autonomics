@@ -11,13 +11,13 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::Diagnostic;
 use crate::Storage;
 use crate::diagnostics;
 use crate::language::Language;
 use crate::storage::repo;
 use crate::storage::types::{Entity, Index, Knowledge, KnowledgeType, Nomenclature, TargetType};
-use crate::view::{IndexView, LocalView, SubtreeSummary, SUBTREE_TITLES_LIMIT};
-use crate::{Diagnostic};
+use crate::view::{IndexView, LocalView, SUBTREE_TITLES_LIMIT, SubtreeSummary};
 
 // ─────────────────────────── document store trait ───────────────────────────
 
@@ -335,9 +335,10 @@ impl KmsService {
             .map_err(|e| e.to_string())?;
         match filter {
             EntityFilter::All => Ok(all),
-            EntityFilter::EmptyDefinition => {
-                Ok(all.into_iter().filter(|e| e.definition.is_empty()).collect())
-            }
+            EntityFilter::EmptyDefinition => Ok(all
+                .into_iter()
+                .filter(|e| e.definition.is_empty())
+                .collect()),
             EntityFilter::NoNomenclature => {
                 Ok(all.into_iter().filter(|e| e.name.is_empty()).collect())
             }
@@ -955,9 +956,7 @@ impl KmsService {
                 let children = self.get_children(Some(pointer)).await?;
                 match children.iter().find(|c| c.title.as_deref() == Some(seg)) {
                     Some(child) => pointer = child.id,
-                    None => {
-                        return Err(format!("segment '{seg}' not found as child of node"))
-                    }
+                    None => return Err(format!("segment '{seg}' not found as child of node")),
                 }
             }
         }
@@ -1017,9 +1016,7 @@ impl KmsService {
                             src = source_path
                         ));
                     } else {
-                        msg.push_str(
-                            " (verify source_path resolves to the parent you intended.)",
-                        );
+                        msg.push_str(" (verify source_path resolves to the parent you intended.)");
                     }
                     msg
                 })?;
@@ -1135,7 +1132,9 @@ impl KmsService {
             .await
             .map(|n| n.title.unwrap_or_else(|| new_parent_id.to_string()))
             .unwrap_or_else(|_| new_parent_id.to_string());
-        Ok(format!("moved '{index_path}' under '{new_parent_label}'\n{location}"))
+        Ok(format!(
+            "moved '{index_path}' under '{new_parent_label}'\n{location}"
+        ))
     }
 
     pub async fn merge_subtree(
@@ -1163,9 +1162,14 @@ impl KmsService {
             .len();
 
         for (i, child) in children.iter().enumerate() {
-            repo::index_reparent(conn, child.id, target_parent_id, (existing_count + i) as i64)
-                .await
-                .map_err(|e| e.to_string())?;
+            repo::index_reparent(
+                conn,
+                child.id,
+                target_parent_id,
+                (existing_count + i) as i64,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
         if !children.is_empty() {
             repo::index_reindex_positions(conn, Some(target_parent_id))
@@ -1212,7 +1216,11 @@ impl KmsService {
             let is_last = i == path.len() - 1;
 
             if i > 0 {
-                s.push_str(if is_last { "  └── " } else { "  ├── " });
+                s.push_str(if is_last {
+                    "  └── "
+                } else {
+                    "  ├── "
+                });
             } else {
                 s.push_str("## ");
             }
@@ -1235,7 +1243,11 @@ impl KmsService {
             let last = children.len() - 1;
             for (i, c) in children.iter().enumerate() {
                 let t = c.title.as_deref().unwrap_or("(unnamed)");
-                let connector = if i == last { "  └── " } else { "  ├── " };
+                let connector = if i == last {
+                    "  └── "
+                } else {
+                    "  ├── "
+                };
                 let suffix = match c.target_type {
                     TargetType::Group => "",
                     TargetType::Knowledge => " [knowledge]",
@@ -1322,15 +1334,9 @@ impl KmsService {
                 Ok::<Index, String>(Index {
                     id: Uuid::parse_str(&r.id).map_err(|e| e.to_string())?,
                     title: r.title.clone(),
-                    target: r
-                        .target
-                        .as_deref()
-                        .and_then(|t| Uuid::parse_str(t).ok()),
+                    target: r.target.as_deref().and_then(|t| Uuid::parse_str(t).ok()),
                     target_type: TargetType::from_str(r.target_type.as_deref().unwrap_or("group")),
-                    parent_id: r
-                        .parent_id
-                        .as_deref()
-                        .and_then(|p| Uuid::parse_str(p).ok()),
+                    parent_id: r.parent_id.as_deref().and_then(|p| Uuid::parse_str(p).ok()),
                     position: r.position,
                 })
             })

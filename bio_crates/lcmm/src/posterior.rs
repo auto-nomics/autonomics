@@ -107,12 +107,18 @@ impl<'a> PosteriorLike for crate::likelihood::HlmeLikelihood<'a> {
                     // nea == 0: V_i = Corr_i, no random effects.
                     let (vi, _) = invert_pd(&corr, ni).unwrap_or_else(|| {
                         let mut eye = vec![0.0; ni * ni];
-                        for j in 0..ni { eye[j * ni + j] = 1.0; }
+                        for j in 0..ni {
+                            eye[j * ni + j] = 1.0;
+                        }
                         (eye, 0.0)
                     });
                     (vi, Vec::new())
                 };
-                let det = if let Some((_, d, _)) = &shared { *d } else { 0.0 };
+                let det = if let Some((_, d, _)) = &shared {
+                    *d
+                } else {
+                    0.0
+                };
                 class_vi[g - 1] = vi_inv.clone();
                 class_valea[g - 1] = valea.clone();
 
@@ -169,7 +175,8 @@ impl<'a> PosteriorLike for crate::likelihood::HlmeLikelihood<'a> {
             // π-weighted residuals + RE predictions.
             for g in 0..ng {
                 let mu = class_mean(spec, data, L, best, i, ni, g + 1);
-                let pred_ss = pred_ss_g.iter()
+                let pred_ss = pred_ss_g
+                    .iter()
                     .skip(row * ng + g)
                     .step_by(ng)
                     .take(ni)
@@ -256,7 +263,14 @@ fn build_zi(data: &LongData, spec: &ModelSpec, L: &ParamLayout, i: usize, ni: us
     zi
 }
 
-fn build_corr(data: &LongData, spec: &ModelSpec, L: &ParamLayout, best: &[f64], i: usize, ni: usize) -> Vec<f64> {
+fn build_corr(
+    data: &LongData,
+    spec: &ModelSpec,
+    L: &ParamLayout,
+    best: &[f64],
+    i: usize,
+    ni: usize,
+) -> Vec<f64> {
     let mut corr = vec![0.0; ni * ni];
     let mut tcor = vec![0.0; ni];
     if L.ncor > 0 {
@@ -290,7 +304,13 @@ fn build_corr(data: &LongData, spec: &ModelSpec, L: &ParamLayout, best: &[f64], 
 }
 
 /// Returns `(V^{-1}, log|V|, Valea)` where `Valea = Ut · (Z·Ut)'` (nea×ni).
-fn decompose_subject(zi: &[f64], ut: &[f64], nea: usize, corr: &[f64], ni: usize) -> (Vec<f64>, f64, Vec<f64>) {
+fn decompose_subject(
+    zi: &[f64],
+    ut: &[f64],
+    nea: usize,
+    corr: &[f64],
+    ni: usize,
+) -> (Vec<f64>, f64, Vec<f64>) {
     // P = Z · Ut (ni × nea)
     let mut p = vec![0.0; ni * nea];
     for j in 0..ni {
@@ -315,7 +335,9 @@ fn decompose_subject(zi: &[f64], ut: &[f64], nea: usize, corr: &[f64], ni: usize
     }
     let (vi_inv, det) = invert_pd(&vc, ni).unwrap_or_else(|| {
         let mut eye = vec![0.0; ni * ni];
-        for j in 0..ni { eye[j * ni + j] = 1.0; }
+        for j in 0..ni {
+            eye[j * ni + j] = 1.0;
+        }
         (eye, 0.0)
     });
     // Valea = Ut · P'  (nea × ni)
@@ -332,7 +354,15 @@ fn decompose_subject(zi: &[f64], ut: &[f64], nea: usize, corr: &[f64], ni: usize
     (vi_inv, det, valea)
 }
 
-fn subject_specific_pred(zi: &[f64], ut: &[f64], vi_inv: &[f64], y2: &[f64], mu: &[f64], nea: usize, ni: usize) -> Vec<f64> {
+fn subject_specific_pred(
+    zi: &[f64],
+    ut: &[f64],
+    vi_inv: &[f64],
+    y2: &[f64],
+    mu: &[f64],
+    nea: usize,
+    ni: usize,
+) -> Vec<f64> {
     let err1 = matvec(vi_inv, y2, ni);
     // CovDev = Z B Z' = P P'
     let mut p = vec![0.0; ni * nea];
@@ -360,7 +390,13 @@ fn subject_specific_pred(zi: &[f64], ut: &[f64], vi_inv: &[f64], y2: &[f64], mu:
     pred
 }
 
-fn class_probs(spec: &ModelSpec, data: &LongData, L: &ParamLayout, best: &[f64], i: usize) -> Vec<f64> {
+fn class_probs(
+    spec: &ModelSpec,
+    data: &LongData,
+    L: &ParamLayout,
+    best: &[f64],
+    i: usize,
+) -> Vec<f64> {
     let ng = L.ng;
     let mut pi = vec![0.0; ng];
     if data.prior[i] != 0 {
@@ -390,7 +426,9 @@ fn class_probs(spec: &ModelSpec, data: &LongData, L: &ParamLayout, best: &[f64],
             pi[g - 1] *= pi[ng - 1];
         }
     } else {
-        for v in pi.iter_mut() { *v = 1.0; }
+        for v in pi.iter_mut() {
+            *v = 1.0;
+        }
     }
     for g in 0..ng {
         pi[g] *= data.pprior[i * ng + g];
@@ -398,19 +436,31 @@ fn class_probs(spec: &ModelSpec, data: &LongData, L: &ParamLayout, best: &[f64],
     pi
 }
 
-fn class_mean(spec: &ModelSpec, data: &LongData, L: &ParamLayout, best: &[f64], i: usize, ni: usize, class1: usize) -> Vec<f64> {
+fn class_mean(
+    spec: &ModelSpec,
+    data: &LongData,
+    L: &ParamLayout,
+    best: &[f64],
+    i: usize,
+    ni: usize,
+    class1: usize,
+) -> Vec<f64> {
     let mut mu = vec![0.0; ni];
     let mut nmoins = 0_isize;
     for k in 0..L.nv {
         match spec.idg[k] {
             1 => {
                 let beta = best[L.nprob + nmoins as usize];
-                for j in 0..ni { mu[j] += beta * data.x_at(i, j, k); }
+                for j in 0..ni {
+                    mu[j] += beta * data.x_at(i, j, k);
+                }
                 nmoins += 1;
             }
             2 => {
                 let beta = best[L.nprob + nmoins as usize + (class1 - 1)];
-                for j in 0..ni { mu[j] += beta * data.x_at(i, j, k); }
+                for j in 0..ni {
+                    mu[j] += beta * data.x_at(i, j, k);
+                }
                 nmoins += L.ng as isize;
             }
             _ => {}
@@ -423,7 +473,9 @@ fn matvec(a: &[f64], x: &[f64], ni: usize) -> Vec<f64> {
     let mut y = vec![0.0; ni];
     for i in 0..ni {
         let mut s = 0.0;
-        for j in 0..ni { s += a[i * ni + j] * x[j]; }
+        for j in 0..ni {
+            s += a[i * ni + j] * x[j];
+        }
         y[i] = s;
     }
     y
@@ -439,7 +491,13 @@ fn matvec(a: &[f64], x: &[f64], ni: usize) -> Vec<f64> {
 /// `newdata_x` is a row-major `n_new × nv` matrix using the same column
 /// ordering as the original fit's design matrix. Returns `ng × n_new`
 /// predicted means (class-major: result[g*n_new + r]).
-pub fn predict_y(spec: &ModelSpec, L: &ParamLayout, best: &[f64], newdata_x: &[f64], n_new: usize) -> Vec<f64> {
+pub fn predict_y(
+    spec: &ModelSpec,
+    L: &ParamLayout,
+    best: &[f64],
+    newdata_x: &[f64],
+    n_new: usize,
+) -> Vec<f64> {
     let ng = L.ng;
     let mut out = vec![0.0; ng * n_new];
     for g in 1..=ng {

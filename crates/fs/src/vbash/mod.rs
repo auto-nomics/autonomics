@@ -610,7 +610,10 @@ mod tests {
         let mut s = input("stat");
         s.path = Some("/full/a.txt".into());
         let result = tool.run(s).await.unwrap();
-        assert_eq!(result.is_error, None, "non-empty-dir rm must not delete contents");
+        assert_eq!(
+            result.is_error, None,
+            "non-empty-dir rm must not delete contents"
+        );
     }
 
     #[tokio::test]
@@ -843,8 +846,12 @@ mod tests {
         let json = result_json(result);
         let content = json["content"].as_str().unwrap();
         // Root must appear exactly once (as the header), not as a child
-        let count = content.matches("
-/").count();
+        let count = content
+            .matches(
+                "
+/",
+            )
+            .count();
         assert!(
             count <= 1,
             "root '/' should not be duplicated as child, got content:\n{content}"
@@ -919,7 +926,6 @@ mod tests {
         let result = tool.run(t).await.unwrap();
         assert_eq!(result.is_error, Some(true));
     }
-
 
     #[tokio::test]
     async fn read_allows_cjk_and_emoji() {

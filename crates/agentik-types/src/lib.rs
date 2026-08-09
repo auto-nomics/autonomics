@@ -12,7 +12,7 @@ pub mod shared;
 pub mod streaming;
 pub mod tools;
 
-pub use agent_events::{SessionInfo};
+pub use agent_events::SessionInfo;
 pub use errors::{AnthropicError, Result};
 pub use path::{AgentPath, PathError};
 pub use reasoning::{

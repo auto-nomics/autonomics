@@ -17,9 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, Float64Array, Int64Array, RecordBatch, StringArray,
-};
+use arrow_array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -57,7 +55,9 @@ pub enum ColocNodeError {
 }
 
 impl ::dag_core::dag::NodeError for ColocNodeError {
-    fn node_type(&self) -> &str { COLOC_ABF_NODE_KIND }
+    fn node_type(&self) -> &str {
+        COLOC_ABF_NODE_KIND
+    }
 }
 
 // =====================================================================
@@ -124,9 +124,15 @@ pub struct ColocAbfConfig {
     pub prior_weights2: Option<String>,
 }
 
-fn default_p1() -> f64 { 1e-4 }
-fn default_p2() -> f64 { 1e-4 }
-fn default_p12() -> f64 { 1e-5 }
+fn default_p1() -> f64 {
+    1e-4
+}
+fn default_p2() -> f64 {
+    1e-4
+}
+fn default_p12() -> f64 {
+    1e-5
+}
 
 // =====================================================================
 // Output schema
@@ -190,7 +196,10 @@ fn extract_opt_f64(
 fn extract_string(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, ColocNodeError> {
     let idx = column_index(batches, name)?;
     let dtype = batches[0].schema().field(idx).data_type().clone();
-    if !matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) {
+    if !matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
         return Err(ColocNodeError::WrongColumnType {
             name: name.into(),
             dtype: dtype.to_string(),
@@ -331,7 +340,11 @@ impl NodeFactory for ColocAbfNodeFactory {
     ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<ColocAbfConfig>(spec, "coloc_abf")?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
         // Build dataset1 R list.
@@ -419,10 +432,7 @@ impl NodeFactory for ColocAbfNodeFactory {
             "library(coloc)".to_string(),
             format!("dataset1 <- list({})", d1_args.join(", ")),
             format!("dataset2 <- list({})", d2_args.join(", ")),
-            format!(
-                "{out} <- coloc.abf({})",
-                coloc_args.join(", ")
-            ),
+            format!("{out} <- coloc.abf({})", coloc_args.join(", ")),
             format!("print({out}$summary)"),
         ];
 
@@ -459,15 +469,16 @@ impl DagNode for ColocAbfNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(ColocNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: COLOC_ABF_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: COLOC_ABF_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
             return Err(ColocNodeError::EmptyInput.into());
         }
@@ -516,22 +527,36 @@ fn build_dataset(
     common_maf: Option<&str>,
 ) -> Result<coloc::Dataset, ColocNodeError> {
     let snp = extract_string(batches, &spec.snp)?;
-    let r#type: coloc::TraitType = spec.r#type.as_str().parse().map_err(|_| {
-        ColocNodeError::WrongColumnType {
-            name: "type".into(),
-            dtype: spec.r#type.clone(),
-        }
-    })?;
+    let r#type: coloc::TraitType =
+        spec.r#type
+            .as_str()
+            .parse()
+            .map_err(|_| ColocNodeError::WrongColumnType {
+                name: "type".into(),
+                dtype: spec.r#type.clone(),
+            })?;
 
-    let beta = spec.beta.as_ref().and_then(|c| extract_opt_f64(batches, c).ok().flatten());
-    let varbeta = spec.varbeta.as_ref().and_then(|c| extract_opt_f64(batches, c).ok().flatten());
-    let pvalues = spec.pvalues.as_ref().and_then(|c| extract_opt_f64(batches, c).ok().flatten());
+    let beta = spec
+        .beta
+        .as_ref()
+        .and_then(|c| extract_opt_f64(batches, c).ok().flatten());
+    let varbeta = spec
+        .varbeta
+        .as_ref()
+        .and_then(|c| extract_opt_f64(batches, c).ok().flatten());
+    let pvalues = spec
+        .pvalues
+        .as_ref()
+        .and_then(|c| extract_opt_f64(batches, c).ok().flatten());
 
     // MAF: use dataset-specific column, or common MAF column.
     let maf_col = spec.maf.as_deref().or(common_maf);
     let maf = maf_col.and_then(|c| extract_opt_f64(batches, c).ok().flatten());
 
-    let position = spec.position.as_ref().and_then(|c| extract_opt_f64(batches, c).ok().flatten());
+    let position = spec
+        .position
+        .as_ref()
+        .and_then(|c| extract_opt_f64(batches, c).ok().flatten());
 
     Ok(coloc::Dataset {
         snp,
@@ -711,9 +736,17 @@ mod tests {
         assert_eq!(batch.num_rows(), 6); // 1 summary + 5 SNPs
 
         // Summary row should have PP values.
-        let section = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let section = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(section.value(0), "summary");
-        let pp_h4 = batch.column(6).as_any().downcast_ref::<Float64Array>().unwrap();
+        let pp_h4 = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
         let h4_val = pp_h4.value(0);
         assert!(h4_val > 0.0 && h4_val <= 1.0);
         // Similar effect directions → expect H4 dominant.

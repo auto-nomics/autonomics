@@ -44,11 +44,21 @@ mod helpers {
 pub fn s2_registrations(client: Arc<S2Client>) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     vec![
-        R::from(search::S2SearchTool { client: client.clone() }),
-        R::from(paper::S2PaperTool { client: client.clone() }),
-        R::from(citations::S2CitationsTool { client: client.clone() }),
-        R::from(references::S2ReferencesTool { client: client.clone() }),
-        R::from(author::S2AuthorTool { client: client.clone() }),
+        R::from(search::S2SearchTool {
+            client: client.clone(),
+        }),
+        R::from(paper::S2PaperTool {
+            client: client.clone(),
+        }),
+        R::from(citations::S2CitationsTool {
+            client: client.clone(),
+        }),
+        R::from(references::S2ReferencesTool {
+            client: client.clone(),
+        }),
+        R::from(author::S2AuthorTool {
+            client: client.clone(),
+        }),
         R::from(recommendations::S2RecommendationsTool { client }),
     ]
 }

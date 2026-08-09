@@ -146,7 +146,11 @@ impl NodeFactory for MiceOrchestratorNodeFactory {
         let s = parse_spec::<MiceOrchestratorNodeSpec>(spec, "mice")?;
         let out = ctx.output_var.to_string();
         let mids_var = ctx.fresh_var("mids");
-        let y0 = s.impute_columns.first().cloned().unwrap_or_else(|| "y".to_string());
+        let y0 = s
+            .impute_columns
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "y".to_string());
         let comp_var = ctx.fresh_var("comp");
         let input = input_0(ctx).to_string();
 
@@ -162,7 +166,9 @@ impl NodeFactory for MiceOrchestratorNodeFactory {
             let methods_r = vec_to_r_str(m);
             format!(
                 "{{ impute_cols <- {impute_cols_r}; user_methods_list <- {methods_r}; n_cols <- ncol({input}); mthd <- rep(\"\", n_cols); names(mthd) <- colnames({input}); for (i in seq_along(impute_cols)) {{ idx <- match(impute_cols[i], colnames({input}), nomatch = 0L); if (idx > 0L) {{ mthd[idx] <- user_methods_list[[i]] }} }}; mthd }}",
-                input = input, impute_cols_r = impute_cols_r, methods_r = methods_r
+                input = input,
+                impute_cols_r = impute_cols_r,
+                methods_r = methods_r
             )
         } else {
             "NULL".to_string()
@@ -171,17 +177,11 @@ impl NodeFactory for MiceOrchestratorNodeFactory {
             let rows: Vec<String> = pm
                 .iter()
                 .map(|r| {
-                    let inner: Vec<String> = r
-                        .iter()
-                        .map(|c| format!("\"{c}\""))
-                        .collect();
+                    let inner: Vec<String> = r.iter().map(|c| format!("\"{c}\"")).collect();
                     format!("c({})", inner.join(", "))
                 })
                 .collect();
-            format!(
-                "predictorMatrix = rbind({})",
-                rows.join(",\n  ")
-            )
+            format!("predictorMatrix = rbind({})", rows.join(",\n  "))
         } else {
             String::new()
         };
@@ -207,7 +207,9 @@ impl NodeFactory for MiceOrchestratorNodeFactory {
             format!("  printFlag = FALSE{pm_arg}"),
             ")".to_string(),
             format!("{comp_var} <- complete({mids_var}, action = \"long\", include = FALSE)"),
-            format!("{{ comp_y <- as.data.frame({comp_var})[, c('.imp', '{y0}')]; summ <- data.frame(imp_col = unique(comp_y[, '.imp']), n_rows = as.numeric(table(comp_y[, '.imp'])), y_mean = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], mean)), y_sd = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], sd)), y_min = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], min)), y_max = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], max))) }}"),
+            format!(
+                "{{ comp_y <- as.data.frame({comp_var})[, c('.imp', '{y0}')]; summ <- data.frame(imp_col = unique(comp_y[, '.imp']), n_rows = as.numeric(table(comp_y[, '.imp'])), y_mean = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], mean)), y_sd = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], sd)), y_min = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], min)), y_max = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], max))) }}"
+            ),
             format!("{out} <- summ"),
             format!("print({out})"),
         ];
@@ -322,43 +324,58 @@ impl DagNode for MiceOrchestratorNode {
         // default method for impute columns. This mirrors the codegen_r
         // path, which builds the same ""-padded method vector for R's
         // mice().
-        let method_vec: Vec<String> = col_order.iter().map(|col| {
-            if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
-                self.spec.methods.as_ref()
-                    .and_then(|m| m.get(idx).cloned())
-                    .unwrap_or_else(|| {
-                        // Infer default from data type (same logic as
-                        // mice::orchestrator::default_method_for).
-                        let mut levels: Vec<f64> = data[col].iter()
-                            .copied()
-                            .filter(|v| !v.is_nan())
-                            .collect();
-                        levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        levels.dedup();
-                        if levels.len() <= 2 { "logreg".to_string() } else { "pmm".to_string() }
-                    })
-            } else {
-                String::new() // "" → skip imputation for this column
-            }
-        }).collect();
+        let method_vec: Vec<String> = col_order
+            .iter()
+            .map(|col| {
+                if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
+                    self.spec
+                        .methods
+                        .as_ref()
+                        .and_then(|m| m.get(idx).cloned())
+                        .unwrap_or_else(|| {
+                            // Infer default from data type (same logic as
+                            // mice::orchestrator::default_method_for).
+                            let mut levels: Vec<f64> =
+                                data[col].iter().copied().filter(|v| !v.is_nan()).collect();
+                            levels.sort_by(|a, b| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            levels.dedup();
+                            if levels.len() <= 2 {
+                                "logreg".to_string()
+                            } else {
+                                "pmm".to_string()
+                            }
+                        })
+                } else {
+                    String::new() // "" → skip imputation for this column
+                }
+            })
+            .collect();
 
         // Build predictor matrix aligned to column_order. Non-impute
         // columns get an empty predictor list (they're never targets).
         let pred_matrix: Vec<Vec<String>> = match &self.spec.predictor_matrix {
-            Some(pm) => col_order.iter().map(|col| {
-                if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
-                    pm.get(idx).cloned().unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
-            }).collect(),
-            None => col_order.iter().map(|col| {
-                if self.spec.impute_columns.iter().any(|c| c == col) {
-                    col_order.iter().filter(|c| *c != col).cloned().collect()
-                } else {
-                    Vec::new()
-                }
-            }).collect(),
+            Some(pm) => col_order
+                .iter()
+                .map(|col| {
+                    if let Some(idx) = self.spec.impute_columns.iter().position(|c| c == col) {
+                        pm.get(idx).cloned().unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect(),
+            None => col_order
+                .iter()
+                .map(|col| {
+                    if self.spec.impute_columns.iter().any(|c| c == col) {
+                        col_order.iter().filter(|c| *c != col).cloned().collect()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect(),
         };
 
         let config = mice::orchestrator::MiceConfig {
@@ -373,15 +390,12 @@ impl DagNode for MiceOrchestratorNode {
             parallel: self.spec.parallel,
         };
 
-        let mids = mice::orchestrator::mice(data, col_order, config).map_err(|e| DagError::NodeError {
-            node_type: "mice".into(),
-            msg: e.to_string(),
-        })?;
-        let completed = mice::complete::complete(
-            &mids,
-            mice::complete::CompleteFormat::All,
-            1,
-        );
+        let mids =
+            mice::orchestrator::mice(data, col_order, config).map_err(|e| DagError::NodeError {
+                node_type: "mice".into(),
+                msg: e.to_string(),
+            })?;
+        let completed = mice::complete::complete(&mids, mice::complete::CompleteFormat::All, 1);
 
         // Build output batch.
         let n = mids.data[&mids.column_names[0]].len();
@@ -401,7 +415,8 @@ impl DagNode for MiceOrchestratorNode {
         ];
         // completed.columns = [".imp", ".id", x, z, y, ...] (R long-format names).
         // Skip the .imp / .id entries — we already declared those columns.
-        let data_columns: Vec<String> = completed.columns
+        let data_columns: Vec<String> = completed
+            .columns
             .iter()
             .filter(|c| c.as_str() != ".imp" && c.as_str() != ".id")
             .cloned()
@@ -426,9 +441,11 @@ impl DagNode for MiceOrchestratorNode {
             }
             columns.push(Arc::new(Float64Array::from(val_buf.clone())));
         }
-        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map_err(|e| DagError::NodeError {
-            node_type: "mice".into(),
-            msg: format!("Arrow: {e}"),
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map_err(|e| {
+            DagError::NodeError {
+                node_type: "mice".into(),
+                msg: format!("Arrow: {e}"),
+            }
         })?;
         let ctx = node_ctx.session();
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
@@ -455,7 +472,9 @@ mod tests {
             .collect();
         let arrays: Vec<Arc<dyn arrow_array::Array>> = columns
             .iter()
-            .map(|(_, vals)| Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>)
+            .map(|(_, vals)| {
+                Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>
+            })
             .collect();
         arrow_array::RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
     }
@@ -466,7 +485,11 @@ mod tests {
         let n = 30;
         let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
         let z: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
-        let y: Vec<f64> = x.iter().zip(z.iter()).map(|(xi, zi)| 2.0 * xi + zi).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .zip(z.iter())
+            .map(|(xi, zi)| 2.0 * xi + zi)
+            .collect();
         let mut y_mis = y.clone();
         y_mis[3] = f64::NAN;
         y_mis[7] = f64::NAN;
@@ -493,7 +516,9 @@ mod tests {
         };
         let input = dag_core::node::NodeInput {
             port: 0,
-            data: datafusion::prelude::SessionContext::new().read_batch(batch).unwrap(),
+            data: datafusion::prelude::SessionContext::new()
+                .read_batch(batch)
+                .unwrap(),
         };
         let outs = node
             .execute(

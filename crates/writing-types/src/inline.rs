@@ -96,9 +96,7 @@ impl Inline {
             }
             Self::CrossRef { label, .. } => format!("[ref:{label}]"),
             Self::Link { text, .. } => text.clone(),
-            Self::Footnote { content } => {
-                content.iter().map(|i| i.plain_text()).collect()
-            }
+            Self::Footnote { content } => content.iter().map(|i| i.plain_text()).collect(),
         }
     }
 }

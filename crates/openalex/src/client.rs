@@ -366,7 +366,8 @@ impl OpenAlexClient {
         &self,
         params: &ListParams,
     ) -> Result<ListResponse<Institution>> {
-        self.get_json("/institutions", &params.to_query_pairs()).await
+        self.get_json("/institutions", &params.to_query_pairs())
+            .await
     }
 
     /// Retrieve a single institution by OpenAlex ID or ROR.
@@ -409,11 +410,7 @@ impl OpenAlexClient {
     ///
     /// `entity` is one of `"works"`, `"authors"`, `"sources"`,
     /// `"institutions"`, `"topics"`.
-    pub async fn autocomplete(
-        &self,
-        entity: &str,
-        query: &str,
-    ) -> Result<AutocompleteResponse> {
+    pub async fn autocomplete(&self, entity: &str, query: &str) -> Result<AutocompleteResponse> {
         let path = format!("/autocomplete/{}", urlencode(entity));
         let params: Vec<(&str, String)> = vec![("q", query.to_string())];
         self.get_json(&path, &params).await
@@ -471,13 +468,20 @@ mod tests {
             .with_filter("publication_year:2024")
             .with_per_page(10);
         let pairs = p.to_query_pairs();
-        assert!(pairs.iter().any(|(k, v)| *k == "filter" && v == "publication_year:2024"));
+        assert!(
+            pairs
+                .iter()
+                .any(|(k, v)| *k == "filter" && v == "publication_year:2024")
+        );
         assert!(pairs.iter().any(|(k, v)| *k == "per_page" && v == "10"));
     }
 
     #[test]
     fn url_encode_special() {
-        assert_eq!(urlencode("doi:10.7717/peerj.4375"), "doi%3A10.7717%2Fpeerj.4375");
+        assert_eq!(
+            urlencode("doi:10.7717/peerj.4375"),
+            "doi%3A10.7717%2Fpeerj.4375"
+        );
         assert_eq!(urlencode("ABC123-_.~"), "ABC123-_.~");
     }
 

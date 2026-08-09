@@ -260,7 +260,10 @@ fn yeo_johnson_transform(x: f64, lambda: f64) -> f64 {
 
 fn yeo_johnson_log_likelihood(col: &[f64], lambda: f64) -> f64 {
     let n = col.len() as f64;
-    let transformed: Vec<f64> = col.iter().map(|&x| yeo_johnson_transform(x, lambda)).collect();
+    let transformed: Vec<f64> = col
+        .iter()
+        .map(|&x| yeo_johnson_transform(x, lambda))
+        .collect();
     let mean = transformed.iter().sum::<f64>() / n;
     let variance = transformed.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
     if variance <= 0.0 {

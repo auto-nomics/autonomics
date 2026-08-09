@@ -28,21 +28,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
-};
+use arrow_array::{Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use lcmm::{
-    HlmeControl, HlmeFit, LongData, ModelSpec, ParamLayout,
-    hlme as hlme_fit, predict_y,
-};
+use lcmm::{HlmeControl, HlmeFit, LongData, ModelSpec, ParamLayout, hlme as hlme_fit, predict_y};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::{ColumnError, column_index, extract_numeric_lenient};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -75,7 +70,9 @@ impl From<ColumnError> for HlmeNodeError {
 }
 
 impl ::dag_core::dag::NodeError for HlmeNodeError {
-    fn node_type(&self) -> &str { "hlme" }
+    fn node_type(&self) -> &str {
+        "hlme"
+    }
 }
 
 // =====================================================================
@@ -175,12 +172,13 @@ fn build_model_data(
     let mut col_names: Vec<String> = Vec::new();
     let mut col_seen: HashMap<String, usize> = HashMap::new();
 
-    let register = |name: &str, col_names: &mut Vec<String>, col_seen: &mut HashMap<String, usize>| {
-        if let std::collections::hash_map::Entry::Vacant(e) = col_seen.entry(name.to_string()) {
-            e.insert(col_names.len());
-            col_names.push(name.to_string());
-        }
-    };
+    let register =
+        |name: &str, col_names: &mut Vec<String>, col_seen: &mut HashMap<String, usize>| {
+            if let std::collections::hash_map::Entry::Vacant(e) = col_seen.entry(name.to_string()) {
+                e.insert(col_names.len());
+                col_names.push(name.to_string());
+            }
+        };
 
     if cfg.intercept {
         register("__intercept", &mut col_names, &mut col_seen);
@@ -340,10 +338,7 @@ fn build_model_data(
 }
 
 /// Extract subject IDs from a column, accepting integer types.
-fn extract_subject_ids(
-    batches: &[RecordBatch],
-    name: &str,
-) -> Result<Vec<i64>, HlmeNodeError> {
+fn extract_subject_ids(batches: &[RecordBatch], name: &str) -> Result<Vec<i64>, HlmeNodeError> {
     let idx = column_index(batches, name)?;
     let mut ids = Vec::new();
     for batch in batches {
@@ -499,11 +494,21 @@ fn compare_schema() -> SchemaRef {
 const HLME_NODE_KIND: &str = "hlme";
 
 /// Default values.
-fn default_ng() -> usize { 1 }
-fn default_intercept() -> bool { true }
-fn default_idiag() -> bool { false }
-fn default_nwg() -> bool { false }
-fn default_maxiter() -> usize { 500 }
+fn default_ng() -> usize {
+    1
+}
+fn default_intercept() -> bool {
+    true
+}
+fn default_idiag() -> bool {
+    false
+}
+fn default_nwg() -> bool {
+    false
+}
+fn default_maxiter() -> usize {
+    500
+}
 
 /// Configuration for the `hlme` node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -552,10 +557,10 @@ pub struct HlmeConfig {
 fn hlme_ports(ng: usize) -> NodePorts {
     NodePorts::new()
         .add_input_port(None)
-        .add_output_port(Some(summary_schema()))      // 0: summary
-        .add_output_port(Some(params_schema()))        // 1: params
-        .add_output_port(Some(posterior_schema(ng)))   // 2: posterior
-        .add_output_port(Some(fitted_schema()))        // 3: fitted
+        .add_output_port(Some(summary_schema())) // 0: summary
+        .add_output_port(Some(params_schema())) // 1: params
+        .add_output_port(Some(posterior_schema(ng))) // 2: posterior
+        .add_output_port(Some(fitted_schema())) // 3: fitted
 }
 
 #[derive(Clone)]
@@ -617,7 +622,11 @@ impl NodeFactory for HlmeNodeFactory {
     ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<HlmeConfig>(spec, "hlme")?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
         // Build R formula strings.
@@ -695,15 +704,16 @@ impl DagNode for HlmeNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(HlmeNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: HLME_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: HLME_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let cfg = &self.config;
         let (data, spec, col_labels) = build_model_data(&batches, cfg)?;
@@ -717,7 +727,8 @@ impl DagNode for HlmeNode {
                 "init_b length {} != expected NPM {}",
                 cfg.init_b.len(),
                 layout.npm
-            )).into());
+            ))
+            .into());
         } else {
             default_init_b(&data, &spec)
         };
@@ -727,31 +738,38 @@ impl DagNode for HlmeNode {
             ..Default::default()
         };
 
-        let fit = hlme_fit(&data, &spec, &b_init, &[], &control)
-            .map_err(HlmeNodeError::Lcmm)?;
+        let fit = hlme_fit(&data, &spec, &b_init, &[], &control).map_err(HlmeNodeError::Lcmm)?;
 
         // Build output batches.
         let summary_batch = build_summary_batch(&fit, data.nobs);
         let params_batch = build_params_batch(&fit, &col_labels);
         let session = node_ctx.session();
-        let df_summary = session.read_batch(summary_batch).map_err(HlmeNodeError::Df)?;
-        let df_params = session.read_batch(params_batch).map_err(HlmeNodeError::Df)?;
+        let df_summary = session
+            .read_batch(summary_batch)
+            .map_err(HlmeNodeError::Df)?;
+        let df_params = session
+            .read_batch(params_batch)
+            .map_err(HlmeNodeError::Df)?;
 
         // Posterior + fitted ports: only computed when the fit is usable.
         let (df_posterior, df_fitted) = if fit.posterior.is_some() {
             let posterior_batch = build_posterior_batch(&fit, &data);
             let fitted_batch = build_fitted_batch(&fit, &data);
-            let df_posterior = session.read_batch(posterior_batch).map_err(HlmeNodeError::Df)?;
-            let df_fitted = session.read_batch(fitted_batch).map_err(HlmeNodeError::Df)?;
+            let df_posterior = session
+                .read_batch(posterior_batch)
+                .map_err(HlmeNodeError::Df)?;
+            let df_fitted = session
+                .read_batch(fitted_batch)
+                .map_err(HlmeNodeError::Df)?;
             (df_posterior, df_fitted)
         } else {
             // maxiter=0 or failed convergence: emit empty batches.
-            let empty_posterior = session.read_batch(
-                RecordBatch::new_empty(posterior_schema(fit.ng))
-            ).map_err(HlmeNodeError::Df)?;
-            let empty_fitted = session.read_batch(
-                RecordBatch::new_empty(fitted_schema())
-            ).map_err(HlmeNodeError::Df)?;
+            let empty_posterior = session
+                .read_batch(RecordBatch::new_empty(posterior_schema(fit.ng)))
+                .map_err(HlmeNodeError::Df)?;
+            let empty_fitted = session
+                .read_batch(RecordBatch::new_empty(fitted_schema()))
+                .map_err(HlmeNodeError::Df)?;
             (empty_posterior, empty_fitted)
         };
 
@@ -880,9 +898,10 @@ fn build_posterior_batch(fit: &HlmeFit, data: &LongData) -> RecordBatch {
     let ng = fit.ng;
     let ns = data.ns;
 
-    let post = fit.posterior.as_ref().unwrap_or_else(|| {
-        panic!("posterior should be computed for conv {:?}", fit.conv)
-    });
+    let post = fit
+        .posterior
+        .as_ref()
+        .unwrap_or_else(|| panic!("posterior should be computed for conv {:?}", fit.conv));
 
     // Subject IDs: use the sorted unique subjects from data.
     // LongData doesn't store original IDs; we emit 0-based indices.
@@ -922,10 +941,12 @@ fn build_fitted_batch(fit: &HlmeFit, data: &LongData) -> RecordBatch {
     let pred_marginal: Vec<f64> = (0..data.nobs)
         .map(|r| {
             let s = subj_ids[r] as usize;
-            (0..ng).map(|g| {
-                let pi = post.ppi[s * ng + g];
-                pi * post.pred_m_g[r * ng + g]
-            }).sum::<f64>()
+            (0..ng)
+                .map(|g| {
+                    let pi = post.ppi[s * ng + g];
+                    pi * post.pred_m_g[r * ng + g]
+                })
+                .sum::<f64>()
         })
         .collect();
 
@@ -933,10 +954,12 @@ fn build_fitted_batch(fit: &HlmeFit, data: &LongData) -> RecordBatch {
     let pred_subject: Vec<f64> = (0..data.nobs)
         .map(|r| {
             let s = subj_ids[r] as usize;
-            (0..ng).map(|g| {
-                let pi = post.ppi[s * ng + g];
-                pi * post.pred_ss_g[r * ng + g]
-            }).sum::<f64>()
+            (0..ng)
+                .map(|g| {
+                    let pi = post.ppi[s * ng + g];
+                    pi * post.pred_ss_g[r * ng + g]
+                })
+                .sum::<f64>()
         })
         .collect();
 
@@ -1008,7 +1031,7 @@ pub struct HlmePredictConfig {
 
 fn predict_ports() -> NodePorts {
     NodePorts::new()
-        .add_input_port(None)   // newdata
+        .add_input_port(None) // newdata
         .add_output_port(Some(predict_schema()))
 }
 
@@ -1068,14 +1091,19 @@ impl NodeFactory for HlmePredictNodeFactory {
     ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<HlmePredictConfig>(spec, "hlme_predict")?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
-        let newdata_cols: Vec<String> = cfg.columns.iter()
-            .map(|c| r_col(input, c))
-            .collect();
+        let newdata_cols: Vec<String> = cfg.columns.iter().map(|c| r_col(input, c)).collect();
         let newdata_df = r_dataframe(
-            &cfg.columns.iter().map(|c| c.as_str()).zip(newdata_cols.iter().map(|s| s.as_str()))
+            &cfg.columns
+                .iter()
+                .map(|c| c.as_str())
+                .zip(newdata_cols.iter().map(|s| s.as_str()))
                 .collect::<Vec<_>>(),
         );
 
@@ -1083,8 +1111,10 @@ impl NodeFactory for HlmePredictNodeFactory {
             "# hlme_predict: class-conditional trajectory prediction".to_string(),
             "library(lcmm)".to_string(),
             format!("newdata <- {newdata_df}"),
-            format!("{out} <- predictY(model, newdata = newdata, var.time = {}, draws = FALSE)",
-                r_str(cfg.columns.first().map(|s| s.as_str()).unwrap_or("Time"))),
+            format!(
+                "{out} <- predictY(model, newdata = newdata, var.time = {}, draws = FALSE)",
+                r_str(cfg.columns.first().map(|s| s.as_str()).unwrap_or("Time"))
+            ),
         ];
 
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))
@@ -1120,15 +1150,16 @@ impl DagNode for HlmePredictNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(HlmeNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: HLME_PREDICT_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: HLME_PREDICT_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         if batches.is_empty() {
             return Err(HlmeNodeError::EmptyInput.into());
@@ -1145,7 +1176,9 @@ impl DagNode for HlmePredictNode {
         // Assemble column list in the same order as the original fit.
         let mut col_names: Vec<String> = Vec::new();
         let mut col_seen: HashMap<String, usize> = HashMap::new();
-        let register = |name: &str, col_names: &mut Vec<String>, col_seen: &mut HashMap<String, usize>| {
+        let register = |name: &str,
+                        col_names: &mut Vec<String>,
+                        col_seen: &mut HashMap<String, usize>| {
             if let std::collections::hash_map::Entry::Vacant(e) = col_seen.entry(name.to_string()) {
                 e.insert(col_names.len());
                 col_names.push(name.to_string());
@@ -1154,9 +1187,15 @@ impl DagNode for HlmePredictNode {
         if cfg.intercept {
             register("__intercept", &mut col_names, &mut col_seen);
         }
-        for t in &fixed_terms { register(&t.name, &mut col_names, &mut col_seen); }
-        for t in &mixture_terms { register(&t.name, &mut col_names, &mut col_seen); }
-        for t in &classmb_terms { register(&t.name, &mut col_names, &mut col_seen); }
+        for t in &fixed_terms {
+            register(&t.name, &mut col_names, &mut col_seen);
+        }
+        for t in &mixture_terms {
+            register(&t.name, &mut col_names, &mut col_seen);
+        }
+        for t in &classmb_terms {
+            register(&t.name, &mut col_names, &mut col_seen);
+        }
 
         let nv = col_names.len();
         let nobs: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -1165,14 +1204,17 @@ impl DagNode for HlmePredictNode {
         let mut x = vec![0.0_f64; nobs * nv];
         for (k, name) in col_names.iter().enumerate() {
             if name == "__intercept" {
-                for r in 0..nobs { x[r * nv + k] = 1.0; }
+                for r in 0..nobs {
+                    x[r * nv + k] = 1.0;
+                }
             } else {
                 let term = [&fixed_terms, &mixture_terms, &classmb_terms]
                     .into_iter()
                     .flatten()
                     .find(|t| &t.name == name)
                     .ok_or_else(|| HlmeNodeError::Spec(format!("term '{name}' not found")))?;
-                let src_vals: Vec<Vec<f64>> = term.sources
+                let src_vals: Vec<Vec<f64>> = term
+                    .sources
                     .iter()
                     .map(|s| extract_numeric_lenient(&batches, s))
                     .collect::<Result<_, _>>()?;
@@ -1190,7 +1232,9 @@ impl DagNode for HlmePredictNode {
                 idg[0] = if mixture_terms.is_empty() { 1 } else { 2 };
             }
             for (k, name) in col_names.iter().enumerate() {
-                if name == "__intercept" { continue; }
+                if name == "__intercept" {
+                    continue;
+                }
                 if mixture_terms.iter().any(|t| &t.name == name) {
                     idg[k] = 2;
                 } else if fixed_terms.iter().any(|t| &t.name == name) {
@@ -1202,9 +1246,21 @@ impl DagNode for HlmePredictNode {
             cfg.idg.clone()
         };
 
-        let idprob = if cfg.idprob.is_empty() { vec![0u8; nv] } else { cfg.idprob.clone() };
-        let idea = if cfg.idea.is_empty() { vec![0u8; nv] } else { cfg.idea.clone() };
-        let idcor = if cfg.idcor.is_empty() { vec![0u8; nv] } else { cfg.idcor.clone() };
+        let idprob = if cfg.idprob.is_empty() {
+            vec![0u8; nv]
+        } else {
+            cfg.idprob.clone()
+        };
+        let idea = if cfg.idea.is_empty() {
+            vec![0u8; nv]
+        } else {
+            cfg.idea.clone()
+        };
+        let idcor = if cfg.idcor.is_empty() {
+            vec![0u8; nv]
+        } else {
+            cfg.idcor.clone()
+        };
 
         let spec = ModelSpec {
             ng: cfg.ng,
@@ -1238,9 +1294,13 @@ impl DagNode for HlmePredictNode {
                 Arc::new(Int32Array::from(classes)),
                 Arc::new(Float64Array::from(predicted)),
             ],
-        ).map_err(HlmeNodeError::Arrow)?;
+        )
+        .map_err(HlmeNodeError::Arrow)?;
 
-        let df = node_ctx.session().read_batch(batch).map_err(HlmeNodeError::Df)?;
+        let df = node_ctx
+            .session()
+            .read_batch(batch)
+            .map_err(HlmeNodeError::Df)?;
         let mut res = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
@@ -1343,26 +1403,45 @@ impl NodeFactory for HlmeCompareNodeFactory {
         ];
         code.push(format!(
             "  model = c({}),",
-            cfg.models.iter().map(|m| r_str(&m.name)).collect::<Vec<_>>().join(", ")
+            cfg.models
+                .iter()
+                .map(|m| r_str(&m.name))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         code.push(format!(
             "  ng = c({}),",
-            cfg.models.iter().map(|m| m.ng.to_string()).collect::<Vec<_>>().join(", ")
+            cfg.models
+                .iter()
+                .map(|m| m.ng.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         code.push(format!(
             "  npm = c({}),",
-            cfg.models.iter().map(|m| m.npm.to_string()).collect::<Vec<_>>().join(", ")
+            cfg.models
+                .iter()
+                .map(|m| m.npm.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         code.push(format!(
             "  loglik = c({})",
-            cfg.models.iter().map(|m| m.loglik.to_string()).collect::<Vec<_>>().join(", ")
+            cfg.models
+                .iter()
+                .map(|m| m.loglik.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         code.push(")".to_string());
         code.push("summarytable$aic <- -2*summarytable$loglik + 2*summarytable$npm".into());
         code.push("summarytable$bic <- -2*summarytable$loglik + log(N)*summarytable$npm".into());
         code.push("print(summarytable)".into());
 
-        Ok(dag_core::codegen::NodeCodegen::simple(code, "summarytable".to_string()))
+        Ok(dag_core::codegen::NodeCodegen::simple(
+            code,
+            "summarytable".to_string(),
+        ))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -1397,12 +1476,20 @@ impl DagNode for HlmeCompareNode {
         let cfg = &self.config;
 
         // Compute BIC and AIC for each model.
-        let entries: Vec<(String, i32, i32, f64, f64, f64)> = cfg.models
+        let entries: Vec<(String, i32, i32, f64, f64, f64)> = cfg
+            .models
             .iter()
             .map(|m| {
                 let aic = -2.0 * m.loglik + 2.0 * (m.npm as f64);
                 let bic = -2.0 * m.loglik + (m.ns as f64).ln() * (m.npm as f64);
-                (m.name.clone(), m.ng as i32, m.npm as i32, m.loglik, aic, bic)
+                (
+                    m.name.clone(),
+                    m.ng as i32,
+                    m.npm as i32,
+                    m.loglik,
+                    aic,
+                    bic,
+                )
             })
             .collect();
 
@@ -1436,9 +1523,13 @@ impl DagNode for HlmeCompareNode {
                 Arc::new(Float64Array::from(bic_deltas)),
                 Arc::new(Float64Array::from(bic_probs)),
             ],
-        ).map_err(HlmeNodeError::Arrow)?;
+        )
+        .map_err(HlmeNodeError::Arrow)?;
 
-        let df = node_ctx.session().read_batch(batch).map_err(HlmeNodeError::Df)?;
+        let df = node_ctx
+            .session()
+            .read_batch(batch)
+            .map_err(HlmeNodeError::Df)?;
         let mut res = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
@@ -1482,7 +1573,10 @@ mod tests {
     fn default_init_b_gbtm() {
         // GBTM: ng=2, no random, no nwg.
         let spec = ModelSpec {
-            ng: 2, idiag: false, nwg: false, ncor: 0,
+            ng: 2,
+            idiag: false,
+            nwg: false,
+            ncor: 0,
             idprob: vec![1, 0],
             idea: vec![0, 0],
             idg: vec![2, 2],
@@ -1503,14 +1597,17 @@ mod tests {
         assert_eq!(b.len(), 6);
         // NPROB = 0, NEF = 0, STDERR > 0
         assert_eq!(b[0], 0.0); // NPROB
-        assert!(b[5] > 0.0);   // STDERR
+        assert!(b[5] > 0.0); // STDERR
     }
 
     #[test]
     fn default_init_b_with_random() {
         // m1: ng=1, random intercept + Time slope.
         let spec = ModelSpec {
-            ng: 1, idiag: false, nwg: false, ncor: 0,
+            ng: 1,
+            idiag: false,
+            nwg: false,
+            ncor: 0,
             idprob: vec![0, 0, 0, 0],
             idea: vec![1, 1, 0, 0],
             idg: vec![1, 1, 1, 1],
@@ -1523,7 +1620,9 @@ mod tests {
         let data = LongData::new(
             vec![1.0, 2.0],
             vec![1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0],
-            4, vec![2], 1,
+            4,
+            vec![2],
+            1,
         );
         let b = default_init_b(&data, &spec);
         assert_eq!(b.len(), 8);
@@ -1545,8 +1644,8 @@ mod cross_validation {
     use super::*;
     use dag_core::dag::node_event::NodeReporter;
     use dag_core::registry::NodeCtx;
-    use datalake::Datalake;
     use datafusion::prelude::SessionContext;
+    use datalake::Datalake;
 
     const TOL_LL: f64 = 1e-8;
 
@@ -1576,9 +1675,13 @@ mod cross_validation {
         let mut x3s = Vec::new();
 
         for (i, line) in text.lines().enumerate() {
-            if i == 0 { continue; }
+            if i == 0 {
+                continue;
+            }
             let f: Vec<&str> = line.split(',').collect();
-            if f.len() < 6 { continue; }
+            if f.len() < 6 {
+                continue;
+            }
             ids.push(f[0].parse::<i64>().unwrap());
             ys.push(f[1].parse::<f64>().unwrap());
             times.push(f[2].parse::<f64>().unwrap());
@@ -1596,14 +1699,18 @@ mod cross_validation {
             Field::new("X3", DataType::Float64, false),
         ]));
 
-        RecordBatch::try_new(schema, vec![
-            Arc::new(Int64Array::from(ids)),
-            Arc::new(Float64Array::from(ys)),
-            Arc::new(Float64Array::from(times)),
-            Arc::new(Float64Array::from(x1s)),
-            Arc::new(Float64Array::from(x2s)),
-            Arc::new(Float64Array::from(x3s)),
-        ]).unwrap()
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(Float64Array::from(ys)),
+                Arc::new(Float64Array::from(times)),
+                Arc::new(Float64Array::from(x1s)),
+                Arc::new(Float64Array::from(x2s)),
+                Arc::new(Float64Array::from(x3s)),
+            ],
+        )
+        .unwrap()
     }
 
     // ---- Golden JSON ---------------------------------------------------
@@ -1620,13 +1727,20 @@ mod cross_validation {
     }
 
     fn golden_fit<'a>(golden: &'a serde_json::Value, tag: &str) -> &'a serde_json::Value {
-        golden["fits"].as_array().unwrap().iter()
+        golden["fits"]
+            .as_array()
+            .unwrap()
+            .iter()
             .find(|f| f["tag"].as_str() == Some(tag))
             .unwrap_or_else(|| panic!("golden fit '{tag}' not found"))
     }
 
     fn json_to_f64_array(v: &serde_json::Value) -> Vec<f64> {
-        v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
     }
 
     /// Convert golden `best` from R's post-processed form (varcov entries hold
@@ -1660,15 +1774,31 @@ mod cross_validation {
     fn check_spec(
         test_name: &str,
         spec: &ModelSpec,
-        ng: usize, idiag: bool, nwg: bool,
-        idprob: &[u8], idea: &[u8], idg: &[u8],
+        ng: usize,
+        idiag: bool,
+        nwg: bool,
+        idprob: &[u8],
+        idea: &[u8],
+        idg: &[u8],
     ) {
         assert_eq!(spec.ng, ng, "{test_name}: ng mismatch");
         assert_eq!(spec.idiag, idiag, "{test_name}: idiag mismatch");
         assert_eq!(spec.nwg, nwg, "{test_name}: nwg mismatch");
-        assert_eq!(spec.idprob, idprob, "{test_name}: idprob mismatch: got {:?}, want {:?}", spec.idprob, idprob);
-        assert_eq!(spec.idea, idea, "{test_name}: idea mismatch: got {:?}, want {:?}", spec.idea, idea);
-        assert_eq!(spec.idg, idg, "{test_name}: idg mismatch: got {:?}, want {:?}", spec.idg, idg);
+        assert_eq!(
+            spec.idprob, idprob,
+            "{test_name}: idprob mismatch: got {:?}, want {:?}",
+            spec.idprob, idprob
+        );
+        assert_eq!(
+            spec.idea, idea,
+            "{test_name}: idea mismatch: got {:?}, want {:?}",
+            spec.idea, idea
+        );
+        assert_eq!(
+            spec.idg, idg,
+            "{test_name}: idg mismatch: got {:?}, want {:?}",
+            spec.idg, idg
+        );
         eprintln!("PASS design_matrix {test_name}");
     }
 
@@ -1677,15 +1807,23 @@ mod cross_validation {
         let batch = load_data_batch();
         let batches = vec![batch];
         let cfg = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec![], random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time".into()],
+            mixture: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (data, spec, _) = build_model_data(&batches, &cfg).unwrap();
         // gbtm1: X0 = [intercept, Time], idg=[1,1], idea=[0,0]
         assert_eq!(spec.idg.len(), 2, "nv should be 2");
-        check_spec("gbtm1", &spec, 1, false, false, &[0,0], &[0,0], &[1,1]);
+        check_spec("gbtm1", &spec, 1, false, false, &[0, 0], &[0, 0], &[1, 1]);
         // Verify data dimensions
         assert_eq!(data.ns, 100, "gbtm1: ns should be 100");
     }
@@ -1695,16 +1833,23 @@ mod cross_validation {
         let batch = load_data_batch();
         let batches = vec![batch];
         let cfg = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time".into()],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 2,
+            intercept: true,
+            fixed: vec!["Time".into()],
             mixture: vec!["Time".into()],
-            random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
         // gbtm2: X0 = [intercept, Time], idg=[2,2], idea=[0,0], idprob=[1,0]
         assert_eq!(spec.idg.len(), 2);
-        check_spec("gbtm2", &spec, 2, false, false, &[1,0], &[0,0], &[2,2]);
+        check_spec("gbtm2", &spec, 2, false, false, &[1, 0], &[0, 0], &[2, 2]);
     }
 
     #[test]
@@ -1712,16 +1857,37 @@ mod cross_validation {
         let batch = load_data_batch();
         let batches = vec![batch];
         let cfg = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time*X1".into()],
+            mixture: vec![],
+            random: vec!["Time".into()],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
         // m1: X0 = [intercept, Time, X1, Time:X1]
         // idg=[1,1,1,1], idea=[1,1,0,0]
-        assert_eq!(spec.idg.len(), 4, "m1: nv should be 4 (intercept + Time + X1 + Time:X1)");
-        check_spec("m1", &spec, 1, false, false, &[0,0,0,0], &[1,1,0,0], &[1,1,1,1]);
+        assert_eq!(
+            spec.idg.len(),
+            4,
+            "m1: nv should be 4 (intercept + Time + X1 + Time:X1)"
+        );
+        check_spec(
+            "m1",
+            &spec,
+            1,
+            false,
+            false,
+            &[0, 0, 0, 0],
+            &[1, 1, 0, 0],
+            &[1, 1, 1, 1],
+        );
     }
 
     #[test]
@@ -1729,20 +1895,32 @@ mod cross_validation {
         let batch = load_data_batch();
         let batches = vec![batch];
         let cfg = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time*X1".into()],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 2,
+            intercept: true,
+            fixed: vec!["Time*X1".into()],
             mixture: vec!["Time".into()],
             random: vec!["Time".into()],
             classmb: vec!["X2".into(), "X3".into()],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
         // m2a: X0 = [intercept, Time, X1, Time:X1, X2, X3]
         // idprob=[1,0,0,0,1,1], idea=[1,1,0,0,0,0], idg=[2,2,1,1,0,0]
         assert_eq!(spec.idg.len(), 6, "m2a: nv should be 6");
         check_spec(
-            "m2a", &spec, 2, false, false,
-            &[1,0,0,0,1,1], &[1,1,0,0,0,0], &[2,2,1,1,0,0],
+            "m2a",
+            &spec,
+            2,
+            false,
+            false,
+            &[1, 0, 0, 0, 1, 1],
+            &[1, 1, 0, 0, 0, 0],
+            &[2, 2, 1, 1, 0, 0],
         );
     }
 
@@ -1751,16 +1929,30 @@ mod cross_validation {
         let batch = load_data_batch();
         let batches = vec![batch];
         let cfg = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
-            idiag: true, nwg: false, maxiter: 500, init_b: vec![],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time*X1".into()],
+            mixture: vec![],
+            random: vec!["Time".into()],
+            classmb: vec![],
+            idiag: true,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg).unwrap();
         assert!(spec.idiag, "m1_idiag: idiag should be true");
         check_spec(
-            "m1_idiag", &spec, 1, true, false,
-            &[0,0,0,0], &[1,1,0,0], &[1,1,1,1],
+            "m1_idiag",
+            &spec,
+            1,
+            true,
+            false,
+            &[0, 0, 0, 0],
+            &[1, 1, 0, 0],
+            &[1, 1, 1, 1],
         );
     }
 
@@ -1780,9 +1972,11 @@ mod cross_validation {
         // Validate NPM.
         let golden_best = json_to_f64_array(&gf["best"]);
         assert_eq!(
-            golden_best.len(), layout.npm,
+            golden_best.len(),
+            layout.npm,
             "{test_name}: golden NPM={} != Rust NPM={}",
-            golden_best.len(), layout.npm,
+            golden_best.len(),
+            layout.npm,
         );
 
         // Convert golden best from R post-processed form.
@@ -1803,78 +1997,156 @@ mod cross_validation {
 
     #[test]
     fn loglik_gbtm1() {
-        check_loglik("gbtm1", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec![], random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
-        }, "gbtm1");
+        check_loglik(
+            "gbtm1",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 1,
+                intercept: true,
+                fixed: vec!["Time".into()],
+                mixture: vec![],
+                random: vec![],
+                classmb: vec![],
+                idiag: false,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "gbtm1",
+        );
     }
 
     #[test]
     fn loglik_gbtm2() {
-        check_loglik("gbtm2", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec!["Time".into()],
-            random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
-        }, "gbtm2");
+        check_loglik(
+            "gbtm2",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 2,
+                intercept: true,
+                fixed: vec!["Time".into()],
+                mixture: vec!["Time".into()],
+                random: vec![],
+                classmb: vec![],
+                idiag: false,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "gbtm2",
+        );
     }
 
     #[test]
     fn loglik_gbtm3() {
-        check_loglik("gbtm3", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 3,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec!["Time".into()],
-            random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
-        }, "gbtm3");
+        check_loglik(
+            "gbtm3",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 3,
+                intercept: true,
+                fixed: vec!["Time".into()],
+                mixture: vec!["Time".into()],
+                random: vec![],
+                classmb: vec![],
+                idiag: false,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "gbtm3",
+        );
     }
 
     #[test]
     fn loglik_m1() {
-        check_loglik("m1", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
-        }, "m1");
+        check_loglik(
+            "m1",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 1,
+                intercept: true,
+                fixed: vec!["Time*X1".into()],
+                mixture: vec![],
+                random: vec!["Time".into()],
+                classmb: vec![],
+                idiag: false,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "m1",
+        );
     }
 
     #[test]
     fn loglik_m1_idiag() {
-        check_loglik("m1_idiag", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec![], random: vec!["Time".into()], classmb: vec![],
-            idiag: true, nwg: false, maxiter: 500, init_b: vec![],
-        }, "m1_idiag");
+        check_loglik(
+            "m1_idiag",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 1,
+                intercept: true,
+                fixed: vec!["Time*X1".into()],
+                mixture: vec![],
+                random: vec!["Time".into()],
+                classmb: vec![],
+                idiag: true,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "m1_idiag",
+        );
     }
 
     #[test]
     fn loglik_m2a() {
-        check_loglik("m2a", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec!["Time".into()],
-            random: vec!["Time".into()],
-            classmb: vec!["X2".into(), "X3".into()],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
-        }, "m2a");
+        check_loglik(
+            "m2a",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 2,
+                intercept: true,
+                fixed: vec!["Time*X1".into()],
+                mixture: vec!["Time".into()],
+                random: vec!["Time".into()],
+                classmb: vec!["X2".into(), "X3".into()],
+                idiag: false,
+                nwg: false,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "m2a",
+        );
     }
 
     #[test]
     fn loglik_m2a_nwg() {
-        check_loglik("m2a_nwg", &HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time*X1".into()],
-            mixture: vec!["Time".into()],
-            random: vec!["Time".into()],
-            classmb: vec!["X2".into(), "X3".into()],
-            idiag: false, nwg: true, maxiter: 500, init_b: vec![],
-        }, "m2a_nwg");
+        check_loglik(
+            "m2a_nwg",
+            &HlmeConfig {
+                subject: "ID".into(),
+                outcome: "Y".into(),
+                ng: 2,
+                intercept: true,
+                fixed: vec!["Time*X1".into()],
+                mixture: vec!["Time".into()],
+                random: vec!["Time".into()],
+                classmb: vec!["X2".into(), "X3".into()],
+                idiag: false,
+                nwg: true,
+                maxiter: 500,
+                init_b: vec![],
+            },
+            "m2a_nwg",
+        );
     }
 
     // ---- End-to-end node execution test --------------------------------
@@ -1901,10 +2173,18 @@ mod cross_validation {
         // First, build model data to get the layout for golden best conversion.
         let batches = vec![batch.clone()];
         let cfg_layout = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec![], random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time".into()],
+            mixture: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (data, spec, _) = build_model_data(&batches, &cfg_layout).unwrap();
         let layout = spec.layout();
@@ -1916,10 +2196,18 @@ mod cross_validation {
 
         // Execute node with maxiter=0.
         let mut node = HlmeNode::new(HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 1,
-            intercept: true, fixed: vec!["Time".into()],
-            mixture: vec![], random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 0, init_b: best,
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time".into()],
+            mixture: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 0,
+            init_b: best,
         });
 
         let df = SessionContext::new().read_batch(batch).unwrap();
@@ -1932,7 +2220,13 @@ mod cross_validation {
 
         // Check port 0 (summary).
         let summary_df = res.get(&0).unwrap().clone();
-        let summary = summary_df.collect().await.unwrap().into_iter().next().unwrap();
+        let summary = summary_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         let loglik = summary
             .column_by_name("loglik")
@@ -1951,10 +2245,20 @@ mod cross_validation {
         eprintln!("PASS node_execute_gbtm1: loglik={loglik:.6} R={golden_ll:.6} rel={rel:.2e}");
 
         // Also verify AIC and BIC.
-        let aic = summary.column_by_name("aic").unwrap()
-            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
-        let bic = summary.column_by_name("bic").unwrap()
-            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let aic = summary
+            .column_by_name("aic")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+        let bic = summary
+            .column_by_name("bic")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
         let golden_aic = gf["AIC"].as_f64().unwrap();
         let golden_bic = gf["BIC"].as_f64().unwrap();
         let rel_aic = (aic - golden_aic).abs() / golden_aic.abs().max(1e-10);
@@ -1964,7 +2268,13 @@ mod cross_validation {
 
         // Verify port 1 (params) has the right number of rows.
         let params_df = res.get(&1).unwrap().clone();
-        let params = params_df.collect().await.unwrap().into_iter().next().unwrap();
+        let params = params_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         assert_eq!(
             params.num_rows(),
             layout.npm,
@@ -1993,11 +2303,18 @@ mod cross_validation {
         // Build model data for layout.
         let batches = vec![batch.clone()];
         let cfg_layout = HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time".into()],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 2,
+            intercept: true,
+            fixed: vec!["Time".into()],
             mixture: vec!["Time".into()],
-            random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 500, init_b: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
         };
         let (_data, spec, _) = build_model_data(&batches, &cfg_layout).unwrap();
         let layout = spec.layout();
@@ -2009,11 +2326,18 @@ mod cross_validation {
 
         // Execute with maxiter=0.
         let mut node = HlmeNode::new(HlmeConfig {
-            subject: "ID".into(), outcome: "Y".into(), ng: 2,
-            intercept: true, fixed: vec!["Time".into()],
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 2,
+            intercept: true,
+            fixed: vec!["Time".into()],
             mixture: vec!["Time".into()],
-            random: vec![], classmb: vec![],
-            idiag: false, nwg: false, maxiter: 0, init_b: best,
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 0,
+            init_b: best,
         });
 
         let df = SessionContext::new().read_batch(batch).unwrap();
@@ -2026,19 +2350,41 @@ mod cross_validation {
 
         // Verify loglik from port 0.
         let summary_df = res.get(&0).unwrap().clone();
-        let summary = summary_df.collect().await.unwrap().into_iter().next().unwrap();
-        let loglik = summary.column_by_name("loglik").unwrap()
-            .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let summary = summary_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let loglik = summary
+            .column_by_name("loglik")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
         let golden_ll = gf["loglik"].as_f64().unwrap();
         let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
-        assert!(rel < TOL_LL,
-            "node_execute gbtm2: loglik mismatch. Node={loglik:.10}, R={golden_ll:.10}, rel={rel:.3e}");
+        assert!(
+            rel < TOL_LL,
+            "node_execute gbtm2: loglik mismatch. Node={loglik:.10}, R={golden_ll:.10}, rel={rel:.3e}"
+        );
         eprintln!("PASS node_execute_gbtm2: loglik={loglik:.6} R={golden_ll:.6} rel={rel:.2e}");
 
         // With maxiter=0, posterior is None → port 2 should be an empty batch.
         let posterior_df = res.get(&2).unwrap().clone();
-        let posterior = posterior_df.collect().await.unwrap().into_iter().next().unwrap();
-        assert_eq!(posterior.num_rows(), 0,
-            "posterior port should be empty with maxiter=0");
+        let posterior = posterior_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            posterior.num_rows(),
+            0,
+            "posterior port should be empty with maxiter=0"
+        );
     }
 }

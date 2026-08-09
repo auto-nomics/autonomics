@@ -249,7 +249,8 @@ mod tests {
 
         // Before: f32_col is Float32.
         assert_eq!(
-            df.schema().field_with_name(None, "f32_col")
+            df.schema()
+                .field_with_name(None, "f32_col")
                 .unwrap()
                 .data_type(),
             &DataType::Float32,
@@ -259,7 +260,8 @@ mod tests {
 
         // After: f32_col promoted to Float64.
         assert_eq!(
-            df.schema().field_with_name(None, "f32_col")
+            df.schema()
+                .field_with_name(None, "f32_col")
                 .unwrap()
                 .data_type(),
             &DataType::Float64,
@@ -270,13 +272,15 @@ mod tests {
             &DataType::Int32,
         );
         assert_eq!(
-            df.schema().field_with_name(None, "name")
+            df.schema()
+                .field_with_name(None, "name")
                 .unwrap()
                 .data_type(),
             &DataType::Utf8,
         );
         assert_eq!(
-            df.schema().field_with_name(None, "f64_col")
+            df.schema()
+                .field_with_name(None, "f64_col")
                 .unwrap()
                 .data_type(),
             &DataType::Float64,

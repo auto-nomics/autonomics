@@ -54,7 +54,9 @@ pub enum NetworkOutcome {
         final_node: Option<String>,
         final_output: Option<String>,
     },
-    Completed { rounds: usize },
+    Completed {
+        rounds: usize,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -185,7 +187,9 @@ impl AgentNetwork {
             .into_iter()
             .filter_map(|name| {
                 self.graph.node(name).and_then(|n| {
-                    n.initial_prompt.as_ref().map(|p| (name.to_string(), p.clone()))
+                    n.initial_prompt
+                        .as_ref()
+                        .map(|p| (name.to_string(), p.clone()))
                 })
             })
             .collect()
@@ -227,15 +231,9 @@ impl AgentNetwork {
             }
 
             AgentEvent::Done => {
-                let response = self
-                    .response_buffers
-                    .remove(from)
-                    .unwrap_or_default();
+                let response = self.response_buffers.remove(from).unwrap_or_default();
 
-                let count = self
-                    .completion_counts
-                    .entry(from.to_string())
-                    .or_insert(0);
+                let count = self.completion_counts.entry(from.to_string()).or_insert(0);
                 *count += 1;
                 let max_rounds = self.rounds();
 
@@ -319,9 +317,7 @@ pub fn check_termination_spec(
             node: cond_node,
             pattern,
         } => {
-            if node == cond_node
-                && response.to_lowercase().contains(&pattern.to_lowercase())
-            {
+            if node == cond_node && response.to_lowercase().contains(&pattern.to_lowercase()) {
                 Some(TerminationReason::Condition {
                     node: node.to_string(),
                     pattern: pattern.clone(),
@@ -385,8 +381,18 @@ mod tests {
     #[test]
     fn delegate_edge_sends_request_then_returns_response() {
         let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
-        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec {
+            name: "a".into(),
+            profile: "x".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
+        net.add_node(NodeSpec {
+            name: "b".into(),
+            profile: "y".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
         net.set_termination(TerminationSpec::MaxRounds { max: 99 });
 
@@ -415,8 +421,18 @@ mod tests {
     fn delegate_edge_does_not_lose_leaf_output() {
         // A→[Delegate]B (B is a leaf). B's response goes back to A.
         let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
-        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec {
+            name: "a".into(),
+            profile: "x".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
+        net.add_node(NodeSpec {
+            name: "b".into(),
+            profile: "y".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
         net.set_termination(TerminationSpec::MaxRounds { max: 99 });
 
@@ -440,11 +456,18 @@ mod tests {
         // because the delegation response takes exclusive priority.
         let mut net = AgentNetwork::new();
         for name in ["a", "b", "c"] {
-            net.add_node(NodeSpec { name: name.into(), profile: name.into(), initial_prompt: None }).unwrap();
+            net.add_node(NodeSpec {
+                name: name.into(),
+                profile: name.into(),
+                initial_prompt: None,
+            })
+            .unwrap();
         }
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
         net.connect("b", "c", EdgeTrigger::OnDone, None).unwrap();
-        net.set_termination(TerminationSpec::AnyNodeDone { nodes: vec!["c".into()] });
+        net.set_termination(TerminationSpec::AnyNodeDone {
+            nodes: vec!["c".into()],
+        });
 
         // A Dones → forward to B, track delegation (B should respond to A).
         net.process_event("a", &AgentEvent::LlmResponse("data".into()));
@@ -467,9 +490,20 @@ mod tests {
     fn arena_loop_with_single_delegate_edge() {
         // writer→[Delegate]reviewer (no reverse edge needed!)
         let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec { name: "writer".into(), profile: "w".into(), initial_prompt: Some("write".into()) }).unwrap();
-        net.add_node(NodeSpec { name: "reviewer".into(), profile: "r".into(), initial_prompt: None }).unwrap();
-        net.connect("writer", "reviewer", EdgeTrigger::OnDone, None).unwrap();
+        net.add_node(NodeSpec {
+            name: "writer".into(),
+            profile: "w".into(),
+            initial_prompt: Some("write".into()),
+        })
+        .unwrap();
+        net.add_node(NodeSpec {
+            name: "reviewer".into(),
+            profile: "r".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
+        net.connect("writer", "reviewer", EdgeTrigger::OnDone, None)
+            .unwrap();
         net.set_termination(TerminationSpec::Condition {
             node: "reviewer".into(),
             pattern: "ACCEPT".into(),
@@ -478,10 +512,17 @@ mod tests {
         // Round 1: writer Dones → delegate to reviewer.
         net.process_event("writer", &AgentEvent::LlmResponse("draft v1".into()));
         let actions = net.process_event("writer", &AgentEvent::Done);
-        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer")));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer"))
+        );
 
         // Reviewer Dones with REJECT → response returns to writer, no termination.
-        net.process_event("reviewer", &AgentEvent::LlmResponse("REJECT - needs work".into()));
+        net.process_event(
+            "reviewer",
+            &AgentEvent::LlmResponse("REJECT - needs work".into()),
+        );
         let actions = net.process_event("reviewer", &AgentEvent::Done);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], RoutingAction::Send { to, message } if to == "writer"));
@@ -490,12 +531,23 @@ mod tests {
         // Round 2: writer Dones → delegate to reviewer again.
         net.process_event("writer", &AgentEvent::LlmResponse("draft v2".into()));
         let actions = net.process_event("writer", &AgentEvent::Done);
-        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer")));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, RoutingAction::Send { to, .. } if to == "reviewer"))
+        );
 
         // Reviewer Dones with ACCEPT → termination fires.
-        net.process_event("reviewer", &AgentEvent::LlmResponse("Good work. ACCEPT".into()));
+        net.process_event(
+            "reviewer",
+            &AgentEvent::LlmResponse("Good work. ACCEPT".into()),
+        );
         let actions = net.process_event("reviewer", &AgentEvent::Done);
-        assert!(actions.iter().any(|a| matches!(a, RoutingAction::Finished { .. })));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, RoutingAction::Finished { .. }))
+        );
         assert!(net.is_finished());
     }
 
@@ -504,8 +556,18 @@ mod tests {
     #[test]
     fn reset_clears_delegations() {
         let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
-        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec {
+            name: "a".into(),
+            profile: "x".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
+        net.add_node(NodeSpec {
+            name: "b".into(),
+            profile: "y".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
 
         net.process_event("a", &AgentEvent::LlmResponse("x".into()));
@@ -520,8 +582,18 @@ mod tests {
     #[test]
     fn remove_node_cleans_delegation_state() {
         let mut net = AgentNetwork::new();
-        net.add_node(NodeSpec { name: "a".into(), profile: "x".into(), initial_prompt: None }).unwrap();
-        net.add_node(NodeSpec { name: "b".into(), profile: "y".into(), initial_prompt: None }).unwrap();
+        net.add_node(NodeSpec {
+            name: "a".into(),
+            profile: "x".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
+        net.add_node(NodeSpec {
+            name: "b".into(),
+            profile: "y".into(),
+            initial_prompt: None,
+        })
+        .unwrap();
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
 
         net.process_event("a", &AgentEvent::LlmResponse("x".into()));
@@ -540,7 +612,12 @@ mod tests {
         // and does NOT also push to C.
         let mut net = AgentNetwork::new();
         for name in ["a", "b", "c"] {
-            net.add_node(NodeSpec { name: name.into(), profile: name.into(), initial_prompt: None }).unwrap();
+            net.add_node(NodeSpec {
+                name: name.into(),
+                profile: name.into(),
+                initial_prompt: None,
+            })
+            .unwrap();
         }
         net.connect("a", "b", EdgeTrigger::OnDone, None).unwrap();
         net.connect("b", "c", EdgeTrigger::OnDone, None).unwrap();
@@ -556,20 +633,32 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], RoutingAction::Send { to, .. } if to == "a"));
         // C was NOT contacted.
-        assert!(actions.iter().all(|a| !matches!(a, RoutingAction::Send { to, .. } if to == "c")));
+        assert!(
+            actions
+                .iter()
+                .all(|a| !matches!(a, RoutingAction::Send { to, .. } if to == "c"))
+        );
     }
 
     // ── Termination logic tests ──
 
     #[test]
     fn test_condition_termination_match() {
-        let spec = TerminationSpec::Condition { node: "reviewer".into(), pattern: "ACCEPT".into() };
-        assert!(check_termination_spec(&spec, "reviewer", "<verdict>ACCEPT</verdict>", 3).is_some());
+        let spec = TerminationSpec::Condition {
+            node: "reviewer".into(),
+            pattern: "ACCEPT".into(),
+        };
+        assert!(
+            check_termination_spec(&spec, "reviewer", "<verdict>ACCEPT</verdict>", 3).is_some()
+        );
     }
 
     #[test]
     fn test_condition_case_insensitive() {
-        let spec = TerminationSpec::Condition { node: "rev".into(), pattern: "accept".into() };
+        let spec = TerminationSpec::Condition {
+            node: "rev".into(),
+            pattern: "accept".into(),
+        };
         assert!(check_termination_spec(&spec, "rev", "I ACCEPT", 1).is_some());
     }
 
@@ -584,7 +673,10 @@ mod tests {
     fn test_any_composite_termination() {
         let spec = TerminationSpec::Any {
             specs: vec![
-                TerminationSpec::Condition { node: "reviewer".into(), pattern: "ACCEPT".into() },
+                TerminationSpec::Condition {
+                    node: "reviewer".into(),
+                    pattern: "ACCEPT".into(),
+                },
                 TerminationSpec::MaxRounds { max: 5 },
             ],
         };
@@ -595,13 +687,25 @@ mod tests {
 
     #[test]
     fn test_edge_on_done_always_fires() {
-        let edge = EdgeSpec { from: "a".into(), to: "b".into(), trigger: EdgeTrigger::OnDone, transform: None };
+        let edge = EdgeSpec {
+            from: "a".into(),
+            to: "b".into(),
+            trigger: EdgeTrigger::OnDone,
+            transform: None,
+        };
         assert!(edge_should_fire(&edge, "anything"));
     }
 
     #[test]
     fn test_edge_on_pattern() {
-        let edge = EdgeSpec { from: "a".into(), to: "b".into(), trigger: EdgeTrigger::OnPattern { pattern: "ready".into() }, transform: None };
+        let edge = EdgeSpec {
+            from: "a".into(),
+            to: "b".into(),
+            trigger: EdgeTrigger::OnPattern {
+                pattern: "ready".into(),
+            },
+            transform: None,
+        };
         assert!(edge_should_fire(&edge, "I am ready"));
         assert!(!edge_should_fire(&edge, "not yet"));
     }

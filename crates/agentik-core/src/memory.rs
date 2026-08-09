@@ -732,9 +732,7 @@ mod tests {
     fn test_should_compact_true_but_compact_noop_single_segment() {
         // One segment with a giant user message — no historical segments.
         let mut memory = Memory::new();
-        memory
-            .remember(Message::user("x".repeat(200_000)))
-            .unwrap();
+        memory.remember(Message::user("x".repeat(200_000))).unwrap();
 
         // `should_compact` would return true (200K chars ≈ 50K tokens >> any
         // reasonable context budget), but `select_for_compaction` returns None
@@ -749,9 +747,7 @@ mod tests {
         let mut memory = Memory::new();
         memory.remember(Message::user("tiny history")).unwrap();
         memory.items.push(MemoryItem::default());
-        memory
-            .remember(Message::user("x".repeat(200_000)))
-            .unwrap();
+        memory.remember(Message::user("x".repeat(200_000))).unwrap();
 
         // Historical tokens (~3) are well below DEFAULT_KEEP_TOKENS (8000),
         // so `select_for_compaction` returns None even though the total

@@ -30,7 +30,9 @@ impl SqlNodeError {
 }
 
 impl ::dag_core::dag::NodeError for SqlNodeError {
-    fn node_type(&self) -> &str { "sql" }
+    fn node_type(&self) -> &str {
+        "sql"
+    }
 }
 
 /// A transform node: registers each upstream input as a named table and runs a

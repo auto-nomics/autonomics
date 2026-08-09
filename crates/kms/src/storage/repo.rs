@@ -73,10 +73,7 @@ fn opt_v(opt: Option<Uuid>) -> Value {
 
 /// Collect all remaining rows from a `turso::Rows` cursor, applying a
 /// mapping function. Drains the cursor completely.
-async fn collect_rows<T, F>(
-    rows: &mut turso::Rows,
-    map: F,
-) -> Result<Vec<T>, StorageError>
+async fn collect_rows<T, F>(rows: &mut turso::Rows, map: F) -> Result<Vec<T>, StorageError>
 where
     F: Fn(&turso::Row) -> Result<T, StorageError>,
 {
@@ -259,15 +256,12 @@ pub async fn entity_list_all(conn: &turso::Connection) -> Result<Vec<Entity>, St
                 let lang = Language::from_str(&text_col(&row, 2)?);
                 let full = text_col(&row, 3)?;
                 let abbr = opt_text_col(&row, 4)?;
-                nom_map
-                    .entry(entity_id)
-                    .or_default()
-                    .push(Nomenclature {
-                        id: nom_id,
-                        lang,
-                        full,
-                        abbr,
-                    });
+                nom_map.entry(entity_id).or_default().push(Nomenclature {
+                    id: nom_id,
+                    lang,
+                    full,
+                    abbr,
+                });
             }
             None => break,
         }
@@ -342,10 +336,7 @@ pub async fn entity_find_by_exact_name(
     }
 }
 
-pub async fn entity_update(
-    conn: &turso::Connection,
-    entity: &Entity,
-) -> Result<(), StorageError> {
+pub async fn entity_update(conn: &turso::Connection, entity: &Entity) -> Result<(), StorageError> {
     conn.execute("BEGIN", ()).await?;
 
     let result = entity_update_inner(conn, entity).await;
@@ -368,10 +359,7 @@ async fn entity_update_inner(
     let affected = conn
         .execute(
             "UPDATE entities SET definition = ?1 WHERE id = ?2",
-            params_from_iter([
-                Value::Text(entity.definition.clone()),
-                v(entity.id),
-            ]),
+            params_from_iter([Value::Text(entity.definition.clone()), v(entity.id)]),
         )
         .await?;
 
@@ -516,27 +504,29 @@ pub async fn knowledge_create(
         .join(",");
 
     conn.execute(
-        &format!(
-            "INSERT INTO knowledges ({KNOWLEDGE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
-        ),
+        &format!("INSERT INTO knowledges ({KNOWLEDGE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
         params_from_iter([
             v(knowledge.id),
             Value::Text(knowledge.title.clone()),
             Value::Text(knowledge.knowledge_type.as_str().to_string()),
             Value::Text(entities_str),
-            knowledge.content.clone().map(Value::Text).unwrap_or(Value::Null),
+            knowledge
+                .content
+                .clone()
+                .map(Value::Text)
+                .unwrap_or(Value::Null),
             opt_v(knowledge.source_document_id),
-            knowledge.source_chunk_idx.map(Value::Integer).unwrap_or(Value::Null),
+            knowledge
+                .source_chunk_idx
+                .map(Value::Integer)
+                .unwrap_or(Value::Null),
         ]),
     )
     .await?;
     Ok(knowledge.id)
 }
 
-pub async fn knowledge_get(
-    conn: &turso::Connection,
-    id: Uuid,
-) -> Result<Knowledge, StorageError> {
+pub async fn knowledge_get(conn: &turso::Connection, id: Uuid) -> Result<Knowledge, StorageError> {
     let mut rows = conn
         .query(
             &format!("SELECT {KNOWLEDGE_COLS} FROM knowledges WHERE id = ?1"),
@@ -550,9 +540,7 @@ pub async fn knowledge_get(
     }
 }
 
-pub async fn knowledge_list_all(
-    conn: &turso::Connection,
-) -> Result<Vec<Knowledge>, StorageError> {
+pub async fn knowledge_list_all(conn: &turso::Connection) -> Result<Vec<Knowledge>, StorageError> {
     let mut rows = conn
         .query(
             &format!("SELECT {KNOWLEDGE_COLS} FROM knowledges"),
@@ -568,9 +556,7 @@ pub async fn knowledge_find_by_title(
 ) -> Result<Option<Knowledge>, StorageError> {
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT {KNOWLEDGE_COLS} FROM knowledges WHERE title = ?1 LIMIT 1"
-            ),
+            &format!("SELECT {KNOWLEDGE_COLS} FROM knowledges WHERE title = ?1 LIMIT 1"),
             params_from_iter([Value::Text(title.to_string())]),
         )
         .await?;
@@ -588,7 +574,10 @@ pub async fn knowledge_find_by_entity(
     // SQLite `entities` column is a comma-joined UUID list; filter in Rust
     // after fetching all rows (same approach as the original dendrite code).
     let all = knowledge_list_all(conn).await?;
-    Ok(all.into_iter().filter(|k| k.entities.contains(&entity_id)).collect())
+    Ok(all
+        .into_iter()
+        .filter(|k| k.entities.contains(&entity_id))
+        .collect())
 }
 
 pub async fn knowledge_update(
@@ -610,9 +599,16 @@ pub async fn knowledge_update(
                 Value::Text(knowledge.title.clone()),
                 Value::Text(knowledge.knowledge_type.as_str().to_string()),
                 Value::Text(entities_str),
-                knowledge.content.clone().map(Value::Text).unwrap_or(Value::Null),
+                knowledge
+                    .content
+                    .clone()
+                    .map(Value::Text)
+                    .unwrap_or(Value::Null),
                 opt_v(knowledge.source_document_id),
-                knowledge.source_chunk_idx.map(Value::Integer).unwrap_or(Value::Null),
+                knowledge
+                    .source_chunk_idx
+                    .map(Value::Integer)
+                    .unwrap_or(Value::Null),
                 v(knowledge.id),
             ]),
         )
@@ -623,10 +619,7 @@ pub async fn knowledge_update(
     Ok(())
 }
 
-pub async fn knowledge_delete(
-    conn: &turso::Connection,
-    id: Uuid,
-) -> Result<(), StorageError> {
+pub async fn knowledge_delete(conn: &turso::Connection, id: Uuid) -> Result<(), StorageError> {
     let affected = conn
         .execute(
             "DELETE FROM knowledges WHERE id = ?1",
@@ -662,10 +655,7 @@ fn row_to_index(row: &turso::Row) -> Result<Index, StorageError> {
     })
 }
 
-pub async fn index_create(
-    conn: &turso::Connection,
-    entry: &Index,
-) -> Result<Uuid, StorageError> {
+pub async fn index_create(conn: &turso::Connection, entry: &Index) -> Result<Uuid, StorageError> {
     conn.execute(
         "INSERT INTO indexes (id, title, target, target_type, parent_id, position) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -734,10 +724,7 @@ pub async fn index_find_root(conn: &turso::Connection) -> Result<Index, StorageE
     }
 }
 
-pub async fn index_update(
-    conn: &turso::Connection,
-    entry: &Index,
-) -> Result<(), StorageError> {
+pub async fn index_update(conn: &turso::Connection, entry: &Index) -> Result<(), StorageError> {
     let affected = conn
         .execute(
             "UPDATE indexes SET title = ?1, target = ?2, target_type = ?3, \
@@ -778,9 +765,7 @@ pub async fn index_children_of(
     let mut rows = match parent_id {
         Some(pid) => {
             conn.query(
-                &format!(
-                    "SELECT {INDEX_COLS} FROM indexes WHERE parent_id = ?1 ORDER BY position"
-                ),
+                &format!("SELECT {INDEX_COLS} FROM indexes WHERE parent_id = ?1 ORDER BY position"),
                 params_from_iter([v(pid)]),
             )
             .await?

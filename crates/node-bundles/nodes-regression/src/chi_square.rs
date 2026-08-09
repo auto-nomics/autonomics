@@ -22,8 +22,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::{ColumnError, crosstab, extract_string_column};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -48,7 +48,9 @@ impl From<ColumnError> for ChiSquareError {
 }
 
 impl ::dag_core::dag::NodeError for ChiSquareError {
-    fn node_type(&self) -> &str { "chi_square" }
+    fn node_type(&self) -> &str {
+        "chi_square"
+    }
 }
 
 /// Spec for [`ChiSquareNode`].

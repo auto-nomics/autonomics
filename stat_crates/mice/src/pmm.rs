@@ -16,8 +16,8 @@
 //! Reproduces R's `mice.impute.pmm` to ~1e-12 (matching the donor selection
 //! given identical RNG seeds).
 
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 
 use crate::error::Result;
 use crate::estimice::norm_draw;

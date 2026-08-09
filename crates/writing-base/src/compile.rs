@@ -416,7 +416,8 @@ pub async fn compile_document(
     // 2. Generate .bib if we have a resolver.
     let bib_content = if let Some(resolver) = resolver {
         let bib = resolver.generate_bib(doc).await;
-        if bib.trim().is_empty() || bib.starts_with("% Auto-generated") && !bib.contains("@article") {
+        if bib.trim().is_empty() || bib.starts_with("% Auto-generated") && !bib.contains("@article")
+        {
             // No real entries — don't include .bib to avoid bibtex errors.
             None
         } else {
@@ -531,10 +532,7 @@ fn parse_warnings(log: &str) -> Vec<CompileIssue> {
 fn extract_line_number(s: &str) -> Option<usize> {
     if let Some(pos) = s.find("line ") {
         let rest = &s[pos + 5..];
-        let num: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         num.parse().ok()
     } else {
         None
@@ -603,8 +601,16 @@ l.10 \nonexistent
 "#;
         let errors = parse_errors(log);
         assert!(errors.len() >= 2);
-        assert!(errors.iter().any(|e| e.message.contains("Undefined control sequence")));
-        assert!(errors.iter().any(|e| e.message.contains("Missing $ inserted")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Undefined control sequence"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Missing $ inserted"))
+        );
     }
 
     #[test]
@@ -626,7 +632,11 @@ Overfull \hbox (10.0pt too wide) in paragraph at lines 5--10
 Underfull \hbox (badness 10000) in paragraph at lines 20--25
 "#;
         let warnings = parse_warnings(log);
-        assert!(warnings.iter().any(|w| w.message.contains("fig:nonexistent")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("fig:nonexistent"))
+        );
         assert!(warnings.iter().any(|w| w.message.contains("smith2024")));
         assert!(warnings.iter().any(|w| w.message.starts_with("Overfull")));
         assert!(warnings.iter().any(|w| w.message.starts_with("Underfull")));

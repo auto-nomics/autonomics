@@ -131,7 +131,10 @@ pub(crate) fn build_column(rows: &[Value], key: &str, dtype: &DataType) -> Arc<d
         DataType::Int64 => {
             let vals: Vec<Option<i64>> = rows
                 .iter()
-                .map(|r| r.get(key).and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64))))
+                .map(|r| {
+                    r.get(key)
+                        .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
+                })
                 .collect();
             Arc::new(Int64Array::from(vals))
         }

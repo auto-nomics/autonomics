@@ -18,9 +18,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::dag::DagError;
 use dag_core::dag::graph::PortOutputs;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 
 /// Errors raised by the visualization node.
 #[derive(Debug, Error)]

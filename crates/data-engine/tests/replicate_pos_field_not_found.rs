@@ -43,15 +43,15 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use data_engine::dag::DagNode;
 use dag_core::{NodeInput, SinkMode};
-use nodes_io::sink_iceberg::IcebergSinkNode;
+use data_engine::dag::DagNode;
 use datafusion::prelude::SessionContext;
 use datalake::Datalake;
 use iceberg::metadata_columns::{
     RESERVED_COL_NAME_DELETE_FILE_POS, RESERVED_FIELD_ID_DELETE_FILE_POS, get_metadata_field_id,
     is_metadata_column_name,
 };
+use nodes_io::sink_iceberg::IcebergSinkNode;
 
 /// Zero-dependency logic-level repro of the upstream iceberg-rust bug: the bare
 /// column name `pos` (no leading underscore) is reserved as a metadata column

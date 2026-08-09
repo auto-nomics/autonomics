@@ -2,10 +2,10 @@
 //! `hypothesize.levene_test`, `hypothesize.fligner_test`, `hypothesize.oneway_anova`.
 
 use super::common::{HypoNodeError, collect_input, emit_test_row, extract_groups};
-use dag_core::dag::DagError;
-use dag_core::registry::{NodeCtx, NodeFactory};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use async_trait::async_trait;
+use dag_core::dag::DagError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::registry::{NodeCtx, NodeFactory};
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;

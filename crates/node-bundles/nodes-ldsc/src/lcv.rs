@@ -46,7 +46,9 @@ pub enum LcvNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LcvNodeError {
-    fn node_type(&self) -> &str { "lcv" }
+    fn node_type(&self) -> &str {
+        "lcv"
+    }
 }
 
 impl From<datalake::error::Error> for LcvNodeError {
@@ -251,7 +253,8 @@ impl NodeFactory for LcvNodeFactory {
         let cfg = parse_spec::<LcvConfig>(spec, "lcv")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
-            .input_vars.first()
+            .input_vars
+            .first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

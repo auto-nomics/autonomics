@@ -33,10 +33,7 @@ impl ToolFunction for ListNodeFactoriesTool {
     type Input = ListNodeFactoriesInput;
 
     async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
-        let nodes = self
-            .client
-            .list_node_factories()
-            .map_err(ExecError::from)?;
+        let nodes = self.client.list_node_factories().map_err(ExecError::from)?;
 
         let content = serde_json::to_value(&nodes).map_err(|e| ToolError::ExecutionFailed {
             source: Box::new(e),

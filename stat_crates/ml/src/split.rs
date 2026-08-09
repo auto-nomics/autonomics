@@ -69,8 +69,7 @@ pub fn train_test_split(
             let mut test = Vec::new();
             for (_, mut indices) in classes {
                 indices.shuffle(&mut rng);
-                let split_at =
-                    ((indices.len() as f64) * (1.0 - test_size)).round() as usize;
+                let split_at = ((indices.len() as f64) * (1.0 - test_size)).round() as usize;
                 let mut rest = indices.split_off(split_at);
                 train.extend(indices);
                 test.append(&mut rest);
@@ -130,12 +129,7 @@ pub fn kfold(n: usize, k: usize, shuffle: bool, seed: u64) -> Result<Vec<Fold>> 
 /// Generate stratified K-Fold cross-validation folds.
 ///
 /// Each fold preserves the class proportions from `labels`.
-pub fn stratified_kfold(
-    labels: &[usize],
-    k: usize,
-    shuffle: bool,
-    seed: u64,
-) -> Result<Vec<Fold>> {
+pub fn stratified_kfold(labels: &[usize], k: usize, shuffle: bool, seed: u64) -> Result<Vec<Fold>> {
     let n = labels.len();
     if k < 2 || n < k {
         return Err(SplitError::TooFewSamples { n, k });

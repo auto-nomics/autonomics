@@ -45,11 +45,7 @@ pub fn accuracy(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
 /// Confusion matrix for integer class labels `[0, n_classes)`.
 ///
 /// Returns `cm[actual][predicted]` as a flattened row-major `Vec<usize>`.
-pub fn confusion_matrix(
-    y_true: &[f64],
-    y_pred: &[f64],
-    n_classes: usize,
-) -> Result<Vec<usize>> {
+pub fn confusion_matrix(y_true: &[f64], y_pred: &[f64], n_classes: usize) -> Result<Vec<usize>> {
     check_len(y_true, y_pred)?;
     let mut cm = vec![0usize; n_classes * n_classes];
     for (&a, &p) in y_true.iter().zip(y_pred) {
@@ -151,11 +147,23 @@ pub fn macro_precision_recall_f1(
 pub fn roc_auc(y_true: &[f64], y_score: &[f64]) -> Result<f64> {
     check_len(y_true, y_score)?;
     // Mann-Whitney U → AUC
-    let mut pairs: Vec<(f64, f64)> = y_score.iter().zip(y_true.iter()).map(|(&s, &t)| (s, t)).collect();
+    let mut pairs: Vec<(f64, f64)> = y_score
+        .iter()
+        .zip(y_true.iter())
+        .map(|(&s, &t)| (s, t))
+        .collect();
     pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let pos: Vec<f64> = pairs.iter().filter(|(_, t)| *t == 1.0).map(|(s, _)| *s).collect();
-    let neg: Vec<f64> = pairs.iter().filter(|(_, t)| *t == 0.0).map(|(s, _)| *s).collect();
+    let pos: Vec<f64> = pairs
+        .iter()
+        .filter(|(_, t)| *t == 1.0)
+        .map(|(s, _)| *s)
+        .collect();
+    let neg: Vec<f64> = pairs
+        .iter()
+        .filter(|(_, t)| *t == 0.0)
+        .map(|(s, _)| *s)
+        .collect();
     if pos.is_empty() || neg.is_empty() {
         return Err(MetricsError::Other(
             "ROC AUC requires both classes present".into(),
@@ -182,7 +190,12 @@ pub fn roc_auc(y_true: &[f64], y_score: &[f64]) -> Result<f64> {
 pub fn mse(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
     check_len(y_true, y_pred)?;
     let n = y_true.len() as f64;
-    Ok(y_true.iter().zip(y_pred).map(|(a, b)| (a - b).powi(2)).sum::<f64>() / n)
+    Ok(y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f64>()
+        / n)
 }
 
 /// Root mean squared error.
@@ -194,14 +207,23 @@ pub fn rmse(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
 pub fn mae(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
     check_len(y_true, y_pred)?;
     let n = y_true.len() as f64;
-    Ok(y_true.iter().zip(y_pred).map(|(a, b)| (a - b).abs()).sum::<f64>() / n)
+    Ok(y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f64>()
+        / n)
 }
 
 /// R² (coefficient of determination).
 pub fn r2_score(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
     check_len(y_true, y_pred)?;
     let mean = y_true.iter().sum::<f64>() / y_true.len() as f64;
-    let ss_res: f64 = y_true.iter().zip(y_pred).map(|(a, b)| (a - b).powi(2)).sum();
+    let ss_res: f64 = y_true
+        .iter()
+        .zip(y_pred)
+        .map(|(a, b)| (a - b).powi(2))
+        .sum();
     let ss_tot: f64 = y_true.iter().map(|a| (a - mean).powi(2)).sum();
     if ss_tot == 0.0 {
         return Ok(0.0);
@@ -216,7 +238,13 @@ pub fn mape(y_true: &[f64], y_pred: &[f64]) -> Result<f64> {
     let sum: f64 = y_true
         .iter()
         .zip(y_pred)
-        .map(|(a, b)| if a.abs() > 1e-12 { ((a - b) / a).abs() } else { 0.0 })
+        .map(|(a, b)| {
+            if a.abs() > 1e-12 {
+                ((a - b) / a).abs()
+            } else {
+                0.0
+            }
+        })
         .sum();
     Ok(sum / n)
 }
@@ -254,12 +282,16 @@ mod tests {
 
     #[test]
     fn test_accuracy() {
-        assert_eq!(accuracy(&[0., 1., 1., 0.], &[0., 1., 0., 0.]).unwrap(), 0.75);
+        assert_eq!(
+            accuracy(&[0., 1., 1., 0.], &[0., 1., 0., 0.]).unwrap(),
+            0.75
+        );
     }
 
     #[test]
     fn test_prf() {
-        let (p, r, f) = precision_recall_f1(&[0., 1., 1., 0., 1.], &[0., 1., 0., 0., 1.], 1.0).unwrap();
+        let (p, r, f) =
+            precision_recall_f1(&[0., 1., 1., 0., 1.], &[0., 1., 0., 0., 1.], 1.0).unwrap();
         assert!((p - 1.0).abs() < 1e-10);
         assert!((r - 2.0 / 3.0).abs() < 1e-10);
         assert!((f - 0.8).abs() < 1e-10);

@@ -47,7 +47,18 @@ impl LongData {
         debug_assert_eq!(acc, nobs);
         let prior = vec![0; ns];
         let pprior = vec![1.0; ns * ng];
-        Self { ns, ng, nv, nobs, y, x, nmes, offsets, prior, pprior }
+        Self {
+            ns,
+            ng,
+            nv,
+            nobs,
+            y,
+            x,
+            nmes,
+            offsets,
+            prior,
+            pprior,
+        }
     }
 
     /// Set the `prior` vector (subject-fixed class assignments).

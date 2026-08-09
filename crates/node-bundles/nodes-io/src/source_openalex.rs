@@ -18,9 +18,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, BooleanArray, RecordBatch, StringArray, UInt16Array, UInt64Array,
-};
+use arrow_array::{Array, BooleanArray, RecordBatch, StringArray, UInt16Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::common::HashMap;
@@ -277,8 +275,10 @@ fn build_works_batch(works: Vec<Work>) -> Result<RecordBatch, DagError> {
     let langs: Vec<Option<String>> = works.iter().map(|w| w.language.clone()).collect();
     let cited: Vec<u64> = works.iter().map(|w| w.cited_by_count).collect();
     let is_oa: Vec<bool> = works.iter().map(|w| w.open_access.is_oa).collect();
-    let oa_status: Vec<Option<String>> =
-        works.iter().map(|w| w.open_access.oa_status.clone()).collect();
+    let oa_status: Vec<Option<String>> = works
+        .iter()
+        .map(|w| w.open_access.oa_status.clone())
+        .collect();
     let journals: Vec<Option<String>> = works
         .iter()
         .map(|w| {
@@ -296,8 +296,10 @@ fn build_works_batch(works: Vec<Work>) -> Result<RecordBatch, DagError> {
                 .and_then(|a| a.author.display_name.clone())
         })
         .collect();
-    let author_counts: Vec<Option<u64>> =
-        works.iter().map(|w| Some(w.authorships.len() as u64)).collect();
+    let author_counts: Vec<Option<u64>> = works
+        .iter()
+        .map(|w| Some(w.authorships.len() as u64))
+        .collect();
     let is_retracted: Vec<bool> = works.iter().map(|w| w.is_retracted).collect();
 
     let schema = Arc::new(Schema::new(vec![
@@ -463,8 +465,7 @@ impl DagNode for OpenAlexGroupByNode {
             })
             .map(Some)
             .collect();
-        let key_ids: Vec<Option<String>> =
-            entries.iter().map(|e| Some(e.key.clone())).collect();
+        let key_ids: Vec<Option<String>> = entries.iter().map(|e| Some(e.key.clone())).collect();
         let counts: Vec<u64> = entries.iter().map(|e| e.count).collect();
 
         let session = ctx.session();

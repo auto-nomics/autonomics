@@ -367,7 +367,9 @@ pub fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<Stri
                 })
                 .collect(),
         )
-    } else { arr.as_any().downcast_ref::<StringViewArray>().map(|a| (0..a.len())
+    } else {
+        arr.as_any().downcast_ref::<StringViewArray>().map(|a| {
+            (0..a.len())
                 .map(|i| {
                     if a.is_null(i) {
                         None
@@ -375,5 +377,7 @@ pub fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<Stri
                         Some(a.value(i).to_string())
                     }
                 })
-                .collect()) }
+                .collect()
+        })
+    }
 }

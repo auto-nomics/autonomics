@@ -57,12 +57,17 @@ pub fn norm_draw<R: Rng + ?Sized>(
         }
         "ridge" => {
             let fit: RidgeFit = ridge_fit(x_obs, y_obs, ridge)?;
-            (fit.coef, fit.v, fit.residuals, y_obs.len().saturating_sub(x_obs[0].len()))
+            (
+                fit.coef,
+                fit.v,
+                fit.residuals,
+                y_obs.len().saturating_sub(x_obs[0].len()),
+            )
         }
         other => {
             return Err(crate::error::MiceError::InvalidSpec(format!(
                 "estimice: unknown ls.meth '{other}'"
-            )))
+            )));
         }
     };
 
@@ -70,9 +75,8 @@ pub fn norm_draw<R: Rng + ?Sized>(
 
     // Step 3: σ* = √(Σ rᵢ² / χ²_ν).
     let rss: f64 = residuals.iter().map(|r| r * r).sum();
-    let chi = ChiSquared::new(df as f64).map_err(|e| {
-        crate::error::MiceError::Numerical(format!("chi-squared df: {e}"))
-    })?;
+    let chi = ChiSquared::new(df as f64)
+        .map_err(|e| crate::error::MiceError::Numerical(format!("chi-squared df: {e}")))?;
     let g = chi.sample(rng);
     let sigma = (rss / g).sqrt();
 
@@ -80,9 +84,8 @@ pub fn norm_draw<R: Rng + ?Sized>(
     // β* = β̂ + σ* · L · z with z ~ N(0, I_p).
     let sym_v = symmetrise(&v);
     let l = chol_factor(&sym_v)?;
-    let normal = Normal::new(0.0, 1.0).map_err(|e| {
-        crate::error::MiceError::Numerical(format!("normal init: {e}"))
-    })?;
+    let normal = Normal::new(0.0, 1.0)
+        .map_err(|e| crate::error::MiceError::Numerical(format!("normal init: {e}")))?;
     let z: Vec<f64> = (0..p).map(|_| normal.sample(rng)).collect();
 
     // Compute L · z.

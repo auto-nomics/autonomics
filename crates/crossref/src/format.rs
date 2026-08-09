@@ -299,7 +299,10 @@ fn format_work_full(work: &Work, out: &mut String) {
 
     // Counts.
     out.push_str(&format!("**Cited by:** {}\n", work.is_referenced_by_count));
-    out.push_str(&format!("**References count:** {}\n", work.references_count));
+    out.push_str(&format!(
+        "**References count:** {}\n",
+        work.references_count
+    ));
 
     // Subjects.
     if !work.subject.is_empty() {
@@ -395,9 +398,7 @@ mod tests {
                 family: "Baumeister".into(),
                 sequence: "first".into(),
                 orcid: Some("https://orcid.org/0000-0002-1234-5678".into()),
-                affiliation: vec![Affiliation {
-                    name: "FSU".into(),
-                }],
+                affiliation: vec![Affiliation { name: "FSU".into() }],
             }],
             issued: Some(DateParts {
                 date_parts: vec![vec![Some(2004), Some(7)]],
@@ -410,9 +411,7 @@ mod tests {
             is_referenced_by_count: 5000,
             references_count: 120,
             publisher: "APA".into(),
-            abstract_text: Some(
-                "<jats:p>Self-regulation involves ego depletion.</jats:p>".into(),
-            ),
+            abstract_text: Some("<jats:p>Self-regulation involves ego depletion.</jats:p>".into()),
             ..Default::default()
         }
     }

@@ -38,7 +38,13 @@ struct IrlsFit {
 /// `x_aug` is `n × (p+1)` row-major with an intercept column prepended by
 /// the caller. `y_aug` is 0/1 (length `n`). `w_aug` is the per-row weight
 /// (length `n`).
-fn irls_logit(x_aug: &[Vec<f64>], y_aug: &[f64], w_aug: &[f64], max_iter: usize, tol: f64) -> Result<IrlsFit> {
+fn irls_logit(
+    x_aug: &[Vec<f64>],
+    y_aug: &[f64],
+    w_aug: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> Result<IrlsFit> {
     let n = y_aug.len();
     if x_aug.len() != n {
         return Err(MiceError::LengthMismatch("x_aug row count".into()));
@@ -96,7 +102,8 @@ fn irls_logit(x_aug: &[Vec<f64>], y_aug: &[f64], w_aug: &[f64], max_iter: usize,
         }
         let _ = xb;
 
-        let chol = Llt::new(xtx.as_ref(), Side::Lower).map_err(|e| MiceError::Numerical(format!("irls_logit: {e:?}")))?;
+        let chol = Llt::new(xtx.as_ref(), Side::Lower)
+            .map_err(|e| MiceError::Numerical(format!("irls_logit: {e:?}")))?;
         let mut rhs = Mat::<f64>::zeros(p, 1);
         for j in 0..p {
             rhs[(j, 0)] = xtwz[j];
@@ -135,7 +142,8 @@ fn irls_logit(x_aug: &[Vec<f64>], y_aug: &[f64], w_aug: &[f64], max_iter: usize,
             }
         }
     }
-    let chol = Llt::new(xtx.as_ref(), Side::Lower).map_err(|e| MiceError::Numerical(format!("irls_logit: {e:?}")))?;
+    let chol = Llt::new(xtx.as_ref(), Side::Lower)
+        .map_err(|e| MiceError::Numerical(format!("irls_logit: {e:?}")))?;
     let mut ident = Mat::<f64>::zeros(p, p);
     for j in 0..p {
         ident[(j, j)] = 1.0;
@@ -197,7 +205,11 @@ pub fn impute_logreg<R: Rng + ?Sized>(
 
     // Step 2: build (intercept, x) design and fit IRLS only on ry_aug.
     let n_aug = y_aug_in.len();
-    let p_in = if x_aug_in.is_empty() { 0 } else { x_aug_in[0].len() };
+    let p_in = if x_aug_in.is_empty() {
+        0
+    } else {
+        x_aug_in[0].len()
+    };
     let mut x_aug: Vec<Vec<f64>> = Vec::with_capacity(n_aug);
     for i in 0..n_aug {
         let mut row = vec![1.0_f64];
@@ -232,7 +244,8 @@ pub fn impute_logreg<R: Rng + ?Sized>(
             cov[(j, k)] = fit.cov_unscaled[j * p_full + k];
         }
     }
-    let chol = Llt::new(cov.as_ref(), Side::Lower).map_err(|e| MiceError::Numerical(format!("logreg cov: {e:?}")))?;
+    let chol = Llt::new(cov.as_ref(), Side::Lower)
+        .map_err(|e| MiceError::Numerical(format!("logreg cov: {e:?}")))?;
     let mut zm = Mat::<f64>::zeros(p_full, 1);
     for j in 0..p_full {
         zm[(j, 0)] = z[j];

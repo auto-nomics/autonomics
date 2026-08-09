@@ -235,8 +235,7 @@ impl Session {
     /// `AgentEvent::LifecycleChanged` if the status actually changed.
     pub(crate) fn set_lifecycle(&mut self, status: agentik_types::AgentLifecycleStatus) {
         if self.lifecycle.set_status(status) {
-            self.shared
-                .send_event(AgentEvent::LifecycleChanged(status));
+            self.shared.send_event(AgentEvent::LifecycleChanged(status));
         }
     }
 
@@ -733,7 +732,10 @@ impl Session {
 
         // Combine identity + agent name into a single section so the agent
         // knows both its role and its concrete name in multi-agent interactions.
-        let identity = self.shared.system_prompt_identity.as_deref()
+        let identity = self
+            .shared
+            .system_prompt_identity
+            .as_deref()
             .unwrap_or("You are a helpful assistant.");
         builder = builder.with_identity(format!(
             "{identity}\n\n\

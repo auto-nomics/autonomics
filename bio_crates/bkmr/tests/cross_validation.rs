@@ -20,7 +20,9 @@
 //! Rscript tests/gen_r_golden.R tests/bkmr_golden.json
 //! ```
 
-use bkmr::{ControlParams, KmbayesOptions, RMethod, RPrior, Rng, StartingValues, kmbayes, sim_data};
+use bkmr::{
+    ControlParams, KmbayesOptions, RMethod, RPrior, Rng, StartingValues, kmbayes, sim_data,
+};
 use serde_json::Value;
 
 // Tolerance for MCMC chain values: the port reproduces R's RNG stream
@@ -46,7 +48,11 @@ fn load_golden() -> Value {
 }
 
 fn vec_f64(v: &Value) -> Vec<f64> {
-    v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
 }
 
 fn opt_vec_f64(v: &Value) -> Vec<f64> {
@@ -142,7 +148,12 @@ fn run_scenario(golden: &Value) -> (bkmr::BkmrFit, usize, usize, usize) {
     let g_y = vec_f64(&golden["y"]);
     let g_z = vec_f64(&golden["Z"]);
     let g_x = vec_f64(&golden["X"]);
-    let max_y_diff = dat.y.iter().zip(g_y.iter()).map(|(a, b)| (a - b).abs()).fold(0.0f64, f64::max);
+    let max_y_diff = dat
+        .y
+        .iter()
+        .zip(g_y.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
     assert!(max_y_diff < 1e-12, "y mismatch: {max_y_diff:e}");
     let mut max_z_diff = 0.0f64;
     for i in 0..n {
@@ -151,7 +162,9 @@ fn run_scenario(golden: &Value) -> (bkmr::BkmrFit, usize, usize, usize) {
         }
     }
     assert!(max_z_diff < 1e-12, "Z mismatch: {max_z_diff:e}");
-    let max_x_diff = (0..n).map(|i| (dat.x[(i, 0)] - g_x[i]).abs()).fold(0.0f64, f64::max);
+    let max_x_diff = (0..n)
+        .map(|i| (dat.x[(i, 0)] - g_x[i]).abs())
+        .fold(0.0f64, f64::max);
     assert!(max_x_diff < 1e-12, "X mismatch: {max_x_diff:e}");
 
     // Run kmbayes with same seed
@@ -187,13 +200,24 @@ fn xval_gaussian_novarsel() {
     let s = &g["scenarios"]["gaussian_novarsel"];
     let (fit, n, m, k) = run_scenario(s);
     let cmp = compare_chain(s, &fit, n, m, k);
-    eprintln!("gaussian_novarsel: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
-              cmp.max_beta, cmp.max_lambda, cmp.max_sigsq, cmp.max_r, cmp.max_delta, cmp.n_accept_mismatch);
+    eprintln!(
+        "gaussian_novarsel: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
+        cmp.max_beta,
+        cmp.max_lambda,
+        cmp.max_sigsq,
+        cmp.max_r,
+        cmp.max_delta,
+        cmp.n_accept_mismatch
+    );
     assert!(cmp.max_beta < TOL_CHAIN, "beta diff {}", cmp.max_beta);
     assert!(cmp.max_lambda < TOL_CHAIN, "lambda diff {}", cmp.max_lambda);
     assert!(cmp.max_sigsq < TOL_CHAIN, "sigsq diff {}", cmp.max_sigsq);
     assert!(cmp.max_r < TOL_CHAIN, "r diff {}", cmp.max_r);
-    assert!(cmp.n_accept_mismatch == 0, "accept mismatch {}", cmp.n_accept_mismatch);
+    assert!(
+        cmp.n_accept_mismatch == 0,
+        "accept mismatch {}",
+        cmp.n_accept_mismatch
+    );
 }
 
 #[test]
@@ -202,14 +226,25 @@ fn xval_gaussian_varsel() {
     let s = &g["scenarios"]["gaussian_varsel"];
     let (fit, n, m, k) = run_scenario(s);
     let cmp = compare_chain(s, &fit, n, m, k);
-    eprintln!("gaussian_varsel: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
-              cmp.max_beta, cmp.max_lambda, cmp.max_sigsq, cmp.max_r, cmp.max_delta, cmp.n_accept_mismatch);
+    eprintln!(
+        "gaussian_varsel: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
+        cmp.max_beta,
+        cmp.max_lambda,
+        cmp.max_sigsq,
+        cmp.max_r,
+        cmp.max_delta,
+        cmp.n_accept_mismatch
+    );
     assert!(cmp.max_beta < TOL_CHAIN, "beta diff {}", cmp.max_beta);
     assert!(cmp.max_lambda < TOL_CHAIN, "lambda diff {}", cmp.max_lambda);
     assert!(cmp.max_sigsq < TOL_CHAIN, "sigsq diff {}", cmp.max_sigsq);
     assert!(cmp.max_r < TOL_CHAIN, "r diff {}", cmp.max_r);
     assert!(cmp.max_delta < TOL_CHAIN, "delta diff {}", cmp.max_delta);
-    assert!(cmp.n_accept_mismatch == 0, "accept mismatch {}", cmp.n_accept_mismatch);
+    assert!(
+        cmp.n_accept_mismatch == 0,
+        "accept mismatch {}",
+        cmp.n_accept_mismatch
+    );
 }
 
 #[test]
@@ -218,8 +253,15 @@ fn xval_gaussian_varsel_gamma() {
     let s = &g["scenarios"]["gaussian_varsel_gamma"];
     let (fit, n, m, k) = run_scenario(s);
     let cmp = compare_chain(s, &fit, n, m, k);
-    eprintln!("gaussian_varsel_gamma: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
-              cmp.max_beta, cmp.max_lambda, cmp.max_sigsq, cmp.max_r, cmp.max_delta, cmp.n_accept_mismatch);
+    eprintln!(
+        "gaussian_varsel_gamma: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
+        cmp.max_beta,
+        cmp.max_lambda,
+        cmp.max_sigsq,
+        cmp.max_r,
+        cmp.max_delta,
+        cmp.n_accept_mismatch
+    );
     assert!(cmp.max_beta < TOL_CHAIN, "beta diff {}", cmp.max_beta);
     assert!(cmp.max_lambda < TOL_CHAIN, "lambda diff {}", cmp.max_lambda);
     assert!(cmp.max_sigsq < TOL_CHAIN, "sigsq diff {}", cmp.max_sigsq);
@@ -233,8 +275,15 @@ fn xval_gaussian_novarsel_unif() {
     let s = &g["scenarios"]["gaussian_novarsel_unif"];
     let (fit, n, m, k) = run_scenario(s);
     let cmp = compare_chain(s, &fit, n, m, k);
-    eprintln!("gaussian_novarsel_unif: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
-              cmp.max_beta, cmp.max_lambda, cmp.max_sigsq, cmp.max_r, cmp.max_delta, cmp.n_accept_mismatch);
+    eprintln!(
+        "gaussian_novarsel_unif: beta={:.3e} lambda={:.3e} sigsq={:.3e} r={:.3e} delta={:.3e} accept_mismatch={}",
+        cmp.max_beta,
+        cmp.max_lambda,
+        cmp.max_sigsq,
+        cmp.max_r,
+        cmp.max_delta,
+        cmp.n_accept_mismatch
+    );
     assert!(cmp.max_beta < TOL_CHAIN, "beta diff {}", cmp.max_beta);
     assert!(cmp.max_lambda < TOL_CHAIN, "lambda diff {}", cmp.max_lambda);
     assert!(cmp.max_sigsq < TOL_CHAIN, "sigsq diff {}", cmp.max_sigsq);

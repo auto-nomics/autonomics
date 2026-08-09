@@ -256,11 +256,7 @@ impl CrossrefClient {
     }
 
     /// List works published in a specific journal (by ISSN).
-    pub async fn journal_works(
-        &self,
-        issn: &str,
-        query: &WorksQuery,
-    ) -> Result<WorksListResponse> {
+    pub async fn journal_works(&self, issn: &str, query: &WorksQuery) -> Result<WorksListResponse> {
         let path = format!("/journals/{}/works", urlencode(issn));
         self.get(&path, &query.to_params()).await
     }
@@ -281,11 +277,7 @@ impl CrossrefClient {
     }
 
     /// List works deposited by a specific member.
-    pub async fn member_works(
-        &self,
-        id: u64,
-        query: &WorksQuery,
-    ) -> Result<WorksListResponse> {
+    pub async fn member_works(&self, id: u64, query: &WorksQuery) -> Result<WorksListResponse> {
         let path = format!("/members/{id}/works");
         self.get(&path, &query.to_params()).await
     }
@@ -306,11 +298,7 @@ impl CrossrefClient {
     }
 
     /// List works associated with a specific funder.
-    pub async fn funder_works(
-        &self,
-        id: &str,
-        query: &WorksQuery,
-    ) -> Result<WorksListResponse> {
+    pub async fn funder_works(&self, id: &str, query: &WorksQuery) -> Result<WorksListResponse> {
         let path = format!("/funders/{}/works", urlencode(id));
         self.get(&path, &query.to_params()).await
     }
@@ -339,11 +327,7 @@ impl CrossrefClient {
     }
 
     /// List works of a specific type (e.g. `journal-article`).
-    pub async fn type_works(
-        &self,
-        type_id: &str,
-        query: &WorksQuery,
-    ) -> Result<WorksListResponse> {
+    pub async fn type_works(&self, type_id: &str, query: &WorksQuery) -> Result<WorksListResponse> {
         let path = format!("/types/{}/works", urlencode(type_id));
         self.get(&path, &query.to_params()).await
     }
@@ -554,10 +538,7 @@ pub(crate) fn build_url(
     params: &[(&str, String)],
     mailto: Option<&str>,
 ) -> String {
-    let has_mailto = mailto.is_some()
-        || params
-            .iter()
-            .any(|(k, _)| *k == "mailto");
+    let has_mailto = mailto.is_some() || params.iter().any(|(k, _)| *k == "mailto");
     let mut all_params: Vec<(&str, String)> = params.to_vec();
     if let Some(m) = mailto {
         if !all_params.iter().any(|(k, _)| *k == "mailto") {

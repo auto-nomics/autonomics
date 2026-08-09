@@ -100,7 +100,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             let h_split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Min(20),          // Chat (flexible)
+                    Constraint::Min(20),               // Chat (flexible)
                     Constraint::Length(sidebar_width), // Sidebar (fixed)
                 ])
                 .split(middle);

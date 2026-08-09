@@ -134,11 +134,7 @@ mod tests {
 
     #[test]
     fn multivariate_singular_rejected() {
-        let r = wald_multi(
-            &[1.0, 1.0],
-            &[vec![1.0, 1.0], vec![1.0, 1.0]],
-            &[0.0, 0.0],
-        );
+        let r = wald_multi(&[1.0, 1.0], &[vec![1.0, 1.0], vec![1.0, 1.0]], &[0.0, 0.0]);
         assert!(r.is_err());
     }
 

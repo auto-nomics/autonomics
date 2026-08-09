@@ -39,7 +39,9 @@ pub enum LdscNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LdscNodeError {
-    fn node_type(&self) -> &str { "ldsc" }
+    fn node_type(&self) -> &str {
+        "ldsc"
+    }
 }
 
 impl From<datalake::error::Error> for LdscNodeError {
@@ -296,8 +298,11 @@ impl NodeFactory for LdscHsqNodeFactory {
             n_blocks = cfg.n_blocks,
         ));
 
-        code.push("# NOTE: Parse LDSC stdout for h², intercept, ratio. The Rust node\n\
-             # returns a structured DataFrame with these fields directly.".to_string());
+        code.push(
+            "# NOTE: Parse LDSC stdout for h², intercept, ratio. The Rust node\n\
+             # returns a structured DataFrame with these fields directly."
+                .to_string(),
+        );
         code.push(format!("cat({tmp_result}, sep = \"\\n\")"));
         code.push(format!("# {out} holds the parsed LDSC h² result"));
         code.push(format!(

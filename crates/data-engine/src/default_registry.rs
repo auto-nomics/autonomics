@@ -6,10 +6,7 @@
 
 use std::sync::Arc;
 
-use datafusion::{
-    catalog::CatalogProvider,
-    execution::runtime_env::RuntimeEnv,
-};
+use datafusion::{catalog::CatalogProvider, execution::runtime_env::RuntimeEnv};
 use datalake::Datalake;
 
 use dag_core::registry::NodeRegistry;
@@ -29,12 +26,8 @@ pub fn build_default_registry(
     datalake: Arc<Datalake>,
     opendal: Option<Arc<fs::OpendalFileStorage>>,
 ) -> NodeRegistry {
-    let mut registry = NodeRegistry::with_ingredients(
-        runtime_env,
-        iceberg_catalog,
-        datalake,
-        opendal,
-    );
+    let mut registry =
+        NodeRegistry::with_ingredients(runtime_env, iceberg_catalog, datalake, opendal);
 
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
     #[cfg(feature = "bundle-ldsc")]

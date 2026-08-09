@@ -21,7 +21,7 @@ pub mod spec;
 pub use event::NetworkEvent;
 pub use graph::NetworkGraph;
 pub use router::{
-    edge_should_fire, check_termination_spec, AgentNetwork, NetworkOutcome, RoutingAction,
-    TerminationReason,
+    AgentNetwork, NetworkOutcome, RoutingAction, TerminationReason, check_termination_spec,
+    edge_should_fire,
 };
 pub use spec::{EdgeSpec, EdgeTrigger, NetworkSpec, NodeSpec, TerminationSpec, TransformSpec};

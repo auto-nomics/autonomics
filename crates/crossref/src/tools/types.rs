@@ -5,8 +5,8 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::format::{format_funders, format_journals, format_members};
 use crate::CrossrefClient;
+use crate::format::{format_funders, format_journals, format_members};
 
 /// Browse Crossref resource registries: members (publishers), journals,
 /// funders, or work types.
@@ -61,27 +61,15 @@ impl ToolFunction for CrossrefTypesTool {
 
         let markdown = match resource {
             "members" => {
-                let resp = self
-                    .client
-                    .members(&list)
-                    .await
-                    .map_err(super::json_err)?;
+                let resp = self.client.members(&list).await.map_err(super::json_err)?;
                 format_members(&resp)
             }
             "journals" => {
-                let resp = self
-                    .client
-                    .journals(&list)
-                    .await
-                    .map_err(super::json_err)?;
+                let resp = self.client.journals(&list).await.map_err(super::json_err)?;
                 format_journals(&resp)
             }
             "funders" => {
-                let resp = self
-                    .client
-                    .funders(&list)
-                    .await
-                    .map_err(super::json_err)?;
+                let resp = self.client.funders(&list).await.map_err(super::json_err)?;
                 format_funders(&resp)
             }
             "types" => {

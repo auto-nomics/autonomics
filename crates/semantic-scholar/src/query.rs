@@ -85,7 +85,11 @@ pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
         }
     }
 
-    if terms.is_empty() && sq.journal.is_none() && sq.publication_types.is_none() && sq.year_range.is_none() {
+    if terms.is_empty()
+        && sq.journal.is_none()
+        && sq.publication_types.is_none()
+        && sq.year_range.is_none()
+    {
         return Err(S2Error::Param(
             "structured search is empty: populate at least one field".into(),
         ));
@@ -211,7 +215,10 @@ mod tests {
     fn year_range_becomes_filter() {
         let sq = StructuredSearch {
             keywords: kw(&["cancer"]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let parts = to_s2(&sq).unwrap();
@@ -238,13 +245,19 @@ mod tests {
             ..Default::default()
         };
         let parts = to_s2(&sq).unwrap();
-        assert_eq!(parts.filter.publication_types.as_deref(), Some("Review,JournalArticle"));
+        assert_eq!(
+            parts.filter.publication_types.as_deref(),
+            Some("Review,JournalArticle")
+        );
     }
 
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         assert!(to_s2(&sq).is_err());

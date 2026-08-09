@@ -290,7 +290,9 @@ impl std::fmt::Display for SurveyNodeError {
 impl std::error::Error for SurveyNodeError {}
 
 impl ::dag_core::dag::NodeError for SurveyNodeError {
-    fn node_type(&self) -> &str { "survey" }
+    fn node_type(&self) -> &str {
+        "survey"
+    }
 }
 
 /// Public wrapper for [`extract_string_column`] — used by svyby to extract

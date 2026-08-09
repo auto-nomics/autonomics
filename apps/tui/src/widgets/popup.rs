@@ -98,7 +98,9 @@ impl<'a> Popup<'a> {
             .borders(Borders::ALL)
             .title(Span::styled(
                 self.title,
-                Style::default().fg(self.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(self.accent)
+                    .add_modifier(Modifier::BOLD),
             ))
             .border_style(Style::default().fg(Color::DarkGray));
         block.render(outer, buf);

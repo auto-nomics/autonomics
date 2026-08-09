@@ -49,7 +49,12 @@ impl ToolFunction for KmsCreateIndexTool {
             _ => TargetType::Group,
         });
         self.svc
-            .create_index_by_ref(&input.parent_ref, Some(input.title.clone()), input.target_ref.as_deref(), target_type)
+            .create_index_by_ref(
+                &input.parent_ref,
+                Some(input.title.clone()),
+                input.target_ref.as_deref(),
+                target_type,
+            )
             .await
             .map_err(svc_err)?;
         Ok(ToolResult::success_json(json!({ "title": input.title })))
@@ -190,7 +195,11 @@ impl ToolFunction for KmsLocalTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let path = input.path.as_deref().unwrap_or("/");
-        let view = self.svc.get_local_view_by_path(path).await.map_err(svc_err)?;
+        let view = self
+            .svc
+            .get_local_view_by_path(path)
+            .await
+            .map_err(svc_err)?;
 
         let path_titles: Vec<_> = view
             .path

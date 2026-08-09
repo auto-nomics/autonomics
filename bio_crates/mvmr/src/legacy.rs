@@ -52,12 +52,7 @@ pub fn mvmr(input: &MvmrInput, gencov: f64) -> Result<MvmrLegacyResult> {
     for i in 0..p {
         let y: Vec<f64> = (0..n).map(|row| betas[row][i]).collect();
         let x: Vec<Vec<f64>> = (0..n)
-            .map(|row| {
-                (0..p)
-                    .filter(|&c| c != i)
-                    .map(|c| betas[row][c])
-                    .collect()
-            })
+            .map(|row| (0..p).filter(|&c| c != i).map(|c| betas[row][c]).collect())
             .collect();
         let coef = crate::linalg::ols_origin(&x, &y)?;
         for k in 0..(p - 1) {

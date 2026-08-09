@@ -11,9 +11,7 @@
 use std::sync::Arc;
 
 use bib_base::BibShared;
-use bib_types::{
-    Article, ArticleSource, Author, Identifier,
-};
+use bib_types::{Article, ArticleSource, Author, Identifier};
 
 fn sample_article(id: &str) -> Article {
     let mut art = Article::new(id, format!("Paper {id}"));
@@ -104,12 +102,8 @@ async fn racing_writes_same_article_id_succeed() {
 
     let b1 = bib.clone();
     let b2 = bib.clone();
-    let h1 = tokio::spawn(async move {
-        b1.upsert_article(&sample_article("race-01")).await
-    });
-    let h2 = tokio::spawn(async move {
-        b2.upsert_article(&sample_article("race-01")).await
-    });
+    let h1 = tokio::spawn(async move { b1.upsert_article(&sample_article("race-01")).await });
+    let h2 = tokio::spawn(async move { b2.upsert_article(&sample_article("race-01")).await });
 
     let r1 = h1.await.unwrap();
     let r2 = h2.await.unwrap();

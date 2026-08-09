@@ -98,12 +98,18 @@ impl NodeFactory for OpengwasLdClumpNodeFactory {
         let rsids = r_vec(&s.rsid);
         let pvals = r_vec_f64(&s.pval);
         let code = vec![
-            format!("# OpenGWAS LD clumping (r2={}, kb={}, pop=\"{}\")", s.r2, s.kb, s.pop),
+            format!(
+                "# OpenGWAS LD clumping (r2={}, kb={}, pop=\"{}\")",
+                s.r2, s.kb, s.pop
+            ),
             format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
             format!("_dat <- data.frame(rsid = c({rsids}), pval = c({pvals}))"),
             format!("{out} <- ieugwasr::ld_clump("),
             format!("  dat = _dat,"),
-            format!("  clump_kb = {}, clump_r2 = {}, plink_bin = NULL", s.kb, s.r2),
+            format!(
+                "  clump_kb = {}, clump_r2 = {}, plink_bin = NULL",
+                s.kb, s.r2
+            ),
             format!(")"),
         ];
         Ok(codegen::NodeCodegen::simple(code, out))

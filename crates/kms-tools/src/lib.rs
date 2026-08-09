@@ -11,8 +11,8 @@
 //! behind `AgentProfile.enable_kms`.
 
 mod entity_tools;
-mod knowledge_tools;
 mod index_tools;
+mod knowledge_tools;
 
 use std::sync::Arc;
 

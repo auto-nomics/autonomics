@@ -25,8 +25,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -51,7 +51,9 @@ pub enum SusieNodeError {
 }
 
 impl ::dag_core::dag::NodeError for SusieNodeError {
-    fn node_type(&self) -> &str { "susie_rss" }
+    fn node_type(&self) -> &str {
+        "susie_rss"
+    }
 }
 
 fn missing(name: &str) -> SusieNodeError {

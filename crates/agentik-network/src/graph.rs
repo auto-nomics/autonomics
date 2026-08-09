@@ -7,10 +7,10 @@
 
 use std::collections::HashMap;
 
+use petgraph::Direction;
 use petgraph::algo::{has_path_connecting, is_cyclic_directed, kosaraju_scc};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
 
 use crate::spec::{EdgeSpec, EdgeTrigger, NodeSpec};
 
@@ -33,10 +33,7 @@ impl NetworkGraph {
     }
 
     /// Build a graph from a spec's nodes + edges (for batch construction).
-    pub fn from_nodes_edges(
-        nodes: &[NodeSpec],
-        edges: &[EdgeSpec],
-    ) -> Result<Self, String> {
+    pub fn from_nodes_edges(nodes: &[NodeSpec], edges: &[EdgeSpec]) -> Result<Self, String> {
         let mut g = Self::new();
         for node in nodes {
             g.add_node(node.clone())?;
@@ -87,9 +84,7 @@ impl NetworkGraph {
 
     /// Remove all edges from `from` to `to`.
     pub fn remove_edges(&mut self, from: &str, to: &str) -> usize {
-        let (Some(from_idx), Some(to_idx)) =
-            (self.node_index(from), self.node_index(to))
-        else {
+        let (Some(from_idx), Some(to_idx)) = (self.node_index(from), self.node_index(to)) else {
             return 0;
         };
         let edge_ids: Vec<_> = self
@@ -149,10 +144,7 @@ impl NetworkGraph {
 
     /// All node names.
     pub fn node_names(&self) -> Vec<&str> {
-        self.graph
-            .node_weights()
-            .map(|n| n.name.as_str())
-            .collect()
+        self.graph.node_weights().map(|n| n.name.as_str()).collect()
     }
 
     // ── Edge queries ───────────────────────────────────────
@@ -223,9 +215,7 @@ impl NetworkGraph {
 
     /// Is there a directed path from `from` to `to`?
     pub fn has_path(&self, from: &str, to: &str) -> bool {
-        let (Some(from_idx), Some(to_idx)) =
-            (self.node_index(from), self.node_index(to))
-        else {
+        let (Some(from_idx), Some(to_idx)) = (self.node_index(from), self.node_index(to)) else {
             return false;
         };
         has_path_connecting(&self.graph, from_idx, to_idx, None)
@@ -460,6 +450,9 @@ mod tests {
         let mut g = NetworkGraph::new();
         g.add_node(writer_node()).unwrap();
         g.node_mut("writer").unwrap().initial_prompt = Some("new prompt".into());
-        assert_eq!(g.node("writer").unwrap().initial_prompt.as_deref(), Some("new prompt"));
+        assert_eq!(
+            g.node("writer").unwrap().initial_prompt.as_deref(),
+            Some("new prompt")
+        );
     }
 }

@@ -8,7 +8,9 @@ use openalex::OpenAlexClient;
 
 #[tokio::test]
 async fn get_work_by_openalex_id() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let work = client
         .get_work("W2741809807")
@@ -24,7 +26,9 @@ async fn get_work_by_openalex_id() {
 
 #[tokio::test]
 async fn get_work_by_doi_shortcut() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let work = client
         .get_work("doi:10.7717/peerj.4375")
@@ -32,16 +36,14 @@ async fn get_work_by_doi_shortcut() {
         .expect("should fetch by DOI shortcut");
 
     assert!(work.doi.is_some());
-    assert!(work
-        .doi
-        .as_ref()
-        .unwrap()
-        .contains("10.7717/peerj.4375"));
+    assert!(work.doi.as_ref().unwrap().contains("10.7717/peerj.4375"));
 }
 
 #[tokio::test]
 async fn get_work_by_doi_full_url() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let work = client
         .get_work("https://doi.org/10.7717/peerj.4375")
@@ -54,7 +56,9 @@ async fn get_work_by_doi_full_url() {
 
 #[tokio::test]
 async fn get_work_by_pmid() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let work = client
         .get_work("pmid:29456894")
@@ -67,7 +71,9 @@ async fn get_work_by_pmid() {
 
 #[tokio::test]
 async fn get_work_abstract_reconstruction() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let work = client
         .get_work("W2741809807")
@@ -82,7 +88,9 @@ async fn get_work_abstract_reconstruction() {
 
 #[tokio::test]
 async fn get_work_not_found() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client.get_work("W9999999999999").await;
     assert!(resp.is_err(), "nonexistent work should return error");
@@ -90,7 +98,9 @@ async fn get_work_not_found() {
 
 #[tokio::test]
 async fn get_author_by_id() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     // Heather Piwowar — first author of the PeerJ article W2741809807
     let author = client
@@ -104,7 +114,9 @@ async fn get_author_by_id() {
 
 #[tokio::test]
 async fn get_author_by_orcid() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let author = client
         .get_author("https://orcid.org/0000-0003-1613-5981")
@@ -117,7 +129,9 @@ async fn get_author_by_orcid() {
 
 #[tokio::test]
 async fn list_sources_basic() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_sources(&openalex::ListParams::new().with_per_page(3))
@@ -130,7 +144,9 @@ async fn list_sources_basic() {
 
 #[tokio::test]
 async fn list_institutions_basic() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_institutions(
@@ -149,7 +165,9 @@ async fn list_institutions_basic() {
 
 #[tokio::test]
 async fn list_topics_basic() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_topics(&openalex::ListParams::new().with_per_page(3))

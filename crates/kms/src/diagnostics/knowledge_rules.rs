@@ -178,7 +178,10 @@ pub struct BoldAsHeading;
 impl KnowledgeDiagnosticRule for BoldAsHeading {
     fn check(&self, knowledge: &Knowledge) -> Option<Diagnostic> {
         let content = knowledge.content.as_deref().unwrap_or("");
-        let matches: Vec<&str> = BOLD_ONLY_LINE_RE.find_iter(content).map(|m| m.as_str()).collect();
+        let matches: Vec<&str> = BOLD_ONLY_LINE_RE
+            .find_iter(content)
+            .map(|m| m.as_str())
+            .collect();
         let offending = &matches[0..matches.len().min(3)];
         if matches.is_empty() {
             return None;

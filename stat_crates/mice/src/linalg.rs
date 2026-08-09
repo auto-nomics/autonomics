@@ -154,11 +154,7 @@ pub fn ridge_fit(x: &[Vec<f64>], y: &[f64], ridge: f64) -> Result<RidgeFit> {
         }
     }
 
-    Ok(RidgeFit {
-        coef,
-        residuals,
-        v,
-    })
+    Ok(RidgeFit { coef, residuals, v })
 }
 
 /// Cholesky factorisation of a symmetric positive-definite matrix.

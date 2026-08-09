@@ -39,10 +39,7 @@ impl Widget for TodoWidget<'_> {
             return;
         }
 
-        let (done, total) = self
-            .plan
-            .progress()
-            .unwrap_or((0, self.plan.steps.len()));
+        let (done, total) = self.plan.progress().unwrap_or((0, self.plan.steps.len()));
 
         // ── Build the title with progress ──
         let title = format!(" Task Plan ── {done}/{total} ");
@@ -85,9 +82,7 @@ impl Widget for TodoWidget<'_> {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                agentik_types::StepStatus::Pending => {
-                    ("○ ", Style::default().fg(Color::DarkGray))
-                }
+                agentik_types::StepStatus::Pending => ("○ ", Style::default().fg(Color::DarkGray)),
             };
 
             // Truncate step text to fit within the inner width.
@@ -95,10 +90,7 @@ impl Widget for TodoWidget<'_> {
             let max_text_len = inner.width.saturating_sub(icon_width) as usize;
             let text = truncate_str(&step.step, max_text_len);
 
-            let line = Line::from(vec![
-                Span::styled(icon, style),
-                Span::styled(text, style),
-            ]);
+            let line = Line::from(vec![Span::styled(icon, style), Span::styled(text, style)]);
             line.render(
                 Rect {
                     x: inner.x,

@@ -30,8 +30,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::ColumnError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -56,7 +56,9 @@ impl From<ColumnError> for CoxRegressionError {
 }
 
 impl ::dag_core::dag::NodeError for CoxRegressionError {
-    fn node_type(&self) -> &str { "cox_regression" }
+    fn node_type(&self) -> &str {
+        "cox_regression"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -199,7 +201,8 @@ impl DagNode for CoxRegressionNode {
             .map_err(|e| CoxRegressionError::Collect(e.to_string()))?;
 
         let time_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.time_column)?;
-        let event_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.event_column)?;
+        let event_raw =
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.event_column)?;
 
         // Validate binary event indicator.
         for &v in &event_raw {

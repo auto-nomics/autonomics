@@ -36,21 +36,21 @@ pub struct ModelSpec {
 pub struct ParamLayout {
     pub ng: usize,
     pub nv: usize,
-    pub nea: usize,        // # random-effect design columns (sum idea==1)
-    pub nvarprob: usize,   // # classmb covariates (sum idprob==1)
-    pub nprob: usize,      // nvarprob * (ng-1)
-    pub ncssig: usize,     // # idg==1 covars
-    pub ncg: usize,        // # idg==2 covars
-    pub nef_count: usize,  // ncssig + ncg*ng
-    pub nvc: usize,        // nea (idiag) or nea*(nea+1)/2 (full)
-    pub nw: usize,         // ng-1 if nwg else 0
-    pub ncor: usize,       // 0/1/2
-    pub npm: usize,        // total parameter count
-    pub i_nef: usize,      // start of fixed-effect block
-    pub i_nvc: usize,      // start of variance-Cholesky block
-    pub i_nw: usize,       // start of nwg block
-    pub i_ncor: usize,     // start of correlation block
-    pub i_stderr: usize,   // index of stderr (= npm - 1)
+    pub nea: usize,       // # random-effect design columns (sum idea==1)
+    pub nvarprob: usize,  // # classmb covariates (sum idprob==1)
+    pub nprob: usize,     // nvarprob * (ng-1)
+    pub ncssig: usize,    // # idg==1 covars
+    pub ncg: usize,       // # idg==2 covars
+    pub nef_count: usize, // ncssig + ncg*ng
+    pub nvc: usize,       // nea (idiag) or nea*(nea+1)/2 (full)
+    pub nw: usize,        // ng-1 if nwg else 0
+    pub ncor: usize,      // 0/1/2
+    pub npm: usize,       // total parameter count
+    pub i_nef: usize,     // start of fixed-effect block
+    pub i_nvc: usize,     // start of variance-Cholesky block
+    pub i_nw: usize,      // start of nwg block
+    pub i_ncor: usize,    // start of correlation block
+    pub i_stderr: usize,  // index of stderr (= npm - 1)
 }
 
 impl ModelSpec {
@@ -65,10 +65,18 @@ impl ModelSpec {
         let ncssig = self.idg.iter().filter(|&&x| x == 1).count();
         let ncg = self.idg.iter().filter(|&&x| x == 2).count();
 
-        let nprob = if self.ng > 1 { nvarprob * (self.ng - 1) } else { 0 };
+        let nprob = if self.ng > 1 {
+            nvarprob * (self.ng - 1)
+        } else {
+            0
+        };
         let nef_count = ncssig + ncg * self.ng;
         let nvc = if self.idiag { nea } else { nea * (nea + 1) / 2 };
-        let nw = if self.nwg && self.ng > 1 { self.ng - 1 } else { 0 };
+        let nw = if self.nwg && self.ng > 1 {
+            self.ng - 1
+        } else {
+            0
+        };
         let ncor = self.ncor;
 
         let i_nef = nprob;

@@ -155,10 +155,7 @@ mod tests {
             title: kw(&["cancer"]),
             ..Default::default()
         };
-        assert_eq!(
-            to_openalex_filter(&sq).unwrap(),
-            "title.search:cancer"
-        );
+        assert_eq!(to_openalex_filter(&sq).unwrap(), "title.search:cancer");
     }
 
     #[test]
@@ -186,7 +183,10 @@ mod tests {
     #[test]
     fn year_range_filter() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let f = to_openalex_filter(&sq).unwrap();
@@ -224,7 +224,10 @@ mod tests {
     #[test]
     fn year_range_inverted_errors() {
         let sq = StructuredSearch {
-            year_range: Some(YearRange { from: 2024, to: 2020 }),
+            year_range: Some(YearRange {
+                from: 2024,
+                to: 2020,
+            }),
             ..Default::default()
         };
         let err = to_openalex_filter(&sq).unwrap_err();

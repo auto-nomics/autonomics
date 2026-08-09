@@ -73,12 +73,19 @@ async fn run_index_diagnostics(
     let mut path_map = HashMap::new();
 
     let conn = storage.conn();
-    let root = repo::index_find_root(conn).await.map_err(|e| e.to_string())?;
-    let all_nodes = repo::index_list_all(conn).await.map_err(|e| e.to_string())?;
+    let root = repo::index_find_root(conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    let all_nodes = repo::index_list_all(conn)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut children_map: HashMap<Option<Uuid>, Vec<Index>> = HashMap::new();
     for node in &all_nodes {
-        children_map.entry(node.parent_id).or_default().push(node.clone());
+        children_map
+            .entry(node.parent_id)
+            .or_default()
+            .push(node.clone());
     }
 
     let mut stack: Vec<(Index, usize, Vec<String>)> = vec![(root, 0, vec![])];
@@ -93,12 +100,13 @@ async fn run_index_diagnostics(
         }
         let raw_path = current_path.join(" > ");
         path_map.insert(node.id, raw_path.clone());
-        let location = format_location_with_leaf_marker(
-            &raw_path,
-            leaf_kind_from_target(node.target_type),
-        );
+        let location =
+            format_location_with_leaf_marker(&raw_path, leaf_kind_from_target(node.target_type));
 
-        let children = children_map.get(&Some(node.id)).cloned().unwrap_or_default();
+        let children = children_map
+            .get(&Some(node.id))
+            .cloned()
+            .unwrap_or_default();
 
         for rule in &rules {
             if let Some(d) = rule.check(&node, depth, &location, &children) {
@@ -184,8 +192,7 @@ async fn run_knowledge_diagnostics(
             .get(&k.id)
             .cloned()
             .unwrap_or_else(|| format!("(orphan) {}", k.title));
-        let location =
-            format_location_with_leaf_marker(&raw_location, LocationLeafKind::Knowledge);
+        let location = format_location_with_leaf_marker(&raw_location, LocationLeafKind::Knowledge);
 
         for rule in &rules {
             if let Some(mut d) = rule.check(&k) {

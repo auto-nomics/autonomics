@@ -133,7 +133,10 @@ fn render_section(section: &Section, out: &mut String) {
     if section.level != SectionLevel::Root {
         let cmd = section.level.command();
         if !cmd.is_empty() {
-            out.push_str(&format!("\\{cmd}{{{title}}}", title = escape_latex(&section.title)));
+            out.push_str(&format!(
+                "\\{cmd}{{{title}}}",
+                title = escape_latex(&section.title)
+            ));
             out.push('\n');
             if let Some(ref label) = section.label {
                 out.push_str(&format!("\\label{{{label}}}\n"));
@@ -352,9 +355,7 @@ fn render_inline(inline: &Inline) -> String {
         }
 
         Inline::CrossRef {
-            label,
-            auto_prefix,
-            ..
+            label, auto_prefix, ..
         } => {
             if *auto_prefix {
                 format!("\\cref{{{label}}}")
@@ -390,19 +391,11 @@ fn render_tabular(
     out: &mut String,
 ) {
     // Build column spec.
-    let n_cols = header.len().max(
-        rows.iter()
-            .map(|r| r.len())
-            .max()
-            .unwrap_or(0),
-    );
+    let n_cols = header
+        .len()
+        .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
     let col_spec: String = (0..n_cols)
-        .map(|i| {
-            alignment
-                .get(i)
-                .map(|a| a.latex_char())
-                .unwrap_or('l')
-        })
+        .map(|i| alignment.get(i).map(|a| a.latex_char()).unwrap_or('l'))
         .collect();
 
     let env = if format == TableFormat::Longtable {
@@ -417,8 +410,7 @@ fn render_tabular(
         TableFormat::Booktabs => {
             out.push_str("    \\toprule\n");
             // Header.
-            let header_row: Vec<String> =
-                header.iter().map(|h| escape_latex(h)).collect();
+            let header_row: Vec<String> = header.iter().map(|h| escape_latex(h)).collect();
             out.push_str(&format!("    {} \\\\\n", header_row.join(" & ")));
             out.push_str("    \\midrule\n");
             // Data rows.
@@ -487,7 +479,11 @@ fn render_tabular(
 // Figure source rendering
 // ---------------------------------------------------------------------------
 
-fn render_figure_source(source: &FigureSource, width: Option<&writing_types::Size>, out: &mut String) {
+fn render_figure_source(
+    source: &FigureSource,
+    width: Option<&writing_types::Size>,
+    out: &mut String,
+) {
     match source {
         FigureSource::FilePath { path } => {
             let w = width
@@ -497,9 +493,7 @@ fn render_figure_source(source: &FigureSource, width: Option<&writing_types::Siz
         }
         FigureSource::DagArtifact { dag_id, node_id } => {
             // Placeholder — resolved before compilation.
-            out.push_str(&format!(
-                "  % DAG artifact: {dag_id}/{node_id}\n"
-            ));
+            out.push_str(&format!("  % DAG artifact: {dag_id}/{node_id}\n"));
             out.push_str(&format!(
                 "  \\includegraphics{{dag_{dag_id}_{node_id}.pdf}}\n"
             ));
@@ -590,18 +584,12 @@ mod tests {
             placement: Placement::Default,
             source: TableSource::Cells {
                 header: vec!["Method".into(), "Beta".into(), "P-value".into()],
-                rows: vec![
-                    vec![
-                        TableCell::plain("IVW"),
-                        TableCell::raw("0.45^{***}"),
-                        TableCell::plain("1.2e-5"),
-                    ],
-                ],
-                alignment: vec![
-                    ColumnAlign::Left,
-                    ColumnAlign::Center,
-                    ColumnAlign::Center,
-                ],
+                rows: vec![vec![
+                    TableCell::plain("IVW"),
+                    TableCell::raw("0.45^{***}"),
+                    TableCell::plain("1.2e-5"),
+                ]],
+                alignment: vec![ColumnAlign::Left, ColumnAlign::Center, ColumnAlign::Center],
             },
         }));
         doc.root.children.push(methods);
@@ -674,7 +662,11 @@ mod tests {
         let doc = make_simple_doc();
         let rendered = render_document(&doc);
         assert!(rendered.main_tex.contains("\\begin{figure}[t]"));
-        assert!(rendered.main_tex.contains("\\includegraphics[width=0.8\\textwidth] {figures/main.pdf}"));
+        assert!(
+            rendered
+                .main_tex
+                .contains("\\includegraphics[width=0.8\\textwidth] {figures/main.pdf}")
+        );
         assert!(rendered.main_tex.contains("\\caption{Main result figure.}"));
         assert!(rendered.main_tex.contains("\\label{fig:main}"));
         assert!(rendered.main_tex.contains("\\end{figure}"));
@@ -807,12 +799,18 @@ mod tests {
     fn render_subsection() {
         let mut doc = Document::new("d1", "Test");
         let mut sec = Section::new(SectionLevel::Section, "Methods");
-        sec.children
-            .push(Section::new(SectionLevel::Subsection, "Statistical Analysis"));
+        sec.children.push(Section::new(
+            SectionLevel::Subsection,
+            "Statistical Analysis",
+        ));
         doc.root.children.push(sec);
         let rendered = render_document(&doc);
         assert!(rendered.main_tex.contains("\\section{Methods}"));
-        assert!(rendered.main_tex.contains("\\subsection{Statistical Analysis}"));
+        assert!(
+            rendered
+                .main_tex
+                .contains("\\subsection{Statistical Analysis}")
+        );
     }
 
     #[test]

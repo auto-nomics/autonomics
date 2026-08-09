@@ -71,16 +71,18 @@ pub fn complete(mids: &Mids, format: CompleteFormat, imputation: usize) -> Compl
                             .filter(|(_, ro)| !**ro)
                             .map(|(i, _)| i)
                             .collect();
-                        let row_in_imp = wy_positions
-                            .iter()
-                            .position(|&x| x == r_idx)
-                            .unwrap_or(0);
-                        mids.imp.get(col, imputation.saturating_sub(1), row_in_imp).unwrap_or(0.0)
+                        let row_in_imp = wy_positions.iter().position(|&x| x == r_idx).unwrap_or(0);
+                        mids.imp
+                            .get(col, imputation.saturating_sub(1), row_in_imp)
+                            .unwrap_or(0.0)
                     };
                     rows.push(val);
                 }
             }
-            CompletedData { columns: cols, rows }
+            CompletedData {
+                columns: cols,
+                rows,
+            }
         }
         CompleteFormat::All => {
             // Long format: for each imputation i (1..=m), for each row r,
@@ -105,10 +107,8 @@ pub fn complete(mids: &Mids, format: CompleteFormat, imputation: usize) -> Compl
                                 .filter(|(_, ro)| !**ro)
                                 .map(|(i, _)| i)
                                 .collect();
-                            let row_in_imp = wy_positions
-                                .iter()
-                                .position(|&x| x == r_idx)
-                                .unwrap_or(0);
+                            let row_in_imp =
+                                wy_positions.iter().position(|&x| x == r_idx).unwrap_or(0);
                             mids.imp.get(col, i, row_in_imp).unwrap_or(0.0)
                         };
                         rows.push(val);
@@ -142,10 +142,8 @@ pub fn complete(mids: &Mids, format: CompleteFormat, imputation: usize) -> Compl
                                 .filter(|(_, ro)| !**ro)
                                 .map(|(i, _)| i)
                                 .collect();
-                            let row_in_imp = wy_positions
-                                .iter()
-                                .position(|&x| x == r_idx)
-                                .unwrap_or(0);
+                            let row_in_imp =
+                                wy_positions.iter().position(|&x| x == r_idx).unwrap_or(0);
                             mids.imp.get(col, i, row_in_imp).unwrap_or(0.0)
                         };
                         rows.push(val);

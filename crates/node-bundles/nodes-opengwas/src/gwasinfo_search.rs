@@ -134,13 +134,11 @@ impl DagNode for OpengwasGwasinfoSearchNode {
         } else {
             &self.spec.field
         };
-        let sort_by = self.spec.sort_by.as_deref().map(|s| {
-            if s == "trait" {
-                "trait_"
-            } else {
-                s
-            }
-        });
+        let sort_by = self
+            .spec
+            .sort_by
+            .as_deref()
+            .map(|s| if s == "trait" { "trait_" } else { s });
         let rows = client
             .gwasinfo_search(
                 &self.spec.keyword,

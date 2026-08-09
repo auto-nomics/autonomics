@@ -14,8 +14,8 @@
 //!
 //! Optimization stops when all three fall below their thresholds.
 
-use crate::likelihood::invert_pd;
 use crate::LcmmError;
+use crate::likelihood::invert_pd;
 
 /// Controls for [`marq_lev_alg`].
 #[derive(Clone, Debug)]
@@ -91,7 +91,8 @@ pub fn marq_lev_alg<O: Objective>(
         if b.iter().any(|&x| !x.is_finite()) {
             if ctrl.verbose {
                 eprintln!(
-                    "mla: infinite parameters. last b={:?}", old_b.iter().take(8).collect::<Vec<_>>()
+                    "mla: infinite parameters. last b={:?}",
+                    old_b.iter().take(8).collect::<Vec<_>>()
                 );
             }
             istop = 4;
@@ -145,9 +146,7 @@ pub fn marq_lev_alg<O: Objective>(
         };
 
         if ctrl.verbose {
-            eprintln!(
-                "mla iter {ni}: rl={rl:.6} ca={ca:.3e} cb={cb:.3e} dd={dd:.3e}"
-            );
+            eprintln!("mla iter {ni}: rl={rl:.6} ca={ca:.3e} cb={cb:.3e} dd={dd:.3e}");
         }
 
         old_b = b.clone();

@@ -2,13 +2,13 @@
 //! `hypothesize.score_test`. These read scalars from the spec, not from columns.
 
 use super::common::{HypoNodeError, emit_test_row};
-use dag_core::dag::DagError;
-use dag_core::dag::graph::PortOutputs;
-use dag_core::registry::{NodeCtx, NodeFactory};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use arrow_array::{Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use dag_core::dag::DagError;
+use dag_core::dag::graph::PortOutputs;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::registry::{NodeCtx, NodeFactory};
 use hypothesize as h;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;

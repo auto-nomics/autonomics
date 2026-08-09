@@ -8,7 +8,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "causal" }
+    fn name(&self) -> &'static str {
+        "causal"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(mediation::MediationNodeFactory {}));
         registry.register(Box::new(causal::CausalNodeFactory {}));

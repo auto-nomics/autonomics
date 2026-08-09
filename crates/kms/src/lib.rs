@@ -19,11 +19,14 @@ pub mod view;
 
 pub use diagnostics::{CodeDescription, Diagnostic, Severity};
 pub use language::Language;
-pub use service::{BatchKnowledgeResult, BatchStatus, EntityFilter, KnowledgeContentHit, KmsDocumentStore, KmsService, KnowledgeView};
+pub use service::{
+    BatchKnowledgeResult, BatchStatus, EntityFilter, KmsDocumentStore, KmsService,
+    KnowledgeContentHit, KnowledgeView,
+};
 pub use storage::Storage;
 pub use storage::error::StorageError;
 pub use storage::types::{Entity, Index, Knowledge, KnowledgeType, Nomenclature, TargetType};
-pub use view::{IndexView, LocalView, SubtreeSummary, SUBTREE_TITLES_LIMIT};
+pub use view::{IndexView, LocalView, SUBTREE_TITLES_LIMIT, SubtreeSummary};
 
 #[cfg(test)]
 mod tests;

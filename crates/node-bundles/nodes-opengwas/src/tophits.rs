@@ -127,7 +127,10 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
         let code = vec![
             format!("# OpenGWAS tophits for: [\"{}\"]", ids),
             format!("# NOTE: requires the TwoSampleMR R package and OPENGWAS_TOKEN"),
-            format!("ao <- extract_outcome_data(snps = c(), outcomes = c(\"{}\"))", ids),
+            format!(
+                "ao <- extract_outcome_data(snps = c(), outcomes = c(\"{}\"))",
+                ids
+            ),
             format!(
                 "# Top hits with pval ≤ {} (clump={}, pop=\"{}\")",
                 s.pval, s.clump, s.pop

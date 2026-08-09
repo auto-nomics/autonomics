@@ -354,9 +354,9 @@ async fn dag_node_works_dataframe() {
     use std::sync::Arc;
 
     use arrow_array::{RecordBatch, StringArray};
-    use datafusion::prelude::SessionContext;
     use dag_core::dag::{DagNode, NodeInput};
     use dag_core::registry::{NodeCtx, NodeFactory};
+    use datafusion::prelude::SessionContext;
 
     // Build the node via the factory, exactly as the engine would.
     let factory = crossref::nodes::works::CrossrefWorksNodeFactory {};
@@ -386,9 +386,7 @@ async fn dag_node_works_dataframe() {
         .await
         .expect("node execute");
 
-    let df = outputs
-        .remove(&0)
-        .expect("output port 0");
+    let df = outputs.remove(&0).expect("output port 0");
     let batches: Vec<RecordBatch> = df.collect().await.expect("collect dataframe");
 
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -399,7 +397,10 @@ async fn dag_node_works_dataframe() {
     let schema = batches[0].schema();
     let fields: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert!(fields.contains(&"doi"), "schema should have 'doi' column");
-    assert!(fields.contains(&"title"), "schema should have 'title' column");
+    assert!(
+        fields.contains(&"title"),
+        "schema should have 'title' column"
+    );
     assert!(
         fields.contains(&"cited_by_count"),
         "schema should have 'cited_by_count'"

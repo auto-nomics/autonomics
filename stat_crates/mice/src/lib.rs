@@ -31,20 +31,20 @@
 
 #![allow(clippy::needless_range_loop)]
 
+pub mod augment;
+pub mod complete;
 pub mod error;
 pub mod estimice;
 pub mod linalg;
+pub mod logreg;
+pub mod mean;
 pub mod mids;
+pub mod norm;
 pub mod orchestrator;
 pub mod pmm;
-pub mod norm;
-pub mod mean;
 pub mod sample;
-pub mod logreg;
-pub mod augment;
-pub mod complete;
 
+pub use complete::{CompleteFormat, complete};
 pub use error::{MiceError, Result};
-pub use mids::{Mids, ImpList, MethodSpec};
-pub use orchestrator::{mice, MiceConfig};
-pub use complete::{complete, CompleteFormat};
+pub use mids::{ImpList, MethodSpec, Mids};
+pub use orchestrator::{MiceConfig, mice};

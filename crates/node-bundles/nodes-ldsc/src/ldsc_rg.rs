@@ -50,7 +50,9 @@ pub enum LdscRgNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LdscRgNodeError {
-    fn node_type(&self) -> &str { "ldsc_rg" }
+    fn node_type(&self) -> &str {
+        "ldsc_rg"
+    }
 }
 
 impl From<datalake::error::Error> for LdscRgNodeError {
@@ -268,7 +270,8 @@ impl NodeFactory for LdscRgNodeFactory {
         let cfg = parse_spec::<LdscRgConfig>(spec, "ldsc_rg")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
-            .input_vars.first()
+            .input_vars
+            .first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

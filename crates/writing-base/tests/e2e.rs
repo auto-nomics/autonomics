@@ -36,8 +36,10 @@ fn build_paper() -> Document {
     let mut intro = Section::new(SectionLevel::Section, "Introduction");
     intro.label = Some("sec:intro".into());
     intro.blocks.push(Block::Paragraph(ParagraphBlock::new(vec![
-        Inline::text("Genome-wide association studies (GWAS) have identified thousands of \
-                     genetic variants associated with complex traits "),
+        Inline::text(
+            "Genome-wide association studies (GWAS) have identified thousands of \
+                     genetic variants associated with complex traits ",
+        ),
         Inline::Citation(CitationCluster {
             keys: vec![
                 CiteKey {
@@ -51,8 +53,10 @@ fn build_paper() -> Document {
             suffix: None,
             claim_id: None,
         }),
-        Inline::text(". However, identifying causal variants from these associations \
-                     remains challenging "),
+        Inline::text(
+            ". However, identifying causal variants from these associations \
+                     remains challenging ",
+        ),
         Inline::Citation(CitationCluster {
             keys: vec![CiteKey::new("doe2022causal")],
             style: CitationStyle::Textual,
@@ -103,22 +107,26 @@ fn build_paper() -> Document {
     let mut results = Section::new(SectionLevel::Section, "Results");
     results.label = Some("sec:results".into());
 
-    results.blocks.push(Block::Paragraph(ParagraphBlock::new(vec![
-        Inline::text("We identified 45 instrument variables after clumping. \
-                     The IVW analysis yielded a causal estimate of "),
-        Inline::InlineMath {
-            latex: "\\beta = 0.42".into(),
-        },
-        Inline::text(" ("),
-        Inline::Citation(CitationCluster {
-            keys: vec![CiteKey::new("smith2024gwas")],
-            style: CitationStyle::Parenthetical,
-            prefix: None,
-            suffix: Some("Table 1".into()),
-            claim_id: None,
-        }),
-        Inline::text(")."),
-    ])));
+    results
+        .blocks
+        .push(Block::Paragraph(ParagraphBlock::new(vec![
+            Inline::text(
+                "We identified 45 instrument variables after clumping. \
+                     The IVW analysis yielded a causal estimate of ",
+            ),
+            Inline::InlineMath {
+                latex: "\\beta = 0.42".into(),
+            },
+            Inline::text(" ("),
+            Inline::Citation(CitationCluster {
+                keys: vec![CiteKey::new("smith2024gwas")],
+                style: CitationStyle::Parenthetical,
+                prefix: None,
+                suffix: Some("Table 1".into()),
+                claim_id: None,
+            }),
+            Inline::text(")."),
+        ])));
 
     results.blocks.push(Block::Table(TableBlock {
         meta: BlockMeta::new().with_label("tab:mr_results"),
@@ -179,9 +187,7 @@ fn build_paper() -> Document {
 
     // Preamble
     doc.preamble.packages.push("cleveref".into());
-    doc.preamble
-        .packages
-        .push("enumitem".into());
+    doc.preamble.packages.push("enumitem".into());
 
     doc
 }
@@ -206,18 +212,12 @@ async fn full_document_lifecycle() {
     let loaded = store.get_document(&doc.id).await.unwrap();
     assert_eq!(loaded.title, "Genetic Architecture of Complex Traits");
     assert_eq!(loaded.root.children.len(), 4); // intro, methods, results, discussion
-    assert_eq!(
-        loaded.root.children[0].title,
-        "Introduction"
-    );
+    assert_eq!(loaded.root.children[0].title, "Introduction");
 
     // Verify nested sections.
     let methods = &loaded.root.children[1];
     assert_eq!(methods.children.len(), 2); // Data Sources, Statistical Analysis
-    assert_eq!(
-        methods.children[1].title,
-        "Statistical Analysis"
-    );
+    assert_eq!(methods.children[1].title, "Statistical Analysis");
 }
 
 /// Edit a stored document and verify version history.
@@ -243,7 +243,10 @@ async fn edit_and_version_history() {
         },
     )
     .unwrap();
-    store.save_document(&mut doc, "v2: add discussion", None).await.unwrap();
+    store
+        .save_document(&mut doc, "v2: add discussion", None)
+        .await
+        .unwrap();
 
     // Version 2: Add a citation to Introduction.
     let intro_block_id = doc.root.children[0].blocks[0].id().to_string();
@@ -257,7 +260,10 @@ async fn edit_and_version_history() {
         },
     )
     .unwrap();
-    store.save_document(&mut doc, "v3: add citation", None).await.unwrap();
+    store
+        .save_document(&mut doc, "v3: add citation", None)
+        .await
+        .unwrap();
 
     // Check version history.
     let versions = store.list_versions(&doc.id).await.unwrap();
@@ -401,7 +407,10 @@ async fn edit_script_complex_restructure() {
     assert_eq!(doc.root.children[1].title, "C");
     assert_eq!(doc.root.children[2].title, "B Renamed");
 
-    store.save_document(&mut doc, "restructured", None).await.unwrap();
+    store
+        .save_document(&mut doc, "restructured", None)
+        .await
+        .unwrap();
 }
 
 /// Citation management: add, collect, and verify.
@@ -513,13 +522,19 @@ async fn multi_document_store_e2e() {
     doc1.root
         .children
         .push(Section::new(SectionLevel::Section, "Intro A"));
-    store.save_document(&mut doc1, "draft A", None).await.unwrap();
+    store
+        .save_document(&mut doc1, "draft A", None)
+        .await
+        .unwrap();
 
     let mut doc2 = Document::new("paper-b", "Paper B");
     doc2.root
         .children
         .push(Section::new(SectionLevel::Section, "Intro B"));
-    store.save_document(&mut doc2, "draft B", None).await.unwrap();
+    store
+        .save_document(&mut doc2, "draft B", None)
+        .await
+        .unwrap();
 
     let docs = store.list_documents().await.unwrap();
     assert_eq!(docs.len(), 2);
@@ -598,7 +613,10 @@ async fn block_operations_e2e() {
     }
 
     // Store final state.
-    store.save_document(&mut doc, "block ops", None).await.unwrap();
+    store
+        .save_document(&mut doc, "block ops", None)
+        .await
+        .unwrap();
 }
 
 /// Render and verify LaTeX for a document with all block types.
@@ -676,9 +694,8 @@ fn render_all_block_types() {
     }));
 
     // Page break.
-    sec.blocks.push(Block::PageBreak(PageBreak {
-        id: "pb1".into(),
-    }));
+    sec.blocks
+        .push(Block::PageBreak(PageBreak { id: "pb1".into() }));
 
     doc.root.children.push(sec);
 
@@ -750,7 +767,10 @@ async fn nested_sections_with_versions() {
     let chap_id = chapter.id.clone();
     doc.root.children.push(chapter);
 
-    store.save_document(&mut doc, "chapter 1 structure", None).await.unwrap();
+    store
+        .save_document(&mut doc, "chapter 1 structure", None)
+        .await
+        .unwrap();
 
     // Add content to the deeply nested subsection.
     ast::apply_edit(
@@ -764,7 +784,10 @@ async fn nested_sections_with_versions() {
         },
     )
     .unwrap();
-    store.save_document(&mut doc, "add subsection content", None).await.unwrap();
+    store
+        .save_document(&mut doc, "add subsection content", None)
+        .await
+        .unwrap();
 
     // Verify structure survived storage.
     let loaded = store.get_document(&doc.id).await.unwrap();
@@ -807,7 +830,8 @@ async fn citation_resolver_full_pipeline() {
     a1.year = Some(2024);
     a1.journal = Some("Nature Genetics".into());
     a1.volume = Some("56".into());
-    a1.identifiers.push(Identifier::doi("10.1038/s41588-024-1234"));
+    a1.identifiers
+        .push(Identifier::doi("10.1038/s41588-024-1234"));
     bib.upsert_article(&a1).await.unwrap();
 
     let mut a2 = Article::new("art-ldsc", "LD score regression distinguishes confounding");
@@ -886,7 +910,11 @@ async fn citation_resolver_full_pipeline() {
     assert_eq!(unresolved.key(), "ghost2024phantom");
 
     // Uncited article detected.
-    assert!(report.uncited_article_ids.contains(&"art-uncited".to_string()));
+    assert!(
+        report
+            .uncited_article_ids
+            .contains(&"art-uncited".to_string())
+    );
 
     // Generate .bib file.
     let bib_content = resolver.generate_bib(&doc).await;
@@ -1035,7 +1063,10 @@ async fn citation_persistence_e2e() {
     ])));
     doc.root.children.push(sec);
 
-    store.save_document(&mut doc, "initial", None).await.unwrap();
+    store
+        .save_document(&mut doc, "initial", None)
+        .await
+        .unwrap();
 
     // Reload from store and re-resolve.
     let loaded = store.get_document(&doc.id).await.unwrap();
@@ -1092,18 +1123,12 @@ async fn compile_to_pdf_xelatex() {
         placement: Placement::Top,
         source: TableSource::Cells {
             header: vec!["Method".into(), "Beta".into(), "P".into()],
-            rows: vec![
-                vec![
-                    TableCell::plain("IVW"),
-                    TableCell::plain("0.42"),
-                    TableCell::plain("0.001"),
-                ],
-            ],
-            alignment: vec![
-                ColumnAlign::Left,
-                ColumnAlign::Center,
-                ColumnAlign::Center,
-            ],
+            rows: vec![vec![
+                TableCell::plain("IVW"),
+                TableCell::plain("0.42"),
+                TableCell::plain("0.001"),
+            ]],
+            alignment: vec![ColumnAlign::Left, ColumnAlign::Center, ColumnAlign::Center],
         },
     }));
     simple_doc.root.children.push(methods);

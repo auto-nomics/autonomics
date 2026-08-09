@@ -52,7 +52,9 @@ pub enum CpassocNodeError {
 }
 
 impl ::dag_core::dag::NodeError for CpassocNodeError {
-    fn node_type(&self) -> &str { "cpassoc" }
+    fn node_type(&self) -> &str {
+        "cpassoc"
+    }
 }
 
 // =====================================================================

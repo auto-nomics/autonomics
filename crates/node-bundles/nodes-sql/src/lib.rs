@@ -7,7 +7,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "sql" }
+    fn name(&self) -> &'static str {
+        "sql"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(sql_node::SqlNodeFactory {}));
         registry.register(Box::new(echo_node::EchoNodeFactory {}));

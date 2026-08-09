@@ -61,9 +61,7 @@ pub struct SessionStats {
 }
 
 /// Compute session statistics from TUI chat lines.
-pub fn compute_session_stats(
-    messages: &[crate::state::ChatLine],
-) -> SessionStats {
+pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStats {
     let mut user_count = 0usize;
     let mut assistant_count = 0usize;
     let mut tool_call_count = 0usize;
@@ -210,11 +208,7 @@ impl SessionPickerState {
 
     fn sync_selection_to_active(&mut self) {
         if let Some(active) = self.active_id {
-            if let Some(idx) = self
-                .filtered_items()
-                .iter()
-                .position(|s| s.id == active)
-            {
+            if let Some(idx) = self.filtered_items().iter().position(|s| s.id == active) {
                 self.selected = idx;
             }
         }
@@ -243,20 +237,16 @@ impl SessionPickerState {
 
     /// Returns the currently selected session ID (if any).
     pub fn selected_id(&self) -> Option<uuid::Uuid> {
-        self.filtered_items()
-            .get(self.selected)
-            .map(|s| s.id)
+        self.filtered_items().get(self.selected).map(|s| s.id)
     }
 
     fn sync_list_state(&mut self) {
         let len = self.filtered_items().len();
-        self.list_state.select(
-            if len == 0 || self.selected >= len {
-                None
-            } else {
-                Some(self.selected)
-            },
-        );
+        self.list_state.select(if len == 0 || self.selected >= len {
+            None
+        } else {
+            Some(self.selected)
+        });
     }
 }
 
@@ -314,7 +304,7 @@ impl StatefulWidget for SessionPicker {
             .constraints([
                 Constraint::Length(1), // Search bar
                 Constraint::Length(1), // Separator
-                Constraint::Min(3),   // Content (list + preview)
+                Constraint::Min(3),    // Content (list + preview)
                 Constraint::Length(1), // Footer
             ])
             .split(inner);
@@ -333,10 +323,7 @@ impl StatefulWidget for SessionPicker {
         } else {
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(self.accent)),
-                Span::styled(
-                    state.query.clone(),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
             ])
         };
         Widget::render(Paragraph::new(search_line), v_regions[0], buf);
@@ -353,17 +340,15 @@ impl StatefulWidget for SessionPicker {
         // ── Content: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(self.list_width),
-                Constraint::Min(10),
-            ])
+            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
             .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
         self.render_preview_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint = " ↑↓ navigate  Enter switch  Ctrl+N new  Ctrl+R rename  Ctrl+D close  Esc cancel";
+        let hint =
+            " ↑↓ navigate  Enter switch  Ctrl+N new  Ctrl+R rename  Ctrl+D close  Esc cancel";
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -532,9 +517,8 @@ impl SessionPicker {
         )));
 
         // ── Message statistics ──
-        let total = session.user_message_count
-            + session.assistant_message_count
-            + session.tool_call_count;
+        let total =
+            session.user_message_count + session.assistant_message_count + session.tool_call_count;
 
         // Mini bar chart comparing message type counts
         let max_cat = [
@@ -643,7 +627,8 @@ impl SessionPicker {
             )));
 
             if let Some(ref first_msg) = session.first_user_message {
-                let preview = truncate_for_preview(first_msg, (inner.width as usize).saturating_sub(6));
+                let preview =
+                    truncate_for_preview(first_msg, (inner.width as usize).saturating_sub(6));
                 lines.push(Line::from(vec![
                     Span::styled("  ❯ ", Style::default().fg(Color::Cyan)),
                     Span::styled(preview, Style::default().fg(Color::Gray)),
@@ -651,7 +636,8 @@ impl SessionPicker {
             }
 
             if let Some(ref last_msg) = session.last_assistant_message {
-                let preview = truncate_for_preview(last_msg, (inner.width as usize).saturating_sub(6));
+                let preview =
+                    truncate_for_preview(last_msg, (inner.width as usize).saturating_sub(6));
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
                     Span::styled("  🤖 ", Style::default().fg(Color::Green)),

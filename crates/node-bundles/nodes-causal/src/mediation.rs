@@ -29,8 +29,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::ColumnError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -55,7 +55,9 @@ impl From<ColumnError> for MediationError {
 }
 
 impl ::dag_core::dag::NodeError for MediationError {
-    fn node_type(&self) -> &str { "mediation" }
+    fn node_type(&self) -> &str {
+        "mediation"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

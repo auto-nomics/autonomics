@@ -42,7 +42,6 @@ pub struct ProfilePickerState {
     list_state: ListState,
 }
 
-
 impl ProfilePickerState {
     pub fn open(&mut self) {
         self.visible = true;
@@ -93,17 +92,21 @@ impl ProfilePickerState {
 
     /// Populate the picker from profiles.
     pub fn set_profiles(&mut self, profiles: Vec<AgentProfile>) {
-        self.items = profiles.into_iter().map(|p| ProfileItem { profile: p }).collect();
+        self.items = profiles
+            .into_iter()
+            .map(|p| ProfileItem { profile: p })
+            .collect();
         self.refilter();
     }
 
     fn sync_list_state(&mut self) {
-        self.list_state
-            .select(if self.filtered.is_empty() || self.selected >= self.filtered.len() {
+        self.list_state.select(
+            if self.filtered.is_empty() || self.selected >= self.filtered.len() {
                 None
             } else {
                 Some(self.selected)
-            });
+            },
+        );
     }
 
     fn refilter(&mut self) {
@@ -222,10 +225,7 @@ impl StatefulWidget for ProfilePicker {
         // ── Content area: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(self.list_width),
-                Constraint::Min(10),
-            ])
+            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
             .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
@@ -233,8 +233,11 @@ impl StatefulWidget for ProfilePicker {
 
         // ── Footer ──
         let hint = " Enter spawn  ↑↓ navigate  Esc cancel";
-        let p = Paragraph::new(hint)
-            .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+        let p = Paragraph::new(hint).style(
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        );
         Widget::render(p, v_regions[3], buf);
     }
 }
@@ -305,14 +308,12 @@ impl ProfilePicker {
 
     /// Render the right block: preview of the currently selected profile.
     fn render_preview_block(&self, area: Rect, buf: &mut Buffer, state: &ProfilePickerState) {
-        let block = Block::default()
-            .borders(Borders::NONE)
-            .title(Span::styled(
-                " Preview ",
-                Style::default()
-                    .fg(self.accent)
-                    .add_modifier(Modifier::BOLD),
-            ));
+        let block = Block::default().borders(Borders::NONE).title(Span::styled(
+            " Preview ",
+            Style::default()
+                .fg(self.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -341,7 +342,9 @@ impl ProfilePicker {
             Span::styled("  Name       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 p.name.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
 
@@ -378,7 +381,11 @@ impl ProfilePicker {
         )));
 
         let mut flag = |name: &str, on: bool| {
-            let (icon, color) = if on { ("●", Color::Green) } else { ("○", Color::DarkGray) };
+            let (icon, color) = if on {
+                ("●", Color::Green)
+            } else {
+                ("○", Color::DarkGray)
+            };
             lines.push(Line::from(vec![
                 Span::styled("    ", Style::default()),
                 Span::styled(icon, Style::default().fg(color)),

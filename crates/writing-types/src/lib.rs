@@ -18,8 +18,8 @@ pub mod inline;
 pub mod section;
 
 pub use block::{
-    Block, BlockComment, BlockId, BlockMeta, CodeBlock, EquationBlock, HorizontalRule,
-    ListBlock, ListItem, ListMarker, PageBreak, ParagraphBlock, QuoteBlock, RawLatexBlock,
+    Block, BlockComment, BlockId, BlockMeta, CodeBlock, EquationBlock, HorizontalRule, ListBlock,
+    ListItem, ListMarker, PageBreak, ParagraphBlock, QuoteBlock, RawLatexBlock,
 };
 pub use claim::{
     Claim, ClaimType, Confidence, EvidenceLink, EvidenceTarget, EvidenceType, TextSpan,
@@ -31,12 +31,10 @@ pub use edit::{
     CitationPosition, EditOp, EditScript, MetadataChanges, Outline, OutlineItem, PreambleChanges,
 };
 pub use figure::{
-    ColumnAlign, FigureBlock, FigureSource, Placement, Size, SubfigureSpec, TableBlock,
-    TableCell, TableFormat, TableSource,
+    ColumnAlign, FigureBlock, FigureSource, Placement, Size, SubfigureSpec, TableBlock, TableCell,
+    TableFormat, TableSource,
 };
-pub use inline::{
-    CiteKey, CitationCluster, CitationStyle, Inline, RefKind, TextFormat,
-};
+pub use inline::{CitationCluster, CitationStyle, CiteKey, Inline, RefKind, TextFormat};
 pub use section::{Section, SectionLevel, SectionStatus};
 
 /// Generate a new block ID (UUID v4).
@@ -53,8 +51,7 @@ fn uuid_v4_string() -> String {
         .unwrap_or(0);
 
     // Mix in thread id for extra uniqueness within a process.
-    let tid = std::thread::current()
-        .id();
+    let tid = std::thread::current().id();
     let tid_hash = format!("{tid:?}")
         .bytes()
         .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
@@ -64,10 +61,21 @@ fn uuid_v4_string() -> String {
 
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     )
 }

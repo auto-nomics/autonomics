@@ -16,13 +16,13 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use crate::survey_common::{
     SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
 use dag_core::codegen::helpers::{input_0, parse_spec};
 use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================

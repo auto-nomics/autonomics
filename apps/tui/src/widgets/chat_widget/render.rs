@@ -155,9 +155,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             attempt,
             max_retries,
         } => {
-            let header = format!(
-                "↻ Retry {attempt}/{max_retries}: "
-            );
+            let header = format!("↻ Retry {attempt}/{max_retries}: ");
             let mut lines = Vec::new();
             let mut first = true;
             for line in message.lines() {
@@ -195,7 +193,9 @@ pub(crate) fn render_line_with_settings(
             let n = text.lines().count();
             vec![Line::from(Span::styled(
                 format!(" 💭 [thinking — {n} lines, collapsed]"),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
             ))]
         }
         ChatLine::ToolCall { name, input } if display.collapse_tool_calls => {
@@ -203,7 +203,11 @@ pub(crate) fn render_line_with_settings(
                 String::new()
             } else {
                 let p: String = input.chars().take(40).collect();
-                if input.len() > 40 { format!("({p}…)") } else { format!("({p})") }
+                if input.len() > 40 {
+                    format!("({p}…)")
+                } else {
+                    format!("({p})")
+                }
             };
             vec![Line::from(Span::styled(
                 format!(" 🔧 {name}{preview} [collapsed]"),
@@ -211,7 +215,11 @@ pub(crate) fn render_line_with_settings(
             ))]
         }
         ChatLine::ToolResult { ok, content } if display.collapse_tool_results => {
-            let (icon, color) = if *ok { ("✓", Color::Green) } else { ("✗", Color::Red) };
+            let (icon, color) = if *ok {
+                ("✓", Color::Green)
+            } else {
+                ("✗", Color::Red)
+            };
             let n = content.chars().count();
             vec![Line::from(Span::styled(
                 format!(" {icon} [result — {n} chars, collapsed]"),

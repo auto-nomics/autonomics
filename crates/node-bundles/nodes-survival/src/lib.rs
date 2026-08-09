@@ -8,7 +8,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "survival" }
+    fn name(&self) -> &'static str {
+        "survival"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(fine_gray::FineGrayNodeFactory {}));
         registry.register(Box::new(cuminc::CumincNodeFactory {}));

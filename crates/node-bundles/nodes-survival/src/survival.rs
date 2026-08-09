@@ -16,8 +16,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::{ColumnError, extract_numeric_lenient};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -42,7 +42,9 @@ impl From<ColumnError> for SurvivalError {
 }
 
 impl ::dag_core::dag::NodeError for SurvivalError {
-    fn node_type(&self) -> &str { "survival" }
+    fn node_type(&self) -> &str {
+        "survival"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

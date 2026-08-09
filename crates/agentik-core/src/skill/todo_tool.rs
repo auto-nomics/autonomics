@@ -172,9 +172,7 @@ mod tests {
         registry.register(todo_reg).unwrap();
         let toolset = Toolset::from_registry(
             std::sync::Arc::new(registry),
-            Some(
-                tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
-            ),
+            Some(tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0),
         );
 
         // allowed_tools whitelist must always permit update_todo.

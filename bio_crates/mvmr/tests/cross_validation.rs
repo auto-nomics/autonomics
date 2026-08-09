@@ -30,8 +30,7 @@ const TOL_P: f64 = 1e-8;
 const TOL_QHET: f64 = 5e-3;
 
 fn load_golden() -> Value {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mvmr_golden.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mvmr_golden.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "Failed to read {}: {}. Run `Rscript tests/gen_r_golden.R tests/mvmr_golden.json` first.",
@@ -45,7 +44,13 @@ fn load_golden() -> Value {
 /// Parse the rawdat_mvmr CSV (exported once by the R golden script). Because
 /// the dataset ships inside the MVMR R package, we embed the column data
 /// directly here so the Rust test does not depend on R at run time.
-fn rawdat() -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>, Vec<f64>, Vec<String>) {
+fn rawdat() -> (
+    Vec<Vec<f64>>,
+    Vec<Vec<f64>>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<String>,
+) {
     // Columns: SNP, LDL_beta, HDL_beta, Trg_beta, LDL_se, HDL_se, Trg_se,
     // SBP_beta, SBP_se
     let data = include_str!("rawdat_mvmr.csv");
@@ -96,7 +101,8 @@ fn input_for(exposures: &[usize]) -> MvmrInput {
 }
 
 fn num(v: &Value) -> f64 {
-    v.as_f64().unwrap_or_else(|| panic!("expected number, got {v:?}"))
+    v.as_f64()
+        .unwrap_or_else(|| panic!("expected number, got {v:?}"))
 }
 
 fn close(a: f64, b: f64, tol: f64) -> bool {

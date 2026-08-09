@@ -6,7 +6,9 @@ use openalex::OpenAlexClient;
 
 #[tokio::test]
 async fn autocomplete_works() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("works", "machine learning")
@@ -21,7 +23,9 @@ async fn autocomplete_works() {
 
 #[tokio::test]
 async fn autocomplete_authors() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("authors", "Einstein")
@@ -33,17 +37,15 @@ async fn autocomplete_authors() {
     let has_einstein = resp
         .results
         .iter()
-        .any(|r| r
-            .display_name
-            .as_deref()
-            .unwrap_or("")
-            .contains("Einstein"));
+        .any(|r| r.display_name.as_deref().unwrap_or("").contains("Einstein"));
     assert!(has_einstein, "should find an Einstein");
 }
 
 #[tokio::test]
 async fn autocomplete_sources() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("sources", "Nature")
@@ -60,7 +62,9 @@ async fn autocomplete_sources() {
 
 #[tokio::test]
 async fn autocomplete_institutions() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("institutions", "Harvard")
@@ -77,7 +81,9 @@ async fn autocomplete_institutions() {
 
 #[tokio::test]
 async fn autocomplete_topics() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("topics", "cancer")
@@ -89,7 +95,9 @@ async fn autocomplete_topics() {
 
 #[tokio::test]
 async fn autocomplete_funders() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .autocomplete("funders", "National")

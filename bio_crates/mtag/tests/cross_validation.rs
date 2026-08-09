@@ -68,11 +68,7 @@ fn json_to_mat(v: &Value) -> Mat<f64> {
 /// Parse a JSON 3D array (M×P×P) into a Vec of P×P matrices.
 #[allow(dead_code)]
 fn json_to_3d(v: &Value) -> Vec<Mat<f64>> {
-    v.as_array()
-        .unwrap()
-        .iter()
-        .map(json_to_mat)
-        .collect()
+    v.as_array().unwrap().iter().map(json_to_mat).collect()
 }
 
 /// Compare two matrices element-by-element, printing the first mismatch.

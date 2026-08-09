@@ -151,8 +151,7 @@ fn parse_single_author(
         .collect();
 
     // Match corresponding author by last name (case-insensitive).
-    let is_corresponding =
-        corresponding_last.is_some_and(|cl| last_name.eq_ignore_ascii_case(cl));
+    let is_corresponding = corresponding_last.is_some_and(|cl| last_name.eq_ignore_ascii_case(cl));
 
     Author {
         last_name: last_name.to_owned(),

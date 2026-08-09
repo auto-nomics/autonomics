@@ -10,7 +10,7 @@
 
 use writing_types::{
     CitationCluster, CitationPosition, CitationStyle, CiteKey, Document, EditOp, EditScript,
-    PreambleChanges, Inline, Preamble, Section, SectionLevel,
+    Inline, Preamble, PreambleChanges, Section, SectionLevel,
 };
 
 use crate::{Error, Result};
@@ -125,11 +125,9 @@ pub fn apply_edit(doc: &mut Document, op: &EditOp) -> Result<()> {
             Ok(())
         }
 
-        EditOp::DeleteSection { section_id } => {
-            delete_section_recursive(&mut doc.root, section_id)
-                .then_some(())
-                .ok_or_else(|| Error::Edit(format!("section not found: {section_id}")))
-        }
+        EditOp::DeleteSection { section_id } => delete_section_recursive(&mut doc.root, section_id)
+            .then_some(())
+            .ok_or_else(|| Error::Edit(format!("section not found: {section_id}"))),
 
         EditOp::MoveSection {
             section_id,
@@ -187,11 +185,9 @@ pub fn apply_edit(doc: &mut Document, op: &EditOp) -> Result<()> {
             Ok(())
         }
 
-        EditOp::DeleteBlock { block_id } => {
-            delete_block_recursive(&mut doc.root, block_id)
-                .then_some(())
-                .ok_or_else(|| Error::Edit(format!("block not found: {block_id}")))
-        }
+        EditOp::DeleteBlock { block_id } => delete_block_recursive(&mut doc.root, block_id)
+            .then_some(())
+            .ok_or_else(|| Error::Edit(format!("block not found: {block_id}"))),
 
         EditOp::MoveBlock {
             block_id,
@@ -203,10 +199,9 @@ pub fn apply_edit(doc: &mut Document, op: &EditOp) -> Result<()> {
                 .ok_or_else(|| Error::Edit(format!("block not found: {block_id}")))?;
 
             // Insert at destination.
-            let dest = doc
-                .root
-                .find_mut(to_section)
-                .ok_or_else(|| Error::Edit(format!("destination section not found: {to_section}")))?;
+            let dest = doc.root.find_mut(to_section).ok_or_else(|| {
+                Error::Edit(format!("destination section not found: {to_section}"))
+            })?;
             insert_block_after(dest, after_block.as_deref(), block);
             Ok(())
         }
@@ -254,7 +249,8 @@ pub fn apply_edit(doc: &mut Document, op: &EditOp) -> Result<()> {
                 CitationPosition::AfterText { text } => {
                     let plain = para.plain_text();
                     if let Some(pos) = plain.find(text) {
-                        let insert_idx = find_inline_index_after_byte(&para.inlines, pos + text.len());
+                        let insert_idx =
+                            find_inline_index_after_byte(&para.inlines, pos + text.len());
                         para.inlines.insert(insert_idx, citation);
                     } else {
                         return Err(Error::Edit(format!(
@@ -314,7 +310,9 @@ pub fn apply_edit(doc: &mut Document, op: &EditOp) -> Result<()> {
             doc.preamble
                 .packages
                 .retain(|p| !changes.remove_packages.contains(p));
-            doc.preamble.custom.extend(changes.add_custom.iter().cloned());
+            doc.preamble
+                .custom
+                .extend(changes.add_custom.iter().cloned());
             Ok(())
         }
     }
@@ -367,11 +365,7 @@ fn op_name(op: &EditOp) -> &'static str {
 // Internal helpers
 // ===========================================================================
 
-fn insert_section_after(
-    parent: &mut Section,
-    after: Option<&str>,
-    new_section: Section,
-) {
+fn insert_section_after(parent: &mut Section, after: Option<&str>, new_section: Section) {
     match after {
         Some(after_id) => {
             let pos = parent
@@ -412,11 +406,7 @@ fn remove_section_recursive(root: &mut Section, id: &str) -> Option<Section> {
     None
 }
 
-fn insert_block_after(
-    section: &mut Section,
-    after: Option<&str>,
-    block: writing_types::Block,
-) {
+fn insert_block_after(section: &mut Section, after: Option<&str>, block: writing_types::Block) {
     match after {
         Some(after_id) => {
             let pos = section
@@ -431,10 +421,7 @@ fn insert_block_after(
     }
 }
 
-fn find_block_loc<'a>(
-    root: &'a mut Section,
-    block_id: &str,
-) -> Option<(&'a mut Section, usize)> {
+fn find_block_loc<'a>(root: &'a mut Section, block_id: &str) -> Option<(&'a mut Section, usize)> {
     if let Some(idx) = root.blocks.iter().position(|b| b.id() == block_id) {
         return Some((root, idx));
     }
@@ -460,10 +447,7 @@ fn delete_block_recursive(root: &mut Section, id: &str) -> bool {
     false
 }
 
-fn remove_block_recursive(
-    root: &mut Section,
-    id: &str,
-) -> Option<writing_types::Block> {
+fn remove_block_recursive(root: &mut Section, id: &str) -> Option<writing_types::Block> {
     if let Some(idx) = root.blocks.iter().position(|b| b.id() == id) {
         return Some(root.blocks.remove(idx));
     }
@@ -552,7 +536,11 @@ pub fn outline(doc: &Document) -> writing_types::Outline {
     writing_types::Outline { items }
 }
 
-fn outline_recursive(section: &Section, level: SectionLevel, out: &mut Vec<writing_types::OutlineItem>) {
+fn outline_recursive(
+    section: &Section,
+    level: SectionLevel,
+    out: &mut Vec<writing_types::OutlineItem>,
+) {
     if level != SectionLevel::Root {
         out.push(writing_types::OutlineItem {
             section_id: section.id.clone(),
@@ -712,10 +700,7 @@ mod tests {
         };
         apply_edit(&mut doc, &op).unwrap();
         assert_eq!(doc.root.children[1].blocks.len(), 1);
-        assert_eq!(
-            doc.root.children[1].blocks[0].kind_name(),
-            "equation"
-        );
+        assert_eq!(doc.root.children[1].blocks[0].kind_name(), "equation");
     }
 
     #[test]

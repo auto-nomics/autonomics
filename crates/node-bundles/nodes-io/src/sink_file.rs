@@ -14,9 +14,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::source_file::normalize_path;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::sink::SinkMode;
-use crate::source_file::normalize_path;
 use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::DagError,
@@ -54,7 +54,9 @@ impl FileSinkError {
 }
 
 impl ::dag_core::dag::NodeError for FileSinkError {
-    fn node_type(&self) -> &str { "sink_file" }
+    fn node_type(&self) -> &str {
+        "sink_file"
+    }
 }
 
 pub struct FileSinkNode {

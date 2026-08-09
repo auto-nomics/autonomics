@@ -37,7 +37,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "opengwas" }
+    fn name(&self) -> &'static str {
+        "opengwas"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(associations::OpengwasAssociationsNodeFactory));
         registry.register(Box::new(phewas::OpengwasPhewasNodeFactory));
@@ -56,9 +58,7 @@ mod tests {
     use opengwas::types::GwasInfo;
     use serde_json::Value;
 
-    use crate::shared::{
-        build_gwasinfo_batch, build_json_batch, extract_rows, infer_columns,
-    };
+    use crate::shared::{build_gwasinfo_batch, build_json_batch, extract_rows, infer_columns};
     use crate::{associations, gwasinfo_search, ld_clump, phewas};
 
     // -- extract_rows --
@@ -221,8 +221,7 @@ mod tests {
             "variant": ["rs1205"],
             "id": ["ieu-a-2"]
         });
-        let spec: associations::OpengwasAssociationsSpec =
-            serde_json::from_value(json).unwrap();
+        let spec: associations::OpengwasAssociationsSpec = serde_json::from_value(json).unwrap();
         assert_eq!(spec.variant, vec!["rs1205"]);
         assert_eq!(spec.id, vec!["ieu-a-2"]);
     }

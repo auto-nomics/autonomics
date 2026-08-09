@@ -22,7 +22,9 @@ pub enum PathError {
     Empty,
     #[error("agent path must start with `/root`, got `{0}`")]
     InvalidRoot(String),
-    #[error("agent name segment `{segment}` must use only lowercase letters, digits, and underscores")]
+    #[error(
+        "agent name segment `{segment}` must use only lowercase letters, digits, and underscores"
+    )]
     InvalidSegmentChar { segment: String },
     #[error("agent name segment `{0}` is reserved")]
     ReservedSegment(String),
@@ -82,11 +84,7 @@ impl AgentPath {
         }
         let idx = self.0.rfind('/')?;
         // Don't strip below `/root`.
-        let parent = if idx == 0 {
-            ROOT_STR
-        } else {
-            &self.0[..idx]
-        };
+        let parent = if idx == 0 { ROOT_STR } else { &self.0[..idx] };
         Some(Self(parent.to_string()))
     }
 
@@ -420,10 +418,7 @@ mod tests {
     #[test]
     fn parent_of_child() {
         let child = AgentPath::try_from("/root/researcher/worker").unwrap();
-        assert_eq!(
-            child.parent().unwrap().as_str(),
-            "/root/researcher"
-        );
+        assert_eq!(child.parent().unwrap().as_str(), "/root/researcher");
     }
 
     #[test]

@@ -198,7 +198,10 @@ struct RouteTaskTool {
 impl ToolFunction for RouteTaskTool {
     type Input = RouteTaskInput;
 
-    async fn run(&self, input: RouteTaskInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: RouteTaskInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
             .route_task(&input.description, Some(self.self_path.as_str()))
@@ -234,7 +237,10 @@ struct GetAgentInfoTool {
 impl ToolFunction for GetAgentInfoTool {
     type Input = GetAgentInfoInput;
 
-    async fn run(&self, input: GetAgentInfoInput) -> Result<ToolResult, agentik_core::tools::ToolError> {
+    async fn run(
+        &self,
+        input: GetAgentInfoInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_agent_info(&input.agent_name).await {
             Some(info) => Ok(ToolResult::success_json(
                 serde_json::to_value(&info).unwrap_or_default(),

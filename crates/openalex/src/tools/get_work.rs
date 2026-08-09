@@ -5,8 +5,8 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::format::format_work_detail;
 use crate::OpenAlexClient;
+use crate::format::format_work_detail;
 
 #[tool(
     name = "openalex_get_work",
@@ -38,7 +38,11 @@ impl ToolFunction for OpenAlexGetWorkTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let work = self.client.get_work(&input.id).await.map_err(super::json_err)?;
+        let work = self
+            .client
+            .get_work(&input.id)
+            .await
+            .map_err(super::json_err)?;
         Ok(AgentToolResult::success(format_work_detail(&work)))
     }
 }

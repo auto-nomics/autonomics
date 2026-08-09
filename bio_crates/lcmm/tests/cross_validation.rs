@@ -9,8 +9,10 @@
 //!
 //! Test archive: `rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/`
 
-use lcmm::{hlme, HlmeControl, HlmeLikelihood, LongData, ModelSpec, ParamLayout,
-           compute_posterior, loglik_hlme, predict_y};
+use lcmm::{
+    HlmeControl, HlmeLikelihood, LongData, ModelSpec, ParamLayout, compute_posterior, hlme,
+    loglik_hlme, predict_y,
+};
 use serde::{Deserialize, Deserializer};
 
 /// Deserialize a JSON `null` or missing field as an empty `Vec<T>`.
@@ -23,9 +25,9 @@ where
     Ok(opt.unwrap_or_default())
 }
 
-const TOL_LL: f64 = 1e-8;   // loglik relative tolerance
-const TOL_PPI: f64 = 1e-6;   // posterior probability tolerance
-const TOL_PRED: f64 = 1e-8;  // prediction tolerance
+const TOL_LL: f64 = 1e-8; // loglik relative tolerance
+const TOL_PPI: f64 = 1e-6; // posterior probability tolerance
+const TOL_PRED: f64 = 1e-8; // prediction tolerance
 
 // ---- Golden JSON types ------------------------------------------------
 
@@ -113,8 +115,8 @@ struct GoldenPredY3 {
 }
 
 fn load_golden() -> GoldenFile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/hlme_golden.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hlme_golden.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "Failed to read {}: {}. Run `Rscript tests/extract_data.R tests/fixtures` first.\n\
@@ -141,11 +143,10 @@ struct CsvData {
 }
 
 fn load_csv() -> CsvData {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/data_hlme.csv");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("Failed to read {}: {}", path.display(), e)
-    });
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/data_hlme.csv");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
     let mut y = Vec::new();
     let mut time = Vec::new();
     let mut x1 = Vec::new();
@@ -153,9 +154,13 @@ fn load_csv() -> CsvData {
     let mut x3 = Vec::new();
     let mut id = Vec::new();
     for (i, line) in text.lines().enumerate() {
-        if i == 0 { continue; } // skip header
+        if i == 0 {
+            continue;
+        } // skip header
         let f: Vec<&str> = line.split(',').collect();
-        if f.len() < 6 { continue; }
+        if f.len() < 6 {
+            continue;
+        }
         id.push(f[0].parse().unwrap());
         y.push(f[1].parse().unwrap());
         time.push(f[2].parse().unwrap());
@@ -169,16 +174,20 @@ fn load_csv() -> CsvData {
     for &idv in &id {
         nmes[(idv - 1) as usize] += 1;
     }
-    CsvData { y, time, x1, x2, x3, id, nmes, ns }
+    CsvData {
+        y,
+        time,
+        x1,
+        x2,
+        x3,
+        id,
+        nmes,
+        ns,
+    }
 }
 
 /// Build a LongData with the specified covariate design matrix X0.
-fn build_longdata(
-    csv: &CsvData,
-    nv: usize,
-    x0_cols: &[Vec<f64>],
-    ng: usize,
-) -> LongData {
+fn build_longdata(csv: &CsvData, nv: usize, x0_cols: &[Vec<f64>], ng: usize) -> LongData {
     let nobs = csv.y.len();
     let mut x = vec![0.0; nobs * nv];
     for k in 0..nv {
@@ -195,11 +204,18 @@ fn build_longdata(
 /// X0 = [intercept, Time, X1, Time:X1], idg=[1,1,1,1], idea=[1,1,0,0]
 fn m1_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let n = csv.y.len();
-    let x0 = vec![vec![1.0; n], csv.time.clone(), csv.x1.clone(),
-                  (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>()];
+    let x0 = vec![
+        vec![1.0; n],
+        csv.time.clone(),
+        csv.x1.clone(),
+        (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
+    ];
     let data = build_longdata(csv, 4, &x0, 1);
     let spec = ModelSpec {
-        ng: 1, idiag: false, nwg: false, ncor: 0,
+        ng: 1,
+        idiag: false,
+        nwg: false,
+        ncor: 0,
         idprob: vec![0, 0, 0, 0],
         idea: vec![1, 1, 0, 0],
         idg: vec![1, 1, 1, 1],
@@ -215,7 +231,10 @@ fn gbtm1_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![vec![1.0; n], csv.time.clone()];
     let data = build_longdata(csv, 2, &x0, 1);
     let spec = ModelSpec {
-        ng: 1, idiag: false, nwg: false, ncor: 0,
+        ng: 1,
+        idiag: false,
+        nwg: false,
+        ncor: 0,
         idprob: vec![0, 0],
         idea: vec![0, 0],
         idg: vec![1, 1],
@@ -231,7 +250,10 @@ fn gbtm2_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![vec![1.0; n], csv.time.clone()];
     let data = build_longdata(csv, 2, &x0, 2);
     let spec = ModelSpec {
-        ng: 2, idiag: false, nwg: false, ncor: 0,
+        ng: 2,
+        idiag: false,
+        nwg: false,
+        ncor: 0,
         idprob: vec![1, 0],
         idea: vec![0, 0],
         idg: vec![2, 2],
@@ -246,7 +268,10 @@ fn gbtm3_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let x0 = vec![vec![1.0; n], csv.time.clone()];
     let data = build_longdata(csv, 2, &x0, 3);
     let spec = ModelSpec {
-        ng: 3, idiag: false, nwg: false, ncor: 0,
+        ng: 3,
+        idiag: false,
+        nwg: false,
+        ncor: 0,
         idprob: vec![1, 0],
         idea: vec![0, 0],
         idg: vec![2, 2],
@@ -261,14 +286,19 @@ fn gbtm3_data(csv: &CsvData) -> (LongData, ModelSpec) {
 fn m2a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let n = csv.y.len();
     let x0 = vec![
-        vec![1.0; n], csv.time.clone(), csv.x1.clone(),
+        vec![1.0; n],
+        csv.time.clone(),
+        csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
         csv.x2.to_vec(),
         csv.x3.clone(),
     ];
     let data = build_longdata(csv, 6, &x0, 2);
     let spec = ModelSpec {
-        ng: 2, idiag: false, nwg: false, ncor: 0,
+        ng: 2,
+        idiag: false,
+        nwg: false,
+        ncor: 0,
         idprob: vec![1, 0, 0, 0, 1, 1],
         idea: vec![1, 1, 0, 0, 0, 0],
         idg: vec![2, 2, 1, 1, 0, 0],
@@ -285,7 +315,9 @@ fn m3a_data(csv: &CsvData) -> (LongData, ModelSpec) {
     // Rebuild data with ng=3
     let n = csv.y.len();
     let x0 = vec![
-        vec![1.0; n], csv.time.clone(), csv.x1.clone(),
+        vec![1.0; n],
+        csv.time.clone(),
+        csv.x1.clone(),
         (0..n).map(|i| csv.time[i] * csv.x1[i]).collect::<Vec<_>>(),
         csv.x2.to_vec(),
         csv.x3.clone(),
@@ -297,14 +329,20 @@ fn m3a_data(csv: &CsvData) -> (LongData, ModelSpec) {
 /// m1_idiag: same as m1 but idiag=true
 fn m1_idiag_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let (data, spec_base) = m1_data(csv);
-    let spec = ModelSpec { idiag: true, ..spec_base };
+    let spec = ModelSpec {
+        idiag: true,
+        ..spec_base
+    };
     (data, spec)
 }
 
 /// m2a_nwg: same as m2a but nwg=true
 fn m2a_nwg_data(csv: &CsvData) -> (LongData, ModelSpec) {
     let (data, spec_base) = m2a_data(csv);
-    let spec = ModelSpec { nwg: true, ..spec_base };
+    let spec = ModelSpec {
+        nwg: true,
+        ..spec_base
+    };
     (data, spec)
 }
 
@@ -313,24 +351,37 @@ fn m2a_nwg_data(csv: &CsvData) -> (LongData, ModelSpec) {
 // =====================================================================
 
 fn find_fit<'a>(golden: &'a GoldenFile, tag: &str) -> &'a GoldenFit {
-    golden.fits.iter().find(|f| f.tag == tag)
+    golden
+        .fits
+        .iter()
+        .find(|f| f.tag == tag)
         .unwrap_or_else(|| panic!("golden fit '{tag}' not found"))
 }
 
 /// Verify the log-likelihood evaluates to the same value at the golden `best`.
 fn check_loglik(test_name: &str, data: &LongData, spec: &ModelSpec, golden: &GoldenFit) {
     let layout = spec.layout();
-    assert_eq!(golden.best.len(), layout.npm,
-        "{test_name}: golden NPM={} != Rust NPM={}", golden.best.len(), layout.npm);
+    assert_eq!(
+        golden.best.len(),
+        layout.npm,
+        "{test_name}: golden NPM={} != Rust NPM={}",
+        golden.best.len(),
+        layout.npm
+    );
     // Convert golden best from R post-processed form (B entries in varcov)
     // back to Fortran optimization form (Cholesky factor entries).
     let best = convert_golden_best(golden, &layout);
     let ll = loglik_hlme(&best, data, spec);
     let rel = (ll - golden.loglik).abs() / golden.loglik.abs().max(1e-10);
-    assert!(rel < TOL_LL,
+    assert!(
+        rel < TOL_LL,
         "{test_name}: loglik mismatch. Rust={ll:.10}, R={:.10}, rel={rel:.3e}",
-        golden.loglik);
-    eprintln!("PASS loglik {test_name}: Rust={ll:.6} R={:.6} rel={rel:.2e}", golden.loglik);
+        golden.loglik
+    );
+    eprintln!(
+        "PASS loglik {test_name}: Rust={ll:.6} R={:.6} rel={rel:.2e}",
+        golden.loglik
+    );
 }
 
 #[test]
@@ -400,7 +451,9 @@ fn loglik_m2a_nwg() {
 // ---- Posterior probability tests ---------------------------------------
 
 fn check_ppi(test_name: &str, data: &LongData, spec: &ModelSpec, golden: &GoldenFit) {
-    if golden.ng <= 1 { return; }
+    if golden.ng <= 1 {
+        return;
+    }
     let layout = spec.layout();
     let ll = HlmeLikelihood::new(data, spec, &vec![0u8; layout.npm], &[]);
     let best = convert_golden_best(golden, &layout);
@@ -413,19 +466,29 @@ fn check_ppi(test_name: &str, data: &LongData, spec: &ModelSpec, golden: &Golden
         let rel = (post.ppi[i] - golden.ppi[i]).abs() / golden.ppi[i].abs().max(1e-10);
         max_rel = max_rel.max(rel);
     }
-    assert!(max_rel < TOL_PPI,
-        "{test_name}: ppi mismatch, max_rel={max_rel:.3e}");
+    assert!(
+        max_rel < TOL_PPI,
+        "{test_name}: ppi mismatch, max_rel={max_rel:.3e}"
+    );
     // Class assignments
-    let golden_class_counts: std::collections::HashMap<usize, usize> =
-        golden.pprob_class.iter().fold(std::collections::HashMap::new(), |mut m, &c| {
-            *m.entry(c).or_default() += 1; m
+    let golden_class_counts: std::collections::HashMap<usize, usize> = golden
+        .pprob_class
+        .iter()
+        .fold(std::collections::HashMap::new(), |mut m, &c| {
+            *m.entry(c).or_default() += 1;
+            m
         });
     let rust_class_counts: std::collections::HashMap<usize, usize> =
-        post.class.iter().fold(std::collections::HashMap::new(), |mut m, &c| {
-            *m.entry(c).or_default() += 1; m
-        });
-    assert_eq!(golden_class_counts, rust_class_counts,
-        "{test_name}: class assignment counts differ");
+        post.class
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut m, &c| {
+                *m.entry(c).or_default() += 1;
+                m
+            });
+    assert_eq!(
+        golden_class_counts, rust_class_counts,
+        "{test_name}: class assignment counts differ"
+    );
     eprintln!("PASS ppi {test_name}: max_rel={max_rel:.2e}");
 }
 
@@ -467,9 +530,7 @@ fn predict_y_m2a() {
     // X0 = [intercept, Time, X1, Time:X1, X2, X3]
     let n_new = 3;
     let newdata_x = vec![
-        1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        1.0, 2.0, 0.0, 0.0, 0.0, 0.0,
-        1.0, 5.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 5.0, 0.0, 0.0, 0.0, 0.0,
     ];
     let pred = predict_y(&spec, &layout, &gf.best, &newdata_x, n_new);
     // Golden predictY_m2a pred is [[class1,class2] per time] (time-major).
@@ -498,9 +559,7 @@ fn predict_y_gbtm3() {
     // newdata: Time=0..6, no other covars
     // X0 = [intercept, Time]
     let n_new = 7;
-    let newdata_x: Vec<f64> = (0..n_new)
-        .flat_map(|t| vec![1.0, t as f64])
-        .collect();
+    let newdata_x: Vec<f64> = (0..n_new).flat_map(|t| vec![1.0, t as f64]).collect();
     let pred = predict_y(&spec, &layout, &gf.best, &newdata_x, n_new);
     let golden_pred = &golden.predictY_gbtm3.pred;
     let mut max_rel = 0.0_f64;
@@ -527,13 +586,23 @@ fn optimize_gbtm1() {
 
     // Auto-init: intercept=mean(Y), slope=0, stderr=1 (matching R's ng=1 default).
     let b0 = vec![csv.y.iter().sum::<f64>() / csv.y.len() as f64, 0.0, 1.0];
-    let ctrl = HlmeControl { verbose: true, ..Default::default() };
+    let ctrl = HlmeControl {
+        verbose: true,
+        ..Default::default()
+    };
     let fit = hlme(&data, &spec, &b0, &[], &ctrl).expect("gbtm1 fit failed");
 
     let rel_ll = (fit.loglik - gf.loglik).abs() / gf.loglik.abs();
-    assert!(rel_ll < 1e-6, "gbtm1 opt loglik: Rust={} R={} rel={rel_ll:.3e}",
-        fit.loglik, gf.loglik);
-    eprintln!("PASS opt gbtm1: loglik={:.6} (R={:.6}), niter={}", fit.loglik, gf.loglik, fit.niter);
+    assert!(
+        rel_ll < 1e-6,
+        "gbtm1 opt loglik: Rust={} R={} rel={rel_ll:.3e}",
+        fit.loglik,
+        gf.loglik
+    );
+    eprintln!(
+        "PASS opt gbtm1: loglik={:.6} (R={:.6}), niter={}",
+        fit.loglik, gf.loglik, fit.niter
+    );
 }
 
 /// Build the init parameter vector for an ng>1 model from a prior ng=1 fit.
@@ -590,15 +659,27 @@ fn optimize_gbtm2() {
     // identical classes, making the Hessian ill-conditioned for our finite-
     // difference optimizer). This init is well-separated and identifiable.
     let b0 = vec![0.0, 20.0, 30.0, -1.0, 0.0, 5.0];
-    let ctrl = HlmeControl { maxiter: 500, verbose: true, ..Default::default() };
+    let ctrl = HlmeControl {
+        maxiter: 500,
+        verbose: true,
+        ..Default::default()
+    };
     let fit = match hlme(&data, &spec, &b0, &[], &ctrl) {
         Ok(f) => f,
         Err(e) => panic!("gbtm2 opt failed: {e}"),
     };
 
     let rel_ll = (fit.loglik - gf.loglik).abs() / gf.loglik.abs();
-    assert!(rel_ll < 1e-6,
+    assert!(
+        rel_ll < 1e-6,
         "gbtm2 opt loglik: Rust={} R={} rel={rel_ll:.3e} conv={:?} niter={}",
-        fit.loglik, gf.loglik, fit.conv, fit.niter);
-    eprintln!("PASS opt gbtm2: loglik={:.6} (R={:.6}), niter={}", fit.loglik, gf.loglik, fit.niter);
+        fit.loglik,
+        gf.loglik,
+        fit.conv,
+        fit.niter
+    );
+    eprintln!(
+        "PASS opt gbtm2: loglik={:.6} (R={:.6}), niter={}",
+        fit.loglik, gf.loglik, fit.niter
+    );
 }

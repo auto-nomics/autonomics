@@ -218,7 +218,8 @@ mod tests {
     fn section_walk_visits_all() {
         let mut root = Section::root();
         let mut a = Section::new(SectionLevel::Section, "A");
-        a.children.push(Section::new(SectionLevel::Subsection, "A.1"));
+        a.children
+            .push(Section::new(SectionLevel::Subsection, "A.1"));
         root.children.push(a);
         root.children.push(Section::new(SectionLevel::Section, "B"));
 

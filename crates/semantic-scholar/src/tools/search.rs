@@ -88,12 +88,7 @@ impl ToolFunction for S2SearchTool {
             };
             let resp = self
                 .client
-                .search_paper_bulk(
-                    &query,
-                    input.token.as_deref(),
-                    None,
-                    None,
-                )
+                .search_paper_bulk(&query, input.token.as_deref(), None, None)
                 .await
                 .map_err(super::json_err)?;
 

@@ -58,7 +58,9 @@ pub enum MtagNodeError {
 }
 
 impl ::dag_core::dag::NodeError for MtagNodeError {
-    fn node_type(&self) -> &str { "mtag" }
+    fn node_type(&self) -> &str {
+        "mtag"
+    }
 }
 
 impl From<datalake::error::Error> for MtagNodeError {

@@ -136,7 +136,9 @@ impl WritingStore {
                 doc.title.clone(),
                 data.clone(),
                 doc.version as i64,
-                doc.created_at.map(|t| t.to_rfc3339()).unwrap_or_else(|| now.clone()),
+                doc.created_at
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_else(|| now.clone()),
                 now.clone(),
             ],
         )
@@ -216,11 +218,8 @@ impl WritingStore {
             turso::params![id],
         )
         .await?;
-        conn.execute(
-            "DELETE FROM documents WHERE id = ?1",
-            turso::params![id],
-        )
-        .await?;
+        conn.execute("DELETE FROM documents WHERE id = ?1", turso::params![id])
+            .await?;
         Ok(())
     }
 
@@ -266,7 +265,7 @@ impl WritingStore {
             None => {
                 return Err(Error::NotFound(format!(
                     "version {version} of document {doc_id}"
-                )))
+                )));
             }
         };
 
@@ -295,9 +294,7 @@ impl WritingStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use writing_types::{
-        Block, EditOp, EditScript, Inline, ParagraphBlock, Section, SectionLevel,
-    };
+    use writing_types::{Block, EditOp, EditScript, Inline, ParagraphBlock, Section, SectionLevel};
 
     async fn setup() -> WritingStore {
         let store = WritingStore::open_in_memory().await.unwrap();
@@ -307,10 +304,7 @@ mod tests {
     #[tokio::test]
     async fn create_and_get_document() {
         let store = setup().await;
-        store
-            .create_document("d1", "My Paper")
-            .await
-            .unwrap();
+        store.create_document("d1", "My Paper").await.unwrap();
 
         let loaded = store.get_document("d1").await.unwrap();
         assert_eq!(loaded.id, "d1");
@@ -341,7 +335,10 @@ mod tests {
             },
         )
         .unwrap();
-        store.save_document(&mut doc, "add intro", None).await.unwrap();
+        store
+            .save_document(&mut doc, "add intro", None)
+            .await
+            .unwrap();
 
         // Add a paragraph.
         crate::ast::apply_edit(
@@ -353,7 +350,10 @@ mod tests {
             },
         )
         .unwrap();
-        store.save_document(&mut doc, "add paragraph", None).await.unwrap();
+        store
+            .save_document(&mut doc, "add paragraph", None)
+            .await
+            .unwrap();
 
         // Three versions should exist.
         let versions = store.list_versions("d1").await.unwrap();
@@ -449,7 +449,10 @@ mod tests {
             .message("Initial structure");
 
         crate::ast::apply_edit_script(&mut doc, &script).unwrap();
-        store.save_document(&mut doc, "Initial structure", None).await.unwrap();
+        store
+            .save_document(&mut doc, "Initial structure", None)
+            .await
+            .unwrap();
 
         // Verify.
         let loaded = store.get_document("d1").await.unwrap();

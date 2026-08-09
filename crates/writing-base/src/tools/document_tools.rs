@@ -6,23 +6,33 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
-use writing_types::{
-    DocumentAuthor, DocumentClass, SectionLevel,
-};
+use writing_types::{DocumentAuthor, DocumentClass, SectionLevel};
 
+use super::WritingToolState;
 use crate::ast;
 use crate::store::WritingStore;
-use super::WritingToolState;
 
 /// Build all document-management tool registrations.
 pub fn registrations(state: WritingToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DocCreateTool { store: state.store.clone() }),
-        ToolRegistration::from(DocListTool { store: state.store.clone() }),
-        ToolRegistration::from(DocOpenTool { store: state.store.clone() }),
-        ToolRegistration::from(DocDeleteTool { store: state.store.clone() }),
-        ToolRegistration::from(DocOutlineTool { store: state.store.clone() }),
-        ToolRegistration::from(DocMetadataTool { store: state.store.clone() }),
+        ToolRegistration::from(DocCreateTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocListTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocOpenTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocDeleteTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocOutlineTool {
+            store: state.store.clone(),
+        }),
+        ToolRegistration::from(DocMetadataTool {
+            store: state.store.clone(),
+        }),
     ]
 }
 
@@ -68,11 +78,7 @@ impl ToolFunction for DocCreateTool {
 
         let id = format!("doc-{}", short_id());
 
-        let doc = match self
-            .store
-            .create_document(&id, &input.title)
-            .await
-        {
+        let doc = match self.store.create_document(&id, &input.title).await {
             Ok(mut doc) => {
                 doc.document_class = doc_class;
                 if let Some(authors) = &input.authors {
@@ -130,11 +136,13 @@ impl ToolFunction for DocListTool {
     type Input = DocListInput;
 
     async fn run(&self, _input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let docs = self.store.list_documents().await.map_err(|e| {
-            ToolError::ExecutionFailed {
+        let docs = self
+            .store
+            .list_documents()
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         let entries: Vec<_> = docs
             .iter()
@@ -180,11 +188,13 @@ impl ToolFunction for DocOpenTool {
     type Input = DocOpenInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let doc = self.store.get_document(&input.document_id).await.map_err(|e| {
-            ToolError::ExecutionFailed {
+        let doc = self
+            .store
+            .get_document(&input.document_id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         let outline = ast::outline(&doc);
 
@@ -230,11 +240,12 @@ impl ToolFunction for DocDeleteTool {
     type Input = DocDeleteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        self.store.delete_document(&input.document_id).await.map_err(|e| {
-            ToolError::ExecutionFailed {
+        self.store
+            .delete_document(&input.document_id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "deleted": true,
@@ -267,11 +278,13 @@ impl ToolFunction for DocOutlineTool {
     type Input = DocOutlineInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let doc = self.store.get_document(&input.document_id).await.map_err(|e| {
-            ToolError::ExecutionFailed {
+        let doc = self
+            .store
+            .get_document(&input.document_id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         let outline = ast::outline(&doc);
 
@@ -334,11 +347,13 @@ impl ToolFunction for DocMetadataTool {
     type Input = DocMetadataInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let mut doc = self.store.get_document(&input.document_id).await.map_err(|e| {
-            ToolError::ExecutionFailed {
+        let mut doc = self
+            .store
+            .get_document(&input.document_id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         let mut changed = false;
 

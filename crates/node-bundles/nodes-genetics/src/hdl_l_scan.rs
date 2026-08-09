@@ -40,9 +40,9 @@ use tokio::sync::Semaphore;
 use crate::hdl_l::{
     MAX_REGION_WIDTH, REF_PREFIX_TEMPLATE, collect_input_batches, parse_sumstats, result_schema,
 };
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_SCAN_KIND: &str = "hdl_l_scan";
@@ -321,7 +321,8 @@ impl NodeFactory for HdlLScanNodeFactory {
         use dag_core::codegen::helpers::*;
         let s = parse_spec::<HdlLScanSpec>(spec, "hdl_l_scan")?;
         let input1 = ctx
-            .input_vars.first()
+            .input_vars
+            .first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

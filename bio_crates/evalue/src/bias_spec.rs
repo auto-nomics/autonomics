@@ -227,12 +227,11 @@ pub fn misclassification(target: &str, rare_outcome: bool, rare_exposure: bool) 
         );
     }
 
-    if target == "exposure"
-        && !rare_outcome {
-            return Err(EvalueError::Invalid(
+    if target == "exposure" && !rare_outcome {
+        return Err(EvalueError::Invalid(
                 "Exposure misclassification with non-rare outcomes not currently available; set rare_outcome = TRUE.".into(),
             ));
-        }
+    }
 
     let (n, d) = match kind {
         BiasKind::OutcomeMisclassification => (1, 0),

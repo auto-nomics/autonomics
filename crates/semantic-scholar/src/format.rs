@@ -180,7 +180,11 @@ pub(crate) fn format_paper_preview(i: usize, paper: &Paper, out: &mut String) {
     // Authors
     if !paper.authors.is_empty() {
         let display = if paper.authors.len() > 5 {
-            let first = paper.authors.first().and_then(|a| a.name.as_deref()).unwrap_or("");
+            let first = paper
+                .authors
+                .first()
+                .and_then(|a| a.name.as_deref())
+                .unwrap_or("");
             format!("{} et al.", first)
         } else {
             paper
@@ -331,7 +335,10 @@ fn format_paper_full(paper: &Paper, out: &mut String) {
 
     // Open access
     if let Some(oa) = paper.is_open_access {
-        out.push_str(&format!("**Open access:** {}\n", if oa { "yes" } else { "no" }));
+        out.push_str(&format!(
+            "**Open access:** {}\n",
+            if oa { "yes" } else { "no" }
+        ));
     }
     if let Some(ref pdf) = paper.open_access_pdf {
         if let Some(ref url) = pdf.url {
@@ -380,9 +387,16 @@ fn format_paper_full(paper: &Paper, out: &mut String) {
 
 fn format_author(i: usize, a: &Author, out: &mut String) {
     if i > 0 {
-        out.push_str(&format!("### {}. {}\n", i, a.name.as_deref().unwrap_or("(unknown)")));
+        out.push_str(&format!(
+            "### {}. {}\n",
+            i,
+            a.name.as_deref().unwrap_or("(unknown)")
+        ));
     } else {
-        out.push_str(&format!("## {}\n\n", a.name.as_deref().unwrap_or("(unknown)")));
+        out.push_str(&format!(
+            "## {}\n\n",
+            a.name.as_deref().unwrap_or("(unknown)")
+        ));
     }
 
     out.push_str(&format!("**Author ID:** {}\n", a.author_id));
@@ -447,8 +461,14 @@ mod tests {
             year: Some(2024),
             venue: Some("Nature Biotechnology".into()),
             authors: vec![
-                PaperAuthor { author_id: Some("1".into()), name: Some("Alice Smith".into()) },
-                PaperAuthor { author_id: Some("2".into()), name: Some("Bob Jones".into()) },
+                PaperAuthor {
+                    author_id: Some("1".into()),
+                    name: Some("Alice Smith".into()),
+                },
+                PaperAuthor {
+                    author_id: Some("2".into()),
+                    name: Some("Bob Jones".into()),
+                },
             ],
             citation_count: Some(42),
             external_ids: Some(ExternalIds {

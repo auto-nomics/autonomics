@@ -409,31 +409,32 @@ fn diff_manifests(old: &DagManifest, new: &DagManifest) {
     // 修改节点（kind 或 spec 变了）
     for n in &new.nodes {
         if let Some(old_n) = old_nodes.get(n.id.as_str())
-            && (old_n.kind != n.kind || old_n.spec != n.spec) {
-                println!("  ~ node {} ({})", n.id, n.kind);
-                // 简要显示 spec 变化
-                let old_keys: std::collections::HashSet<&str> = old_n
-                    .spec
-                    .as_object()
-                    .iter()
-                    .flat_map(|m| m.keys())
-                    .map(|s| s.as_str())
-                    .collect();
-                let new_keys: std::collections::HashSet<&str> = n
-                    .spec
-                    .as_object()
-                    .iter()
-                    .flat_map(|m| m.keys())
-                    .map(|s| s.as_str())
-                    .collect();
-                for k in new_keys.difference(&old_keys) {
-                    println!("      + {k}");
-                }
-                for k in old_keys.difference(&new_keys) {
-                    println!("      - {k}");
-                }
-                changes += 1;
+            && (old_n.kind != n.kind || old_n.spec != n.spec)
+        {
+            println!("  ~ node {} ({})", n.id, n.kind);
+            // 简要显示 spec 变化
+            let old_keys: std::collections::HashSet<&str> = old_n
+                .spec
+                .as_object()
+                .iter()
+                .flat_map(|m| m.keys())
+                .map(|s| s.as_str())
+                .collect();
+            let new_keys: std::collections::HashSet<&str> = n
+                .spec
+                .as_object()
+                .iter()
+                .flat_map(|m| m.keys())
+                .map(|s| s.as_str())
+                .collect();
+            for k in new_keys.difference(&old_keys) {
+                println!("      + {k}");
             }
+            for k in old_keys.difference(&new_keys) {
+                println!("      - {k}");
+            }
+            changes += 1;
+        }
     }
 
     // 新增边

@@ -107,9 +107,7 @@ impl AgentWorkspace<'_> {
                 Line::raw(""),
                 Line::from(Span::styled(
                     "  No agents running.",
-                    Style::default()
-                        .fg(Color::Gray)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
@@ -148,10 +146,7 @@ impl AgentWorkspace<'_> {
                         .add_modifier(Modifier::BOLD),
                 ));
             } else {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
             }
 
             // Separator

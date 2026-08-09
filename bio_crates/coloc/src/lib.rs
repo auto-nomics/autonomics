@@ -258,10 +258,7 @@ pub fn approx_bf_estimates(
 /// Direct port of R's `sdY.est()`.  Uses OLS through the origin.
 pub fn sd_y_est(vbeta: &[f64], maf: &[f64], n: f64) -> Result<f64> {
     let oneover: Vec<f64> = vbeta.iter().map(|&v| 1.0 / v).collect();
-    let nvx: Vec<f64> = maf
-        .iter()
-        .map(|&f| 2.0 * n * f * (1.0 - f))
-        .collect();
+    let nvx: Vec<f64> = maf.iter().map(|&f| 2.0 * n * f * (1.0 - f)).collect();
     // OLS through origin: nvx = coef * oneover  →  coef = sum(nvx * oneover) / sum(oneover^2)
     let num: f64 = oneover.iter().zip(nvx.iter()).map(|(&o, &x)| o * x).sum();
     let den: f64 = oneover.iter().map(|&o| o * o).sum();
@@ -451,8 +448,16 @@ pub fn combine_abf_weighted(
 
     let lsum: Vec<f64> = l1.iter().zip(l2.iter()).map(|(&a, &b)| a + b).collect();
     let l_h0 = 0.0;
-    let lp1_l1: Vec<f64> = p1_vec.iter().zip(l1.iter()).map(|(&p, &l)| p.ln() + l).collect();
-    let lp2_l2: Vec<f64> = p2_vec.iter().zip(l2.iter()).map(|(&p, &l)| p.ln() + l).collect();
+    let lp1_l1: Vec<f64> = p1_vec
+        .iter()
+        .zip(l1.iter())
+        .map(|(&p, &l)| p.ln() + l)
+        .collect();
+    let lp2_l2: Vec<f64> = p2_vec
+        .iter()
+        .zip(l2.iter())
+        .map(|(&p, &l)| p.ln() + l)
+        .collect();
     let l_h1 = logsum(&lp1_l1);
     let l_h2 = logsum(&lp2_l2);
 
@@ -493,10 +498,7 @@ pub fn combine_abf_weighted(
 /// of dataset 1.
 ///
 /// Mirrors R's `merge(df1, df2)` which sorts by the merge key.
-fn merge_on_snp(
-    df1: &ProcessedDataset,
-    df2: &ProcessedDataset,
-) -> Vec<(usize, usize)> {
+fn merge_on_snp(df1: &ProcessedDataset, df2: &ProcessedDataset) -> Vec<(usize, usize)> {
     // Build snp → index for df2.
     let mut idx2: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, s) in df2.snp.iter().enumerate() {
@@ -842,7 +844,7 @@ pub fn coloc_detail(
             // expand.grid iterates snp2 fastest (R's as.data.frame(expand.grid)).
             h3_pairs.push(H3Pair {
                 snp1: merged_snp[j].clone(), // first arg varies slowest
-                snp2: merged_snp[i].clone(),  // second arg varies fastest
+                snp2: merged_snp[i].clone(), // second arg varies fastest
                 lbf3: lbf1[j] + lbf2[i],
             });
         }
@@ -917,7 +919,11 @@ pub fn coloc_detail(
 /// posterior probability until cumulative probability ≥ `credible_size`.
 pub fn credible_sets(snps: &[FinemapAbfSnp], credible_size: f64) -> Vec<(String, f64)> {
     let mut sorted: Vec<&FinemapAbfSnp> = snps.iter().collect();
-    sorted.sort_by(|a, b| b.snp_pp.partial_cmp(&a.snp_pp).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.snp_pp
+            .partial_cmp(&a.snp_pp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut cumsum = 0.0;
     let mut out = Vec::new();
     for s in &sorted {
@@ -979,7 +985,10 @@ pub fn check_dataset(d: &Dataset, suffix: &str) -> Result<()> {
     }
 
     // Check for missing values (NaN/Inf) in numeric vectors.
-    for v in [&d.beta, &d.varbeta, &d.pvalues, &d.maf].into_iter().flatten() {
+    for v in [&d.beta, &d.varbeta, &d.pvalues, &d.maf]
+        .into_iter()
+        .flatten()
+    {
         for &x in v {
             if x.is_nan() {
                 return Err(ColocError::MissingValues {
@@ -1042,10 +1051,9 @@ pub fn check_dataset(d: &Dataset, suffix: &str) -> Result<()> {
     }
 
     // For quant without sdY, need MAF + N.
-    if d.r#type == TraitType::Quant && d.sd_y.is_none()
-        && (d.maf.is_none() || d.n.is_none()) {
-            return Err(ColocError::MissingSdYOrMafN(suffix));
-        }
+    if d.r#type == TraitType::Quant && d.sd_y.is_none() && (d.maf.is_none() || d.n.is_none()) {
+        return Err(ColocError::MissingSdYOrMafN(suffix));
+    }
 
     Ok(())
 }
@@ -1234,8 +1242,8 @@ mod tests {
             position: None,
         };
         let result = coloc_abf(&d1, &d2, &ColocAbfOptions::default()).unwrap();
-        let sum = result.pp.pp_h0 + result.pp.pp_h1 + result.pp.pp_h2 + result.pp.pp_h3
-            + result.pp.pp_h4;
+        let sum =
+            result.pp.pp_h0 + result.pp.pp_h1 + result.pp.pp_h2 + result.pp.pp_h3 + result.pp.pp_h4;
         assert!((sum - 1.0).abs() < 1e-14, "PPs must sum to 1, got {sum}");
         assert_eq!(result.nsnps, 3);
         // Similar effect directions → expect H4 > H3.

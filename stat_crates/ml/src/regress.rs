@@ -41,7 +41,10 @@ pub fn linear_regression(data: &Mat<f64>, target: &[f64]) -> Result<RegressResul
         return Err(RegressError::Empty);
     }
     if target.len() != nrows {
-        return Err(RegressError::TargetMismatch { target: target.len(), rows: nrows });
+        return Err(RegressError::TargetMismatch {
+            target: target.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
@@ -87,7 +90,10 @@ pub fn elastic_net(
         return Err(RegressError::Empty);
     }
     if target.len() != nrows {
-        return Err(RegressError::TargetMismatch { target: target.len(), rows: nrows });
+        return Err(RegressError::TargetMismatch {
+            target: target.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
@@ -127,7 +133,10 @@ pub fn lars(data: &Mat<f64>, target: &[f64], _n_features: usize) -> Result<Regre
         return Err(RegressError::Empty);
     }
     if target.len() != nrows {
-        return Err(RegressError::TargetMismatch { target: target.len(), rows: nrows });
+        return Err(RegressError::TargetMismatch {
+            target: target.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
@@ -135,7 +144,6 @@ pub fn lars(data: &Mat<f64>, target: &[f64], _n_features: usize) -> Result<Regre
     let dataset = DatasetBase::new(x, y);
 
     let model = Lars::params()
-        
         .fit(&dataset)
         .map_err(|e| RegressError::Linfa(e.to_string()))?;
 
@@ -202,11 +210,7 @@ mod tests {
 
     #[test]
     fn test_linear_regression() {
-        let data = mat_from_row_major(
-            5,
-            2,
-            &[1.0, 2.0, 2.0, 4.0, 3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
-        );
+        let data = mat_from_row_major(5, 2, &[1.0, 2.0, 2.0, 4.0, 3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
         let target = vec![5.0, 10.0, 15.0, 20.0, 25.0]; // y = 5*x1
         let result = linear_regression(&data, &target).unwrap();
         assert_eq!(result.predictions.len(), 5);
@@ -221,9 +225,10 @@ mod tests {
         let data = mat_from_row_major(
             10,
             3,
-            &[1.0, 0.0, 1.0, 2.0, 0.0, 1.0, 3.0, 0.0, 1.0, 4.0, 0.0, 1.0,
-              5.0, 0.0, 1.0, 6.0, 0.0, 1.0, 7.0, 0.0, 1.0, 8.0, 0.0, 1.0,
-              9.0, 0.0, 1.0, 10.0, 0.0, 1.0],
+            &[
+                1.0, 0.0, 1.0, 2.0, 0.0, 1.0, 3.0, 0.0, 1.0, 4.0, 0.0, 1.0, 5.0, 0.0, 1.0, 6.0,
+                0.0, 1.0, 7.0, 0.0, 1.0, 8.0, 0.0, 1.0, 9.0, 0.0, 1.0, 10.0, 0.0, 1.0,
+            ],
         );
         let target: Vec<f64> = (1..=10).map(|x| x as f64 * 2.0).collect();
         let result = elastic_net(&data, &target, 0.01, 0.5, 1000, 1e-4).unwrap();

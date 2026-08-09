@@ -7,10 +7,10 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::compile::{LatexEngine, compile_document};
-use crate::store::WritingStore;
 use super::WritingToolState;
 use super::citation_tools::PreviewTexTool;
+use crate::compile::{LatexEngine, compile_document};
+use crate::store::WritingStore;
 
 pub fn registrations(state: WritingToolState) -> Vec<ToolRegistration> {
     let mut regs = Vec::new();
@@ -72,9 +72,10 @@ impl ToolFunction for DocCompileTool {
             })?;
 
         // Build resolver if bib is available.
-        let resolver = self.bib.as_ref().map(|bib| {
-            crate::citation::CitationResolver::new(bib.clone())
-        });
+        let resolver = self
+            .bib
+            .as_ref()
+            .map(|bib| crate::citation::CitationResolver::new(bib.clone()));
 
         let output = compile_document(&doc, resolver.as_ref(), self.engine.as_ref())
             .await

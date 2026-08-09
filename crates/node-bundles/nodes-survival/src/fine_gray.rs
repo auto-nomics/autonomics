@@ -48,8 +48,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::ColumnError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -79,7 +79,9 @@ impl From<ColumnError> for FineGrayError {
 }
 
 impl ::dag_core::dag::NodeError for FineGrayError {
-    fn node_type(&self) -> &str { FINE_GRAY_NODE_KIND }
+    fn node_type(&self) -> &str {
+        FINE_GRAY_NODE_KIND
+    }
 }
 
 // ── spec ────────────────────────────────────────────────────────────────────

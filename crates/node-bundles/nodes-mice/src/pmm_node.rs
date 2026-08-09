@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
@@ -123,7 +123,14 @@ impl NodeFactory for MiceImputePmmNodeFactory {
         let preds_expr = if s.predictors.is_empty() {
             String::new()
         } else {
-            format!("cbind({})", s.predictors.iter().map(|c| format!("{input}${c}")).collect::<Vec<_>>().join(", "))
+            format!(
+                "cbind({})",
+                s.predictors
+                    .iter()
+                    .map(|c| format!("{input}${c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         };
 
         let yc = s.y_column.clone();
@@ -140,7 +147,9 @@ impl NodeFactory for MiceImputePmmNodeFactory {
             format!("  matchtype = {}", s.matchtype),
             ")".to_string(),
             "# Augment with observed-set statistics for cross-validation".to_string(),
-            format!("{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); obs_sd <- sd(obs_y); obs_min <- min(obs_y); obs_max <- max(obs_y); {out} <- data.frame(imputed = as.numeric({fit_var}), in_observed_set = as.numeric({fit_var}) %in% obs_y, observed_mean = obs_mean, observed_sd = obs_sd, observed_min = obs_min, observed_max = obs_max) }}"),
+            format!(
+                "{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); obs_sd <- sd(obs_y); obs_min <- min(obs_y); obs_max <- max(obs_y); {out} <- data.frame(imputed = as.numeric({fit_var}), in_observed_set = as.numeric({fit_var}) %in% obs_y, observed_mean = obs_mean, observed_sd = obs_sd, observed_min = obs_min, observed_max = obs_max) }}"
+            ),
             format!("print({out})"),
         ];
         Ok(NodeCodegen::simple(code, out))
@@ -194,14 +203,17 @@ impl DagNode for MiceImputePmmNode {
             node_type: "mice_impute_pmm".into(),
             msg: e.to_string(),
         })?;
-        let ry = extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
-            node_type: "mice_impute_pmm".into(),
-            msg: e.to_string(),
-        })?;
+        let ry =
+            extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
+                node_type: "mice_impute_pmm".into(),
+                msg: e.to_string(),
+            })?;
         let wy: Vec<bool> = ry.iter().map(|r| !*r).collect();
-        let (x, _n) = build_predictor_matrix(&batches, &self.spec.predictors).map_err(|e| DagError::NodeError {
-            node_type: "mice_impute_pmm".into(),
-            msg: e.to_string(),
+        let (x, _n) = build_predictor_matrix(&batches, &self.spec.predictors).map_err(|e| {
+            DagError::NodeError {
+                node_type: "mice_impute_pmm".into(),
+                msg: e.to_string(),
+            }
         })?;
 
         let mut rng = match self.spec.seed {
@@ -252,7 +264,9 @@ mod tests {
             .collect();
         let arrays: Vec<Arc<dyn arrow_array::Array>> = columns
             .iter()
-            .map(|(_, vals)| Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>)
+            .map(|(_, vals)| {
+                Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>
+            })
             .collect();
         arrow_array::RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
     }
@@ -283,7 +297,9 @@ mod tests {
 
         let input = dag_core::node::NodeInput {
             port: 0,
-            data: datafusion::prelude::SessionContext::new().read_batch(batch).unwrap(),
+            data: datafusion::prelude::SessionContext::new()
+                .read_batch(batch)
+                .unwrap(),
         };
         let outs = node
             .execute(
@@ -298,7 +314,13 @@ mod tests {
         let batches = df.collect().await.unwrap();
         let imputed: Vec<f64> = batches
             .iter()
-            .flat_map(|b| b.column(0).as_any().downcast_ref::<Float64Array>().unwrap().iter())
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .iter()
+            })
             .map(|v| v.unwrap())
             .collect();
         assert_eq!(imputed.len(), 3);

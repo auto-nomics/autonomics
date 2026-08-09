@@ -43,8 +43,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::ColumnError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -72,7 +72,9 @@ impl From<ColumnError> for CumincError {
 }
 
 impl ::dag_core::dag::NodeError for CumincError {
-    fn node_type(&self) -> &str { CUMINC_NODE_KIND }
+    fn node_type(&self) -> &str {
+        CUMINC_NODE_KIND
+    }
 }
 
 // ── spec ────────────────────────────────────────────────────────────────────

@@ -83,10 +83,9 @@ pub fn apriori(
         for i in 0..prev_level.len() {
             for j in (i + 1)..prev_level.len() {
                 let union: HashSet<String> = prev_level[i].union(&prev_level[j]).cloned().collect();
-                if union.len() == k
-                    && !candidates.contains(&union) {
-                        candidates.push(union);
-                    }
+                if union.len() == k && !candidates.contains(&union) {
+                    candidates.push(union);
+                }
             }
         }
 
@@ -119,16 +118,22 @@ pub fn apriori(
         let items_vec = &fi.items;
         let n_items = items_vec.len();
         for mask in 1..(1usize << n_items) - 1 {
-            let antecedent: HashSet<&String> = items_vec.iter().enumerate()
+            let antecedent: HashSet<&String> = items_vec
+                .iter()
+                .enumerate()
                 .filter(|(i, _)| mask & (1 << i) != 0)
                 .map(|(_, item)| item)
                 .collect();
             let consequent: HashSet<&String> = full.difference(&antecedent).copied().collect();
 
             let ant_count = count_support(&antecedent);
-            if ant_count == 0 { continue; }
+            if ant_count == 0 {
+                continue;
+            }
             let confidence = full_count as f64 / ant_count as f64;
-            if confidence < min_confidence { continue; }
+            if confidence < min_confidence {
+                continue;
+            }
 
             let ant_support = ant_count as f64 / n as f64;
             let con_count = count_support(&consequent);
@@ -170,8 +175,8 @@ pub fn als(
         return Err(AssocError::Empty);
     }
 
-    use rand::SeedableRng;
     use rand::Rng;
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -291,7 +296,9 @@ fn solve_linear(a: &[f64], b: &[f64], n: usize) -> std::result::Result<Vec<f64>,
             aug[col * (n + 1) + j] /= pivot;
         }
         for row in 0..n {
-            if row == col { continue; }
+            if row == col {
+                continue;
+            }
             let factor = aug[row * (n + 1) + col];
             for j in 0..=n {
                 aug[row * (n + 1) + j] -= factor * aug[col * (n + 1) + j];
@@ -322,10 +329,14 @@ mod tests {
     #[test]
     fn test_als() {
         let ratings = vec![
-            (0, 0, 5.0), (0, 1, 3.0),
-            (1, 0, 4.0), (1, 1, 2.0),
-            (2, 0, 1.0), (2, 2, 5.0),
-            (3, 1, 4.0), (3, 2, 3.0),
+            (0, 0, 5.0),
+            (0, 1, 3.0),
+            (1, 0, 4.0),
+            (1, 1, 2.0),
+            (2, 0, 1.0),
+            (2, 2, 5.0),
+            (3, 1, 4.0),
+            (3, 2, 3.0),
         ];
         let result = als(&ratings, 4, 3, 2, 10, 0.1).unwrap();
         assert_eq!(result.user_factors.len(), 4);

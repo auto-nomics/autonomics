@@ -4,8 +4,8 @@
 //! Avoids the massive burn dependency tree while covering the core use case.
 
 use faer::Mat;
-use rand::SeedableRng;
 use rand::Rng;
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
@@ -39,7 +39,13 @@ impl Activation {
 
     fn derivative(&self, x: f64) -> f64 {
         match self {
-            Activation::ReLU => if x > 0.0 { 1.0 } else { 0.0 },
+            Activation::ReLU => {
+                if x > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             Activation::Sigmoid => {
                 let s = 1.0 / (1.0 + (-x).exp());
                 s * (1.0 - s)
@@ -73,11 +79,7 @@ pub struct MlpOptions {
 }
 
 /// Fit an MLP for binary classification (output = sigmoid → probability).
-pub fn mlp_fit(
-    data: &Mat<f64>,
-    labels: &[usize],
-    opts: &MlpOptions,
-) -> Result<MlpModel> {
+pub fn mlp_fit(data: &Mat<f64>, labels: &[usize], opts: &MlpOptions) -> Result<MlpModel> {
     let (nrows, ncols) = data.shape();
     if nrows == 0 {
         return Err(DeepError::Empty);
@@ -137,7 +139,10 @@ pub fn mlp_fit(
 
         // Backward pass + weight update
         let n_layers = weights.len();
-        let mut weight_grads: Vec<Mat<f64>> = weights.iter().map(|w| Mat::<f64>::zeros(w.nrows(), w.ncols())).collect();
+        let mut weight_grads: Vec<Mat<f64>> = weights
+            .iter()
+            .map(|w| Mat::<f64>::zeros(w.nrows(), w.ncols()))
+            .collect();
 
         for i in 0..nrows {
             let target = if labels[i] != 0 { 1.0 } else { 0.0 };
@@ -217,7 +222,10 @@ pub fn mlp_predict(model: &MlpModel, data: &Mat<f64>) -> Vec<usize> {
                 let z: Vec<f64> = (0..n_out)
                     .map(|j| (0..n_in).map(|k| w[(k, j)] * biased[k]).sum())
                     .collect();
-                input = z.iter().map(|&v| model.activations[l].activate(v)).collect();
+                input = z
+                    .iter()
+                    .map(|&v| model.activations[l].activate(v))
+                    .collect();
             }
             if input[0] > 0.5 { 1 } else { 0 }
         })
@@ -238,7 +246,10 @@ pub fn mlp_predict_proba(model: &MlpModel, data: &Mat<f64>) -> Vec<f64> {
                 let z: Vec<f64> = (0..n_out)
                     .map(|j| (0..n_in).map(|k| w[(k, j)] * biased[k]).sum())
                     .collect();
-                input = z.iter().map(|&v| model.activations[l].activate(v)).collect();
+                input = z
+                    .iter()
+                    .map(|&v| model.activations[l].activate(v))
+                    .collect();
             }
             input[0]
         })
@@ -250,7 +261,7 @@ pub fn mlp_predict_proba(model: &MlpModel, data: &Mat<f64>) -> Vec<f64> {
 // ═══════════════════════════════════════════════════════════════════════
 
 pub struct AutoencoderResult {
-    pub encoded: Vec<Vec<f64>>, // n_samples × latent_dim
+    pub encoded: Vec<Vec<f64>>,       // n_samples × latent_dim
     pub reconstructed: Vec<Vec<f64>>, // n_samples × n_features
     pub reconstruction_error: f64,
 }
@@ -322,13 +333,22 @@ pub fn autoencoder(
     }
 
     // Compute final encoding + reconstruction
-    let encoded: Vec<Vec<f64>> = (0..nrows).map(|i| {
-        let x: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
-        (0..latent_dim).map(|k| (0..ncols).map(|j| x[j] * w1[(j, k)]).sum()).collect()
-    }).collect();
-    let reconstructed: Vec<Vec<f64>> = encoded.iter().map(|z| {
-        (0..ncols).map(|j| (0..latent_dim).map(|k| z[k] * w2[(k, j)]).sum()).collect()
-    }).collect();
+    let encoded: Vec<Vec<f64>> = (0..nrows)
+        .map(|i| {
+            let x: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
+            (0..latent_dim)
+                .map(|k| (0..ncols).map(|j| x[j] * w1[(j, k)]).sum())
+                .collect()
+        })
+        .collect();
+    let reconstructed: Vec<Vec<f64>> = encoded
+        .iter()
+        .map(|z| {
+            (0..ncols)
+                .map(|j| (0..latent_dim).map(|k| z[k] * w2[(k, j)]).sum())
+                .collect()
+        })
+        .collect();
 
     let mut recon_sq = 0.0f64;
     for i in 0..nrows {
@@ -338,7 +358,11 @@ pub fn autoencoder(
     }
     let recon_error = recon_sq.sqrt();
 
-    Ok(AutoencoderResult { encoded, reconstructed, reconstruction_error: recon_error })
+    Ok(AutoencoderResult {
+        encoded,
+        reconstructed,
+        reconstruction_error: recon_error,
+    })
 }
 
 #[cfg(test)]
@@ -349,9 +373,11 @@ mod tests {
     #[test]
     fn test_mlp() {
         let data = mat_from_row_major(
-            8, 2,
-            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1,
-              5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1],
+            8,
+            2,
+            &[
+                0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1,
+            ],
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let opts = MlpOptions {
@@ -372,10 +398,12 @@ mod tests {
     #[test]
     fn test_autoencoder() {
         let data = mat_from_row_major(
-            6, 4,
-            &[1.0, 2.0, 1.0, 2.0, 2.0, 1.0, 2.0, 1.0,
-              1.0, 2.0, 1.0, 2.0, 2.0, 1.0, 2.0, 1.0,
-              10.0, 20.0, 10.0, 20.0, 20.0, 10.0, 20.0, 10.0],
+            6,
+            4,
+            &[
+                1.0, 2.0, 1.0, 2.0, 2.0, 1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 2.0, 2.0, 1.0, 2.0, 1.0,
+                10.0, 20.0, 10.0, 20.0, 20.0, 10.0, 20.0, 10.0,
+            ],
         );
         let result = autoencoder(&data, 2, 200, 0.001, 42).unwrap();
         assert_eq!(result.encoded.len(), 6);

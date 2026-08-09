@@ -83,8 +83,7 @@ impl Hunk {
 }
 
 /// A contiguous change region within an update hunk.
-#[derive(Debug, PartialEq, Clone)]
-#[derive(Default)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct UpdateFileChunk {
     /// A single line of context (e.g. a function signature) used to narrow
     /// down the position of the chunk in the file.
@@ -522,7 +521,6 @@ impl Parser {
         })
     }
 }
-
 
 /// Ensure there is at least one chunk to push lines into.
 fn ensure_chunk(chunks: &mut Vec<UpdateFileChunk>) {

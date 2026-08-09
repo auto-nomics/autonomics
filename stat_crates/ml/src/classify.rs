@@ -38,7 +38,7 @@ pub fn logistic_regression(
     alpha: f64,
     max_iter: usize,
 ) -> Result<LogisticResult> {
-    use linfa::dataset::{DatasetBase, AsTargets};
+    use linfa::dataset::{AsTargets, DatasetBase};
     use linfa::traits::{Fit, Predict};
     use linfa_logistic::LogisticRegression;
 
@@ -47,7 +47,10 @@ pub fn logistic_regression(
         return Err(ClassifyError::Empty);
     }
     if labels.len() != nrows {
-        return Err(ClassifyError::LabelMismatch { labels: labels.len(), rows: nrows });
+        return Err(ClassifyError::LabelMismatch {
+            labels: labels.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
@@ -65,7 +68,10 @@ pub fn logistic_regression(
     let predictions: Vec<usize> = probs.iter().map(|&p| if p > 0.5 { 1 } else { 0 }).collect();
     let probabilities: Vec<f64> = probs.to_vec();
 
-    Ok(LogisticResult { predictions, probabilities })
+    Ok(LogisticResult {
+        predictions,
+        probabilities,
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -86,7 +92,10 @@ pub fn gaussian_nb(data: &Mat<f64>, labels: &[usize]) -> Result<NbResult> {
         return Err(ClassifyError::Empty);
     }
     if labels.len() != nrows {
-        return Err(ClassifyError::LabelMismatch { labels: labels.len(), rows: nrows });
+        return Err(ClassifyError::LabelMismatch {
+            labels: labels.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
@@ -123,7 +132,10 @@ pub fn knn_classify(
         return Err(ClassifyError::Empty);
     }
     if train_labels.len() != n_train {
-        return Err(ClassifyError::LabelMismatch { labels: train_labels.len(), rows: n_train });
+        return Err(ClassifyError::LabelMismatch {
+            labels: train_labels.len(),
+            rows: n_train,
+        });
     }
 
     let predictions: Vec<usize> = (0..n_test)
@@ -132,8 +144,14 @@ pub fn knn_classify(
             // Compute distances to all training points
             let mut dists: Vec<(f64, usize)> = (0..n_train)
                 .map(|t| {
-                    let train_point: Vec<f64> = (0..n_features).map(|j| train_data[(t, j)]).collect();
-                    let d: f64 = test_point.iter().zip(&train_point).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
+                    let train_point: Vec<f64> =
+                        (0..n_features).map(|j| train_data[(t, j)]).collect();
+                    let d: f64 = test_point
+                        .iter()
+                        .zip(&train_point)
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f64>()
+                        .sqrt();
                     (d, train_labels[t])
                 })
                 .collect();
@@ -141,11 +159,16 @@ pub fn knn_classify(
 
             // Majority vote among k nearest
             let k = k.min(dists.len());
-            let mut vote_counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+            let mut vote_counts: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
             for (_, label) in dists.iter().take(k) {
                 *vote_counts.entry(*label).or_insert(0) += 1;
             }
-            vote_counts.into_iter().max_by_key(|(_, c)| *c).map(|(l, _)| l).unwrap_or(0)
+            vote_counts
+                .into_iter()
+                .max_by_key(|(_, c)| *c)
+                .map(|(l, _)| l)
+                .unwrap_or(0)
         })
         .collect();
 
@@ -176,15 +199,17 @@ pub fn decision_tree(
         return Err(ClassifyError::Empty);
     }
     if labels.len() != nrows {
-        return Err(ClassifyError::LabelMismatch { labels: labels.len(), rows: nrows });
+        return Err(ClassifyError::LabelMismatch {
+            labels: labels.len(),
+            rows: nrows,
+        });
     }
 
     let x = faer_to_ndarray(data);
     let y = ndarray::Array1::from_vec(labels.to_vec());
     let dataset = DatasetBase::new(x, y);
 
-    let params = DecisionTree::params()
-        .max_depth(Some(max_depth));
+    let params = DecisionTree::params().max_depth(Some(max_depth));
     // linfa-trees builder methods
     let model = params
         .fit(&dataset)
@@ -206,8 +231,10 @@ mod tests {
         let data = mat_from_row_major(
             8,
             2,
-            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, // class 0
-              5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1], // class 1
+            &[
+                0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, // class 0
+                5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1,
+            ], // class 1
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         (data, labels)
@@ -235,6 +262,11 @@ mod tests {
         assert_eq!(result.predictions.len(), 8);
         // Just verify it runs and produces valid predictions
         assert!(result.predictions.iter().all(|&p| p == 0 || p == 1));
-        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(
+            result
+                .probabilities
+                .iter()
+                .all(|&p| (0.0..=1.0).contains(&p))
+        );
     }
 }

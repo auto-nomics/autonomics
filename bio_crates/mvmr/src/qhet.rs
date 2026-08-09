@@ -87,8 +87,8 @@ fn inner_min_q(
             let resid = gamma[l] - dot(&pihat[l], beta);
             // ∂Q/∂β_k = −2 Π_{lk} resid / w − resid² · 2 (Σ_l β)_k / w²
             for k in 0..p {
-                grad[k] += -2.0 * pihat[l][k] * resid / w
-                    - resid * resid * 2.0 * sigma_beta[k] / (w * w);
+                grad[k] +=
+                    -2.0 * pihat[l][k] * resid / w - resid * resid * 2.0 * sigma_beta[k] / (w * w);
             }
         }
         grad
@@ -119,8 +119,7 @@ fn inner_min_q(
                 beta_mp[b_idx] += h;
                 beta_mm[a] -= h;
                 beta_mm[b_idx] -= h;
-                hess[a][b_idx] = (objective(&beta_pp) - objective(&beta_pm)
-                    - objective(&beta_mp)
+                hess[a][b_idx] = (objective(&beta_pp) - objective(&beta_pm) - objective(&beta_mp)
                     + objective(&beta_mm))
                     / (4.0 * h * h);
                 hess[b_idx][a] = hess[a][b_idx];
@@ -129,8 +128,8 @@ fn inner_min_q(
         // Solve Hessian · step = −gradient via Cholesky (faer).
         let mat = faer::Mat::from_fn(p, p, |i, j| hess[j][i]);
         let rhs = faer::Mat::from_fn(p, 1, |i, _| -grad[i]);
-        use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
         use faer::Side;
+        use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
         let step = match Llt::new(mat.as_ref(), Side::Lower) {
             Ok(llt) => llt.solve(&rhs),
             Err(_) => {
@@ -187,9 +186,7 @@ pub fn qhet_mvmr(input: &MvmrInput, pcor: &[Vec<f64>]) -> Result<QhetResult> {
     let n = input.n_snps();
     let p = input.n_exposures();
     if pcor.len() != p || pcor.iter().any(|r| r.len() != p) {
-        return Err(MvmrError::LengthMismatch(format!(
-            "pcor must be {p}×{p}"
-        )));
+        return Err(MvmrError::LengthMismatch(format!("pcor must be {p}×{p}")));
     }
 
     let gamma = &input.beta_yg;
@@ -399,11 +396,7 @@ fn golden_section<F: Fn(f64) -> f64>(
             fd = f(d);
         }
     }
-    if fc < fd {
-        (c, fc)
-    } else {
-        (d, fd)
-    }
+    if fc < fd { (c, fc) } else { (d, fd) }
 }
 
 #[cfg(test)]
@@ -421,7 +414,12 @@ mod tests {
     #[test]
     fn nelder_mead_finds_quadratic_minimum() {
         // f(x,y) = (x−1)^2 + (y−2)^2.
-        let (v, f) = nelder_mead(&[0.0, 0.0], &|x: &[f64]| (x[0] - 1.0).powi(2) + (x[1] - 2.0).powi(2), 1e-12, 500);
+        let (v, f) = nelder_mead(
+            &[0.0, 0.0],
+            &|x: &[f64]| (x[0] - 1.0).powi(2) + (x[1] - 2.0).powi(2),
+            1e-12,
+            500,
+        );
         assert!((v[0] - 1.0).abs() < 1e-6);
         assert!((v[1] - 2.0).abs() < 1e-6);
         assert!(f.abs() < 1e-12);

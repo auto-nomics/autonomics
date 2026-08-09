@@ -64,9 +64,7 @@ impl EntityDiagnosticRule for EmptyDefinition {
                 location: format_entity_location(name),
                 severity: Severity::Warning,
                 message: "实体定义为空".to_string(),
-                suggested_actions: vec![
-                    "使用 kms_update_entity 补充实体的定义".to_string(),
-                ],
+                suggested_actions: vec!["使用 kms_update_entity 补充实体的定义".to_string()],
             })
         } else {
             None
@@ -97,9 +95,7 @@ impl EntityDiagnosticRule for MissingZhNomenclature {
                 location: format_entity_location(name),
                 severity: Severity::Hint,
                 message: "实体缺少中文命名".to_string(),
-                suggested_actions: vec![
-                    "为实体添加中文 (ZH) 命名".to_string(),
-                ],
+                suggested_actions: vec!["为实体添加中文 (ZH) 命名".to_string()],
             })
         } else {
             None

@@ -48,7 +48,9 @@ pub enum BkmrNodeError {
 }
 
 impl ::dag_core::dag::NodeError for BkmrNodeError {
-    fn node_type(&self) -> &str { BKMR_NODE_KIND }
+    fn node_type(&self) -> &str {
+        BKMR_NODE_KIND
+    }
 }
 
 // =====================================================================
@@ -80,10 +82,18 @@ pub struct BkmrConfig {
     pub seed: u32,
 }
 
-fn default_iter() -> usize { 1000 }
-fn default_true() -> bool { true }
-fn default_r_prior() -> String { "invunif".into() }
-fn default_seed() -> u32 { 111 }
+fn default_iter() -> usize {
+    1000
+}
+fn default_true() -> bool {
+    true
+}
+fn default_r_prior() -> String {
+    "invunif".into()
+}
+fn default_seed() -> u32 {
+    111
+}
 
 // =====================================================================
 // Output schema
@@ -112,7 +122,10 @@ fn numeric_values(col: &dyn Array) -> Vec<f64> {
         ($T:ty) => {
             if let Some(a) = col.as_any().downcast_ref::<$T>() {
                 for v in a.iter() {
-                    out.push(match v { Some(x) => x as f64, None => f64::NAN });
+                    out.push(match v {
+                        Some(x) => x as f64,
+                        None => f64::NAN,
+                    });
                 }
                 return out;
             }
@@ -135,10 +148,7 @@ fn numeric_values(col: &dyn Array) -> Vec<f64> {
 }
 
 fn extract_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, BkmrNodeError> {
-    let schema = batches
-        .first()
-        .ok_or(BkmrNodeError::EmptyInput)?
-        .schema();
+    let schema = batches.first().ok_or(BkmrNodeError::EmptyInput)?.schema();
     let idx = schema
         .index_of(name)
         .map_err(|_| BkmrNodeError::MissingColumn { name: name.into() })?;
@@ -252,17 +262,25 @@ impl NodeFactory for BkmrNodeFactory {
     ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<BkmrConfig>(spec, "bkmr")?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
-        let z_cols = cfg.exposures.iter()
+        let z_cols = cfg
+            .exposures
+            .iter()
             .map(|c| format!("{input}${c}"))
             .collect::<Vec<_>>()
             .join(", ");
         let x_part = if cfg.covariates.is_empty() {
             "NULL".to_string()
         } else {
-            let x_cols = cfg.covariates.iter()
+            let x_cols = cfg
+                .covariates
+                .iter()
                 .map(|c| format!("{input}${c}"))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -318,15 +336,16 @@ impl DagNode for BkmrNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(BkmrNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: BKMR_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: BKMR_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
             return Err(BkmrNodeError::EmptyInput.into());
         }
@@ -377,8 +396,8 @@ impl DagNode for BkmrNode {
         };
 
         let mut rng = bkmr::Rng::new(cfg.seed);
-        let fit =
-            bkmr::kmbayes(&mut rng, &y, z.as_ref(), x.as_ref(), &opts).map_err(BkmrNodeError::Bkmr)?;
+        let fit = bkmr::kmbayes(&mut rng, &y, z.as_ref(), x.as_ref(), &opts)
+            .map_err(BkmrNodeError::Bkmr)?;
 
         let batch = build_result_batch(&fit, m, k)?;
         let df = node_ctx
@@ -393,7 +412,11 @@ impl DagNode for BkmrNode {
 }
 
 /// Build the summary output batch from the MCMC chain.
-fn build_result_batch(fit: &bkmr::BkmrFit, m: usize, k: usize) -> Result<RecordBatch, BkmrNodeError> {
+fn build_result_batch(
+    fit: &bkmr::BkmrFit,
+    m: usize,
+    k: usize,
+) -> Result<RecordBatch, BkmrNodeError> {
     // Use second half of the chain for posterior summaries (burn-in = first half)
     let burn = fit.iter / 2;
     let sel = burn..fit.iter;

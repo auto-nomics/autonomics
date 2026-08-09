@@ -11,8 +11,8 @@ pub use dag_core::dag;
 pub use dag_core::dataset;
 pub use dag_core::error;
 // Node-level traits and types.
-pub use dag_core::node;
 pub use dag_core::arrow_util;
+pub use dag_core::node;
 pub use dag_core::sink;
 // Registry under its original `node_registry` path for backward compat.
 pub use dag_core::registry as node_registry;

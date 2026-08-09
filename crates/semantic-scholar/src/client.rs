@@ -266,11 +266,7 @@ impl S2Client {
     /// `paper_id` accepts: S2 SHA, `CorpusId:<id>`, `DOI:<doi>`,
     /// `ARXIV:<id>`, `PMID:<id>`, `PMCID:<id>`, `ACL:<id>`, `MAG:<id>`,
     /// `URL:<url>`.
-    pub async fn get_paper(
-        &self,
-        paper_id: &str,
-        fields: Option<&str>,
-    ) -> Result<Paper> {
+    pub async fn get_paper(&self, paper_id: &str, fields: Option<&str>) -> Result<Paper> {
         let path = format!("/paper/{}", urlencode(paper_id));
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(f) = fields {
@@ -381,11 +377,7 @@ impl S2Client {
     }
 
     /// Get details about a single author.
-    pub async fn get_author(
-        &self,
-        author_id: &str,
-        fields: Option<&str>,
-    ) -> Result<Author> {
+    pub async fn get_author(&self, author_id: &str, fields: Option<&str>) -> Result<Author> {
         let path = format!("/author/{}", urlencode(author_id));
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(f) = fields {

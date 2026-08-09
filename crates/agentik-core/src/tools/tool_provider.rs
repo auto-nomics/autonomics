@@ -80,9 +80,7 @@ impl ToolProviderRegistry {
 
         Toolset::from_registry(
             std::sync::Arc::new(registry),
-            Some(
-                tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0,
-            ),
+            Some(tokio::sync::mpsc::unbounded_channel::<agentik_sdk::types::AgentEvent>().0),
         )
     }
 

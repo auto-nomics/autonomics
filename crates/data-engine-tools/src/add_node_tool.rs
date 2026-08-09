@@ -124,8 +124,7 @@ mod tests {
         assert!(typed.spec.is_string(), "spec should be a string");
 
         // But the downstream factory would fail: Value::String ≠ expected struct.
-        let factory_err =
-            serde_json::from_value::<nodes_sql::sql_node::SqlNodeSpec>(typed.spec);
+        let factory_err = serde_json::from_value::<nodes_sql::sql_node::SqlNodeSpec>(typed.spec);
         assert!(
             factory_err.is_err(),
             "a string-valued spec must be rejected by the node factory: {factory_err:?}"

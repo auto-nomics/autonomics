@@ -16,9 +16,9 @@ use faer::Mat;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const MRLAP_KIND: &str = "mrlap";
@@ -161,7 +161,8 @@ impl NodeFactory for MrlapNodeFactory {
         let s = parse_spec::<MrlapSpec>(spec, "mrlap")?;
         let out = ctx.output_var.to_string();
         let input1 = ctx
-            .input_vars.first()
+            .input_vars
+            .first()
             .cloned()
             .unwrap_or_else(|| "__missing_input_0".into());
         let input2 = ctx

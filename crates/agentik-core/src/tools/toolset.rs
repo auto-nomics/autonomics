@@ -489,9 +489,7 @@ mod tests {
     }
 
     /// Build a `ToolRegistry` from a list of tools and freeze it into `Arc`.
-    fn build_registry(
-        tools: Vec<crate::tools::ToolRegistration>,
-    ) -> Arc<ToolRegistry> {
+    fn build_registry(tools: Vec<crate::tools::ToolRegistration>) -> Arc<ToolRegistry> {
         let mut registry = ToolRegistry::new();
         registry.register_all(tools).unwrap();
         Arc::new(registry)
@@ -584,7 +582,10 @@ mod tests {
             .find(|t| t.id() == "tc1")
             .expect("task should be retained as background");
         assert!(
-            matches!(entry.status(), crate::tools::task_runtime::TaskStatus::Running),
+            matches!(
+                entry.status(),
+                crate::tools::task_runtime::TaskStatus::Running
+            ),
             "task should still be running after sync window"
         );
         drop(tasks);
@@ -739,10 +740,7 @@ mod tests {
         ));
 
         // But registries ARE shared.
-        assert!(Arc::ptr_eq(
-            toolset_a.registry(),
-            toolset_b.registry(),
-        ));
+        assert!(Arc::ptr_eq(toolset_a.registry(), toolset_b.registry(),));
 
         // Running a tool on A does not affect B's task list.
         let _ = toolset_a

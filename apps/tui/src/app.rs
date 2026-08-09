@@ -158,9 +158,18 @@ impl App {
 
         // ── Load display settings from the settings table ──
         for (key, field) in [
-            ("collapse_thinking", &mut state.display_settings.collapse_thinking),
-            ("collapse_tool_calls", &mut state.display_settings.collapse_tool_calls),
-            ("collapse_tool_results", &mut state.display_settings.collapse_tool_results),
+            (
+                "collapse_thinking",
+                &mut state.display_settings.collapse_thinking,
+            ),
+            (
+                "collapse_tool_calls",
+                &mut state.display_settings.collapse_tool_calls,
+            ),
+            (
+                "collapse_tool_results",
+                &mut state.display_settings.collapse_tool_results,
+            ),
         ] {
             if let Ok(value) = conn.query_row(
                 "SELECT value FROM settings WHERE key = ?1",
@@ -657,7 +666,11 @@ impl App {
                 self.close_agent_leaf_by_id(agent_id);
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
-            crate::app_event::AppEvent::HistoryLoaded { agent_id, session_id, messages } => {
+            crate::app_event::AppEvent::HistoryLoaded {
+                agent_id,
+                session_id,
+                messages,
+            } => {
                 self.replay_history(agent_id, session_id, &messages);
             }
             crate::app_event::AppEvent::AgentSpawned {
@@ -735,11 +748,7 @@ impl App {
             runtime::HostEvent::AgentUnregistered { path } => {
                 self.state.sessions.retain(|s| s.name != path);
                 if self.state.active_agent_idx >= self.state.sessions.len() {
-                    self.state.active_agent_idx = self
-                        .state
-                        .sessions
-                        .len()
-                        .saturating_sub(1);
+                    self.state.active_agent_idx = self.state.sessions.len().saturating_sub(1);
                 }
                 tracing::info!(agent = %path, "host agent unregistered from TUI");
             }
@@ -777,10 +786,7 @@ impl App {
 
         let session = &mut self.state.sessions[session_idx];
         // Find the sub-session by session_id.
-        let sub = session
-            .sub_sessions
-            .iter_mut()
-            .find(|s| s.id == session_id);
+        let sub = session.sub_sessions.iter_mut().find(|s| s.id == session_id);
         let Some(sub) = sub else {
             tracing::warn!(%session_id, "history loaded for unknown sub-session");
             return;
@@ -845,9 +851,8 @@ impl App {
                     Ok(None) => {
                         // No snapshot — replay all WAL messages.
                         let mut mem = agentik_core::memory::Memory::new();
-                        if let Ok(msgs) = storage
-                            .get_messages_since_for_session(session_id, 0)
-                            .await
+                        if let Ok(msgs) =
+                            storage.get_messages_since_for_session(session_id, 0).await
                         {
                             for msg in msgs {
                                 let _ = mem.remember(msg);
@@ -1061,11 +1066,7 @@ impl App {
             // Clear any pending queued messages — the user cancelled, so
             // we don't want queued messages to immediately re-trigger
             // the agent when the TurnAborted event arrives.
-            let cleared = self
-                .state
-                .active_tab_state_mut()
-                .pending_queue
-                .len();
+            let cleared = self.state.active_tab_state_mut().pending_queue.len();
             if cleared > 0 {
                 self.state.active_tab_state_mut().pending_queue.clear();
                 tracing::info!(cleared, "cleared pending queue on user cancel");
@@ -1197,7 +1198,9 @@ impl App {
     fn open_agent_picker(&mut self) {
         tracing::info!("open_agent_picker called");
         let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
-            tracing::warn!("no host available for agent listing — RuntimeHost::open likely failed at startup");
+            tracing::warn!(
+                "no host available for agent listing — RuntimeHost::open likely failed at startup"
+            );
             return;
         };
         let tx = self.app_event_tx.clone();
@@ -1259,11 +1262,7 @@ impl App {
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
             KeyCode::Enter => {
                 // If cursor is on a folder, toggle expand/collapse.
-                let on_leaf = self
-                    .state
-                    .agent_picker
-                    .selected_item()
-                    .is_some();
+                let on_leaf = self.state.agent_picker.selected_item().is_some();
                 if !on_leaf {
                     self.state.agent_picker.toggle_expand();
                     return;
@@ -1419,9 +1418,7 @@ impl App {
             KeyCode::Char('n') if ctrl => {
                 self.state.session_picker.close();
                 self.state.pending_session_name = true;
-                self.state
-                    .name_input
-                    .open(" New Session ", "New session");
+                self.state.name_input.open(" New Session ", "New session");
             }
             // Ctrl+D: close the selected session
             KeyCode::Char('d') if ctrl => {
@@ -1449,7 +1446,8 @@ impl App {
                         .session_picker
                         .selected_id()
                         .and_then(|sid| {
-                            self.state.session_picker
+                            self.state
+                                .session_picker
                                 .items
                                 .iter()
                                 .find(|s| s.id == sid)
@@ -1664,11 +1662,7 @@ impl App {
 
         // Dispatch send_message outside the `ts` borrow.
         if let Some(text) = send_text {
-            let name = self
-                .state
-                .sessions
-                .get(active_idx)
-                .map(|s| s.name.clone());
+            let name = self.state.sessions.get(active_idx).map(|s| s.name.clone());
             if let Some(name) = name {
                 if let Some(host) = self.host.as_ref() {
                     host.control().deliver_message(&name, text);
@@ -1838,9 +1832,7 @@ impl App {
                 // Agent tab when there is history and the agent is idle.
                 let is_agent_tab = true;
                 let ts = self.state.active_tab_state_mut();
-                let can = is_agent_tab
-                    && !ts.status.is_active()
-                    && !ts.input_history.is_empty();
+                let can = is_agent_tab && !ts.status.is_active() && !ts.input_history.is_empty();
                 if can {
                     ts.input_mode = InputMode::Input;
                     ts.in_history_search = true;
@@ -1909,21 +1901,28 @@ impl App {
                     return;
                 }
                 self.state.pending_session_name = true;
-                self.state
-                    .name_input
-                    .open(" New Session ", "New session");
+                self.state.name_input.open(" New Session ", "New session");
             }
             CommandAction::ToggleCollapseThinking => {
                 self.state.display_settings.toggle_thinking();
-                self.persist_display_setting("collapse_thinking", self.state.display_settings.collapse_thinking);
+                self.persist_display_setting(
+                    "collapse_thinking",
+                    self.state.display_settings.collapse_thinking,
+                );
             }
             CommandAction::ToggleCollapseToolCalls => {
                 self.state.display_settings.toggle_tool_calls();
-                self.persist_display_setting("collapse_tool_calls", self.state.display_settings.collapse_tool_calls);
+                self.persist_display_setting(
+                    "collapse_tool_calls",
+                    self.state.display_settings.collapse_tool_calls,
+                );
             }
             CommandAction::ToggleCollapseToolResults => {
                 self.state.display_settings.toggle_tool_results();
-                self.persist_display_setting("collapse_tool_results", self.state.display_settings.collapse_tool_results);
+                self.persist_display_setting(
+                    "collapse_tool_results",
+                    self.state.display_settings.collapse_tool_results,
+                );
             }
         }
     }
@@ -2049,7 +2048,11 @@ impl App {
     }
 
     /// Render the delete-agent confirmation popup.
-    fn render_delete_confirm_popup(&self, area: ratatui::layout::Rect, buf: &mut ratatui::prelude::Buffer) {
+    fn render_delete_confirm_popup(
+        &self,
+        area: ratatui::layout::Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
         use ratatui::{
             layout::{Alignment, Rect},
             style::{Color, Modifier, Style},
@@ -2101,7 +2104,10 @@ impl App {
             Line::from(""),
             Line::from(vec![
                 Span::styled(" Press ", Style::default().fg(Color::Gray)),
-                Span::styled("y", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "y",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
                 Span::styled("n", Style::default().fg(Color::Green)),
                 Span::styled(" or ", Style::default().fg(Color::Gray)),
@@ -2125,37 +2131,33 @@ impl App {
         let agent_name = agent_session.name.clone();
         // Seed picker with whatever sub_sessions are already known; the
         // SessionList event will refresh the list shortly.
-        let initial_items: Vec<crate::widgets::session_picker::PickerSession> =
-            agent_session
-                .sub_sessions
-                .iter()
-                .map(|s| {
-                    let stats = crate::widgets::session_picker::compute_session_stats(
-                        &s.tab_state.messages,
-                    );
-                    crate::widgets::session_picker::PickerSession {
-                        id: s.id,
-                        title: s.title.clone(),
-                        message_count: s.tab_state.messages.len(),
-                        last_active: s.last_active,
-                        created_at: 0,
-                        user_message_count: stats.user_message_count,
-                        assistant_message_count: stats.assistant_message_count,
-                        tool_call_count: stats.tool_call_count,
-                        input_tokens: stats.input_tokens,
-                        output_tokens: stats.output_tokens,
-                        first_user_message: stats.first_user_message,
-                        last_assistant_message: stats.last_assistant_message,
-                    }
-                })
-                .collect();
+        let initial_items: Vec<crate::widgets::session_picker::PickerSession> = agent_session
+            .sub_sessions
+            .iter()
+            .map(|s| {
+                let stats =
+                    crate::widgets::session_picker::compute_session_stats(&s.tab_state.messages);
+                crate::widgets::session_picker::PickerSession {
+                    id: s.id,
+                    title: s.title.clone(),
+                    message_count: s.tab_state.messages.len(),
+                    last_active: s.last_active,
+                    created_at: 0,
+                    user_message_count: stats.user_message_count,
+                    assistant_message_count: stats.assistant_message_count,
+                    tool_call_count: stats.tool_call_count,
+                    input_tokens: stats.input_tokens,
+                    output_tokens: stats.output_tokens,
+                    first_user_message: stats.first_user_message,
+                    last_assistant_message: stats.last_assistant_message,
+                }
+            })
+            .collect();
         let active_id = agent_session
             .sub_sessions
             .get(agent_session.active_sub_session_idx)
             .map(|s| s.id);
-        self.state
-            .session_picker
-            .open(agent_id, agent_name.clone());
+        self.state.session_picker.open(agent_id, agent_name.clone());
         self.state
             .session_picker
             .set_sessions(initial_items, active_id);
@@ -2175,9 +2177,7 @@ impl App {
             .sessions
             .get(self.state.active_agent_idx)
             .map(|s| s.name.clone())
-            .and_then(|name| {
-                self.host.as_ref().and_then(|h| h.agent_model_info(&name))
-            })
+            .and_then(|name| self.host.as_ref().and_then(|h| h.agent_model_info(&name)))
             .or_else(|| {
                 // Fallback to global model when no agent is active.
                 self.state
@@ -2292,12 +2292,11 @@ impl App {
         // ── Session picker popup ──
         if self.state.session_picker.visible {
             use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::session_picker::SessionPicker::new()
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.session_picker,
-                );
+            crate::widgets::session_picker::SessionPicker::new().render(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.session_picker,
+            );
         }
 
         // ── Name input popup ──
@@ -2559,14 +2558,10 @@ fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine> {
                             text_parts.push_str(text);
                         }
                         ContentBlock::ToolResult {
-                            content,
-                            is_error,
-                            ..
+                            content, is_error, ..
                         } => {
                             if !text_parts.is_empty() {
-                                lines.push(state::ChatLine::User(
-                                    std::mem::take(&mut text_parts),
-                                ));
+                                lines.push(state::ChatLine::User(std::mem::take(&mut text_parts)));
                             }
                             lines.push(state::ChatLine::ToolResult {
                                 ok: !is_error.unwrap_or(false),

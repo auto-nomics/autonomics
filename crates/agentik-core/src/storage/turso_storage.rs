@@ -304,16 +304,17 @@ fn row_to_record(row: &turso::Row) -> Result<AgentRecord, StorageError> {
 }
 
 fn parse_relation(row: &turso::Row) -> Result<AgentRelation, StorageError> {
-    let parent_id = Uuid::parse_str(&text_col(row, 0)?)
-        .map_err(|e| StorageError::Other(e.into()))?;
-    let child_id = Uuid::parse_str(&text_col(row, 1)?)
-        .map_err(|e| StorageError::Other(e.into()))?;
+    let parent_id =
+        Uuid::parse_str(&text_col(row, 0)?).map_err(|e| StorageError::Other(e.into()))?;
+    let child_id =
+        Uuid::parse_str(&text_col(row, 1)?).map_err(|e| StorageError::Other(e.into()))?;
     let kind_str = text_col(row, 2)?;
     Ok(AgentRelation {
         parent_id,
         child_id,
-        kind: RelationKind::from_str(&kind_str)
-            .ok_or_else(|| StorageError::Other(format!("unknown relation kind: {kind_str}").into()))?,
+        kind: RelationKind::from_str(&kind_str).ok_or_else(|| {
+            StorageError::Other(format!("unknown relation kind: {kind_str}").into())
+        })?,
     })
 }
 
@@ -597,11 +598,7 @@ impl AgentStorage for TursoAgentStorage {
 
     // ── Session log (WAL) ────────────────────────────────────
 
-    async fn start_session(
-        &self,
-        agent_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<(), StorageError> {
+    async fn start_session(&self, agent_id: Uuid, session_id: Uuid) -> Result<(), StorageError> {
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
@@ -693,10 +690,7 @@ impl AgentStorage for TursoAgentStorage {
                  JOIN sessions s ON m.session_id = s.id
                  WHERE s.agent_id = ?1 AND m.ts > ?2
                  ORDER BY m.ts ASC, m.seq ASC",
-                params_from_iter([
-                    Value::Text(agent_id.to_string()),
-                    Value::Integer(ts),
-                ]),
+                params_from_iter([Value::Text(agent_id.to_string()), Value::Integer(ts)]),
             )
             .await?;
 
@@ -758,12 +752,9 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Integer(n) => n,
                         _ => 0,
                     };
-                    let session_id = Uuid::parse_str(&id_str)
-                        .map_err(|e| {
-                            StorageError::Other(
-                                format!("invalid session UUID '{id_str}': {e}").into(),
-                            )
-                        })?;
+                    let session_id = Uuid::parse_str(&id_str).map_err(|e| {
+                        StorageError::Other(format!("invalid session UUID '{id_str}': {e}").into())
+                    })?;
                     records.push(crate::storage::SessionRecord {
                         session_id,
                         title,
@@ -810,10 +801,7 @@ impl AgentStorage for TursoAgentStorage {
                  FROM messages
                  WHERE session_id = ?1 AND ts > ?2
                  ORDER BY ts ASC, seq ASC",
-                params_from_iter([
-                    Value::Text(session_id.to_string()),
-                    Value::Integer(ts),
-                ]),
+                params_from_iter([Value::Text(session_id.to_string()), Value::Integer(ts)]),
             )
             .await?;
         let mut messages = Vec::new();
@@ -872,10 +860,7 @@ impl AgentStorage for TursoAgentStorage {
     }
 }
 
-async fn collect_rows<T, F>(
-    rows: &mut turso::Rows,
-    mut f: F,
-) -> Result<Vec<T>, StorageError>
+async fn collect_rows<T, F>(rows: &mut turso::Rows, mut f: F) -> Result<Vec<T>, StorageError>
 where
     F: FnMut(&turso::Row) -> Result<T, StorageError>,
 {
@@ -1153,7 +1138,10 @@ mod tests {
         let sess_id = Uuid::new_v4();
 
         store.upsert_agent(rec).await.unwrap();
-        store.create_snapshot(sample_snapshot(agent_id, 1000)).await.unwrap();
+        store
+            .create_snapshot(sample_snapshot(agent_id, 1000))
+            .await
+            .unwrap();
         store.start_session(agent_id, sess_id).await.unwrap();
         store
             .append_message(sess_id, &Message::user("hi"))
@@ -1162,8 +1150,20 @@ mod tests {
 
         store.delete_agent(agent_id).await.unwrap();
         assert!(store.get_agent(agent_id).await.unwrap().is_none());
-        assert!(store.get_agent_snapshots(agent_id).await.unwrap().is_empty());
-        assert!(store.get_messages_since(agent_id, 0).await.unwrap().is_empty());
+        assert!(
+            store
+                .get_agent_snapshots(agent_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .get_messages_since(agent_id, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1221,11 +1221,13 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_latest_none() {
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        assert!(store
-            .get_latest_snapshot(Uuid::new_v4())
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .get_latest_snapshot(Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     // ── Session + WAL ────────────────────────────────────────
@@ -1237,8 +1239,14 @@ mod tests {
         let session_id = Uuid::new_v4();
 
         store.start_session(agent_id, session_id).await.unwrap();
-        store.append_message(session_id, &Message::user("hello")).await.unwrap();
-        store.append_message(session_id, &Message::user("world")).await.unwrap();
+        store
+            .append_message(session_id, &Message::user("hello"))
+            .await
+            .unwrap();
+        store
+            .append_message(session_id, &Message::user("world"))
+            .await
+            .unwrap();
         store.end_session(session_id).await.unwrap();
 
         let msgs = store.get_messages_since(agent_id, 0).await.unwrap();
@@ -1252,14 +1260,24 @@ mod tests {
         let session_id = Uuid::new_v4();
 
         store.start_session(agent_id, session_id).await.unwrap();
-        store.append_message(session_id, &Message::user("old")).await.unwrap();
+        store
+            .append_message(session_id, &Message::user("old"))
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let watermark = chrono::Utc::now().timestamp_millis();
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        store.append_message(session_id, &Message::user("new")).await.unwrap();
+        store
+            .append_message(session_id, &Message::user("new"))
+            .await
+            .unwrap();
 
         let msgs = store.get_messages_since(agent_id, watermark).await.unwrap();
-        assert_eq!(msgs.len(), 1, "only messages after watermark should be returned");
+        assert_eq!(
+            msgs.len(),
+            1,
+            "only messages after watermark should be returned"
+        );
     }
 
     #[tokio::test]
@@ -1343,7 +1361,11 @@ mod tests {
         }
 
         let records = store.list_session_records(agent_id).await.unwrap();
-        assert_eq!(records.len(), 1, "repeated start_session must be idempotent");
+        assert_eq!(
+            records.len(),
+            1,
+            "repeated start_session must be idempotent"
+        );
         assert_eq!(records[0].session_id, session_id);
     }
 
@@ -1383,7 +1405,10 @@ mod tests {
             .iter()
             .flat_map(|i| i.messages.iter())
             .collect();
-        assert!(all_msgs.len() >= 2, "expected at least 2 messages after restore");
+        assert!(
+            all_msgs.len() >= 2,
+            "expected at least 2 messages after restore"
+        );
     }
 
     // ── RelationKind ─────────────────────────────────────────
@@ -1473,7 +1498,13 @@ mod tests {
         // 7. Delete cascades to everything.
         store.delete_agent(agent_id).await.unwrap();
         assert!(store.get_agent(agent_id).await.unwrap().is_none());
-        assert!(store.get_messages_since(agent_id, 0).await.unwrap().is_empty());
+        assert!(
+            store
+                .get_messages_since(agent_id, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     // ── AgentProfileRegistry ─────────────────────────────────
@@ -1524,11 +1555,7 @@ mod tests {
 
         store.create_profile(profile).await.unwrap();
 
-        let fetched = store
-            .get_profile_by_name("by-name")
-            .await
-            .unwrap()
-            .unwrap();
+        let fetched = store.get_profile_by_name("by-name").await.unwrap().unwrap();
         assert_eq!(fetched.name, "by-name");
     }
 
@@ -1633,10 +1660,7 @@ mod tests {
             "no profile should retain the legacy 'default' name"
         );
         // The migrated researcher should preserve the legacy identity.
-        let researcher = profiles
-            .iter()
-            .find(|p| p.name == "researcher")
-            .unwrap();
+        let researcher = profiles.iter().find(|p| p.name == "researcher").unwrap();
         assert_eq!(researcher.agent_identity, "legacy identity");
     }
 
@@ -1704,10 +1728,7 @@ mod tests {
         // 1. Start session + add messages.
         store.start_session(agent_id, session_id).await.unwrap();
         store
-            .append_message(
-                session_id,
-                &Message::user("hello world"),
-            )
+            .append_message(session_id, &Message::user("hello world"))
             .await
             .unwrap();
         store
@@ -1778,7 +1799,6 @@ mod tests {
         }
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Torn-WAL recovery helpers

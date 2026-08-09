@@ -35,11 +35,7 @@ pub fn writing_all_registrations(
     bib: Option<Arc<BibBase>>,
     engine: Option<Arc<dyn LatexEngine>>,
 ) -> Vec<ToolRegistration> {
-    let state = WritingToolState {
-        store,
-        bib,
-        engine,
-    };
+    let state = WritingToolState { store, bib, engine };
 
     let mut regs = Vec::new();
 

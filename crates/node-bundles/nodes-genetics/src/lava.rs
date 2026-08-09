@@ -26,8 +26,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::dag::runtime::RuntimeStatus;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -48,7 +48,9 @@ pub enum LavaNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LavaNodeError {
-    fn node_type(&self) -> &str { "lava" }
+    fn node_type(&self) -> &str {
+        "lava"
+    }
 }
 
 fn missing(name: &str) -> LavaNodeError {

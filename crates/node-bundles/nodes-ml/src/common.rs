@@ -46,11 +46,9 @@ pub fn extract_numeric_column(
     name: &str,
 ) -> Result<Vec<f64>, ColumnError> {
     let schema = batches.first().ok_or(ColumnError::Empty)?.schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| ColumnError::Missing {
-            name: name.to_string(),
-        })?;
+    let idx = schema.index_of(name).map_err(|_| ColumnError::Missing {
+        name: name.to_string(),
+    })?;
     let dtype = schema.field(idx).data_type().clone();
     if !is_numeric(&dtype) {
         return Err(ColumnError::WrongType {
@@ -63,27 +61,24 @@ pub fn extract_numeric_column(
     let mut values = Vec::new();
     for batch in batches {
         let col = batch.column(idx);
-        extract_numeric_dispatch(col, &mut |v: Option<f64>| values.push(v.unwrap_or(f64::NAN)));
+        extract_numeric_dispatch(col, &mut |v: Option<f64>| {
+            values.push(v.unwrap_or(f64::NAN))
+        });
     }
     Ok(values)
 }
 
 /// Extract a single string column as `Vec<String>`, nulls → empty string.
-pub fn extract_string_column(
-    batches: &[RecordBatch],
-    name: &str,
-) -> Result<Vec<String>, DagError> {
+pub fn extract_string_column(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, DagError> {
     let batch0 = batches.first().ok_or_else(|| DagError::NodeError {
         node_type: "ml".into(),
         msg: "no input rows".into(),
     })?;
     let schema = batch0.schema();
-    let idx = schema
-        .index_of(name)
-        .map_err(|_| DagError::NodeError {
-            node_type: "ml".into(),
-            msg: format!("column '{name}' not found"),
-        })?;
+    let idx = schema.index_of(name).map_err(|_| DagError::NodeError {
+        node_type: "ml".into(),
+        msg: format!("column '{name}' not found"),
+    })?;
 
     let mut values = Vec::new();
     for batch in batches {

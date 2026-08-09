@@ -141,19 +141,16 @@ impl DagNode for FigureEmbedNode {
             false,
         )]));
         let cols: Vec<ArrayRef> = vec![Arc::new(StringArray::from(vec![latex.as_str()]))];
-        let batch =
-            RecordBatch::try_new(out_schema, cols).map_err(|e| DagError::NodeError {
-                node_type: "figure_embed".into(),
-                msg: format!("failed to build output batch: {e}"),
-            })?;
+        let batch = RecordBatch::try_new(out_schema, cols).map_err(|e| DagError::NodeError {
+            node_type: "figure_embed".into(),
+            msg: format!("failed to build output batch: {e}"),
+        })?;
 
         let session = node_ctx.session();
-        let out_df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::NodeError {
-                node_type: "figure_embed".into(),
-                msg: format!("read_batch failed: {e}"),
-            })?;
+        let out_df = session.read_batch(batch).map_err(|e| DagError::NodeError {
+            node_type: "figure_embed".into(),
+            msg: format!("read_batch failed: {e}"),
+        })?;
 
         let mut out: PortOutputs = HashMap::new();
         out.insert(0, out_df);

@@ -119,7 +119,9 @@ impl FileSourceError {
 }
 
 impl ::dag_core::dag::NodeError for FileSourceError {
-    fn node_type(&self) -> &str { "source_file" }
+    fn node_type(&self) -> &str {
+        "source_file"
+    }
 }
 
 #[derive(Clone)]

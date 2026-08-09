@@ -84,10 +84,7 @@ fn vec_str(v: &Value) -> Vec<String> {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
-fn make_dataset_from_inputs(
-    inputs: &Value,
-    mode: &str,
-) -> Dataset {
+fn make_dataset_from_inputs(inputs: &Value, mode: &str) -> Dataset {
     let snp = vec_str(&inputs["snp"]);
     let n = num(&inputs["N"]);
     let maf = vec_f64(&inputs["maf"]);
@@ -187,7 +184,10 @@ fn xval_var_data_cc() {
     for (i, &f) in maf.iter().enumerate() {
         let rust = var_data_cc(f, n, s);
         let r_val = 1.0 / (2.0 * n * f * (1.0 - f) * s * (1.0 - s));
-        assert!((rust - r_val).abs() < 1e-15, "var_data_cc mismatch at snp {i}");
+        assert!(
+            (rust - r_val).abs() < 1e-15,
+            "var_data_cc mismatch at snp {i}"
+        );
     }
 }
 

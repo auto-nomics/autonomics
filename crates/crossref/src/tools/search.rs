@@ -6,8 +6,8 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 use bib_types::StructuredSearch;
 
-use crate::format::format_works;
 use crate::CrossrefClient;
+use crate::format::format_works;
 
 /// Search Crossref's 150M+ DOIs for scholarly works.
 ///

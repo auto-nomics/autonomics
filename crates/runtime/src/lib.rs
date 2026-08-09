@@ -13,5 +13,7 @@ pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use control::{HostCommand, HostControl, HostStatus};
-pub use host::{AgentHandle, HostError, HostEvent, HostResult, RuntimeHost, SharedInfra, TaggedEvent};
+pub use host::{
+    AgentHandle, HostError, HostEvent, HostResult, RuntimeHost, SharedInfra, TaggedEvent,
+};
 pub use host_tools::host_tools;

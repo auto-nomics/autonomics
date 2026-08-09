@@ -35,8 +35,8 @@ use ratatui::{
 use crate::state::{PlanState, ToolTaskInfo, ToolTaskStatus};
 // Re-export SessionSummary so callers (agent_leaf, agent_workspace, app) can
 // construct SidebarData without a separate import from session_list.
-pub use crate::widgets::session_list::SessionSummary;
 use crate::widgets::session_list::SessionList;
+pub use crate::widgets::session_list::SessionSummary;
 
 /// Data bundle the sidebar needs from the agent tab state.
 pub struct SidebarData<'a> {
@@ -151,7 +151,12 @@ fn render_plan_section(area: Rect, buf: &mut Buffer, plan: &PlanState) {
             break;
         }
         render_plan_step(
-            Rect { x: area.x, y, width: area.width, height: 1 },
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
             buf,
             step,
         );
@@ -173,7 +178,12 @@ fn render_task_section(area: Rect, buf: &mut Buffer, tasks: &[ToolTaskInfo]) {
             break;
         }
         render_task_row(
-            Rect { x: area.x, y, width: area.width, height: 1 },
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
             buf,
             task,
         );
@@ -183,15 +193,18 @@ fn render_task_section(area: Rect, buf: &mut Buffer, tasks: &[ToolTaskInfo]) {
 // ── Row renderers ──────────────────────────────────────
 
 /// Render a section header line: ` LABEL ` left, optional `N/M` right.
-fn render_section_header(area: Rect, buf: &mut Buffer, label: &str, progress: Option<(usize, usize)>) {
-    let mut spans = vec![
-        Span::styled(
-            format!(" {label} "),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+fn render_section_header(
+    area: Rect,
+    buf: &mut Buffer,
+    label: &str,
+    progress: Option<(usize, usize)>,
+) {
+    let mut spans = vec![Span::styled(
+        format!(" {label} "),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
 
     if let Some((done, total)) = progress {
         let text = format!("{done}/{total} ");
@@ -200,15 +213,17 @@ fn render_section_header(area: Rect, buf: &mut Buffer, label: &str, progress: Op
         if gap > 0 {
             spans.push(Span::raw(" ".repeat(gap)));
         }
-        spans.push(Span::styled(
-            text,
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled(text, Style::default().fg(Color::DarkGray)));
     }
 
     let line = Line::from(spans);
     Paragraph::new(line).render(
-        Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        },
         buf,
     );
 }
@@ -239,19 +254,14 @@ fn render_plan_step(area: Rect, buf: &mut Buffer, step: &agentik_types::PlanStep
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        agentik_types::StepStatus::Pending => {
-            ("○ ", Style::default().fg(Color::DarkGray))
-        }
+        agentik_types::StepStatus::Pending => ("○ ", Style::default().fg(Color::DarkGray)),
     };
 
     let icon_width = 2;
     let max_text_len = area.width.saturating_sub(icon_width) as usize;
     let text = truncate_str(&step.step, max_text_len);
 
-    let line = Line::from(vec![
-        Span::styled(icon, style),
-        Span::styled(text, style),
-    ]);
+    let line = Line::from(vec![Span::styled(icon, style), Span::styled(text, style)]);
     line.render(area, buf);
 }
 

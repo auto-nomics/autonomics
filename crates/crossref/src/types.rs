@@ -163,11 +163,19 @@ pub struct Work {
     pub r#type: String,
 
     /// Number of times this DOI is referenced by other Crossref DOIs.
-    #[serde(default, rename = "is-referenced-by-count", deserialize_with = "null_default")]
+    #[serde(
+        default,
+        rename = "is-referenced-by-count",
+        deserialize_with = "null_default"
+    )]
     pub is_referenced_by_count: u64,
 
     /// Number of references in this work's reference list.
-    #[serde(default, rename = "references-count", deserialize_with = "null_default")]
+    #[serde(
+        default,
+        rename = "references-count",
+        deserialize_with = "null_default"
+    )]
     pub references_count: u64,
 
     /// References list (when included — requires `has-references` filter).
@@ -218,7 +226,10 @@ pub struct Work {
 impl Work {
     /// First title, or a placeholder.
     pub fn title_str(&self) -> &str {
-        self.title.first().map(|s| s.as_str()).unwrap_or("(untitled)")
+        self.title
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("(untitled)")
     }
 
     /// First container title (journal / book name).
@@ -308,9 +319,21 @@ impl DateParts {
     /// Extract `(year, month, day)` from the first date-parts entry.
     pub fn ymd(&self) -> (Option<u16>, Option<u8>, Option<u8>) {
         let parts = self.date_parts.first();
-        let y = parts.and_then(|p| p.first()).copied().flatten().map(|v| v as u16);
-        let m = parts.and_then(|p| p.get(1)).copied().flatten().map(|v| v as u8);
-        let d = parts.and_then(|p| p.get(2)).copied().flatten().map(|v| v as u8);
+        let y = parts
+            .and_then(|p| p.first())
+            .copied()
+            .flatten()
+            .map(|v| v as u16);
+        let m = parts
+            .and_then(|p| p.get(1))
+            .copied()
+            .flatten()
+            .map(|v| v as u8);
+        let d = parts
+            .and_then(|p| p.get(2))
+            .copied()
+            .flatten()
+            .map(|v| v as u8);
         (y, m, d)
     }
 }
@@ -408,9 +431,17 @@ pub struct Member {
     pub names: serde_json::Value,
     #[serde(default)]
     pub prefix: serde_json::Value,
-    #[serde(default, rename = "backfile-doi-count", deserialize_with = "null_default")]
+    #[serde(
+        default,
+        rename = "backfile-doi-count",
+        deserialize_with = "null_default"
+    )]
     pub backfile_doi_count: u64,
-    #[serde(default, rename = "current-doi-count", deserialize_with = "null_default")]
+    #[serde(
+        default,
+        rename = "current-doi-count",
+        deserialize_with = "null_default"
+    )]
     pub current_doi_count: u64,
     #[serde(default, rename = "total-doi-count", deserialize_with = "null_default")]
     pub total_doi_count: u64,

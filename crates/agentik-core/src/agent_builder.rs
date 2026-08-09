@@ -8,11 +8,11 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
+use crate::memory::Memory;
 use crate::session::AgentShared;
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
-use crate::memory::Memory;
 use agentik_sdk::types::messages::Message;
 
 pub struct AgentBuilder {
@@ -186,10 +186,9 @@ impl AgentBuilder {
         // ── Build the shared tool registry ──────────────────
         // User tools + builtin task tools (tied to a tasks handle that will
         // be shared with the initial session's Toolset) + skill todo tool.
-        let tasks: Arc<tokio::sync::RwLock<crate::tools::task_runtime::TaskStore>> =
-            Arc::new(tokio::sync::RwLock::new(
-                crate::tools::task_runtime::TaskStore::new(),
-            ));
+        let tasks: Arc<tokio::sync::RwLock<crate::tools::task_runtime::TaskStore>> = Arc::new(
+            tokio::sync::RwLock::new(crate::tools::task_runtime::TaskStore::new()),
+        );
 
         // Plan state is created early so the update_plan tool can share it.
         let agent_id = self.id.unwrap_or_else(Uuid::new_v4);

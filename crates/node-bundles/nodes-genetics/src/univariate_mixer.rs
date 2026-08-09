@@ -49,7 +49,9 @@ pub enum UnivariateMixerError {
 }
 
 impl ::dag_core::dag::NodeError for UnivariateMixerError {
-    fn node_type(&self) -> &str { "univariate_mixer" }
+    fn node_type(&self) -> &str {
+        "univariate_mixer"
+    }
 }
 
 // =====================================================================
@@ -379,8 +381,11 @@ impl DagNode for UnivariateMixerNode {
             .arg(self.spec.downsample_factor.to_string());
 
         // ── 4. Run mixer.py fit1 ───────────────────────────────────────
-        reporter.info("fit1: invoking gsa-mixer subprocess (no mid-phase progress; \
-             LD loading + optimization dominates runtime)".to_string());
+        reporter.info(
+            "fit1: invoking gsa-mixer subprocess (no mid-phase progress; \
+             LD loading + optimization dominates runtime)"
+                .to_string(),
+        );
 
         // Run in a blocking thread to avoid stalling the async runtime.
         let output = tokio::task::spawn_blocking(move || cmd.output())

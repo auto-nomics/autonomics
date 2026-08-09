@@ -454,8 +454,7 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.latest_turn_input_tokens = t;
                 state.latest_turn_output_tokens = output_tokens;
                 state.latest_turn_cache_read_tokens = cache_read_input_tokens.unwrap_or(0);
-                state.latest_turn_cache_creation_tokens =
-                    cache_creation_input_tokens.unwrap_or(0);
+                state.latest_turn_cache_creation_tokens = cache_creation_input_tokens.unwrap_or(0);
                 // Anthropic's `input_tokens` is the count of NEW uncached
                 // tokens. To get the full prompt size that counted against
                 // the context window, add cached reads + cached writes.
@@ -593,15 +592,8 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
 /// triggers `SessionActivated` on a background agent), only the target
 /// agent's sub-sessions are touched — the foreground agent's view is
 /// untouched.
-pub fn apply_session_event(
-    state: &mut AppState,
-    event: AgentEvent,
-    agent_idx: usize,
-) {
-    let active_agent_id = state
-        .sessions
-        .get(agent_idx)
-        .map(|s| s.agent_id);
+pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: usize) {
+    let active_agent_id = state.sessions.get(agent_idx).map(|s| s.agent_id);
     let active_session_id = state
         .sessions
         .get(agent_idx)
@@ -636,32 +628,32 @@ pub fn apply_session_event(
                 })
                 .collect();
             // Feed the picker if it's open for the same agent.
-            if state.session_picker.visible
-                && state.session_picker.agent_id == active_agent_id
-            {
-                let picker_items: Vec<crate::widgets::session_picker::PickerSession> =
-                    subs.iter()
-                        .map(|s| {
-                            let stats = crate::widgets::session_picker::compute_session_stats(
-                                &s.tab_state.messages,
-                            );
-                            crate::widgets::session_picker::PickerSession {
-                                id: s.id,
-                                title: s.title.clone(),
-                                message_count: s.tab_state.messages.len(),
-                                last_active: s.last_active,
-                                created_at: 0, // not tracked on SubSession
-                                user_message_count: stats.user_message_count,
-                                assistant_message_count: stats.assistant_message_count,
-                                tool_call_count: stats.tool_call_count,
-                                input_tokens: stats.input_tokens,
-                                output_tokens: stats.output_tokens,
-                                first_user_message: stats.first_user_message,
-                                last_assistant_message: stats.last_assistant_message,
-                            }
-                        })
-                        .collect();
-                state.session_picker.set_sessions(picker_items, active_session_id);
+            if state.session_picker.visible && state.session_picker.agent_id == active_agent_id {
+                let picker_items: Vec<crate::widgets::session_picker::PickerSession> = subs
+                    .iter()
+                    .map(|s| {
+                        let stats = crate::widgets::session_picker::compute_session_stats(
+                            &s.tab_state.messages,
+                        );
+                        crate::widgets::session_picker::PickerSession {
+                            id: s.id,
+                            title: s.title.clone(),
+                            message_count: s.tab_state.messages.len(),
+                            last_active: s.last_active,
+                            created_at: 0, // not tracked on SubSession
+                            user_message_count: stats.user_message_count,
+                            assistant_message_count: stats.assistant_message_count,
+                            tool_call_count: stats.tool_call_count,
+                            input_tokens: stats.input_tokens,
+                            output_tokens: stats.output_tokens,
+                            first_user_message: stats.first_user_message,
+                            last_assistant_message: stats.last_assistant_message,
+                        }
+                    })
+                    .collect();
+                state
+                    .session_picker
+                    .set_sessions(picker_items, active_session_id);
             }
             session.sub_sessions = subs;
             if session.active_sub_session_idx >= session.sub_sessions.len()
@@ -761,8 +753,7 @@ impl SubSession {
 
 /// Global display preferences affecting how chat lines are rendered.
 /// Persisted in the `settings` table.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
@@ -771,7 +762,6 @@ pub struct DisplaySettings {
     /// to invalidate all cached lines when display settings change.
     pub version: u64,
 }
-
 
 impl DisplaySettings {
     pub fn toggle_thinking(&mut self) {
@@ -869,10 +859,7 @@ impl AppState {
     /// (which is never displayed since the workspace renders an empty state).
     pub fn active_tab_state_mut(&mut self) -> &mut AgentTabState {
         if let Some(session) = self.sessions.get_mut(self.active_agent_idx) {
-            if let Some(sub) = session
-                .sub_sessions
-                .get_mut(session.active_sub_session_idx)
-            {
+            if let Some(sub) = session.sub_sessions.get_mut(session.active_sub_session_idx) {
                 return &mut sub.tab_state;
             }
             return &mut session.pending_tab_state;
@@ -883,10 +870,7 @@ impl AppState {
     /// Returns an immutable reference to the active sub-session's tab state.
     pub fn active_tab_state(&self) -> &AgentTabState {
         if let Some(session) = self.sessions.get(self.active_agent_idx) {
-            if let Some(sub) = session
-                .sub_sessions
-                .get(session.active_sub_session_idx)
-            {
+            if let Some(sub) = session.sub_sessions.get(session.active_sub_session_idx) {
                 return &sub.tab_state;
             }
             return &session.pending_tab_state;

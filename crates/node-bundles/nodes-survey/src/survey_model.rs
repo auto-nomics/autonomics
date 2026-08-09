@@ -15,11 +15,11 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use crate::survey_common::{SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out};
 use dag_core::codegen::helpers::{input_0, parse_spec, r_formula};
 use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
@@ -100,17 +100,14 @@ impl DagNode for SvyGlmNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Parse the family + link specification.
-        let family_spec = survey::FamilySpec::new(
-            &self.spec.family,
-            self.spec.link.as_deref(),
-        )
-        .ok_or_else(|| DagError::NodeError {
-            node_type: "svyglm".into(),
-            msg: format!(
-                "unsupported family='{}' link='{:?}'",
-                self.spec.family, self.spec.link
-            ),
-        })?;
+        let family_spec = survey::FamilySpec::new(&self.spec.family, self.spec.link.as_deref())
+            .ok_or_else(|| DagError::NodeError {
+                node_type: "svyglm".into(),
+                msg: format!(
+                    "unsupported family='{}' link='{:?}'",
+                    self.spec.family, self.spec.link
+                ),
+            })?;
 
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "svyglm".into(),
@@ -139,7 +136,13 @@ impl DagNode for SvyGlmNode {
         }
 
         let fit = survey::svyglm(
-            &y[0], &x, &design, self.spec.intercept, None, &family_spec, None,
+            &y[0],
+            &x,
+            &design,
+            self.spec.intercept,
+            None,
+            &family_spec,
+            None,
         )
         .map_err(|e| DagError::NodeError {
             node_type: "svyglm".into(),

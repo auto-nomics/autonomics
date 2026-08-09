@@ -11,8 +11,7 @@ use faer::Mat;
 // ─── public input structs ────────────────────────────────────────────────────
 
 /// How z-scores relate to the model's σ²=1 scale.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ZMethod {
     /// Wald z = bhat/shat; PVE-adjusted onto σ²=1 scale (default).
     #[default]
@@ -21,10 +20,8 @@ pub enum ZMethod {
     Score,
 }
 
-
 /// Prior-variance optimization strategy (mirrors susieR's `estimate_prior_method`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PriorMethod {
     /// R `optim(method="Brent")` on log(V).
     #[default]
@@ -35,7 +32,6 @@ pub enum PriorMethod {
     /// the null-threshold check.
     Simple,
 }
-
 
 /// Input bundle for [`crate::susie_rss`].
 #[derive(Debug, Clone)]

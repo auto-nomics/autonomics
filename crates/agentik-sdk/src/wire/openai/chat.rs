@@ -50,9 +50,10 @@ impl WireProtocol for OpenAiChatWire {
         // Anthropic carries `system` as a top-level field; OpenAI Chat puts it
         // as the first message with `role: "system"`.
         if let Some(system) = &params.system
-            && !system.is_empty() {
-                messages.push(json!({"role": "system", "content": system}));
-            }
+            && !system.is_empty()
+        {
+            messages.push(json!({"role": "system", "content": system}));
+        }
 
         // Fan out canonical messages; a single Anthropic message can produce
         // multiple OpenAI messages (tool results become standalone `tool`
@@ -91,17 +92,18 @@ impl WireProtocol for OpenAiChatWire {
         // Tools: wrap each function descriptor as
         // `{"type":"function","function":{…}}`.
         if let Some(tools) = &params.tools
-            && !tools.is_empty() {
-                let openai_tools: Vec<Value> = tools
-                    .iter()
-                    .map(function_descriptor)
-                    .map(|f| json!({"type": "function", "function": f}))
-                    .collect();
-                body["tools"] = Value::Array(openai_tools);
-                // Allow parallel tool calls by default (OpenAI enables it
-                // unless explicitly disabled).
-                body["parallel_tool_calls"] = json!(true);
-            }
+            && !tools.is_empty()
+        {
+            let openai_tools: Vec<Value> = tools
+                .iter()
+                .map(function_descriptor)
+                .map(|f| json!({"type": "function", "function": f}))
+                .collect();
+            body["tools"] = Value::Array(openai_tools);
+            // Allow parallel tool calls by default (OpenAI enables it
+            // unless explicitly disabled).
+            body["parallel_tool_calls"] = json!(true);
+        }
 
         if let Some(choice) = &params.tool_choice {
             body["tool_choice"] = translate_tool_choice(choice, /*chat_form*/ true);
@@ -161,11 +163,12 @@ impl WireProtocol for OpenAiChatWire {
 
         // Text content.
         if let Some(text) = msg.get("content").and_then(|c| c.as_str())
-            && !text.is_empty() {
-                content.push(ContentBlock::Text {
-                    text: text.to_string(),
-                });
-            }
+            && !text.is_empty()
+        {
+            content.push(ContentBlock::Text {
+                text: text.to_string(),
+            });
+        }
 
         // Tool calls.
         if let Some(tool_calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
@@ -289,32 +292,33 @@ impl WireProtocol for OpenAiChatWire {
 
         // Text content delta → ContentBlockDelta::TextDelta at index 0.
         if let Some(text) = delta.get("content").and_then(|c| c.as_str())
-            && !text.is_empty() {
-                if !state.text_block_open {
-                    state.text_block_open = true;
-                    // We can only return one event per call; emit the
-                    // ContentBlockStart now and let the consumer poll again
-                    // for the delta. To avoid losing the delta, we re-queue
-                    // it by not consuming — but since we can't, we instead
-                    // emit the start now and the text delta will come on the
-                    // next chunk. This is acceptable: OpenAI's first text
-                    // delta is almost always preceded by a role-only delta
-                    // chunk.
-                    state.next_block_index = 1;
-                    return Ok(Some(MessageStreamEvent::ContentBlockStart {
-                        content_block: ContentBlock::Text {
-                            text: String::new(),
-                        },
-                        index: 0,
-                    }));
-                }
-                return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                    delta: ContentBlockDelta::TextDelta {
-                        text: text.to_string(),
+            && !text.is_empty()
+        {
+            if !state.text_block_open {
+                state.text_block_open = true;
+                // We can only return one event per call; emit the
+                // ContentBlockStart now and let the consumer poll again
+                // for the delta. To avoid losing the delta, we re-queue
+                // it by not consuming — but since we can't, we instead
+                // emit the start now and the text delta will come on the
+                // next chunk. This is acceptable: OpenAI's first text
+                // delta is almost always preceded by a role-only delta
+                // chunk.
+                state.next_block_index = 1;
+                return Ok(Some(MessageStreamEvent::ContentBlockStart {
+                    content_block: ContentBlock::Text {
+                        text: String::new(),
                     },
                     index: 0,
                 }));
             }
+            return Ok(Some(MessageStreamEvent::ContentBlockDelta {
+                delta: ContentBlockDelta::TextDelta {
+                    text: text.to_string(),
+                },
+                index: 0,
+            }));
+        }
 
         // Tool call deltas.
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
@@ -353,15 +357,16 @@ impl WireProtocol for OpenAiChatWire {
 
                 // Argument fragment → ContentBlockDelta::InputJsonDelta.
                 if let Some(args) = tc["function"]["arguments"].as_str()
-                    && !args.is_empty() {
-                        slot.arguments.push_str(args);
-                        return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                            delta: ContentBlockDelta::InputJsonDelta {
-                                partial_json: args.to_string(),
-                            },
-                            index: slot.block_index,
-                        }));
-                    }
+                    && !args.is_empty()
+                {
+                    slot.arguments.push_str(args);
+                    return Ok(Some(MessageStreamEvent::ContentBlockDelta {
+                        delta: ContentBlockDelta::InputJsonDelta {
+                            partial_json: args.to_string(),
+                        },
+                        index: slot.block_index,
+                    }));
+                }
             }
             // Consumed tool_calls deltas without emitting (e.g. all empty).
             return Ok(None);

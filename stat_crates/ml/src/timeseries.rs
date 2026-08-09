@@ -71,9 +71,7 @@ pub fn holt_linear(
         fitted.push(level + trend);
     }
 
-    let forecast: Vec<f64> = (1..=n_forecast)
-        .map(|h| level + h as f64 * trend)
-        .collect();
+    let forecast: Vec<f64> = (1..=n_forecast).map(|h| level + h as f64 * trend).collect();
 
     Ok(ExpSmoothingResult {
         fitted,
@@ -123,7 +121,9 @@ pub fn ar(data: &[f64], p: usize) -> Result<ArResult> {
     fitted[..p].copy_from_slice(&data[..p]); // first p points: no fit
     for t in 0..n {
         let pred = intercept
-            + (0..p).map(|j| coefficients[j] * data[t + p - 1 - j]).sum::<f64>();
+            + (0..p)
+                .map(|j| coefficients[j] * data[t + p - 1 - j])
+                .sum::<f64>();
         fitted[t + p] = pred;
         residuals[t + p] = data[t + p] - pred;
     }
@@ -166,7 +166,9 @@ fn ols_solve(x: &[f64], y: &[f64], n: usize, k: usize) -> Result<Vec<f64>> {
             aug[col * (k + 1) + j] /= pivot;
         }
         for row in 0..k {
-            if row == col { continue; }
+            if row == col {
+                continue;
+            }
             let factor = aug[row * (k + 1) + col];
             for j in 0..=k {
                 aug[row * (k + 1) + j] -= factor * aug[col * (k + 1) + j];
@@ -209,7 +211,9 @@ pub fn pelt(data: &[f64], penalty: f64) -> Result<Vec<usize>> {
     // Segment cost: sum of squared deviations from mean
     let seg_cost = |start: usize, end: usize| -> f64 {
         let len = (end - start) as f64;
-        if len == 0.0 { return 0.0; }
+        if len == 0.0 {
+            return 0.0;
+        }
         let sum = cumsum[end] - cumsum[start];
         let sum_sq = cumsum_sq[end] - cumsum_sq[start];
         let mean = sum / len;
@@ -286,11 +290,18 @@ pub fn stl_decompose(data: &[f64], period: usize) -> Result<StlResult> {
     let seasonal_norm: Vec<f64> = seasonal_avg.iter().map(|s| s - seasonal_mean).collect();
 
     let seasonal: Vec<f64> = (0..n).map(|i| seasonal_norm[i % period]).collect();
-    let residual: Vec<f64> = data.iter().zip(&trend).zip(&seasonal)
+    let residual: Vec<f64> = data
+        .iter()
+        .zip(&trend)
+        .zip(&seasonal)
         .map(|((d, t), s)| d - t - s)
         .collect();
 
-    Ok(StlResult { trend, seasonal, residual })
+    Ok(StlResult {
+        trend,
+        seasonal,
+        residual,
+    })
 }
 
 #[cfg(test)]
@@ -318,10 +329,16 @@ mod tests {
 
     #[test]
     fn test_ar() {
-        let data: Vec<f64> = (0..50).map(|i| {
-            // AR(1): y[t] = 0.8 * y[t-1] + noise
-            if i == 0 { 1.0 } else { 0.8 * (i as f64 * 0.1) + 0.1 }
-        }).collect();
+        let data: Vec<f64> = (0..50)
+            .map(|i| {
+                // AR(1): y[t] = 0.8 * y[t-1] + noise
+                if i == 0 {
+                    1.0
+                } else {
+                    0.8 * (i as f64 * 0.1) + 0.1
+                }
+            })
+            .collect();
         let result = ar(&data, 1).unwrap();
         assert_eq!(result.coefficients.len(), 1);
         assert_eq!(result.fitted.len(), 50);
@@ -338,11 +355,13 @@ mod tests {
     #[test]
     fn test_stl() {
         // Seasonal data with period 4
-        let data: Vec<f64> = (0..24).map(|i| {
-            let seasonal = (i as f64 / 4.0 * std::f64::consts::TAU).sin();
-            let trend = i as f64 * 0.5;
-            seasonal + trend + 10.0
-        }).collect();
+        let data: Vec<f64> = (0..24)
+            .map(|i| {
+                let seasonal = (i as f64 / 4.0 * std::f64::consts::TAU).sin();
+                let trend = i as f64 * 0.5;
+                seasonal + trend + 10.0
+            })
+            .collect();
         let result = stl_decompose(&data, 4).unwrap();
         assert_eq!(result.trend.len(), 24);
         assert_eq!(result.seasonal.len(), 24);

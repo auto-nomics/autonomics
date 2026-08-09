@@ -259,10 +259,7 @@ pub async fn op_write(
                 "size": size,
             })));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(
-            5 * (attempt as u64 + 1),
-        ))
-        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(5 * (attempt as u64 + 1))).await;
     }
 
     Ok(AgentToolResult::error(format!(
@@ -749,7 +746,6 @@ pub async fn op_tree(
     let meta_by_path: std::collections::HashMap<String, bool> =
         entries.iter().map(|(_, p, d)| (p.clone(), *d)).collect();
 
-
     // Collect all entry paths and the parent-directory path each one
     // belongs to. The walker below uses these to render the tree.
     let all_paths: Vec<String> = entries.iter().map(|(_, p, _)| p.clone()).collect();
@@ -794,7 +790,7 @@ pub async fn op_tree(
             })
             .collect();
         children.sort();
-            if children.is_empty() {
+        if children.is_empty() {
             return;
         }
         let n = children.len();
@@ -824,7 +820,13 @@ pub async fn op_tree(
                 ancestor_has_more.push(!is_last);
                 // Recurse with the directory path (no trailing slash)
                 // so subsequent prefix lookups match child entries.
-                walk(child.trim_end_matches('/'), ancestor_has_more, all_paths, meta_by_path, out);
+                walk(
+                    child.trim_end_matches('/'),
+                    ancestor_has_more,
+                    all_paths,
+                    meta_by_path,
+                    out,
+                );
                 ancestor_has_more.pop();
             }
         }
@@ -835,7 +837,13 @@ pub async fn op_tree(
     out.push('\n');
 
     let mut ancestor_has_more: Vec<bool> = Vec::new();
-    walk("/", &mut ancestor_has_more, &all_paths, &meta_by_path, &mut out);
+    walk(
+        "/",
+        &mut ancestor_has_more,
+        &all_paths,
+        &meta_by_path,
+        &mut out,
+    );
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "path": vpath,
@@ -863,7 +871,11 @@ async fn read_text_numbered(
                 "read: '{display_path}': No such file or directory"
             )));
         }
-        Err(e) => return Ok(AgentToolResult::error(format!("read: '{display_path}': {e}"))),
+        Err(e) => {
+            return Ok(AgentToolResult::error(format!(
+                "read: '{display_path}': {e}"
+            )));
+        }
     };
     if meta.is_dir() {
         return Ok(AgentToolResult::error(format!(

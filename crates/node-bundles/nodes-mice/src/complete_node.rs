@@ -154,7 +154,9 @@ impl DagNode for MiceCompleteNode {
         let schema = batches[0].schema();
         let imp_idx = schema
             .index_of("imp_num")
-            .map_err(|_| MiceNodeError::MissingColumn { name: ".imp".into() })
+            .map_err(|_| MiceNodeError::MissingColumn {
+                name: ".imp".into(),
+            })
             .map_err(|e| DagError::NodeError {
                 node_type: "mice_complete".into(),
                 msg: e.to_string(),
@@ -178,21 +180,27 @@ impl DagNode for MiceCompleteNode {
             // Use arrow's filter via boolean mask
             let mut new_columns: Vec<Arc<dyn Array>> = Vec::new();
             for c in batch.columns() {
-                let filtered = arrow_select::filter::filter(c.as_ref(), &mask).map_err(|e| DagError::NodeError {
-                    node_type: "mice_complete".into(),
-                    msg: format!("filter: {e}"),
+                let filtered = arrow_select::filter::filter(c.as_ref(), &mask).map_err(|e| {
+                    DagError::NodeError {
+                        node_type: "mice_complete".into(),
+                        msg: format!("filter: {e}"),
+                    }
                 })?;
                 new_columns.push(filtered);
             }
-            let rb = RecordBatch::try_new(schema.clone(), new_columns).map_err(|e| DagError::NodeError {
-                node_type: "mice_complete".into(),
-                msg: format!("Arrow: {e}"),
+            let rb = RecordBatch::try_new(schema.clone(), new_columns).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "mice_complete".into(),
+                    msg: format!("Arrow: {e}"),
+                }
             })?;
             out_rows.push(rb);
         }
-        let merged = arrow::compute::concat_batches(&schema, &out_rows).map_err(|e| DagError::NodeError {
-            node_type: "mice_complete".into(),
-            msg: format!("concat: {e}"),
+        let merged = arrow::compute::concat_batches(&schema, &out_rows).map_err(|e| {
+            DagError::NodeError {
+                node_type: "mice_complete".into(),
+                msg: format!("concat: {e}"),
+            }
         })?;
         let _ = Float64Array::from(vec![1.0]);
         let ctx = node_ctx.session();
@@ -244,7 +252,9 @@ mod tests {
         };
         let input = dag_core::node::NodeInput {
             port: 0,
-            data: datafusion::prelude::SessionContext::new().read_batch(batch).unwrap(),
+            data: datafusion::prelude::SessionContext::new()
+                .read_batch(batch)
+                .unwrap(),
         };
         let outs = node
             .execute(
@@ -260,11 +270,7 @@ mod tests {
         assert_eq!(total, 3);
         // Check that .imp == 2 for all rows.
         for b in &batches {
-            let imp_col = b
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+            let imp_col = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
             for v in imp_col.iter() {
                 assert_eq!(v.unwrap(), 2);
             }

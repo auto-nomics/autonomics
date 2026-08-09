@@ -33,9 +33,7 @@ pub enum EditOp {
     },
 
     /// Delete a section and all its descendants.
-    DeleteSection {
-        section_id: BlockId,
-    },
+    DeleteSection { section_id: BlockId },
 
     /// Move a section to a new parent / position.
     MoveSection {
@@ -59,15 +57,10 @@ pub enum EditOp {
     },
 
     /// Replace an existing block.
-    ReplaceBlock {
-        block_id: BlockId,
-        new_block: Block,
-    },
+    ReplaceBlock { block_id: BlockId, new_block: Block },
 
     /// Delete a block.
-    DeleteBlock {
-        block_id: BlockId,
-    },
+    DeleteBlock { block_id: BlockId },
 
     /// Move a block to a different section.
     MoveBlock {
@@ -97,20 +90,13 @@ pub enum EditOp {
     },
 
     /// Tag a claim within a block.
-    TagClaim {
-        block_id: BlockId,
-        claim: Claim,
-    },
+    TagClaim { block_id: BlockId, claim: Claim },
 
     /// Update document metadata.
-    UpdateMetadata {
-        changes: MetadataChanges,
-    },
+    UpdateMetadata { changes: MetadataChanges },
 
     /// Modify the preamble.
-    UpdatePreamble {
-        changes: PreambleChanges,
-    },
+    UpdatePreamble { changes: PreambleChanges },
 }
 
 // ---------------------------------------------------------------------------

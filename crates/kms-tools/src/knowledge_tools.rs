@@ -7,7 +7,7 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
-use kms::{KnowledgeType, KmsService};
+use kms::{KmsService, KnowledgeType};
 use serde_json::json;
 
 fn svc_err(e: String) -> ToolError {
@@ -26,7 +26,15 @@ fn knowledge_type_from_str(s: &str) -> KnowledgeType {
 // ═══════════════════════════════════════════════════════════════════
 
 const VAGUE_TITLE_SUFFIXES: &[&str] = &[
-    "概述", "总结", "小结", "定义", "简介", "说明", "介绍", "基本概念", "特征",
+    "概述",
+    "总结",
+    "小结",
+    "定义",
+    "简介",
+    "说明",
+    "介绍",
+    "基本概念",
+    "特征",
 ];
 
 fn validate_knowledge_title(title: &str) -> Result<(), ToolError> {
@@ -90,7 +98,9 @@ impl ToolFunction for KmsCreateKnowledgeTool {
             .await
             .map_err(svc_err)?;
 
-        Ok(ToolResult::success_json(json!({ "title": knowledge.title })))
+        Ok(ToolResult::success_json(
+            json!({ "title": knowledge.title }),
+        ))
     }
 }
 
@@ -126,11 +136,7 @@ impl ToolFunction for KmsUpdateKnowledgeTool {
             .map(|v| v.iter().map(|s| s.as_str()).collect());
         let knowledge = self
             .svc
-            .update_knowledge_by_ref(
-                &input.title_ref,
-                input.content.as_deref(),
-                entity_refs,
-            )
+            .update_knowledge_by_ref(&input.title_ref, input.content.as_deref(), entity_refs)
             .await
             .map_err(svc_err)?;
 
@@ -166,7 +172,10 @@ impl ToolFunction for KmsDeleteKnowledgeTool {
     type Input = DeleteKnowledgeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        self.svc.delete_knowledge(&input.title).await.map_err(svc_err)?;
+        self.svc
+            .delete_knowledge(&input.title)
+            .await
+            .map_err(svc_err)?;
         Ok(ToolResult::success_json(json!({ "deleted": input.title })))
     }
 }
@@ -175,7 +184,10 @@ impl ToolFunction for KmsDeleteKnowledgeTool {
 // kms_get_knowledge
 // ═══════════════════════════════════════════════════════════════════
 
-#[tool(name = "kms_get_knowledge", description = "Get the full content of a knowledge entry by title.")]
+#[tool(
+    name = "kms_get_knowledge",
+    description = "Get the full content of a knowledge entry by title."
+)]
 pub struct GetKnowledgeInput {
     #[desc = "Title of the knowledge entry"]
     pub title: String,
@@ -190,7 +202,11 @@ impl ToolFunction for KmsGetKnowledgeTool {
     type Input = GetKnowledgeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let id = self.svc.resolve_knowledge(&input.title).await.map_err(svc_err)?;
+        let id = self
+            .svc
+            .resolve_knowledge(&input.title)
+            .await
+            .map_err(svc_err)?;
         let knowledge = self.svc.get_knowledge(id).await.map_err(svc_err)?;
 
         // Resolve entity names for the agent.
@@ -285,7 +301,11 @@ impl ToolFunction for KmsGetEntityKnowledgeTool {
     type Input = GetEntityKnowledgeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let entity_id = self.svc.resolve(&input.entity_name).await.map_err(svc_err)?;
+        let entity_id = self
+            .svc
+            .resolve(&input.entity_name)
+            .await
+            .map_err(svc_err)?;
         let knowledge_list = self
             .svc
             .get_entity_referencing_knowledge(entity_id)

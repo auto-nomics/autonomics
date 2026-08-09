@@ -116,9 +116,7 @@ impl IndexDiagnosticRule for ExcessiveChildren {
                 location: location.to_string(),
                 severity: Severity::Warning,
                 message: format!("有 {} 个子节点，建议重构整理", children.len()),
-                suggested_actions: vec![
-                    "使用 kms_move_children 将子节点按主题分组".to_string(),
-                ],
+                suggested_actions: vec!["使用 kms_move_children 将子节点按主题分组".to_string()],
             })
         } else {
             None

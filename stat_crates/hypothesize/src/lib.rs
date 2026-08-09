@@ -93,7 +93,6 @@ impl Alternative {
     }
 }
 
-
 /// Errors returned by `hypothesize`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum HypoError {

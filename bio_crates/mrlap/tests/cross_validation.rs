@@ -91,10 +91,7 @@ fn tidy_matches_r() {
     assert_eq!(tidy_rows.len(), golden.len(), "row count");
     // index by rsid
     use std::collections::HashMap;
-    let map: HashMap<&str, &Vec<String>> = golden
-        .iter()
-        .map(|r| (col(&h, r, "rsid"), r))
-        .collect();
+    let map: HashMap<&str, &Vec<String>> = golden.iter().map(|r| (col(&h, r, "rsid"), r)).collect();
     for t in &tidy_rows {
         let g = map.get(t.rsid.as_str()).unwrap();
         assert!(
@@ -119,10 +116,7 @@ fn harmonise_matches_r() {
     let harm = harmonise(&exp, &out);
     let (h, golden) = read_tsv("harmonised.tsv");
     use std::collections::HashMap;
-    let map: HashMap<&str, &Vec<String>> = golden
-        .iter()
-        .map(|r| (col(&h, r, "rsid"), r))
-        .collect();
+    let map: HashMap<&str, &Vec<String>> = golden.iter().map(|r| (col(&h, r, "rsid"), r)).collect();
     assert_eq!(harm.len(), golden.len(), "harmonised row count");
     for row in &harm {
         let g = map.get(row.rsid.as_str()).unwrap();

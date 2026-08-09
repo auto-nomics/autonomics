@@ -111,7 +111,11 @@ impl ToolFunction for OpenAlexSearchTool {
             });
         }
 
-        let result = self.client.list_works(&params).await.map_err(super::json_err)?;
+        let result = self
+            .client
+            .list_works(&params)
+            .await
+            .map_err(super::json_err)?;
 
         Ok(AgentToolResult::success(format_works(&result)))
     }

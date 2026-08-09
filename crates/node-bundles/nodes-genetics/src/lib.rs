@@ -14,7 +14,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "genetics" }
+    fn name(&self) -> &'static str {
+        "genetics"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(lava::LavaLocusNodeFactory {}));
         registry.register(Box::new(lava::LavaUnivNodeFactory {}));

@@ -15,4 +15,4 @@ pub mod sink_common {
     pub use dag_core::sink::*;
 }
 
-pub use meta::{DagNode, NodeId, NodeInput, NodePorts, Port, DEFAULT_PORT};
+pub use meta::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port};

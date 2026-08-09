@@ -209,19 +209,16 @@ impl DagNode for TableFromDfNode {
             false,
         )]));
         let cols: Vec<ArrayRef> = vec![Arc::new(StringArray::from(vec![latex.as_str()]))];
-        let batch =
-            RecordBatch::try_new(out_schema, cols).map_err(|e| DagError::NodeError {
-                node_type: "table_from_df".into(),
-                msg: format!("failed to build output batch: {e}"),
-            })?;
+        let batch = RecordBatch::try_new(out_schema, cols).map_err(|e| DagError::NodeError {
+            node_type: "table_from_df".into(),
+            msg: format!("failed to build output batch: {e}"),
+        })?;
 
         let session = node_ctx.session();
-        let out_df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::NodeError {
-                node_type: "table_from_df".into(),
-                msg: format!("read_batch failed: {e}"),
-            })?;
+        let out_df = session.read_batch(batch).map_err(|e| DagError::NodeError {
+            node_type: "table_from_df".into(),
+            msg: format!("read_batch failed: {e}"),
+        })?;
 
         let mut out: PortOutputs = HashMap::new();
         out.insert(0, out_df);
@@ -246,7 +243,10 @@ fn arrow_cell_to_string(array: &dyn arrow_array::Array, row: usize) -> String {
     }
 
     // Try string view array (DataFusion >= 42 uses Utf8View).
-    if let Some(str_arr) = array.as_any().downcast_ref::<arrow_array::StringViewArray>() {
+    if let Some(str_arr) = array
+        .as_any()
+        .downcast_ref::<arrow_array::StringViewArray>()
+    {
         if row < str_arr.len() {
             return str_arr.value(row).to_string();
         }

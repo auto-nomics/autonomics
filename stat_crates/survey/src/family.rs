@@ -309,9 +309,7 @@ impl FamilySpec {
             Family::Binomial | Family::QuasiBinomial => {
                 for (i, &v) in y.iter().enumerate() {
                     if !(0.0..=1.0).contains(&v) {
-                        return Err(format!(
-                            "y[{i}] = {v} is outside [0,1] for binomial family"
-                        ));
+                        return Err(format!("y[{i}] = {v} is outside [0,1] for binomial family"));
                     }
                 }
             }
@@ -332,9 +330,7 @@ impl FamilySpec {
             Family::InverseGaussian => {
                 for (i, &v) in y.iter().enumerate() {
                     if v <= 0.0 {
-                        return Err(format!(
-                            "y[{i}] = {v} <= 0 for inverse.gaussian family"
-                        ));
+                        return Err(format!("y[{i}] = {v} <= 0 for inverse.gaussian family"));
                     }
                 }
             }

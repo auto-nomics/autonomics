@@ -234,11 +234,24 @@ fn irls(
         if change < IRLS_EPS {
             converged = true;
             let n_iter = iter + 1;
-            return finalize_irls(y, xmat, prior_w, spec, &beta, &eta, &mu, dev, n_iter, converged);
+            return finalize_irls(
+                y, xmat, prior_w, spec, &beta, &eta, &mu, dev, n_iter, converged,
+            );
         }
     }
 
-    finalize_irls(y, xmat, prior_w, spec, &beta, &eta, &mu, dev, MAX_IRLS_ITER, converged)
+    finalize_irls(
+        y,
+        xmat,
+        prior_w,
+        spec,
+        &beta,
+        &eta,
+        &mu,
+        dev,
+        MAX_IRLS_ITER,
+        converged,
+    )
 }
 
 /// Compute the final IRLS results (working weights, residuals, naive cov).
@@ -810,9 +823,7 @@ fn f_dist_surv(x: f64, df1: f64, df2: f64) -> f64 {
 /// Student-t survival function via statrs.
 fn t_dist_sf(x: f64, df: f64) -> f64 {
     use statrs::distribution::{ContinuousCDF, StudentsT};
-    StudentsT::new(0.0, 1.0, df)
-        .map(|d| d.sf(x))
-        .unwrap_or(0.0)
+    StudentsT::new(0.0, 1.0, df).map(|d| d.sf(x)).unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -965,7 +976,9 @@ mod tests {
             let eta = 0.5 + 1.0 * xi;
             let p = 1.0 / (1.0 + (-eta).exp());
             // Simple LCG random.
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let u = (rng_state >> 33) as f64 / (1u64 << 31) as f64;
             let yi = if u < p { 1.0 } else { 0.0 };
             x.push(xi);
@@ -991,7 +1004,11 @@ mod tests {
         }
         // Check coefficients are roughly in the right direction.
         assert!(fit.coefficients[0] > 0.0, "intercept should be positive");
-        assert!(fit.coefficients[1] > 0.5, "slope should be ~1: got {}", fit.coefficients[1]);
+        assert!(
+            fit.coefficients[1] > 0.5,
+            "slope should be ~1: got {}",
+            fit.coefficients[1]
+        );
     }
 
     /// Poisson regression on synthetic count data.
@@ -1007,7 +1024,9 @@ mod tests {
             let log_lambda = 0.5 + 0.1 * xi;
             let lambda = log_lambda.exp();
             // Simple Poisson generation via Knuth's algorithm.
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let mut u = (rng_state >> 33) as f64 / (1u64 << 31) as f64;
             let mut k: f64 = 0.0;
             let mut p = (-lambda).exp();
@@ -1058,10 +1077,7 @@ mod tests {
         // Simple test: Gamma with log link, check it runs and converges.
         let x: Vec<f64> = (0..50).map(|i| i as f64 * 0.1).collect();
         // y = exp(1 + 0.5*x) * noise, where noise ~ Gamma(shape=5, scale=1/5)
-        let y: Vec<f64> = x
-            .iter()
-            .map(|&xi| (1.0 + 0.5 * xi).exp())
-            .collect();
+        let y: Vec<f64> = x.iter().map(|&xi| (1.0 + 0.5 * xi).exp()).collect();
 
         let n = y.len();
         let design = SurveyDesignBuilder::new()

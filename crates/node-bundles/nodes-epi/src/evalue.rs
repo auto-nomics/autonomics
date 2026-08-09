@@ -39,7 +39,9 @@ pub enum EvalueNodeError {
 }
 
 impl ::dag_core::dag::NodeError for EvalueNodeError {
-    fn node_type(&self) -> &str { "evalue" }
+    fn node_type(&self) -> &str {
+        "evalue"
+    }
 }
 
 // =====================================================================

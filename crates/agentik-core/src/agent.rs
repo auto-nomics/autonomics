@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentik_sdk::model::Model;
-use agentik_sdk::types::messages::ContentBlock;
 use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::messages::ContentBlock;
 use arc_swap::ArcSwapOption;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
@@ -25,9 +25,9 @@ use uuid::Uuid;
 
 use crate::error::{AgentError, Result};
 use crate::session::{AgentShared, Session};
-use agentik_types::SessionInfo;
 use crate::storage::{AgentRecord, AgentStorage, PersistOp};
 use crate::tools::ToolRegistration;
+use agentik_types::SessionInfo;
 
 #[derive(Clone)]
 pub struct AgentConfig {
@@ -54,7 +54,10 @@ pub enum InternalEvent {
     MessageInject(Vec<ContentBlock>),
     /// A background tool task finished.
     /// `id` is the `tool_use_id`, `seq` is the short task number.
-    BgTaskComplete { id: String, seq: u64 },
+    BgTaskComplete {
+        id: String,
+        seq: u64,
+    },
     Done,
     /// External Runtime requests the agent to shut down.
     Shutdown,
@@ -68,13 +71,20 @@ pub enum InternalEvent {
         title: Option<String>,
     },
     /// Switch the active session to `id`.
-    SwitchSession { id: Uuid },
+    SwitchSession {
+        id: Uuid,
+    },
     /// Close and remove a session.
-    CloseSession { id: Uuid },
+    CloseSession {
+        id: Uuid,
+    },
     /// Request a list of all sessions (reply via event channel).
     ListSessions,
     /// Rename a session (update title in memory + storage).
-    RenameSession { id: Uuid, title: String },
+    RenameSession {
+        id: Uuid,
+        title: String,
+    },
 }
 
 pub struct Agent {
@@ -149,28 +159,34 @@ impl Agent {
     /// uniquely owned). After sessions exist, rebuild with
     /// [`Agent::builder`].
     pub fn register_tool(&mut self, registration: ToolRegistration) -> Result<()> {
-        let shared = Arc::get_mut(&mut self.shared)
-            .ok_or_else(|| AgentError::Tool(crate::tools::error::ToolError::RegistryError {
+        let shared = Arc::get_mut(&mut self.shared).ok_or_else(|| {
+            AgentError::Tool(crate::tools::error::ToolError::RegistryError {
                 message: "AgentShared is frozen (sessions exist)".into(),
-            }))?;
+            })
+        })?;
         Arc::get_mut(&mut shared.tool_registry)
-            .ok_or_else(|| AgentError::Tool(crate::tools::error::ToolError::RegistryError {
-                message: "Tool registry is frozen (shared across sessions)".into(),
-            }))?
+            .ok_or_else(|| {
+                AgentError::Tool(crate::tools::error::ToolError::RegistryError {
+                    message: "Tool registry is frozen (shared across sessions)".into(),
+                })
+            })?
             .register(registration)?;
         Ok(())
     }
 
     /// Register multiple tools at once. See [`register_tool`](Self::register_tool).
     pub fn register_tools(&mut self, registrations: Vec<ToolRegistration>) -> Result<()> {
-        let shared = Arc::get_mut(&mut self.shared)
-            .ok_or_else(|| AgentError::Tool(crate::tools::error::ToolError::RegistryError {
+        let shared = Arc::get_mut(&mut self.shared).ok_or_else(|| {
+            AgentError::Tool(crate::tools::error::ToolError::RegistryError {
                 message: "AgentShared is frozen (sessions exist)".into(),
-            }))?;
+            })
+        })?;
         Arc::get_mut(&mut shared.tool_registry)
-            .ok_or_else(|| AgentError::Tool(crate::tools::error::ToolError::RegistryError {
-                message: "Tool registry is frozen (shared across sessions)".into(),
-            }))?
+            .ok_or_else(|| {
+                AgentError::Tool(crate::tools::error::ToolError::RegistryError {
+                    message: "Tool registry is frozen (shared across sessions)".into(),
+                })
+            })?
             .register_all(registrations)?;
         Ok(())
     }
@@ -182,7 +198,8 @@ impl Agent {
     }
 
     pub fn active_session_mut(&mut self) -> Option<&mut Session> {
-        self.active_session_id.and_then(|id| self.sessions.get_mut(&id))
+        self.active_session_id
+            .and_then(|id| self.sessions.get_mut(&id))
     }
 
     pub fn lifecycle_status(&self) -> agentik_types::AgentLifecycleStatus {
@@ -192,7 +209,9 @@ impl Agent {
     }
 
     pub fn is_running(&self) -> bool {
-        self.active_session().map(|s| s.lifecycle.is_running()).unwrap_or(false)
+        self.active_session()
+            .map(|s| s.lifecycle.is_running())
+            .unwrap_or(false)
     }
 
     pub fn inject_message(&mut self, user_content: Vec<ContentBlock>) -> Result<()> {
@@ -240,8 +259,7 @@ impl Agent {
                 })
                 .await;
 
-            let (persist_tx, persist_rx) =
-                tokio::sync::mpsc::unbounded_channel::<PersistOp>();
+            let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel::<PersistOp>();
 
             // ── Restore the agent's persistent plan ──────────
             if let Ok(Some(plan)) = storage.as_ref().load_plan(self.shared.id).await {
@@ -270,11 +288,7 @@ impl Agent {
         // exist in the HashMap (they were created in a prior run but lost
         // on restart).
         if let Some(storage) = self.shared.storage.clone() {
-            match storage
-                .as_ref()
-                .list_session_records(self.shared.id)
-                .await
-            {
+            match storage.as_ref().list_session_records(self.shared.id).await {
                 Ok(records) => {
                     for rec in records {
                         // Skip if this session is already in the HashMap
@@ -301,10 +315,7 @@ impl Agent {
                         // WAL messages since the snapshot timestamp.
                         match storage
                             .as_ref()
-                            .get_latest_snapshot_for_session(
-                                self.shared.id,
-                                rec.session_id,
-                            )
+                            .get_latest_snapshot_for_session(self.shared.id, rec.session_id)
                             .await
                         {
                             Ok(Some(snap)) => {
@@ -313,10 +324,7 @@ impl Agent {
                                 // Replay WAL messages for this session.
                                 match storage
                                     .as_ref()
-                                    .get_messages_since_for_session(
-                                        rec.session_id,
-                                        snap_ts,
-                                    )
+                                    .get_messages_since_for_session(rec.session_id, snap_ts)
                                     .await
                                 {
                                     Ok(msgs) => {
@@ -336,10 +344,7 @@ impl Agent {
                                 // No snapshot — try replaying all WAL messages.
                                 match storage
                                     .as_ref()
-                                    .get_messages_since_for_session(
-                                        rec.session_id,
-                                        0,
-                                    )
+                                    .get_messages_since_for_session(rec.session_id, 0)
                                     .await
                                 {
                                     Ok(msgs) => {
@@ -422,8 +427,7 @@ impl Agent {
             // ── Auto-create a session on first message ──
             // If no session exists yet, create one before processing the
             // event so the message isn't lost.
-            if matches!(event, InternalEvent::MessageInject(_))
-                && self.active_session_id.is_none()
+            if matches!(event, InternalEvent::MessageInject(_)) && self.active_session_id.is_none()
             {
                 let id = Uuid::new_v4();
                 let mut s = Session::new(id, self.shared.clone());
@@ -444,7 +448,11 @@ impl Agent {
 
             // Session management events are handled inline before delegation.
             let should_run = match &event {
-                InternalEvent::CreateSession { id, fork_from, title } => {
+                InternalEvent::CreateSession {
+                    id,
+                    fork_from,
+                    title,
+                } => {
                     self.handle_create_session(*id, *fork_from, title.clone())
                         .await;
                     false
@@ -562,7 +570,8 @@ impl Agent {
                 if let Some(s) = self.sessions.get_mut(&old) {
                     s.pause().await;
                 }
-                self.shared.send_event(AgentEvent::SessionPaused { id: old });
+                self.shared
+                    .send_event(AgentEvent::SessionPaused { id: old });
             }
         }
         self.active_session_id = Some(id);
@@ -584,8 +593,10 @@ impl Agent {
             let _ = storage.update_session_title(id, &title).await;
         }
         // Notify TUI.
-        self.shared
-            .send_event(AgentEvent::SessionActivated { id, title: Some(title) });
+        self.shared.send_event(AgentEvent::SessionActivated {
+            id,
+            title: Some(title),
+        });
     }
 
     async fn handle_close_session(&mut self, id: Uuid) {
@@ -661,10 +672,7 @@ impl TokenBudget {
         content_str.len() as u64 / 4
     }
 
-    pub fn estimate_messages_tokens(
-        &self,
-        messages: &[agentik_sdk::types::Message],
-    ) -> u64 {
+    pub fn estimate_messages_tokens(&self, messages: &[agentik_sdk::types::Message]) -> u64 {
         messages.iter().map(|m| self.count_token_est(m)).sum()
     }
 
@@ -699,15 +707,15 @@ async fn persist_worker(
 ) {
     while let Some(op) = rx.recv().await {
         let result = match op {
-            PersistOp::StartSession { agent_id, session_id } => {
-                storage.start_session(agent_id, session_id).await
-            }
-            PersistOp::AppendMessage { session_id, message } => {
-                storage.append_message(session_id, &message).await
-            }
-            PersistOp::EndSession { session_id } => {
-                storage.end_session(session_id).await
-            }
+            PersistOp::StartSession {
+                agent_id,
+                session_id,
+            } => storage.start_session(agent_id, session_id).await,
+            PersistOp::AppendMessage {
+                session_id,
+                message,
+            } => storage.append_message(session_id, &message).await,
+            PersistOp::EndSession { session_id } => storage.end_session(session_id).await,
         };
         if let Err(e) = result {
             tracing::warn!("persist op failed (non-fatal): {e}");
@@ -755,10 +763,7 @@ mod tests {
     /// Build a minimal agent with an event receiver wired up.
     async fn build_test_agent(
         mock_api: MockApiClient,
-    ) -> (
-        Agent,
-        tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
-    ) {
+    ) -> (Agent, tokio::sync::mpsc::UnboundedReceiver<AgentEvent>) {
         let model = Model::with_client(test_model_info(), mock_api);
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

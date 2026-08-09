@@ -17,20 +17,24 @@ use std::sync::Arc;
 
 use agentik_core::AgentProfile;
 use agentik_network::{EdgeTrigger, TerminationSpec};
-use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
 use agentik_sdk::AuthMethod;
+use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
 use arc_swap::ArcSwapOption;
 use clap::Parser;
-use runtime::config::RuntimeConfig;
 use runtime::RuntimeHost;
+use runtime::config::RuntimeConfig;
 
 /// CLI arguments for the arena example.
 #[derive(Parser)]
 struct Args {
-    #[arg(short, long, default_value = "\
+    #[arg(
+        short,
+        long,
+        default_value = "\
         Write a 300-word manuscript abstract on the role of polygenic risk \
         scores in precision medicine, covering methodology, current \
-        applications, and limitations.")]
+        applications, and limitations."
+    )]
     topic: String,
 
     #[arg(short, long, default_value_t = 3)]
@@ -59,7 +63,8 @@ fn writer_profile() -> AgentProfile {
             You will receive reviewer feedback and must revise your work. \
             Your goal is to produce a manuscript rigorous enough to be \
             accepted by a top journal. \
-            Write in clear, precise academic prose.".into(),
+            Write in clear, precise academic prose."
+            .into(),
         system_prompt: None,
         enable_bibliography: true,
         enable_opengwas: false,
@@ -83,7 +88,8 @@ fn reviewer_profile() -> AgentProfile {
             If the manuscript meets your standards, end your review with \
             exactly: VERDICT: ACCEPT \
             Otherwise, provide specific actionable criticism and end with: \
-            VERDICT: REJECT".into(),
+            VERDICT: REJECT"
+            .into(),
         system_prompt: None,
         enable_bibliography: true,
         enable_opengwas: false,
@@ -104,17 +110,25 @@ fn build_model(provider: &str, model_name: &str) -> Result<Model, Box<dyn std::e
         ProviderType::Deepseek => std::env::var("DEEPSEEK_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .map_err(|_| "DEEPSEEK_API_KEY not set")?,
-        ProviderType::Moonshot => std::env::var("MOONSHOT_API_KEY").map_err(|_| "MOONSHOT_API_KEY not set")?,
-        ProviderType::Minimax => std::env::var("MINIMAX_API_KEY").map_err(|_| "MINIMAX_API_KEY not set")?,
+        ProviderType::Moonshot => {
+            std::env::var("MOONSHOT_API_KEY").map_err(|_| "MOONSHOT_API_KEY not set")?
+        }
+        ProviderType::Minimax => {
+            std::env::var("MINIMAX_API_KEY").map_err(|_| "MINIMAX_API_KEY not set")?
+        }
         ProviderType::Mimo => std::env::var("MIMO_API_KEY").map_err(|_| "MIMO_API_KEY not set")?,
         ProviderType::Zai => std::env::var("ZAI_API_KEY").map_err(|_| "ZAI_API_KEY not set")?,
-        ProviderType::Sensenova => std::env::var("SENSENOVA_API_KEY").map_err(|_| "SENSENOVA_API_KEY not set")?,
+        ProviderType::Sensenova => {
+            std::env::var("SENSENOVA_API_KEY").map_err(|_| "SENSENOVA_API_KEY not set")?
+        }
         ProviderType::Custom(ref name) => {
             let env = format!("{}_API_KEY", name.to_uppercase());
             std::env::var(&env).map_err(|_| format!("{env} not set"))?
         }
     };
-    let base_url = registry::default_base_url(&provider_type).ok_or("no default base URL")?.to_string();
+    let base_url = registry::default_base_url(&provider_type)
+        .ok_or("no default base URL")?
+        .to_string();
     let auth_method = registry::default_auth_method(&provider_type);
     let preset_models = registry::preset_models(&provider_type).ok_or("no preset models")?;
     let mut model_info = preset_models
@@ -147,7 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{BAR}");
     println!("          🏟️  Adversarial Arena Started");
     println!("{BAR}");
-    println!("  Provider: {}  Model: {}  Max rounds: {}", args.provider, args.model, args.max_rounds);
+    println!(
+        "  Provider: {}  Model: {}  Max rounds: {}",
+        args.provider, args.model, args.max_rounds
+    );
 
     // ── Build model + host ──────────────────────────────────
     let model = build_model(&args.provider, &args.model)?;
@@ -181,8 +198,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wp = writer_profile();
     let rp = reviewer_profile();
 
-    host.spawn_and_register("writer", &wp, global_model.clone(), None).await?;
-    host.spawn_and_register("reviewer", &rp, global_model.clone(), None).await?;
+    host.spawn_and_register("writer", &wp, global_model.clone(), None)
+        .await?;
+    host.spawn_and_register("reviewer", &rp, global_model.clone(), None)
+        .await?;
 
     // ── Inject initial prompts ──────────────────────────────
     host.inject_initial_prompts();

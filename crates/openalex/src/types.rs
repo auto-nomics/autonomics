@@ -545,7 +545,10 @@ mod tests {
         }"#;
         let work: Work = serde_json::from_str(json).unwrap();
         assert_eq!(work.id, "https://openalex.org/W2741809807");
-        assert_eq!(work.doi.as_deref(), Some("https://doi.org/10.7717/peerj.4375"));
+        assert_eq!(
+            work.doi.as_deref(),
+            Some("https://doi.org/10.7717/peerj.4375")
+        );
         assert_eq!(work.title_or_name(), Some("The state of OA"));
         assert_eq!(work.publication_year, Some(2018));
         assert_eq!(work.cited_by_count, 100);
@@ -580,7 +583,10 @@ mod tests {
         let a = &work.authorships[0];
         assert_eq!(a.author_position.as_deref(), Some("first"));
         assert_eq!(a.author.display_name.as_deref(), Some("Jane Doe"));
-        assert_eq!(a.author.orcid.as_deref(), Some("https://orcid.org/0000-0001-2345-6789"));
+        assert_eq!(
+            a.author.orcid.as_deref(),
+            Some("https://orcid.org/0000-0001-2345-6789")
+        );
         assert_eq!(a.institutions.len(), 1);
         assert_eq!(a.institutions[0].display_name.as_deref(), Some("MIT"));
     }
@@ -598,7 +604,10 @@ mod tests {
         let work: Work = serde_json::from_str(json).unwrap();
         assert!(work.open_access.is_oa);
         assert_eq!(work.open_access.oa_status.as_deref(), Some("gold"));
-        assert_eq!(work.open_access.oa_url.as_deref(), Some("https://example.com/paper.pdf"));
+        assert_eq!(
+            work.open_access.oa_url.as_deref(),
+            Some("https://example.com/paper.pdf")
+        );
     }
 
     #[test]
@@ -669,7 +678,10 @@ mod tests {
         }"#;
         let resp: AutocompleteResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.results.len(), 1);
-        assert_eq!(resp.results[0].display_name.as_deref(), Some("Machine Learning"));
+        assert_eq!(
+            resp.results[0].display_name.as_deref(),
+            Some("Machine Learning")
+        );
         assert_eq!(resp.results[0].relevance_score, Some(0.95));
     }
 

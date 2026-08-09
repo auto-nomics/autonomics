@@ -44,14 +44,10 @@ pub struct AugmentedData {
 pub fn augment(y: &[f64], ry: &[bool], x: &[Vec<f64>], wy: &[bool]) -> Result<AugmentedData> {
     let n = y.len();
     if ry.len() != n || wy.len() != n {
-        return Err(MiceError::LengthMismatch(
-            "ry/wy must have length n".into(),
-        ));
+        return Err(MiceError::LengthMismatch("ry/wy must have length n".into()));
     }
     if x.len() != n {
-        return Err(MiceError::LengthMismatch(
-            "x must have n rows".into(),
-        ));
+        return Err(MiceError::LengthMismatch("x must have n rows".into()));
     }
     if n == 0 {
         return Err(MiceError::InsufficientData("empty input".into()));

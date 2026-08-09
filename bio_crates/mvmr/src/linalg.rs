@@ -108,8 +108,9 @@ pub fn wls_origin(x: &[Vec<f64>], y: &[f64], w: &[f64]) -> Result<WlsSummary> {
     }
 
     let gram = Mat::from_fn(p, p, |i, j| xtwx[j * p + i]);
-    let llt = Llt::new(gram.as_ref(), Side::Lower)
-        .map_err(|e| MvmrError::Numerical(format!("wls_origin: singular design (LLᵀ failed): {e:?}")))?;
+    let llt = Llt::new(gram.as_ref(), Side::Lower).map_err(|e| {
+        MvmrError::Numerical(format!("wls_origin: singular design (LLᵀ failed): {e:?}"))
+    })?;
     let rhs = Mat::from_fn(p, 1, |i, _| xtwy[i]);
     let sol = llt.solve(&rhs);
     let coef: Vec<f64> = (0..p).map(|i| sol[(i, 0)]).collect();
@@ -177,7 +178,7 @@ pub fn wls_origin(x: &[Vec<f64>], y: &[f64], w: &[f64]) -> Result<WlsSummary> {
 
 /// Two-sided tail of the Student-t distribution with `df` degrees of freedom.
 pub fn two_sided_t(t: f64, df: f64) -> f64 {
-    use statrs::distribution::{StudentsT, ContinuousCDF};
+    use statrs::distribution::{ContinuousCDF, StudentsT};
     if !t.is_finite() || df <= 0.0 {
         return f64::NAN;
     }
@@ -204,7 +205,7 @@ pub fn pchisq_upper(q: f64, df: f64) -> f64 {
 
 /// Upper tail of the F distribution (`stats::pf(q, df1, df2, lower.tail=FALSE)`).
 pub fn pf_upper(q: f64, df1: f64, df2: f64) -> f64 {
-    use statrs::distribution::{FisherSnedecor, ContinuousCDF};
+    use statrs::distribution::{ContinuousCDF, FisherSnedecor};
     if q < 0.0 || df1 <= 0.0 || df2 <= 0.0 {
         return f64::NAN;
     }

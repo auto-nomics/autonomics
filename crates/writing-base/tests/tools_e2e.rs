@@ -5,12 +5,10 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
-use writing_base::{
-    LatexEngine, NullEngine, WritingStore, ast, writing_all_registrations,
-};
-use bib_base::BibBase;
 use agentik_core::tools::ToolRegistration;
+use bib_base::BibBase;
+use serde_json::{Value, json};
+use writing_base::{LatexEngine, NullEngine, WritingStore, ast, writing_all_registrations};
 
 /// Execute a tool by name with the given JSON input.
 async fn call_tool(regs: &[ToolRegistration], name: &str, input: Value) -> Value {
@@ -60,10 +58,14 @@ async fn doc_create_and_list() {
     let (store, regs) = setup().await;
 
     // Create a document.
-    let result = call_tool(&regs, "doc_create", json!({
-        "title": "Test Paper",
-        "document_class": "article",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_create",
+        json!({
+            "title": "Test Paper",
+            "document_class": "article",
+        }),
+    )
     .await;
 
     let doc_id = result["document_id"].as_str().unwrap().to_string();
@@ -107,17 +109,25 @@ async fn doc_open_and_outline() {
     store.save_document(&mut doc, "setup", None).await.unwrap();
 
     // Open via tool.
-    let result = call_tool(&regs, "doc_open", json!({
-        "document_id": "d1",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_open",
+        json!({
+            "document_id": "d1",
+        }),
+    )
     .await;
     assert_eq!(result["title"], "Outline Test");
     assert_eq!(result["outline"].as_array().unwrap().len(), 2);
 
     // Outline via tool.
-    let outline = call_tool(&regs, "doc_outline", json!({
-        "document_id": "d1",
-    }))
+    let outline = call_tool(
+        &regs,
+        "doc_outline",
+        json!({
+            "document_id": "d1",
+        }),
+    )
     .await;
     assert_eq!(outline["total_sections"], 2);
     assert_eq!(outline["outline"][0]["title"], "Introduction");
@@ -130,12 +140,16 @@ async fn doc_metadata_update() {
     store.create_document("d1", "Original").await.unwrap();
 
     // Update metadata.
-    let result = call_tool(&regs, "doc_metadata", json!({
-        "document_id": "d1",
-        "title": "Updated Title",
-        "abstract_text": "This is the abstract.",
-        "add_keywords": ["GWAS", "genetics"],
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_metadata",
+        json!({
+            "document_id": "d1",
+            "title": "Updated Title",
+            "abstract_text": "This is the abstract.",
+            "add_keywords": ["GWAS", "genetics"],
+        }),
+    )
     .await;
 
     assert_eq!(result["title"], "Updated Title");
@@ -152,9 +166,13 @@ async fn doc_delete() {
     let (store, regs) = setup().await;
     store.create_document("d1", "ToDelete").await.unwrap();
 
-    call_tool(&regs, "doc_delete", json!({
-        "document_id": "d1",
-    }))
+    call_tool(
+        &regs,
+        "doc_delete",
+        json!({
+            "document_id": "d1",
+        }),
+    )
     .await;
 
     assert!(store.get_document("d1").await.is_err());
@@ -169,27 +187,39 @@ async fn doc_insert_section_tool() {
     let (_store, regs) = setup().await;
 
     // Create doc.
-    let create_result = call_tool(&regs, "doc_create", json!({
-        "title": "Edit Test",
-    }))
+    let create_result = call_tool(
+        &regs,
+        "doc_create",
+        json!({
+            "title": "Edit Test",
+        }),
+    )
     .await;
     let doc_id = create_result["document_id"].as_str().unwrap();
 
     // Insert section.
-    let result = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id,
-        "title": "Introduction",
-        "level": "section",
-        "label": "sec:intro",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id,
+            "title": "Introduction",
+            "level": "section",
+            "label": "sec:intro",
+        }),
+    )
     .await;
 
     assert!(result["section_id"].as_str().is_some());
 
     // Verify via outline.
-    let outline = call_tool(&regs, "doc_outline", json!({
-        "document_id": doc_id,
-    }))
+    let outline = call_tool(
+        &regs,
+        "doc_outline",
+        json!({
+            "document_id": doc_id,
+        }),
+    )
     .await;
     assert_eq!(outline["total_sections"], 1);
     assert_eq!(outline["outline"][0]["title"], "Introduction");
@@ -203,21 +233,29 @@ async fn doc_insert_block_paragraph() {
     let doc_id = create["document_id"].as_str().unwrap();
 
     // Insert section.
-    let sec = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id,
-        "title": "Body",
-        "level": "section",
-    }))
+    let sec = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id,
+            "title": "Body",
+            "level": "section",
+        }),
+    )
     .await;
     let section_id = sec["section_id"].as_str().unwrap();
 
     // Insert paragraph.
-    let block = call_tool(&regs, "doc_insert_block", json!({
-        "document_id": doc_id,
-        "section_id": section_id,
-        "block_type": "paragraph",
-        "text": "This is a test paragraph.",
-    }))
+    let block = call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": doc_id,
+            "section_id": section_id,
+            "block_type": "paragraph",
+            "text": "This is a test paragraph.",
+        }),
+    )
     .await;
 
     assert!(block["block_id"].as_str().is_some());
@@ -231,19 +269,27 @@ async fn doc_insert_block_equation() {
     let create = call_tool(&regs, "doc_create", json!({"title": "T"})).await;
     let doc_id = create["document_id"].as_str().unwrap();
 
-    let sec = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "S", "level": "section",
-    }))
+    let sec = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "S", "level": "section",
+        }),
+    )
     .await;
     let section_id = sec["section_id"].as_str().unwrap();
 
-    let block = call_tool(&regs, "doc_insert_block", json!({
-        "document_id": doc_id,
-        "section_id": section_id,
-        "block_type": "equation",
-        "latex": "E = mc^2",
-        "label": "eq:energy",
-    }))
+    let block = call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": doc_id,
+            "section_id": section_id,
+            "block_type": "equation",
+            "latex": "E = mc^2",
+            "label": "eq:energy",
+        }),
+    )
     .await;
 
     assert_eq!(block["block_type"], "equation");
@@ -256,19 +302,27 @@ async fn doc_insert_block_list() {
     let create = call_tool(&regs, "doc_create", json!({"title": "T"})).await;
     let doc_id = create["document_id"].as_str().unwrap();
 
-    let sec = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "S", "level": "section",
-    }))
+    let sec = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "S", "level": "section",
+        }),
+    )
     .await;
     let section_id = sec["section_id"].as_str().unwrap();
 
-    let block = call_tool(&regs, "doc_insert_block", json!({
-        "document_id": doc_id,
-        "section_id": section_id,
-        "block_type": "list",
-        "items": ["First", "Second", "Third"],
-        "ordered": true,
-    }))
+    let block = call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": doc_id,
+            "section_id": section_id,
+            "block_type": "list",
+            "items": ["First", "Second", "Third"],
+            "ordered": true,
+        }),
+    )
     .await;
 
     assert_eq!(block["block_type"], "list");
@@ -282,34 +336,50 @@ async fn doc_delete_and_move_block() {
     let doc_id = create["document_id"].as_str().unwrap();
 
     // Create two sections.
-    let sec1 = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "A", "level": "section",
-    }))
+    let sec1 = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "A", "level": "section",
+        }),
+    )
     .await;
     let sec1_id = sec1["section_id"].as_str().unwrap().to_string();
 
-    let sec2 = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "B", "level": "section",
-    }))
+    let sec2 = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "B", "level": "section",
+        }),
+    )
     .await;
     let sec2_id = sec2["section_id"].as_str().unwrap().to_string();
 
     // Add a block to sec1.
-    let block = call_tool(&regs, "doc_insert_block", json!({
-        "document_id": doc_id,
-        "section_id": &sec1_id,
-        "block_type": "paragraph",
-        "text": "Move me.",
-    }))
+    let block = call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": doc_id,
+            "section_id": &sec1_id,
+            "block_type": "paragraph",
+            "text": "Move me.",
+        }),
+    )
     .await;
     let block_id = block["block_id"].as_str().unwrap().to_string();
 
     // Move block to sec2.
-    let moved = call_tool(&regs, "doc_move_block", json!({
-        "document_id": doc_id,
-        "block_id": &block_id,
-        "to_section": &sec2_id,
-    }))
+    let moved = call_tool(
+        &regs,
+        "doc_move_block",
+        json!({
+            "document_id": doc_id,
+            "block_id": &block_id,
+            "to_section": &sec2_id,
+        }),
+    )
     .await;
     assert_eq!(moved["moved"], true);
 
@@ -321,10 +391,14 @@ async fn doc_delete_and_move_block() {
     assert_eq!(sec2.blocks.len(), 1);
 
     // Delete the block.
-    call_tool(&regs, "doc_delete_block", json!({
-        "document_id": doc_id,
-        "block_id": &block_id,
-    }))
+    call_tool(
+        &regs,
+        "doc_delete_block",
+        json!({
+            "document_id": doc_id,
+            "block_id": &block_id,
+        }),
+    )
     .await;
 
     let doc = store.get_document(doc_id).await.unwrap();
@@ -339,35 +413,51 @@ async fn doc_append_and_replace_text() {
     let create = call_tool(&regs, "doc_create", json!({"title": "T"})).await;
     let doc_id = create["document_id"].as_str().unwrap();
 
-    let sec = call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "S", "level": "section",
-    }))
+    let sec = call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "S", "level": "section",
+        }),
+    )
     .await;
     let section_id = sec["section_id"].as_str().unwrap();
 
-    let block = call_tool(&regs, "doc_insert_block", json!({
-        "document_id": doc_id,
-        "section_id": section_id,
-        "block_type": "paragraph",
-        "text": "Original text.",
-    }))
+    let block = call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": doc_id,
+            "section_id": section_id,
+            "block_type": "paragraph",
+            "text": "Original text.",
+        }),
+    )
     .await;
     let block_id = block["block_id"].as_str().unwrap();
 
     // Append text.
-    call_tool(&regs, "doc_append_text", json!({
-        "document_id": doc_id,
-        "block_id": block_id,
-        "text": " More text.",
-    }))
+    call_tool(
+        &regs,
+        "doc_append_text",
+        json!({
+            "document_id": doc_id,
+            "block_id": block_id,
+            "text": " More text.",
+        }),
+    )
     .await;
 
     // Replace paragraph.
-    let replaced = call_tool(&regs, "doc_replace_paragraph", json!({
-        "document_id": doc_id,
-        "block_id": block_id,
-        "text": "Completely new text.",
-    }))
+    let replaced = call_tool(
+        &regs,
+        "doc_replace_paragraph",
+        json!({
+            "document_id": doc_id,
+            "block_id": block_id,
+            "text": "Completely new text.",
+        }),
+    )
     .await;
     assert_eq!(replaced["replaced"], true);
 }
@@ -380,15 +470,19 @@ async fn doc_edit_script_multi_op() {
     let doc_id = create["document_id"].as_str().unwrap();
 
     // Execute a multi-op edit script.
-    let result = call_tool(&regs, "doc_edit_script", json!({
-        "document_id": doc_id,
-        "operations": [
-            {"action": "insert_section", "title": "Intro", "level": "section"},
-            {"action": "insert_section", "title": "Methods", "level": "section"},
-            {"action": "update_metadata", "title": "New Title"},
-        ],
-        "message": "initial structure",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_edit_script",
+        json!({
+            "document_id": doc_id,
+            "operations": [
+                {"action": "insert_section", "title": "Intro", "level": "section"},
+                {"action": "insert_section", "title": "Methods", "level": "section"},
+                {"action": "update_metadata", "title": "New Title"},
+            ],
+            "message": "initial structure",
+        }),
+    )
     .await;
 
     assert_eq!(result["applied"], 3);
@@ -434,22 +528,30 @@ async fn doc_add_citation_tool() {
     store.save_document(&mut doc, "setup", None).await.unwrap();
 
     // Add citation via tool.
-    let result = call_tool(&regs, "doc_add_citation", json!({
-        "document_id": "d1",
-        "block_id": block_id,
-        "keys": ["testauthor2024a"],
-        "style": "parenthetical",
-        "position": "end",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_add_citation",
+        json!({
+            "document_id": "d1",
+            "block_id": block_id,
+            "keys": ["testauthor2024a"],
+            "style": "parenthetical",
+            "position": "end",
+        }),
+    )
     .await;
 
     assert_eq!(result["added"], 1);
     assert_eq!(result["resolved"], 1);
 
     // Check citations.
-    let check = call_tool(&regs, "doc_check_citations", json!({
-        "document_id": "d1",
-    }))
+    let check = call_tool(
+        &regs,
+        "doc_check_citations",
+        json!({
+            "document_id": "d1",
+        }),
+    )
     .await;
     assert_eq!(check["resolved"], 1);
     assert_eq!(check["unresolved"], 0);
@@ -495,9 +597,13 @@ async fn doc_generate_bib_tool() {
     store.save_document(&mut doc, "setup", None).await.unwrap();
 
     // Generate bib via tool.
-    let result = call_tool(&regs, "doc_generate_bib", json!({
-        "document_id": "d1",
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_generate_bib",
+        json!({
+            "document_id": "d1",
+        }),
+    )
     .await;
 
     let bib_content = result["bib_content"].as_str().unwrap();
@@ -513,20 +619,32 @@ async fn doc_generate_bib_tool() {
 async fn doc_preview_tex_tool() {
     let (_store, regs) = setup().await;
 
-    let create = call_tool(&regs, "doc_create", json!({
-        "title": "Preview Test",
-    }))
+    let create = call_tool(
+        &regs,
+        "doc_create",
+        json!({
+            "title": "Preview Test",
+        }),
+    )
     .await;
     let doc_id = create["document_id"].as_str().unwrap();
 
-    call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "Intro", "level": "section",
-    }))
+    call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "Intro", "level": "section",
+        }),
+    )
     .await;
 
-    let result = call_tool(&regs, "doc_preview_tex", json!({
-        "document_id": doc_id,
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_preview_tex",
+        json!({
+            "document_id": doc_id,
+        }),
+    )
     .await;
 
     let tex = result["tex_content"].as_str().unwrap();
@@ -542,14 +660,22 @@ async fn doc_compile_tool_null_engine() {
     let create = call_tool(&regs, "doc_create", json!({"title": "Compile"})).await;
     let doc_id = create["document_id"].as_str().unwrap();
 
-    call_tool(&regs, "doc_insert_section", json!({
-        "document_id": doc_id, "title": "Body", "level": "section",
-    }))
+    call_tool(
+        &regs,
+        "doc_insert_section",
+        json!({
+            "document_id": doc_id, "title": "Body", "level": "section",
+        }),
+    )
     .await;
 
-    let result = call_tool(&regs, "doc_compile", json!({
-        "document_id": doc_id,
-    }))
+    let result = call_tool(
+        &regs,
+        "doc_compile",
+        json!({
+            "document_id": doc_id,
+        }),
+    )
     .await;
 
     // NullEngine always succeeds but doesn't produce PDF.
@@ -566,63 +692,91 @@ async fn full_agent_workflow() {
     let (_store, regs) = setup().await;
 
     // 1. Create document.
-    let create = call_tool(&regs, "doc_create", json!({
-        "title": "Full Workflow Paper",
-        "document_class": "article",
-        "authors": ["Jane Doe"],
-    }))
+    let create = call_tool(
+        &regs,
+        "doc_create",
+        json!({
+            "title": "Full Workflow Paper",
+            "document_class": "article",
+            "authors": ["Jane Doe"],
+        }),
+    )
     .await;
     let doc_id = create["document_id"].as_str().unwrap().to_string();
 
     // 2. Set metadata.
-    call_tool(&regs, "doc_metadata", json!({
-        "document_id": &doc_id,
-        "abstract_text": "We test the full writing workflow.",
-        "add_keywords": ["test", "workflow"],
-    }))
+    call_tool(
+        &regs,
+        "doc_metadata",
+        json!({
+            "document_id": &doc_id,
+            "abstract_text": "We test the full writing workflow.",
+            "add_keywords": ["test", "workflow"],
+        }),
+    )
     .await;
 
     // 3. Add sections.
     for title in &["Introduction", "Methods", "Results", "Discussion"] {
-        call_tool(&regs, "doc_insert_section", json!({
-            "document_id": &doc_id,
-            "title": title,
-            "level": "section",
-        }))
+        call_tool(
+            &regs,
+            "doc_insert_section",
+            json!({
+                "document_id": &doc_id,
+                "title": title,
+                "level": "section",
+            }),
+        )
         .await;
     }
 
     // 4. Get outline.
-    let outline = call_tool(&regs, "doc_outline", json!({
-        "document_id": &doc_id,
-    }))
+    let outline = call_tool(
+        &regs,
+        "doc_outline",
+        json!({
+            "document_id": &doc_id,
+        }),
+    )
     .await;
     assert_eq!(outline["total_sections"], 4);
 
     // 5. Add paragraphs.
     let intro_sec_id = outline["outline"][0]["section_id"].as_str().unwrap();
-    call_tool(&regs, "doc_insert_block", json!({
-        "document_id": &doc_id,
-        "section_id": intro_sec_id,
-        "block_type": "paragraph",
-        "text": "This is the introduction text.",
-    }))
+    call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": &doc_id,
+            "section_id": intro_sec_id,
+            "block_type": "paragraph",
+            "text": "This is the introduction text.",
+        }),
+    )
     .await;
 
     let methods_sec_id = outline["outline"][1]["section_id"].as_str().unwrap();
-    call_tool(&regs, "doc_insert_block", json!({
-        "document_id": &doc_id,
-        "section_id": methods_sec_id,
-        "block_type": "equation",
-        "latex": "y = X\\beta + \\epsilon",
-        "label": "eq:model",
-    }))
+    call_tool(
+        &regs,
+        "doc_insert_block",
+        json!({
+            "document_id": &doc_id,
+            "section_id": methods_sec_id,
+            "block_type": "equation",
+            "latex": "y = X\\beta + \\epsilon",
+            "label": "eq:model",
+        }),
+    )
     .await;
 
     // 6. Preview tex.
-    let preview = call_tool(&regs, "doc_preview_tex", json!({
-        "document_id": &doc_id,
-    }))
+    let preview = call_tool(
+        &regs,
+        "doc_preview_tex",
+        json!({
+            "document_id": &doc_id,
+        }),
+    )
     .await;
     let tex = preview["tex_content"].as_str().unwrap();
     assert!(tex.contains("\\section{Introduction}"));
@@ -631,9 +785,13 @@ async fn full_agent_workflow() {
     assert!(tex.contains("y = X\\beta + \\epsilon"));
 
     // 7. Compile (NullEngine).
-    let compile = call_tool(&regs, "doc_compile", json!({
-        "document_id": &doc_id,
-    }))
+    let compile = call_tool(
+        &regs,
+        "doc_compile",
+        json!({
+            "document_id": &doc_id,
+        }),
+    )
     .await;
     assert_eq!(compile["success"], true);
 }

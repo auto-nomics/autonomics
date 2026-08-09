@@ -9,9 +9,9 @@
 
 use uuid::Uuid;
 
-use crate::*;
 use crate::language::Language;
 use crate::storage::types::{KnowledgeType, Nomenclature, TargetType};
+use crate::*;
 
 fn make_name(full: &str) -> Nomenclature {
     Nomenclature {
@@ -260,9 +260,7 @@ async fn test_diagnostics_empty_definition() {
         .unwrap();
 
     let diags = svc.diagnose().await.unwrap();
-    let has_empty_def = diags
-        .iter()
-        .any(|d| d.code == "entity.empty_definition");
+    let has_empty_def = diags.iter().any(|d| d.code == "entity.empty_definition");
     assert!(has_empty_def);
 }
 
@@ -398,7 +396,10 @@ async fn test_detach_and_link_orphan() {
     .unwrap();
 
     // Detach.
-    let orphaned_id = svc.detach_knowledge_index("Vue · 响应式原理").await.unwrap();
+    let orphaned_id = svc
+        .detach_knowledge_index("Vue · 响应式原理")
+        .await
+        .unwrap();
     assert_eq!(orphaned_id, knowledge.id);
 
     // The knowledge should now be orphaned.

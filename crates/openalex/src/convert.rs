@@ -43,11 +43,7 @@ pub fn work_to_article(work: &Work) -> Article {
     let identifiers = collect_identifiers(work);
 
     // Authors: OpenAlex gives display_name + optional ORCID.
-    let authors: Vec<Author> = work
-        .authorships
-        .iter()
-        .map(authorship_to_author)
-        .collect();
+    let authors: Vec<Author> = work.authorships.iter().map(authorship_to_author).collect();
 
     // Internal id: prefer DOI, then OpenAlex id, then fallback.
     let internal_id = identifiers
@@ -221,9 +217,7 @@ fn authorship_to_author(a: &Authorship) -> Author {
 
     // ORCID — strip URL prefix.
     if let Some(ref orcid) = a.author.orcid {
-        let bare = orcid
-            .strip_prefix("https://orcid.org/")
-            .unwrap_or(orcid);
+        let bare = orcid.strip_prefix("https://orcid.org/").unwrap_or(orcid);
         author.orcid = Some(bare.to_owned());
     }
 
@@ -267,7 +261,11 @@ fn parse_display_name(name: &str) -> Author {
             Author {
                 last_name: last.to_owned(),
                 fore_name: Some(given.to_owned()),
-                initials: if initials.is_empty() { None } else { Some(initials) },
+                initials: if initials.is_empty() {
+                    None
+                } else {
+                    Some(initials)
+                },
                 affiliation: None,
                 orcid: None,
                 corresponding: false,
@@ -449,9 +447,11 @@ mod tests {
 
         assert!(article.keywords.contains(&"Open Access".to_string()));
         assert!(article.keywords.contains(&"open access".to_string()));
-        assert!(article
-            .keywords
-            .contains(&"Peer Review, Research".to_string()));
+        assert!(
+            article
+                .keywords
+                .contains(&"Peer Review, Research".to_string())
+        );
     }
 
     #[test]
@@ -464,10 +464,7 @@ mod tests {
 
         assert_eq!(article.title, "(untitled)");
         assert_eq!(article.source, ArticleSource::OpenAlex);
-        assert_eq!(
-            article.identifier(IdKind::OpenAlex),
-            Some("W1")
-        );
+        assert_eq!(article.identifier(IdKind::OpenAlex), Some("W1"));
         assert!(article.authors.is_empty());
         assert!(article.doi().is_none());
     }

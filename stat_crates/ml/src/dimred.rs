@@ -277,9 +277,9 @@ pub fn nmf(
     tol: f64,
     seed: u64,
 ) -> Result<NmfModel> {
+    use rand::Rng;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
-    use rand::Rng;
 
     let (n, m) = data.shape();
     if n == 0 || m == 0 {
@@ -301,7 +301,11 @@ pub fn nmf(
 
     // Initialize W and H with random non-negative values
     let mut w: Vec<Vec<f64>> = (0..n)
-        .map(|_| (0..n_components).map(|_| rng.random::<f64>() * 0.1 + 0.01).collect())
+        .map(|_| {
+            (0..n_components)
+                .map(|_| rng.random::<f64>() * 0.1 + 0.01)
+                .collect()
+        })
         .collect();
     let mut h: Vec<Vec<f64>> = (0..n_components)
         .map(|_| (0..m).map(|_| rng.random::<f64>() * 0.1 + 0.01).collect())
@@ -464,8 +468,8 @@ fn tmat_tmat(a: &[Vec<f64>], _b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 /// Fitted Truncated SVD: X ≈ U_k · Σ_k · V_k^T.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TruncatedSvdModel {
-    pub components: Vec<Vec<f64>>,   // V_k^T (n_components × n_features)
-    pub singular_values: Vec<f64>,   // Σ_k
+    pub components: Vec<Vec<f64>>, // V_k^T (n_components × n_features)
+    pub singular_values: Vec<f64>, // Σ_k
     pub explained_variance: Vec<f64>,
     pub explained_variance_ratio: Vec<f64>,
     pub n_components: usize,
@@ -482,7 +486,9 @@ pub fn truncated_svd(data: &Mat<f64>, n_components: usize) -> Result<TruncatedSv
         return Err(DimredError::InvalidComponents(n_components));
     }
 
-    let svd = data.svd().map_err(|e| DimredError::Numeric(format!("{e:?}")))?;
+    let svd = data
+        .svd()
+        .map_err(|e| DimredError::Numeric(format!("{e:?}")))?;
     let s_vals: Vec<f64> = svd.S().column_vector().iter().copied().collect();
 
     // Take top n_comp components (sorted descending)
@@ -497,10 +503,7 @@ pub fn truncated_svd(data: &Mat<f64>, n_components: usize) -> Result<TruncatedSv
     // Explained variance: s² / (n-1)
     let total_var: f64 = s_vals.iter().map(|s| s * s).sum();
     let explained_variance: Vec<f64> = s_top.iter().map(|s| s * s / (nrows as f64 - 1.0)).collect();
-    let explained_variance_ratio: Vec<f64> = s_top
-        .iter()
-        .map(|s| (s * s) / total_var)
-        .collect();
+    let explained_variance_ratio: Vec<f64> = s_top.iter().map(|s| (s * s) / total_var).collect();
 
     Ok(TruncatedSvdModel {
         components,
@@ -560,7 +563,9 @@ mod tests {
         let data = mat_from_row_major(
             5,
             3,
-            &[3.0, 1.0, 2.0, 4.0, 2.0, 3.0, 1.0, 5.0, 1.0, 5.0, 0.0, 4.0, 2.0, 3.0, 2.0],
+            &[
+                3.0, 1.0, 2.0, 4.0, 2.0, 3.0, 1.0, 5.0, 1.0, 5.0, 0.0, 4.0, 2.0, 3.0, 2.0,
+            ],
         );
         let model = nmf(&data, 2, 200, 1e-6, 42).unwrap();
         assert_eq!(model.n_components, 2);

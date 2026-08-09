@@ -48,12 +48,7 @@ pub fn strength_mvmr(input: &MvmrInput, _gencov: f64) -> Result<StrengthResult> 
         // Regressand: betas[:, i]. Regressors: betas without column i.
         let y: Vec<f64> = (0..n).map(|row| betas[row][i]).collect();
         let x: Vec<Vec<f64>> = (0..n)
-            .map(|row| {
-                (0..p)
-                    .filter(|&c| c != i)
-                    .map(|c| betas[row][c])
-                    .collect()
-            })
+            .map(|row| (0..p).filter(|&c| c != i).map(|c| betas[row][c]).collect())
             .collect();
         let coef = ols_origin(&x, &y)?;
         for k in 0..(p - 1) {
@@ -112,10 +107,7 @@ pub fn strength_mvmr(input: &MvmrInput, _gencov: f64) -> Result<StrengthResult> 
 /// Variant of [`strength_mvmr`] that takes per-SNP covariance matrices for the
 /// exposure effects (the `is.list(gencov)` branch in R). Each `covlist[j]` is a
 /// `p × p` covariance matrix for instrument `j`.
-pub fn strength_mvmr_cov(
-    input: &MvmrInput,
-    covlist: &[Vec<Vec<f64>>],
-) -> Result<StrengthResult> {
+pub fn strength_mvmr_cov(input: &MvmrInput, covlist: &[Vec<Vec<f64>>]) -> Result<StrengthResult> {
     input.validate()?;
     let n = input.n_snps();
     let p = input.n_exposures();
@@ -133,12 +125,7 @@ pub fn strength_mvmr_cov(
     for i in 0..p {
         let y: Vec<f64> = (0..n).map(|row| betas[row][i]).collect();
         let x: Vec<Vec<f64>> = (0..n)
-            .map(|row| {
-                (0..p)
-                    .filter(|&c| c != i)
-                    .map(|c| betas[row][c])
-                    .collect()
-            })
+            .map(|row| (0..p).filter(|&c| c != i).map(|c| betas[row][c]).collect())
             .collect();
         let coef = ols_origin(&x, &y)?;
         for k in 0..(p - 1) {

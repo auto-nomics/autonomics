@@ -53,7 +53,9 @@ pub enum MvmrNodeError {
 }
 
 impl ::dag_core::dag::NodeError for MvmrNodeError {
-    fn node_type(&self) -> &str { MVMR_NODE_KIND }
+    fn node_type(&self) -> &str {
+        MVMR_NODE_KIND
+    }
 }
 
 // =====================================================================
@@ -402,9 +404,7 @@ impl NodeFactory for MvmrNodeFactory {
             // Serialize pcor as an R matrix literal.
             let rows: Vec<String> = (0..p)
                 .map(|i| {
-                    let vals: Vec<String> = (0..p)
-                        .map(|j| format!("{}", cfg.pcor[i][j]))
-                        .collect();
+                    let vals: Vec<String> = (0..p).map(|j| format!("{}", cfg.pcor[i][j])).collect();
                     format!("c({})", vals.join(", "))
                 })
                 .collect();
@@ -575,10 +575,7 @@ impl DagNode for MvmrNode {
             None
         };
         let qhet_res = if self.config.qhet && !self.config.pcor.is_empty() {
-            Some(
-                mvmr::qhet_mvmr(&mvmr_input, &self.config.pcor)
-                    .map_err(MvmrNodeError::Mvmr)?,
-            )
+            Some(mvmr::qhet_mvmr(&mvmr_input, &self.config.pcor).map_err(MvmrNodeError::Mvmr)?)
         } else {
             None
         };
@@ -724,11 +721,7 @@ fn build_result_batch(
 
 /// Convert an f64 to `Option<f64>`, mapping NaN → None (arrow null).
 fn finite(x: f64) -> Option<f64> {
-    if x.is_nan() {
-        None
-    } else {
-        Some(x)
-    }
+    if x.is_nan() { None } else { Some(x) }
 }
 
 // =====================================================================
@@ -751,16 +744,12 @@ mod tests {
 
     /// Build a small MVMR input batch: 8 instruments, two exposures.
     fn make_input_batch() -> RecordBatch {
-        let snp =
-            StringArray::from(vec!["rs1", "rs2", "rs3", "rs4", "rs5", "rs6", "rs7", "rs8"]);
-        let beta_yg =
-            Float64Array::from(vec![0.10, 0.12, 0.09, 0.15, 0.20, 0.14, 0.25, 0.30]);
+        let snp = StringArray::from(vec!["rs1", "rs2", "rs3", "rs4", "rs5", "rs6", "rs7", "rs8"]);
+        let beta_yg = Float64Array::from(vec![0.10, 0.12, 0.09, 0.15, 0.20, 0.14, 0.25, 0.30]);
         let se_yg = Float64Array::from(vec![0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]);
-        let bx1 =
-            Float64Array::from(vec![0.20, 0.22, 0.19, 0.30, 0.40, 0.28, 0.50, 0.60]);
+        let bx1 = Float64Array::from(vec![0.20, 0.22, 0.19, 0.30, 0.40, 0.28, 0.50, 0.60]);
         let sex1 = Float64Array::from(vec![0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03, 0.03]);
-        let bx2 =
-            Float64Array::from(vec![0.05, 0.08, 0.01, 0.12, 0.15, 0.09, 0.18, 0.22]);
+        let bx2 = Float64Array::from(vec![0.05, 0.08, 0.01, 0.12, 0.15, 0.09, 0.18, 0.22]);
         let sex2 = Float64Array::from(vec![0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04]);
         let schema = Arc::new(Schema::new(vec![
             Field::new("snp", DataType::Utf8, false),

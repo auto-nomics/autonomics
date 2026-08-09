@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch, UInt8Array, UInt16Array, UInt32Array, UInt64Array, Float32Array};
+use arrow_array::{
+    Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+};
 use arrow_schema::{DataType, Schema, SchemaRef};
 use dag_core::registry::NodeCtx;
 

@@ -561,11 +561,8 @@ mod tests {
         let _ctx = Datalake::default().get_ctx().await.unwrap();
         let _provider = Datalake::default().get_provider().await.unwrap();
         let datalake = Arc::new(Datalake::default());
-        let mut node = IcebergSinkNode::new(
-            "gwas.test4".to_string(),
-            SinkMode::Overwrite,
-            datalake,
-        );
+        let mut node =
+            IcebergSinkNode::new("gwas.test4".to_string(), SinkMode::Overwrite, datalake);
 
         let (_, df) = sample_dataframe();
         let input = NodeInput { port: 0, data: df };

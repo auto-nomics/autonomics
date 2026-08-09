@@ -52,7 +52,9 @@ pub enum MrpressoNodeError {
 }
 
 impl ::dag_core::dag::NodeError for MrpressoNodeError {
-    fn node_type(&self) -> &str { MRPRESSO_NODE_KIND }
+    fn node_type(&self) -> &str {
+        MRPRESSO_NODE_KIND
+    }
 }
 
 // =====================================================================

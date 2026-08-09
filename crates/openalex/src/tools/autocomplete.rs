@@ -5,8 +5,8 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use crate::format::format_autocomplete;
 use crate::OpenAlexClient;
+use crate::format::format_autocomplete;
 
 #[tool(
     name = "openalex_autocomplete",
@@ -41,7 +41,12 @@ impl ToolFunction for OpenAlexAutocompleteTool {
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let valid = [
-            "works", "authors", "sources", "institutions", "topics", "funders",
+            "works",
+            "authors",
+            "sources",
+            "institutions",
+            "topics",
+            "funders",
         ];
         if !valid.contains(&input.entity.as_str()) {
             return Err(ToolError::ValidationFailed {

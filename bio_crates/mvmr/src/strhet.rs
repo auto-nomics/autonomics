@@ -22,7 +22,10 @@ pub struct StrhetResult {
 
 /// Per-SNP covariance matrices: either diagonal (scalar `gencov = 0` path) or
 /// full per-SNP matrices (the `is.list(gencov)` path).
-fn build_covlist(input: &MvmrInput, gencov_list: Option<&[Vec<Vec<f64>>]>) -> Result<Vec<Vec<Vec<f64>>>> {
+fn build_covlist(
+    input: &MvmrInput,
+    gencov_list: Option<&[Vec<Vec<f64>>]>,
+) -> Result<Vec<Vec<Vec<f64>>>> {
     let n = input.n_snps();
     let p = input.n_exposures();
     let sebetas = input.sebeta_xg_matrix();
@@ -71,12 +74,7 @@ pub fn strhet_mvmr(
         // y = betas[:, m]; X = betas without column m.
         let y: Vec<f64> = (0..n).map(|row| betas[row][m]).collect();
         let x: Vec<Vec<f64>> = (0..n)
-            .map(|row| {
-                (0..p)
-                    .filter(|&c| c != m)
-                    .map(|c| betas[row][c])
-                    .collect()
-            })
+            .map(|row| (0..p).filter(|&c| c != m).map(|c| betas[row][c]).collect())
             .collect();
 
         // IRLS: alternate updating δ (WLS) and the per-row σ² = vᵀ Σ v.

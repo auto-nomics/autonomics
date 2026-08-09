@@ -62,7 +62,9 @@ pub enum LdscSldscNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LdscSldscNodeError {
-    fn node_type(&self) -> &str { "sldsc" }
+    fn node_type(&self) -> &str {
+        "sldsc"
+    }
 }
 
 // =====================================================================

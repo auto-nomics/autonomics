@@ -22,5 +22,8 @@ pub enum Error {
          at index {msg_index} (id '{tool_use_id}'), but found a different role or \
          message structure"
     )]
-    UnexpectedMessageLayout { msg_index: usize, tool_use_id: String },
+    UnexpectedMessageLayout {
+        msg_index: usize,
+        tool_use_id: String,
+    },
 }

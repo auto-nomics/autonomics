@@ -24,12 +24,7 @@ pub struct HlmeLikelihood<'a> {
 }
 
 impl<'a> HlmeLikelihood<'a> {
-    pub fn new(
-        data: &'a LongData,
-        spec: &'a ModelSpec,
-        fix0: &[u8],
-        bfix: &[f64],
-    ) -> Self {
+    pub fn new(data: &'a LongData, spec: &'a ModelSpec, fix0: &[u8], bfix: &[f64]) -> Self {
         Self {
             data,
             spec,
@@ -74,7 +69,6 @@ impl<'a> Objective for HlmeLikelihood<'a> {
 }
 
 impl<'a> HlmeLikelihood<'a> {
-
     /// The hlme log-likelihood at the full parameter vector `b1` (length NPM).
     /// Direct port of `hetmixlin.f90::funcpa`.
     pub fn funcpa(&self, b1: &[f64]) -> f64 {
@@ -139,8 +133,7 @@ impl<'a> HlmeLikelihood<'a> {
                         // AR(1): sigma_ar^2 * exp(-rho * |dt|)
                         let rho = b1[L.i_ncor];
                         let sigma_ar = b1[L.i_ncor + 1];
-                        c += sigma_ar * sigma_ar
-                            * (-rho * (tcor[j1] - tcor[j2]).abs()).exp();
+                        c += sigma_ar * sigma_ar * (-rho * (tcor[j1] - tcor[j2]).abs()).exp();
                     }
                     corr[j1 * ni + j2] = c;
                 }
@@ -413,11 +406,7 @@ pub(crate) fn invert_pd(vc: &[f64], ni: usize) -> Option<(Vec<f64>, f64)> {
 }
 
 /// Free function wrapper for cross-validation tests.
-pub fn loglik_hlme(
-    b: &[f64],
-    data: &LongData,
-    spec: &ModelSpec,
-) -> f64 {
+pub fn loglik_hlme(b: &[f64], data: &LongData, spec: &ModelSpec) -> f64 {
     let layout = spec.layout();
     debug_assert_eq!(b.len(), layout.npm);
     let fix0 = vec![0u8; layout.npm];

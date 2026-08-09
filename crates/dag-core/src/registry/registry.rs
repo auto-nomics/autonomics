@@ -185,7 +185,12 @@ impl NodeRegistry {
         datalake: Arc<Datalake>,
         opendal: Option<Arc<fs::OpendalFileStorage>>,
     ) -> Self {
-        Self::new(NodeCtx::new(runtime_env, iceberg_catalog, datalake, opendal))
+        Self::new(NodeCtx::new(
+            runtime_env,
+            iceberg_catalog,
+            datalake,
+            opendal,
+        ))
     }
 
     /// Register a single node factory.

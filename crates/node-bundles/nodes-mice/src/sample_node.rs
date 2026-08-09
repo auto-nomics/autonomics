@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
@@ -86,9 +86,14 @@ impl NodeFactory for MiceImputeSampleNodeFactory {
             "src <- as.data.frame(src)".to_string(),
             "# Sample imputation".to_string(),
             "library(mice)".to_string(),
-            format!("{fit_var} <- mice.impute.sample(y = {input}${}, ry = !is.na({input}${}))", yc, yc),
+            format!(
+                "{fit_var} <- mice.impute.sample(y = {input}${}, ry = !is.na({input}${}))",
+                yc, yc
+            ),
             "# Observed-set statistics for xval".to_string(),
-            format!("{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); obs_sd <- sd(obs_y); obs_min <- min(obs_y); obs_max <- max(obs_y); {out} <- data.frame(imputed = as.numeric({fit_var}), in_observed_set = as.numeric({fit_var}) %in% obs_y, observed_mean = obs_mean, observed_sd = obs_sd, observed_min = obs_min, observed_max = obs_max) }}"),
+            format!(
+                "{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); obs_sd <- sd(obs_y); obs_min <- min(obs_y); obs_max <- max(obs_y); {out} <- data.frame(imputed = as.numeric({fit_var}), in_observed_set = as.numeric({fit_var}) %in% obs_y, observed_mean = obs_mean, observed_sd = obs_sd, observed_min = obs_min, observed_max = obs_max) }}"
+            ),
             format!("print({out})"),
         ];
         Ok(NodeCodegen::simple(code, out))
@@ -141,10 +146,11 @@ impl DagNode for MiceImputeSampleNode {
             node_type: "mice_impute_sample".into(),
             msg: e.to_string(),
         })?;
-        let ry = extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
-            node_type: "mice_impute_sample".into(),
-            msg: e.to_string(),
-        })?;
+        let ry =
+            extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
+                node_type: "mice_impute_sample".into(),
+                msg: e.to_string(),
+            })?;
         let mut rng = match self.spec.seed {
             Some(s) => StdRng::seed_from_u64(s),
             None => StdRng::from_entropy(),
@@ -175,7 +181,8 @@ mod tests {
 
     fn make_batch(values: Vec<f64>) -> arrow_array::RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("y", DataType::Float64, false)]));
-        arrow_array::RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(values))]).unwrap()
+        arrow_array::RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(values))])
+            .unwrap()
     }
 
     #[tokio::test]
@@ -195,7 +202,9 @@ mod tests {
         };
         let input = dag_core::node::NodeInput {
             port: 0,
-            data: datafusion::prelude::SessionContext::new().read_batch(batch).unwrap(),
+            data: datafusion::prelude::SessionContext::new()
+                .read_batch(batch)
+                .unwrap(),
         };
         let outs = node
             .execute(
@@ -210,7 +219,13 @@ mod tests {
         let batches = df.collect().await.unwrap();
         let imputed: Vec<f64> = batches
             .iter()
-            .flat_map(|b| b.column(0).as_any().downcast_ref::<Float64Array>().unwrap().iter())
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .iter()
+            })
             .map(|v| v.unwrap())
             .collect();
         assert_eq!(imputed.len(), 2);

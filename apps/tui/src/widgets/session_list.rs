@@ -62,12 +62,10 @@ impl Widget for SessionList<'_> {
         // time descending (newest at top). This is a display-only reorder —
         // it does not mutate the caller's slice.
         let mut ordered: Vec<&SessionSummary> = self.sessions.iter().collect();
-        ordered.sort_by(|a, b| {
-            match (b.is_active, a.is_active) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => b.created_at.cmp(&a.created_at),
-            }
+        ordered.sort_by(|a, b| match (b.is_active, a.is_active) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => b.created_at.cmp(&a.created_at),
         });
 
         for (i, session) in ordered.iter().enumerate() {
@@ -120,9 +118,7 @@ fn render_session_row(area: Rect, buf: &mut Buffer, session: &SessionSummary) {
             Span::styled(" ○ ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 title_display,
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
             ),
             Span::raw(" "),
             Span::styled(msg_text, Style::default().fg(Color::DarkGray)),
@@ -202,27 +198,21 @@ mod tests {
         widget.render(Rect::new(0, 0, 40, 5), &mut buf);
 
         // Row 0 (y=0) must contain the active marker "●".
-        let row0: String = (0..40)
-            .map(|x| buf[(x, 0)].symbol().to_string())
-            .collect();
+        let row0: String = (0..40).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert!(
             row0.contains('●'),
             "expected active marker on first row, got: {row0}"
         );
 
         // Row 1 (y=1) must be the newest inactive ("Older", created_at 9000).
-        let row1: String = (0..40)
-            .map(|x| buf[(x, 1)].symbol().to_string())
-            .collect();
+        let row1: String = (0..40).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert!(
             row1.contains("Older"),
             "expected newest inactive on second row, got: {row1}"
         );
 
         // Row 2 must be "Middle" (created_at 5000).
-        let row2: String = (0..40)
-            .map(|x| buf[(x, 2)].symbol().to_string())
-            .collect();
+        let row2: String = (0..40).map(|x| buf[(x, 2)].symbol().to_string()).collect();
         assert!(
             row2.contains("Middle"),
             "expected second-newest inactive on third row, got: {row2}"

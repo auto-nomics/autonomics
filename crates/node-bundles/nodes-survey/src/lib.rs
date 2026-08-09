@@ -12,7 +12,9 @@ use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "survey" }
+    fn name(&self) -> &'static str {
+        "survey"
+    }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(survey_describe::SvyMeanFactory {}));
         registry.register(Box::new(survey_describe::SvyTotalFactory {}));

@@ -39,7 +39,9 @@ pub enum LinearRegressionError {
 }
 
 impl ::dag_core::dag::NodeError for LinearRegressionError {
-    fn node_type(&self) -> &str { "linear_regression" }
+    fn node_type(&self) -> &str {
+        "linear_regression"
+    }
 }
 
 // =====================================================================

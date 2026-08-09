@@ -59,13 +59,18 @@ async fn search_basic_query() -> TestResult {
 async fn search_returns_rich_metadata() -> TestResult {
     throttle().await;
     let client = common::client();
-    let resp = client.search_paper("deep learning genomics", 3, None).await?;
+    let resp = client
+        .search_paper("deep learning genomics", 3, None)
+        .await?;
 
     if resp.data.is_empty() {
         return Ok(()); // API returned nothing; skip
     }
     let p = &resp.data[0];
-    assert!(p.year.is_some(), "year should be present with default fields");
+    assert!(
+        p.year.is_some(),
+        "year should be present with default fields"
+    );
     assert!(
         !p.authors.is_empty(),
         "authors should be present with default fields"
@@ -161,7 +166,10 @@ async fn search_structured_query() -> TestResult {
     let sq = StructuredSearch {
         keywords: Some(vec!["p53".into(), "cancer".into()]),
         keywords_op: Some(BoolOp::And),
-        year_range: Some(YearRange { from: 2022, to: 2024 }),
+        year_range: Some(YearRange {
+            from: 2022,
+            to: 2024,
+        }),
         ..Default::default()
     };
     let parts = to_s2(&sq)?;
@@ -220,7 +228,9 @@ async fn search_pagination() -> TestResult {
 async fn get_paper_by_sha() -> TestResult {
     throttle().await;
     let client = common::client();
-    let search = client.search_paper("attention is all you need", 1, None).await?;
+    let search = client
+        .search_paper("attention is all you need", 1, None)
+        .await?;
     if search.data.is_empty() {
         return Ok(());
     }
@@ -262,7 +272,9 @@ async fn get_paper_by_arxiv_id() -> TestResult {
 async fn get_papers_batch() -> TestResult {
     throttle().await;
     let client = common::client();
-    let search = client.search_paper("genome wide association", 3, None).await?;
+    let search = client
+        .search_paper("genome wide association", 3, None)
+        .await?;
     let ids: Vec<&str> = search.data.iter().map(|p| p.paper_id.as_str()).collect();
 
     throttle().await;
@@ -285,9 +297,7 @@ async fn get_papers_batch() -> TestResult {
 async fn get_citations() -> TestResult {
     throttle().await;
     let client = common::client();
-    let resp = client
-        .get_citations("ARXIV:1706.03762", 5, 0, None)
-        .await?;
+    let resp = client.get_citations("ARXIV:1706.03762", 5, 0, None).await?;
 
     assert!(!resp.data.is_empty(), "should have citations");
     let c = &resp.data[0];
@@ -338,12 +348,13 @@ async fn citation_intents_present() -> TestResult {
         .iter()
         .filter(|c| c.intents.as_ref().map(|v| !v.is_empty()).unwrap_or(false))
         .count();
-    eprintln!("  {}/{} citations have intents", with_intents, resp.data.len());
+    eprintln!(
+        "  {}/{} citations have intents",
+        with_intents,
+        resp.data.len()
+    );
     // At minimum, the field should be present (even if empty list).
-    let has_field = resp
-        .data
-        .iter()
-        .all(|c| c.intents.is_some());
+    let has_field = resp.data.iter().all(|c| c.intents.is_some());
     assert!(
         has_field,
         "intents field should be deserialised (present) on all citations"
@@ -427,7 +438,9 @@ async fn recommendations_for_paper() -> TestResult {
     throttle().await;
     let client = common::client();
     // First search for a well-known paper to get its S2 SHA.
-    let search = client.search_paper("attention is all you need", 1, None).await?;
+    let search = client
+        .search_paper("attention is all you need", 1, None)
+        .await?;
     if search.data.is_empty() {
         return Ok(());
     }
@@ -535,8 +548,7 @@ async fn convert_paper_with_doi_has_both_ids() -> TestResult {
         "S2 ID must be present"
     );
     assert!(
-        article.identifier(IdKind::Arxiv).is_some()
-            || article.doi().is_some(),
+        article.identifier(IdKind::Arxiv).is_some() || article.doi().is_some(),
         "at least one external ID (ArXiv or DOI) should be present"
     );
 

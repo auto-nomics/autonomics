@@ -77,12 +77,7 @@ impl HostControl {
         });
     }
 
-    pub fn add_node_with_prompt(
-        &self,
-        name: &str,
-        profile: &str,
-        prompt: impl Into<String>,
-    ) {
+    pub fn add_node_with_prompt(&self, name: &str, profile: &str, prompt: impl Into<String>) {
         self.fire(HostCommand::AddNode {
             name: name.into(),
             profile: profile.into(),
@@ -131,12 +126,7 @@ impl HostControl {
         self.fire(HostCommand::ListSessions { name: name.into() });
     }
 
-    pub fn create_session(
-        &self,
-        name: &str,
-        title: Option<String>,
-        fork_from: Option<uuid::Uuid>,
-    ) {
+    pub fn create_session(&self, name: &str, title: Option<String>, fork_from: Option<uuid::Uuid>) {
         self.fire(HostCommand::CreateSession {
             name: name.into(),
             title,
@@ -339,7 +329,6 @@ pub enum HostCommand {
     },
 
     // ── Session management ──
-
     /// Cancel the current turn of a named agent.
     CancelAgent { name: String },
 
@@ -354,10 +343,16 @@ pub enum HostCommand {
     },
 
     /// Switch the active session of a named agent.
-    SwitchSession { name: String, session_id: uuid::Uuid },
+    SwitchSession {
+        name: String,
+        session_id: uuid::Uuid,
+    },
 
     /// Close a session in a named agent.
-    CloseSession { name: String, session_id: uuid::Uuid },
+    CloseSession {
+        name: String,
+        session_id: uuid::Uuid,
+    },
 
     /// Rename a session in a named agent.
     RenameSession {
@@ -367,7 +362,6 @@ pub enum HostCommand {
     },
 
     // ── Model management ──
-
     /// Hot-swap the model of a named agent.
     SetAgentModel { name: String, model: Model },
 

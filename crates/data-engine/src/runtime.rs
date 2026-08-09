@@ -19,8 +19,8 @@
 //! (`NodeRegistry`, `DagHistory`, `RuntimeEnv`) is shared via `Arc`.
 
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use datafusion::common::HashMap;
 use futures::FutureExt;
@@ -54,10 +54,7 @@ struct SessionServer {
 impl SessionServer {
     async fn run(mut self) {
         while let Some(msg) = self.rx.recv().await {
-            if let Err(panic) = AssertUnwindSafe(self.handle(msg))
-                .catch_unwind()
-                .await
-            {
+            if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
                 tracing::error!(
                     session_id = %self.session_id,
                     "session actor handler panicked: {:?}",
@@ -106,9 +103,10 @@ impl SessionServer {
                             let _ = reply.send(res);
                         }
                         Err(panic) => {
-                            let _ = reply.send(Err(crate::error::Error::Custom(
-                                format!("DAG run panicked: {:?}", panic),
-                            )));
+                            let _ = reply.send(Err(crate::error::Error::Custom(format!(
+                                "DAG run panicked: {:?}",
+                                panic
+                            ))));
                         }
                     }
                 });
@@ -133,12 +131,16 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let res = match (from_port, to_port) {
                     (Some(fp), Some(tp)) => engine.add_edge(from, to, fp, tp).map(|_| ()),
                     (None, None) => engine.add_edge(from, to, 0, 0).map(|_| ()),
                     _ => Err(crate::error::Error::Custom(
-                        "add_edge: from_port and to_port must both be Some or both None".to_string(),
+                        "add_edge: from_port and to_port must both be Some or both None"
+                            .to_string(),
                     )),
                 };
                 let _ = reply.send(res);
@@ -156,7 +158,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.add_node_from_registry(id, &kind, spec));
             }
             DataEngineCmd::UpdateNode { id, spec, reply } => {
@@ -167,7 +172,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.update_node(id, spec));
             }
             DataEngineCmd::RemoveNode { id, reply } => {
@@ -178,7 +186,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.remove_node(id).map(|_| ()));
             }
             DataEngineCmd::ClearDag { reply } => {
@@ -189,7 +200,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.clear_dag().map(|_| ()));
             }
 
@@ -201,7 +215,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(Ok(engine.get_output(id).await));
             }
             DataEngineCmd::GetNodeStatus { id, reply } => {
@@ -211,7 +228,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(Ok(engine.node_status(&id)));
             }
             DataEngineCmd::ViewDag { reply } => {
@@ -221,7 +241,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.view_dag());
             }
             DataEngineCmd::CompileDag { target, reply } => {
@@ -231,7 +254,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.compile_dag(target));
             }
 
@@ -244,7 +270,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.new_dag_ref(&name).await);
             }
             DataEngineCmd::SwitchDagRef { name, reply } => {
@@ -255,7 +284,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.switch_dag_ref(&name).await);
             }
             DataEngineCmd::ListDagRefs { reply } => {
@@ -265,7 +297,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.list_dag_refs().await);
             }
             DataEngineCmd::DagLog {
@@ -279,7 +314,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.dag_log(ref_name.as_deref(), limit).await);
             }
             DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
@@ -289,7 +327,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.checkout_dag(&snapshot_id).await);
             }
             DataEngineCmd::BranchFromSnapshot {
@@ -299,16 +340,16 @@ impl SessionServer {
             } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for completion before branching".to_string(),
+                        "DAG is currently running; wait for completion before branching"
+                            .to_string(),
                     )));
                     return;
                 }
-                let mut engine = self.engine.try_lock().expect("uncontended: running flag is false");
-                let _ = reply.send(
-                    engine
-                        .branch_from_snapshot(&snapshot_id, &ref_name)
-                        .await,
-                );
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.branch_from_snapshot(&snapshot_id, &ref_name).await);
             }
             DataEngineCmd::GetDagRef { reply } => {
                 if self.running.load(Ordering::SeqCst) {
@@ -317,7 +358,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(Ok(engine.history_ref().to_string()));
             }
             DataEngineCmd::GetSnapshot { snapshot_id, reply } => {
@@ -327,7 +371,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.get_snapshot(&snapshot_id).await);
             }
             DataEngineCmd::DiffSnapshots {
@@ -341,7 +388,10 @@ impl SessionServer {
                     )));
                     return;
                 }
-                let engine = self.engine.try_lock().expect("uncontended: running flag is false");
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.diff_snapshots(&old_id, &new_id).await);
             }
         }
@@ -504,7 +554,10 @@ impl DataEngineClient {
     pub async fn get_output(&self, id: String) -> Result<Option<crate::dag::graph::PortOutputs>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::GetOutput { id, reply: reply_tx },
+            DataEngineCmd::GetOutput {
+                id,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -516,7 +569,10 @@ impl DataEngineClient {
     ) -> Result<Option<crate::dag::runtime::RuntimeStatus>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::GetNodeStatus { id, reply: reply_tx },
+            DataEngineCmd::GetNodeStatus {
+                id,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -533,7 +589,10 @@ impl DataEngineClient {
     pub async fn remove_node(&self, id: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::RemoveNode { id, reply: reply_tx },
+            DataEngineCmd::RemoveNode {
+                id,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -547,17 +606,17 @@ impl DataEngineClient {
 
     pub async fn clear_dag(&self) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ClearDag { reply: reply_tx },
-            reply_rx,
-        )
-        .await
+        self.request(DataEngineCmd::ClearDag { reply: reply_tx }, reply_rx)
+            .await
     }
 
     pub async fn new_dag_ref(&self, name: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::NewDagRef { name, reply: reply_tx },
+            DataEngineCmd::NewDagRef {
+                name,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -566,7 +625,10 @@ impl DataEngineClient {
     pub async fn switch_dag_ref(&self, name: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::SwitchDagRef { name, reply: reply_tx },
+            DataEngineCmd::SwitchDagRef {
+                name,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -574,11 +636,8 @@ impl DataEngineClient {
 
     pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ListDagRefs { reply: reply_tx },
-            reply_rx,
-        )
-        .await
+        self.request(DataEngineCmd::ListDagRefs { reply: reply_tx }, reply_rx)
+            .await
     }
 
     pub async fn dag_log(
@@ -610,11 +669,7 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn branch_from_snapshot(
-        &self,
-        snapshot_id: String,
-        ref_name: String,
-    ) -> Result<()> {
+    pub async fn branch_from_snapshot(&self, snapshot_id: String, ref_name: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::BranchFromSnapshot {
@@ -629,17 +684,11 @@ impl DataEngineClient {
 
     pub async fn get_dag_ref(&self) -> Result<String> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetDagRef { reply: reply_tx },
-            reply_rx,
-        )
-        .await
+        self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
+            .await
     }
 
-    pub async fn get_snapshot(
-        &self,
-        snapshot_id: String,
-    ) -> Result<Option<crate::dag::Snapshot>> {
+    pub async fn get_snapshot(&self, snapshot_id: String) -> Result<Option<crate::dag::Snapshot>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::GetSnapshot {
@@ -664,12 +713,7 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn add_node(
-        &self,
-        id: String,
-        kind: String,
-        spec: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn add_node(&self, id: String, kind: String, spec: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::AddNode {
@@ -702,7 +746,10 @@ impl DataEngineClient {
     ) -> Result<crate::codegen::CompiledScript> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::CompileDag { target, reply: reply_tx },
+            DataEngineCmd::CompileDag {
+                target,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await

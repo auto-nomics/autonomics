@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
@@ -93,7 +93,14 @@ impl NodeFactory for MiceImputeLogregNodeFactory {
         let preds_expr = if s.predictors.is_empty() {
             String::new()
         } else {
-            format!("cbind({})", s.predictors.iter().map(|c| format!("{input}${c}")).collect::<Vec<_>>().join(", "))
+            format!(
+                "cbind({})",
+                s.predictors
+                    .iter()
+                    .map(|c| format!("{input}${c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         };
         let yc = s.y_column.clone();
         let code = vec![
@@ -110,11 +117,16 @@ impl NodeFactory for MiceImputeLogregNodeFactory {
             {
                 let formula_part = format!(
                     "as.formula(paste(\"{yc} ~\", paste(setdiff(names({input}), \"{yc}\"), collapse = \" + \")))",
-                    yc = yc, input = input
+                    yc = yc,
+                    input = input
                 );
                 format!(
                     "{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); formula_glm <- {formula}; fit_glm <- glm(formula_glm, family = binomial, data = {input}); pred_obs <- predict(fit_glm, newdata = {input}[is.na({input}${yc}), ], type = \"response\"); binarised_pred <- as.numeric(pred_obs > 0.5); {out} <- data.frame(imputed = as.numeric({fit_var}), is_binary = as.numeric({fit_var}) %in% c(0, 1), predicted_prob = as.numeric(pred_obs), binarised_pred = binarised_pred, observed_mean = obs_mean) }}",
-                    input = input, yc = yc, formula = formula_part, fit_var = fit_var, out = out
+                    input = input,
+                    yc = yc,
+                    formula = formula_part,
+                    fit_var = fit_var,
+                    out = out
                 )
             },
             format!("print({out})"),
@@ -169,24 +181,29 @@ impl DagNode for MiceImputeLogregNode {
             node_type: "mice_impute_logreg".into(),
             msg: e.to_string(),
         })?;
-        let ry = extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
-            node_type: "mice_impute_logreg".into(),
-            msg: e.to_string(),
-        })?;
+        let ry =
+            extract_observed(&batches, &self.spec.y_column).map_err(|e| DagError::NodeError {
+                node_type: "mice_impute_logreg".into(),
+                msg: e.to_string(),
+            })?;
         let wy: Vec<bool> = ry.iter().map(|r| !*r).collect();
-        let (x, _n) = build_predictor_matrix(&batches, &self.spec.predictors).map_err(|e| DagError::NodeError {
-            node_type: "mice_impute_logreg".into(),
-            msg: e.to_string(),
+        let (x, _n) = build_predictor_matrix(&batches, &self.spec.predictors).map_err(|e| {
+            DagError::NodeError {
+                node_type: "mice_impute_logreg".into(),
+                msg: e.to_string(),
+            }
         })?;
 
         let mut rng = match self.spec.seed {
             Some(s) => StdRng::seed_from_u64(s),
             None => StdRng::from_entropy(),
         };
-        let imputed = mice::logreg::impute_logreg(&y, &ry, &x, Some(&wy), &mut rng)
-            .map_err(|e| DagError::NodeError {
-                node_type: "mice_impute_logreg".into(),
-                msg: e.to_string(),
+        let imputed =
+            mice::logreg::impute_logreg(&y, &ry, &x, Some(&wy), &mut rng).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "mice_impute_logreg".into(),
+                    msg: e.to_string(),
+                }
             })?;
 
         let batch = build_imputation_batch(&imputed).map_err(|e| DagError::NodeError {
@@ -218,7 +235,9 @@ mod tests {
             .collect();
         let arrays: Vec<Arc<dyn arrow_array::Array>> = columns
             .iter()
-            .map(|(_, vals)| Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>)
+            .map(|(_, vals)| {
+                Arc::new(Float64Array::from(vals.clone())) as Arc<dyn arrow_array::Array>
+            })
             .collect();
         arrow_array::RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
     }
@@ -232,7 +251,11 @@ mod tests {
         let mut y = Vec::with_capacity(n);
         for i in 0..n {
             let p = 1.0 / (1.0 + (-linpred[i]).exp());
-            y.push(if (i as f64 * 0.123).fract() < p { 1.0 } else { 0.0 });
+            y.push(if (i as f64 * 0.123).fract() < p {
+                1.0
+            } else {
+                0.0
+            });
         }
         let mut y_mis = y.clone();
         y_mis[5] = f64::NAN;
@@ -253,7 +276,9 @@ mod tests {
 
         let input = dag_core::node::NodeInput {
             port: 0,
-            data: datafusion::prelude::SessionContext::new().read_batch(batch).unwrap(),
+            data: datafusion::prelude::SessionContext::new()
+                .read_batch(batch)
+                .unwrap(),
         };
         let outs = node
             .execute(
@@ -268,7 +293,13 @@ mod tests {
         let batches = df.collect().await.unwrap();
         let imputed: Vec<f64> = batches
             .iter()
-            .flat_map(|b| b.column(0).as_any().downcast_ref::<Float64Array>().unwrap().iter())
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .iter()
+            })
             .map(|v| v.unwrap())
             .collect();
         assert_eq!(imputed.len(), 4);

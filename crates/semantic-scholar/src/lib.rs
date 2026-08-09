@@ -54,8 +54,8 @@ pub mod query;
 pub mod tools;
 pub mod types;
 
-pub use client::S2Client;
 pub use client::PaperSearchFilter;
+pub use client::S2Client;
 pub use convert::{paper_to_article, papers_to_articles};
 pub use error::S2Error;
 pub use tools::s2_registrations;

@@ -56,7 +56,9 @@ pub enum LiabilityNodeError {
 }
 
 impl ::dag_core::dag::NodeError for LiabilityNodeError {
-    fn node_type(&self) -> &str { "liability" }
+    fn node_type(&self) -> &str {
+        "liability"
+    }
 }
 
 // =====================================================================

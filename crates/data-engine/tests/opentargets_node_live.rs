@@ -7,10 +7,10 @@
 //! ```
 
 use data_engine::node_registry::{NodeCtx, NodeFactory};
+use datafusion::prelude::SessionContext;
 use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };
-use datafusion::prelude::SessionContext;
 use std::sync::Arc;
 
 fn node_ctx() -> NodeCtx {

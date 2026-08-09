@@ -170,7 +170,8 @@ impl AgentProfile {
                 name: "researcher".into(),
                 description: "Full-featured biomedical research assistant.".into(),
                 agent_identity: "You are a biomedical research assistant specializing \
-                    in genomics, GWAS analysis, and literature mining.".into(),
+                    in genomics, GWAS analysis, and literature mining."
+                    .into(),
                 system_prompt: None,
                 enable_bibliography: true,
                 enable_opengwas: true,
@@ -188,7 +189,8 @@ impl AgentProfile {
                 description: "Literature search and evidence synthesis expert.".into(),
                 agent_identity: "You are a literature search expert specializing in \
                     systematic reviews, meta-analyses, and evidence synthesis. \
-                    Use PubMed, Embase, and bioRxiv tools to find and analyze publications.".into(),
+                    Use PubMed, Embase, and bioRxiv tools to find and analyze publications."
+                    .into(),
                 system_prompt: None,
                 enable_bibliography: true,
                 enable_opengwas: false,
@@ -206,7 +208,8 @@ impl AgentProfile {
                 description: "GWAS data analysis and statistical genetics expert.".into(),
                 agent_identity: "You are a GWAS analysis expert specializing in \
                     statistical genetics. Use OpenGWAS, GWAS Catalog, and the \
-                    data pipeline engine to analyze genetic association data.".into(),
+                    data pipeline engine to analyze genetic association data."
+                    .into(),
                 system_prompt: None,
                 enable_bibliography: false,
                 enable_opengwas: true,
@@ -258,7 +261,8 @@ pub trait AgentStorage: Send + Sync {
 
     async fn create_snapshot(&self, snapshot: AgentSnapshot) -> Result<(), StorageError>;
     async fn get_snapshot(&self, snapshot_id: Uuid) -> Result<AgentSnapshot, StorageError>;
-    async fn get_agent_snapshots(&self, agent_id: Uuid) -> Result<Vec<AgentSnapshot>, StorageError>;
+    async fn get_agent_snapshots(&self, agent_id: Uuid)
+    -> Result<Vec<AgentSnapshot>, StorageError>;
     async fn get_latest_snapshot(
         &self,
         agent_id: Uuid,
@@ -294,16 +298,9 @@ pub trait AgentStorage: Send + Sync {
 
     // ── Session log (WAL) ────────────────────────────────────
 
-    async fn start_session(
-        &self,
-        agent_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<(), StorageError>;
-    async fn append_message(
-        &self,
-        session_id: Uuid,
-        message: &Message,
-    ) -> Result<(), StorageError>;
+    async fn start_session(&self, agent_id: Uuid, session_id: Uuid) -> Result<(), StorageError>;
+    async fn append_message(&self, session_id: Uuid, message: &Message)
+    -> Result<(), StorageError>;
     async fn end_session(&self, session_id: Uuid) -> Result<(), StorageError>;
 
     /// Permanently delete a session and its messages from storage.
@@ -316,11 +313,8 @@ pub trait AgentStorage: Send + Sync {
     ) -> Result<Vec<Message>, StorageError>;
 
     /// Update the title of a session record.
-    async fn update_session_title(
-        &self,
-        session_id: Uuid,
-        title: &str,
-    ) -> Result<(), StorageError>;
+    async fn update_session_title(&self, session_id: Uuid, title: &str)
+    -> Result<(), StorageError>;
 
     /// List all session records for an agent (for restoring session list on
     /// restart). Returns sessions ordered by creation time ascending.
@@ -373,10 +367,7 @@ pub trait AgentProfileRegistry: Send + Sync {
         let mut changed = false;
 
         // ── Legacy migration: rename `default` → `researcher` ──
-        if let Some(legacy) = existing
-            .iter()
-            .find(|p| p.name == "default").cloned()
-        {
+        if let Some(legacy) = existing.iter().find(|p| p.name == "default").cloned() {
             let mut renamed = legacy;
             renamed.name = "researcher".into();
             renamed.updated_at = now_ms();

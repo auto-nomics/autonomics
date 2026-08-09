@@ -71,7 +71,9 @@ pub enum TwoSampleMrNodeError {
 }
 
 impl ::dag_core::dag::NodeError for TwoSampleMrNodeError {
-    fn node_type(&self) -> &str { TWO_SAMPLE_MR_NODE_KIND }
+    fn node_type(&self) -> &str {
+        TWO_SAMPLE_MR_NODE_KIND
+    }
 }
 
 // =====================================================================
@@ -534,7 +536,6 @@ pub enum ClumpMode {
     IcebergLd,
 }
 
-
 /// LD clumping parameters for selecting independent instruments via the
 /// OpenGWAS `/ld/clump` endpoint (1000 Genomes reference panel).
 ///
@@ -753,9 +754,7 @@ async fn clump_iceberg_ld(
         let df = match session.sql(&sql).await {
             Ok(df) => df,
             Err(e) => {
-                tracing::debug!(
-                    "LD matrix table for chr{chrom} unavailable ({e}); skipping"
-                );
+                tracing::debug!("LD matrix table for chr{chrom} unavailable ({e}); skipping");
                 skipped_chroms.push(chrom);
                 continue;
             }
@@ -811,10 +810,7 @@ async fn clump_iceberg_ld(
         if skipped_chroms.is_empty() {
             String::new()
         } else {
-            format!(
-                "; skipped chromosomes (no table): {:?}",
-                skipped_chroms
-            )
+            format!("; skipped chromosomes (no table): {:?}", skipped_chroms)
         },
     );
 

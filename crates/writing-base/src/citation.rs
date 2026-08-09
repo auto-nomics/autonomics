@@ -39,7 +39,10 @@ pub enum CiteKeyStatus {
     },
 
     /// Multiple articles match this key (ambiguity).
-    Ambiguous { key: String, candidates: Vec<String> },
+    Ambiguous {
+        key: String,
+        candidates: Vec<String>,
+    },
 }
 
 impl CiteKeyStatus {
@@ -326,11 +329,7 @@ impl CitationResolver {
     // -----------------------------------------------------------------------
 
     /// Check which cite keys in a document would break if an article is deleted.
-    pub async fn check_deletion_impact(
-        &self,
-        article_id: &str,
-        doc: &Document,
-    ) -> Vec<String> {
+    pub async fn check_deletion_impact(&self, article_id: &str, doc: &Document) -> Vec<String> {
         let (_, reverse) = self.build_index().await;
         let cite_key = match reverse.get(article_id) {
             Some(k) => k.clone(),
@@ -350,11 +349,7 @@ impl CitationResolver {
     // -----------------------------------------------------------------------
 
     /// Suggest a closest-matching key for an unresolved cite key.
-    fn suggest_for_key(
-        &self,
-        unresolved: &str,
-        index: &HashMap<String, String>,
-    ) -> Option<String> {
+    fn suggest_for_key(&self, unresolved: &str, index: &HashMap<String, String>) -> Option<String> {
         // Simple prefix + edit-distance heuristic.
         let mut best: Option<(String, usize)> = None;
         for candidate in index.keys() {
@@ -464,7 +459,10 @@ mod tests {
         bib.upsert_article(&a1).await.unwrap();
 
         // Jones 2023 — "Mendelian randomization analysis"
-        let mut a2 = Article::new("art-2", "Mendelian randomization analysis of complex traits");
+        let mut a2 = Article::new(
+            "art-2",
+            "Mendelian randomization analysis of complex traits",
+        );
         a2.authors.push(bib_types::Author {
             last_name: "Jones".into(),
             fore_name: Some("Bob".into()),
@@ -582,7 +580,10 @@ mod tests {
         let (forward, _) = resolver.build_index().await;
 
         // Both articles should be in the index.
-        let smith_keys: Vec<&String> = forward.keys().filter(|k| k.starts_with("smith2024")).collect();
+        let smith_keys: Vec<&String> = forward
+            .keys()
+            .filter(|k| k.starts_with("smith2024"))
+            .collect();
         assert!(smith_keys.len() >= 2);
     }
 

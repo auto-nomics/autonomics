@@ -5,9 +5,9 @@
 //! they return `NotImplemented`.
 
 use faer::Mat;
+use rand::Rng;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
@@ -187,11 +187,7 @@ fn kmeans_pp_init(data: &Mat<f64>, k: usize, rng: &mut ChaCha8Rng) -> Vec<Vec<f6
             .map(|i| {
                 centroids
                     .iter()
-                    .map(|c| {
-                        (0..d)
-                            .map(|j| (data[(i, j)] - c[j]).powi(2))
-                            .sum::<f64>()
-                    })
+                    .map(|c| (0..d).map(|j| (data[(i, j)] - c[j]).powi(2)).sum::<f64>())
                     .fold(f64::INFINITY, f64::min)
             })
             .collect();
@@ -224,9 +220,7 @@ pub fn kmeans_predict(model: &KMeansModel, data: &Mat<f64>) -> Vec<usize> {
             let mut best_k = 0;
             let mut best_dist = f64::INFINITY;
             for (k, c) in model.centroids.iter().enumerate() {
-                let dist: f64 = (0..ncols)
-                    .map(|j| (data[(i, j)] - c[j]).powi(2))
-                    .sum();
+                let dist: f64 = (0..ncols).map(|j| (data[(i, j)] - c[j]).powi(2)).sum();
                 if dist < best_dist {
                     best_dist = dist;
                     best_k = k;
@@ -478,9 +472,7 @@ pub fn dbscan(data: &Mat<f64>, opts: &DbscanOptions) -> Result<DbscanResult> {
     let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         for j in (i + 1)..n {
-            let dist_sq: f64 = (0..d)
-                .map(|k| (data[(i, k)] - data[(j, k)]).powi(2))
-                .sum();
+            let dist_sq: f64 = (0..d).map(|k| (data[(i, k)] - data[(j, k)]).powi(2)).sum();
             if dist_sq <= eps_sq {
                 neighbours[i].push(j);
                 neighbours[j].push(i);
@@ -603,12 +595,7 @@ pub fn hierarchical(data: &Mat<f64>, k: usize, linkage: Linkage) -> Result<Hiera
     })
 }
 
-fn cluster_distance(
-    c1: &[usize],
-    c2: &[usize],
-    dist: &[Vec<f64>],
-    linkage: Linkage,
-) -> f64 {
+fn cluster_distance(c1: &[usize], c2: &[usize], dist: &[Vec<f64>], linkage: Linkage) -> f64 {
     match linkage {
         Linkage::Single => c1
             .iter()
@@ -685,7 +672,14 @@ mod tests {
     #[test]
     fn test_dbscan() {
         let data = make_test_data();
-        let result = dbscan(&data, &DbscanOptions { eps: 2.0, min_points: 2 }).unwrap();
+        let result = dbscan(
+            &data,
+            &DbscanOptions {
+                eps: 2.0,
+                min_points: 2,
+            },
+        )
+        .unwrap();
         assert!(result.n_clusters >= 1);
     }
 

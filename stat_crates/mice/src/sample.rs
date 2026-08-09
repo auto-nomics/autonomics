@@ -9,8 +9,8 @@
 //! identically. Callers must seed their `SmallRng` with the same 32-bit
 //! integer they would pass to `set.seed()` in R (using `seeded_rng` below).
 
-use rand::seq::IteratorRandom;
 use rand::Rng;
+use rand::seq::IteratorRandom;
 
 /// Reproduce `mice.impute.sample(y, ry, x = NULL, wy = NULL)`.
 ///
@@ -25,7 +25,12 @@ use rand::Rng;
 /// * If `yry` has fewer than 2 elements, it is padded to length 2 (R does
 ///   `yry <- rep(yry, 2)`).
 /// * If `yry` is empty, the function falls back to `rnorm(sum(wy))`.
-pub fn impute_sample<R: Rng + ?Sized>(y: &[f64], ry: &[bool], wy: Option<&[bool]>, rng: &mut R) -> Vec<f64> {
+pub fn impute_sample<R: Rng + ?Sized>(
+    y: &[f64],
+    ry: &[bool],
+    wy: Option<&[bool]>,
+    rng: &mut R,
+) -> Vec<f64> {
     let wy_owned;
     let wy = match wy {
         Some(v) => v,

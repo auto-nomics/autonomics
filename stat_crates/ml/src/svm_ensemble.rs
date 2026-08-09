@@ -27,12 +27,7 @@ pub struct SvmResult {
     pub predictions: Vec<usize>,
 }
 
-pub fn svm_classify(
-    data: &Mat<f64>,
-    labels: &[usize],
-    kernel: &str,
-    c: f64,
-) -> Result<SvmResult> {
+pub fn svm_classify(data: &Mat<f64>, labels: &[usize], kernel: &str, c: f64) -> Result<SvmResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
     use linfa_svm::Svm;
@@ -48,10 +43,18 @@ pub fn svm_classify(
 
     let mut params = Svm::<_, bool>::params().pos_neg_weights(1.0, 1.0);
     match kernel {
-        "linear" => { params = params.linear_kernel(); }
-        "rbf" | "gaussian" => { params = params.gaussian_kernel(c); }
-        "poly" | "polynomial" => { params = params.polynomial_kernel(c, 3.0); }
-        _ => { params = params.gaussian_kernel(c); }
+        "linear" => {
+            params = params.linear_kernel();
+        }
+        "rbf" | "gaussian" => {
+            params = params.gaussian_kernel(c);
+        }
+        "poly" | "polynomial" => {
+            params = params.polynomial_kernel(c, 3.0);
+        }
+        _ => {
+            params = params.gaussian_kernel(c);
+        }
     }
 
     let model = params
@@ -85,7 +88,10 @@ pub fn adaboost(
     }
 
     let _rng = ChaCha8Rng::seed_from_u64(42);
-    let y: Vec<f64> = labels.iter().map(|&l| if l != 0 { 1.0 } else { -1.0 }).collect();
+    let y: Vec<f64> = labels
+        .iter()
+        .map(|&l| if l != 0 { 1.0 } else { -1.0 })
+        .collect();
 
     // Initialize sample weights uniformly
     let mut weights = vec![1.0 / nrows as f64; nrows];
@@ -109,7 +115,11 @@ pub fn adaboost(
                 for &direction in &[1.0, -1.0] {
                     let err: f64 = (0..nrows)
                         .filter(|&i| {
-                            let pred = if col[i] * direction > threshold * direction { 1.0 } else { -1.0 };
+                            let pred = if col[i] * direction > threshold * direction {
+                                1.0
+                            } else {
+                                -1.0
+                            };
                             pred != y[i]
                         })
                         .map(|i| weights[i])
@@ -134,7 +144,11 @@ pub fn adaboost(
         let (feat, thresh, dir) = best_stump;
         let col: Vec<f64> = (0..nrows).map(|i| data[(i, feat)]).collect();
         for i in 0..nrows {
-            let pred = if col[i] * dir > thresh * dir { 1.0 } else { -1.0 };
+            let pred = if col[i] * dir > thresh * dir {
+                1.0
+            } else {
+                -1.0
+            };
             if pred != y[i] {
                 weights[i] *= (alpha).exp();
             } else {
@@ -149,15 +163,17 @@ pub fn adaboost(
     }
 
     // Predict using weighted ensemble
-    let predictions: Vec<usize> = (0..nrows).map(|i| {
-        let mut score = 0.0;
-        for &(feat, thresh, dir, alpha) in &weak_learners {
-            let val = data[(i, feat)];
-            let pred = if val * dir > thresh * dir { 1.0 } else { -1.0 };
-            score += alpha * pred;
-        }
-        if score > 0.0 { 1 } else { 0 }
-    }).collect();
+    let predictions: Vec<usize> = (0..nrows)
+        .map(|i| {
+            let mut score = 0.0;
+            for &(feat, thresh, dir, alpha) in &weak_learners {
+                let val = data[(i, feat)];
+                let pred = if val * dir > thresh * dir { 1.0 } else { -1.0 };
+                score += alpha * pred;
+            }
+            if score > 0.0 { 1 } else { 0 }
+        })
+        .collect();
 
     let _ = learning_rate; // TODO: apply learning_rate scaling
     Ok(SvmResult { predictions })
@@ -171,9 +187,11 @@ mod tests {
     #[test]
     fn test_svm() {
         let data = mat_from_row_major(
-            8, 2,
-            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1,
-              5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1],
+            8,
+            2,
+            &[
+                0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1,
+            ],
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let result = svm_classify(&data, &labels, "linear", 1.0).unwrap();
@@ -183,9 +201,11 @@ mod tests {
     #[test]
     fn test_adaboost() {
         let data = mat_from_row_major(
-            8, 2,
-            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1,
-              5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1],
+            8,
+            2,
+            &[
+                0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1,
+            ],
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let result = adaboost(&data, &labels, 10, 1.0).unwrap();

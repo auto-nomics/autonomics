@@ -187,8 +187,14 @@ mod tests {
             year: Some(2024),
             venue: Some("Nature".into()),
             authors: vec![
-                PaperAuthor { author_id: Some("1".into()), name: Some("Alice Smith".into()) },
-                PaperAuthor { author_id: Some("2".into()), name: Some("Bob Jones".into()) },
+                PaperAuthor {
+                    author_id: Some("1".into()),
+                    name: Some("Alice Smith".into()),
+                },
+                PaperAuthor {
+                    author_id: Some("2".into()),
+                    name: Some("Bob Jones".into()),
+                },
             ],
             external_ids: Some(ExternalIds {
                 doi: Some("10.1038/nbt.1234".into()),
@@ -274,8 +280,16 @@ mod tests {
     #[test]
     fn batch_conversion() {
         let papers = vec![
-            Paper { paper_id: "1".into(), title: Some("First".into()), ..Default::default() },
-            Paper { paper_id: "2".into(), title: Some("Second".into()), ..Default::default() },
+            Paper {
+                paper_id: "1".into(),
+                title: Some("First".into()),
+                ..Default::default()
+            },
+            Paper {
+                paper_id: "2".into(),
+                title: Some("Second".into()),
+                ..Default::default()
+            },
         ];
         let articles = papers_to_articles(&papers);
         assert_eq!(articles.len(), 2);
@@ -303,9 +317,18 @@ mod tests {
             paper_id: "x".into(),
             title: Some("T".into()),
             authors: vec![
-                PaperAuthor { author_id: None, name: Some("Real Person".into()) },
-                PaperAuthor { author_id: None, name: Some("".into()) },
-                PaperAuthor { author_id: None, name: None },
+                PaperAuthor {
+                    author_id: None,
+                    name: Some("Real Person".into()),
+                },
+                PaperAuthor {
+                    author_id: None,
+                    name: Some("".into()),
+                },
+                PaperAuthor {
+                    author_id: None,
+                    name: None,
+                },
             ],
             ..Default::default()
         };

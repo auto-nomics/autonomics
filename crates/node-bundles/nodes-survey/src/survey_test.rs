@@ -13,11 +13,11 @@ use serde::Deserialize;
 
 use arrow_array::Float64Array;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use crate::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
 use dag_core::codegen::helpers::{input_0, parse_spec};
 use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================

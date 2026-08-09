@@ -9,7 +9,9 @@ use openalex::{ListParams, OpenAlexClient};
 
 #[tokio::test]
 async fn list_works_basic() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(&ListParams::new().with_per_page(5))
@@ -24,7 +26,9 @@ async fn list_works_basic() {
 
 #[tokio::test]
 async fn list_works_with_filter() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -48,7 +52,9 @@ async fn list_works_with_filter() {
 
 #[tokio::test]
 async fn search_works_keyword() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .search_works("CRISPR gene editing", Some(5))
@@ -61,7 +67,9 @@ async fn search_works_keyword() {
 
 #[tokio::test]
 async fn list_works_cursor_paging() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
 
     let first = client
@@ -98,7 +106,9 @@ async fn list_works_cursor_paging() {
 
 #[tokio::test]
 async fn list_works_select_fields() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -118,7 +128,9 @@ async fn list_works_select_fields() {
 
 #[tokio::test]
 async fn list_works_group_by_type() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -144,7 +156,9 @@ async fn list_works_group_by_type() {
 
 #[tokio::test]
 async fn list_works_group_by_year() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -162,7 +176,9 @@ async fn list_works_group_by_year() {
 
 #[tokio::test]
 async fn list_works_or_filter() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -185,7 +201,9 @@ async fn list_works_or_filter() {
 
 #[tokio::test]
 async fn list_works_not_filter() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(
@@ -208,7 +226,9 @@ async fn list_works_not_filter() {
 
 #[tokio::test]
 async fn list_works_all_auto_page() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     // Narrow filter so we get a manageable number
     let works = client
@@ -221,17 +241,21 @@ async fn list_works_all_auto_page() {
 
     // There should be a small number of articles with >10k citations in 2024
     assert!(!works.is_empty(), "should find some highly cited works");
-    assert!(works.len() < 500, "should not be too many (sanity check), got {}", works.len());
+    assert!(
+        works.len() < 500,
+        "should not be too many (sanity check), got {}",
+        works.len()
+    );
 }
 
 #[tokio::test]
 async fn error_on_nonexistent_filter_field() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
-        .list_works(
-            &ListParams::new().with_filter("nonexistent_field:abc"),
-        )
+        .list_works(&ListParams::new().with_filter("nonexistent_field:abc"))
         .await;
 
     assert!(resp.is_err(), "bad filter should return an error");
@@ -239,7 +263,9 @@ async fn error_on_nonexistent_filter_field() {
 
 #[tokio::test]
 async fn work_has_title_and_ids() {
-    if !common::run_live() { return; }
+    if !common::run_live() {
+        return;
+    }
     let client = common::client();
     let resp = client
         .list_works(&ListParams::new().with_per_page(1))
@@ -247,10 +273,19 @@ async fn work_has_title_and_ids() {
         .expect("should succeed");
 
     let w = &resp.results[0];
-    assert!(w.title_or_name().is_some(), "should have a title/display_name");
-    assert!(w.id.starts_with("https://openalex.org/W"), "id should be an OpenAlex work URL");
+    assert!(
+        w.title_or_name().is_some(),
+        "should have a title/display_name"
+    );
+    assert!(
+        w.id.starts_with("https://openalex.org/W"),
+        "id should be an OpenAlex work URL"
+    );
     // ids.mag should be a string (not u64)
     if let Some(ref mag) = w.ids.mag {
-        assert!(mag.parse::<u64>().is_ok(), "mag should be a numeric string, got '{mag}'");
+        assert!(
+            mag.parse::<u64>().is_ok(),
+            "mag should be a numeric string, got '{mag}'"
+        );
     }
 }

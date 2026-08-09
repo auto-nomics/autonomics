@@ -19,7 +19,9 @@ use tracing::{debug, warn};
 use super::utils::{build_inputs, cascade_skip};
 
 use super::error::DagError;
-use super::runtime::{DirtyState, NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport};
+use super::runtime::{
+    DirtyState, NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport,
+};
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 
@@ -1236,7 +1238,9 @@ mod tests {
     impl Default for EchoNode {
         fn default() -> Self {
             Self {
-                meta: NodePorts::new().add_output_port(None).set_fixed_input(false),
+                meta: NodePorts::new()
+                    .add_output_port(None)
+                    .set_fixed_input(false),
             }
         }
     }
@@ -1967,7 +1971,9 @@ mod tests {
     impl CountingEcho {
         fn new(counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
             Self {
-                meta: NodePorts::new().add_output_port(None).set_fixed_input(false),
+                meta: NodePorts::new()
+                    .add_output_port(None)
+                    .set_fixed_input(false),
                 counter,
             }
         }
@@ -1995,11 +2001,8 @@ mod tests {
 
         dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
             .unwrap();
-        dag.add_node(
-            "b".into(),
-            Box::new(CountingEcho::new(ctr_b.clone())),
-        )
-        .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
         dag.add_edge("a", "b", 0, 0).unwrap();
         dag.validate().unwrap();
 
@@ -2023,11 +2026,8 @@ mod tests {
 
         dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
             .unwrap();
-        dag.add_node(
-            "b".into(),
-            Box::new(CountingEcho::new(ctr_b.clone())),
-        )
-        .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
         dag.add_edge("a", "b", 0, 0).unwrap();
 
         let ctx = test_ctx();
@@ -2079,11 +2079,8 @@ mod tests {
 
         // Replace node "a" with a fresh CountingEcho (new counter).
         let ctr_a2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        dag.replace_node(
-            "a",
-            Box::new(CountingEcho::new(ctr_a2.clone())),
-        )
-        .unwrap();
+        dag.replace_node("a", Box::new(CountingEcho::new(ctr_a2.clone())))
+            .unwrap();
 
         // "a" and "b" should be dirty; "c" should be clean.
         assert!(dag.is_dirty("a"), "a should be dirty after replace");
@@ -2092,11 +2089,7 @@ mod tests {
 
         // Second run.
         dag.run(&cfg, &ctx, None).await.unwrap();
-        assert_eq!(
-            cnt(&ctr_a2),
-            1,
-            "replaced a should execute once"
-        );
+        assert_eq!(cnt(&ctr_a2), 1, "replaced a should execute once");
         assert_eq!(
             cnt(&ctr_b),
             2,
@@ -2188,11 +2181,8 @@ mod tests {
             .map(|_| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
             .collect();
         for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
-            dag.add_node(
-                (*id).into(),
-                Box::new(CountingEcho::new(ctrs[i].clone())),
-            )
-            .unwrap();
+            dag.add_node((*id).into(), Box::new(CountingEcho::new(ctrs[i].clone())))
+                .unwrap();
         }
         dag.add_edge("a", "b", 0, 0).unwrap();
         dag.add_edge("b", "c", 0, 0).unwrap();
@@ -2280,11 +2270,8 @@ mod tests {
             .map(|_| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
             .collect();
         for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
-            dag.add_node(
-                (*id).into(),
-                Box::new(CountingEcho::new(ctrs[i].clone())),
-            )
-            .unwrap();
+            dag.add_node((*id).into(), Box::new(CountingEcho::new(ctrs[i].clone())))
+                .unwrap();
         }
         dag.add_edge("a", "b", 0, 0).unwrap();
         dag.add_edge("a", "c", 0, 0).unwrap();

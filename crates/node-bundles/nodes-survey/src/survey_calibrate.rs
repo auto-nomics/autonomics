@@ -16,13 +16,13 @@ use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use crate::survey_common::{
     SurveyDesignSpec, build_survey_design, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
 };
 use dag_core::codegen::helpers::{input_0, parse_spec};
 use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 // =====================================================================
@@ -147,8 +147,7 @@ impl DagNode for PostStratifyNode {
                 .collect::<Vec<_>>(),
         ));
 
-        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().to_vec();
+        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> = combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =
@@ -378,8 +377,7 @@ impl DagNode for RakeNode {
                 .collect::<Vec<_>>(),
         ));
 
-        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().to_vec();
+        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> = combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =
@@ -625,8 +623,7 @@ impl DagNode for CalibrateNode {
                 ))))
                 .collect::<Vec<_>>(),
         ));
-        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().to_vec();
+        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> = combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
         let output_batch =
             RecordBatch::try_new(new_schema, new_columns).map_err(|e| DagError::NodeError {
@@ -831,8 +828,7 @@ impl DagNode for TrimWeightsNode {
                 ))))
                 .collect::<Vec<_>>(),
         ));
-        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> =
-            combined.columns().to_vec();
+        let mut new_columns: Vec<Arc<dyn arrow_array::Array>> = combined.columns().to_vec();
         new_columns.push(Arc::new(Float64Array::from(new_weights)));
 
         let output_batch =

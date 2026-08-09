@@ -24,8 +24,8 @@ use datafusion::common::HashMap;
 use datafusion::dataframe::DataFrame;
 use datafusion::prelude::SessionContext;
 use schemars::{JsonSchema, schema_for};
-use serde::Deserialize;
 use semantic_scholar::{PaperSearchFilter, S2Client};
+use serde::Deserialize;
 
 use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -159,9 +159,7 @@ impl NodeFactory for S2PaperSearchNodeFactory {
             format!("# Semantic Scholar: paper search for '{}'", s.query),
             format!("# NOTE: Uses the S2 Academic Graph REST API via httr"),
             format!("{out} <- httr::content(httr::GET("),
-            format!(
-                "  \"https://api.semanticscholar.org/graph/v1/paper/search\",",
-            ),
+            format!("  \"https://api.semanticscholar.org/graph/v1/paper/search\",",),
             format!(
                 "  query = list(query = \"{}\", limit = {}, fields = \"paperId,title,year,venue,citationCount,referenceCount,isOpenAccess,openAccessPdf,externalIds,tldr\"),",
                 s.query,
@@ -280,14 +278,21 @@ fn build_paper_batch(rows: Vec<semantic_scholar::Paper>) -> Result<RecordBatch, 
 
     let is_oa: Vec<Option<String>> = rows
         .iter()
-        .map(|p| p.is_open_access.map(|b| if b { "true".into() } else { "false".into() }))
+        .map(|p| {
+            p.is_open_access
+                .map(|b| if b { "true".into() } else { "false".into() })
+        })
         .collect();
 
-    let oa_pdfs: Vec<Option<String>> =
-        rows.iter().map(|p| p.open_access_pdf.as_ref().and_then(|o| o.url.clone())).collect();
+    let oa_pdfs: Vec<Option<String>> = rows
+        .iter()
+        .map(|p| p.open_access_pdf.as_ref().and_then(|o| o.url.clone()))
+        .collect();
 
-    let tldrs: Vec<Option<String>> =
-        rows.iter().map(|p| p.tldr.as_ref().and_then(|t| t.text.clone())).collect();
+    let tldrs: Vec<Option<String>> = rows
+        .iter()
+        .map(|p| p.tldr.as_ref().and_then(|t| t.text.clone()))
+        .collect();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("paper_id", DataType::Utf8, true),
@@ -414,9 +419,7 @@ impl NodeFactory for S2AuthorSearchNodeFactory {
         let code = vec![
             format!("# Semantic Scholar: author search for '{}'", s.query),
             format!("{out} <- httr::content(httr::GET("),
-            format!(
-                "  \"https://api.semanticscholar.org/graph/v1/author/search\",",
-            ),
+            format!("  \"https://api.semanticscholar.org/graph/v1/author/search\",",),
             format!(
                 "  query = list(query = \"{}\", limit = {}, fields = \"authorId,name,affiliations,homepage,paperCount,citationCount,hIndex\"),",
                 s.query,
@@ -486,10 +489,14 @@ fn build_author_batch(rows: Vec<semantic_scholar::Author>) -> Result<RecordBatch
         .map(|a| a.affiliations.as_ref().map(|v| v.join("; ")))
         .collect();
     let homepages: Vec<Option<String>> = rows.iter().map(|a| a.homepage.clone()).collect();
-    let paper_counts: Vec<Option<i32>> =
-        rows.iter().map(|a| a.paper_count.map(|c| c as i32)).collect();
-    let citation_counts: Vec<Option<i32>> =
-        rows.iter().map(|a| a.citation_count.map(|c| c as i32)).collect();
+    let paper_counts: Vec<Option<i32>> = rows
+        .iter()
+        .map(|a| a.paper_count.map(|c| c as i32))
+        .collect();
+    let citation_counts: Vec<Option<i32>> = rows
+        .iter()
+        .map(|a| a.citation_count.map(|c| c as i32))
+        .collect();
     let h_indices: Vec<Option<i32>> = rows.iter().map(|a| a.h_index.map(|c| c as i32)).collect();
 
     let schema = Arc::new(Schema::new(vec![

@@ -22,9 +22,9 @@
 
 use std::sync::Arc;
 
+use crate::Result;
 use crate::bib_base::BibBase;
 use crate::query::LiteratureGateway;
-use crate::Result;
 
 /// Build the shared `reqwest::Client` from [`BibHttpOptions`]. Used by
 /// `BiorxivSource` and any future source that wants a bare HTTP client.

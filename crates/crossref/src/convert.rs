@@ -34,9 +34,7 @@ pub fn work_to_article(work: &Work) -> Article {
             let orcid = a
                 .orcid
                 .as_ref()
-                .map(|url| {
-                    url.rsplit('/').next().unwrap_or(url).to_string()
-                });
+                .map(|url| url.rsplit('/').next().unwrap_or(url).to_string());
             let affiliation = a
                 .affiliation
                 .first()
@@ -172,8 +170,7 @@ fn strip_xml_tags(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::types::{
-        Affiliation as CrAffiliation, Author as CrAuthor, DateParts as CrDateParts,
-        Work as CrWork,
+        Affiliation as CrAffiliation, Author as CrAuthor, DateParts as CrDateParts, Work as CrWork,
     };
 
     fn sample_work() -> CrWork {
@@ -222,18 +219,12 @@ mod tests {
     fn convert_basic() {
         let work = sample_work();
         let art = work_to_article(&work);
-        assert_eq!(
-            art.doi(),
-            Some("10.1037/0003-066x.59.1.29")
-        );
+        assert_eq!(art.doi(), Some("10.1037/0003-066x.59.1.29"));
         assert_eq!(art.title, "Toward a science of ego depletion");
         assert_eq!(art.authors.len(), 2);
         assert_eq!(art.authors[0].last_name, "Baumeister");
         assert_eq!(art.authors[0].fore_name.as_deref(), Some("Roy F"));
-        assert_eq!(
-            art.authors[0].orcid.as_deref(),
-            Some("0000-0002-1234-5678")
-        );
+        assert_eq!(art.authors[0].orcid.as_deref(), Some("0000-0002-1234-5678"));
         assert_eq!(
             art.authors[0].affiliation.as_deref(),
             Some("Florida State University")

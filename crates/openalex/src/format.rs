@@ -41,7 +41,11 @@ pub fn format_works(resp: &ListResponse<Work>) -> String {
 fn format_work_preview(idx: usize, work: &Work, out: &mut String) {
     out.push_str(&format!("### {}. ", idx));
     if let Some(ref doi) = work.doi {
-        out.push_str(&format!("[{}]({})\n", work.title_or_name().unwrap_or("(untitled)"), doi));
+        out.push_str(&format!(
+            "[{}]({})\n",
+            work.title_or_name().unwrap_or("(untitled)"),
+            doi
+        ));
     } else {
         out.push_str(&format!(
             "{}\n",
@@ -79,7 +83,11 @@ fn format_work_preview(idx: usize, work: &Work, out: &mut String) {
         } else {
             String::new()
         };
-        out.push_str(&format!("**Authors:** {}{}\n", author_names.join(", "), suffix));
+        out.push_str(&format!(
+            "**Authors:** {}{}\n",
+            author_names.join(", "),
+            suffix
+        ));
     }
 
     // Venue
@@ -390,7 +398,10 @@ mod tests {
     #[test]
     fn format_works_empty() {
         let resp = ListResponse::<Work> {
-            meta: Meta { count: 0, ..Default::default() },
+            meta: Meta {
+                count: 0,
+                ..Default::default()
+            },
             results: vec![],
             group_by: vec![],
         };
@@ -411,7 +422,10 @@ mod tests {
     #[test]
     fn format_authors_nonempty() {
         let resp = ListResponse {
-            meta: Meta { count: 1, ..Default::default() },
+            meta: Meta {
+                count: 1,
+                ..Default::default()
+            },
             results: vec![Author {
                 id: "https://openalex.org/A1".into(),
                 display_name: "Jane Doe".into(),
@@ -436,7 +450,10 @@ mod tests {
     #[test]
     fn format_autocomplete_nonempty() {
         let resp = AutocompleteResponse {
-            meta: Meta { count: 2, ..Default::default() },
+            meta: Meta {
+                count: 2,
+                ..Default::default()
+            },
             results: vec![AutocompleteResult {
                 id: Some("https://openalex.org/W1".into()),
                 display_name: Some("Machine Learning".into()),
@@ -492,7 +509,9 @@ mod tests {
         let long_text = "word ".repeat(100);
         let mut inv = std::collections::BTreeMap::new();
         for (i, word) in long_text.split_whitespace().enumerate() {
-            inv.entry(word.to_string()).or_insert_with(Vec::new).push(i as u32);
+            inv.entry(word.to_string())
+                .or_insert_with(Vec::new)
+                .push(i as u32);
         }
         work.abstract_inverted_index = Some(inv);
         let md = format_work_detail(&work);

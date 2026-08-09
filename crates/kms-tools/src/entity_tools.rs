@@ -12,9 +12,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 fn svc_err(e: String) -> ToolError {
-    ToolError::ExecutionFailed {
-        source: e.into(),
-    }
+    ToolError::ExecutionFailed { source: e.into() }
 }
 
 fn lang_from_str(s: &str) -> Language {
@@ -219,7 +217,10 @@ impl ToolFunction for KmsDeleteEntityTool {
 // kms_get_entity
 // ═══════════════════════════════════════════════════════════════════
 
-#[tool(name = "kms_get_entity", description = "Get an entity by its nomenclature name.")]
+#[tool(
+    name = "kms_get_entity",
+    description = "Get an entity by its nomenclature name."
+)]
 pub struct GetEntityInput {
     #[desc = "Nomenclature full name of the entity"]
     pub name: String,
@@ -248,7 +249,10 @@ impl ToolFunction for KmsGetEntityTool {
 // kms_search_entity
 // ═══════════════════════════════════════════════════════════════════
 
-#[tool(name = "kms_search_entity", description = "Search entities by nomenclature name (prefix match).")]
+#[tool(
+    name = "kms_search_entity",
+    description = "Search entities by nomenclature name (prefix match)."
+)]
 pub struct SearchEntityInput {
     #[desc = "Search keyword"]
     pub keyword: String,
@@ -263,7 +267,11 @@ impl ToolFunction for KmsSearchEntityTool {
     type Input = SearchEntityInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let entities = self.svc.search_entity(&input.keyword).await.map_err(svc_err)?;
+        let entities = self
+            .svc
+            .search_entity(&input.keyword)
+            .await
+            .map_err(svc_err)?;
         let results: Vec<_> = entities
             .iter()
             .map(|e| {
@@ -400,7 +408,11 @@ impl ToolFunction for KmsUpdateNomenclatureTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let entity_id = Uuid::parse_str(&input.entity_id).map_err(|e| svc_err(e.to_string()))?;
         let nom_id = Uuid::parse_str(&input.nomenclature_id).map_err(|e| svc_err(e.to_string()))?;
-        let abbr = input.abbr.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let abbr = input
+            .abbr
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         let entity = self
             .svc
             .update_nomenclature(

@@ -228,9 +228,7 @@ impl AgentPickerState {
                 self.items
                     .iter()
                     .enumerate()
-                    .filter(|(_, item)| {
-                        item.name.to_lowercase().contains(&needle)
-                    })
+                    .filter(|(_, item)| item.name.to_lowercase().contains(&needle))
                     .map(|(i, _)| i)
                     .collect(),
             )
@@ -242,12 +240,7 @@ impl AgentPickerState {
             .items
             .iter()
             .enumerate()
-            .filter(|(i, _)| {
-                matching
-                    .as_ref()
-                    .map(|m| m.contains(i))
-                    .unwrap_or(true)
-            })
+            .filter(|(i, _)| matching.as_ref().map(|m| m.contains(i)).unwrap_or(true))
             .map(|(i, item)| {
                 let segments: Vec<String> = item
                     .name
@@ -361,8 +354,7 @@ fn build_tree(
             .collect();
 
         let has_children = !deeper_children.is_empty();
-        let is_collapsed = collapsed.contains(full_path)
-            && !force_expand.contains(full_path);
+        let is_collapsed = collapsed.contains(full_path) && !force_expand.contains(full_path);
         let expanded = !is_collapsed;
 
         rows.push(TreeNode {
@@ -376,13 +368,7 @@ fn build_tree(
 
         // Recurse into children if expanded.
         if has_children && expanded {
-            build_tree(
-                &deeper_children,
-                collapsed,
-                force_expand,
-                rows,
-                depth + 1,
-            );
+            build_tree(&deeper_children, collapsed, force_expand, rows, depth + 1);
         }
     }
 }
@@ -470,10 +456,7 @@ impl StatefulWidget for AgentPicker {
         } else {
             Line::from(vec![
                 Span::styled("> ", Style::default().fg(self.accent)),
-                Span::styled(
-                    state.query.clone(),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
             ])
         };
         Widget::render(Paragraph::new(input_line), v_regions[0], buf);
@@ -489,10 +472,7 @@ impl StatefulWidget for AgentPicker {
         // ── Content area: two horizontal blocks ──
         let h_regions = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(self.list_width),
-                Constraint::Min(10),
-            ])
+            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
             .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
@@ -500,17 +480,13 @@ impl StatefulWidget for AgentPicker {
 
         // ── Footer ──
         let hint = if state.delete_confirm_id.is_some() {
-            let item_name = state
-                .selected_item()
-                .map(|i| i.name)
-                .unwrap_or_default();
+            let item_name = state.selected_item().map(|i| i.name).unwrap_or_default();
             format!(
                 " Type 'yes' to delete '{}'  Enter confirm  Esc cancel",
                 item_name
             )
         } else {
-            " Enter resume  →/← expand/fold  Ctrl+D delete  ↑↓ navigate  Esc cancel"
-                .to_string()
+            " Enter resume  →/← expand/fold  Ctrl+D delete  ↑↓ navigate  Esc cancel".to_string()
         };
         let p = Paragraph::new(hint).style(
             Style::default()

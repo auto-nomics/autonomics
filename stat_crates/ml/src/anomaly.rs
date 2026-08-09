@@ -1,10 +1,10 @@
 //! Anomaly detection — Isolation Forest, LOF, Z-score outlier rule.
 
 use faer::Mat;
-use rand::SeedableRng;
 use rand::Rng;
-use rand_chacha::ChaCha8Rng;
+use rand::SeedableRng;
 use rand::seq::SliceRandom;
+use rand_chacha::ChaCha8Rng;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -83,7 +83,8 @@ pub fn isolation_forest(
 
     // Average path length for unsupervised isolation forest
     let c_n = if max_samples > 2 {
-        2.0 * ((max_samples as f64 - 1.0).ln()) - 2.0 * ((max_samples as f64 - 1.0) / max_samples as f64).ln()
+        2.0 * ((max_samples as f64 - 1.0).ln())
+            - 2.0 * ((max_samples as f64 - 1.0) / max_samples as f64).ln()
     } else if max_samples == 2 {
         1.0
     } else {
@@ -148,9 +149,10 @@ fn isolation_tree_path(
 
     // Go left or right based on point's value
     let go_left = point[feature] < split;
-    let subset: Vec<&Vec<f64>> = data.iter().filter(|row| {
-        (go_left && row[feature] < split) || (!go_left && row[feature] >= split)
-    }).collect();
+    let subset: Vec<&Vec<f64>> = data
+        .iter()
+        .filter(|row| (go_left && row[feature] < split) || (!go_left && row[feature] >= split))
+        .collect();
 
     if subset.is_empty() {
         return depth as f64;
@@ -164,10 +166,7 @@ fn isolation_tree_path(
 // Local Outlier Factor (LOF) — native faer
 // ═══════════════════════════════════════════════════════════════════════
 
-pub fn local_outlier_factor(
-    data: &Mat<f64>,
-    k: usize,
-) -> Result<OutlierResult> {
+pub fn local_outlier_factor(data: &Mat<f64>, k: usize) -> Result<OutlierResult> {
     let (nrows, ncols) = data.shape();
     if nrows == 0 {
         return Err(AnomalyError::Empty);
@@ -175,7 +174,10 @@ pub fn local_outlier_factor(
 
     // Compute pairwise distances
     let dist = |i: usize, j: usize| -> f64 {
-        (0..ncols).map(|c| (data[(i, c)] - data[(j, c)]).powi(2)).sum::<f64>().sqrt()
+        (0..ncols)
+            .map(|c| (data[(i, c)] - data[(j, c)]).powi(2))
+            .sum::<f64>()
+            .sqrt()
     };
 
     // k-distance and k-nearest neighbors for each point
@@ -190,28 +192,35 @@ pub fn local_outlier_factor(
         dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let kk = k.min(dists.len());
         knn[i] = dists.iter().take(kk).map(|(_, j)| *j).collect();
-        k_distances[i] = dists.get(kk.saturating_sub(1)).map(|(d, _)| *d).unwrap_or(0.0);
+        k_distances[i] = dists
+            .get(kk.saturating_sub(1))
+            .map(|(d, _)| *d)
+            .unwrap_or(0.0);
     }
 
     // Local reachability density
-    let lrd: Vec<f64> = (0..nrows).map(|i| {
-        let sum_reach: f64 = knn[i].iter().map(|&j| k_distances[j].max(dist(i, j))).sum();
-        if sum_reach > 0.0 {
-            knn[i].len() as f64 / sum_reach
-        } else {
-            0.0
-        }
-    }).collect();
+    let lrd: Vec<f64> = (0..nrows)
+        .map(|i| {
+            let sum_reach: f64 = knn[i].iter().map(|&j| k_distances[j].max(dist(i, j))).sum();
+            if sum_reach > 0.0 {
+                knn[i].len() as f64 / sum_reach
+            } else {
+                0.0
+            }
+        })
+        .collect();
 
     // LOF = average lrd of neighbors / lrd of point
-    let scores: Vec<f64> = (0..nrows).map(|i| {
-        if lrd[i] > 0.0 && !knn[i].is_empty() {
-            let sum_lrd: f64 = knn[i].iter().map(|&j| lrd[j]).sum();
-            sum_lrd / (knn[i].len() as f64 * lrd[i])
-        } else {
-            1.0
-        }
-    }).collect();
+    let scores: Vec<f64> = (0..nrows)
+        .map(|i| {
+            if lrd[i] > 0.0 && !knn[i].is_empty() {
+                let sum_lrd: f64 = knn[i].iter().map(|&j| lrd[j]).sum();
+                sum_lrd / (knn[i].len() as f64 * lrd[i])
+            } else {
+                1.0
+            }
+        })
+        .collect();
 
     let is_outlier: Vec<bool> = scores.iter().map(|&s| s > 1.5).collect();
 
@@ -233,20 +242,33 @@ mod tests {
 
     #[test]
     fn test_isolation_forest() {
-        let data = mat_from_row_major(10, 2,
-            &[0.0, 0.0, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4,
-              0.5, 0.5, 0.6, 0.6, 0.7, 0.7, 0.8, 0.8, 50.0, 50.0]);
+        let data = mat_from_row_major(
+            10,
+            2,
+            &[
+                0.0, 0.0, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 0.5, 0.5, 0.6, 0.6, 0.7, 0.7,
+                0.8, 0.8, 50.0, 50.0,
+            ],
+        );
         let result = isolation_forest(&data, 50, 5, 42).unwrap();
         assert_eq!(result.scores.len(), 10);
         // The outlier (50,50) should have the highest anomaly score
-        let max_idx = result.scores.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(i, _)| i);
+        let max_idx = result
+            .scores
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i);
         assert_eq!(max_idx, Some(9)); // index of (50,50)
     }
 
     #[test]
     fn test_lof() {
-        let data = mat_from_row_major(6, 2,
-            &[0.0, 0.0, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 10.0, 10.0]);
+        let data = mat_from_row_major(
+            6,
+            2,
+            &[0.0, 0.0, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4, 10.0, 10.0],
+        );
         let result = local_outlier_factor(&data, 3).unwrap();
         assert_eq!(result.scores.len(), 6);
         // The isolated point should have higher LOF

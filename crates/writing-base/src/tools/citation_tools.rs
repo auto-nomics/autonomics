@@ -8,12 +8,12 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 use bib_base::BibBase;
 
+use super::WritingToolState;
 use crate::ast;
 use crate::citation::CitationResolver;
 use crate::compile::LatexEngine;
 use crate::render_document;
 use crate::store::WritingStore;
-use super::WritingToolState;
 
 pub fn registrations(state: WritingToolState) -> Vec<ToolRegistration> {
     let mut regs = Vec::new();
@@ -170,12 +170,10 @@ impl ToolFunction for DocCheckCitationsTool {
             .statuses
             .iter()
             .filter_map(|s| match s {
-                crate::CiteKeyStatus::Unresolved { key, suggestion } => {
-                    Some(serde_json::json!({
-                        "key": key,
-                        "suggestion": suggestion,
-                    }))
-                }
+                crate::CiteKeyStatus::Unresolved { key, suggestion } => Some(serde_json::json!({
+                    "key": key,
+                    "suggestion": suggestion,
+                })),
                 _ => None,
             })
             .collect();
@@ -305,14 +303,10 @@ fn parse_position(s: &str) -> writing_types::CitationPosition {
         return writing_types::CitationPosition::End;
     }
     if let Some(text) = s.strip_prefix("after:") {
-        return writing_types::CitationPosition::AfterText {
-            text: text.into(),
-        };
+        return writing_types::CitationPosition::AfterText { text: text.into() };
     }
     if let Some(text) = s.strip_prefix("before:") {
-        return writing_types::CitationPosition::BeforeText {
-            text: text.into(),
-        };
+        return writing_types::CitationPosition::BeforeText { text: text.into() };
     }
     writing_types::CitationPosition::End
 }
@@ -350,7 +344,11 @@ impl ToolFunction for DocPreviewTexTool {
 
         // Truncate if very long.
         let preview = if rendered.main_tex.len() > 10000 {
-            format!("{}...\n\n[truncated, total {} chars]", &rendered.main_tex[..10000], rendered.main_tex.len())
+            format!(
+                "{}...\n\n[truncated, total {} chars]",
+                &rendered.main_tex[..10000],
+                rendered.main_tex.len()
+            )
         } else {
             rendered.main_tex.clone()
         };

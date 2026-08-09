@@ -11,8 +11,8 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::arrow_util::ColumnError;
+use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -36,7 +36,9 @@ impl From<ColumnError> for CausalError {
     }
 }
 impl ::dag_core::dag::NodeError for CausalError {
-    fn node_type(&self) -> &str { "causal" }
+    fn node_type(&self) -> &str {
+        "causal"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

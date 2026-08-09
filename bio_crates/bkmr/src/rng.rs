@@ -329,8 +329,10 @@ impl Rng {
         loop {
             let dv = self.rbits(bits);
             // Matches `!(dn <= dv)` including the NaN case.
-            if !matches!(dn.partial_cmp(&dv), Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal))
-            {
+            if !matches!(
+                dn.partial_cmp(&dv),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) {
                 return dv;
             }
         }

@@ -142,7 +142,10 @@ impl NodeFactory for CrossrefWorksNodeFactory {
             format!("# Crossref: search /works for '{}'", query_str),
             format!("# NOTE: Uses the Crossref REST API via httr"),
             format!("{out} <- httr::content(httr::GET("),
-            format!("  paste0(\"https://api.crossref.org/works?query={}&rows={}\"),", query_str, rows),
+            format!(
+                "  paste0(\"https://api.crossref.org/works?query={}&rows={}\"),",
+                query_str, rows
+            ),
             format!("  encode = \"json\""),
             format!("))$message$items"),
         ];
@@ -278,27 +281,23 @@ impl DagNode for CrossrefWorksNode {
 
 fn build_works_batch(rows: &[Work]) -> Result<RecordBatch, DagError> {
     let dois: Vec<Option<String>> = rows.iter().map(|w| Some(w.doi.clone())).collect();
-    let titles: Vec<Option<String>> =
-        rows.iter().map(|w| Some(w.title_str().to_string())).collect();
-    let types: Vec<Option<String>> =
-        rows.iter().map(|w| Some(w.r#type.clone())).collect();
+    let titles: Vec<Option<String>> = rows
+        .iter()
+        .map(|w| Some(w.title_str().to_string()))
+        .collect();
+    let types: Vec<Option<String>> = rows.iter().map(|w| Some(w.r#type.clone())).collect();
     let container_titles: Vec<Option<String>> = rows
         .iter()
         .map(|w| w.container_title.first().cloned())
         .collect();
-    let publishers: Vec<Option<String>> =
-        rows.iter().map(|w| Some(w.publisher.clone())).collect();
+    let publishers: Vec<Option<String>> = rows.iter().map(|w| Some(w.publisher.clone())).collect();
     let years: Vec<Option<i64>> = rows.iter().map(|w| w.year().map(|y| y as i64)).collect();
-    let months: Vec<Option<i64>> =
-        rows.iter().map(|w| {
-            w.issued.as_ref()
-                .and_then(|d| d.ymd().1)
-                .map(|m| m as i64)
-        }).collect();
-    let volumes: Vec<Option<String>> =
-        rows.iter().map(|w| Some(w.volume.clone())).collect();
-    let issues: Vec<Option<String>> =
-        rows.iter().map(|w| Some(w.issue.clone())).collect();
+    let months: Vec<Option<i64>> = rows
+        .iter()
+        .map(|w| w.issued.as_ref().and_then(|d| d.ymd().1).map(|m| m as i64))
+        .collect();
+    let volumes: Vec<Option<String>> = rows.iter().map(|w| Some(w.volume.clone())).collect();
+    let issues: Vec<Option<String>> = rows.iter().map(|w| Some(w.issue.clone())).collect();
     let pages: Vec<Option<String>> = rows.iter().map(|w| Some(w.page.clone())).collect();
     let issns: Vec<Option<String>> = rows.iter().map(|w| w.issn.first().cloned()).collect();
     let authors: Vec<Option<String>> = rows
@@ -317,12 +316,12 @@ fn build_works_batch(rows: &[Work]) -> Result<RecordBatch, DagError> {
             }
         })
         .collect();
-    let cited_by: Vec<Option<u64>> =
-        rows.iter().map(|w| Some(w.is_referenced_by_count)).collect();
-    let ref_counts: Vec<Option<u64>> =
-        rows.iter().map(|w| Some(w.references_count)).collect();
-    let abstracts: Vec<Option<String>> =
-        rows.iter().map(|w| w.abstract_text.clone()).collect();
+    let cited_by: Vec<Option<u64>> = rows
+        .iter()
+        .map(|w| Some(w.is_referenced_by_count))
+        .collect();
+    let ref_counts: Vec<Option<u64>> = rows.iter().map(|w| Some(w.references_count)).collect();
+    let abstracts: Vec<Option<String>> = rows.iter().map(|w| w.abstract_text.clone()).collect();
     let scores: Vec<Option<f64>> = rows.iter().map(|w| w.score).collect();
 
     let schema = Arc::new(Schema::new(vec![
