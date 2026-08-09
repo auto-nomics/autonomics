@@ -33,8 +33,20 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::RuntimeConfig;
+use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::tools::DefaultToolSetError;
+
+// AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
+// can build a dynamic system prompt that only mentions tools the profile
+// actually enables.
+impl PromptCapabilities for agentik_core::AgentProfile {
+    fn enable_bibliography(&self) -> bool { self.enable_bibliography }
+    fn enable_opengwas(&self) -> bool { self.enable_opengwas }
+    fn enable_opentargets(&self) -> bool { self.enable_opentargets }
+    fn enable_gwascatalog(&self) -> bool { self.enable_gwascatalog }
+    fn enable_iceberg(&self) -> bool { self.enable_iceberg }
+    fn enable_dag_history(&self) -> bool { self.enable_dag_history }
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Error
@@ -243,7 +255,9 @@ impl SharedInfra {
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);
         } else {
-            builder = builder.with_system_prompt_section(crate::config::default_system_prompt());
+            builder = builder.with_system_prompt_section(
+                crate::config::build_system_prompt(profile),
+            );
         }
 
         builder = builder

@@ -299,7 +299,7 @@ impl AgentProfile {
                 description: "Literature search and evidence synthesis expert.".into(),
                 agent_identity: "You are a literature search expert specializing in \
                     systematic reviews, meta-analyses, and evidence synthesis. \
-                    Use PubMed, Embase, and bioRxiv tools to find and analyze publications."
+                    Use PubMed, arXiv, and bioRxiv tools to find and analyze publications."
                     .into(),
                 system_prompt: None,
                 enable_bibliography: true,
