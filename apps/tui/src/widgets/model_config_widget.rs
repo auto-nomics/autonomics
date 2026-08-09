@@ -54,6 +54,8 @@ pub enum ConfigCommand {
         provider_name: String,
         model_name: String,
     },
+    /// Close the model config popup.
+    Close,
     /// Nothing to do.
     None,
 }
@@ -128,22 +130,82 @@ pub struct ModelConfigState {
     /// The `model_name` of the model the agent is currently using, if any.
     pub active_model_name: Option<String>,
     pub provider_panel_state: ProviderPanelState,
+    /// Quick-filter search query. When non-empty, the tree auto-expands to
+    /// show only providers/models whose names match (case-insensitive
+    /// substring).  Typing any character pushes to the query; Backspace
+    /// pops; Esc clears (press Esc again to close).
+    pub query: String,
 }
 
 impl ModelConfigState {
-    /// Build the flat list of visible rows (provider headers + indented models
-    /// for configured/expanded providers).
+    /// Build the flat list of visible rows.
+    ///
+    /// **No filter**: provider headers + indented models for
+    /// configured/expanded providers.
+    ///
+    /// **With filter** (query non-empty): providers whose name matches show
+    /// all their models (configured only); configured providers with matching
+    /// model names show only those models; unconfigured providers whose name
+    /// matches show as a header with no children.  Expansion state is
+    /// ignored while filtering — matched content is always visible.
     fn flat_items(&self) -> Vec<FlatItem> {
+        let needle = self.query.trim().to_lowercase();
+        let filtering = !needle.is_empty();
         let mut items = Vec::new();
         for (pi, p) in self.providers.iter().enumerate() {
-            items.push(FlatItem::Provider(pi));
-            if p.configured && p.expanded {
-                for (mi, _) in p.models.iter().enumerate() {
-                    items.push(FlatItem::Model(pi, mi));
+            if filtering {
+                let provider_name_match = p.name.to_lowercase().contains(&needle);
+                // Only show models from configured providers while filtering.
+                let matching_models: Vec<usize> = if !p.configured {
+                    Vec::new()
+                } else if provider_name_match {
+                    (0..p.models.len()).collect()
+                } else {
+                    p.models
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, m)| m.model_name.to_lowercase().contains(&needle))
+                        .map(|(mi, _)| mi)
+                        .collect()
+                };
+                if provider_name_match || !matching_models.is_empty() {
+                    items.push(FlatItem::Provider(pi));
+                    for mi in matching_models {
+                        items.push(FlatItem::Model(pi, mi));
+                    }
+                }
+            } else {
+                items.push(FlatItem::Provider(pi));
+                if p.configured && p.expanded {
+                    for (mi, _) in p.models.iter().enumerate() {
+                        items.push(FlatItem::Model(pi, mi));
+                    }
                 }
             }
         }
         items
+    }
+
+    /// Push a character onto the search query and re-clamp the cursor.
+    fn push_char(&mut self, c: char) {
+        self.query.push(c);
+        self.clamp_cursor();
+    }
+
+    /// Pop the last character from the search query.
+    fn pop_char(&mut self) {
+        self.query.pop();
+        self.clamp_cursor();
+    }
+
+    /// Clamp cursor into the valid range of the current flat list.
+    fn clamp_cursor(&mut self) {
+        let len = self.flat_items().len();
+        if len == 0 {
+            self.cursor = 0;
+        } else if self.cursor >= len {
+            self.cursor = len - 1;
+        }
     }
 
     /// Move cursor by `delta`, wrapping around.
@@ -303,26 +365,62 @@ impl ModelConfigState {
 
         // ── Preview mode ──
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Esc => {
+                if !self.query.is_empty() {
+                    self.query.clear();
+                    self.clamp_cursor();
+                    consumed(ConfigCommand::None)
+                } else {
+                    consumed(ConfigCommand::Close)
+                }
+            }
+            // Arrow keys always navigate, even while filtering.
+            KeyCode::Down => {
                 self.move_cursor(1);
                 consumed(ConfigCommand::None)
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.move_cursor(-1);
                 consumed(ConfigCommand::None)
             }
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
+            // Vim-style navigation only when not filtering.
+            KeyCode::Char('j') if self.query.is_empty() => {
+                self.move_cursor(1);
+                consumed(ConfigCommand::None)
+            }
+            KeyCode::Char('k') if self.query.is_empty() => {
+                self.move_cursor(-1);
+                consumed(ConfigCommand::None)
+            }
+            KeyCode::Right | KeyCode::Tab if self.query.is_empty() => {
                 self.toggle_expand_at_cursor();
                 consumed(ConfigCommand::None)
             }
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
+            KeyCode::Left | KeyCode::BackTab if self.query.is_empty() => {
                 self.toggle_expand_at_cursor();
+                consumed(ConfigCommand::None)
+            }
+            KeyCode::Char('l') if self.query.is_empty() => {
+                self.toggle_expand_at_cursor();
+                consumed(ConfigCommand::None)
+            }
+            KeyCode::Char('h') if self.query.is_empty() => {
+                self.toggle_expand_at_cursor();
+                consumed(ConfigCommand::None)
+            }
+            // Backspace pops from the search query.
+            KeyCode::Backspace => {
+                self.pop_char();
                 consumed(ConfigCommand::None)
             }
             KeyCode::Enter => {
                 let flat = self.flat_items();
                 if let Some(FlatItem::Model(pi, mi)) = flat.get(self.cursor).copied() {
                     let provider = &self.providers[pi];
+                    // Only allow selecting models from configured providers.
+                    if !provider.configured {
+                        return consumed(ConfigCommand::None);
+                    }
                     let model = &provider.models[mi];
                     self.active_model_name = Some(model.model_name.clone());
                     consumed(ConfigCommand::SelectModel {
@@ -333,8 +431,9 @@ impl ModelConfigState {
                     consumed(ConfigCommand::None)
                 }
             }
-            // Enter provider config mode when cursor is on a provider row.
-            KeyCode::Char('e') => {
+            // Enter provider config mode when cursor is on a provider row
+            // (only when not filtering).
+            KeyCode::Char('e') if self.query.is_empty() => {
                 let flat = self.flat_items();
                 if let Some(FlatItem::Provider(pi)) = flat.get(self.cursor) {
                     let pi = *pi;
@@ -357,6 +456,11 @@ impl ModelConfigState {
                 }
                 consumed(ConfigCommand::None)
             }
+            // Any other printable character is appended to the search query.
+            KeyCode::Char(c) => {
+                self.push_char(c);
+                consumed(ConfigCommand::None)
+            }
             _ => ConfigCommand::None,
         }
     }
@@ -370,10 +474,29 @@ impl StatefulWidgetRef for ModelConfigWidget {
     type State = ModelConfigState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // Vertical: search bar (1) + separator (1) + content (rest).
+        let v_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // search input
+                Constraint::Length(1), // separator
+                Constraint::Min(3),    // content
+            ])
+            .split(area);
+
+        render_search_bar(v_chunks[0], buf, state);
+
+        // Separator line.
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .render(v_chunks[1], buf);
+
+        // Content area: tree (left) + detail/config (right).
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
+            .split(v_chunks[2]);
 
         // Tree is always rendered on the left.
         render_tree(chunks[0], buf, state);
@@ -406,6 +529,37 @@ impl StatefulWidgetRef for ModelConfigWidget {
             }
         }
     }
+}
+
+// ── Search bar ─────────────────────────────────────────
+
+fn render_search_bar(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
+    let line = if state.query.is_empty() {
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " search models…  (type to filter, Enter to select, Esc to clear)",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ])
+    } else {
+        let filtered_count = state.flat_items().len();
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Magenta)),
+            Span::styled(
+                state.query.clone(),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled("▏", Style::default().fg(Color::Magenta)),
+            Span::styled(
+                format!("  {} items", filtered_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    };
+    Widget::render(Paragraph::new(line), area, buf);
 }
 
 // ── Tree list ──────────────────────────────────────────
@@ -837,5 +991,6 @@ pub fn build_catalog(
         cursor: 0,
         active_model_name: None,
         provider_panel_state: Default::default(),
+        query: String::new(),
     }
 }
