@@ -87,7 +87,13 @@ impl S2Client {
     // Core request helpers
     // -----------------------------------------------------------------------
 
-    /// Execute a GET request that returns JSON.
+    /// Maximum number of retries on HTTP 429.
+    const MAX_RETRIES: u32 = 5;
+
+    /// Initial backoff delay for 429 retries (milliseconds).
+    const INITIAL_BACKOFF_MS: u64 = 2000;
+
+    /// Execute a GET request that returns JSON, with automatic retry on 429.
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         base: &str,
@@ -95,20 +101,30 @@ impl S2Client {
         params: &[(&str, String)],
     ) -> Result<T> {
         let url = build_url(base, path, params);
-        let mut req = self.client.get(&url);
-        if let Some(ref key) = self.api_key {
-            req = req.header("x-api-key", key);
+        let mut backoff = Self::INITIAL_BACKOFF_MS;
+        for attempt in 0..=Self::MAX_RETRIES {
+            let mut req = self.client.get(&url);
+            if let Some(ref key) = self.api_key {
+                req = req.header("x-api-key", key);
+            }
+            let resp = req.send().await?;
+            let status = resp.status().as_u16();
+            let body = resp.text().await?;
+            if status == 429 && attempt < Self::MAX_RETRIES {
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                backoff *= 2;
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                return Err(S2Error::Status { status, body });
+            }
+            return serde_json::from_str(&body).map_err(Into::into);
         }
-        let resp = req.send().await?;
-        let status = resp.status().as_u16();
-        let body = resp.text().await?;
-        if !(200..300).contains(&status) {
-            return Err(S2Error::Status { status, body });
-        }
-        serde_json::from_str(&body).map_err(Into::into)
+        unreachable!()
     }
 
-    /// Execute a POST request with a JSON body that returns JSON.
+    /// Execute a POST request with a JSON body that returns JSON, with
+    /// automatic retry on 429.
     async fn post_json<T: serde::de::DeserializeOwned>(
         &self,
         base: &str,
@@ -117,20 +133,29 @@ impl S2Client {
         body: &impl serde::Serialize,
     ) -> Result<T> {
         let url = build_url(base, path, params);
-        let mut req = self.client.post(&url).json(body);
-        if let Some(ref key) = self.api_key {
-            req = req.header("x-api-key", key);
+        let mut backoff = Self::INITIAL_BACKOFF_MS;
+        for attempt in 0..=Self::MAX_RETRIES {
+            let mut req = self.client.post(&url).json(body);
+            if let Some(ref key) = self.api_key {
+                req = req.header("x-api-key", key);
+            }
+            let resp = req.send().await?;
+            let status = resp.status().as_u16();
+            let body_text = resp.text().await?;
+            if status == 429 && attempt < Self::MAX_RETRIES {
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                backoff *= 2;
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                return Err(S2Error::Status {
+                    status,
+                    body: body_text,
+                });
+            }
+            return serde_json::from_str(&body_text).map_err(Into::into);
         }
-        let resp = req.send().await?;
-        let status = resp.status().as_u16();
-        let body_text = resp.text().await?;
-        if !(200..300).contains(&status) {
-            return Err(S2Error::Status {
-                status,
-                body: body_text,
-            });
-        }
-        serde_json::from_str(&body_text).map_err(Into::into)
+        unreachable!()
     }
 
     // ===================================================================
@@ -223,7 +248,7 @@ impl S2Client {
         if let Some(f) = fields {
             params.push(("fields", f.to_owned()));
         } else {
-            params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
+            params.push(("fields", BULK_PAPER_FIELDS.to_owned()));
         }
         if let Some(s) = sort {
             params.push(("sort", s.to_owned()));
@@ -387,7 +412,7 @@ impl S2Client {
         if let Some(f) = fields {
             params.push(("fields", f.to_owned()));
         } else {
-            params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
+            params.push(("fields", AUTHOR_PAPER_FIELDS.to_owned()));
         }
         self.get_json(GRAPH_BASE, &path, &params).await
     }

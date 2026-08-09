@@ -10052,6 +10052,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror 2.0.19",
  "tokio",
 ]
