@@ -64,6 +64,7 @@ members = [
   "crates/biorxiv",
   "crates/europepmc",
   "crates/openalex",
+  "crates/semantic-scholar",
   "bio_crates/susie",
   "bio_crates/evalue",
   "bio_crates/mrpresso",
