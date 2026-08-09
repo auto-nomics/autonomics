@@ -496,8 +496,12 @@ impl Agent {
             }
         }
 
-        // Shutdown: pause all sessions.
+        // Shutdown: cancel background tool tasks, then pause all sessions.
+        // Background tasks (e.g. run_dag, run_bash) are tokio::spawn'd and
+        // would outlive the agent task; cancelling their tokens lets them
+        // exit cleanly before the runtime is dropped.
         for session in self.sessions.values_mut() {
+            session.toolset.cancel_all_tasks().await;
             session.pause().await;
         }
     }

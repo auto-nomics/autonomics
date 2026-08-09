@@ -254,15 +254,17 @@ impl Default for AgentTabState {
 
 impl AgentTabState {
     /// Returns true when the user can type and send messages.
+    /// Sending is allowed in any non-active state (Idle, Error, Aborted) —
+    /// in Error the user can immediately retry or steer the agent.
     pub fn can_send(&self) -> bool {
-        self.status == AgentStatus::Idle && !self.input.is_empty()
+        !self.status.is_active() && !self.input.is_empty()
     }
 
     /// Returns true when the composer has text that can be enqueued for
-    /// later delivery (agent is busy). The text is taken from the input
-    /// field; the queue is drained when the agent returns to idle.
+    /// later delivery (agent is busy). Only meaningful when the agent is
+    /// actively processing — in Error/Idle the user should send directly.
     pub fn can_enqueue(&self) -> bool {
-        !self.input.is_empty()
+        self.status.is_active() && !self.input.is_empty()
     }
 
     /// Number of messages waiting in the pending queue.
@@ -911,10 +913,10 @@ mod tests {
         assert!(!ts.can_send());
         assert!(!ts.can_enqueue());
 
-        // Idle + text → can send (immediate)
+        // Idle + text → can send (immediate), NOT enqueue
         ts.input.insert_str("hi");
         assert!(ts.can_send());
-        assert!(ts.can_enqueue());
+        assert!(!ts.can_enqueue());
 
         // Running + text → can enqueue only
         ts.status = AgentStatus::Streaming;
@@ -924,6 +926,13 @@ mod tests {
         // Running + empty → neither
         ts.input.clear();
         assert!(!ts.can_send());
+        assert!(!ts.can_enqueue());
+
+        // Error + text → can send (retry), NOT enqueue — Error is a
+        // soft-terminal state; the user should be able to send immediately.
+        ts.status = AgentStatus::Error;
+        ts.input.insert_str("retry");
+        assert!(ts.can_send());
         assert!(!ts.can_enqueue());
     }
 

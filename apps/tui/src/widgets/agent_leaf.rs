@@ -49,7 +49,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
     type State = AgentTabState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
-        let running = ts.status != crate::state::AgentStatus::Idle;
+        let running = ts.status.is_active();
 
         // Dynamic input height: the boxed composer grows with content
         // (word-wrapped), capped at MAX_INPUT_ROWS text rows. The widget draws

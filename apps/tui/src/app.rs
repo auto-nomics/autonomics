@@ -20,7 +20,7 @@ use rusqlite::Connection;
 use std::io::{Stdout, Write, stdout};
 use uuid::Uuid;
 
-use crate::state::{self, AgentSession, AgentStatus, AppState, ChatLine, InputMode};
+use crate::state::{self, AgentSession, AppState, ChatLine, InputMode};
 use crate::widgets::agent_workspace::AgentWorkspace;
 use agentik_core::{AgentProfile, TursoAgentStorage};
 use runtime::{AgentHandle, RuntimeHost};
@@ -614,14 +614,14 @@ impl App {
                 // ── Fixed-rate render tick ──
                 _ = render_tick.tick() => {
                     let active_status = self.state.active_status();
-                    if matches!(active_status, AgentStatus::Idle) {
+                    if !active_status.is_active() {
                         self.clear_cancel_pending();
                     } else {
                         let ts = self.state.active_tab_state_mut();
                         ts.frame = ts.frame.wrapping_add(1);
                     }
 
-                    let agent_active = !matches!(active_status, AgentStatus::Idle);
+                    let agent_active = active_status.is_active();
                     if self.dirty || agent_active {
                         terminal.draw(|f| self.render(f))?;
                         self.dirty = false;
@@ -1022,7 +1022,8 @@ impl App {
                 // Already quitting — no-op.
                 return;
             }
-            if matches!(self.state.active_tab_state_mut().status, AgentStatus::Idle) {
+            if !self.state.active_tab_state_mut().status.is_active() {
+                // Idle, Error, or Aborted — quit immediately.
                 self.should_quit = true;
                 return;
             }
@@ -1790,7 +1791,7 @@ impl App {
                 self.should_quit = true;
             }
             CommandAction::CancelAgent => {
-                if !matches!(self.state.active_status(), AgentStatus::Idle) {
+                if self.state.active_status().is_active() {
                     let agent_name = self
                         .state
                         .sessions
@@ -1837,7 +1838,7 @@ impl App {
                 let is_agent_tab = true;
                 let ts = self.state.active_tab_state_mut();
                 let can = is_agent_tab
-                    && ts.status == state::AgentStatus::Idle
+                    && !ts.status.is_active()
                     && !ts.input_history.is_empty();
                 if can {
                     ts.input_mode = InputMode::Input;

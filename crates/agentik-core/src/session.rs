@@ -497,9 +497,15 @@ impl Session {
 
             // Drain control/notification events that arrived during this iteration.
             // Session management events (CreateSession, SwitchSession, etc.)
-            // must NOT be consumed here — they need to reach the outer
-            // Agent::run() loop. Re-queue them and signal this session to
-            // return so the outer loop can process them.
+            // and Shutdown must NOT be consumed here — they need to reach the
+            // outer Agent::run() loop. Re-queue them and signal this session
+            // to return so the outer loop can process them.
+            //
+            // Shutdown in particular must be re-queued: if it were consumed
+            // by `apply_internal_event` (which returns `false`), the session
+            // loop would exit but the agent's `run()` loop would never see
+            // the Shutdown, causing a deadlock — the relay task waits at
+            // `handle.join()` while the agent loop parks on `rx.recv()`.
             let mut terminal = false;
             let mut session_mgmt_pending = false;
             while let Ok(event) = rx.try_recv() {
@@ -510,6 +516,7 @@ impl Session {
                         | InternalEvent::CloseSession { .. }
                         | InternalEvent::ListSessions
                         | InternalEvent::RenameSession { .. }
+                        | InternalEvent::Shutdown
                 ) {
                     // Re-queue for the outer Agent::run() loop.
                     let _ = internal_event_tx.send(event);
