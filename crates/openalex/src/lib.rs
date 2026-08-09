@@ -53,6 +53,7 @@
 //! and reuses HTTP connections via a shared connection pool.
 
 pub mod client;
+pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
@@ -60,6 +61,7 @@ pub mod tools;
 pub mod types;
 
 pub use client::{ListParams, OpenAlexClient};
+pub use convert::{work_to_article, works_to_articles};
 pub use error::OpenAlexError;
 pub use tools::openalex_registrations;
 pub use types::*;
