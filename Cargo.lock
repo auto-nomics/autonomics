@@ -7246,6 +7246,7 @@ dependencies = [
  "iceberg",
  "iceberg-catalog-rest",
  "mr",
+ "openalex",
  "opentargets",
  "parquet",
  "schemars 1.2.2",
@@ -8037,6 +8038,24 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "openalex"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "bib-types",
+ "reqwest 0.13.4",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "opendal"
