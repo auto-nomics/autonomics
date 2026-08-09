@@ -32,7 +32,7 @@ pub use bib_base::BibBase;
 pub use http_options::BibHttpOptions;
 pub use shared::BibShared;
 pub use error::{Error, Result};
-pub use export::{render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
+pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};
 pub use library_tools::bib_all_registrations;
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};

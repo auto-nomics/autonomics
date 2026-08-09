@@ -89,7 +89,7 @@ pub fn to_bibtex(article: &Article) -> String {
 }
 
 /// Build a cite key from first author's last name + year + first title word.
-fn cite_key(article: &Article) -> String {
+pub fn cite_key(article: &Article) -> String {
     let author_part = article
         .authors
         .first()

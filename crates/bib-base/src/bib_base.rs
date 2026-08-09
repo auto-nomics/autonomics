@@ -360,6 +360,37 @@ impl BibBase {
         Ok(row.get::<i64>(0)?)
     }
 
+    /// List all article IDs in the library.
+    ///
+    /// Lightweight scan — returns only IDs.  Use [`get_article`] to load
+    /// full records.  Useful for building cite-key indexes.
+    pub async fn list_article_ids(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query("SELECT id FROM articles ORDER BY id", turso::params![])
+            .await?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get::<String>(0)?);
+        }
+        Ok(ids)
+    }
+
+    /// List all articles (full records) in the library.
+    ///
+    /// Loads every article with authors and identifiers.  For large
+    /// libraries prefer [`list_article_ids`] + selective [`get_article`].
+    pub async fn list_all_articles(&self) -> Result<Vec<Article>> {
+        let ids = self.list_article_ids().await?;
+        let mut articles = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some(article) = self.get_article(id).await? {
+                articles.push(article);
+            }
+        }
+        Ok(articles)
+    }
+
     // -----------------------------------------------------------------------
     // Search — LIKE-based full-text search
     // -----------------------------------------------------------------------

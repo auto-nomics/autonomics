@@ -46,6 +46,10 @@ pub fn build_default_registry(
     #[cfg(feature = "bundle-mice")]
     registry.register_plugin(&nodes_mice::Plugin);
 
+    // ── Writing bundle ────────────────────────────────────────────────
+    #[cfg(feature = "bundle-writing")]
+    registry.register_plugin(&nodes_writing::Plugin);
+
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
     registry.register_plugin(&nodes_io::Plugin);
