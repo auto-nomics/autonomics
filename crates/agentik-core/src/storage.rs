@@ -123,6 +123,8 @@ pub struct AgentProfile {
 
     // ── Tool capability flags ──
     pub enable_bibliography: bool,
+    #[serde(default)]
+    pub enable_writing: bool,
     pub enable_opengwas: bool,
     pub enable_opentargets: bool,
     pub enable_gwascatalog: bool,
@@ -150,6 +152,7 @@ impl AgentProfile {
             agent_identity: "You are a helpful assistant.".into(),
             system_prompt: None,
             enable_bibliography: true,
+            enable_writing: true,
             enable_opengwas: true,
             enable_opentargets: true,
             enable_gwascatalog: true,
@@ -174,6 +177,7 @@ impl AgentProfile {
                     .into(),
                 system_prompt: None,
                 enable_bibliography: true,
+                enable_writing: true,
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
@@ -193,6 +197,7 @@ impl AgentProfile {
                     .into(),
                 system_prompt: None,
                 enable_bibliography: true,
+                enable_writing: false,
                 enable_opengwas: false,
                 enable_opentargets: true,
                 enable_gwascatalog: false,
@@ -212,11 +217,45 @@ impl AgentProfile {
                     .into(),
                 system_prompt: None,
                 enable_bibliography: false,
+                enable_writing: false,
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
                 enable_iceberg: true,
                 enable_dag_history: true,
+                preferred_model: None,
+                created_at: now,
+                updated_at: now,
+            },
+            AgentProfile {
+                id: Uuid::new_v4(),
+                name: "writer".into(),
+                description: "Manuscript writing, editing, and LaTeX compilation expert.".into(),
+                agent_identity: "You are a scientific manuscript writing assistant specializing \
+                    in LaTeX document preparation, citation management, and compilation. \
+                    Use the writing tools (doc_create, doc_insert_section, doc_insert_block, \
+                    doc_add_citation, doc_compile) to draft, edit, and compile documents. \
+                    Use bibliography tools (lit_search, bib_save) to find and store references."
+                    .into(),
+                system_prompt: Some(
+                    "When writing a manuscript:\n\
+                    1. Use doc_create to start a new document\n\
+                    2. Use doc_insert_section to build the outline (Introduction, Methods, Results, Discussion)\n\
+                    3. Use doc_insert_block to add paragraphs, equations, and tables\n\
+                    4. Use lit_search + bib_save to find and store references\n\
+                    5. Use doc_add_citation to insert citations\n\
+                    6. Use doc_check_citations to verify all citations resolve\n\
+                    7. Use doc_compile to produce the final PDF\n\
+                    \n\
+                    Always run doc_check_citations before doc_compile to catch broken references.".into()
+                ),
+                enable_bibliography: true,
+                enable_writing: true,
+                enable_opengwas: false,
+                enable_opentargets: false,
+                enable_gwascatalog: false,
+                enable_iceberg: false,
+                enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,

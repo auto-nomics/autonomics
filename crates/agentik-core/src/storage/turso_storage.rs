@@ -906,6 +906,10 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_bibliography")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_writing: config
+            .get("enable_writing")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         enable_opengwas: config
             .get("enable_opengwas")
             .and_then(|v| v.as_bool())
@@ -943,6 +947,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "agent_identity": profile.agent_identity,
         "system_prompt": profile.system_prompt,
         "enable_bibliography": profile.enable_bibliography,
+        "enable_writing": profile.enable_writing,
         "enable_opengwas": profile.enable_opengwas,
         "enable_opentargets": profile.enable_opentargets,
         "enable_gwascatalog": profile.enable_gwascatalog,
@@ -1517,6 +1522,7 @@ mod tests {
             agent_identity: "You are a test agent.".into(),
             system_prompt: Some("Custom prompt.".into()),
             enable_bibliography: true,
+            enable_writing: true,
             enable_opengwas: false,
             enable_opentargets: true,
             enable_gwascatalog: false,
@@ -1618,7 +1624,7 @@ mod tests {
         assert!(seeded, "should seed on empty table");
 
         let profiles = store.list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 3, "should have 3 default profiles");
+        assert_eq!(profiles.len(), 4, "should have 4 default profiles");
         assert!(profiles.iter().any(|p| p.name == "researcher"));
         assert!(profiles.iter().any(|p| p.name == "literature"));
         assert!(profiles.iter().any(|p| p.name == "gwas-analysis"));
@@ -1628,7 +1634,7 @@ mod tests {
         assert!(!seeded_again, "should not seed when table has data");
 
         let profiles2 = store.list_profiles().await.unwrap();
-        assert_eq!(profiles2.len(), 3, "should still have 3 profiles");
+        assert_eq!(profiles2.len(), 4, "should still have 4 profiles");
     }
 
     #[tokio::test]
@@ -1649,8 +1655,8 @@ mod tests {
         assert!(changed, "migration should make a change");
 
         let profiles = store.list_profiles().await.unwrap();
-        // researcher (migrated from default) + literature + gwas-analysis.
-        assert_eq!(profiles.len(), 3);
+        // researcher (migrated from default) + literature + gwas-analysis + writer.
+        assert_eq!(profiles.len(), 4);
         assert!(
             profiles.iter().any(|p| p.name == "researcher"),
             "legacy 'default' should be renamed to 'researcher'"

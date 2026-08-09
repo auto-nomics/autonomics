@@ -60,6 +60,9 @@ pub enum HostError {
     #[error("bibliography shared init failed: {0}")]
     BibShared(#[from] bib_base::Error),
 
+    #[error("writing system init failed: {0}")]
+    WritingShared(#[from] writing_base::Error),
+
     #[error("{0}")]
     Other(String),
 }
@@ -85,6 +88,9 @@ pub struct SharedInfra {
     /// Bibliography storage + literature gateway, opened **once** per
     /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
+    /// LaTeX writing system (store + optional engine), opened **once** per
+    /// process. Reuses `bib` for citation resolution when available.
+    pub writing: Arc<writing_base::WritingShared>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -165,16 +171,27 @@ impl SharedInfra {
             }
         };
 
+        let bib = Arc::new(
+            bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
+                .await?,
+        );
+
+        let writing = Arc::new(
+            writing_base::WritingShared::open_with(
+                &config.writing_db_path.to_string_lossy(),
+                Some(bib.clone()),
+            )
+            .await?,
+        );
+
         Ok(Self {
             engine_manager,
             file_storage,
             datalake,
             storage,
             runtime_handle: tokio::runtime::Handle::current(),
-            bib: Arc::new(
-                bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
-                    .await?,
-            ),
+            bib,
+            writing,
             host_control: None,
         })
     }
@@ -299,6 +316,16 @@ impl SharedInfra {
                 Some(bib_shared.europe_pmc.clone()),
             );
             tools.extend(bib_tools);
+        }
+
+        if profile.enable_writing {
+            let ws = self.writing.clone();
+            let writing_tools = writing_base::writing_all_registrations(
+                ws.store.clone(),
+                ws.bib.as_ref().map(|b| b.bib.clone()),
+                ws.engine.clone(),
+            );
+            tools.extend(writing_tools);
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
@@ -1393,6 +1420,14 @@ fn capability_from_profile(
         tags.push("bibliography".into());
         expertise.push("literature-search".into());
         expertise.push("citation-management".into());
+    }
+    if profile.enable_writing {
+        tags.push("writing".into());
+        tags.push("latex".into());
+        tags.push("manuscript".into());
+        expertise.push("document-editing".into());
+        expertise.push("citation-insertion".into());
+        expertise.push("latex-compilation".into());
     }
     if profile.enable_opengwas {
         tags.push("gwas".into());

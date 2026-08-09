@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use writing_base::LatexEngine;
+
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
@@ -86,6 +88,31 @@ pub fn resolve_bib_db_path() -> String {
     std::env::var("AUTONOMICS_BIB_DB").unwrap_or_else(|_| DEFAULT_BIB_DB.to_string())
 }
 
+/// Default on-disk location for the writing-system database.
+pub const DEFAULT_WRITING_DB: &str = "writing.db";
+
+/// Writing tools: document management (doc_create, doc_list, …), editing
+/// (doc_insert_section, doc_insert_block, …), citation management
+/// (doc_add_citation, doc_check_citations, …), and compilation (doc_compile).
+pub async fn writing_tools(db_path: &str) -> Result<Vec<ToolRegistration>, writing_base::Error> {
+    let store = Arc::new(writing_base::WritingStore::open(db_path).await?);
+    let engine: Arc<dyn writing_base::LatexEngine> = {
+        let x = writing_base::XelatexEngine::new();
+        if writing_base::LatexEngine::is_available(&x) {
+            Arc::new(x)
+        } else {
+            Arc::new(writing_base::NullEngine)
+        }
+    };
+    Ok(writing_base::writing_all_registrations(store, None, Some(engine)))
+}
+
+/// Resolves the writing DB path: the `AUTONOMICS_WRITING_DB` env var if set,
+/// otherwise [`DEFAULT_WRITING_DB`].
+pub fn resolve_writing_db_path() -> String {
+    std::env::var("AUTONOMICS_WRITING_DB").unwrap_or_else(|_| DEFAULT_WRITING_DB.to_string())
+}
+
 /// The complete default tool set: File + OpenGWAS + Open Targets
 /// + GWAS Catalog + DataLake + DataEngine + Bibliography.
 ///
@@ -144,6 +171,15 @@ pub async fn tool_set_from_config(
         }
     }
 
+    if config.enable_writing {
+        match writing_tools(&config.writing_db_path.to_string_lossy()).await {
+            Ok(wt) => tools.extend(wt),
+            Err(e) => {
+                eprintln!("[runtime] WARNING: writing tools disabled: {e}");
+            }
+        }
+    }
+
     Ok(tools)
 }
 
@@ -154,4 +190,6 @@ pub enum DefaultToolSetError {
     Opengwas(#[from] OpengwasError),
     #[error(transparent)]
     Bib(#[from] bib_base::Error),
+    #[error(transparent)]
+    Writing(#[from] writing_base::Error),
 }

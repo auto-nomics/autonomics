@@ -65,6 +65,11 @@ const DEFAULT_AGENT_DB: &str = "agent.db";
 /// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
 const DEFAULT_BIB_DB: &str = "bib.db";
 
+/// Default writing-system database path.
+///
+/// Override via builder `.writing_db_path(…)` or env `AUTONOMICS_WRITING_DB`.
+const DEFAULT_WRITING_DB: &str = "writing.db";
+
 /// Default TUI application database (model config, settings, etc.).
 ///
 /// Override via builder `.app_db_path(…)` or env `AUTONOMICS_APP_DB`.
@@ -86,6 +91,9 @@ pub const ENV_STATE_DIR: &str = "AUTONOMICS_STATE_DIR";
 
 /// Env var overriding the bibliography DB path.
 pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
+
+/// Env var overriding the writing-system DB path.
+pub const ENV_WRITING_DB: &str = "AUTONOMICS_WRITING_DB";
 
 /// Env var overriding the TUI application DB path.
 pub const ENV_APP_DB: &str = "AUTONOMICS_APP_DB";
@@ -141,6 +149,9 @@ pub struct RuntimeConfig {
     /// Path to the bibliography SQLite database.
     pub bib_db_path: PathBuf,
 
+    /// Path to the writing-system SQLite database.
+    pub writing_db_path: PathBuf,
+
     /// Path to the TUI / application SQLite database (model config, settings).
     pub app_db_path: PathBuf,
 
@@ -177,6 +188,9 @@ pub struct RuntimeConfig {
 
     /// Whether to enable bibliography tools (lit_search, bib_*, etc.).
     pub enable_bibliography: bool,
+
+    /// Whether to enable writing tools (doc_create, doc_edit, doc_compile, etc.).
+    pub enable_writing: bool,
 
     /// Whether to enable OpenGWAS tools. Requires a valid token.
     pub enable_opengwas: bool,
@@ -233,6 +247,11 @@ impl RuntimeConfig {
             .or_else(|| env_path(ENV_BIB_DB))
             .unwrap_or_else(|| PathBuf::from(DEFAULT_BIB_DB));
 
+        let writing_db_path = base
+            .and_then(|b| b.writing_db_path.clone())
+            .or_else(|| env_path(ENV_WRITING_DB))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_WRITING_DB));
+
         let app_db_path = base
             .and_then(|b| b.app_db_path.clone())
             .or_else(|| env_path(ENV_APP_DB))
@@ -271,6 +290,7 @@ impl RuntimeConfig {
             state_dir,
             dag_history_db,
             bib_db_path,
+            writing_db_path,
             app_db_path,
             agent_db,
             opengwas_token,
@@ -280,6 +300,7 @@ impl RuntimeConfig {
             enable_iceberg: resolve_flag(base, |b| b.enable_iceberg, true),
             enable_dag_history: resolve_flag(base, |b| b.enable_dag_history, true),
             enable_bibliography: resolve_flag(base, |b| b.enable_bibliography, true),
+            enable_writing: resolve_flag(base, |b| b.enable_writing, true),
             enable_opengwas: resolve_flag(base, |b| b.enable_opengwas, true),
             enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
@@ -496,6 +517,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) state_dir: Option<PathBuf>,
     pub(crate) dag_history_db: Option<PathBuf>,
     pub(crate) bib_db_path: Option<PathBuf>,
+    pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
@@ -505,6 +527,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_iceberg: Option<bool>,
     pub(crate) enable_dag_history: Option<bool>,
     pub(crate) enable_bibliography: Option<bool>,
+    pub(crate) enable_writing: Option<bool>,
     pub(crate) enable_opengwas: Option<bool>,
     pub(crate) enable_opentargets: Option<bool>,
     pub(crate) enable_gwascatalog: Option<bool>,
@@ -544,6 +567,12 @@ impl RuntimeConfigBuilder {
     /// Path to the bibliography SQLite database.
     pub fn bib_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.bib_db_path = Some(path.into());
+        self
+    }
+
+    /// Path to the writing-system SQLite database.
+    pub fn writing_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writing_db_path = Some(path.into());
         self
     }
 
@@ -598,6 +627,12 @@ impl RuntimeConfigBuilder {
     /// Enable or disable bibliography tools.
     pub fn enable_bibliography(mut self, enabled: bool) -> Self {
         self.enable_bibliography = Some(enabled);
+        self
+    }
+
+    /// Enable or disable writing tools (doc_create, doc_edit, doc_compile, etc.).
+    pub fn enable_writing(mut self, enabled: bool) -> Self {
+        self.enable_writing = Some(enabled);
         self
     }
 

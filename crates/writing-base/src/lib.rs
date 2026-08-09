@@ -16,6 +16,7 @@ pub mod citation;
 pub mod compile;
 pub mod error;
 pub mod serialize;
+pub mod shared;
 pub mod store;
 pub mod tools;
 
@@ -26,5 +27,6 @@ pub use compile::{
 };
 pub use error::{Error, Result};
 pub use serialize::render_document;
+pub use shared::WritingShared;
 pub use store::{VersionSummary, WritingStore};
 pub use tools::writing_all_registrations;
