@@ -3,7 +3,7 @@
 //! Wraps [`epi::lasso`]. Performs feature selection via LASSO with a λ path
 //! and CV, plus optional bootstrap selection frequencies.
 //!
-//! Output schema (one row per feature):
+//! **Port 0** — Feature-level results (one row per feature):
 //!
 //! | Column              | Type    | Description                          |
 //! |---------------------|---------|--------------------------------------|
@@ -15,10 +15,21 @@
 //! | `lambda_min`        | Float64 | Optimal λ (minimum CV deviance)       |
 //! | `lambda_1se`        | Float64 | λ.1se (most regularised within 1 SE)  |
 //! | `bootstrap_freq`    | Float64 | Selection frequency (if bootstrap > 0)|
+//!
+//! **Port 1** — CV curve (one row per λ on the path):
+//!
+//! | Column              | Type    | Description                          |
+//! |---------------------|---------|--------------------------------------|
+//! | `lambda`            | Float64 | Penalty λ                            |
+//! | `cv_mean`           | Float64 | Mean CV deviance across folds        |
+//! | `cv_se`             | Float64 | Standard error of CV deviance        |
+//! | `n_selected`        | Int32   | Non-zero coefficients at this λ       |
+//! | `is_lambda_min`     | Boolean | True at λ.min                        |
+//! | `is_lambda_1se`     | Boolean | True at λ.1se                        |
 
 use std::sync::Arc;
 
-use arrow_array::{BooleanArray, Float64Array, RecordBatch, StringArray};
+use arrow_array::{BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -103,7 +114,10 @@ pub struct EpiLassoNode {
 pub struct EpiLassoNodeFactory {}
 
 fn port_layout() -> NodePorts {
-    NodePorts::new().add_output_port(None).add_input_port(None)
+    NodePorts::new()
+        .add_output_port(None) // port 0: feature-level results
+        .add_output_port(None) // port 1: CV curve
+        .add_input_port(None)
 }
 
 impl NodeFactory for EpiLassoNodeFactory {
@@ -158,6 +172,7 @@ impl NodeFactory for EpiLassoNodeFactory {
         use dag_core::codegen::helpers::*;
         let s = parse_spec::<EpiLassoNodeSpec>(spec, "epi_lasso")?;
         let out = ctx.output_var.to_string();
+        let cv_out = ctx.fresh_var("cv_curve");
         let cv_fit = ctx.fresh_var("cv_fit");
         let x_mat = ctx.fresh_var("x_mat");
         let y_vec = ctx.fresh_var("y_vec");
@@ -189,8 +204,24 @@ impl NodeFactory for EpiLassoNodeFactory {
             format!(")"),
             format!("# NOTE: bootstrap_freq not generated in R reference"),
             format!("print({out})"),
+            format!("# CV curve (port 1)"),
+            format!("{cv_out} <- data.frame("),
+            format!("  lambda = {cv_fit}$lambda,"),
+            format!("  cv_mean = {cv_fit}$cvm,"),
+            format!("  cv_se = {cv_fit}$cvsd,"),
+            format!(
+                "  n_selected = {cv_fit}$nzero,"
+            ),
+            format!("  is_lambda_min = {cv_fit}$lambda == {cv_fit}$lambda.min,"),
+            format!("  is_lambda_1se = {cv_fit}$lambda == {cv_fit}$lambda.1se"),
+            format!(")"),
+            format!("print({cv_out})"),
         ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
+        Ok(dag_core::codegen::NodeCodegen {
+            code,
+            output_vars: vec![out, cv_out],
+            extra_packages: vec![],
+        })
     }
     fn r_packages(&self) -> Vec<String> {
         vec!["glmnet".into()]
@@ -340,12 +371,53 @@ impl DagNode for EpiLassoNode {
         )
         .expect("lasso output schema");
 
+        // ── Port 1: CV curve (one row per λ) ──
+        let nl = cv.lambdas.len();
+        let cv_lambdas: Float64Array = cv.lambdas.iter().copied().collect();
+        let cv_means: Float64Array = cv.cv_mean.iter().copied().collect();
+        let cv_ses: Float64Array = cv.cv_se.iter().copied().collect();
+        let cv_nsel: Int32Array = cv
+            .n_selected_path
+            .iter()
+            .map(|&n| n as i32)
+            .collect();
+        let is_min: BooleanArray = (0..nl)
+            .map(|i| i == cv.idx_min)
+            .collect();
+        let is_1se: BooleanArray = (0..nl)
+            .map(|i| i == cv.idx_1se)
+            .collect();
+
+        let cv_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("lambda", DataType::Float64, false),
+                Field::new("cv_mean", DataType::Float64, false),
+                Field::new("cv_se", DataType::Float64, false),
+                Field::new("n_selected", DataType::Int32, false),
+                Field::new("is_lambda_min", DataType::Boolean, false),
+                Field::new("is_lambda_1se", DataType::Boolean, false),
+            ])),
+            vec![
+                Arc::new(cv_lambdas),
+                Arc::new(cv_means),
+                Arc::new(cv_ses),
+                Arc::new(cv_nsel),
+                Arc::new(is_min),
+                Arc::new(is_1se),
+            ],
+        )
+        .expect("lasso cv curve schema");
+
         let ctx = node_ctx.session();
         let df = ctx
             .read_batch(batch)
             .map_err(|e| EpiLassoError::ReadBatch(e.to_string()))?;
+        let cv_df = ctx
+            .read_batch(cv_batch)
+            .map_err(|e| EpiLassoError::ReadBatch(e.to_string()))?;
         let mut res = PortOutputs::new();
         res.insert(0, df);
+        res.insert(1, cv_df);
         Ok(res)
     }
 }

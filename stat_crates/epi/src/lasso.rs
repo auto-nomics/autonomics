@@ -92,6 +92,8 @@ pub struct LassoCvResult {
     pub idx_min: usize,
     /// Index of `λ.1se` (most regularised within 1 SE of min).
     pub idx_1se: usize,
+    /// Number of non-zero coefficients at each λ (from full-data fits).
+    pub n_selected_path: Vec<usize>,
     /// Fit at `λ.1se` on the full data.
     pub fit_1se: LassoFit,
     /// Fit at `λ.min` on the full data.
@@ -224,6 +226,7 @@ pub fn lasso_cv(
         cv_se,
         idx_min,
         idx_1se,
+        n_selected_path: full_fits.iter().map(|f| f.n_selected).collect(),
         fit_1se: full_fits[idx_1se].clone(),
         fit_min: full_fits[idx_min].clone(),
         feature_names,
