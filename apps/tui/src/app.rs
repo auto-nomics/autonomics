@@ -673,6 +673,41 @@ impl App {
             } => {
                 self.replay_history(agent_id, session_id, &messages);
             }
+            crate::app_event::AppEvent::PlanLoaded { agent_id, plan } => {
+                // Only route to the agent's active tab_state. Guard against
+                // stale overlay: the loaded revision is only applied if it's
+                // newer than what the TUI already has (e.g. the model already
+                // called update_plan since resume).
+                let session_idx = self
+                    .state
+                    .sessions
+                    .iter()
+                    .position(|s| s.agent_id == agent_id);
+                let Some(session_idx) = session_idx else {
+                    tracing::warn!(%agent_id, "plan loaded for unknown agent");
+                    return;
+                };
+                let ts = if session_idx == self.state.active_agent_idx {
+                    self.state.active_tab_state_mut()
+                } else {
+                    // Route to the session's pending_tab_state so it shows up
+                    // when the user switches to that agent.
+                    &mut self.state.sessions[session_idx].pending_tab_state
+                };
+                if plan.revision > ts.plan.revision {
+                    ts.plan = state::PlanState {
+                        steps: plan.update.plan,
+                        explanation: plan.update.explanation,
+                        revision: plan.revision,
+                    };
+                    self.dirty = true;
+                    tracing::info!(
+                        %agent_id,
+                        revision = plan.revision,
+                        "restored agent plan to TUI from storage"
+                    );
+                }
+            }
             crate::app_event::AppEvent::AgentSpawned {
                 profile_name,
                 result,
@@ -876,6 +911,21 @@ impl App {
                 }
             });
         }
+
+        // ── Restore the agent's persistent plan ──
+        // The backend `Agent::run()` bootstrap loads the plan from storage
+        // but does NOT emit an `AgentEvent::PlanUpdate`, so the TUI's
+        // `PlanState` would stay empty. We fetch it here and push a
+        // `PlanLoaded` event to surface the restored checklist.
+        let tx = self.app_event_tx.clone();
+        self.runtime_handle.spawn(async move {
+            use agentik_core::storage::AgentStorage;
+            if let Ok(Some(plan)) = storage.load_plan(agent_id).await {
+                if !plan.is_empty() {
+                    tx.send(crate::app_event::AppEvent::PlanLoaded { agent_id, plan });
+                }
+            }
+        });
     }
     fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
@@ -1122,7 +1172,7 @@ impl App {
     /// The `AgentSpawned` event is handled in `handle_app_event`.
     fn spawn_agent_from_profile(&mut self, profile: &AgentProfile, agent_name: &str) {
         tracing::info!(
-            profile = %profile.name,
+            profile = %profile.path,
             agent = %agent_name,
             "spawn_agent_from_profile called"
         );
@@ -1152,12 +1202,12 @@ impl App {
         let control = host.control();
         let profile_clone = profile.clone();
         let agent_name_owned = agent_name.to_string();
-        let profile_name_owned = profile.name.clone();
+        let profile_name_owned = profile.path.clone();
         let tx = self.app_event_tx.clone();
 
         self.runtime_handle.spawn(async move {
             tracing::debug!(
-                profile = %profile_clone.name,
+                profile = %profile_clone.path,
                 agent = %agent_name_owned,
                 "async spawn task started"
             );
@@ -1188,7 +1238,7 @@ impl App {
             tx.send(event);
         });
 
-        tracing::info!(profile = %profile.name, "spawning agent...");
+        tracing::info!(profile = %profile.path, "spawning agent...");
     }
 
     /// Key handling in browse mode: Up/Down scroll line-by-line,
@@ -1297,7 +1347,7 @@ impl App {
                             self.state
                                 .profiles
                                 .iter()
-                                .find(|p| p.name == agent_name)
+                                .find(|p| p.path == agent_name)
                                 .cloned()
                         });
                     match profile {
@@ -1756,6 +1806,14 @@ impl App {
             }
             KeyCode::Up => self.state.profile_picker.move_up(),
             KeyCode::Down => self.state.profile_picker.move_down(),
+            // Expand/collapse folder nodes. Tab and Right both expand;
+            // Left collapses.
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('+') => {
+                self.state.profile_picker.toggle_expand();
+            }
+            KeyCode::Left | KeyCode::BackTab => {
+                self.state.profile_picker.toggle_expand();
+            }
             KeyCode::Backspace => self.state.profile_picker.pop_char(),
             KeyCode::Char(c) if !ctrl => self.state.profile_picker.push_char(c),
             KeyCode::Enter => {
@@ -1768,7 +1826,7 @@ impl App {
                     self.state.pending_profile = Some(profile.clone());
                     self.state
                         .name_input
-                        .open(format!(" New Agent ({}) ", profile.name), profile.name);
+                        .open(format!(" New Agent ({}) ", profile.name()), profile.name());
                 }
             }
             _ => {}
@@ -1860,14 +1918,14 @@ impl App {
                     .state
                     .profiles
                     .iter()
-                    .find(|p| p.name == profile_name)
+                    .find(|p| p.path == profile_name)
                     .cloned()
                 {
                     // Stash the profile; name input prompts for the agent name.
                     self.state.pending_profile = Some(profile.clone());
                     self.state
                         .name_input
-                        .open(format!(" New Agent ({}) ", profile.name), profile.name);
+                        .open(format!(" New Agent ({}) ", profile.name()), profile.name());
                 }
             }
             CommandAction::NewAgent => {
@@ -2361,14 +2419,11 @@ impl App {
     fn handle_model_config_key(&mut self, key: &KeyEvent) {
         use crate::widgets::model_config_widget::ConfigCommand;
 
-        // Esc closes the popup.
-        if key.code == KeyCode::Esc {
-            self.state.model_config_visible = false;
-            return;
-        }
-
         let cmd = self.state.model_config_state.handle_key(*key);
         match cmd {
+            ConfigCommand::Close => {
+                self.state.model_config_visible = false;
+            }
             ConfigCommand::SaveProvider {
                 provider_name,
                 api_key,

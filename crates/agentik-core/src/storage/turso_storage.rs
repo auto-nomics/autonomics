@@ -63,7 +63,7 @@ use agentik_types::AgentPlan;
 
 use crate::storage::{
     AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
-    RelationKind, StorageError,
+    ProfileOverrides, RelationKind, StorageError,
 };
 
 /// Turso-backed implementation of [`AgentStorage`].
@@ -879,19 +879,19 @@ where
 
 fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
     let id_str = text_col(row, 0)?;
-    let name = text_col(row, 1)?;
+    let path = text_col(row, 1)?;
     let description = text_col(row, 2)?;
     let config_str = text_col(row, 3)?;
     let created_at = int_col(row, 4)?;
     let updated_at = int_col(row, 5)?;
 
-    // The config_json stores everything except id/name/timestamps.
+    // The config_json stores everything except id/path/timestamps.
     let config: serde_json::Value = serde_json::from_str(&config_str)?;
 
     Ok(AgentProfile {
         id: Uuid::parse_str(&id_str)
             .map_err(|e| StorageError::Other(format!("parse profile id: {e}").into()))?,
-        name,
+        path,
         description,
         agent_identity: config
             .get("agent_identity")
@@ -968,7 +968,7 @@ impl AgentProfileRegistry for TursoAgentStorage {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params_from_iter([
                     Value::Text(profile.id.to_string()),
-                    Value::Text(profile.name),
+                    Value::Text(profile.path),
                     Value::Text(profile.description),
                     Value::Text(config_json),
                     Value::Integer(profile.created_at),
@@ -996,13 +996,13 @@ impl AgentProfileRegistry for TursoAgentStorage {
         }
     }
 
-    async fn get_profile_by_name(&self, name: &str) -> Result<Option<AgentProfile>, StorageError> {
+    async fn get_profile_by_path(&self, path: &str) -> Result<Option<AgentProfile>, StorageError> {
         let mut rows = self
             .conn
             .query(
                 "SELECT id, name, description, config_json, created_at, updated_at
                  FROM agent_profiles WHERE name = ?1 LIMIT 1",
-                params_from_iter([Value::Text(name.to_string())]),
+                params_from_iter([Value::Text(path.to_string())]),
             )
             .await?;
 
@@ -1026,6 +1026,24 @@ impl AgentProfileRegistry for TursoAgentStorage {
         collect_rows(&mut rows, row_to_profile).await
     }
 
+    async fn list_child_profiles(
+        &self,
+        parent_path: &str,
+    ) -> Result<Vec<AgentProfile>, StorageError> {
+        let prefix = format!("{parent_path}/%");
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, description, config_json, created_at, updated_at
+                 FROM agent_profiles WHERE name LIKE ?1
+                 ORDER BY created_at ASC",
+                params_from_iter([Value::Text(prefix)]),
+            )
+            .await?;
+
+        collect_rows(&mut rows, row_to_profile).await
+    }
+
     async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError> {
         let config_json = serde_json::to_string(&profile_to_config_json(&profile))?;
         self.conn
@@ -1038,7 +1056,7 @@ impl AgentProfileRegistry for TursoAgentStorage {
                  WHERE id = ?1",
                 params_from_iter([
                     Value::Text(profile.id.to_string()),
-                    Value::Text(profile.name),
+                    Value::Text(profile.path),
                     Value::Text(profile.description),
                     Value::Text(config_json),
                     Value::Integer(profile.updated_at),
@@ -1514,11 +1532,11 @@ mod tests {
 
     // ── AgentProfileRegistry ─────────────────────────────────
 
-    fn sample_profile(name: &str) -> AgentProfile {
+    fn sample_profile(path: &str) -> AgentProfile {
         AgentProfile {
             id: Uuid::new_v4(),
-            name: name.to_string(),
-            description: format!("Test profile: {name}"),
+            path: path.to_string(),
+            description: format!("Test profile: {path}"),
             agent_identity: "You are a test agent.".into(),
             system_prompt: Some("Custom prompt.".into()),
             enable_bibliography: true,
@@ -1543,7 +1561,7 @@ mod tests {
 
         let fetched = store.get_profile(profile.id).await.unwrap().unwrap();
         assert_eq!(fetched.id, profile.id);
-        assert_eq!(fetched.name, "test-profile");
+        assert_eq!(fetched.path, "test-profile");
         assert_eq!(fetched.agent_identity, "You are a test agent.");
         assert_eq!(fetched.system_prompt.as_deref(), Some("Custom prompt."));
         assert!(fetched.enable_bibliography);
@@ -1555,14 +1573,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_profile_get_by_name() {
+    async fn test_profile_get_by_path() {
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let profile = sample_profile("by-name");
+        let profile = sample_profile("by-path");
 
         store.create_profile(profile).await.unwrap();
 
-        let fetched = store.get_profile_by_name("by-name").await.unwrap().unwrap();
-        assert_eq!(fetched.name, "by-name");
+        let fetched = store.get_profile_by_path("by-path").await.unwrap().unwrap();
+        assert_eq!(fetched.path, "by-path");
     }
 
     #[tokio::test]
@@ -1579,8 +1597,8 @@ mod tests {
         let profiles = store.list_profiles().await.unwrap();
         assert_eq!(profiles.len(), 2);
         // Ordered by created_at ASC.
-        assert_eq!(profiles[0].name, "alpha");
-        assert_eq!(profiles[1].name, "beta");
+        assert_eq!(profiles[0].path, "alpha");
+        assert_eq!(profiles[1].path, "beta");
     }
 
     #[tokio::test]
@@ -1625,9 +1643,9 @@ mod tests {
 
         let profiles = store.list_profiles().await.unwrap();
         assert_eq!(profiles.len(), 4, "should have 4 default profiles");
-        assert!(profiles.iter().any(|p| p.name == "researcher"));
-        assert!(profiles.iter().any(|p| p.name == "literature"));
-        assert!(profiles.iter().any(|p| p.name == "gwas-analysis"));
+        assert!(profiles.iter().any(|p| p.path == "researcher"));
+        assert!(profiles.iter().any(|p| p.path == "literature"));
+        assert!(profiles.iter().any(|p| p.path == "gwas-analysis"));
 
         // Non-empty → should NOT seed again.
         let seeded_again = store.seed_defaults_if_empty().await.unwrap();
@@ -1643,7 +1661,7 @@ mod tests {
 
         // Simulate a legacy DB: only a "default" profile exists.
         let legacy = AgentProfile {
-            name: "default".into(),
+            path: "default".into(),
             description: "legacy".into(),
             agent_identity: "legacy identity".into(),
             ..AgentProfile::new("default")
@@ -1658,16 +1676,112 @@ mod tests {
         // researcher (migrated from default) + literature + gwas-analysis + writer.
         assert_eq!(profiles.len(), 4);
         assert!(
-            profiles.iter().any(|p| p.name == "researcher"),
+            profiles.iter().any(|p| p.path == "researcher"),
             "legacy 'default' should be renamed to 'researcher'"
         );
         assert!(
-            profiles.iter().all(|p| p.name != "default"),
-            "no profile should retain the legacy 'default' name"
+            profiles.iter().all(|p| p.path != "default"),
+            "no profile should retain the legacy 'default' path"
         );
         // The migrated researcher should preserve the legacy identity.
-        let researcher = profiles.iter().find(|p| p.name == "researcher").unwrap();
+        let researcher = profiles.iter().find(|p| p.path == "researcher").unwrap();
         assert_eq!(researcher.agent_identity, "legacy identity");
+    }
+
+    #[tokio::test]
+    async fn test_list_child_profiles() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+
+        // Create a parent and two children.
+        let parent = sample_profile("researcher");
+        store.create_profile(parent.clone()).await.unwrap();
+
+        let child1 = parent
+            .derive_child("genomics", ProfileOverrides::default())
+            .unwrap();
+        store.create_profile(child1.clone()).await.unwrap();
+
+        let child2 = parent
+            .derive_child("proteomics", ProfileOverrides::default())
+            .unwrap();
+        store.create_profile(child2.clone()).await.unwrap();
+
+        // Unrelated root profile.
+        store.create_profile(sample_profile("writer")).await.unwrap();
+
+        let children = store.list_child_profiles("researcher").await.unwrap();
+        assert_eq!(children.len(), 2);
+        let paths: Vec<&str> = children.iter().map(|p| p.path.as_str()).collect();
+        assert!(paths.contains(&"researcher/genomics"));
+        assert!(paths.contains(&"researcher/proteomics"));
+    }
+
+    #[test]
+    fn test_profile_name_and_parent_path() {
+        let root = AgentProfile::new("researcher");
+        assert_eq!(root.name(), "researcher");
+        assert_eq!(root.parent_path(), None);
+        assert_eq!(root.depth(), 0);
+
+        let child = root
+            .derive_child("genomics", ProfileOverrides::default())
+            .unwrap();
+        assert_eq!(child.name(), "genomics");
+        assert_eq!(child.parent_path(), Some("researcher"));
+        assert_eq!(child.depth(), 1);
+
+        let grandchild = child
+            .derive_child("mr_analysis", ProfileOverrides::default())
+            .unwrap();
+        assert_eq!(grandchild.name(), "mr_analysis");
+        assert_eq!(grandchild.parent_path(), Some("researcher/genomics"));
+        assert_eq!(grandchild.depth(), 2);
+    }
+
+    #[test]
+    fn test_derive_child_inheritance_and_overrides() {
+        let parent = AgentProfile {
+            path: "researcher".into(),
+            description: "Parent desc".into(),
+            agent_identity: "Parent identity".into(),
+            system_prompt: None,
+            enable_bibliography: true,
+            enable_writing: false,
+            enable_opengwas: true,
+            enable_opentargets: true,
+            enable_gwascatalog: true,
+            enable_iceberg: true,
+            enable_dag_history: true,
+            preferred_model: None,
+            ..AgentProfile::new("researcher")
+        };
+
+        // Partial override.
+        let overrides = ProfileOverrides {
+            description: Some("Genomics specialist".into()),
+            agent_identity: Some("You are a genomics expert.".into()),
+            enable_writing: Some(true),
+            enable_dag_history: Some(false),
+            ..Default::default()
+        };
+
+        let child = parent.derive_child("genomics", overrides).unwrap();
+        assert_eq!(child.path, "researcher/genomics");
+        assert_eq!(child.description, "Genomics specialist");
+        assert_eq!(child.agent_identity, "You are a genomics expert.");
+        // Inherited.
+        assert!(child.enable_bibliography);
+        assert!(child.enable_opengwas);
+        // Overridden.
+        assert!(child.enable_writing);
+        assert!(!child.enable_dag_history);
+    }
+
+    #[test]
+    fn test_derive_child_rejects_invalid_segment() {
+        let parent = AgentProfile::new("researcher");
+        let result = parent.derive_child("Bad Name", ProfileOverrides::default());
+        assert!(result.is_err());
     }
 
     #[tokio::test]
