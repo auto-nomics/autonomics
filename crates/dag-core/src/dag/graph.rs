@@ -1181,6 +1181,15 @@ impl DAG {
     pub fn has_spec(&self, id: &str) -> bool {
         self.specs.contains_key(id)
     }
+
+    /// Get the retained `(kind, spec)` for a node id.
+    ///
+    /// Returns `None` if the node does not exist or was added via the raw
+    /// [`Self::add_node`] path (no retained spec). Returned values are cloned
+    /// so the caller owns them without borrowing `self`.
+    pub fn node_spec(&self, id: &str) -> Option<(String, serde_json::Value)> {
+        self.specs.get(id).cloned()
+    }
 }
 
 /// Check that every field required by `input` is present in `output` with a

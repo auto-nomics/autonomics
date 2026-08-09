@@ -197,6 +197,23 @@ impl DataEngine {
         Ok(self.dag.to_dot())
     }
 
+    /// Get the retained `(kind, spec)` of an existing node instance.
+    ///
+    /// Returns `None` when `id` does not exist in the DAG, or when the node
+    /// was added through the raw `add_node` path (no spec retained). This is
+    /// the instance-level counterpart of [`Self::get_node_spec`] (which returns
+    /// a kind's parameter *schema*, not the instance's stored configuration).
+    pub fn get_node(&self, id: &str) -> Option<(String, serde_json::Value)> {
+        self.dag.node_spec(id)
+    }
+
+    /// Whether a node with `id` exists in the DAG (regardless of whether it
+    /// has a retained spec). Use to distinguish "unknown id" from "exists but
+    /// no spec" when interpreting a `None` from [`Self::get_node`].
+    pub fn node_exists(&self, id: &str) -> bool {
+        self.dag.get_node(id).is_some()
+    }
+
     /// Reverse-compile the current DAG into R or Python source code.
     pub fn compile_dag(
         &self,
