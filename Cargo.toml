@@ -75,6 +75,7 @@ members = [
   "stat_crates/ml",
   "stat_crates/mice",
   "bio_crates/lcmm",
+  "crates/crossref",
 ]
 resolver = "3"
 
