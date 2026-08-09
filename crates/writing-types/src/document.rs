@@ -83,7 +83,7 @@ impl Document {
 // ---------------------------------------------------------------------------
 
 /// An author of the document under construction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DocumentAuthor {
     pub name: String,
     #[serde(default)]

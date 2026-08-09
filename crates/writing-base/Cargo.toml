@@ -19,6 +19,12 @@ tokio = { workspace = true, features = ["process", "fs"] }
 async-trait.workspace = true
 tracing.workspace = true
 
+# Agent tools
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+schemars.workspace = true
+
 [lints]
 workspace = true
 
@@ -28,3 +34,5 @@ e2e = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "fs"] }
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }

@@ -17,6 +17,7 @@ pub mod compile;
 pub mod error;
 pub mod serialize;
 pub mod store;
+pub mod tools;
 
 pub use citation::{CitationReport, CitationResolver, CiteKeyStatus};
 pub use compile::{
@@ -26,3 +27,4 @@ pub use compile::{
 pub use error::{Error, Result};
 pub use serialize::render_document;
 pub use store::{VersionSummary, WritingStore};
+pub use tools::writing_all_registrations;

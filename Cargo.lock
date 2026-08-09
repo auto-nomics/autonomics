@@ -2578,6 +2578,7 @@ dependencies = [
  "nodes-survey",
  "nodes-survival",
  "nodes-viz",
+ "nodes-writing",
  "parquet",
  "schemars 1.2.2",
  "serde",
@@ -7473,6 +7474,24 @@ dependencies = [
  "tokio",
  "tracing",
  "visualization",
+]
+
+[[package]]
+name = "nodes-writing"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "writing-base",
+ "writing-types",
 ]
 
 [[package]]
@@ -12833,9 +12852,14 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 name = "writing-base"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
  "bib-base",
  "bib-types",
  "chrono",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
