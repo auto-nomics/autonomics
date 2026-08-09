@@ -13,6 +13,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 use bib_types::query::{BoolOp, StructuredSearch, YearRange};
+use bib_types::{IdKind, Identifier};
 
 use crate::query::LiteratureGateway;
 
@@ -23,12 +24,15 @@ use crate::query::LiteratureGateway;
 #[tool(
     name = "lit_search",
     description = "Search for academic literature. By default searches ALL registered sources \
-                  concurrently (PubMed, arXiv, bioRxiv). Pass `sources` to restrict to specific \
-                  sources only — those will be searched concurrently and the rest skipped entirely. \
+                  concurrently (PubMed, arXiv, bioRxiv, OpenAlex, Crossref, Semantic Scholar). \
+                  Pass `sources` to restrict to specific sources only — those will be searched \
+                  concurrently and the rest skipped entirely. \
                   \
                   \
         **Sources**: \"pubmed\" (biomedical), \"arxiv\" (physics/CS/math preprints), \
-        \"biorxiv\" (biology/medicine preprints — keyword search not supported, fetch only). \
+        \"biorxiv\" (biology/medicine preprints — keyword search not supported, fetch only), \
+        \"openalex\" (270M+ works, all disciplines), \"crossref\" (DOI-registered works), \
+        \"semantic_scholar\" (AI-powered academic search). \
         \
         **Keywords**: searched against title + abstract. Use `keywords_op` to control \
         whether ALL keywords must match (AND) or ANY (OR, default). \
@@ -36,7 +40,7 @@ use crate::query::LiteratureGateway;
         **Examples**: \
         • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\" — search all sources \
         • keywords=[\"transformer\"], sources=[\"arxiv\"] — only arXiv \
-        • keywords=[\"GWAS\"], sources=[\"pubmed\", \"biorxiv\"] — PubMed + bioRxiv concurrently"
+        • keywords=[\"GWAS\"], sources=[\"pubmed\", \"openalex\"] — PubMed + OpenAlex concurrently"
 )]
 pub struct LitSearchInput {
     #[desc = "Topic keywords to search in title/abstract, e.g. [\"CRISPR\", \"gene editing\"]"]
@@ -63,8 +67,8 @@ pub struct LitSearchInput {
     #[desc = "Publication year end (inclusive), e.g. 2024"]
     pub year_to: Option<u16>,
 
-    #[desc = "Sources to search (concurrently). Options: \"pubmed\", \"arxiv\", \"biorxiv\". \
-             Default: all registered sources."]
+    #[desc = "Sources to search (concurrently). Options: \"pubmed\", \"arxiv\", \"biorxiv\", \
+             \"openalex\", \"crossref\", \"semantic_scholar\". Default: all registered sources."]
     pub sources: Option<Vec<String>>,
 
     #[desc = "Max results per source (default 10)"]
@@ -158,20 +162,37 @@ impl ToolFunction for LitSearchTool {
 
 #[tool(
     name = "lit_fetch",
-    description = "Fetch a single article by ID from the appropriate source. \
-                  Auto-detects the source from the ID format: \
-                  • Numeric (e.g. \"30124452\") → PubMed PMID \
-                  • Starts with \"10.\" → DOI (resolved via PubMed) \
-                  • Contains \"/\" or dot pattern (e.g. \"2401.12345\") → arXiv \
+    description = "Fetch a single article by a typed identifier from a **specific** source. \
+                  You MUST specify `id_type`, `id`, AND `source`. \
                   \
-                  Returns full metadata including abstract."
+        **id_type** — one of: \
+        • \"doi\" — Digital Object Identifier (e.g. \"10.1038/s41586-023-06236-2\") \
+        • \"pmid\" — PubMed ID (e.g. \"30124452\") \
+        • \"arxiv\" — arXiv preprint ID (e.g. \"2401.00001\") \
+        • \"openalex\" — OpenAlex work ID (e.g. \"W2741809807\") \
+        • \"s2\" — Semantic Scholar paper ID (e.g. \"CorpusId:12345\" or 40-char SHA) \
+        • \"biorxiv\" — bioRxiv/medRxiv DOI (e.g. \"10.1101/2024.01.01.574000\") \
+        \
+        **source** — which source to query (must be compatible with id_type): \
+        • \"pubmed\" — supports pmid, doi \
+        • \"arxiv\" — supports arxiv \
+        • \"biorxiv\" — supports doi, biorxiv \
+        • \"openalex\" — supports openalex, doi, pmid \
+        • \"crossref\" — supports doi \
+        • \"semantic_scholar\" — supports s2, doi, arxiv, pmid \
+        \
+        Returns full metadata including abstract."
 )]
 pub struct LitFetchInput {
-    #[desc = "Article identifier: PMID, DOI, or arXiv ID"]
+    #[desc = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\""]
+    pub id_type: String,
+
+    #[desc = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"W2741809807\")"]
     pub id: String,
 
-    #[desc = "Force a specific source: \"pubmed\" or \"arxiv\". Default: auto-detect."]
-    pub source: Option<String>,
+    #[desc = "REQUIRED — the source to query: \"pubmed\", \"arxiv\", \"biorxiv\", \"openalex\", \
+             \"crossref\", or \"semantic_scholar\". There is no default; you must pick one."]
+    pub source: String,
 }
 
 pub struct LitFetchTool {
@@ -187,18 +208,22 @@ impl ToolFunction for LitFetchTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let result = if let Some(ref source) = input.source {
-            // Explicit source selection.
-            let article = self
-                .gateway
-                .fetch_from(source, &input.id)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed { source: e.into() })?;
-            article.map(|a| (source.clone(), a))
-        } else {
-            // Auto-detect: try the most likely source first.
-            auto_fetch(&self.gateway, &input.id).await
-        };
+        let kind = parse_id_kind(&input.id_type).ok_or_else(|| ToolError::ExecutionFailed {
+            source: format!(
+                "unknown id_type '{}': expected one of doi, pmid, arxiv, openalex, s2, biorxiv",
+                input.id_type
+            )
+            .into(),
+        })?;
+        let identifier = Identifier::new(kind, &input.id);
+
+        // Source is mandatory — no default multi-source fallback.
+        let result = self
+            .gateway
+            .fetch_from(&input.source, &identifier)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed { source: e.into() })?
+            .map(|article| (input.source.clone(), article));
 
         match result {
             Some((source, article)) => {
@@ -228,8 +253,9 @@ impl ToolFunction for LitFetchTool {
             }
             None => Ok(AgentToolResult::success_json(serde_json::json!({
                 "found": false,
+                "id_type": input.id_type,
                 "id": input.id,
-                "message": "No article found with this ID in any configured source."
+                "message": "No article found with this identifier in any compatible source."
             }))),
         }
     }
@@ -286,38 +312,21 @@ fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
     }
 }
 
-/// Auto-detect the source from the ID format and fetch accordingly.
+/// Parse a user-supplied `id_type` string into an [`IdKind`].
 ///
-/// Routing priority by ID format:
-/// - bioRxiv/medRxiv DOI (`10.1101/...`) → bioRxiv source → all sources
-/// - DOI (`10.xxx`) → PubMed → all sources
-/// - Numeric (PMID) → PubMed → all sources
-/// - arXiv ID pattern → arXiv → all sources
-/// - Other → all sources in registration order
-pub(crate) async fn auto_fetch(
-    gateway: &LiteratureGateway,
-    id: &str,
-) -> Option<(String, bib_types::Article)> {
-    let is_numeric = id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty();
-    let is_doi = id.starts_with("10.");
-    let is_biorxiv = id.starts_with("10.1101/");
-
-    if is_biorxiv {
-        // bioRxiv/medRxiv preprint DOI — try bioRxiv source first.
-        if let Some(result) = gateway.fetch_from("biorxiv", id).await.ok().flatten() {
-            return Some(("biorxiv".into(), result));
-        }
+/// Accepts the lowercase labels produced by [`IdKind::as_str`] plus
+/// `"biorxiv"`.
+pub(crate) fn parse_id_kind(s: &str) -> Option<IdKind> {
+    match s.trim().to_lowercase().as_str() {
+        "doi" => Some(IdKind::Doi),
+        "pmid" => Some(IdKind::Pmid),
+        "pmc" => Some(IdKind::Pmc),
+        "arxiv" => Some(IdKind::Arxiv),
+        "biorxiv" => Some(IdKind::Biorxiv),
+        "s2" => Some(IdKind::S2),
+        "openalex" => Some(IdKind::OpenAlex),
+        _ => None,
     }
-
-    if is_numeric || is_doi {
-        // PMID or generic DOI → try PubMed first.
-        if let Some(result) = gateway.fetch_from("pubmed", id).await.ok().flatten() {
-            return Some(("pubmed".into(), result));
-        }
-    }
-
-    // Fall back to trying all sources in registration order.
-    gateway.fetch(id).await
 }
 
 /// Return the first non-DOI, non-PMID identifier value for display.

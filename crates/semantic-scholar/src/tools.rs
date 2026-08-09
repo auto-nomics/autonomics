@@ -62,3 +62,26 @@ pub fn s2_registrations(client: Arc<S2Client>) -> Vec<ToolRegistration> {
         R::from(recommendations::S2RecommendationsTool { client }),
     ]
 }
+
+/// Build [`ToolRegistration`]s for Semantic Scholar tools whose
+/// capabilities are **not** covered by the [`bib_base::LiteratureGateway`].
+///
+/// The gateway already provides unified `search` and `fetch` for papers,
+/// so this function registers only the citation-graph, recommendation, and
+/// author tools — capabilities that fall outside the `LiteratureSource`
+/// trait.
+pub fn s2_extended_registrations(client: Arc<S2Client>) -> Vec<ToolRegistration> {
+    use agentik_core::tools::ToolRegistration as R;
+    vec![
+        R::from(citations::S2CitationsTool {
+            client: client.clone(),
+        }),
+        R::from(references::S2ReferencesTool {
+            client: client.clone(),
+        }),
+        R::from(author::S2AuthorTool {
+            client: client.clone(),
+        }),
+        R::from(recommendations::S2RecommendationsTool { client }),
+    ]
+}

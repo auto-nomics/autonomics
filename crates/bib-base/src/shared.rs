@@ -32,6 +32,43 @@ fn http_client_from(opts: crate::BibHttpOptions) -> Arc<reqwest::Client> {
     Arc::new(opts.build_client())
 }
 
+/// Build an [`openalex::OpenAlexClient`] from the `OPENALEX_API_KEY`
+/// environment variable (optional; absent ⇒ free/anonymous tier).
+fn openalex_client_from_env() -> Arc<openalex::OpenAlexClient> {
+    let key = std::env::var("OPENALEX_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    Arc::new(openalex::OpenAlexClient::new(key.as_deref()))
+}
+
+/// Build a [`crossref::CrossrefClient`] using the `CROSSREF_MAILTO`
+/// environment variable (optional; absent ⇒ default pool).
+fn crossref_client_from_env() -> Arc<crossref::CrossrefClient> {
+    let mailto = std::env::var("CROSSREF_MAILTO")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let builder = crossref::CrossrefClient::builder();
+    let builder = match mailto {
+        Some(email) => builder.mailto(email),
+        None => builder,
+    };
+    Arc::new(builder.build())
+}
+
+/// Build a [`semantic_scholar::S2Client`] from the `S2_API_KEY`
+/// environment variable (optional; absent ⇒ lower rate limit).
+fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
+    let key = std::env::var("S2_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let client = semantic_scholar::S2Client::new();
+    let client = match key {
+        Some(k) => client.with_api_key(k),
+        None => client,
+    };
+    Arc::new(client)
+}
+
 /// Aggregated, process-level bibliography handle. Cheap to clone
 /// (`Arc`-backed).
 #[derive(Clone)]
@@ -59,6 +96,25 @@ pub struct BibShared {
     /// Shared Europe PMC client used by the `bib_save` tool's
     /// open-access full-text auto-fetch.
     pub europe_pmc: Arc<europepmc::EuropePmcClient>,
+
+    /// Shared OpenAlex client. Loaded into the [`LiteratureGateway`] as
+    /// [`OpenAlexSource`](crate::OpenAlexSource) and also used by the
+    /// standalone autocomplete tool.
+    /// API key read from `OPENALEX_API_KEY` (optional; absent = free tier).
+    pub openalex: Arc<openalex::OpenAlexClient>,
+
+    /// Shared Crossref client. Loaded into the [`LiteratureGateway`] as
+    /// [`CrossrefSource`](crate::CrossrefSource) and also used by the
+    /// standalone type-catalogue tool. A contact email read from
+    /// `CROSSREF_MAILTO` (optional) routes requests to the polite pool.
+    pub crossref: Arc<crossref::CrossrefClient>,
+
+    /// Shared Semantic Scholar client. Loaded into the
+    /// [`LiteratureGateway`] as [`S2Source`](crate::S2Source) and also
+    /// used by the standalone citation/reference/recommendation/author
+    /// tools. API key read from `S2_API_KEY` (optional; absent = lower
+    /// rate limit).
+    pub s2: Arc<semantic_scholar::S2Client>,
 }
 
 impl BibShared {
@@ -92,10 +148,16 @@ impl BibShared {
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
         let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
-        let gateway = Arc::new(LiteratureGateway::with_shared_clients(
+        let openalex = openalex_client_from_env();
+        let crossref = crossref_client_from_env();
+        let s2 = s2_client_from_env();
+        let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
             http.clone(),
+            openalex.clone(),
+            crossref.clone(),
+            s2.clone(),
         ));
         Ok(Self {
             bib,
@@ -104,6 +166,9 @@ impl BibShared {
             arxiv,
             http,
             europe_pmc,
+            openalex,
+            crossref,
+            s2,
         })
     }
 
@@ -121,10 +186,16 @@ impl BibShared {
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
         let europe_pmc = Arc::new(europepmc::EuropePmcClient::new());
-        let gateway = Arc::new(LiteratureGateway::with_shared_clients(
+        let openalex = openalex_client_from_env();
+        let crossref = crossref_client_from_env();
+        let s2 = s2_client_from_env();
+        let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
             http.clone(),
+            openalex.clone(),
+            crossref.clone(),
+            s2.clone(),
         ));
         Ok(Self {
             bib,
@@ -133,6 +204,9 @@ impl BibShared {
             arxiv,
             http,
             europe_pmc,
+            openalex,
+            crossref,
+            s2,
         })
     }
 }
@@ -146,6 +220,9 @@ impl std::fmt::Debug for BibShared {
             .field("arxiv", &"Arc<ArxivClient>")
             .field("http", &"Arc<reqwest::Client>")
             .field("europe_pmc", &"Arc<EuropePmcClient>")
+            .field("openalex", &"Arc<OpenAlexClient>")
+            .field("crossref", &"Arc<CrossrefClient>")
+            .field("s2", &"Arc<S2Client>")
             .finish()
     }
 }

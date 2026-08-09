@@ -340,6 +340,17 @@ impl SharedInfra {
                 Some(bib_shared.europe_pmc.clone()),
             );
             tools.extend(bib_tools);
+
+            // Extended literature tools: source-specific capabilities of
+            // OpenAlex / Crossref / Semantic Scholar that fall outside the
+            // LiteratureGateway's search/fetch contract (autocomplete,
+            // citation graph, recommendations, author lookup, type
+            // catalogue). The shared clients live on BibShared.
+            tools.extend(bib_base::bib_extended_registrations(
+                bib_shared.openalex.clone(),
+                bib_shared.crossref.clone(),
+                bib_shared.s2.clone(),
+            ));
         }
 
         if profile.enable_writing {

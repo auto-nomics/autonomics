@@ -50,3 +50,15 @@ pub fn openalex_registrations(client: Arc<OpenAlexClient>) -> Vec<ToolRegistrati
         R::from(autocomplete::OpenAlexAutocompleteTool { client }),
     ]
 }
+
+/// Build [`ToolRegistration`]s for OpenAlex tools whose capabilities are
+/// **not** covered by the [`bib_base::LiteratureGateway`].
+///
+/// The gateway already provides unified `search` and `fetch` for works, so
+/// this function registers only the cross-entity `autocomplete` tool. Use
+/// it alongside the gateway to expose OpenAlex's full surface area without
+/// duplicating search/fetch.
+pub fn openalex_extended_registrations(client: Arc<OpenAlexClient>) -> Vec<ToolRegistration> {
+    use agentik_core::tools::ToolRegistration as R;
+    vec![R::from(autocomplete::OpenAlexAutocompleteTool { client })]
+}

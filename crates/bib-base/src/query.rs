@@ -17,7 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
 
-use bib_types::Article;
+use bib_types::{Article, IdKind, Identifier};
 use bib_types::query::StructuredSearch;
 
 use crate::error::{Error, Result};
@@ -55,11 +55,23 @@ pub trait LiteratureSource: Send + Sync {
     /// Search for articles matching the structured query.
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch>;
 
-    /// Fetch a single article by its native ID.
+    /// Whether this source can handle the given [`IdKind`].
     ///
-    /// Returns `Ok(None)` if the source does not recognise the ID or no
-    /// record is found.
-    async fn fetch(&self, id: &str) -> Result<Option<Article>>;
+    /// During a typed [`LiteratureGateway::fetch`], sources that return
+    /// `false` are skipped entirely — no network request is made. The
+    /// default implementation returns `true` (accepts all kinds);
+    /// override for precision so that, e.g., a DOI is not sent to arXiv.
+    fn supports(&self, _kind: IdKind) -> bool {
+        true
+    }
+
+    /// Fetch a single article by its typed [`Identifier`].
+    ///
+    /// Returns `Ok(None)` when:
+    /// - the source does not support `id.kind` (also gated by
+    ///   [`supports`](Self::supports)), or
+    /// - no record exists for the given value.
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +93,10 @@ impl PubmedSource {
 impl LiteratureSource for PubmedSource {
     fn name(&self) -> &'static str {
         "pubmed"
+    }
+
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(kind, IdKind::Pmid | IdKind::Doi)
     }
 
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
@@ -152,40 +168,38 @@ impl LiteratureSource for PubmedSource {
         })
     }
 
-    async fn fetch(&self, id: &str) -> Result<Option<Article>> {
-        // Determine the PMID: if the ID is numeric it's likely already a
-        // PMID. Otherwise (DOI, etc.) resolve via ESearch.
-        let pmid = if id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty() {
-            id.to_owned()
-        } else {
-            let term = if id.starts_with("10.") {
-                format!("{id}[DOI]")
-            } else {
-                id.to_owned()
-            };
-            let resp = self
-                .client
-                .esearch(&eutils::types::ESearchRequest {
-                    db: "pubmed".into(),
-                    term,
-                    retmax: Some(1),
-                    retstart: None,
-                    sort: None,
-                    usehistory: None,
-                    web_env: None,
-                    query_key: None,
-                    datetype: None,
-                    reldate: None,
-                    mindate: None,
-                    maxdate: None,
-                })
-                .await
-                .map_err(|e| Error::Unknown(format!("ESearch: {e}")))?;
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        // Resolve to a PMID: a Pmid is used directly; a Doi is resolved
+        // via ESearch. Other kinds are not supported by PubMed.
+        let pmid = match id.kind {
+            IdKind::Pmid => id.value.clone(),
+            IdKind::Doi => {
+                let term = format!("{}[DOI]", id.value);
+                let resp = self
+                    .client
+                    .esearch(&eutils::types::ESearchRequest {
+                        db: "pubmed".into(),
+                        term,
+                        retmax: Some(1),
+                        retstart: None,
+                        sort: None,
+                        usehistory: None,
+                        web_env: None,
+                        query_key: None,
+                        datetype: None,
+                        reldate: None,
+                        mindate: None,
+                        maxdate: None,
+                    })
+                    .await
+                    .map_err(|e| Error::Unknown(format!("ESearch: {e}")))?;
 
-            match resp.result.id_list.into_iter().next() {
-                Some(p) => p,
-                None => return Ok(None),
+                match resp.result.id_list.into_iter().next() {
+                    Some(p) => p,
+                    None => return Ok(None),
+                }
             }
+            _ => return Ok(None),
         };
 
         let medline = self
@@ -229,6 +243,10 @@ impl LiteratureSource for ArxivSource {
         "arxiv"
     }
 
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(kind, IdKind::Arxiv)
+    }
+
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let term = arxiv::query::to_arxiv(query)
             .map_err(|e| Error::Unknown(format!("arxiv query translation: {e}")))?;
@@ -249,10 +267,13 @@ impl LiteratureSource for ArxivSource {
         })
     }
 
-    async fn fetch(&self, id: &str) -> Result<Option<Article>> {
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        if id.kind != IdKind::Arxiv {
+            return Ok(None);
+        }
         let resp = self
             .client
-            .fetch_by_id(&arxiv::types::FetchRequest::new(id))
+            .fetch_by_id(&arxiv::types::FetchRequest::new(&id.value))
             .await
             .map_err(|e| Error::Unknown(format!("arxiv fetch: {e}")))?;
 
@@ -353,6 +374,10 @@ impl LiteratureSource for BiorxivSource {
         "biorxiv"
     }
 
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(kind, IdKind::Doi | IdKind::Biorxiv)
+    }
+
     async fn search(&self, _query: &StructuredSearch, _limit: usize) -> Result<SourceBatch> {
         // The bioRxiv public API has no keyword-search endpoint.
         Ok(SourceBatch {
@@ -362,13 +387,11 @@ impl LiteratureSource for BiorxivSource {
         })
     }
 
-    async fn fetch(&self, id: &str) -> Result<Option<Article>> {
-        // Accept either a bare DOI (`10.1101/...`) or a URL.
-        let doi = id
-            .strip_prefix("https://doi.org/")
-            .or_else(|| id.strip_prefix("http://doi.org/"))
-            .or_else(|| id.strip_prefix("doi:"))
-            .unwrap_or(id);
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        let doi = match id.kind {
+            IdKind::Biorxiv | IdKind::Doi => &id.value,
+            _ => return Ok(None),
+        };
 
         // Only handle bioRxiv/medRxiv DOIs.
         if !doi.starts_with(BIORXIV_DOI_PREFIX) {
@@ -507,6 +530,233 @@ fn str_field(v: &serde_json::Value, key: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAlex adapter
+// ---------------------------------------------------------------------------
+
+/// [`LiteratureSource`] backed by the [OpenAlex REST API](https://api.openalex.org).
+///
+/// Maps [`StructuredSearch`] → OpenAlex filter syntax via
+/// [`openalex::query::to_openalex_filter`], calls `/works`, and converts each
+/// [`openalex::types::Work`] into a canonical [`Article`] via
+/// [`openalex::work_to_article`].
+///
+/// The `search` and `fetch` capabilities (works search + get-by-id) are
+/// surfaced through the [`LiteratureGateway`]. OpenAlex features that do not
+/// fit the [`LiteratureSource`] contract (cross-entity autocomplete) are
+/// registered as standalone agent tools via
+/// [`bib_extended_registrations`](crate::bib_extended_registrations).
+pub struct OpenAlexSource {
+    client: Arc<openalex::OpenAlexClient>,
+}
+
+impl OpenAlexSource {
+    pub fn new(client: Arc<openalex::OpenAlexClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl LiteratureSource for OpenAlexSource {
+    fn name(&self) -> &'static str {
+        "openalex"
+    }
+
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(kind, IdKind::OpenAlex | IdKind::Doi | IdKind::Pmid)
+    }
+
+    async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
+        let filter = openalex::query::to_openalex_filter(query)
+            .map_err(|e| Error::Unknown(format!("openalex query translation: {e}")))?;
+        let params = openalex::ListParams::new()
+            .with_filter(&filter)
+            .with_per_page((limit as u32).clamp(1, 200));
+        let resp = self
+            .client
+            .list_works(&params)
+            .await
+            .map_err(|e| Error::Unknown(format!("openalex search: {e}")))?;
+        let total = resp.meta.count as usize;
+        let articles: Vec<Article> = resp.results.iter().map(openalex::work_to_article).collect();
+        Ok(SourceBatch {
+            source: self.name().into(),
+            total,
+            articles,
+        })
+    }
+
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        // Translate the typed identifier into an OpenAlex API ID string.
+        let api_id = match id.kind {
+            IdKind::OpenAlex => id.value.clone(),
+            IdKind::Doi => format!("doi:{}", id.value),
+            IdKind::Pmid => format!("pmid:{}", id.value),
+            _ => return Ok(None),
+        };
+        match self.client.get_work(&api_id).await {
+            Ok(work) => Ok(Some(openalex::work_to_article(&work))),
+            // OpenAlex signals unknown IDs with a 404 → NotFound.
+            Err(openalex::OpenAlexError::NotFound(_)) => Ok(None),
+            Err(e) => Err(Error::Unknown(format!("openalex fetch: {e}"))),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Crossref adapter
+// ---------------------------------------------------------------------------
+
+/// [`LiteratureSource`] backed by the [Crossref REST API](https://api.crossref.org).
+///
+/// Maps [`StructuredSearch`] → a [`crossref::client::WorksQuery`] via
+/// [`crossref::query::to_crossref_works_query`], calls `GET /works`, and
+/// converts each [`crossref::types::Work`] into a canonical [`Article`] via
+/// [`crossref::work_to_article`]. `fetch` retrieves a single work by DOI.
+///
+/// Crossref features that do not fit the [`LiteratureSource`] contract
+/// (the type catalogue) are registered as standalone agent tools via
+/// [`bib_extended_registrations`](crate::bib_extended_registrations).
+pub struct CrossrefSource {
+    client: Arc<crossref::CrossrefClient>,
+}
+
+impl CrossrefSource {
+    pub fn new(client: Arc<crossref::CrossrefClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl LiteratureSource for CrossrefSource {
+    fn name(&self) -> &'static str {
+        "crossref"
+    }
+
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(kind, IdKind::Doi)
+    }
+
+    async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
+        let q = crossref::query::to_crossref_works_query(query)
+            .map_err(|e| Error::Unknown(format!("crossref query translation: {e}")))?
+            .with_rows((limit as u32).clamp(1, 100));
+        let resp = self
+            .client
+            .works(&q)
+            .await
+            .map_err(|e| Error::Unknown(format!("crossref search: {e}")))?;
+        let total = resp.message.total_results as usize;
+        let articles: Vec<Article> = resp
+            .message
+            .items
+            .iter()
+            .map(crossref::work_to_article)
+            .collect();
+        Ok(SourceBatch {
+            source: self.name().into(),
+            total,
+            articles,
+        })
+    }
+
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        if id.kind != IdKind::Doi {
+            return Ok(None);
+        }
+        match self.client.works_by_doi(&id.value).await {
+            Ok(resp) => Ok(resp.message.map(|w| crossref::work_to_article(&w))),
+            // Crossref signals unknown DOIs with HTTP 404.
+            Err(crossref::CrossrefError::Status { status: 404, .. }) => Ok(None),
+            Err(e) => Err(Error::Unknown(format!("crossref fetch: {e}"))),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Scholar adapter
+// ---------------------------------------------------------------------------
+
+/// [`LiteratureSource`] backed by the [Semantic Scholar Graph API](
+/// https://api.semanticscholar.org).
+///
+/// Maps [`StructuredSearch`] → an S2 query + filter set via
+/// [`semantic_scholar::query::to_s2`], calls `/paper/search`, and converts
+/// each [`semantic_scholar::Paper`] into a canonical [`Article`] via
+/// [`semantic_scholar::paper_to_article`].
+///
+/// S2 features that do not fit the [`LiteratureSource`] contract (citation
+/// graph traversal, recommendations, author lookup) are registered as
+/// standalone agent tools via
+/// [`bib_extended_registrations`](crate::bib_extended_registrations).
+pub struct S2Source {
+    client: Arc<semantic_scholar::S2Client>,
+}
+
+impl S2Source {
+    pub fn new(client: Arc<semantic_scholar::S2Client>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl LiteratureSource for S2Source {
+    fn name(&self) -> &'static str {
+        "semantic_scholar"
+    }
+
+    fn supports(&self, kind: IdKind) -> bool {
+        matches!(
+            kind,
+            IdKind::S2 | IdKind::Doi | IdKind::Arxiv | IdKind::Pmid
+        )
+    }
+
+    async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
+        let parts = semantic_scholar::query::to_s2(query)
+            .map_err(|e| Error::Unknown(format!("s2 query translation: {e}")))?;
+        let resp = self
+            .client
+            .search_paper_filtered(
+                &parts.query,
+                (limit as u32).clamp(1, 100),
+                0,
+                &parts.filter,
+                None,
+            )
+            .await
+            .map_err(|e| Error::Unknown(format!("s2 search: {e}")))?;
+        let total = resp.total.max(0) as usize;
+        let articles: Vec<Article> = resp
+            .data
+            .iter()
+            .map(semantic_scholar::paper_to_article)
+            .collect();
+        Ok(SourceBatch {
+            source: self.name().into(),
+            total,
+            articles,
+        })
+    }
+
+    async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
+        // S2 accepts prefixed IDs for cross-system lookups.
+        let api_id = match id.kind {
+            IdKind::S2 => id.value.clone(),
+            IdKind::Doi => format!("DOI:{}", id.value),
+            IdKind::Arxiv => format!("ARXIV:{}", id.value),
+            IdKind::Pmid => format!("PMID:{}", id.value),
+            _ => return Ok(None),
+        };
+        match self.client.get_paper(&api_id, None).await {
+            Ok(paper) => Ok(Some(semantic_scholar::paper_to_article(&paper))),
+            // S2 signals unknown paper IDs with HTTP 404.
+            Err(semantic_scholar::S2Error::Status { status: 404, .. }) => Ok(None),
+            Err(e) => Err(Error::Unknown(format!("s2 fetch: {e}"))),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LiteratureGateway — multi-source dispatcher
 // ---------------------------------------------------------------------------
 
@@ -575,6 +825,26 @@ impl LiteratureGateway {
             .with_source(Arc::new(ArxivSource::new(arxiv)))
             .with_source(Arc::new(BiorxivSource::with_client(http)))
     }
+
+    /// Like [`with_shared_clients`](Self::with_shared_clients) but also
+    /// loads the OpenAlex, Crossref, and Semantic Scholar sources.
+    ///
+    /// This is the constructor used by [`BibShared`](crate::BibShared) when
+    /// all six built-in sources are available.
+    pub fn with_all_shared_clients(
+        eutils: Arc<eutils::EutilsClient>,
+        arxiv: Arc<arxiv::ArxivClient>,
+        http: Arc<reqwest::Client>,
+        openalex_client: Arc<openalex::OpenAlexClient>,
+        crossref_client: Arc<crossref::CrossrefClient>,
+        s2_client: Arc<semantic_scholar::S2Client>,
+    ) -> Self {
+        Self::with_shared_clients(eutils, arxiv, http)
+            .with_source(Arc::new(OpenAlexSource::new(openalex_client)))
+            .with_source(Arc::new(CrossrefSource::new(crossref_client)))
+            .with_source(Arc::new(S2Source::new(s2_client)))
+    }
+
 
     /// Register a source.
     pub fn with_source(mut self, source: Arc<dyn LiteratureSource>) -> Self {
@@ -669,12 +939,16 @@ impl LiteratureGateway {
             .collect()
     }
 
-    /// Fetch a single article by ID, trying each source in order.
+    /// Fetch a single article by typed [`Identifier`].
     ///
-    /// Returns the first hit. To try a specific source, use
-    /// [`Self::fetch_from`].
-    pub async fn fetch(&self, id: &str) -> Option<(String, Article)> {
+    /// Only sources that [`support`](LiteratureSource::supports) the
+    /// identifier's [`IdKind`] are queried, in registration order. The
+    /// first hit wins. To target a specific source, use [`Self::fetch_from`].
+    pub async fn fetch(&self, id: &Identifier) -> Option<(String, Article)> {
         for source in &self.sources {
+            if !source.supports(id.kind) {
+                continue;
+            }
             match source.fetch(id).await {
                 Ok(Some(article)) => return Some((source.name().to_owned(), article)),
                 Ok(None) => continue,
@@ -692,7 +966,11 @@ impl LiteratureGateway {
     }
 
     /// Fetch from a specific source by name.
-    pub async fn fetch_from(&self, source_name: &str, id: &str) -> Result<Option<Article>> {
+    pub async fn fetch_from(
+        &self,
+        source_name: &str,
+        id: &Identifier,
+    ) -> Result<Option<Article>> {
         let source = self
             .sources
             .iter()

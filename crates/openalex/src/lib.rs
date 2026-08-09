@@ -64,4 +64,5 @@ pub use client::{ListParams, OpenAlexClient};
 pub use convert::{work_to_article, works_to_articles};
 pub use error::OpenAlexError;
 pub use tools::openalex_registrations;
+pub use tools::openalex_extended_registrations;
 pub use types::*;

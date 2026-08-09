@@ -51,3 +51,13 @@ pub fn crossref_registrations(client: Arc<CrossrefClient>) -> Vec<ToolRegistrati
         R::from(types::CrossrefTypesTool { client }),
     ]
 }
+
+/// Build [`ToolRegistration`]s for Crossref tools whose capabilities are
+/// **not** covered by the [`bib_base::LiteratureGateway`].
+///
+/// The gateway already provides unified `search` and `fetch` (by DOI), so
+/// this function registers only the `types` catalogue tool.
+pub fn crossref_extended_registrations(client: Arc<CrossrefClient>) -> Vec<ToolRegistration> {
+    use agentik_core::tools::ToolRegistration as R;
+    vec![R::from(types::CrossrefTypesTool { client })]
+}

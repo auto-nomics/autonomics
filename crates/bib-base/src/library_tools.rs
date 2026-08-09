@@ -23,26 +23,39 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
-use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind};
+use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, Identifier};
 use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
 use crate::collections::CollectionAddOutcome;
 use crate::oa_fetch::try_fetch_fulltext_with;
 use crate::query::LiteratureGateway;
-use crate::tools::auto_fetch;
+use crate::tools::parse_id_kind;
 
 // ===========================================================================
 // bib_save — fetch from external source and store in local library (batch)
 // ===========================================================================
 
+/// A single typed article identifier for `bib_save`.
+#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+pub struct ArticleIdInput {
+    #[schemars(description = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\"")]
+    pub id_type: String,
+    #[schemars(description = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"W2741809807\")")]
+    pub id: String,
+}
+
 #[tool(
     name = "bib_save",
     description = "Save one or more articles to the local library by fetching their \
-                  metadata from the appropriate external source (PubMed, arXiv). \
+                  metadata from external sources (PubMed, arXiv, OpenAlex, Crossref, \
+                  Semantic Scholar, bioRxiv). \
                   \
-                  Pass a list of IDs — each is fetched concurrently and stored. \
-                  Articles already in the library (matched by DOI or PMID) are \
+                  Each article is identified by a typed `{ id_type, id }` pair so the \
+                  gateway knows exactly which sources to query — no format guessing. \
+                  Articles are fetched concurrently and stored. \
+                  \
+                  Articles already in the library (matched by identifier) are \
                   returned as cached without re-fetching. \
                   \
                   After saving the metadata, each newly stored article is \
@@ -52,17 +65,16 @@ use crate::tools::auto_fetch;
                   `bib_get_article` can return it immediately. Set \
                   `fetch_fulltext=false` to skip this step. \
                   \
-                  Use this after `lit_search` or `lit_fetch` to persist articles you \
-                  want to keep. Pass the same IDs you found in search results. \
-                  \
                   **Examples**: \
-                  • ids=[\"37658030\"] — save a single PMID \
-                  • ids=[\"37658030\", \"10.1038/s41586-023-06236-2\", \"2401.00001\"] — batch"
+                  • ids=[{id_type:\"pmid\", id:\"37658030\"}] — save a single PMID \
+                  • ids=[{id_type:\"doi\", id:\"10.1038/...\"}, {id_type:\"arxiv\", id:\"2401.00001\"}] — batch"
 )]
 pub struct BibSaveInput {
-    #[desc = "One or more article identifiers: PMIDs, DOIs, or arXiv IDs (same IDs you got from lit_search/lit_fetch)"]
-    pub ids: Vec<String>,
-    #[desc = "Force a specific source for ALL ids: \"pubmed\" or \"arxiv\". Default: auto-detect each ID from its format."]
+    #[desc = "One or more typed article identifiers (id_type + id). Use the same identifiers \
+             you found in lit_search/lit_fetch results."]
+    pub ids: Vec<ArticleIdInput>,
+    #[desc = "Force a specific source for ALL ids (e.g. \"pubmed\", \"crossref\"). \
+             Default: auto-route each id to compatible sources."]
     pub source: Option<String>,
     #[desc = "Attempt to download open-access full text from Europe PMC after saving. Default: true"]
     pub fetch_fulltext: Option<bool>,
@@ -113,11 +125,23 @@ impl ToolFunction for BibSaveTool {
 
         let want_fulltext = input.fetch_fulltext.unwrap_or(true);
 
-        // Process each ID concurrently.
-        let futures: Vec<_> = input
-            .ids
+        // Parse each typed id into an Identifier, collecting errors.
+        let mut identifiers: Vec<(String, Identifier)> = Vec::new();
+        for entry in &input.ids {
+            let kind = parse_id_kind(&entry.id_type).ok_or_else(|| ToolError::ExecutionFailed {
+                source: format!(
+                    "unknown id_type '{}': expected one of doi, pmid, arxiv, openalex, s2, biorxiv",
+                    entry.id_type
+                )
+                .into(),
+            })?;
+            identifiers.push((entry.id.clone(), Identifier::new(kind, entry.id.trim())));
+        }
+
+        // Process each identifier concurrently.
+        let futures: Vec<_> = identifiers
             .iter()
-            .map(|id| self.save_one(id.trim(), input.source.as_deref(), want_fulltext))
+            .map(|(raw, id)| self.save_one(raw, id, input.source.as_deref(), want_fulltext))
             .collect();
         let results = futures::future::join_all(futures).await;
 
@@ -148,52 +172,55 @@ impl BibSaveTool {
     /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
     async fn save_one(
         &self,
-        id: &str,
+        raw_id: &str,
+        identifier: &Identifier,
         source_override: Option<&str>,
         want_fulltext: bool,
     ) -> SaveResult {
         // 1. Check if already in local library.
-        if let Some(kind) = detect_id_kind(id) {
-            if let Ok(Some(existing)) = self.bib.find_by_identifier(kind, id).await {
-                let doi = existing.doi().map(str::to_owned);
-                let pmid = existing.pmid().map(str::to_owned);
+        if let Ok(Some(existing)) = self
+            .bib
+            .find_by_identifier(identifier.kind, &identifier.value)
+            .await
+        {
+            let doi = existing.doi().map(str::to_owned);
+            let pmid = existing.pmid().map(str::to_owned);
 
-                // If cached and already has full text, report it.
-                let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
+            // If cached and already has full text, report it.
+            let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
 
-                return SaveResult {
-                    id: id.into(),
-                    saved: true,
-                    cached: true,
-                    article_id: Some(existing.id),
-                    source: None,
-                    title: Some(existing.title),
-                    doi,
-                    pmid,
-                    year: existing.year,
-                    fulltext_fetched: has_ft,
-                    error: None,
-                };
-            }
+            return SaveResult {
+                id: raw_id.into(),
+                saved: true,
+                cached: true,
+                article_id: Some(existing.id),
+                source: None,
+                title: Some(existing.title),
+                doi,
+                pmid,
+                year: existing.year,
+                fulltext_fetched: has_ft,
+                error: None,
+            };
         }
 
         // 2. Fetch from external source.
         let fetched = if let Some(source) = source_override {
             self.gateway
-                .fetch_from(source, id)
+                .fetch_from(source, identifier)
                 .await
                 .ok()
                 .flatten()
                 .map(|article| (source.into(), article))
         } else {
-            auto_fetch(&self.gateway, id).await
+            self.gateway.fetch(identifier).await
         };
 
         let (source_name, article) = match fetched {
             Some(x) => x,
             None => {
                 return SaveResult {
-                    id: id.into(),
+                    id: raw_id.into(),
                     saved: false,
                     cached: false,
                     article_id: None,
@@ -203,7 +230,11 @@ impl BibSaveTool {
                     pmid: None,
                     year: None,
                     fulltext_fetched: false,
-                    error: Some(format!("Article '{id}' not found in any source")),
+                    error: Some(format!(
+                        "Article '{}:{}' not found in any compatible source",
+                        identifier.kind.as_str(),
+                        raw_id
+                    )),
                 };
             }
         };
@@ -225,7 +256,7 @@ impl BibSaveTool {
                 };
 
                 SaveResult {
-                    id: id.into(),
+                    id: raw_id.into(),
                     saved: true,
                     cached: false,
                     article_id: Some(article_id),
@@ -239,7 +270,7 @@ impl BibSaveTool {
                 }
             }
             Err(e) => SaveResult {
-                id: id.into(),
+                id: raw_id.into(),
                 saved: false,
                 cached: false,
                 article_id: None,
@@ -1244,20 +1275,39 @@ pub fn bib_all_registrations(
     tools
 }
 
+/// Build [`ToolRegistration`]s for the extended literature tools whose
+/// capabilities are **not** covered by the [`LiteratureGateway`].
+///
+/// When [`BibShared`](crate::BibShared) is constructed, three additional
+/// sources (OpenAlex, Crossref, Semantic Scholar) are loaded into the
+/// gateway for unified `search`/`fetch`. Each of these APIs, however, also
+/// offers source-specific features that fall outside the
+/// [`LiteratureSource`](crate::LiteratureSource) contract:
+///
+/// | Source            | Extended tools                                   |
+/// |-------------------|--------------------------------------------------|
+/// | OpenAlex          | `openalex_autocomplete` (cross-entity typeahead) |
+/// | Crossref          | `crossref_types` (work-type catalogue)           |
+/// | Semantic Scholar  | `s2_citations`, `s2_references`,                 |
+/// |                   | `s2_recommendations`, `s2_author`                |
+///
+/// Pass the shared clients from [`BibShared`](crate::BibShared) so every
+/// agent reuses the same connection pools.
+pub fn bib_extended_registrations(
+    openalex_client: Arc<openalex::OpenAlexClient>,
+    crossref_client: Arc<crossref::CrossrefClient>,
+    s2_client: Arc<semantic_scholar::S2Client>,
+) -> Vec<ToolRegistration> {
+    let mut tools = Vec::new();
+    tools.extend(openalex::openalex_extended_registrations(openalex_client));
+    tools.extend(crossref::crossref_extended_registrations(crossref_client));
+    tools.extend(semantic_scholar::s2_extended_registrations(s2_client));
+    tools
+}
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-/// Detect the [`IdKind`] from an ID string format.
-fn detect_id_kind(id: &str) -> Option<IdKind> {
-    if id.starts_with("10.") {
-        Some(IdKind::Doi)
-    } else if id.chars().all(|c| c.is_ascii_digit()) && !id.is_empty() {
-        Some(IdKind::Pmid)
-    } else {
-        None
-    }
-}
 
 /// Parse a role string, defaulting to [`ArticleRole::Referenced`].
 fn parse_role(s: Option<&str>) -> ArticleRole {

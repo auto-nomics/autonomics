@@ -35,9 +35,17 @@ use dag_core::registry::{NodeCtx, NodeFactory};
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Build an [`OpenAlexClient`] from an optional API key.
-fn client_from_key(api_key: &Option<String>) -> OpenAlexClient {
-    OpenAlexClient::new(api_key.as_deref())
+/// Build an [`OpenAlexClient`] using the API key from the `OPENALEX_API_KEY`
+/// environment variable (if set and non-empty).
+///
+/// OpenAlex's API is free; the optional premium key only raises the daily
+/// rate-limit budget, so a missing/unset variable falls back to the
+/// anonymous tier rather than erroring.
+fn client_from_env() -> OpenAlexClient {
+    let key = std::env::var("OPENALEX_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    OpenAlexClient::new(key.as_deref())
 }
 
 /// Turn a `RecordBatch` into a `DataFrame` via a fresh isolated session.
@@ -87,9 +95,6 @@ pub struct OpenAlexWorksSpec {
     /// Hard cap on total rows when `fetch_all=true`. Default 10 000.
     #[serde(default)]
     pub max_rows: Option<usize>,
-    /// Optional OpenAlex API key for higher rate limits.
-    #[serde(default)]
-    pub api_key: Option<String>,
     /// Comma-separated list of fields to request (reduces payload size).
     /// Does NOT affect output columns — those are always the schema below.
     #[serde(default)]
@@ -174,7 +179,7 @@ impl DagNode for OpenAlexWorksNode {
         _inputs: &[dag_core::dag::NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let client = client_from_key(&self.spec.api_key);
+        let client = client_from_env();
         let max_rows = self.spec.max_rows.unwrap_or(10_000);
 
         let works: Vec<Work> = if self.spec.fetch_all.unwrap_or(false) {
@@ -356,9 +361,6 @@ pub struct OpenAlexGroupBySpec {
     /// Optional search query.
     #[serde(default)]
     pub search: Option<String>,
-    /// Optional OpenAlex API key.
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 /// Source node emitting an OpenAlex group-by aggregation table.
@@ -438,7 +440,7 @@ impl DagNode for OpenAlexGroupByNode {
         _inputs: &[dag_core::dag::NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let client = client_from_key(&self.spec.api_key);
+        let client = client_from_env();
         let mut params = ListParams::new().with_group_by(&self.spec.group_by);
         if let Some(ref f) = self.spec.filter {
             params = params.with_filter(f);

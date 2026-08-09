@@ -34,9 +34,11 @@ pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdo
 pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
+pub use library_tools::bib_extended_registrations;
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
 pub use query::{
-    ArxivSource, BiorxivSource, LiteratureGateway, LiteratureSource, PubmedSource, SourceBatch,
+    ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource, OpenAlexSource,
+    PubmedSource, S2Source, SourceBatch,
 };
 pub use shared::BibShared;
 
