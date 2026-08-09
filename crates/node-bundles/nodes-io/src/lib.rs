@@ -4,6 +4,7 @@ pub mod sink_file;
 pub mod sink_iceberg;
 pub mod source_file;
 pub mod source_iceberg;
+pub mod source_openalex;
 pub mod source_opentargets;
 
 use dag_core::{NodePlugin, NodeRegistry};
@@ -18,5 +19,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(sink_iceberg::IcebergSinkNodeFactory {}));
         registry.register(Box::new(source_opentargets::OpentargetsAssociationsNodeFactory {}));
         registry.register(Box::new(source_opentargets::OpentargetsSearchNodeFactory {}));
+        registry.register(Box::new(source_openalex::OpenAlexWorksNodeFactory {}));
+        registry.register(Box::new(source_openalex::OpenAlexGroupByNodeFactory {}));
     }
 }

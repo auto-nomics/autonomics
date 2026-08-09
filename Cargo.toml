@@ -63,6 +63,7 @@ members = [
   "crates/embase",
   "crates/biorxiv",
   "crates/europepmc",
+  "crates/openalex",
   "bio_crates/susie",
   "bio_crates/evalue",
   "bio_crates/mrpresso",
