@@ -738,6 +738,19 @@ impl App {
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                 }
             },
+            crate::app_event::AppEvent::DataOpCompleted { op, resource, result } => {
+                match &result {
+                    Ok(msg) => tracing::info!(
+                        op = %op, resource = %resource,
+                        "data operation completed: {msg}"
+                    ),
+                    Err(e) => tracing::warn!(
+                        op = %op, resource = %resource,
+                        "data operation failed: {e}"
+                    ),
+                }
+                self.dirty = true;
+            },
         }
     }
 
@@ -2072,7 +2085,107 @@ impl App {
                     self.state.display_settings.collapse_tool_results,
                 );
             }
+            CommandAction::IngestData => {
+                self.spawn_data_op("ingest");
+            }
+            CommandAction::RestoreData => {
+                self.spawn_data_op("restore");
+            }
+            CommandAction::ArchiveData => {
+                self.spawn_data_op("archive");
+            }
         }
+    }
+
+    /// Spawn a background data operation (ingest/restore/archive) for all
+    /// registered resources that have the relevant spec. Results are
+    /// delivered via `AppEvent::DataOpCompleted`.
+    fn spawn_data_op(&self, op: &str) {
+        let Some(host) = self.host.as_ref() else {
+            tracing::warn!("data op '{op}': runtime host not available");
+            return;
+        };
+        let infra = host.infra();
+        let catalog = infra.resources.clone();
+        let datalake = infra.datalake.clone();
+        let tx = self.app_event_tx.clone();
+        let op_owned = op.to_string();
+
+        self.runtime_handle.spawn(async move {
+            match op_owned.as_str() {
+                "ingest" => {
+                    // Find all IcebergTable resources with an ingestion_spec.
+                    let targets: Vec<String> = catalog
+                        .list()
+                        .into_iter()
+                        .filter(|e| e.ingestion_spec.is_some())
+                        .map(|e| e.name)
+                        .collect();
+
+                    if targets.is_empty() {
+                        let _ = tx.send(crate::app_event::AppEvent::DataOpCompleted {
+                            op: "ingest".into(),
+                            resource: "(none)".into(),
+                            result: Err("No resources with ingestion_spec registered".into()),
+                        });
+                        return;
+                    }
+
+                    let executor = runtime::ingestion::IngestionExecutor::new(
+                        catalog.clone(),
+                        datalake.clone(),
+                    );
+                    for name in &targets {
+                        tracing::info!("ingesting '{name}'…");
+                        let result = executor.ingest(name).await;
+                        let msg = match &result {
+                            Ok(o) if o.skipped => format!("skipped (already has data), {}ms", o.duration_ms),
+                            Ok(o) => format!(
+                                "{} rows, {} files, {}ms",
+                                o.rows_written, o.files_processed, o.duration_ms
+                            ),
+                            Err(e) => e.to_string(),
+                        };
+                        let _ = tx.send(crate::app_event::AppEvent::DataOpCompleted {
+                            op: "ingest".into(),
+                            resource: name.clone(),
+                            result: result.map(|_| msg).map_err(|e| e.to_string()),
+                        });
+                    }
+                }
+                "restore" | "archive" => {
+                    let archivable = catalog.list_archivable();
+                    if archivable.is_empty() {
+                        let _ = tx.send(crate::app_event::AppEvent::DataOpCompleted {
+                            op: op_owned.clone(),
+                            resource: "(none)".into(),
+                            result: Err("No resources with archive_spec registered".into()),
+                        });
+                        return;
+                    }
+                    for res in &archivable {
+                        let result = if op_owned == "restore" {
+                            catalog.restore(&res.name).await
+                        } else {
+                            catalog.archive(&res.name).await
+                        };
+                        let msg = match &result {
+                            Ok(o) => format!(
+                                "{} files, {} bytes, {}ms",
+                                o.files_transferred, o.size_bytes, o.duration_ms
+                            ),
+                            Err(e) => e.to_string(),
+                        };
+                        let _ = tx.send(crate::app_event::AppEvent::DataOpCompleted {
+                            op: op_owned.clone(),
+                            resource: res.name.clone(),
+                            result: result.map(|_| msg).map_err(|e| e.to_string()),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        });
     }
 
     /// Persist a display toggle to the `settings` table.
