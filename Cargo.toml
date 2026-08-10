@@ -24,6 +24,7 @@ members = [
   "crates/node-bundles/nodes-ldsc",
   "crates/node-bundles/nodes-genetics",
   "crates/node-bundles/nodes-mice",
+  "crates/node-bundles/nodes-grf",
   "apps/tui",
   "crates/opengwas",
   "crates/eutils",

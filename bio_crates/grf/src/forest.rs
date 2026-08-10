@@ -818,7 +818,7 @@ impl ForestBlob {
             }
         };
         let preds = unsafe { sys::Predictions::from_raw(raw) }
-            .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
+            .ok_or_else(|| GrfError::Sys(sys::GrfError::Cpp(sys::check_error().to_string())))?;
         Ok(Predictions {
             values: preds.values(),
             variance: preds.variance(),

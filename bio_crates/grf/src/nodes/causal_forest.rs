@@ -92,6 +92,32 @@ impl CausalForestOutput {
     }
 }
 
+impl CausalForestOutput {
+    /// Reassemble a causal forest output from serialized pieces. Used by the
+    /// DAG node layer to rebuild the output downstream of a trainer node from
+    /// the forest-exchange batch. All `y_orig`/`w_orig` fields are private, so
+    /// this is the only public construction path outside this crate.
+    pub fn from_parts(
+        forest: ForestBlob,
+        y_hat: Vec<f64>,
+        w_hat: Vec<f64>,
+        oob_predictions: Option<crate::forest::OobPredictions>,
+        stats: ForestStats,
+        y_orig: Vec<f64>,
+        w_orig: Vec<f64>,
+    ) -> Self {
+        Self {
+            forest,
+            y_hat,
+            w_hat,
+            oob_predictions,
+            stats,
+            y_orig: Some(y_orig),
+            w_orig: Some(w_orig),
+        }
+    }
+}
+
 pub struct CausalForestFactory;
 
 impl CausalForestFactory {

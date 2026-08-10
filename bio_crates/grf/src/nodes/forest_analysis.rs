@@ -169,17 +169,9 @@ impl GetTreeFactory {
 
 impl GetTreeSpec {
     pub fn extract(&self, forest: &ForestBlob) -> Result<GetTreeOutput> {
-        // grf R's get_tree produces an R list of nodes; here we return the
-        // serialized tree blob for the requested index by slicing the
-        // overall forest blob. This is a fast path — deserialize would
-        // be more expensive.
-        // For correctness, we instead expose a per-tree serialize call:
-        // grf-sys exposes the whole forest only. To support per-tree
-        // extraction we need a new C ABI entry; defer that and return
-        // the whole forest blob for now with a marker.
-        Err(GrfError::Missing(
-            "per-tree extraction requires grf-sys extension; use serialize() \
-             and deserialize with a single-tree shim (TODO)".into()))
+        let serialized = forest.inner().get_tree(self.index)
+            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+        Ok(GetTreeOutput { serialized, index: self.index })
     }
 }
 
@@ -213,27 +205,27 @@ impl MergeForestsSpec {
     pub fn merge(&self) -> Result<MergeForestsOutput> {
         let kind = ForestKind::from_str(&self.kind)
             .ok_or_else(|| GrfError::Shape(format!("unknown forest kind: {}", self.kind)))?;
-        let _ = kind;  // used to drive dispatch on the merged blob below
-        // Concatenate all the trees across forests into a single blob.
-        // grf's Forest::merge is in the C++ core but not yet exposed via
-        // grf-sys. For now, deserialize each, then re-serialize the
-        // concatenation (lose the split, but byte-compatible with a single
-        // trained forest's blob layout).
-        // TODO: add grf_forest_merge C ABI entry.
         if self.forests.is_empty() {
             return Err(GrfError::Missing("empty forests list".into()));
         }
-        // Concatenate serialized blobs (simple version: concatenate the
-        // raw bytes; grf core's deserialize handles arbitrary blobs but
-        // only the first forest's trees. Need the merge C ABI to do this
-        // properly.)
-        let mut combined = Vec::new();
-        for f in &self.forests {
-            combined.extend_from_slice(f);
+        // Deserialize each input blob into an owned grf-sys Forest, then merge
+        // the whole set via the C ABI (concatenates the trees). OOB is dropped.
+        let mut inner: Vec<sys::Forest> = Vec::with_capacity(self.forests.len());
+        for bytes in &self.forests {
+            inner.push(sys::Forest::deserialize(bytes).map_err(GrfError::from)?);
         }
-        Err(GrfError::Missing(
-            "merge_forests requires grf-sys Forest::merge extension; \
-             concat-blob is a placeholder".into()))
+        let refs: Vec<&sys::Forest> = inner.iter().collect();
+        let merged = sys::Forest::merge_forests(&refs)
+            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+        let forest = ForestBlob::from_sys(merged, kind, self.n_features);
+        let stats = ForestStats {
+            kind,
+            num_trees: forest.num_trees(),
+            n_features: self.n_features,
+            pred_length: 1,
+            has_oob_predictions: false,
+        };
+        Ok(MergeForestsOutput { forest, stats })
     }
 }
 

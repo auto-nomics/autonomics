@@ -60,6 +60,12 @@ struct grf_forest_t {
     size_t num_classes = 0;                 // probability forest
     size_t num_failures = 0;                // survival forest
     int survival_prediction_type = 0;       // survival forest
+    // Survival forest: the failure-time grid the outcome was relabeled to,
+    // and the column index of the censor indicator in the training data.
+    // Stored so grf_predict can relabel new data identically and set the
+    // censor index (Data::is_failure requires it, else bad_optional_access).
+    std::vector<double> failure_times;
+    size_t censor_index = 0;
     size_t num_outcomes = 0;                // multi_regression, multi_causal, lm
     size_t num_treatments = 0;              // multi_causal, lm
 };
@@ -324,6 +330,16 @@ uint8_t* grf_forest_serialize(const grf_forest_t* forest, size_t* out_len);
 /// Deserialize a forest from a byte buffer. Returns NULL on failure.
 /// The kind tag stored in the buffer is checked against the header.
 grf_forest_t* grf_forest_deserialize(const uint8_t* buf, size_t len);
+
+/// Serialize a single tree (index-th) of a forest into a fresh byte buffer.
+/// `*out_len` receives the buffer length; the caller owns it and must
+/// free(). Returns NULL if index is out of range or on failure.
+uint8_t* grf_forest_get_tree(const grf_forest_t* forest, size_t index, size_t* out_len);
+
+/// Merge N forests into one (concatenate their trees). `forests` is an array
+/// of `n` handles; all must share the same kind, ci_group_size and
+/// num_variables. OOB predictions are dropped. Returns NULL on failure.
+grf_forest_t* grf_forest_merge(const grf_forest_t* const* forests, size_t n);
 
 /* ─────────────────────────── analysis tools ─────────────────────────── */
 
