@@ -360,6 +360,21 @@ struct AddDataArgs {
     /// CSV has no header row.
     #[arg(long)]
     no_header: bool,
+
+    /// Metadata key=value pair (repeat for multiple, e.g. --metadata source=Zenodo --metadata n_snps=1187349).
+    #[arg(long, value_parser = parse_key_value)]
+    metadata: Vec<(String, String)>,
+
+    /// Tag (repeat for multiple, e.g. --tag ld_score --tag reference_panel).
+    #[arg(long)]
+    tag: Vec<String>,
+}
+
+/// Parse `key=value` into a tuple for `--metadata`.
+fn parse_key_value(s: &str) -> color_eyre::Result<(String, String)> {
+    s.split_once('=')
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .ok_or_else(|| color_eyre::eyre::eyre!("expected key=value, got '{s}'"))
 }
 
 /// Arguments for `data remove`.
@@ -493,13 +508,25 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
             }
 
             // Register the target IcebergTable entry.
-            let entry = ResourceEntry::new(
+            let mut entry_builder = ResourceEntry::new(
                 a.name.clone(),
                 ResourceKind::IcebergTable,
                 a.description.as_deref().unwrap_or(""),
                 ResourceAddress::iceberg(&a.schema, &a.table),
             )
             .with_ingestion(spec);
+
+            // Apply optional metadata + tags for self-describing entries.
+            if !a.metadata.is_empty() {
+                entry_builder = entry_builder.with_metadata(
+                    a.metadata.iter().cloned().collect(),
+                );
+            }
+            if !a.tag.is_empty() {
+                entry_builder = entry_builder.with_tags(a.tag.clone());
+            }
+
+            let entry = entry_builder;
 
             catalog.register(entry)?;
             catalog.persist().await;
@@ -511,6 +538,15 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 println!("  partition: {}", a.partition.join(", "));
             }
             println!("  mode: {}", a.mode);
+            if !a.metadata.is_empty() {
+                println!("  metadata:");
+                for (k, v) in &a.metadata {
+                    println!("    {k} = {v}");
+                }
+            }
+            if !a.tag.is_empty() {
+                println!("  tags: {}", a.tag.join(", "));
+            }
             if let Some(aspec) = &archive_spec {
                 println!("  archive: {}:{}", aspec.remote, aspec.remote_path);
             }
@@ -672,6 +708,7 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 }
             }
             println!("\nDone: {ok} ok, {fail} failed.");
+            catalog.persist().await;
         }
 
         DataAction::List => {
