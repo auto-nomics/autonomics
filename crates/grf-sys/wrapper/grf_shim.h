@@ -54,6 +54,14 @@ struct grf_forest_t {
     std::unique_ptr<grf::Forest> forest;
     std::vector<double> oob_predictions;
     size_t oob_pred_length = 0;
+    // Predictor parameters (stored at training time so grf_predict can
+    // reconstruct the correct ForestPredictor for this forest type).
+    std::vector<double> quantiles;          // quantile forest
+    size_t num_classes = 0;                 // probability forest
+    size_t num_failures = 0;                // survival forest
+    int survival_prediction_type = 0;       // survival forest
+    size_t num_outcomes = 0;                // multi_regression, multi_causal, lm
+    size_t num_treatments = 0;              // multi_causal, lm
 };
 struct grf_predictions_t {
     std::vector<double> values;

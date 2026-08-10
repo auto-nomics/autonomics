@@ -90,6 +90,9 @@ impl Default for TrainOptions {
     fn default() -> Self {
         // IMPORTANT: must match grf::ForestOptions invariants. In particular
         // `ci_group_size >= 1` is required (ForestOptions.cpp divides by it).
+        // `legacy_seed = true` matches grf R's default behaviour
+        // (`legacy.seed = !is.null(seed)`), which keeps the historical
+        // tree-seed RNG sequence compatible with older grf releases.
         Self {
             num_trees: 2000,
             ci_group_size: 2,
@@ -103,7 +106,7 @@ impl Default for TrainOptions {
             imbalance_penalty: 0.0,
             num_threads: 0,
             seed: 42,
-            legacy_seed: false,
+            legacy_seed: true,
             compute_oob_predictions: true,
             verbose: false,
             clusters: None,

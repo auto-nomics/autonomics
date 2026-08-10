@@ -118,7 +118,9 @@ impl NodeTrainOptions {
         opts.imbalance_penalty = self.imbalance_penalty;
         opts.num_threads = self.num_threads;
         opts.seed = self.seed;
-        opts.legacy_seed = self.legacy_seed;
+        // legacy_seed = true matches grf R's default behaviour
+        // (legacy.seed = !is.null(seed)).
+        opts.legacy_seed = true;
         opts.compute_oob_predictions = self.compute_oob_predictions;
         opts
     }
@@ -177,6 +179,7 @@ impl RegressionForestSpec {
 pub(crate) fn arrow_batches_to_matrix(
     batches: &[RecordBatch], cols: &[String], n_rows: usize,
 ) -> Result<Matrix> {
+    use arrow_array::Int64Array;
     let mut buf = vec![0f64; n_rows * cols.len()];
     let mut offset = 0;
     for batch in batches {
@@ -184,10 +187,19 @@ pub(crate) fn arrow_batches_to_matrix(
         for (j, name) in cols.iter().enumerate() {
             let arr = batch.column_by_name(name)
                 .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", name)))?;
-            let arr = arr.as_any().downcast_ref::<Float64Array>()
-                .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Float64", name)))?;
-            for i in 0..r {
-                buf[j * n_rows + offset + i] = if arr.is_null(i) { f64::NAN } else { arr.value(i) };
+            // Accept Float64 or Int64 (convert to f64).
+            if let Some(f) = arr.as_any().downcast_ref::<Float64Array>() {
+                for i in 0..r {
+                    buf[j * n_rows + offset + i] = if f.is_null(i) { f64::NAN } else { f.value(i) };
+                }
+            } else if let Some(i64arr) = arr.as_any().downcast_ref::<Int64Array>() {
+                for i in 0..r {
+                    buf[j * n_rows + offset + i] = if i64arr.is_null(i) { f64::NAN } else { i64arr.value(i) as f64 };
+                }
+            } else {
+                return Err(GrfError::Shape(format!(
+                    "column '{}' is neither Float64 nor Int64", name
+                )));
             }
         }
         offset += r;

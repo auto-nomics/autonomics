@@ -44,6 +44,10 @@ pub struct PredictForestOutput {
     pub n_samples: usize,
 }
 
+impl PredictForestOutput {
+    pub fn n_samples(&self) -> usize { self.n_samples }
+}
+
 impl From<Predictions> for PredictForestOutput {
     fn from(p: Predictions) -> Self {
         let n_samples = p.n_samples();
@@ -73,15 +77,17 @@ impl PredictForestSpec {
         test_batches: Option<&[RecordBatch]>,
     ) -> Result<PredictForestOutput> {
         let train_n = train_batches.iter().map(|b| b.num_rows()).sum();
-        // Recover X-only matrix (no Y column needed for prediction).
-        // Convention: outcome_index column is excluded from X.
+        // Pass ALL columns from train_batches to grf. Forests using
+        // DefaultPredictionStrategy (quantile, probability) need the
+        // original Y values for prediction, so we must not strip the
+        // outcome column. The grf core predict functions use the
+        // outcome_index to locate Y internally.
         let train_schema = train_batches.first().map(|b| b.schema()).ok_or_else(||
             GrfError::Missing("empty train batches".into()))?;
-        let train_x_cols: Vec<String> = (0..train_schema.fields().len())
-            .filter(|i| *i != train_outcome_index)
+        let train_all_cols: Vec<String> = (0..train_schema.fields().len())
             .map(|i| train_schema.field(i).name().clone())
             .collect();
-        let train_x = arrow_batches_to_matrix(train_batches, &train_x_cols, train_n)?;
+        let train_x = arrow_batches_to_matrix(train_batches, &train_all_cols, train_n)?;
 
         let request = if self.oob || test_batches.is_none() {
             PredictRequest::oob(train_x, train_outcome_index, self.num_threads_opt())

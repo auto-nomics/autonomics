@@ -542,6 +542,7 @@ grf_forest_t* grf_train_quantile(
         auto forest = trainer.train(d, options);
         auto* h = new grf_forest_t;
         h->kind = "quantile";
+        h->quantiles = q;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         // quantile_trainer has no prediction_strategy; OOB skipped.
         return h;
@@ -579,6 +580,7 @@ grf_forest_t* grf_train_probability(
         }
         auto* h = new grf_forest_t;
         h->kind = "probability";
+        h->num_classes = num_classes;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -620,6 +622,8 @@ grf_forest_t* grf_train_survival(
         }
         auto* h = new grf_forest_t;
         h->kind = "survival";
+        h->num_failures = ft.empty() ? 0 : ft.size();
+        h->survival_prediction_type = 0;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -659,6 +663,7 @@ grf_forest_t* grf_train_multi_regression(
         }
         auto* h = new grf_forest_t;
         h->kind = "multi_regression";
+        h->num_outcomes = num_outcomes;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -709,6 +714,8 @@ grf_forest_t* grf_train_multi_causal(
         }
         auto* h = new grf_forest_t;
         h->kind = "multi_causal";
+        h->num_treatments = num_treatments;
+        h->num_outcomes = num_outcomes;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -790,6 +797,8 @@ grf_forest_t* grf_train_lm(
         }
         auto* h = new grf_forest_t;
         h->kind = "lm";
+        h->num_treatments = num_regressors;
+        h->num_outcomes = num_outcomes;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -875,6 +884,37 @@ size_t grf_forest_oob_num_samples(const grf_forest_t* forest) {
 }
 
 // ──── prediction ────
+//
+// Dispatch on forest->kind to construct the correct ForestPredictor. Each
+// forest type needs its own predictor constructor parameters (quantiles,
+// num_classes, num_outcomes, etc.) which were stored in the forest handle
+// at training time.
+
+static grf::ForestPredictor make_predictor(const grf_forest_t* forest, uint num_threads) {
+    const std::string& kind = forest->kind;
+    if (kind == "regression" || kind == "causal") {
+        return grf::regression_predictor(num_threads);
+    } else if (kind == "instrumental") {
+        return grf::instrumental_predictor(num_threads);
+    } else if (kind == "quantile") {
+        return grf::quantile_predictor(num_threads, forest->quantiles);
+    } else if (kind == "probability") {
+        return grf::probability_predictor(num_threads, forest->num_classes);
+    } else if (kind == "survival") {
+        return grf::survival_predictor(num_threads, forest->num_failures,
+                                       forest->survival_prediction_type);
+    } else if (kind == "multi_regression") {
+        return grf::multi_regression_predictor(num_threads, forest->num_outcomes);
+    } else if (kind == "multi_causal" || kind == "lm") {
+        return grf::multi_causal_predictor(num_threads, forest->num_treatments,
+                                           forest->num_outcomes);
+    } else if (kind == "causal_survival") {
+        return grf::causal_survival_predictor(num_threads);
+    } else {
+        // Default to regression (covers ll_regression etc.)
+        return grf::regression_predictor(num_threads);
+    }
+}
 
 grf_predictions_t* grf_predict(
     const grf_forest_t* forest,
@@ -892,7 +932,7 @@ grf_predictions_t* grf_predict(
         grf::Data train(train_data, n_train_rows, n_train_cols);
         train.set_outcome_index(train_outcome_index);
         grf::Data test(test_data, n_test_rows, n_test_cols);
-        grf::ForestPredictor predictor = grf::regression_predictor(num_threads);
+        grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict(*forest->forest, train, test, estimate_variance);
         auto* h = new grf_predictions_t;
         flatten_predictions(preds, h, estimate_variance, false);
@@ -917,7 +957,7 @@ grf_predictions_t* grf_predict_oob(
         }
         grf::Data train(train_data, n_train_rows, n_train_cols);
         train.set_outcome_index(train_outcome_index);
-        grf::ForestPredictor predictor = grf::regression_predictor(num_threads);
+        grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict_oob(*forest->forest, train, estimate_variance);
         auto* h = new grf_predictions_t;
         flatten_predictions(preds, h, estimate_variance, true);

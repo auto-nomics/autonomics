@@ -74,16 +74,31 @@ impl SurvivalForestSpec {
         let time = arrow_batches_to_time(batches, &self.time_column_name, n_rows)?;
         // grf C++ core takes censor as f64 (0.0 or 1.0).
         let censor_i64 = arrow_batches_to_int64(batches, &self.censor_column_name, n_rows)?;
-        let censor: Vec<f64> = censor_i64.into_iter().map(|c| c as f64).collect();
+        let censor: Vec<f64> = censor_i64.iter().map(|&c| c as f64).collect();
         let weights = self.sample_weights_column.as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
+
+        // If failure_times is not given, compute unique observed event times
+        // (matching grf R's default behavior).
+        let failure_times = match &self.failure_times {
+            Some(ft) => ft.clone(),
+            None => {
+                let mut ft: Vec<f64> = time.iter().zip(censor_i64.iter())
+                    .filter(|(_, c)| **c == 1)
+                    .map(|(t, _)| *t)
+                    .collect();
+                ft.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                ft.dedup();
+                ft
+            }
+        };
 
         let trained = SurvivalTrainer::fit(SurvivalSpec {
             x: x_matrix,
             time,
             censor,
-            failure_times: self.failure_times.clone(),
+            failure_times: Some(failure_times),
             sample_weights: weights,
             options: self.options.to_sys(),
         })?;
