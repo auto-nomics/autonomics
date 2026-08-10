@@ -407,9 +407,16 @@ impl DagNode for MtagNode {
 
         let ctx = node_ctx.session();
 
+        // Resolve the LD-score panel from the resource catalog (with fallback).
+        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef::resolve(
+            &node_ctx.resources,
+            "ldscore.ukbb_eur",
+            "ukbb_eur",
+        );
+
         // Run the full pipeline.
         let (batch1, batch2) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.config).await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.config).await?;
 
         let df1 = ctx.read_batch(batch1).map_err(MtagNodeError::ReadBatch)?;
         let df2 = ctx.read_batch(batch2).map_err(MtagNodeError::ReadBatch)?;
@@ -436,7 +443,7 @@ impl MtagNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_table: &str,
+        ld_ref: &nodes_ldsc::ldsc_common::LdScoreRef,
         cfg: &MtagConfig,
     ) -> Result<(RecordBatch, RecordBatch), DagError> {
         // 1. Register both upstream sumstats DataFrames as temporary tables.
@@ -446,6 +453,7 @@ impl MtagNode {
             .map_err(MtagNodeError::ReadBatch)?;
 
         // 2. Build SQL: 3-way inner join.
+        let ld_table = &ld_ref.sql;
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
@@ -454,13 +462,12 @@ impl MtagNode {
                       l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
                FROM sumstats1 AS s1
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN iceberg.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN {ld_table} AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             frq = INPUT_FRQ_COL,
             rsid = INPUT_RSID_COL,
-            table = ld_table,
             Z1 = LD_Z1_COL,
             Z2 = LD_Z2_COL,
             N1 = LD_N1_COL,
@@ -500,7 +507,7 @@ impl MtagNode {
         let n_snp = z1.len();
 
         // 4. Derive M from the LD score panel.
-        let m = vec![count_panel_snp(ctx, ld_table).await? as f64];
+        let m = vec![count_panel_snp(ctx, &ld_ref.sql).await? as f64];
 
         // 5. LDSC bivariate regression for Σ estimation.
         let x = Mat::from_fn(n_snp, 1, |i, _| ref_ld[i]);
@@ -703,9 +710,9 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 
 async fn count_panel_snp(
     ctx: &datafusion::prelude::SessionContext,
-    ld_table: &str,
+    ld_table_sql: &str,
 ) -> Result<usize, MtagNodeError> {
-    let sql = format!(r#"SELECT COUNT(*) AS "n" FROM iceberg.ld_score.{ld_table}"#);
+    let sql = format!(r#"SELECT COUNT(*) AS "n" FROM {ld_table_sql}"#);
     let df = ctx.sql(&sql).await.map_err(MtagNodeError::ReadBatch)?;
     let batches = df.collect().await.map_err(MtagNodeError::ReadBatch)?;
     let batch = batches
@@ -751,6 +758,7 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         }
     }
 
@@ -863,7 +871,12 @@ mod tests {
             ..Default::default()
         };
 
-        let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
+        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+        };
+
+        let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)
             .await
             .expect("MTAG pipeline should succeed");
 
@@ -925,7 +938,12 @@ mod tests {
             ..Default::default()
         };
 
-        let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
+        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+        };
+
+        let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)
             .await
             .expect("MTAG pipeline should succeed");
 

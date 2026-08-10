@@ -74,7 +74,42 @@ wait_garage_healthy() {
   exit 1
 }
 
-# --- step 2: ensure the warehouse bucket exists -------------------------------
+# --- step 2: ensure the cluster layout has at least one storage node -----------
+# A fresh Garage node reports status=healthy (the process is up and answering
+# the admin API) but has NO storage nodes assigned, so every S3 write returns
+# "Could not reach quorum of 1". We must explicitly assign the node to a zone
+# and apply the layout before any bucket can be created.
+ensure_layout() {
+  # `layout show` prints "Current cluster layout version: N" — if N > 0 a
+  # layout is already in place and we skip.
+  local ver
+  ver="$(gout layout show 2>/dev/null \
+         | grep -oE 'Current cluster layout version: [0-9]+' \
+         | grep -oE '[0-9]+' || echo 0)"
+  if [ "${ver}" -gt 0 ]; then
+    step "Cluster layout already configured (version ${ver})."
+    return 0
+  fi
+
+  step "No cluster layout found — assigning storage role..."
+  # Grab the first (and for single-node, only) node ID from `garage status`.
+  # Node IDs are 16-hex-char prefixes.
+  local node_id zone capacity
+  node_id="$(gout status 2>/dev/null | grep -oE '^[0-9a-f]{16}' | head -1)"
+  if [ -z "${node_id}" ]; then
+    echo "ERROR: could not determine garage node ID from status output" >&2
+    exit 1
+  fi
+  zone="${GARAGE_ZONE:-dc1}"
+  capacity="${GARAGE_DISK_CAPACITY:-800G}"
+
+  echo "  Assigning node ${node_id} → zone=${zone}, capacity=${capacity}"
+  g layout assign -z "${zone}" -c "${capacity}" "${node_id}"
+  g layout apply --version 1
+  step "Layout applied (version 1)."
+}
+
+# --- step 3: ensure the warehouse bucket exists -------------------------------
 ensure_bucket() {
   if gout bucket info "${BUCKET}" >/dev/null 2>&1; then
     step "Bucket '${BUCKET}' already exists."
@@ -84,7 +119,7 @@ ensure_bucket() {
   fi
 }
 
-# --- step 3: ensure the access key matches .env -------------------------------
+# --- step 4: ensure the access key matches .env -------------------------------
 ensure_key() {
   if gout key info "${KEY_ID}" >/dev/null 2>&1; then
     step "Access key '${KEY_ID}' already exists (secret assumed to match .env)."
@@ -95,7 +130,7 @@ ensure_key() {
   fi
 }
 
-# --- step 4: grant read/write/owner on the bucket -----------------------------
+# --- step 5: grant read/write/owner on the bucket -----------------------------
 # bucket allow is additive/idempotent, so it can run unconditionally.
 ensure_key_bucket_perms() {
   step "Granting read/write/owner on '${BUCKET}' to '${KEY_ID}'..."
@@ -119,6 +154,7 @@ report() {
 
 # --- main ----------------------------------------------------------------------
 wait_garage_healthy
+ensure_layout
 ensure_bucket
 ensure_key
 ensure_key_bucket_perms

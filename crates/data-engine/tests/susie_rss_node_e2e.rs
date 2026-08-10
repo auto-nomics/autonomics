@@ -30,6 +30,7 @@ async fn make_node_ctx(dk: &Arc<Datalake>) -> NodeCtx {
         )),
         datalake: dk.clone(),
         opendal: None,
+        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
     }
 }
 
@@ -200,6 +201,7 @@ async fn susie_rss_node_synthetic() {
         iceberg_catalog: None,
         datalake: Arc::new(Datalake::new()),
         opendal: None,
+        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
     };
 
     let spec = SusieRssSpec {

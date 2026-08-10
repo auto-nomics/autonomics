@@ -15,6 +15,9 @@ fn test_registry() -> crate::node_registry::NodeRegistry {
         None,
         Arc::new(Datalake::default()),
         None,
+        std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
     )
 }
 

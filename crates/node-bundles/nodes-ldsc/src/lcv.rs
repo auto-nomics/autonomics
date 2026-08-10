@@ -353,8 +353,13 @@ impl DagNode for LcvNode {
         })?;
 
         let ctx = node_ctx.session();
+        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+            &node_ctx.resources,
+            "ldscore.ukbb_eur",
+            "ukbb_eur",
+        );
         let (out, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.config).await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.config).await?;
 
         let batch = build_result_batch(&out, n_snp)?;
         let df = ctx.read_batch(batch).map_err(LcvNodeError::ReadBatch)?;
@@ -375,7 +380,7 @@ impl LcvNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_table: &str,
+        ld_ref: &crate::ldsc_common::LdScoreRef,
         cfg: &LcvConfig,
     ) -> Result<(lcv::model::LcvOutput, usize), DagError> {
         // 1. Register both upstream sumstats DataFrames.
@@ -385,18 +390,18 @@ impl LcvNode {
             .map_err(LcvNodeError::ReadBatch)?;
 
         // 2. 3-way inner join on rsid.
+        let ld_table = ld_ref.sql.clone();
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
                       l.ld_score AS "{ELL}"
                FROM sumstats1 AS s1
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN iceberg.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN {ld_table} AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             rsid = INPUT_RSID_COL,
-            table = ld_table,
             Z1 = LD_Z1_COL,
             Z2 = LD_Z2_COL,
             N1 = LD_N1_COL,
@@ -565,6 +570,7 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         }
     }
     use super::*;
@@ -693,7 +699,11 @@ mod tests {
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 20000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 50000.0)).unwrap();
-        LcvNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", cfg)
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+        };
+        LcvNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
             .await
             .expect("LCV pipeline should succeed")
     }
@@ -778,11 +788,15 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z, &rs2, 1000.0)).unwrap();
 
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+        };
         let res = LcvNode::run_with_ctx(
             &ctx,
             &df1,
             &df2,
-            "ukbb_eur",
+            &ld_ref,
             &LcvConfig {
                 no_blocks: 10,
                 ..Default::default()

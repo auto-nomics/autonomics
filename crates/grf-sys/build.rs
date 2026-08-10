@@ -1,6 +1,6 @@
 //! Build script for `grf-sys`.
 //!
-//! Drives CMake against the vendored GRF C++ core at `reference/grf/core` and
+//! Drives compilation of the vendored GRF C++ core at `vendor/grf/core` and
 //! emits cargo's linker directives so downstream crates pick up the resulting
 //! static library (`libgrf_core.a`) plus pthread / stdc++.
 //!
@@ -19,9 +19,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// Repository root, where `reference/grf/` lives.
-const GRF_CORE_DIR: &str = "../../reference/grf/core";
-const GRF_THIRD_PARTY: &str = "../../reference/grf/core/third_party";
+/// Vendored GRF source, living inside this crate under `vendor/grf/`.
+const GRF_CORE_DIR: &str = "vendor/grf/core";
+const GRF_THIRD_PARTY: &str = "vendor/grf/core/third_party";
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

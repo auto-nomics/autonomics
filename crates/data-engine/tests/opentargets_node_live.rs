@@ -19,6 +19,7 @@ fn node_ctx() -> NodeCtx {
         iceberg_catalog: None,
         datalake: Arc::new(datalake::Datalake::default()),
         opendal: None,
+        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
     }
 }
 
@@ -29,6 +30,9 @@ fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::
         None,
         Arc::new(datalake::Datalake::default()),
         None,
+        std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
     );
     registry.build_node(kind, spec).expect("build_node failed")
 }
@@ -42,6 +46,9 @@ fn factories_are_registered() {
         None,
         Arc::new(datalake::Datalake::default()),
         None,
+        std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
     );
     let kinds: Vec<_> = registry.list_nodes().into_iter().map(|n| n.kind).collect();
     assert!(kinds.contains(&"source_opentargets_associations".to_string()));

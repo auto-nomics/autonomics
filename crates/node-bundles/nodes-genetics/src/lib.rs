@@ -10,6 +10,9 @@ pub mod mtag;
 pub mod susie_rss;
 pub mod univariate_mixer;
 
+use dag_core::resource_catalog::{
+    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider, CATALOG_NAME,
+};
 use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
@@ -34,5 +37,30 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));
         registry.register(Box::new(univariate_mixer::UnivariateMixerNodeFactory {}));
         registry.register(Box::new(bivariate_mixer::BivariateMixerNodeFactory {}));
+    }
+}
+
+/// Resource declarations for genetics bundle: LD-score panel (MTAG) and
+/// per-chromosome LD-matrix tables (SuSiE-RSS).
+pub struct Resources;
+impl ResourceProvider for Resources {
+    fn name(&self) -> &'static str {
+        "genetics"
+    }
+    fn resources(&self) -> Vec<ResourceEntry> {
+        vec![
+            ResourceEntry::new(
+                "ldscore.ukbb_eur",
+                ResourceKind::IcebergTable,
+                "UKBB EUR LD-score panel (used by MTAG)",
+                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "ukbb_eur"),
+            ),
+            ResourceEntry::new(
+                "ldmatrix.eur_chr",
+                ResourceKind::IcebergTable,
+                "1000G EUR pairwise LD-matrix base table (per-chromosome: eur_chr{N})",
+                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_matrix", "eur_chr"),
+            ),
+        ]
     }
 }

@@ -22,6 +22,8 @@ data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
 datalake = { path = "../datalake" }
 datalake-tools = { path = "../datalake-tools" }
+resource-catalog = { path = "../resource-catalog" }
+dag-core = { path = "../dag-core" }
 fs = { path = "../fs" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }

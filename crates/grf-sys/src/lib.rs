@@ -1,7 +1,7 @@
 //! Safe Rust bindings for the GRF C++ core.
 //!
 //! This crate is a thin FFI layer over `wrapper/grf_shim.cpp` (which itself
-//! wraps `reference/grf/core/`). The C++ core is built as `libgrf_core.a`
+//! wraps `vendor/grf/core/`). The C++ core is built as `libgrf_core.a`
 //! via `cc::Build` in `build.rs`; the C ABI shim is built as `libgrf_shim.a`.
 //! Both staticlibs are linked into every crate that depends on `grf-sys`.
 //!

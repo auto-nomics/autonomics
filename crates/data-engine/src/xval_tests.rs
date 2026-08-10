@@ -22,6 +22,9 @@ fn test_registry() -> NodeRegistry {
         None,
         Arc::new(Datalake::default()),
         None,
+        std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
     )
 }
 
@@ -1283,6 +1286,7 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
             iceberg_catalog: None,
             datalake: Arc::new(Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         };
 
         // Build the node through the factory so spec validation runs.
@@ -1342,6 +1346,7 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             iceberg_catalog: None,
             datalake: Arc::new(Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         };
 
         let registry = test_registry();

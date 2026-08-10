@@ -409,9 +409,13 @@ impl DagNode for LdscRgNode {
         //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
+        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+            &node_ctx.resources,
+            "ldscore.1000g_eur",
+            "1000g_eur",
+        );
         let (rg, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "1000g_eur", &self.ldsc_rg)
-                .await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.ldsc_rg).await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&rg, n_snp)?;
@@ -440,7 +444,7 @@ impl LdscRgNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_table: &str,
+        ld_ref: &crate::ldsc_common::LdScoreRef,
         cfg: &LdscRgConfig,
     ) -> Result<(ldsc::regress::RG, usize), DagError> {
         // 1. Register both upstream sumstats DataFrames as temporary tables.
@@ -466,18 +470,18 @@ impl LdscRgNode {
         //        ORDER BY l.locus.position"#,
         //     ... (same bind params)
         // );
+        let ld_table = ld_ref.sql.clone();
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
                       l.ld_score AS "{REF}", l.w_ld AS "{WLD}"
                FROM sumstats1 AS s1
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN iceberg.ld_score."{table}" AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN {ld_table} AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             rsid = INPUT_RSID_COL,
-            table = ld_table,
             Z1 = LD_Z1_COL,
             Z2 = LD_Z2_COL,
             N1 = LD_N1_COL,
@@ -542,7 +546,7 @@ impl LdscRgNode {
         // matching the h² node and S-LDSC. Using COUNT(*) of the panel
         // overestimates M because the panel row set can differ from the
         // M_5_50 SNP set used when LD scores were computed.
-        let m = crate::ldsc_common::read_m_5_50(ctx, ld_table, 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, &ld_ref.m_sql, 1)
             .await
             .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
         let two_step = two_step.or(
@@ -658,6 +662,7 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         }
     }
     use super::*;
@@ -865,7 +870,11 @@ mod tests {
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 1000.0)).unwrap();
-        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", cfg)
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+        };
+        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
             .await
             .expect("rg pipeline should succeed")
     }
@@ -1067,7 +1076,11 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z1, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z2, &rs2, 1000.0)).unwrap();
 
-        let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", &constrained_cfg()).await;
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+        };
+        let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg()).await;
         assert!(
             res.is_err(),
             "disjoint rsid sets must error, not silently return NaN"
@@ -1113,8 +1126,12 @@ mod tests {
         let df2 = ctx
             .read_batch(sumstats_batch(&z2, &shared, 1000.0))
             .unwrap();
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+        };
         let (rg, n_snp) =
-            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", &constrained_cfg())
+            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg())
                 .await
                 .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");

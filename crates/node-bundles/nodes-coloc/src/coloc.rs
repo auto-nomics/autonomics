@@ -648,6 +648,7 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         }
     }
 

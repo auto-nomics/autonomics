@@ -83,13 +83,26 @@ curl_mgmt() {
   fi
 }
 
-# --- step 1: wait for Lakekeeper to be up and bootstrapped ---------------------
+# --- step 1: wait for Lakekeeper to be up, then bootstrap if needed -----------
 wait_lakekeeper() {
   step "Waiting for Lakekeeper to be ready..."
+  local info
   for i in $(seq 1 30); do
     if info="$(curl -sf "${API}/info" 2>/dev/null)"; then
+      # Server is responding — check if already bootstrapped.
       if printf '%s' "${info}" | jq -e '.bootstrapped == true' >/dev/null 2>&1; then
         step "  Lakekeeper ready (v$(printf '%s' "${info}" | jq -r '.version // "?"'))."
+        return 0
+      fi
+      # Server is up but not yet bootstrapped — do it now.
+      # Under allow-all authz this needs no token; the first caller
+      # becomes the global admin.
+      step "  Bootstrapping Lakekeeper (accepting terms of use)..."
+      if curl -sf -X POST -H "Content-Type: application/json" \
+           -d '{"accept-terms-of-use":true,"is-operator":true,"user-name":"admin","user-email":"admin@localhost"}' \
+           "${API}/bootstrap" >/dev/null 2>&1; then
+        sleep 1   # let the server settle after bootstrap
+        step "  Bootstrap complete."
         return 0
       fi
     fi

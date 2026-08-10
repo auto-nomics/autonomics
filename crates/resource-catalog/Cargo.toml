@@ -1,0 +1,19 @@
+[package]
+name = "resource-catalog"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Centralized, self-describing resource management: a singleton catalog that is the single source of truth for all resources (Iceberg tables, file paths, endpoints, config/env addresses, DB paths, docs)."
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+turso.workspace = true
+
+[lints]
+workspace = true

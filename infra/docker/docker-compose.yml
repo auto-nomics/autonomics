@@ -53,7 +53,7 @@ services:
       - ${GARAGE_META_DIR:-/var/lib/garage/meta}:/var/lib/garage/meta
       - ${GARAGE_SNAPSHOTS_DIR:-/var/lib/garage/snapshots}:/var/lib/garage/snapshots
       - ${GARAGE_DATA_DIR_DISK1:-/mnt/disk1/garage/data}:/mnt/disk1
-      - ${GARAGE_DATA_DIR_DISK2:-/mnt/disk2/garage/data}:/mnt/disk2
+      # - ${GARAGE_DATA_DIR_DISK2:-/mnt/disk2/garage/data}:/mnt/disk2
     networks:
       - iceberg_net
     ports:

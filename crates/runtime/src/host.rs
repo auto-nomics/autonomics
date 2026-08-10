@@ -23,6 +23,9 @@ use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, Termin
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
+use dag_core::resource_catalog::{
+    ResourceCatalog, ResourceEntry, ResourceKind, ResourceAddress, DbKind,
+};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -97,6 +100,11 @@ pub struct SharedInfra {
     pub engine_manager: Arc<DataEngineManager>,
     pub file_storage: Arc<OpendalFileStorage>,
     pub datalake: Arc<Datalake>,
+    /// Centralized resource catalog — the single source of truth for all
+    /// resource addresses (Iceberg tables, file paths, endpoints, config,
+    /// databases). Nodes resolve resources through this instead of
+    /// hardcoding names/paths.
+    pub resources: Arc<ResourceCatalog>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -125,8 +133,29 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
 
+        // ── Resource Catalog ─────────────────────────────────────────
+        // Open (or load) the centralized resource catalog first, so every
+        // downstream component (DataEngine nodes, SDK clients, etc.) resolves
+        // addresses through it. The manifest DB lives in state_dir.
+        let manifest_db = config.state_dir.join("resource-manifest.db");
+        if let Some(parent) = manifest_db.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let resources = Arc::new(
+            ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await,
+        );
+
+        // Register built-in resources from RuntimeConfig (config-as-resource).
+        register_config_resources(&resources, config);
+
+        // Set the process-wide global so SDK crates (eutils, embase, etc.)
+        // can resolve endpoints via `ResourceCatalog::global()`.
+        let _ = ResourceCatalog::set_global(resources.clone());
+
         // ── DataEngine ───────────────────────────────────────────────
-        let mut engine_builder = DataEngine::builder().register_opendal_fs(file_storage.clone())?;
+        let mut engine_builder = DataEngine::builder()
+            .register_opendal_fs(file_storage.clone())?
+            .with_resources(resources.clone());
 
         if config.enable_iceberg {
             match engine_builder.register_iceberg().await {
@@ -205,10 +234,19 @@ impl SharedInfra {
             .await?,
         );
 
+        // ── Drift check + persistence ────────────────────────────────
+        // Best-effort: compare the catalog's registered Iceberg tables
+        // against the live datalake, logging any mismatches. Non-fatal.
+        if config.enable_iceberg {
+            check_drift_best_effort(&resources, &datalake).await;
+        }
+        resources.persist().await;
+
         Ok(Self {
             engine_manager,
             file_storage,
             datalake,
+            resources,
             storage,
             profile_storage,
             runtime_handle: tokio::runtime::Handle::current(),
@@ -379,6 +417,159 @@ impl SharedInfra {
 // ═══════════════════════════════════════════════════════════════════════
 // AgentHandle — per-agent control struct
 // ═══════════════════════════════════════════════════════════════════════
+
+// ── Resource catalog bootstrap helpers ───────────────────────────────────
+
+/// Register built-in resources derived from [`RuntimeConfig`] into the catalog.
+///
+/// This folds env-derived paths and config values into the centralized catalog
+/// so that all modules resolve them by logical name instead of reading env
+/// vars or config fields directly. Registration is idempotent (same-name +
+/// same-address is a no-op); failures are logged and non-fatal.
+fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) {
+    use std::collections::BTreeMap;
+
+    let reg = |name: &str,
+               kind: ResourceKind,
+               desc: &str,
+               address: ResourceAddress,
+               tags: Vec<String>| {
+        let mut entry = ResourceEntry::new(name, kind, desc, address);
+        if !tags.is_empty() {
+            entry = entry.with_tags(tags);
+        }
+        if let Err(e) = catalog.register(entry) {
+            tracing::warn!("resource catalog: failed to register '{name}': {e}");
+        }
+    };
+
+    // ── Database / file paths ─────────────────────────────────────────
+    reg(
+        "db.agent",
+        ResourceKind::Database,
+        "Agent persistence database (Turso/SQLite)",
+        ResourceAddress::database(DbKind::Sqlite, &config.agent_db),
+        vec!["runtime".into()],
+    );
+    reg(
+        "db.dag_history",
+        ResourceKind::Database,
+        "DAG history database (snapshots/refs)",
+        ResourceAddress::database(DbKind::Sqlite, &config.dag_history_db),
+        vec!["runtime".into()],
+    );
+    reg(
+        "db.bib",
+        ResourceKind::Database,
+        "Bibliography database",
+        ResourceAddress::database(DbKind::Sqlite, &config.bib_db_path),
+        vec!["runtime".into()],
+    );
+    reg(
+        "db.writing",
+        ResourceKind::Database,
+        "Writing system database",
+        ResourceAddress::database(DbKind::Sqlite, &config.writing_db_path),
+        vec!["runtime".into()],
+    );
+    reg(
+        "db.app",
+        ResourceKind::Database,
+        "TUI / application database",
+        ResourceAddress::database(DbKind::Sqlite, &config.app_db_path),
+        vec!["runtime".into()],
+    );
+
+    // ── File paths ────────────────────────────────────────────────────
+    reg(
+        "app.data_dir",
+        ResourceKind::FilePath,
+        "Root directory for agent file storage (downloads, scratch, artifacts)",
+        ResourceAddress::path(&config.data_dir),
+        vec!["runtime".into()],
+    );
+    reg(
+        "app.state_dir",
+        ResourceKind::FilePath,
+        "Directory for agent-internal state",
+        ResourceAddress::path(&config.state_dir),
+        vec!["runtime".into()],
+    );
+
+    // ── Config values (from env or defaults) ──────────────────────────
+    let read_env = |key: &str| std::env::var(key).ok();
+    if let Some(uri) = read_env("ICEBERG_REST_URI") {
+        reg(
+            "config.iceberg_rest_uri",
+            ResourceKind::Config,
+            "Iceberg REST catalog URI",
+            ResourceAddress::config("ICEBERG_REST_URI", &uri),
+            vec!["iceberg".into()],
+        );
+    }
+    for (logical, env_key, desc) in [
+        ("config.s3_endpoint", "ICEBERG_S3_ENDPOINT", "S3 endpoint for Iceberg"),
+        ("config.s3_bucket", "ICEBERG_S3_BUCKET", "S3 bucket for Iceberg"),
+        ("config.s3_region", "ICEBERG_S3_REGION", "S3 region for Iceberg"),
+        ("config.s3_warehouse", "ICEBERG_S3_WAREHOUSE", "S3 warehouse path for Iceberg"),
+    ] {
+        if let Some(val) = read_env(env_key) {
+            reg(
+                logical,
+                ResourceKind::Config,
+                desc,
+                ResourceAddress::config(env_key, &val),
+                vec!["iceberg".into()],
+            );
+        }
+    }
+}
+
+/// Best-effort drift check: compare the catalog's registered Iceberg tables
+/// against the live datalake, logging warnings for missing tables or
+/// non-existent file paths. Never fails — connection errors are swallowed.
+async fn check_drift_best_effort(catalog: &ResourceCatalog, datalake: &Datalake) {
+    // Build a snapshot of the live Iceberg tables.
+    let live_tables = match datalake.list_all_tables().await {
+        Ok(tables) => tables,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "resource catalog: drift check skipped (datalake unreachable)"
+            );
+            return;
+        }
+    };
+
+    let snapshot = dag_core::resource_catalog::CatalogSnapshot {
+        tables: live_tables
+            .into_iter()
+            .filter_map(|(ns, table)| {
+                // Use the last namespace segment as the schema name (the
+                // common 2-level `schema.table` pattern).
+                let schema = ns.last()?.clone();
+                Some((schema, table))
+            })
+            .collect(),
+    };
+
+    let warnings = catalog.check_drift(&snapshot);
+    if !warnings.is_empty() {
+        for w in &warnings {
+            tracing::warn!(
+                name = %w.name,
+                detail = %w.detail,
+                "resource catalog drift: registered resource not found in live data"
+            );
+        }
+        tracing::warn!(
+            count = warnings.len(),
+            "resource catalog: drift check found missing resources — index unchanged"
+        );
+    } else {
+        tracing::debug!("resource catalog: drift check passed (all registered resources found)");
+    }
+}
 
 /// Control handle for one running agent.
 ///

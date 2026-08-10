@@ -384,20 +384,27 @@ impl DagNode for MrlapNode {
         ctx.register_table("sumstats2", in1.data.clone().into_view())
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
+        // Resolve the LD-score panel from the resource catalog (with fallback).
+        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef::resolve(
+            &node_ctx.resources,
+            "ldscore.1000g_eur",
+            LD_TABLE,
+        );
+
         // M = total SNPs in the LD panel.
-        let m = count_panel_snp(&ctx, LD_TABLE).await?;
+        let m = count_panel_snp(&ctx, &ld_ref.sql).await?;
         let sql = format!(
             r#"SELECT s1."{z}" AS z1, s2."{z}" AS z2,
                       s1."{n}" AS n1, s2."{n}" AS n2,
                       l.ld_score AS ref_ld, l.ld_score AS w_ld
                FROM sumstats1 AS s1
                INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN iceberg.ld_score.{tbl} AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN {tbl} AS l ON s1."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = IN_Z,
             n = IN_N,
             rsid = IN_RSID,
-            tbl = LD_TABLE,
+            tbl = ld_ref.sql,
         );
         let joined = ctx
             .sql(&sql)
@@ -536,9 +543,9 @@ impl DagNode for MrlapNode {
 /// Count rows in the LD-score panel table (derives M for LDSC).
 async fn count_panel_snp(
     ctx: &datafusion::prelude::SessionContext,
-    ld_table: &str,
+    ld_table_sql: &str,
 ) -> Result<usize, DagError> {
-    let sql = format!("SELECT COUNT(*) AS n FROM iceberg.ld_score.{ld_table}");
+    let sql = format!("SELECT COUNT(*) AS n FROM {ld_table_sql}");
     let df = ctx
         .sql(&sql)
         .await

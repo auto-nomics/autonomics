@@ -332,7 +332,15 @@ impl DagNode for LdscSldscNode {
                 )))?;
 
         let session = ctx.session();
-        let result = Self::run_with_ctx(&session, &input.data, &self.config).await?;
+
+        // Resolve the LD-score panel from the resource catalog (with fallback).
+        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+            &ctx.resources,
+            "ldscore.baselineLD_v2_2_eur",
+            LD_TABLE,
+        );
+
+        let result = Self::run_with_ctx(&session, &input.data, &ld_ref, &self.config).await?;
 
         let batch = build_result_batch(&result)?;
         let df = session
@@ -352,17 +360,15 @@ impl LdscSldscNode {
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
+        ld_ref: &crate::ldsc_common::LdScoreRef,
         cfg: &LdscSldscConfig,
     ) -> Result<ldsc::sldsc::SldscResults, LdscSldscNodeError> {
-        let ld_table = LD_TABLE;
-
         // 1. Register upstream sumstats.
         ctx.register_table("sumstats", input.clone().into_view())
             .map_err(LdscSldscNodeError::ReadBatch)?;
 
         // 2. Query M table for annotation names + M values.
-        let m_sql =
-            format!(r#"SELECT "annotation", "m_5_50" FROM iceberg.ld_score."{ld_table}_m""#);
+        let m_sql = format!(r#"SELECT "annotation", "m_5_50" FROM {}"#, ld_ref.m_sql);
         let m_df = ctx
             .sql(&m_sql)
             .await
@@ -412,11 +418,11 @@ impl LdscSldscNode {
         let sql = format!(
             r#"SELECT s."z" AS "z", s."n" AS "n", {cols}, l."w_ld" AS "wld"
                FROM sumstats AS s
-               INNER JOIN iceberg.ld_score."{tbl}" AS l
+               INNER JOIN {ld_table} AS l
                ON s."rsid" = l."rsid"
                ORDER BY l."locus"."position""#,
             cols = select_cols.join(", "),
-            tbl = ld_table,
+            ld_table = ld_ref.sql,
         );
 
         let joined_df = ctx.sql(&sql).await.map_err(LdscSldscNodeError::ReadBatch)?;
@@ -511,7 +517,11 @@ mod tests {
         let df = ctx
             .read_batch(arrow_array::RecordBatch::new_empty(input_schema()))
             .unwrap();
-        let res = LdscSldscNode::run_with_ctx(&ctx, &df, &LdscSldscConfig::new()).await;
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"baselineLD_v2_2_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"baselineLD_v2_2_eur_m\"".to_string(),
+        };
+        let res = LdscSldscNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscSldscConfig::new()).await;
         assert!(res.is_err(), "should error without Iceberg catalog");
     }
 

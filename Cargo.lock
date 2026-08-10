@@ -2470,6 +2470,7 @@ dependencies = [
  "futures",
  "nanoid",
  "petgraph",
+ "resource-catalog",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -7274,6 +7275,7 @@ dependencies = [
  "mixer",
  "mtag",
  "nanoid",
+ "nodes-ldsc",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -7446,6 +7448,7 @@ dependencies = [
  "mrlap",
  "mrpresso",
  "mvmr",
+ "nodes-ldsc",
  "opengwas",
  "schemars 1.2.2",
  "serde",
@@ -9729,6 +9732,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "resource-catalog"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "turso",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9794,6 +9810,7 @@ dependencies = [
  "async-trait",
  "bib-base",
  "chrono",
+ "dag-core",
  "data-engine",
  "data-engine-tools",
  "datalake",
@@ -9802,6 +9819,7 @@ dependencies = [
  "gwascatalog-sdk",
  "opengwas",
  "opentargets",
+ "resource-catalog",
  "schemars 1.2.2",
  "serde",
  "serde_json",

@@ -10,6 +10,7 @@ use datafusion::{catalog::CatalogProvider, execution::runtime_env::RuntimeEnv};
 use datalake::Datalake;
 
 use dag_core::registry::NodeRegistry;
+use dag_core::resource_catalog::ResourceCatalog;
 
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
 ///
@@ -25,9 +26,22 @@ pub fn build_default_registry(
     iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     datalake: Arc<Datalake>,
     opendal: Option<Arc<fs::OpendalFileStorage>>,
+    resources: Arc<ResourceCatalog>,
 ) -> NodeRegistry {
-    let mut registry =
-        NodeRegistry::with_ingredients(runtime_env, iceberg_catalog, datalake, opendal);
+    let mut registry = NodeRegistry::new(
+        dag_core::registry::NodeCtx::new(runtime_env, iceberg_catalog, datalake, opendal)
+            .with_resources(resources.clone()),
+    );
+
+    // ── Register resource providers (catalog is Arc, &self methods) ──
+    // Each bundle declares the Iceberg tables / file paths it needs.
+    // Registration is idempotent — same-name + same-address = no-op.
+    #[cfg(feature = "bundle-ldsc")]
+    let _ = resources.register_provider(&nodes_ldsc::Resources);
+    #[cfg(feature = "bundle-genetics")]
+    let _ = resources.register_provider(&nodes_genetics::Resources);
+    #[cfg(feature = "bundle-mr")]
+    let _ = resources.register_provider(&nodes_mr::Resources);
 
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
     #[cfg(feature = "bundle-ldsc")]

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::{
@@ -7,6 +8,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datalake::Datalake;
+use resource_catalog::ResourceCatalog;
 
 use serde::Serialize;
 
@@ -115,10 +117,18 @@ pub struct NodeCtx {
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
     pub opendal: Option<Arc<fs::OpendalFileStorage>>,
+    /// The centralized resource catalog — the single source of truth for
+    /// resource addresses (Iceberg tables, file paths, endpoints, config).
+    /// Nodes resolve resources through this instead of hardcoding names/paths.
+    pub resources: Arc<ResourceCatalog>,
 }
 
 impl NodeCtx {
     /// Convenience constructor from the four engine-level ingredients.
+    ///
+    /// The resource catalog defaults to an empty catalog. Call
+    /// [`NodeCtx::with_resources`] to inject the real catalog once a node
+    /// needs to resolve resources.
     pub fn new(
         runtime_env: Arc<RuntimeEnv>,
         iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
@@ -130,7 +140,15 @@ impl NodeCtx {
             iceberg_catalog,
             datalake,
             opendal,
+            resources: Arc::new(ResourceCatalog::new(PathBuf::from("."))),
         }
+    }
+
+    /// Replace the resource catalog (used to inject the real catalog at
+    /// bootstrap, or a test catalog in unit tests).
+    pub fn with_resources(mut self, resources: Arc<ResourceCatalog>) -> Self {
+        self.resources = resources;
+        self
     }
 
     /// Build a **fresh**, isolated [`SessionContext`] from these ingredients.

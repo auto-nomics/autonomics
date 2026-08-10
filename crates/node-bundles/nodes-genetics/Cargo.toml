@@ -16,6 +16,7 @@ susie = { path = "../../../bio_crates/susie" }
 magma = { path = "../../../bio_crates/magma" }
 mixer = { path = "../../../bio_crates/mixer" }
 ldsc = { path = "../../../bio_crates/ldsc" }
+nodes-ldsc = { path = "../nodes-ldsc" }
 statrs = "0.18"
 arrow-array.workspace = true
 arrow-schema.workspace = true

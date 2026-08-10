@@ -1,0 +1,76 @@
+name: Deploy gh-pages
+
+on:
+  push:
+    branches: ["master"]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup build
+        working-directory: r-package/grf
+        run: |
+          # Install R
+          curl -OLs https://eddelbuettel.github.io/r-ci/run.sh && chmod 0755 run.sh
+          ./run.sh bootstrap
+          ./run.sh install_all
+          ./run.sh install_aptget pandoc
+
+          # Install grf
+          R CMD INSTALL .
+      - name: Setup docs
+        working-directory: r-package/grf
+        run: |
+          # Install pkgdown v1.5
+          sudo Rscript -e "install.packages(c('fs', 'highlight', 'httr', 'memoise', 'openssl', 'purrr', 'rmarkdown', 'rstudioapi', 'whisker', 'xml2', 'yaml', 'rematch2', 'fansi'))"
+          sudo Rscript -e "install.packages('https://cran.r-project.org/src/contrib/Archive/pkgdown/pkgdown_1.5.1.tar.gz', repos = NULL, type = 'source')"
+
+          # Install packages used in vignettes
+          sudo Rscript -e "install.packages(c('ggplot2', 'glmnet', 'maq', 'policytree'))"
+      - name: Build docs
+        working-directory: r-package/grf
+        run: |
+          # Build site
+          cp ../../README.md .
+          cp ../../REFERENCE.md .
+          cp ../../DEVELOPING.md .
+          cp ../../releases/CHANGELOG.md .
+
+          # Some minor touchups for intro vignette's html output
+          sed -i '3,14d' vignettes/grf_guide.Rmd
+          sed -i 's/^print(ptree)$/plot(ptree)/' vignettes/grf_guide.Rmd
+          perl -0777 -pi -e 's/,\s*num\.threads\s*=\s*[0-9]+//g; s/> \*\*Remark\*\*: We use `num\.threads[^\n]*\n+//g' vignettes/grf_guide.Rmd
+
+          Rscript -e "pkgdown::build_site()"
+      - name: Inject KaTeX into vignettes
+        working-directory: r-package/grf
+        run: |
+          find docs/articles -name "*.html" -type f | while IFS= read -r f; do
+            sed -i '/<head>/a <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>' "$f"
+          done
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'r-package/grf/docs'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

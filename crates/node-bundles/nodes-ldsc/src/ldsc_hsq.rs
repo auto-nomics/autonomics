@@ -395,7 +395,12 @@ impl DagNode for LdscHsqNode {
         // let result = Self::run_with_ctx(&ctx, &input.data, "ukbb_eur", &self.ldsc_hsq).await?;
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
-        let result = Self::run_with_ctx(&ctx, &input.data, "1000g_eur", &self.ldsc_hsq).await?;
+        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+            &node_ctx.resources,
+            "ldscore.1000g_eur",
+            "1000g_eur",
+        );
+        let result = Self::run_with_ctx(&ctx, &input.data, &ld_ref, &self.ldsc_hsq).await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&result)?;
@@ -421,7 +426,7 @@ impl LdscHsqNode {
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
-        ld_table: &str,
+        ld_ref: &crate::ldsc_common::LdScoreRef,
         cfg: &LdscHsqConfig,
     ) -> Result<ldsc::hsq::HsqResult, DagError> {
         // 1. Register the upstream sumstats DataFrame as a temporary table.
@@ -430,40 +435,26 @@ impl LdscHsqNode {
 
         // 2. Read per-annotation M_5_50 — the L2-summed SNP count that
         //    normalises the LDSC regression slope into h².  This comes from the
-        //    companion `iceberg.ld_score.{ld_table}_m` table (written alongside
-        //    the LD scores), NOT from COUNT(*) of the panel.  Using COUNT(*)
-        //    overestimates M and inflates h² because the panel row set can
-        //    differ from the M_5_50 SNP set.  See memory note
-        //    `ldsc-hsq-node-m-and-liability`.
-        let m = crate::ldsc_common::read_m_5_50(ctx, ld_table, 1)
+        //    companion `_m` table (written alongside the LD scores), NOT from
+        //    COUNT(*) of the panel.
+        let m = crate::ldsc_common::read_m_5_50(ctx, &ld_ref.m_sql, 1)
             .await
             .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 
         // 3. Build SQL: join sumstats with LD score panel on rsid.
         //    The 1000g_eur panel has separate ld_score (ref LD) and w_ld
         //    (weight LD) columns.
-        //
-        // --- Old ukbb_eur panel (ld_score used for both ref_ld and w_ld) ---
-        // let sql = format!(
-        //     r#"SELECT s."{z}" AS "{Z}", s."{n}" AS "{N}",
-        //               l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
-        //        FROM sumstats AS s
-        //        INNER JOIN iceberg.ld_score.{table} AS l
-        //        ON s."{rsid}" = l.rsid
-        //        ORDER BY l.locus.position"#,
-        //     ... (same bind params)
-        // );
         let sql = format!(
             r#"SELECT s."{z}" AS "{Z}", s."{n}" AS "{N}",
                       l.ld_score AS "{REF}", l.w_ld AS "{WLD}"
                FROM sumstats AS s
-               INNER JOIN iceberg.ld_score."{table}" AS l
+               INNER JOIN {ld_table} AS l
                ON s."{rsid}" = l.rsid
                ORDER BY l.locus.position"#,
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             rsid = INPUT_RSID_COL,
-            table = ld_table,
+            ld_table = ld_ref.sql,
             Z = LD_Z_COL,
             N = LD_N_COL,
             REF = LD_REF_COL,
@@ -505,6 +496,7 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
         }
     }
     use super::*;
@@ -674,7 +666,11 @@ mod tests {
             .collect();
         let ctx = ctx_with_ld_panel(N_SNP);
         let df = ctx.read_batch(sumstats_batch(z, &rsids)).unwrap();
-        LdscHsqNode::run_with_ctx(&ctx, &df, "1000g_eur", cfg)
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+        };
+        LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, cfg)
             .await
             .expect("hsq pipeline should succeed")
     }
@@ -809,8 +805,12 @@ mod tests {
         let z: Vec<f64> = (0..50).map(|i| (i as f64) * 0.1).collect();
         let df = ctx.read_batch(sumstats_batch(&z, &rsids)).unwrap();
 
+        let ld_ref = crate::ldsc_common::LdScoreRef {
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+        };
         let res =
-            LdscHsqNode::run_with_ctx(&ctx, &df, "1000g_eur", &LdscHsqConfig::new(20, None)).await;
+            LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscHsqConfig::new(20, None)).await;
         assert!(
             res.is_err(),
             "no rsid overlap must error, not silently return NaN"
