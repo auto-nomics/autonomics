@@ -44,6 +44,11 @@ pub struct ResourceEntry {
     /// Updated by archive operations; persisted with the manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive_status: Option<ArchiveStatus>,
+    /// Optional ingestion spec: how to load source files into this Iceberg
+    /// table. Only meaningful for `IcebergTable` kind. When set, an
+    /// `IngestionExecutor` can ingest data from the declared source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingestion_spec: Option<crate::ingestion::IngestionSpec>,
 }
 
 impl ResourceEntry {
@@ -63,6 +68,7 @@ impl ResourceEntry {
             tags: Vec::new(),
             archive_spec: None,
             archive_status: None,
+            ingestion_spec: None,
         }
     }
 
@@ -82,6 +88,13 @@ impl ResourceEntry {
     /// content is backed up in cloud object storage.
     pub fn with_archive(mut self, spec: crate::archive::ArchiveSpec) -> Self {
         self.archive_spec = Some(spec);
+        self
+    }
+
+    /// Set the ingestion spec on the entry (IcebergTable only), declaring
+    /// how to load source files into this table.
+    pub fn with_ingestion(mut self, spec: crate::ingestion::IngestionSpec) -> Self {
+        self.ingestion_spec = Some(spec);
         self
     }
 }

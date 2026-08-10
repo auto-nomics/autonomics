@@ -29,6 +29,7 @@ pub mod drift;
 pub mod entry;
 pub mod error;
 pub mod iceberg_const;
+pub mod ingestion;
 pub mod kind;
 pub mod persist;
 pub mod provider;
@@ -45,6 +46,7 @@ pub use kind::{DbKind, DocKind, ResourceAddress, ResourceKind};
 pub use persist::{ManifestStore, TursoManifestStore};
 pub use provider::ResourceProvider;
 pub use archive::{ArchiveOutcome, ArchiveSpec, ArchiveStatus, ArchivableResource};
+pub use ingestion::{CsvOptions, IngestionOutcome, IngestionSpec, SourceFormat, WriteMode};
 pub use registry::ResourceRegistry;
 
 /// Resolve an endpoint URL from the global catalog, falling back to

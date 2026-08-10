@@ -60,10 +60,14 @@ impl TursoManifestStore {
         .await
         .map_err(|e| ResourceError::Persistence(format!("manifest schema init: {e}")))?;
 
-        // ── Schema migration: add archive columns ─────────────────────
+        // ── Schema migration: add archive + ingestion columns ──────────
         // ALTER TABLE ADD COLUMN fails if the column already exists — that's
         // expected and harmless for idempotent re-runs.
-        for col in ["archive_spec_json", "archive_status_json"] {
+        for col in [
+            "archive_spec_json",
+            "archive_status_json",
+            "ingestion_spec_json",
+        ] {
             let sql = format!("ALTER TABLE resource_manifest ADD COLUMN {col} TEXT");
             // Ignore "duplicate column" errors — the column already exists
             // from a prior migration.
@@ -112,13 +116,14 @@ impl ManifestStore for TursoManifestStore {
             let tags_json = serde_json::to_string(&entry.tags)?;
             let archive_spec_json = opt_to_json(&entry.archive_spec);
             let archive_status_json = opt_to_json(&entry.archive_status);
+            let ingestion_spec_json = opt_to_json(&entry.ingestion_spec);
 
             self.conn
                 .execute(
                     "INSERT INTO resource_manifest
                         (name, kind, description, address_json, metadata_json, tags_json,
-                         archive_spec_json, archive_status_json)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                         archive_spec_json, archive_status_json, ingestion_spec_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                      ON CONFLICT(name) DO UPDATE SET
                         kind = excluded.kind,
                         description = excluded.description,
@@ -126,7 +131,8 @@ impl ManifestStore for TursoManifestStore {
                         metadata_json = excluded.metadata_json,
                         tags_json = excluded.tags_json,
                         archive_spec_json = excluded.archive_spec_json,
-                        archive_status_json = excluded.archive_status_json",
+                        archive_status_json = excluded.archive_status_json,
+                        ingestion_spec_json = excluded.ingestion_spec_json",
                     params_from_iter([
                         Value::Text(entry.name.clone()),
                         Value::Text(entry.kind.as_str().into()),
@@ -136,6 +142,7 @@ impl ManifestStore for TursoManifestStore {
                         Value::Text(tags_json),
                         Value::Text(archive_spec_json),
                         Value::Text(archive_status_json),
+                        Value::Text(ingestion_spec_json),
                     ]),
                 )
                 .await
@@ -149,7 +156,7 @@ impl ManifestStore for TursoManifestStore {
             .conn
             .query(
                 "SELECT name, kind, description, address_json, metadata_json, tags_json,
-                        archive_spec_json, archive_status_json
+                        archive_spec_json, archive_status_json, ingestion_spec_json
                  FROM resource_manifest ORDER BY name",
                 (),
             )
@@ -168,6 +175,7 @@ impl ManifestStore for TursoManifestStore {
                     let tags_json = text_value(&row, 5)?;
                     let archive_spec_json = text_value(&row, 6)?;
                     let archive_status_json = text_value(&row, 7)?;
+                    let ingestion_spec_json = text_value(&row, 8)?;
 
                     let kind = ResourceKind::from_str(&kind_str).ok_or_else(|| {
                         ResourceError::Persistence(format!("unknown resource kind: {kind_str}"))
@@ -177,6 +185,8 @@ impl ManifestStore for TursoManifestStore {
                     let tags = serde_json::from_str(&tags_json)?;
                     let archive_spec = json_to_opt::<ArchiveSpec>(&archive_spec_json);
                     let archive_status = json_to_opt::<ArchiveStatus>(&archive_status_json);
+                    let ingestion_spec =
+                        json_to_opt::<crate::ingestion::IngestionSpec>(&ingestion_spec_json);
 
                     out.push(ResourceEntry {
                         name,
@@ -187,6 +197,7 @@ impl ManifestStore for TursoManifestStore {
                         tags,
                         archive_spec,
                         archive_status,
+                        ingestion_spec,
                     });
                 }
                 Ok(None) => break,
