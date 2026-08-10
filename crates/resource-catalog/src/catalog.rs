@@ -184,4 +184,75 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "ldscore.1000g_eur");
     }
+
+    #[tokio::test]
+    async fn archive_fields_survive_persist_round_trip() {
+        use crate::archive::{ArchiveSpec, ArchiveStatus};
+
+        let store: Arc<dyn ManifestStore> = Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
+        let cat = ResourceCatalog::with_persist("/tmp", store.clone());
+
+        // Register a resource WITH archive spec + status.
+        cat.register(
+            ResourceEntry::new(
+                "test-data.mixer",
+                crate::kind::ResourceKind::FilePath,
+                "MiXiR test fixtures",
+                ResourceAddress::path("reference/mixer_data/"),
+            )
+            .with_archive(ArchiveSpec {
+                remote: "aliyun".into(),
+                remote_path: "autonomics-data/mixer/test-data/".into(),
+                checksum: true,
+            }),
+        )
+        .unwrap();
+
+        // Simulate an archive_status update (as if archive() was called).
+        cat.update_archive_status_for_test(
+            "test-data.mixer",
+            ArchiveStatus {
+                archived_at: Some("2026-08-10T12:00:00Z".into()),
+                restored_at: None,
+                file_count: Some(42),
+                size_bytes: Some(1073741824),
+                verified: Some(true),
+            },
+        )
+        .unwrap();
+
+        cat.persist().await;
+
+        // Reload from the same store.
+        let loaded = store.load().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        let entry = &loaded[0];
+        assert_eq!(entry.name, "test-data.mixer");
+
+        // Archive spec survived.
+        let spec = entry.archive_spec.as_ref().expect("archive_spec should persist");
+        assert_eq!(spec.remote, "aliyun");
+        assert_eq!(spec.remote_path, "autonomics-data/mixer/test-data/");
+        assert!(spec.checksum);
+
+        // Archive status survived.
+        let status = entry.archive_status.as_ref().expect("archive_status should persist");
+        assert_eq!(status.archived_at.as_deref(), Some("2026-08-10T12:00:00Z"));
+        assert_eq!(status.file_count, Some(42));
+        assert_eq!(status.size_bytes, Some(1073741824));
+        assert_eq!(status.verified, Some(true));
+    }
+}
+
+impl ResourceCatalog {
+    /// Test-only helper to set archive_status directly.
+    #[cfg(test)]
+    fn update_archive_status_for_test(&self, name: &str, status: crate::archive::ArchiveStatus) -> crate::error::Result<()> {
+        let mut reg = self.inner.write().expect("catalog lock");
+        let entry = reg
+            .get_mut(name)
+            .ok_or_else(|| crate::error::ResourceError::UnknownResource(name.to_string()))?;
+        entry.archive_status = Some(status);
+        Ok(())
+    }
 }

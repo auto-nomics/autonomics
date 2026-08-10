@@ -5,6 +5,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use turso::{params_from_iter, Connection, Value};
 
+use crate::archive::{ArchiveSpec, ArchiveStatus};
 use crate::entry::ResourceEntry;
 use crate::error::{ResourceError, Result};
 use crate::kind::ResourceKind;
@@ -27,6 +28,11 @@ pub struct TursoManifestStore {
 
 impl TursoManifestStore {
     /// Open (or create) the manifest database at `path`.
+    ///
+    /// Runs automatic schema migration: adds `archive_spec_json` and
+    /// `archive_status_json` columns if they don't exist (introduced after
+    /// the initial schema). Existing rows get NULL for the new columns,
+    /// which `load()` treats as `None`.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path_str = path
             .as_ref()
@@ -54,6 +60,23 @@ impl TursoManifestStore {
         .await
         .map_err(|e| ResourceError::Persistence(format!("manifest schema init: {e}")))?;
 
+        // ── Schema migration: add archive columns ─────────────────────
+        // ALTER TABLE ADD COLUMN fails if the column already exists — that's
+        // expected and harmless for idempotent re-runs.
+        for col in ["archive_spec_json", "archive_status_json"] {
+            let sql = format!("ALTER TABLE resource_manifest ADD COLUMN {col} TEXT");
+            // Ignore "duplicate column" errors — the column already exists
+            // from a prior migration.
+            if let Err(e) = conn.execute(&sql, ()).await {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") && !msg.contains("already exists") {
+                    return Err(ResourceError::Persistence(format!(
+                        "manifest migration ({col}): {msg}"
+                    )));
+                }
+            }
+        }
+
         Ok(Self { conn })
     }
 
@@ -63,6 +86,23 @@ impl TursoManifestStore {
     }
 }
 
+/// Serialize an `Option<T: Serialize>` to a JSON string, or empty string
+/// for `None`. Stored as a TEXT column; `load()` treats empty as `None`.
+fn opt_to_json<T: serde::Serialize>(opt: &Option<T>) -> String {
+    match opt {
+        Some(v) => serde_json::to_string(v).unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+/// Deserialize a JSON TEXT column back to `Option<T>`. Empty or NULL → None.
+fn json_to_opt<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    if text.is_empty() {
+        return None;
+    }
+    serde_json::from_str(text).ok()
+}
+
 #[async_trait]
 impl ManifestStore for TursoManifestStore {
     async fn save(&self, entries: &[ResourceEntry]) -> Result<()> {
@@ -70,17 +110,23 @@ impl ManifestStore for TursoManifestStore {
             let address_json = serde_json::to_string(&entry.address)?;
             let metadata_json = serde_json::to_string(&entry.metadata)?;
             let tags_json = serde_json::to_string(&entry.tags)?;
+            let archive_spec_json = opt_to_json(&entry.archive_spec);
+            let archive_status_json = opt_to_json(&entry.archive_status);
+
             self.conn
                 .execute(
                     "INSERT INTO resource_manifest
-                        (name, kind, description, address_json, metadata_json, tags_json)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        (name, kind, description, address_json, metadata_json, tags_json,
+                         archive_spec_json, archive_status_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                      ON CONFLICT(name) DO UPDATE SET
                         kind = excluded.kind,
                         description = excluded.description,
                         address_json = excluded.address_json,
                         metadata_json = excluded.metadata_json,
-                        tags_json = excluded.tags_json",
+                        tags_json = excluded.tags_json,
+                        archive_spec_json = excluded.archive_spec_json,
+                        archive_status_json = excluded.archive_status_json",
                     params_from_iter([
                         Value::Text(entry.name.clone()),
                         Value::Text(entry.kind.as_str().into()),
@@ -88,6 +134,8 @@ impl ManifestStore for TursoManifestStore {
                         Value::Text(address_json),
                         Value::Text(metadata_json),
                         Value::Text(tags_json),
+                        Value::Text(archive_spec_json),
+                        Value::Text(archive_status_json),
                     ]),
                 )
                 .await
@@ -100,7 +148,8 @@ impl ManifestStore for TursoManifestStore {
         let mut rows = self
             .conn
             .query(
-                "SELECT name, kind, description, address_json, metadata_json, tags_json
+                "SELECT name, kind, description, address_json, metadata_json, tags_json,
+                        archive_spec_json, archive_status_json
                  FROM resource_manifest ORDER BY name",
                 (),
             )
@@ -117,6 +166,8 @@ impl ManifestStore for TursoManifestStore {
                     let address_json = text_value(&row, 3)?;
                     let metadata_json = text_value(&row, 4)?;
                     let tags_json = text_value(&row, 5)?;
+                    let archive_spec_json = text_value(&row, 6)?;
+                    let archive_status_json = text_value(&row, 7)?;
 
                     let kind = ResourceKind::from_str(&kind_str).ok_or_else(|| {
                         ResourceError::Persistence(format!("unknown resource kind: {kind_str}"))
@@ -124,6 +175,8 @@ impl ManifestStore for TursoManifestStore {
                     let address = serde_json::from_str(&address_json)?;
                     let metadata = serde_json::from_str(&metadata_json)?;
                     let tags = serde_json::from_str(&tags_json)?;
+                    let archive_spec = json_to_opt::<ArchiveSpec>(&archive_spec_json);
+                    let archive_status = json_to_opt::<ArchiveStatus>(&archive_status_json);
 
                     out.push(ResourceEntry {
                         name,
@@ -132,8 +185,8 @@ impl ManifestStore for TursoManifestStore {
                         address,
                         metadata,
                         tags,
-                        archive_spec: None,
-                        archive_status: None,
+                        archive_spec,
+                        archive_status,
                     });
                 }
                 Ok(None) => break,
