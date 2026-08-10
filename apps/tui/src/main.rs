@@ -276,6 +276,14 @@ struct DataArgs {
 /// Subcommands under `autonomics-tui data ...`.
 #[derive(Debug, Subcommand)]
 enum DataAction {
+    /// Register a new parquet/csv source → Iceberg table ingestion job.
+    /// Creates a ResourceEntry with ingestion_spec in the catalog.
+    Add(AddDataArgs),
+
+    /// Remove a resource entry from the catalog (does NOT drop the Iceberg
+    /// table or delete source files — only unregisters the catalog entry).
+    Remove(RemoveDataArgs),
+
     /// Ingest source files (parquet/csv/tsv) into Iceberg tables.
     /// Iterates all resources with an `ingestion_spec`, or a single
     /// resource when `--resource` is given.
@@ -292,6 +300,74 @@ enum DataAction {
     /// List resources that have ingestion or archive specs configured.
     /// Shows current status (archived_at, verified, etc.).
     List,
+}
+
+/// Arguments for `data add`.
+#[derive(Debug, Args)]
+struct AddDataArgs {
+    /// Logical resource name, e.g. "iceberg.gwas.sumstats".
+    #[arg(long)]
+    name: String,
+
+    /// Human-readable description.
+    #[arg(long)]
+    description: Option<String>,
+
+    /// Source file path or glob (e.g. "/data/gwas/*.parquet").
+    #[arg(long)]
+    source: String,
+
+    /// Source format: parquet, csv, or tsv.
+    #[arg(long, default_value = "parquet")]
+    format: String,
+
+    /// Iceberg schema name (e.g. "gwas").
+    #[arg(long)]
+    schema: String,
+
+    /// Iceberg table name (e.g. "sumstats").
+    #[arg(long)]
+    table: String,
+
+    /// Partition columns (repeat for multiple, e.g. --partition chrom --partition pop).
+    #[arg(long)]
+    partition: Vec<String>,
+
+    /// Write mode: create_if_not_exists, create_or_replace, or append.
+    #[arg(long, default_value = "create_if_not_exists")]
+    mode: String,
+
+    /// Restore source from archive before ingest (requires --archive-remote).
+    #[arg(long)]
+    restore_before: bool,
+
+    /// Archive source after successful ingest (requires --archive-remote).
+    #[arg(long)]
+    archive_after: bool,
+
+    /// rclone remote for source archiving, e.g. "aliyun".
+    #[arg(long)]
+    archive_remote: Option<String>,
+
+    /// rclone remote path for source archiving, e.g. "autonomics-data/gwas/".
+    #[arg(long)]
+    archive_path: Option<String>,
+
+    /// CSV delimiter character (default: ','). For tsv, '\t' is used.
+    #[arg(long)]
+    delimiter: Option<char>,
+
+    /// CSV has no header row.
+    #[arg(long)]
+    no_header: bool,
+}
+
+/// Arguments for `data remove`.
+#[derive(Debug, Args)]
+struct RemoveDataArgs {
+    /// Logical resource name to remove.
+    #[arg(long)]
+    name: String,
 }
 
 fn run_data(args: DataArgs) -> color_eyre::Result<()> {
@@ -320,6 +396,136 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
     // For now, the catalog should have persisted entries from a prior TUI run.
 
     match args.action {
+        DataAction::Add(a) => {
+            use dag_core::resource_catalog::{
+                ArchiveSpec, CsvOptions, IngestionSpec, ResourceAddress,
+                ResourceEntry, ResourceKind, SourceFormat, WriteMode,
+            };
+
+            let format = match a.format.as_str() {
+                "parquet" => SourceFormat::Parquet,
+                "csv" => SourceFormat::Csv,
+                "tsv" => SourceFormat::Tsv,
+                other => {
+                    return Err(color_eyre::eyre::eyre!(
+                        "unknown format '{other}': expected parquet, csv, or tsv"
+                    ))
+                }
+            };
+
+            let mode = match a.mode.as_str() {
+                "create_if_not_exists" => WriteMode::CreateIfNotExists,
+                "create_or_replace" => WriteMode::CreateOrReplace,
+                "append" => WriteMode::Append,
+                other => {
+                    return Err(color_eyre::eyre::eyre!(
+                        "unknown mode '{other}': expected create_if_not_exists, create_or_replace, or append"
+                    ))
+                }
+            };
+
+            let csv_options = match format {
+                SourceFormat::Csv | SourceFormat::Tsv => Some(CsvOptions {
+                    has_header: !a.no_header,
+                    delimiter: a.delimiter.unwrap_or_else(|| {
+                        if matches!(format, SourceFormat::Tsv) { '\t' } else { ',' }
+                    }),
+                    file_extension: None,
+                    compression: None,
+                }),
+                _ => None,
+            };
+
+            // Build the ingestion spec.
+            let mut spec = IngestionSpec {
+                source_path: a.source.clone(),
+                source_format: format,
+                partition_by: a.partition.clone(),
+                mode,
+                restore_before: a.restore_before,
+                archive_after: a.archive_after,
+                source_resource: None,
+                csv_options,
+            };
+
+            // Optional archive spec for the source.
+            let archive_spec = match (&a.archive_remote, &a.archive_path) {
+                (Some(remote), Some(path)) => Some(ArchiveSpec {
+                    remote: remote.clone(),
+                    remote_path: path.clone(),
+                    checksum: true,
+                }),
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(color_eyre::eyre::eyre!(
+                        "--archive-remote and --archive-path must both be set (or both omitted)"
+                    ))
+                }
+                _ => None,
+            };
+
+            // If archive spec is set, also register a source resource for
+            // restore/archive linkage.
+            if let Some(ref aspec) = archive_spec {
+                let src_name = format!("source.{}", a.name.strip_prefix("iceberg.").unwrap_or(&a.name));
+                let src_entry = ResourceEntry::new(
+                    src_name.clone(),
+                    ResourceKind::FilePath,
+                    &format!("Source files for {}", a.name),
+                    ResourceAddress::path(&a.source),
+                )
+                .with_archive(aspec.clone());
+                catalog.register(src_entry)?;
+                spec.source_resource = Some(src_name);
+            }
+
+            // Register the target IcebergTable entry.
+            let entry = ResourceEntry::new(
+                a.name.clone(),
+                ResourceKind::IcebergTable,
+                a.description.as_deref().unwrap_or(""),
+                ResourceAddress::iceberg(&a.schema, &a.table),
+            )
+            .with_ingestion(spec);
+
+            catalog.register(entry)?;
+            catalog.persist().await;
+
+            println!("✓ Registered resource '{}'", a.name);
+            println!("  target: iceberg.{}.{}", a.schema, a.table);
+            println!("  source: {} ({})", a.source, a.format);
+            if !a.partition.is_empty() {
+                println!("  partition: {}", a.partition.join(", "));
+            }
+            println!("  mode: {}", a.mode);
+            if let Some(aspec) = &archive_spec {
+                println!("  archive: {}:{}", aspec.remote, aspec.remote_path);
+            }
+            println!("\nTo ingest: autonomics-tui data ingest -r {}", a.name);
+            return Ok(());
+        }
+
+        DataAction::Remove(a) => {
+            // We need mutable access to unregister. Since ResourceCatalog
+            // doesn't have unregister, we rebuild without the entry.
+            let entries: Vec<_> = catalog
+                .list()
+                .into_iter()
+                .filter(|e| e.name != a.name)
+                .collect();
+            // Clear and re-register all remaining entries.
+            // (ResourceRegistry doesn't have a delete method yet, so we
+            // recreate the catalog.)
+            let new_catalog = Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                config.data_dir.clone(),
+            ));
+            for e in entries {
+                let _ = new_catalog.register(e);
+            }
+            new_catalog.persist().await;
+            println!("✓ Removed resource '{}'", a.name);
+            return Ok(());
+        }
+
         DataAction::Ingest => {
             // Need Datalake for Iceberg table creation/insertion.
             let datalake = Arc::new(datalake::Datalake::new());
