@@ -324,20 +324,21 @@ impl Session {
                 true
             }
             InternalEvent::BgTaskComplete { id: _, seq } => {
-                if let Some((name, ok, content)) =
-                    self.toolset.finished_task_notification(seq).await
-                {
+                // Auto-inject the REAL result — no more "call view_task_results" hint.
+                // The agent's next LLM turn sees the actual output and can act on it
+                // immediately, saving a round-trip.
+                if let Some((name, result)) = self.toolset.finished_task_result(seq).await {
+                    let is_error = result.is_error.unwrap_or(false);
                     self.shared
-                        .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
-                    let note = if ok {
+                        .send_event(AgentEvent::ToolBackgroundComplete { seq, ok: !is_error });
+                    let content = result.text_content();
+                    let note = if is_error {
                         format!(
-                            "Background task '{name}' (#{seq}) finished. \
-                             Call `view_task_results` with task={seq} to read its result."
+                            "Background task '{name}' (#{seq}) completed with error:\n{content}"
                         )
                     } else {
                         format!(
-                            "Background task '{name}' (#{seq}) finished with an error: {content}. \
-                             Call `view_task_results` with task={seq} to read the error."
+                            "Background task '{name}' (#{seq}) completed.\nResult:\n{content}"
                         )
                     };
                     let _ = self.memory.remember(Message::user(note));
@@ -671,15 +672,19 @@ impl Session {
             });
         }
 
-        // If any tool call is wait_task, transition to Waiting so the TUI
-        // shows a "waiting" indicator instead of "requesting". The lifecycle
-        // is reset to Requesting after execute() returns (wait_task has
-        // either completed or timed out). This is purely informational —
-        // wait_task still blocks inside execute(), but the session loop's
-        // tokio::select! still fires on cancel.
+        // Transition to ToolRunning so the TUI can show a distinct
+        // "tool executing" indicator instead of "requesting"/"streaming"
+        // while tools run. This is purely informational — the session
+        // loop's tokio::select! still fires on cancel during execute().
+        //
+        // If any tool call is wait_task, override to Waiting (a more
+        // specific "blocked on background task" indicator). The lifecycle
+        // is reset to Requesting after execute() returns.
         let has_wait_task = toolcalls.iter().any(|tc| tc.name == "wait_task");
         if has_wait_task {
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Waiting);
+        } else {
+            self.set_lifecycle(agentik_types::AgentLifecycleStatus::ToolRunning);
         }
 
         let tool_results = self
@@ -687,11 +692,9 @@ impl Session {
             .execute(&toolcalls, Some(internal_event_tx.clone()))
             .await?;
 
-        // Reset Waiting → Requesting so the session loop's is_running()
-        // check passes and the next iteration begins.
-        if has_wait_task {
-            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
-        }
+        // Reset to Requesting so the session loop's is_running() check
+        // passes and the next iteration begins.
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
 
         tracing::debug!(?tool_results, "tool execution results");
 

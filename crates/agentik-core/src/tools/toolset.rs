@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::task_runtime::{RunMode, TaskStatus, TaskStore, WaitResultKind};
-use crate::tools::{ProgressBuffer, ProgressLog, ToolContext};
+use crate::tools::task_runtime::{TaskStatus, TaskStore};
+use crate::tools::{ExecutionMode, ProgressBuffer, ProgressLog, ToolContext};
 
 use super::DynToolFunction;
 use super::error::ToolError;
@@ -186,26 +186,25 @@ impl Toolset {
         &mut self.registry
     }
 
-    /// Spawn independent threads to execute tool calls
+    /// Execute a batch of tool calls, returning one `ToolResult` per call.
+    ///
+    /// **Sync tools** block the caller until the tool completes or times out.
+    /// The result is injected directly as a `tool_result` message.
+    ///
+    /// **Async tools** return a placeholder immediately. The tool runs in the
+    /// background; when it completes, the real result is auto-injected into
+    /// the agent's context via `BgTaskComplete`.
     pub async fn execute(
         &self,
         toolcalls: &[ToolUse],
-        // This tokio sender is prepared for waking up agent in IDLE status
         notify_tx: Option<super::task_runtime::BgTaskNotifyTx>,
     ) -> Result<Vec<ToolResult>, ToolError> {
         let mut immediate_results: Vec<ToolResult> = Vec::new();
-        // Tool name for each task spawned *in this call*, keyed by `tool_use_id`.
-        // We only emit `ToolCallBackground` for newly spawned tasks — retained
-        // background tasks from a prior call already announced themselves.
-        let mut spawned_names: HashMap<String, String> = HashMap::new();
-
-        // ---- Phase 1: spawn tool tasks WITHOUT holding the tasks lock ----
-        // `tokio::spawn` / `TaskEntry::with_notify` are instantaneous; no need
-        // to hold any lock across them. Collect entries and push once.
-        //
-        // Turning ToolCall into TaskEntry
+        // Collect metadata for async tasks before they're moved into the store.
+        let mut async_meta: Vec<(u64, String, String)> = Vec::new(); // (seq, id, name)
         let mut new_entries: Vec<TaskEntry> = Vec::with_capacity(toolcalls.len());
 
+        // ---- Spawn all tool tasks ----
         for tc in toolcalls {
             let Some(registration) = self.registry.get(&tc.name) else {
                 continue;
@@ -216,68 +215,34 @@ impl Toolset {
                 continue;
             }
 
-            let sync_secs = registration.implementation.sync_seconds();
+            let mode = registration.implementation.execution_mode();
             let timeout_secs = registration.implementation.timeout_seconds();
 
             let implementation = registration.implementation.clone();
             let input = tc.input.clone();
             let task_id = tc.id.clone();
 
-            // Allocate a short 1-based sequence number for this task.
-            // Uses an atomic inside TaskStore — safe under a brief read lock.
             let seq = self.tasks.read().await.alloc_seq();
-
             let cancel_token = CancellationToken::new();
             let cancel = cancel_token.clone();
 
-            // Create the shared progress buffer BEFORE spawning so the tool
-            // can push structured records through `ctx.output` while it runs.
-            // The same buffer is handed to `TaskEntry` below; `view_task_status`
-            // snapshots it as the task's accumulated output.
             let output: ProgressBuffer = Arc::new(std::sync::Mutex::new(ProgressLog::new()));
             let ctx = ToolContext {
                 output: Some(output.clone()),
             };
 
-            // Create the run_mode watch channel BEFORE spawning so a receiver
-            // clone can be passed into the task. This lets the task arm its
-            // bg-phase timeout only AFTER the sync window expires (when `wait()`
-            // flips the mode to Bg), instead of racing two independent timers
-            // started simultaneously at spawn time.
-            let (run_mode_tx, run_mode_rx) =
-                tokio::sync::watch::channel(crate::tools::task_runtime::RunMode::Fg);
-            let bg_phase_rx = run_mode_rx.clone();
-
             let task_handle = tokio::spawn(async move {
-                // Pin the execution future so it can be polled across multiple
-                // `select!` rounds without being consumed.
                 let exec_fut = implementation.execute_with_context(input, &ctx);
                 tokio::pin!(exec_fut);
 
-                let mut bg_phase_rx = bg_phase_rx;
-
-                let result = loop {
-                    if *bg_phase_rx.borrow() == crate::tools::task_runtime::RunMode::Bg {
-                        // Sync window has expired — NOW arm the bg timeout.
-                        tokio::select! {
-                            r = &mut exec_fut => break r,
-                            _ = cancel.cancelled() => break Err(ToolError::Cancel),
-                            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
-                                break Err(ToolError::Timeout { seconds: timeout_secs });
-                            }
-                        }
-                    } else {
-                        // Still inside the sync window — no timeout, just wait
-                        // for completion, cancellation, or the Fg→Bg transition.
-                        tokio::select! {
-                            r = &mut exec_fut => break r,
-                            _ = cancel.cancelled() => break Err(ToolError::Cancel),
-                            Ok(()) = bg_phase_rx.changed() => { /* loop back and re-check mode */ }
-                        }
+                let result = tokio::select! {
+                    r = &mut exec_fut => r,
+                    _ = cancel.cancelled() => Err(ToolError::Cancel),
+                    _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+                        Err(ToolError::Timeout { seconds: timeout_secs })
                     }
                 };
 
-                // Set tool_use_id at result construction time
                 match result {
                     Ok(mut tool_result) => {
                         tool_result.tool_use_id = task_id;
@@ -287,74 +252,83 @@ impl Toolset {
                 }
             });
 
-            new_entries.push(TaskEntry::with_notify(
-                seq,
-                tc.id.clone(),
-                tc.name.clone(),
-                task_handle,
-                cancel_token,
-                sync_secs,
-                notify_tx.clone(),
-                output,
-                run_mode_tx,
-                run_mode_rx,
-            ));
-            spawned_names.insert(tc.id.clone(), tc.name.clone());
+            match mode {
+                ExecutionMode::Sync => {
+                    // Sync: no notify_tx (consumed inline by execute()).
+                    let entry = TaskEntry::with_notify(
+                        seq,
+                        tc.id.clone(),
+                        tc.name.clone(),
+                        task_handle,
+                        cancel_token,
+                        None,
+                        output,
+                    );
+                    new_entries.push(entry);
+                }
+                ExecutionMode::Async => {
+                    // Async: pass notify_tx so BgTaskComplete fires on completion.
+                    async_meta.push((seq, tc.id.clone(), tc.name.clone()));
+                    let entry = TaskEntry::with_notify(
+                        seq,
+                        tc.id.clone(),
+                        tc.name.clone(),
+                        task_handle,
+                        cancel_token,
+                        notify_tx.clone(),
+                        output,
+                    );
+                    new_entries.push(entry);
+                }
+            }
         }
 
-        // ---- Phase 2: insert + partition under a SHORT-lived write lock ----
-        // Add the new entries, then move foreground tasks out so we can wait on
-        // them *outside* the lock. Background tasks stay in the vec untouched.
+        // ---- Insert all entries into the task store ----
+        // Then move sync entries back out for waiting (same pattern as the
+        // old Fg/Bg partition, but simpler: we know which entries are sync
+        // at spawn time rather than discovering it via run_mode).
         let mut to_wait: Vec<TaskEntry> = {
             let mut tasks = self.tasks.write().await;
             tasks.extend(new_entries);
+            // Remove sync entries (those whose id is NOT in async_meta).
+            let async_ids: Vec<&str> = async_meta.iter().map(|(_, id, _)| id.as_str()).collect();
             let mut fg = Vec::new();
             let mut i = 0;
             while i < tasks.len() {
-                // swap_remove keeps this O(1); order within the vec is
-                // irrelevant since results are matched by tool_use_id.
-                if matches!(tasks[i].run_mode(), RunMode::Bg) {
-                    i += 1;
+                if async_ids.contains(&tasks[i].id()) {
+                    i += 1; // async — leave in store
                 } else {
-                    fg.push(tasks.swap_remove(i));
+                    fg.push(tasks.swap_remove(i)); // sync — take out to wait
                 }
             }
             fg
         };
-        // ^ lock released here — the expensive await below is now lock-free.
 
-        // ---- Phase 3: wait for foreground tasks WITHOUT holding the lock ----
-        let wait_results = join_all(to_wait.iter_mut().map(|t| t.wait())).await;
+        // ---- Wait for sync tasks (block until done/timeout/cancel) ----
+        let sync_results = join_all(to_wait.iter_mut().map(|t| t.wait_for_result())).await;
 
-        let mut results: Vec<ToolResult> = Vec::with_capacity(wait_results.len());
-        for wait_result in wait_results {
-            // When a tool didn't finish within its sync window, it is now
-            // running in the background — notify frontend observers and agent immediately. Only
-            // announce tasks spawned in this call; retained background tasks
-            // from a prior turn already announced themselves.
-            if let WaitResultKind::StillRunning { ref id, seq } = wait_result.inner
-                && let Some(name) = spawned_names.get(id)
-                && let Some(tx) = &self.agent_event_tx
-            {
+        // ---- Build results vector ----
+        let mut results: Vec<ToolResult> = Vec::new();
+        results.extend(sync_results);
+
+        // Async tasks: emit ToolCallBackground + return placeholder.
+        for (seq, id, name) in &async_meta {
+            if let Some(tx) = &self.agent_event_tx {
                 let _ = tx.send(AgentEvent::ToolCallBackground {
-                    seq,
+                    seq: *seq,
                     name: name.clone(),
                 });
             }
-            results.push(wait_result.into());
+            results.push(ToolResult::from_pending_task(id, *seq));
         }
 
-        // ---- Phase 4: reinsert + cleanup under a SHORT-lived write lock ----
-        // `wait()` flips still-running tasks to RunMode::Bg; finished tasks are
-        // marked read via the `WaitResult -> ToolResult` conversion, so the
-        // retain drops exactly the consumed ones.
+        // ---- Cleanup: remove completed sync tasks, keep async tasks ----
         {
             let mut tasks = self.tasks.write().await;
             tasks.extend(to_wait);
             tasks.retain(|t| !t.is_read());
         }
 
-        // NOTE: intermediate result should be pull by agent rather than injected passively
         results.extend(immediate_results);
 
         Ok(results)
@@ -364,28 +338,15 @@ impl Toolset {
         self.registry.definitions()
     }
 
-    /// Look up a finished background task by `tool_use_id` and return
-    /// `(name, ok, content)` for a completion notification, **without**
-    /// removing the entry from the task list.
-    ///
-    /// The real result stays in the `TaskEntry` (read on demand via
-    /// `view_task_results`) so it is never injected into the LLM context.
-    /// For background tasks the `Done` status only holds a placeholder, so the
-    /// real content is read from `tool_result`.
+    /// Look up a finished async task by seq and return the real result
+    /// for auto-injection into the agent's context.
     ///
     /// Returns `None` when the task is unknown or still running.
-    pub async fn finished_task_notification(&self, seq: u64) -> Option<(String, bool, String)> {
+    pub async fn finished_task_result(&self, seq: u64) -> Option<(String, ToolResult)> {
         let tasks = self.tasks.read().await;
         let entry = tasks.iter().find(|t| t.seq() == seq)?;
-        match entry.status() {
-            TaskStatus::Done(res) => Some((
-                entry.name().to_string(),
-                true,
-                format!("Task {0} finished successfully", res.tool_use_id),
-            )),
-            TaskStatus::Failed(ref err) => Some((entry.name().to_string(), false, err.to_string())),
-            TaskStatus::Running => None,
-        }
+        let result = entry.tool_result()?;
+        Some((entry.name().to_string(), result))
     }
 
     /// Check whether any background tasks are still running.
@@ -408,12 +369,13 @@ impl Toolset {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::tools::ToolFunction;
+    use crate::tools::{ExecutionMode, ToolFunction};
     use agentik_sdk::types::tools::ToolUse;
     use agentik_types::AgentEvent;
     use async_trait::async_trait;
@@ -442,40 +404,6 @@ mod tests {
         }
     }
 
-    #[tool(name = "test_bg_tool", description = "A bg tool")]
-    struct MockTwophaseInput {
-        reason: String,
-    }
-
-    struct MockTwophaseTool {
-        result_text: String,
-    }
-
-    impl MockTwophaseTool {
-        fn new(text: &str) -> Self {
-            Self {
-                result_text: text.to_string(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ToolFunction for MockTwophaseTool {
-        type Input = MockTwophaseInput;
-
-        fn sync_seconds(&self) -> u64 {
-            1
-        }
-        async fn run(
-            &self,
-            input: MockTwophaseInput,
-        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
-            dbg!(&input.reason);
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            Ok(crate::tools::ToolResult::success(self.result_text.clone()))
-        }
-    }
-
     #[async_trait]
     impl ToolFunction for MockTool {
         type Input = MockInput;
@@ -485,6 +413,72 @@ mod tests {
             _input: MockInput,
         ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
             Ok(crate::tools::ToolResult::success(self.result_text.clone()))
+        }
+    }
+
+    // ── Async mock tool ──
+
+    #[tool(name = "test_async_tool", description = "An async tool")]
+    struct MockAsyncInput {
+        reason: String,
+    }
+
+    struct MockAsyncTool {
+        result_text: String,
+    }
+
+    impl MockAsyncTool {
+        fn new(text: &str) -> Self {
+            Self {
+                result_text: text.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolFunction for MockAsyncTool {
+        type Input = MockAsyncInput;
+
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Async
+        }
+
+        async fn run(
+            &self,
+            _input: MockAsyncInput,
+        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(crate::tools::ToolResult::success(self.result_text.clone()))
+        }
+    }
+
+    // ── Progress mock tool (Async, pushes progress via context) ──
+
+    #[tool(name = "test_progress_tool", description = "emits progress")]
+    struct MockProgressInput {
+        reason: String,
+    }
+
+    struct MockProgressTool;
+
+    #[async_trait]
+    impl ToolFunction for MockProgressTool {
+        type Input = MockProgressInput;
+
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Async
+        }
+
+        async fn execute_with_context(
+            &self,
+            input: Value,
+            ctx: &ToolContext,
+        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
+            let _typed: MockProgressInput = serde_json::from_value(input)?;
+            ctx.emit_line("step 1");
+            ctx.emit_line("step 2");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(crate::tools::ToolResult::success("done"))
         }
     }
 
@@ -507,7 +501,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_tool() {
+    async fn test_execute_sync_tool() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
         let registry = build_registry(vec![MockTool::new("mock result").into()]);
         let toolset = Toolset::from_registry(registry, Some(tx));
@@ -521,194 +515,161 @@ mod tests {
         let results = toolset.execute(&[tool_call], None).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tool_use_id, "tc1");
+        // Sync tool returns the real result, not a placeholder.
+        assert!(results[0].text_content().contains("mock result"));
     }
 
+    /// Sync tool blocks until it completes; result is the actual content.
     #[tokio::test]
-    async fn test_double_phase_tool_execution() {
+    async fn test_sync_tool_returns_real_result() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let registry = build_registry(vec![
-            MockTwophaseTool::new("test").into(),
-            MockTool::new("test").into(),
-        ]);
+        let registry = build_registry(vec![MockTool::new("hello world").into()]);
         let toolset = Toolset::from_registry(registry, Some(tx));
 
-        let tool_call = ToolUse {
-            id: "tc1".to_string(),
-            name: "test_bg_tool".to_string(),
-            input: json!({ "reason": "test" }),
-        };
-
-        let tool_call_immediate = ToolUse {
-            id: "tc2".to_string(),
-            name: "test_tool".to_string(),
-            input: json!({ "reason": "test" }),
-        };
-
-        let result = toolset
-            .execute(&[tool_call, tool_call_immediate], None)
+        let results = toolset
+            .execute(
+                &[ToolUse {
+                    id: "tc1".to_string(),
+                    name: "test_tool".to_string(),
+                    input: json!({ "reason": "test" }),
+                }],
+                None,
+            )
             .await
             .unwrap();
 
-        dbg!(&result);
-        assert!(result.len() == 2)
+        assert_eq!(results[0].text_content(), "hello world");
+
+        // Sync tasks are cleaned up after completion.
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        assert!(tasks.is_empty(), "sync task should be cleaned up");
     }
 
-    /// Regression test: when `sync_seconds` and `timeout_seconds` are close
-    /// together, the tool must still transition cleanly from sync → background
-    /// and complete successfully. Before the fix, both timers started at spawn
-    /// time and the bg timeout could fire prematurely during the sync window.
+    /// Async tool returns a placeholder immediately.
     #[tokio::test]
-    async fn test_close_sync_and_timeout_no_spurious_timeout() {
+    async fn test_async_tool_returns_placeholder() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let registry = build_registry(vec![MockCloseTimeoutTool.into()]);
+        let registry = build_registry(vec![MockAsyncTool::new("async result").into()]);
         let toolset = Toolset::from_registry(registry, Some(tx));
 
-        let tool_call = ToolUse {
-            id: "tc1".to_string(),
-            name: "test_close_timeout_tool".to_string(),
-            input: json!({ "reason": "test" }),
-        };
+        let results = toolset
+            .execute(
+                &[ToolUse {
+                    id: "tc1".to_string(),
+                    name: "test_async_tool".to_string(),
+                    input: json!({ "reason": "test" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
 
-        // `execute` returns after the 1s sync window; tool is now in background.
-        let result = toolset.execute(&[tool_call], None).await.unwrap();
-        assert_eq!(result.len(), 1);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].text_content().contains("running in background"));
+        assert!(!results[0].text_content().contains("async result"));
 
-        // The result should be a "pending task" notification (StillRunning),
-        // NOT a timeout error.
+        // Async task is retained in the task store.
         let tasks = toolset.tasks_handle();
         let tasks = tasks.read().await;
-        let entry = tasks
-            .iter()
-            .find(|t| t.id() == "tc1")
-            .expect("task should be retained as background");
-        assert!(
-            matches!(
-                entry.status(),
-                crate::tools::task_runtime::TaskStatus::Running
-            ),
-            "task should still be running after sync window"
-        );
-        drop(tasks);
-
-        // Wait for the background task to complete (2.5s total sleep).
-        tokio::time::sleep(Duration::from_secs(3)).await;
-
-        let tasks = toolset.tasks_handle();
-        let tasks = tasks.read().await;
-        let entry = tasks
-            .iter()
-            .find(|t| t.id() == "tc1")
-            .expect("task should still be in the list");
-        match entry.status() {
-            crate::tools::task_runtime::TaskStatus::Done(_) => { /* success */ }
-            crate::tools::task_runtime::TaskStatus::Failed(_) => {
-                panic!("expected Done, got Failed — spurious timeout?");
-            }
-            crate::tools::task_runtime::TaskStatus::Running => {
-                panic!("expected Done, still Running (test timed out?)");
-            }
-        }
+        assert!(tasks.iter().any(|t| t.id() == "tc1"), "async task retained");
     }
 
-    // A tool that opts into the per-invocation context and pushes live output.
-    #[tool(name = "test_progress_tool", description = "emits progress")]
-    struct MockProgressInput {
-        reason: String,
-    }
-
-    struct MockProgressTool;
-
-    // Regression: sync window (1s) and timeout (2s) are close together.
-    // Before the fix, both timers started simultaneously at spawn time, so the
-    // 2s timeout could fire while the tool was legitimately still in its sync
-    // window — producing a spurious ToolError::Timeout.  After the fix, the
-    // timeout timer only starts AFTER the sync window expires, so the tool
-    // transitions cleanly to background and completes successfully.
-    #[tool(name = "test_close_timeout_tool", description = "sync≈timeout")]
-    struct MockCloseTimeoutInput {
-        reason: String,
-    }
-
-    struct MockCloseTimeoutTool;
-
-    #[async_trait]
-    impl ToolFunction for MockCloseTimeoutTool {
-        type Input = MockCloseTimeoutInput;
-
-        fn sync_seconds(&self) -> u64 {
-            1
-        }
-
-        fn timeout_seconds(&self) -> u64 {
-            2
-        }
-
-        async fn run(
-            &self,
-            _input: MockCloseTimeoutInput,
-        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
-            // Sleep longer than both timers (3s > 2s timeout). The bg timeout
-            // (armed after the 1s sync window) gives us 2s, so total budget
-            // is 1+2 = 3s.  But since the tool sleeps for exactly 3s it's
-            // borderline — instead sleep 2.5s which is > sync (1s) but <
-            // sync+timeout (3s), so the tool should finish successfully.
-            tokio::time::sleep(Duration::from_millis(2500)).await;
-            Ok(crate::tools::ToolResult::success("done"))
-        }
-    }
-
-    #[async_trait]
-    impl ToolFunction for MockProgressTool {
-        type Input = MockProgressInput;
-
-        // Tiny sync window so the tool flips to background while it sleeps,
-        // keeping its TaskEntry (and accumulated output) queryable.
-        fn sync_seconds(&self) -> u64 {
-            1
-        }
-
-        async fn execute_with_context(
-            &self,
-            input: Value,
-            ctx: &ToolContext,
-        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
-            let _typed: MockProgressInput = serde_json::from_value(input)?;
-            // Emit immediately so the output is populated before the sync
-            // window expires.
-            ctx.emit_line("step 1");
-            ctx.emit_line("step 2");
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            Ok(crate::tools::ToolResult::success("done"))
-        }
-    }
-
-    /// A tool overriding `execute_with_context` must be able to push progress
-    /// into its TaskEntry's output channel, where `view_task_status` reads it.
+    /// Async tool eventually completes and stores the real result.
     #[tokio::test]
-    async fn test_execute_with_context_surfaces_output() {
+    async fn test_async_task_completes_with_result() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![MockAsyncTool::new("done!").into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        toolset
+            .execute(
+                &[ToolUse {
+                    id: "tc1".to_string(),
+                    name: "test_async_tool".to_string(),
+                    input: json!({ "reason": "test" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        let entry = tasks
+            .iter()
+            .find(|t| t.id() == "tc1")
+            .expect("async task retained");
+        let result = entry.tool_result().expect("async task completed");
+        assert!(result.text_content().contains("done!"));
+    }
+
+    /// Mixed sync + async execution in the same batch.
+    #[tokio::test]
+    async fn test_mixed_sync_and_async() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![
+            MockAsyncTool::new("async").into(),
+            MockTool::new("sync").into(),
+        ]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        let results = toolset
+            .execute(
+                &[
+                    ToolUse {
+                        id: "tc1".to_string(),
+                        name: "test_async_tool".to_string(),
+                        input: json!({ "reason": "test" }),
+                    },
+                    ToolUse {
+                        id: "tc2".to_string(),
+                        name: "test_tool".to_string(),
+                        input: json!({ "reason": "test" }),
+                    },
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        let async_r = results.iter().find(|r| r.tool_use_id == "tc1").unwrap();
+        let sync_r = results.iter().find(|r| r.tool_use_id == "tc2").unwrap();
+        assert!(sync_r.text_content().contains("sync"));
+        assert!(async_r.text_content().contains("background"));
+    }
+
+    /// Async tool with context pushes progress to its TaskEntry output.
+    #[tokio::test]
+    async fn test_async_tool_surfaces_progress() {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
         let registry = build_registry(vec![MockProgressTool.into()]);
         let toolset = Toolset::from_registry(registry, Some(tx));
 
-        let tool_call = ToolUse {
-            id: "tc1".to_string(),
-            name: "test_progress_tool".to_string(),
-            input: json!({ "reason": "test" }),
-        };
+        toolset
+            .execute(
+                &[ToolUse {
+                    id: "tc1".to_string(),
+                    name: "test_progress_tool".to_string(),
+                    input: json!({ "reason": "test" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
 
-        // Returns once the sync window expires; the tool is now a background
-        // task still mid-sleep, with its output already emitted.
-        let _ = toolset.execute(&[tool_call], None).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         let tasks = toolset.tasks_handle();
         let tasks = tasks.read().await;
         let entry = tasks
             .iter()
             .find(|t| t.id() == "tc1")
-            .expect("background task should be retained while still running");
+            .expect("async task retained");
         let out = entry.output();
-        // emit_line pushes a structured `kind="log"` record carrying the text
-        // in `message` (not a flat concatenated string).
         let messages: Vec<&str> = out
             .iter()
             .filter(|r| r.kind == "log")
@@ -716,12 +677,7 @@ mod tests {
             .collect();
         assert!(
             messages.contains(&"step 1") && messages.contains(&"step 2"),
-            "TaskEntry.output should carry both emitted records in order; got: {out:?}"
-        );
-        assert_eq!(
-            out.len(),
-            2,
-            "expected exactly two progress records; got: {out:?}"
+            "output should carry both emitted records"
         );
     }
 
@@ -733,17 +689,13 @@ mod tests {
         let toolset_a = Toolset::from_registry(registry.clone(), None);
         let toolset_b = Toolset::from_registry(registry, None);
 
-        // Task handles must NOT be the same Arc.
         assert!(!Arc::ptr_eq(
             &toolset_a.tasks_handle(),
             &toolset_b.tasks_handle(),
         ));
-
-        // But registries ARE shared.
         assert!(Arc::ptr_eq(toolset_a.registry(), toolset_b.registry(),));
 
-        // Running a tool on A does not affect B's task list.
-        let _ = toolset_a
+        toolset_a
             .execute(
                 &[ToolUse {
                     id: "tc_a".to_string(),
@@ -757,9 +709,6 @@ mod tests {
 
         let b_tasks = toolset_b.tasks_handle();
         let b_tasks = b_tasks.read().await;
-        assert!(
-            b_tasks.is_empty(),
-            "session B should have no tasks from session A"
-        );
+        assert!(b_tasks.is_empty(), "session B should have no tasks from A");
     }
 }

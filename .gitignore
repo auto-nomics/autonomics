@@ -6,6 +6,7 @@ target
 *.db-shm
 *.db-tshm
 .history
+.envrc
 .autonomics
 
 
@@ -30,5 +31,12 @@ reference/
 infra/.venv/
 infra/**/__pycache__/
 infra/**/*.pyc
+
+# Docker — never commit secrets
+infra/docker/.env
+
+# Rendered at startup by `make up` (scripts/render-garage-config.sh);
+# the source of truth is garage.toml.template.
+infra/docker/garage/garage.toml
 
 

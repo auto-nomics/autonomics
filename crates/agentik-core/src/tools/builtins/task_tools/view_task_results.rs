@@ -34,10 +34,6 @@ impl TaskResultViewerTool {
 impl ToolFunction for TaskResultViewerTool {
     type Input = ViewTaskResultsInput;
 
-    fn sync_seconds(&self) -> u64 {
-        10
-    }
-
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let tasks = self.tasks.read().await;
         let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {

@@ -273,12 +273,23 @@ pub trait ToolFunction: Send + Sync {
         Ok(())
     }
 
-    /// Phase 1 threshold. Tool execution will convert from synchronous into asynchronus.
-    fn sync_seconds(&self) -> u64 {
-        30
+    /// How this tool should be executed by the toolset.
+    ///
+    /// - [`ExecutionMode::Sync`] (default): the agent blocks until the tool
+    ///   returns a result or [`timeout_seconds`](Self::timeout_seconds)
+    ///   fires. The result is injected directly into the agent's context.
+    /// - [`ExecutionMode::Async`]: the toolset returns a placeholder
+    ///   immediately. The tool runs in the background; when it completes,
+    ///   the real result is auto-injected into the agent's context.
+    fn execution_mode(&self) -> ExecutionMode {
+        ExecutionMode::Sync
     }
 
-    /// Phase 2 timeout threshold
+    /// Timeout in seconds.
+    ///
+    /// For Sync tools: the agent blocks up to this duration. On expiry,
+    /// a timeout error is injected as the tool result.
+    /// For Async tools: the background task is killed after this duration.
     fn timeout_seconds(&self) -> u64 {
         300
     }
@@ -286,6 +297,25 @@ pub trait ToolFunction: Send + Sync {
     fn definition(&self) -> ToolDefinition {
         Self::Input::definition()
     }
+}
+
+/// How a tool is executed by the toolset.
+///
+/// Replaces the old `sync_seconds()` two-phase model where every tool
+/// started in a synchronous window and then optionally transitioned to
+/// background. The new model is explicit: a tool is either fully
+/// synchronous (blocks the agent) or fully asynchronous (returns
+/// immediately, result auto-injected later).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Block the agent until the tool completes or times out.
+    /// The result is injected directly as a `tool_result` message.
+    Sync,
+
+    /// Return a placeholder immediately. The tool runs in the background.
+    /// When it completes, the real result is auto-injected into the
+    /// agent's context as a user message.
+    Async,
 }
 
 /// Type-erased view of a tool, for heterogeneous storage.
@@ -314,7 +344,7 @@ pub trait DynToolFunction: Send + Sync {
 
     fn validate_input(&self, input: &Value) -> Result<(), ToolError>;
 
-    fn sync_seconds(&self) -> u64;
+    fn execution_mode(&self) -> ExecutionMode;
     fn timeout_seconds(&self) -> u64;
 
     fn definition(&self) -> ToolDefinition;
@@ -338,8 +368,8 @@ impl<T: ToolFunction + ?Sized> DynToolFunction for T {
         ToolFunction::validate_input(self, input)
     }
 
-    fn sync_seconds(&self) -> u64 {
-        ToolFunction::sync_seconds(self)
+    fn execution_mode(&self) -> ExecutionMode {
+        ToolFunction::execution_mode(self)
     }
 
     fn timeout_seconds(&self) -> u64 {

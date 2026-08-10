@@ -148,14 +148,8 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
 impl ToolFunction for RunDagTool {
     type Input = RunDagInput;
 
-    /// Phase 1 threshold. Tool execution will convert from synchronous into asynchronus.
-    fn sync_seconds(&self) -> u64 {
-        1
-    }
-
-    // DAG execution can run long (full pipelines: LD scoring, fitting,
-    // heavy joins). Override the default 300s phase-2 timeout so that a
-    // genuinely long run is not killed prematurely.
+    // Sync — the agent needs the DAG output to continue. DAG execution
+    // can run long (full pipelines: LD scoring, fitting, heavy joins).
     fn timeout_seconds(&self) -> u64 {
         60 * 60
     }

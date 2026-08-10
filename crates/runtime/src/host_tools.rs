@@ -220,9 +220,9 @@ impl ToolFunction for DeriveProfileTool {
 
 #[tool(
     name = "delegate_to",
-    description = "Delegate a task to another agent and wait for its full response. \
-                   The target agent processes the message and its complete output is \
-                   returned as this tool's result. Runs in the background — use \
+    description = "Delegate a task to another agent. The target agent's COMPLETE response \
+                   is injected back into your context as this tool's result — you will \
+                   see and can act on the full output. Runs in the background; use \
                    wait_task / view_task_results to retrieve the response. \
                    Multiple delegates can run concurrently."
 )]
@@ -242,11 +242,10 @@ struct DelegateToTool {
 impl ToolFunction for DelegateToTool {
     type Input = DelegateToInput;
 
-    /// sync_seconds = 0 → immediately goes to background execution.
-    /// The agent can continue other work and retrieve the result via
-    /// wait_task / view_task_results.
-    fn sync_seconds(&self) -> u64 {
-        0
+    /// Async — the target agent's full response is auto-injected when it
+    /// finishes. The caller continues immediately.
+    fn execution_mode(&self) -> agentik_core::tools::ExecutionMode {
+        agentik_core::tools::ExecutionMode::Async
     }
 
     /// 24-hour timeout — delegated agents may run long analyses.
@@ -269,18 +268,17 @@ impl ToolFunction for DelegateToTool {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Send Message — fire-and-forget inter-agent message (Phase 5)
+// Send Message — inter-agent notification without response injection (Phase 5)
 // ═══════════════════════════════════════════════════════════════════════
 
 #[tool(
     name = "send_message",
-    description = "Send a fire-and-forget message to another agent. Unlike delegate_to, \
-                   this does NOT wait for the target's response — the message is \
-                   delivered and you continue immediately. Use this when:\n\
-                   - You want to notify another agent of something without needing a reply.\n\
-                   - You want to kick off background work on another agent and check \
-                     results later via wait_agent or get_agent_info.\n\
-                   - You need to send multiple messages to different agents in parallel.\n\
+    description = "Send a message to another agent WITHOUT receiving its response. \
+                   Unlike delegate_to, the target agent's output is NOT injected back \
+                   into your context — you only get a delivery confirmation. Use this when:\n\
+                   - You want to notify another agent without needing its reply.\n\
+                   - You want to kick off work and check results later via wait_agent.\n\
+                   - You need to broadcast to multiple agents without consuming each response.\n\
                    The target agent processes the message in its own turn. If it is \
                    currently busy, the message is queued and handled on its next turn."
 )]
@@ -301,12 +299,8 @@ impl ToolFunction for SendMessageTool {
     type Input = SendMessageInput;
 
     /// Synchronous fast-return — the tool completes as soon as the host
-    /// confirms delivery (name resolution + channel send). No waiting
-    /// for the target agent's response.
-    fn sync_seconds(&self) -> u64 {
-        30
-    }
-
+    /// confirms delivery (name resolution + channel send). The key
+    /// Sync (default) — delivery confirmation returned immediately.
     /// 1-hour hard cap. Delivery is near-instant; the cap only matters
     /// if the host command channel is jammed.
     fn timeout_seconds(&self) -> u64 {
@@ -503,10 +497,10 @@ impl ToolFunction for WaitAgentTool {
 
     /// Background execution — `delegate_to` style. The caller can fire
     /// wait_agent and continue other work, retrieving the result via
-    /// `wait_task` / `view_task_results`. Matches codex's
-    /// `multi_agents::wait_agent` which uses the same pattern.
-    fn sync_seconds(&self) -> u64 {
-        0
+    /// Async — the wait result is auto-injected when the target agent
+    /// reaches a terminal status.
+    fn execution_mode(&self) -> agentik_core::tools::ExecutionMode {
+        agentik_core::tools::ExecutionMode::Async
     }
 
     /// Hard cap 24 hours. The inner wait is clamped to 1 hour, so
@@ -807,10 +801,7 @@ impl ToolFunction for InterruptAgentTool {
     /// The agent then emits `LifecycleChanged(Cancelled)` through the
     /// event stream; if you're tracking the result, follow up with
     /// `wait_agent` to see the Cancelled status.
-    fn sync_seconds(&self) -> u64 {
-        0
-    }
-
+    /// Sync (default) — fast fire-and-forget, returns near-instantly.
     /// 1 hour cap — interrupt itself should be near-instant; the cap
     /// only matters if the host command channel is jammed.
     fn timeout_seconds(&self) -> u64 {
@@ -902,38 +893,26 @@ mod tests {
     use super::*;
     use crate::control::HostCommand;
     use crate::host::HostEvent;
-    use agentik_core::tools::ToolFunction;
+    use agentik_core::tools::{ExecutionMode, ToolFunction};
 
-    /// The `SendMessageTool` should be synchronous with a fast return
-    /// (not background like `delegate_to` or `wait_agent`). This ensures
-    /// the calling agent gets immediate delivery confirmation without
-    /// occupying a background task slot.
+    /// The `SendMessageTool` should be Sync — the calling agent gets
+    /// immediate delivery confirmation.
     #[test]
-    fn send_message_tool_is_synchronous_fast_return() {
+    fn send_message_tool_is_sync() {
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
         let tool = SendMessageTool { control };
 
-        // sync_seconds > 0 → synchronous (agent waits for completion).
-        // Not 0 (which would mean background / fire-and-forget at the
-        // tool framework level).
-        assert!(
-            tool.sync_seconds() > 0,
-            "send_message must be synchronous, not background"
-        );
-
-        // timeout should be reasonable (1 hour — delivery is near-instant,
-        // the cap only catches a jammed host channel).
+        assert_eq!(tool.execution_mode(), ExecutionMode::Sync);
         assert_eq!(tool.timeout_seconds(), 3600);
     }
 
-    /// `DelegateToTool` and `SendMessageTool` should differ in sync
-    /// semantics: delegate is background (sync_seconds=0), send_message
-    /// is synchronous (sync_seconds > 0). This distinction is what makes
-    /// them useful for different coordination patterns.
+    /// `DelegateToTool` is Async (target response auto-injected later).
+    /// `SendMessageTool` is Sync (no response injection). This is the
+    /// key semantic distinction.
     #[test]
-    fn send_message_sync_vs_delegate_background() {
+    fn send_message_sync_vs_delegate_async() {
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
@@ -943,9 +922,7 @@ mod tests {
         };
         let sender = SendMessageTool { control };
 
-        // delegate_to is background (sync_seconds = 0).
-        assert_eq!(delegate.sync_seconds(), 0);
-        // send_message is synchronous.
-        assert!(sender.sync_seconds() > 0);
+        assert_eq!(delegate.execution_mode(), ExecutionMode::Async);
+        assert_eq!(sender.execution_mode(), ExecutionMode::Sync);
     }
 }

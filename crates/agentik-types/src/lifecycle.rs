@@ -9,21 +9,21 @@
 /// ## State diagram
 ///
 /// ```text
-///   ┌──────────────────────────────────────────────────────────┐
-///   │                                                          ▼
-///  Idle ──→ Requesting ──→ Streaming ──→ (tool calls?) ──→ Requesting
-///   ▲          │                │                  │
-///   │          │                │                 yes
-///   │          ▼                ▼                  │
-///   │      Retrying         Compacting             │
-///   │          │                │                  │
-///   │          ▼                ▼                  │
-///   │      Requesting       Requesting             │
-///   │                                               │
-///   │         Cancelled ◀──── user Ctrl+C ─────────┘
-///   │            │
-///   │            │ (next message)
-///   └────────────┴──→ Requesting
+///   ┌────────────────────────────────────────────────────────────────┐
+///   │                                                                ▼
+///  Idle ──→ Requesting ──→ Streaming ──→ (tool calls?) ──→ ToolRunning ──→ Requesting
+///   ▲          │                │                  │                        │
+///   │          │                │                 yes                       │
+///   │          ▼                ▼                  │                        │
+///   │      Retrying         Compacting             │                        │
+///   │          │                │                  │                        │
+///   │          ▼                ▼                  │                        │
+///   │      Requesting       Requesting             │                        │
+///   │                                                 │                     │
+///   │         Cancelled ◀────── user Ctrl+C ─────────┘                     │
+///   │            │                    ▲                                    │
+///   │            │ (next message)     │ wait_task overrides ToolRunning    │
+///   └────────────┴──→ Requesting     ──→ Waiting ──→ Requesting            │
 ///
 ///   Error ◀─── fatal failure (persists until next message)
 /// ```
@@ -49,6 +49,16 @@ pub enum AgentLifecycleStatus {
 
     /// Agent is receiving streamed output from the LLM.
     Streaming,
+
+    /// Agent has dispatched tool calls and is waiting for their results.
+    /// This state covers the entire duration of tool execution — from the
+    /// moment tools are invoked until results are returned. It gives the TUI
+    /// a distinct "tool running" indicator so long-running tools don't
+    /// appear as "requesting" or "streaming".
+    ///
+    /// `Waiting` (for `wait_task`) overrides this to convey a more specific
+    /// "blocked on background task" meaning.
+    ToolRunning,
 
     /// A retryable error occurred; the agent is in exponential back-off
     /// before the next attempt.

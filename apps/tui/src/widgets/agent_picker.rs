@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 
 use agentik_core::storage::AgentRecord;
+use agentik_types::AgentPath;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -35,7 +36,8 @@ use crate::widgets::popup::Popup;
 #[derive(Clone)]
 pub struct AgentRecordItem {
     pub id: uuid::Uuid,
-    pub name: String,
+    /// Full hierarchical agent path (e.g. `/root/researcher`).
+    pub path: AgentPath,
     pub last_active: i64,
     /// Serialized `AgentProfile` stored at registration time. Used to
     /// reconstruct the profile if the named profile no longer exists.
@@ -83,6 +85,13 @@ pub struct AgentPickerState {
     pub delete_confirm_id: Option<uuid::Uuid>,
     /// Text typed during delete confirmation.
     pub delete_confirm_input: String,
+    /// When `Some`, rename mode is active for this agent ID.
+    /// The user types a new short name and presses Enter to confirm.
+    pub rename_id: Option<uuid::Uuid>,
+    /// Text typed during rename.
+    pub rename_input: String,
+    /// Validation error message for the rename input (shown inline).
+    pub rename_error: Option<String>,
 }
 
 impl AgentPickerState {
@@ -98,6 +107,9 @@ impl AgentPickerState {
         self.visible = false;
         self.delete_confirm_id = None;
         self.delete_confirm_input.clear();
+        self.rename_id = None;
+        self.rename_input.clear();
+        self.rename_error = None;
     }
 
     // ── Delete confirmation ──
@@ -126,6 +138,67 @@ impl AgentPickerState {
 
     pub fn remove_by_id(&mut self, id: uuid::Uuid) {
         self.items.retain(|i| i.id != id);
+        self.rebuild_rows();
+    }
+
+    // ── Rename ──
+
+    /// Enter rename mode for the currently selected leaf agent.
+    /// Pre-fills the input with the agent's current short name.
+    pub fn start_rename(&mut self) {
+        if let Some(item) = self.selected_item() {
+            self.rename_id = Some(item.id);
+            self.rename_input = item.path.name().to_string();
+            self.rename_error = None;
+        }
+    }
+
+    pub fn cancel_rename(&mut self) {
+        self.rename_id = None;
+        self.rename_input.clear();
+        self.rename_error = None;
+    }
+
+    /// Validate the rename input and, if valid, return `(agent_id, new_path)`.
+    ///
+    /// The new path is constructed by replacing the last segment of the
+    /// agent's current path with the user-supplied name. The name must
+    /// be a valid `AgentPath` segment (lowercase `[a-z0-9_]`, 1–32 chars).
+    pub fn check_rename(&mut self) -> Option<(uuid::Uuid, AgentPath)> {
+        let id = self.rename_id?;
+        let new_name = self.rename_input.trim();
+
+        // Validate segment.
+        if let Err(e) = agentik_types::validate_segment(new_name) {
+            self.rename_error = Some(e.to_string());
+            return None;
+        }
+        self.rename_error = None;
+
+        // Find the agent's current path and replace the last segment.
+        let item = self.items.iter().find(|i| i.id == id)?;
+        let parent = item.path.parent();
+        let new_path = match &parent {
+            Some(p) => p.join(new_name).unwrap_or_else(|_| {
+                // join only fails on invalid segment, already validated above.
+                AgentPath::root().join(new_name).unwrap()
+            }),
+            None => AgentPath::root(), // root can't be renamed
+        };
+
+        // Clear rename state (commit).
+        self.rename_id = None;
+        self.rename_input.clear();
+
+        Some((id, new_path))
+    }
+
+    /// Update an agent's path in the in-memory item list (after storage
+    /// confirms the rename succeeded).
+    pub fn apply_rename(&mut self, id: uuid::Uuid, new_path: AgentPath) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+            item.path = new_path;
+        }
         self.rebuild_rows();
     }
 
@@ -189,14 +262,25 @@ impl AgentPickerState {
     // ── Data ──
 
     /// Populate the picker from agent records.
+    ///
+    /// Each record's `name` field is expected to contain the full
+    /// hierarchical AgentPath (e.g. `/root/researcher`). Records whose
+    /// name cannot be parsed as a valid AgentPath are skipped with a
+    /// warning.
     pub fn set_records(&mut self, records: &[AgentRecord]) {
         self.items = records
             .iter()
-            .map(|r| AgentRecordItem {
-                id: r.id,
-                name: r.name.clone(),
-                last_active: r.last_active,
-                config_json: r.config_json.clone(),
+            .filter_map(|r| match AgentPath::try_from(r.name.as_str()) {
+                Ok(path) => Some(AgentRecordItem {
+                    id: r.id,
+                    path,
+                    last_active: r.last_active,
+                    config_json: r.config_json.clone(),
+                }),
+                Err(e) => {
+                    tracing::warn!(id = %r.id, name = %r.name, error = %e, "skipping agent record with invalid path");
+                    None
+                }
             })
             .collect();
         self.rebuild_rows();
@@ -228,33 +312,31 @@ impl AgentPickerState {
                 self.items
                     .iter()
                     .enumerate()
-                    .filter(|(_, item)| item.name.to_lowercase().contains(&needle))
+                    .filter(|(_, item)| {
+                        item.path.as_str().to_lowercase().contains(&needle)
+                    })
                     .map(|(i, _)| i)
                     .collect(),
             )
         };
 
-        // Collect all paths (including intermediate folders) from agent names.
-        // Each agent name is a full AgentPath like `/root/researcher/worker`.
+        // Collect all paths (including intermediate folders) from agent paths.
+        // Each item's `path` is a validated AgentPath like `/root/researcher/worker`.
         let agent_paths: Vec<(usize, Vec<String>)> = self
             .items
             .iter()
             .enumerate()
             .filter(|(i, _)| matching.as_ref().map(|m| m.contains(i)).unwrap_or(true))
             .map(|(i, item)| {
-                let segments: Vec<String> = item
-                    .name
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect();
+                let segments: Vec<String> =
+                    item.path.segments().iter().map(|s| s.to_string()).collect();
                 (i, segments)
             })
             .collect();
 
         // When filtering, force-expand all folders that lead to matches.
         let mut force_expand: HashSet<String> = HashSet::new();
-        if let Some(ref matches) = matching {
+        if matching.is_some() {
             for (_, segs) in &agent_paths {
                 let mut acc = String::new();
                 for seg in segs {
@@ -265,16 +347,10 @@ impl AgentPickerState {
                     force_expand.insert(acc.clone());
                 }
             }
-            let _ = matches; // suppress unused warning
         }
 
-        // Build the tree. We use a simple recursive approach: collect all
-        // unique prefixes, then emit them in sorted order.
+        // Build the tree recursively.
         let mut rows = Vec::new();
-
-        // Special case: if there's only one top-level group and it's `root`,
-        // we still show it as a collapsible node.
-        // Group agent paths by their parent chain and emit in order.
         build_tree(&agent_paths, &self.collapsed, &force_expand, &mut rows, 0);
 
         self.rows = rows;
@@ -282,8 +358,6 @@ impl AgentPickerState {
         if self.selected >= self.rows.len() {
             self.selected = self.rows.len().saturating_sub(1);
         }
-        // If we had a selection and the list didn't change much, try to
-        // keep it stable. Otherwise, reset to first leaf.
         self.sync_list_state();
     }
 }
@@ -479,14 +553,20 @@ impl StatefulWidget for AgentPicker {
         self.render_preview_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint = if state.delete_confirm_id.is_some() {
-            let item_name = state.selected_item().map(|i| i.name).unwrap_or_default();
+        let hint = if state.rename_id.is_some() {
+            " Enter confirm rename  Esc cancel".to_string()
+        } else if state.delete_confirm_id.is_some() {
+            let item_name = state
+                .selected_item()
+                .map(|i| i.path.as_str().to_string())
+                .unwrap_or_default();
             format!(
                 " Type 'yes' to delete '{}'  Enter confirm  Esc cancel",
                 item_name
             )
         } else {
-            " Enter resume  →/← expand/fold  Ctrl+D delete  ↑↓ navigate  Esc cancel".to_string()
+            " Enter resume  →/← expand/fold  Ctrl+R rename  Ctrl+D delete  ↑↓ navigate  Esc cancel"
+                .to_string()
         };
         let p = Paragraph::new(hint).style(
             Style::default()
@@ -518,6 +598,43 @@ impl StatefulWidget for AgentPicker {
                 Span::styled("▏", Style::default().fg(Color::Red)),
             ]);
             Widget::render(Paragraph::new(line), inner_confirm, buf);
+        }
+
+        // ── Rename overlay ──
+        if state.rename_id.is_some() {
+            let rename_area = Rect {
+                x: h_regions[1].x,
+                y: h_regions[1].y + h_regions[1].height.saturating_sub(2),
+                width: h_regions[1].width,
+                height: 2,
+            };
+            let block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::Cyan));
+            let inner_rename = block.inner(rename_area);
+            block.render(rename_area, buf);
+
+            let error_or_cursor = if let Some(ref err) = state.rename_error {
+                Line::from(vec![
+                    Span::styled("  ✗ ", Style::default().fg(Color::Red)),
+                    Span::styled(err.clone(), Style::default().fg(Color::Red)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("  New name: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        state.rename_input.clone(),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(
+                        "▏",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::SLOW_BLINK),
+                    ),
+                ])
+            };
+            Widget::render(Paragraph::new(error_or_cursor), inner_rename, buf);
         }
     }
 }
@@ -658,11 +775,11 @@ impl AgentPicker {
 
         let mut lines: Vec<Line> = Vec::new();
 
-        // Name (full path).
+        // Path (full hierarchical path).
         lines.push(Line::from(vec![
-            Span::styled("  Name      ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Path      ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                item.name.clone(),
+                item.path.as_str().to_string(),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),

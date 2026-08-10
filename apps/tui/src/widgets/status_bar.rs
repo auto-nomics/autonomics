@@ -36,6 +36,7 @@ impl Widget for StatusBar<'_> {
             AgentStatus::Idle | AgentStatus::Aborted => ("○", Color::Gray, "idle"),
             AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
             AgentStatus::Streaming => ("●", Color::Green, "streaming"),
+            AgentStatus::ToolRunning => ("⚙", Color::Cyan, "tool running"),
             AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
             AgentStatus::Error => ("✗", Color::Red, "error"),
             AgentStatus::Cancelled => ("⊘", Color::DarkGray, "cancelled"),

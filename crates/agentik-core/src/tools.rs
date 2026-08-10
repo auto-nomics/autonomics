@@ -14,8 +14,8 @@ pub mod truncation;
 
 pub use error::{ToolError, ToolOperationResult};
 pub use function::{
-    DynToolFunction, MAX_PROGRESS_RECORDS, ProgressBuffer, ProgressLog, ProgressRecord,
-    ToolContext, ToolFunction,
+    DynToolFunction, ExecutionMode, MAX_PROGRESS_RECORDS, ProgressBuffer, ProgressLog,
+    ProgressRecord, ToolContext, ToolFunction,
 };
 pub use task_runtime::TaskStore;
 pub use tool_provider::ToolProviderRegistry;

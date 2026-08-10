@@ -164,11 +164,6 @@ impl ToolFunction for UpdatePlanTool {
             is_error: None,
         })
     }
-
-    /// This tool is instant — never needs backgrounding.
-    fn sync_seconds(&self) -> u64 {
-        30
-    }
 }
 
 #[cfg(test)]

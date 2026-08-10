@@ -1,0 +1,122 @@
+# =============================================================================
+# Autonomics Data Lake — Iceberg Stack
+#   garage (S3) + iceberg-catalog-db (Postgres) + lakekeeper (REST Catalog)
+# =============================================================================
+# Usage (from infra/docker/):
+#   The unified .env / .env.example live at the workspace root (../../).
+#   cp ../../.env.example ../../.env   # fill in real secrets, then:
+#   make up
+# =============================================================================
+
+x-lakekeeper-env: &lakekeeper-env
+  LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${ICEBERG_DB_USER}:${ICEBERG_DB_PASSWORD}@iceberg-catalog-db:5432/${ICEBERG_DB_NAME}
+  LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${ICEBERG_DB_USER}:${ICEBERG_DB_PASSWORD}@iceberg-catalog-db:5432/${ICEBERG_DB_NAME}
+  LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_PG_ENCRYPTION_KEY:-change-me-in-production}
+  LAKEKEEPER__AUTHZ_BACKEND: allowall
+
+services:
+  # ── Iceberg Catalog Metadata DB ─────────────────────────────────────────
+  iceberg-catalog-db:
+    image: postgres:16
+    container_name: iceberg-catalog-db
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${ICEBERG_DB_PASSWORD:-change-me}
+      POSTGRES_USER: ${ICEBERG_DB_USER:-admin}
+      POSTGRES_DB: ${ICEBERG_DB_NAME:-iceberg}
+    volumes:
+      - iceberg_catalog_db_data:/var/lib/postgresql/data
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ICEBERG_DB_USER:-admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Object Storage (S3-compatible) ──────────────────────────────────────
+  # dxflrs/garage:v2.0.0 is shell-less, so we can't run an entrypoint
+  # script. The garage.toml is rendered on the host (see Makefile target
+  # `garage-config`) and bind-mounted at the binary's default config
+  # path. The image's own Cmd is `["/garage", "server"]`, so we leave
+  # entrypoint unset.
+  garage:
+    image: dxflrs/garage:v2.0.0
+    container_name: garage
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_METRICS_TOKEN: ${GARAGE_METRICS_TOKEN}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - ${GARAGE_META_DIR:-/var/lib/garage/meta}:/var/lib/garage/meta
+      - ${GARAGE_SNAPSHOTS_DIR:-/var/lib/garage/snapshots}:/var/lib/garage/snapshots
+      - ${GARAGE_DATA_DIR_DISK1:-/mnt/disk1/garage/data}:/mnt/disk1
+      - ${GARAGE_DATA_DIR_DISK2:-/mnt/disk2/garage/data}:/mnt/disk2
+    networks:
+      - iceberg_net
+    ports:
+      - "3900:3900" # S3 API
+      - "3901:3901" # RPC
+      - "3902:3902" # Web
+      - "3903:3903" # Admin
+    healthcheck:
+      test: ["CMD", "garage", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Garage Web UI ────────────────────────────────────
+  webui:
+    image: khairul169/garage-webui:latest
+    container_name: garage-webui
+    restart: unless-stopped
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+    networks:
+      - iceberg_net
+    ports:
+      - 3909:3909
+    environment:
+      API_BASE_URL: "http://garage:3903"
+      S3_ENDPOINT_URL: "http://garage:3900"
+
+  # ── Lakekeeper (Iceberg REST Catalog) ────────────────────────────────────
+  lakekeeper-migrate:
+    image: ${LAKEKEEPER__SERVER_IMAGE:-quay.io/lakekeeper/catalog:latest-main}
+    container_name: lakekeeper-migrate
+    pull_policy: always
+    restart: "no"
+    command: ["migrate"]
+    depends_on:
+      iceberg-catalog-db:
+        condition: service_healthy
+      garage:
+        condition: service_started
+    networks:
+      - iceberg_net
+    environment: *lakekeeper-env
+
+  lakekeeper:
+    image: ${LAKEKEEPER__SERVER_IMAGE:-quay.io/lakekeeper/catalog:latest-main}
+    container_name: lakekeeper
+    pull_policy: always
+    restart: always
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+    networks:
+      - iceberg_net
+    ports:
+      - "${LAKEKEEPER_PORT:-8181}:8181"
+    environment: *lakekeeper-env
+    command: ["serve"]
+
+networks:
+  iceberg_net:
+    driver: bridge
+
+volumes:
+  iceberg_catalog_db_data:

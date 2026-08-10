@@ -669,6 +669,15 @@ impl App {
                 self.close_agent_leaf_by_id(agent_id);
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
+            crate::app_event::AppEvent::AgentRenamed {
+                agent_id,
+                new_path,
+            } => {
+                self.state
+                    .agent_picker
+                    .apply_rename(agent_id, new_path.clone());
+                tracing::info!(%agent_id, new_path = %new_path, "agent renamed in picker");
+            }
             crate::app_event::AppEvent::HistoryLoaded {
                 agent_id,
                 session_id,
@@ -1294,6 +1303,28 @@ impl App {
     fn handle_agent_picker_key(&mut self, key: &KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+        // If rename mode is active, route keys to the rename input.
+        if self.state.agent_picker.rename_id.is_some() {
+            match key.code {
+                KeyCode::Esc => self.state.agent_picker.cancel_rename(),
+                KeyCode::Backspace => {
+                    self.state.agent_picker.rename_input.pop();
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    self.state.agent_picker.rename_input.push(c);
+                }
+                KeyCode::Enter => {
+                    if let Some((agent_id, new_path)) =
+                        self.state.agent_picker.check_rename()
+                    {
+                        self.rename_agent_record(agent_id, new_path);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // If delete confirmation is active, route keys differently.
         if self.state.agent_picker.delete_confirm_id.is_some() {
             match key.code {
@@ -1331,6 +1362,9 @@ impl App {
             KeyCode::Char('d') if ctrl => {
                 self.state.agent_picker.start_delete_confirm();
             }
+            KeyCode::Char('r') if ctrl => {
+                self.state.agent_picker.start_rename();
+            }
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
             KeyCode::Enter => {
                 // If cursor is on a folder, toggle expand/collapse.
@@ -1359,23 +1393,26 @@ impl App {
                     }
 
                     let config_json = item.config_json.clone();
-                    let agent_name = item.name.clone();
+                    // `item.path` is the full AgentPath (e.g. `/root/researcher`).
+                    let agent_path = item.path.as_str().to_string();
                     self.state.agent_picker.close();
+                    // Extract the short name segment for spawn_with_profile.
+                    let short_name = item.path.name().to_string();
                     // Try to reconstruct the profile from the stored config_json.
-                    // Fall back to looking up by name in the current profiles.
+                    // Fall back to looking up by short name in the current profiles.
                     let profile = serde_json::from_value::<AgentProfile>(config_json)
                         .ok()
                         .or_else(|| {
                             self.state
                                 .profiles
                                 .iter()
-                                .find(|p| p.path == agent_name)
+                                .find(|p| p.path == short_name)
                                 .cloned()
                         });
                     match profile {
-                        Some(p) => self.spawn_agent_from_profile(&p, &agent_name),
+                        Some(p) => self.spawn_agent_from_profile(&p, &short_name),
                         None => tracing::warn!(
-                            agent = %agent_name,
+                            agent = %agent_path,
                             "could not reconstruct profile for agent record",
                         ),
                     }
@@ -1403,6 +1440,37 @@ impl App {
                     tracing::error!(%agent_id, error = %e, "failed to delete agent");
                 }
             }
+        });
+    }
+
+    /// Rename an agent record in storage: updates `agents.name` to the new
+    /// full AgentPath. Fires `AgentRenamed` on success so the picker can
+    /// refresh its in-memory item.
+    fn rename_agent_record(&mut self, agent_id: uuid::Uuid, new_path: agentik_types::AgentPath) {
+        tracing::info!(%agent_id, new_path = %new_path, "renaming agent record");
+        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
+            tracing::warn!("no host available for rename");
+            return;
+        };
+        let new_name = new_path.as_str().to_string();
+        let tx = self.app_event_tx.clone();
+        self.runtime_handle.spawn(async move {
+            // Read the current record, update its name, and upsert.
+            let Some(mut record) = storage.get_agent(agent_id).await.ok().flatten() else {
+                tracing::error!(%agent_id, "agent record not found for rename");
+                return;
+            };
+            record.name = new_name;
+            record.last_active = chrono::Utc::now().timestamp_millis();
+            if let Err(e) = storage.upsert_agent(record).await {
+                tracing::error!(%agent_id, error = %e, "failed to rename agent");
+                return;
+            }
+            tracing::info!(%agent_id, new_path = %new_path, "agent renamed in storage");
+            tx.send(crate::app_event::AppEvent::AgentRenamed {
+                agent_id,
+                new_path,
+            });
         });
     }
 

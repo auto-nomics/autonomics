@@ -74,13 +74,9 @@ impl ToolFunction for DownloadFilesTool {
     type Input = DownloadFilesInput;
 
     // Downloads are I/O-bound and typically exceed 30s for .vcf.gz files
-    // (often several GiB). Keep the sync window short so the tool transitions
-    // to background quickly, letting the agent poll progress via
-    // `view_task_status` while the download streams.
-    fn sync_seconds(&self) -> u64 {
-        5
-    }
-
+    // Downloads can take a very long time (often several GiB). Sync mode
+    // with a generous timeout — the agent blocks until the download finishes
+    // or times out. Progress is streamed via ToolContext::output.
     fn timeout_seconds(&self) -> u64 {
         6000
     }

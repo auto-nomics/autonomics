@@ -87,16 +87,9 @@ impl WaitTaskTool {
 impl ToolFunction for WaitTaskTool {
     type Input = WaitTaskInput;
 
-    fn sync_seconds(&self) -> u64 {
-        // This tool is inherently a blocking wait — it must never be
-        // demoted to background itself. Return the same value as the
-        // hard timeout so the sync window always covers the full wait.
-        self.timeout_seconds()
-    }
-
+    /// Sync — inherently a blocking wait, must never go to background.
+    /// timeout_seconds is set high enough to cover the full wait.
     fn timeout_seconds(&self) -> u64 {
-        // Hard timeout well above the default user-specified timeout (120s),
-        // so the select! inside run handles graceful timeout reporting.
         300
     }
 

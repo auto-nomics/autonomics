@@ -164,8 +164,7 @@ impl ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: ToolResultContent::Text(format!(
                 "Task #{seq} is running in background. \
-                 Use `view_task_results` with task={seq} (or `wait_task` with task={seq}) \
-                 to retrieve the result when it completes."
+                 The result will be delivered automatically when it completes."
             )),
             is_error: None,
         }

@@ -252,7 +252,7 @@ impl Agent {
                 .as_ref()
                 .upsert_agent(AgentRecord {
                     id: self.shared.id,
-                    name: self.shared.name().to_string(),
+                    name: self.shared.path().as_str().to_string(),
                     config_json: self.shared.config_json.clone(),
                     created_at: now,
                     last_active: now,

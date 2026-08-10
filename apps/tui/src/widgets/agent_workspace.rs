@@ -176,6 +176,7 @@ fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Idle | AgentStatus::Aborted => "●",
         AgentStatus::Requesting => "◐",
         AgentStatus::Streaming => "◑",
+        AgentStatus::ToolRunning => "⚙",
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "✗",
         AgentStatus::Cancelled => "⊘",
@@ -188,6 +189,7 @@ fn status_color(status: &AgentStatus) -> Color {
     match status {
         AgentStatus::Idle | AgentStatus::Aborted => Color::Green,
         AgentStatus::Requesting | AgentStatus::Streaming => Color::Cyan,
+        AgentStatus::ToolRunning => Color::Yellow,
         AgentStatus::Retrying => Color::Yellow,
         AgentStatus::Error => Color::Red,
         AgentStatus::Cancelled => Color::DarkGray,

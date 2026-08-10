@@ -252,6 +252,23 @@ impl TursoAgentStorage {
             )
             .await;
 
+        // ── Migration: agents.name short-name → full AgentPath ──
+        //
+        // Before the AgentPath refactor, `agents.name` stored only the
+        // short name (e.g. `"researcher"`). The tree-based resume picker
+        // requires the full hierarchical path (e.g. `/root/researcher`).
+        // This one-shot UPDATE prefixes `/root/` to every row whose name
+        // does not already start with `/root`. Idempotent — rows that are
+        // already in the new format are left untouched.
+        let _ = self
+            .conn
+            .execute(
+                "UPDATE agents SET name = '/root/' || name
+                 WHERE name NOT LIKE '/root%'",
+                (),
+            )
+            .await;
+
         Ok(())
     }
 }

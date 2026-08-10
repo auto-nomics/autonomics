@@ -265,7 +265,7 @@ impl SharedInfra {
             .with_tools(tool_list)
             .with_cancel_token(cancel_token.clone());
 
-        if let Ok(Some(record)) = storage.get_agent_by_name(agent_path.name()).await {
+        if let Ok(Some(record)) = storage.get_agent_by_name(agent_path.as_str()).await {
             tracing::info!(
                 agent = %agent_path,
                 agent_id = %record.id,
@@ -2036,6 +2036,13 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
             agentik_types::AgentLifecycleStatus::Requesting
             | agentik_types::AgentLifecycleStatus::Streaming
             | agentik_types::AgentLifecycleStatus::Compacting => (AgentStatus::Running, None),
+
+            agentik_types::AgentLifecycleStatus::ToolRunning => (
+                AgentStatus::AwaitingTool {
+                    tool: "executing".into(),
+                },
+                Some("tool running".into()),
+            ),
 
             agentik_types::AgentLifecycleStatus::Retrying => {
                 (AgentStatus::Running, Some("retrying".into()))

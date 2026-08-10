@@ -86,13 +86,8 @@ pub struct DownloadSummaryStatsTool {
 impl ToolFunction for DownloadSummaryStatsTool {
     type Input = DownloadSummaryStatsInput;
 
-    // Summary stats files can be several hundred MiB; keep the sync window
-    // short so the tool transitions to background quickly, letting the agent
-    // poll progress via `view_task_status`.
-    fn sync_seconds(&self) -> u64 {
-        5
-    }
-
+    // Summary stats files can be several hundred MiB. Sync mode with a
+    // generous timeout. Progress is streamed via ToolContext::output.
     fn timeout_seconds(&self) -> u64 {
         6000
     }

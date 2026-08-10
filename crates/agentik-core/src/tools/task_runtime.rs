@@ -3,7 +3,6 @@ use crate::tools::function::ProgressRecord;
 use agentik_sdk::ToolResult;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -65,59 +64,12 @@ impl std::ops::DerefMut for TaskStore {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub enum RunMode {
-    Fg,
-    Bg,
-}
-
 /// Lifecycle of a spawned tool invocation.
 #[derive(Clone)]
 pub enum TaskStatus {
     Running,
     Done(ToolResult),
     Failed(ToolError),
-}
-
-/// What `wait()` returns: result available or still running.
-pub enum WaitResultKind {
-    Done {
-        result: ToolResult,
-        run_mode: RunMode,
-    },
-    StillRunning {
-        id: TaskId,
-        seq: u64,
-    },
-    Failed(ToolResult),
-}
-
-pub struct WaitResult {
-    pub inner: WaitResultKind,
-    seq: u64,
-    read_tx: watch::Sender<bool>,
-}
-
-impl From<WaitResult> for ToolResult {
-    fn from(value: WaitResult) -> Self {
-        let seq = value.seq;
-        match value.inner {
-            WaitResultKind::StillRunning { id, .. } => ToolResult::from_pending_task(&id, seq),
-            WaitResultKind::Failed(tool_result) => {
-                value.read_tx.send(true).ok();
-                tool_result
-            }
-            WaitResultKind::Done { result, run_mode } => match run_mode {
-                RunMode::Fg => {
-                    value.read_tx.send(true).ok();
-                    result
-                }
-                RunMode::Bg => {
-                    ToolResult::task_finish_notification(result.tool_use_id.as_str(), seq)
-                }
-            },
-        }
-    }
 }
 
 /// Sender type for background task completion notifications.
@@ -130,9 +82,10 @@ pub type BgTaskNotifyTx = tokio::sync::mpsc::UnboundedSender<InternalEvent>;
 /// can retrieve the result at any time via [`status`](Self::status) or
 /// [`changed`](Self::changed).
 ///
-/// When a background task completes, the monitor task sends
+/// When an async task completes, the monitor task sends
 /// [`InternalEvent::BgTaskComplete`] through the optional `notify_tx`,
-/// allowing the agent to wake up without polling.
+/// allowing the agent to wake up without polling. Sync tasks are consumed
+/// inline by [`Toolset::execute`] and never need `notify_tx`.
 pub struct TaskEntry {
     /// Short 1-based task number (allocated by [`TaskStore::alloc_seq`]).
     /// Used by the LLM to reference background tasks via `wait_task` /
@@ -143,13 +96,8 @@ pub struct TaskEntry {
     name: String,
     status: watch::Receiver<TaskStatus>,
     cancel_token: CancellationToken,
-    block_secs: u64,
     read: watch::Receiver<bool>,
     read_tx: watch::Sender<bool>,
-    /// Watch channel so the monitor task can observe the current run mode
-    /// (Fg→Bg transition happens after sync timeout in [`wait`]).
-    run_mode: watch::Receiver<RunMode>,
-    run_mode_tx: watch::Sender<RunMode>,
     /// Structured, append-only progress buffer shared with the executing tool
     /// (via [`crate::tools::ToolContext`]). Readable at any time by observers
     /// (`view_task_status`). NOTE: this carries real-time / intermediate
@@ -163,52 +111,45 @@ impl TaskEntry {
     /// Spawn a monitor task that awaits the `JoinHandle` and updates the
     /// status channel on completion. The handle is consumed here; callers
     /// read results exclusively through the watch channel.
+    ///
+    /// Simplified constructor without notification — used by tests.
     pub fn new(
         seq: u64,
         id: TaskId,
         name: String,
         handle: JoinHandle<Result<ToolResult, ToolError>>,
         cancel_token: CancellationToken,
-        block_secs: u64,
     ) -> Self {
-        let (run_mode_tx, run_mode) = watch::channel(RunMode::Fg);
         Self::with_notify(
             seq,
             id,
             name,
             handle,
             cancel_token,
-            block_secs,
             None,
             Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
-            run_mode_tx,
-            run_mode,
         )
     }
 
-    /// Like [`new`](Self::new) but also notifies the agent via `notify_tx`
-    /// when a background task completes.
+    /// Create a `TaskEntry` with optional agent notification on completion.
+    ///
+    /// `notify_tx`: when `Some`, the monitor task sends
+    /// [`InternalEvent::BgTaskComplete`] when the tool finishes. Pass `Some`
+    /// for **async** tools (their result needs to wake the agent for
+    /// auto-injection); pass `None` for **sync** tools (consumed inline by
+    /// `execute()`, no wake-up needed).
     ///
     /// `output` is the shared progress buffer the executing tool pushes
     /// structured [`ProgressRecord`]s onto (so it must be created before the
-    /// tool runs). When in doubt, pass a fresh `Arc::new(Mutex::new(Vec::new()))`.
-    ///
-    /// `run_mode_tx` / `run_mode` are the watch-channel halves that coordinate
-    /// the Fg→Bg transition. They must be created **before** the task is spawned
-    /// so that a receiver clone can be passed into the spawned future — this
-    /// lets the task arm its bg-phase timeout *only after* the sync window
-    /// expires, rather than racing two independent timers from spawn time.
+    /// tool runs).
     pub fn with_notify(
         seq: u64,
         id: TaskId,
         name: String,
         handle: JoinHandle<Result<ToolResult, ToolError>>,
         cancel_token: CancellationToken,
-        block_secs: u64,
         notify_tx: Option<BgTaskNotifyTx>,
         output: ProgressBuffer,
-        run_mode_tx: watch::Sender<RunMode>,
-        run_mode: watch::Receiver<RunMode>,
     ) -> Self {
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
@@ -216,7 +157,6 @@ impl TaskEntry {
 
         let tx = status_tx.clone();
         let out = output.clone();
-        let mode_rx = run_mode.clone();
         let bg_notify = notify_tx.clone();
         let spwan_ts_tx = tool_result_tx.clone();
         let task_id = id.clone();
@@ -224,19 +164,9 @@ impl TaskEntry {
         tokio::spawn(async move {
             match handle.await {
                 Ok(Ok(tool_result)) => {
-                    // Store final result in `tool_result` field.
+                    // Store the real result for later retrieval.
                     spwan_ts_tx.send(Some(tool_result.clone())).ok();
-
-                    let current_mode = mode_rx.borrow().clone();
-                    if matches!(current_mode, RunMode::Bg) {
-                        tx.send(TaskStatus::Done(ToolResult::task_finish_notification(
-                            &tool_result.tool_use_id,
-                            task_seq,
-                        )))
-                        .ok();
-                    } else {
-                        tx.send(TaskStatus::Done(tool_result)).ok();
-                    }
+                    tx.send(TaskStatus::Done(tool_result)).ok();
                 }
                 Ok(Err(e)) => {
                     if let Ok(mut buf) = out.lock() {
@@ -255,18 +185,14 @@ impl TaskEntry {
                     .ok();
                 }
             }
-            // Notify the agent's event loop when a background task finishes.
-            // Only send when the task transitioned to Bg (sync timeout expired);
-            // Fg tasks are consumed inline by `wait()` and need no wake-up.
-            // Carries the tool_use_id so the agent can address the exact task
-            // without scanning the whole task list.
-            if *mode_rx.borrow() == RunMode::Bg {
-                if let Some(notify) = bg_notify {
-                    let _ = notify.send(InternalEvent::BgTaskComplete {
-                        id: task_id,
-                        seq: task_seq,
-                    });
-                }
+            // Notify the agent's event loop when an async task finishes.
+            // notify_tx is Some only for async tools — sync tools are
+            // consumed inline by execute() and never need a wake-up.
+            if let Some(notify) = bg_notify {
+                let _ = notify.send(InternalEvent::BgTaskComplete {
+                    id: task_id,
+                    seq: task_seq,
+                });
             }
         });
 
@@ -276,11 +202,8 @@ impl TaskEntry {
             name,
             status,
             cancel_token,
-            block_secs,
             read,
             read_tx,
-            run_mode,
-            run_mode_tx,
             output,
             tool_result,
         }
@@ -309,17 +232,9 @@ impl TaskEntry {
         self.status.borrow().clone()
     }
 
-    pub fn run_mode(&self) -> RunMode {
-        self.run_mode.borrow().clone()
-    }
-
     /// The real final result of the tool, once execution has finished.
     ///
     /// Returns `None` while the task is still running (no result stored yet).
-    /// Unlike [`status()`](Self::status), this carries the *actual* result for
-    /// background tasks — their `TaskStatus::Done` only holds a
-    /// finish-notification placeholder so the real output is not injected into
-    /// the LLM context. Callers retrieve the real output through here, by id.
     pub fn tool_result(&self) -> Option<ToolResult> {
         self.tool_result.borrow().clone()
     }
@@ -334,41 +249,23 @@ impl TaskEntry {
         self.cancel_token.cancel();
     }
 
-    /// Wait up to `block_secs` for the task to complete.
-    ///
-    /// - `Done(result)` — task finished within the sync window
-    /// - `StillRunning` — sync phase expired, task continues async;
-    ///   poll [`status()`](Self::status) or [`changed()`](Self::changed) later
-    /// - `Failed(msg)` — task errored
-    pub async fn wait(&mut self) -> WaitResult {
-        tokio::select! {
-            _ = self.status.changed() => {
-                match self.status.borrow().clone() {
-                    TaskStatus::Done(result) => WaitResult {
-                        inner: WaitResultKind::Done { result, run_mode: RunMode::Fg },
-                        seq: self.seq,
-                        read_tx: self.read_tx.clone(),
-                    },
-                    TaskStatus::Failed(err) => WaitResult {
-                        inner: WaitResultKind::Failed(ToolResult::error(err.to_string()).with_id(&self.id)),
-                        seq: self.seq,
-                        read_tx: self.read_tx.clone(),
-                    },
-                    TaskStatus::Running => WaitResult {
-                        inner: WaitResultKind::StillRunning { id: self.id.clone(), seq: self.seq },
-                        seq: self.seq,
-                        read_tx: self.read_tx.clone(),
-                    },
-                }
+    /// Wait for the task to complete (Done or Failed). No timeout —
+    /// the caller is responsible for wrapping this in a `tokio::time::timeout`
+    /// if needed (timeout is enforced inside the spawned task).
+    pub async fn wait_for_result(&mut self) -> ToolResult {
+        self.status.changed().await.ok();
+        let seq = self.seq;
+        match self.status.borrow().clone() {
+            TaskStatus::Done(result) => {
+                self.read_tx.send(true).ok();
+                result
             }
-            _ = tokio::time::sleep(Duration::from_secs(self.block_secs)) => {
-                self.run_mode_tx.send(RunMode::Bg).ok();
-                WaitResult {
-                    inner: WaitResultKind::StillRunning { id: self.id.clone(), seq: self.seq },
-                    seq: self.seq,
-                    read_tx: self.read_tx.clone(),
-                }
+            TaskStatus::Failed(err) => {
+                self.read_tx.send(true).ok();
+                ToolResult::error(err.to_string()).with_id(&self.id)
             }
+            // Spurious wake — return a placeholder. The caller should retry.
+            TaskStatus::Running => ToolResult::from_pending_task(&self.id, seq),
         }
     }
 
@@ -408,30 +305,24 @@ impl TaskEntry {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[tokio::test]
-    async fn test_task_two_phase() {
+    async fn test_task_completion() {
         let mut task = TaskEntry::new(
             1,
             "test-task-1".into(),
             "test_tool".into(),
             tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(5)).await;
                 Ok(ToolResult::success("done"))
             }),
             CancellationToken::new(),
-            1,
         );
 
-        // Phase 1 (sync): task takes 5s but block_secs=1, should StillRunning
-        let result = task.wait().await;
-        assert!(matches!(result.inner, WaitResultKind::StillRunning { .. }));
-
-        // Phase 2 (async): task is still running, wait for it to actually finish
+        // Task completes quickly — wait_for_result should return the result.
         assert!(matches!(task.status(), TaskStatus::Running));
-        task.changed().await;
-        assert!(matches!(task.status(), TaskStatus::Done(_)));
+        let result = task.wait_for_result().await;
+        assert!(result.text_content().contains("done"));
+        assert!(task.is_read());
     }
 }

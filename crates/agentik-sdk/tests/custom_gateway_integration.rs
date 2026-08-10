@@ -1,6 +1,17 @@
 use agentik_sdk::{Anthropic, AuthMethod, ClientConfig, ContentBlock, MessageCreateBuilder};
-use dotenvy::dotenv;
 use std::time::Duration;
+
+/// Load the workspace-root `.env` regardless of cargo's test CWD.
+///
+/// cargo runs integration tests with CWD = the package directory
+/// (crates/agentik-sdk/), but the canonical `.env` lives at the workspace root
+/// (CARGO_MANIFEST_DIR/../..). Silently no-ops if the file is absent so that
+/// CI / default `cargo test` runs still work — those tests will just skip when
+/// `CUSTOM_BEARER_TOKEN` is missing.
+fn load_dotenv() {
+    let path = format!("{}/../../.env", env!("CARGO_MANIFEST_DIR"));
+    let _ = dotenvy::from_path(&path);
+}
 
 /// Helper function to extract text content from response
 fn extract_text_from_content(content: &[ContentBlock]) -> String {
@@ -16,7 +27,7 @@ fn extract_text_from_content(content: &[ContentBlock]) -> String {
 
 /// Create a test client for custom gateway
 fn create_custom_client() -> Option<Anthropic> {
-    dotenv().ok();
+    load_dotenv();
 
     let token = std::env::var("CUSTOM_BEARER_TOKEN").ok()?;
     let base_url = std::env::var("CUSTOM_BASE_URL")
@@ -31,7 +42,7 @@ fn create_custom_client() -> Option<Anthropic> {
 
 /// Get model name from environment or use default
 fn get_model_name() -> String {
-    dotenv().ok();
+    load_dotenv();
     std::env::var("CUSTOM_MODEL_NAME").unwrap_or_else(|_| "claude-3-5-sonnet-latest".to_string())
 }
 
@@ -266,13 +277,14 @@ async fn test_streaming_response() {
 #[tokio::test]
 #[ignore]
 async fn test_bearer_token_authentication() {
+    load_dotenv();
     require_token!(_client);
 
     println!("🧪 Testing Bearer token authentication explicitly");
 
     // Create client with explicit Bearer auth
     let bearer_client = {
-        dotenv().ok();
+        load_dotenv();
         let token = std::env::var("CUSTOM_BEARER_TOKEN")
             .expect("CUSTOM_BEARER_TOKEN should be available for this test");
 
