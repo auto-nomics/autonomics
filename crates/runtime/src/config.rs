@@ -246,17 +246,17 @@ impl RuntimeConfig {
         let bib_db_path = base
             .and_then(|b| b.bib_db_path.clone())
             .or_else(|| env_path(ENV_BIB_DB))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_BIB_DB));
+            .unwrap_or_else(|| state_dir.join(DEFAULT_BIB_DB));
 
         let writing_db_path = base
             .and_then(|b| b.writing_db_path.clone())
             .or_else(|| env_path(ENV_WRITING_DB))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_WRITING_DB));
+            .unwrap_or_else(|| state_dir.join(DEFAULT_WRITING_DB));
 
         let app_db_path = base
             .and_then(|b| b.app_db_path.clone())
             .or_else(|| env_path(ENV_APP_DB))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_APP_DB));
+            .unwrap_or_else(|| state_dir.join(DEFAULT_APP_DB));
 
         let agent_db = base
             .and_then(|b| b.agent_db.clone())

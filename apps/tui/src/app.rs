@@ -80,7 +80,15 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let conn = Connection::open("phloem.db").expect("failed to open phloem.db");
+        let config = runtime::RuntimeConfig::default();
+
+        // Ensure state_dir exists before opening DBs inside it.
+        if let Some(parent) = config.app_db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let conn = Connection::open(&config.app_db_path)
+            .unwrap_or_else(|e| panic!("failed to open {}: {e}", config.app_db_path.display()));
 
         conn.pragma_update(None, "foreign_keys", "ON")
             .expect("failed to enable foreign_keys");
@@ -91,7 +99,6 @@ impl App {
         let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
 
         // ── Open RuntimeHost + load profiles ──────────────────────
-        let config = runtime::RuntimeConfig::default();
         let (mut host, profiles) = runtime.block_on(async {
             // Open storage directly for profile seeding/loading (the host
             // also opens it, but we need AgentProfileRegistry trait methods
