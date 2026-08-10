@@ -2594,6 +2594,7 @@ dependencies = [
  "nodes-coloc",
  "nodes-epi",
  "nodes-genetics",
+ "nodes-grf",
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
@@ -7278,6 +7279,26 @@ dependencies = [
  "serde_json",
  "statrs",
  "susie",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nodes-grf"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "grf",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

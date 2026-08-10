@@ -43,6 +43,10 @@ pub fn build_default_registry(
     #[cfg(feature = "bundle-writing")]
     registry.register_plugin(&nodes_writing::Plugin);
 
+    // ── GRF bundle ────────────────────────────────────────────────────
+    #[cfg(feature = "bundle-grf")]
+    registry.register_plugin(&nodes_grf::Plugin);
+
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
     registry.register_plugin(&nodes_io::Plugin);

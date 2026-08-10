@@ -27,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -176,6 +177,43 @@ std::vector<double> maybe_augment_weights(
     out.resize(n_rows * (n_cols + 1));
     for (size_t i = 0; i < n_rows; ++i) {
         out[n_cols * n_rows + i] = sample_weights[i];
+    }
+    return out;
+}
+
+// ─────────────────────────── survival outcome relabeling ───────────────────────────
+
+// R's findInterval(x, vec) with rightmost.closed = FALSE: the number of grid
+// values <= x. Equivalent to std::upper_bound over a sorted unique grid.
+static inline size_t find_interval(double x, const std::vector<double>& grid) {
+    return static_cast<size_t>(std::upper_bound(grid.begin(), grid.end(), x) - grid.begin());
+}
+
+// Build the failure-time grid when the caller left it empty (mirrors R's
+// `failure.times <- sort(unique(Y[D == 1]))`): the sorted unique event times.
+static std::vector<double> compute_failure_times(
+    const double* data, size_t n_rows, size_t n_cols,
+    size_t outcome_index, size_t censor_index) {
+    std::set<double> times;
+    for (size_t i = 0; i < n_rows; ++i) {
+        double censor = data[censor_index * n_rows + i];
+        if (censor > 0.0) {
+            times.insert(data[outcome_index * n_rows + i]);
+        }
+    }
+    return std::vector<double>(times.begin(), times.end());
+}
+
+// Return a column-major copy of `data` with the outcome column replaced by
+// findInterval(time, grid) so the survival predictor's integer indexing
+// (0..num_failures) matches the grid.
+static std::vector<double> relabel_survival_outcome(
+    const double* data, size_t n_rows, size_t n_cols,
+    size_t outcome_index, const std::vector<double>& grid) {
+    std::vector<double> out(data, data + n_rows * n_cols);
+    for (size_t i = 0; i < n_rows; ++i) {
+        out[outcome_index * n_rows + i] = static_cast<double>(
+            find_interval(data[outcome_index * n_rows + i], grid));
     }
     return out;
 }
@@ -602,9 +640,18 @@ grf_forest_t* grf_train_survival(
     try {
         configure_runtime(opts);
         std::vector<double> ft(failure_times, failure_times + n_failure_times);
+        if (ft.empty()) {
+            // Mirror R: `failure.times <- sort(unique(Y[D == 1]))`.
+            ft = compute_failure_times(data, n_rows, n_cols, outcome_index, censor_index);
+        }
         auto weights_aug = maybe_augment_weights(data, n_rows, n_cols, sample_weights,
                                                  sample_weights ? n_rows : 0);
-        grf::Data d(weights_aug.data(), n_rows,
+        // Relabel the outcome to findInterval(time, grid) so the survival
+        // predictor's integer indexing (0..num_failures) matches the grid.
+        std::vector<double> relabeled = relabel_survival_outcome(
+            weights_aug.data(), n_rows, sample_weights ? n_cols + 1 : n_cols,
+            outcome_index, ft);
+        grf::Data d(relabeled.data(), n_rows,
                     sample_weights ? n_cols + 1 : n_cols);
         d.set_outcome_index(outcome_index);
         d.set_censor_index(censor_index);
@@ -622,8 +669,10 @@ grf_forest_t* grf_train_survival(
         }
         auto* h = new grf_forest_t;
         h->kind = "survival";
-        h->num_failures = ft.empty() ? 0 : ft.size();
+        h->num_failures = ft.size();
         h->survival_prediction_type = 0;
+        h->failure_times = ft;
+        h->censor_index = censor_index;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -929,8 +978,22 @@ grf_predictions_t* grf_predict(
             set_error("null forest handle");
             return nullptr;
         }
-        grf::Data train(train_data, n_train_rows, n_train_cols);
+        // For survival forests, relabel the outcome to the failure-time grid
+        // (same transform applied at training time) and set the censor index —
+        // Data::is_failure reads censor_index and would throw otherwise.
+        std::vector<double> relabeled;
+        const double* effective_train = train_data;
+        if (forest->kind == "survival" && !forest->failure_times.empty()) {
+            relabeled = relabel_survival_outcome(
+                train_data, n_train_rows, n_train_cols,
+                train_outcome_index, forest->failure_times);
+            effective_train = relabeled.data();
+        }
+        grf::Data train(effective_train, n_train_rows, n_train_cols);
         train.set_outcome_index(train_outcome_index);
+        if (forest->kind == "survival") {
+            train.set_censor_index(forest->censor_index);
+        }
         grf::Data test(test_data, n_test_rows, n_test_cols);
         grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict(*forest->forest, train, test, estimate_variance);
@@ -955,8 +1018,19 @@ grf_predictions_t* grf_predict_oob(
             set_error("null forest handle");
             return nullptr;
         }
-        grf::Data train(train_data, n_train_rows, n_train_cols);
+        std::vector<double> relabeled;
+        const double* effective_train = train_data;
+        if (forest->kind == "survival" && !forest->failure_times.empty()) {
+            relabeled = relabel_survival_outcome(
+                train_data, n_train_rows, n_train_cols,
+                train_outcome_index, forest->failure_times);
+            effective_train = relabeled.data();
+        }
+        grf::Data train(effective_train, n_train_rows, n_train_cols);
         train.set_outcome_index(train_outcome_index);
+        if (forest->kind == "survival") {
+            train.set_censor_index(forest->censor_index);
+        }
         grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict_oob(*forest->forest, train, estimate_variance);
         auto* h = new grf_predictions_t;
@@ -1015,6 +1089,10 @@ uint8_t* grf_forest_serialize(const grf_forest_t* forest, size_t* out_len) {
         // OOB predictions.
         write_size(buf, forest->oob_pred_length);
         append_vec(buf, forest->oob_predictions);
+        // Survival forest: failure-time grid + censor column index, so a
+        // round-tripped forest can still relabel/predict identically.
+        append_vec(buf, forest->failure_times);
+        write_size(buf, forest->censor_index);
 
         auto* out = static_cast<uint8_t*>(std::malloc(buf.size()));
         if (!out) { set_error("malloc failed"); return nullptr; }
@@ -1067,14 +1145,111 @@ grf_forest_t* grf_forest_deserialize(const uint8_t* buf, size_t len) {
             set_error("oob predictions malformed");
             return nullptr;
         }
+        // Survival grid + censor index (only present in v>=current blobs; the
+        // reader treats a clean EOF as "not stored" to stay forward-tolerant).
+        std::vector<double> failure_times;
+        size_t censor_index = 0;
+        if (read_vec(p, end, failure_times)) {
+            if (!read_size(p, end, censor_index)) {
+                set_error("survival grid malformed");
+                return nullptr;
+            }
+        }
 
         auto* h = new grf_forest_t;
         h->kind = kind;
         h->oob_pred_length = oob_pred_length;
         h->oob_predictions = std::move(oob_predictions);
+        h->failure_times = std::move(failure_times);
+        h->censor_index = censor_index;
         // grf::Forest's ctor takes a non-const lvalue ref to the trees vector;
         // bind to a named local first.
         std::vector<std::unique_ptr<grf::Tree>> trees_lvalue = std::move(trees);
+        h->forest = std::make_unique<grf::Forest>(
+            trees_lvalue, num_variables, ci_group_size);
+        return h;
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return nullptr;
+    }
+}
+
+// ──── per-tree extraction & merge ────
+
+uint8_t* grf_forest_get_tree(const grf_forest_t* forest, size_t index, size_t* out_len) {
+    if (!forest || !forest->forest) {
+        set_error("null forest handle");
+        return nullptr;
+    }
+    try {
+        const auto& trees = forest->forest->get_trees();
+        if (index >= trees.size()) {
+            set_error("tree index out of range");
+            return nullptr;
+        }
+        std::vector<uint8_t> buf;
+        serialize_tree(*trees[index], buf);
+        auto* out = static_cast<uint8_t*>(std::malloc(buf.size()));
+        if (!out) { set_error("malloc failed"); return nullptr; }
+        std::memcpy(out, buf.data(), buf.size());
+        if (out_len) *out_len = buf.size();
+        return out;
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return nullptr;
+    }
+}
+
+grf_forest_t* grf_forest_merge(const grf_forest_t* const* forests, size_t n) {
+    if (!forests || n == 0) {
+        set_error("no forests to merge");
+        return nullptr;
+    }
+    try {
+        // Deep-copy every tree via a serialize/deserialize round-trip so we
+        // never mutate the caller's handles (Forest/Tree are move-only and
+        // grf::Forest::merge would consume them). Concatenate into one vector.
+        std::vector<std::unique_ptr<grf::Tree>> all_trees;
+        size_t num_variables = 0;
+        size_t ci_group_size = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (!forests[i] || !forests[i]->forest) {
+                set_error("null forest in merge list");
+                return nullptr;
+            }
+            if (i == 0) {
+                num_variables = forests[0]->forest->get_num_variables();
+                ci_group_size = forests[0]->forest->get_ci_group_size();
+            } else {
+                if (forests[i]->kind != forests[0]->kind) {
+                    set_error("cannot merge forests of different kinds");
+                    return nullptr;
+                }
+                if (forests[i]->forest->get_ci_group_size() != ci_group_size) {
+                    set_error("all forests being merged must have the same ci_group_size");
+                    return nullptr;
+                }
+            }
+            const auto& trees = forests[i]->forest->get_trees();
+            for (const auto& src : trees) {
+                std::vector<uint8_t> tmp;
+                serialize_tree(*src, tmp);
+                const uint8_t* p = tmp.data();
+                const uint8_t* end = p + tmp.size();
+                std::unique_ptr<grf::Tree> tree;
+                if (!deserialize_tree(p, end, tree)) {
+                    set_error("tree round-trip failed during merge");
+                    return nullptr;
+                }
+                all_trees.push_back(std::move(tree));
+            }
+        }
+
+        auto* h = new grf_forest_t;
+        h->kind = forests[0]->kind;
+        h->oob_pred_length = 0;
+        h->oob_predictions.clear();
+        std::vector<std::unique_ptr<grf::Tree>> trees_lvalue = std::move(all_trees);
         h->forest = std::make_unique<grf::Forest>(
             trees_lvalue, num_variables, ci_group_size);
         return h;

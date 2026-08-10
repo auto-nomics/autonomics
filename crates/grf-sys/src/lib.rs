@@ -292,6 +292,31 @@ impl Forest {
         let ptr = unsafe { ffi::grf_forest_deserialize(bytes.as_ptr(), bytes.len()) };
         unsafe { Self::from_raw(ptr) }.ok_or_else(check_error)
     }
+
+    /// Serialize the `index`-th tree into a standalone byte blob.
+    /// Returns `None` if `index` is out of range or the call fails.
+    pub fn get_tree(&self, index: usize) -> Option<Vec<u8>> {
+        let mut len = 0usize;
+        let p = unsafe { ffi::grf_forest_get_tree(self.ptr.as_ptr(), index, &mut len) };
+        if p.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(p, len) }.to_vec();
+        unsafe { libc::free(p as *mut libc::c_void); }
+        Some(bytes)
+    }
+
+    /// Merge several forests into one by concatenating their trees.
+    /// All forests must share the same kind; returns `None` on failure.
+    pub fn merge_forests(forests: &[&Forest]) -> Option<Self> {
+        if forests.is_empty() {
+            return None;
+        }
+        let ptrs: Vec<*const ffi::grf_forest_t> =
+            forests.iter().map(|f| f.ptr.as_ptr() as *const ffi::grf_forest_t).collect();
+        let ptr = unsafe { ffi::grf_forest_merge(ptrs.as_ptr(), forests.len()) };
+        unsafe { Self::from_raw(ptr) }
+    }
 }
 
 impl Drop for Forest {
@@ -395,7 +420,7 @@ pub fn from_column_major(buf: &[f64], n_rows: usize, n_cols: usize) -> Vec<Vec<f
     out
 }
 
-fn check_error() -> GrfError {
+pub fn check_error() -> GrfError {
     let s = unsafe { CStr::from_ptr(ffi::grf_last_error()) };
     let s = s.to_string_lossy().into_owned();
     if s.is_empty() {

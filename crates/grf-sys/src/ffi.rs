@@ -192,6 +192,12 @@ unsafe extern "C" {
     pub fn grf_forest_deserialize(
         buf: *const c_uchar, len: usize,
     ) -> *mut grf_forest_t;
+    pub fn grf_forest_get_tree(
+        forest: *const grf_forest_t, index: usize, out_len: *mut usize,
+    ) -> *mut c_uchar;
+    pub fn grf_forest_merge(
+        forests: *const *const grf_forest_t, n: usize,
+    ) -> *mut grf_forest_t;
 
     // ──── analysis ────
     pub fn grf_compute_split_frequencies(

@@ -353,7 +353,7 @@ fn xval_probability_forest() {
 // matching). The forest trains correctly (OOB is captured at training time);
 // only the post-training predict path has this issue.
 #[test]
-#[ignore = "survival predict needs grf-sys survival_predictor grid matching"]
+
 fn xval_survival_forest() {
     let dir = fixture_dir();
     let x_rows = read_csv_mat(&dir.join("s_X.csv"));
