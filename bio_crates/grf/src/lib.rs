@@ -43,6 +43,7 @@ pub use forest::{
     RegressionTrainer, CausalTrainer, InstrumentalTrainer, QuantileTrainer,
     ProbabilityTrainer, SurvivalTrainer, MultiRegressionTrainer, MultiCausalTrainer,
     CausalSurvivalTrainer, LmTrainer, LlRegressionTrainer,
+    MultiCausalSpec,
 };
 pub use data::{
     column_major, from_column_major, Matrix,

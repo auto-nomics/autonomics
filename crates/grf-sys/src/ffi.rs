@@ -198,4 +198,19 @@ unsafe extern "C" {
         forest: *const grf_forest_t, max_depth: usize,
     ) -> *mut grf_split_freq_t;
     pub fn grf_split_freq_free(sf: *mut grf_split_freq_t);
+
+    pub fn grf_compute_weights(
+        forest: *const grf_forest_t,
+        train_data: *const c_double, n_train_rows: usize, n_train_cols: usize,
+        test_data: *const c_double, n_test_rows: usize, n_test_cols: usize,
+        out_n_train: *mut usize, out_n_test: *mut usize,
+        num_threads: c_uint,
+    ) -> *mut c_double;
+
+    pub fn grf_compute_weights_oob(
+        forest: *const grf_forest_t,
+        train_data: *const c_double, n_train_rows: usize, n_train_cols: usize,
+        out_n_train: *mut usize,
+        num_threads: c_uint,
+    ) -> *mut c_double;
 }

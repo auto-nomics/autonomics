@@ -40,7 +40,10 @@
 #include "forest/ForestTrainers.h"
 #include "prediction/Prediction.h"
 #include "tree/Tree.h"
+#include "prediction/collector/TreeTraverser.h"
 #include "analysis/SplitFrequencyComputer.h"
+// Eigen sparse types for get_forest_weights.
+#include <Eigen/Sparse>
 
 namespace {
 
@@ -1073,6 +1076,135 @@ void grf_split_freq_free(grf_split_freq_t* sf) {
     if (!sf) return;
     delete[] sf->depths_x_features;
     delete sf;
+}
+
+// ──── forest weights (for get_forest_weights) ────
+//
+// Replicates grf R's compute_sample_weights: for each query sample,
+// returns the per-train-row weight based on how often each train row
+// co-occupies a leaf with the query row across the forest's trees.
+
+static double* flatten_sparse_to_dense_column_major(
+    const Eigen::SparseMatrix<double>& sm, size_t n_rows, size_t n_cols
+) {
+    double* buf = static_cast<double*>(std::malloc(n_rows * n_cols * sizeof(double)));
+    if (!buf) return nullptr;
+    std::memset(buf, 0, n_rows * n_cols * sizeof(double));
+    for (int k = 0; k < sm.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<double>::InnerIterator it(sm, k); it; ++it) {
+            // Eigen sparse column-major: outer = col, inner = row.
+            buf[k * n_rows + it.row()] = it.value();
+        }
+    }
+    return buf;
+}
+
+double* grf_compute_weights(
+    const grf_forest_t* forest,
+    const double* train_data, size_t n_train_rows, size_t n_train_cols,
+    const double* test_data, size_t n_test_rows, size_t n_test_cols,
+    size_t* out_n_train, size_t* out_n_test,
+    uint32_t num_threads
+) {
+    if (!forest || !forest->forest) { set_error("null forest"); return nullptr; }
+    try {
+        grf::Data train(train_data, n_train_rows, n_train_cols);
+        grf::Data test(test_data, n_test_rows, n_test_cols);
+        grf::TreeTraverser traverser(num_threads);
+        auto leaf_nodes = traverser.get_leaf_nodes(*forest->forest, test, false);
+        auto valid_trees = traverser.get_valid_trees_by_sample(*forest->forest, test, false);
+
+        size_t n_neighbors = n_train_rows;
+        Eigen::SparseMatrix<double> result(n_test_rows, n_neighbors);
+        std::vector<Eigen::Triplet<double>> triplets;
+        triplets.reserve(n_neighbors);
+
+        const auto& trees = forest->forest->get_trees();
+        size_t num_trees = trees.size();
+        for (size_t s = 0; s < n_test_rows; ++s) {
+            std::vector<std::pair<size_t, size_t>> train_leaf_counts;
+            for (size_t t = 0; t < num_trees; ++t) {
+                if (!valid_trees[s].empty() && !valid_trees[s][t]) continue;
+                size_t leaf = leaf_nodes[s][t];
+                if (leaf == 0) continue;
+                const auto& leaf_samples = trees[t]->get_leaf_samples();
+                if (leaf >= leaf_samples.size()) continue;
+                for (size_t tr : leaf_samples[leaf]) {
+                    train_leaf_counts.push_back({tr, 1});
+                }
+            }
+            std::sort(train_leaf_counts.begin(), train_leaf_counts.end());
+            for (size_t i = 0; i < train_leaf_counts.size(); ) {
+                size_t j = i;
+                while (j < train_leaf_counts.size()
+                       && train_leaf_counts[j].first == train_leaf_counts[i].first) ++j;
+                triplets.emplace_back(s, train_leaf_counts[i].first,
+                                       double(j - i) / double(num_trees));
+                i = j;
+            }
+        }
+        result.setFromTriplets(triplets.data(), triplets.data() + triplets.size());
+
+        if (out_n_train) *out_n_train = n_train_rows;
+        if (out_n_test) *out_n_test = n_test_rows;
+        return flatten_sparse_to_dense_column_major(result, n_test_rows, n_train_rows);
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return nullptr;
+    }
+}
+
+double* grf_compute_weights_oob(
+    const grf_forest_t* forest,
+    const double* train_data, size_t n_train_rows, size_t n_train_cols,
+    size_t* out_n_train,
+    uint32_t num_threads
+) {
+    if (!forest || !forest->forest) { set_error("null forest"); return nullptr; }
+    try {
+        grf::Data train(train_data, n_train_rows, n_train_cols);
+        grf::TreeTraverser traverser(num_threads);
+        auto leaf_nodes = traverser.get_leaf_nodes(*forest->forest, train, true);
+        auto valid_trees = traverser.get_valid_trees_by_sample(*forest->forest, train, true);
+
+        size_t n_neighbors = n_train_rows;
+        Eigen::SparseMatrix<double> result(n_train_rows, n_neighbors);
+        std::vector<Eigen::Triplet<double>> triplets;
+        triplets.reserve(n_neighbors);
+
+        const auto& trees = forest->forest->get_trees();
+        size_t num_trees = trees.size();
+        for (size_t s = 0; s < n_train_rows; ++s) {
+            std::vector<std::pair<size_t, size_t>> train_leaf_counts;
+            for (size_t t = 0; t < num_trees; ++t) {
+                if (!valid_trees[s].empty() && !valid_trees[s][t]) continue;
+                size_t leaf = leaf_nodes[s][t];
+                if (leaf == 0) continue;
+                const auto& leaf_samples = trees[t]->get_leaf_samples();
+                if (leaf >= leaf_samples.size()) continue;
+                for (size_t tr : leaf_samples[leaf]) {
+                    if (tr == s) continue;
+                    train_leaf_counts.push_back({tr, 1});
+                }
+            }
+            std::sort(train_leaf_counts.begin(), train_leaf_counts.end());
+            for (size_t i = 0; i < train_leaf_counts.size(); ) {
+                size_t j = i;
+                while (j < train_leaf_counts.size()
+                       && train_leaf_counts[j].first == train_leaf_counts[i].first) ++j;
+                triplets.emplace_back(s, train_leaf_counts[i].first,
+                                       double(j - i) / double(num_trees));
+                i = j;
+            }
+        }
+        result.setFromTriplets(triplets.data(), triplets.data() + triplets.size());
+
+        if (out_n_train) *out_n_train = n_train_rows;
+        return flatten_sparse_to_dense_column_major(result, n_train_rows, n_train_rows);
+    } catch (const std::exception& e) {
+        set_error(e.what());
+        return nullptr;
+    }
 }
 
 } // extern "C"

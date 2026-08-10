@@ -19,6 +19,11 @@ pub mod instrumental_forest;
 pub mod lm_forest;
 pub mod ll_regression_forest;
 pub mod boosted_regression_forest;
+pub mod forest_analysis;
+pub mod get_scores;
+pub mod multi_arm_causal_forest;
+pub mod causal_survival_forest;
+pub mod generate_causal_data;
 
 pub use regression_forest::{RegressionForestFactory, RegressionForestSpec};
 pub use predict_forest::{PredictForestFactory, PredictForestSpec, PredictForestOutput};
@@ -51,4 +56,23 @@ pub use ll_regression_forest::{
 };
 pub use boosted_regression_forest::{
     BoostedRegressionForestFactory, BoostedRegressionForestSpec, BoostedRegressionForestOutput,
+};
+pub use forest_analysis::{
+    GetForestWeightsFactory, GetForestWeightsSpec, ForestWeightsOutput,
+    SplitFrequenciesFactory, SplitFrequenciesSpec, SplitFrequenciesOutput,
+    VariableImportanceFactory, VariableImportanceSpec, VariableImportanceOutput,
+    GetTreeFactory, GetTreeSpec, GetTreeOutput,
+    MergeForestsFactory, MergeForestsSpec, MergeForestsOutput,
+};
+pub use get_scores::{
+    GetScoresFactory, GetScoresSpec, GetScoresOutput,
+};
+pub use multi_arm_causal_forest::{
+    MultiArmCausalForestFactory, MultiArmCausalForestSpec, MultiArmCausalForestOutput,
+};
+pub use causal_survival_forest::{
+    CausalSurvivalForestFactory, CausalSurvivalForestSpec, CausalSurvivalForestOutput,
+};
+pub use generate_causal_data::{
+    GenerateCausalDataFactory, GenerateCausalDataSpec, GenerateCausalDataOutput,
 };

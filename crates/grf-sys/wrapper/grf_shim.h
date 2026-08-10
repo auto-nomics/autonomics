@@ -328,6 +328,28 @@ grf_split_freq_t* grf_compute_split_frequencies(
 
 void grf_split_freq_free(grf_split_freq_t* sf);
 
+/// Compute forest weights α(x) — for each test row, the per-train-row weight
+/// based on co-leaf membership. Output is a dense column-major buffer of
+/// shape (n_train_rows, n_test_rows), flattened. Caller frees via `free()`.
+/// Returns NULL on failure.
+double* grf_compute_weights(
+    const grf_forest_t* forest,
+    const double* train_data, size_t n_train_rows, size_t n_train_cols,
+    const double* test_data, size_t n_test_rows, size_t n_test_cols,
+    size_t* out_n_train, size_t* out_n_test,
+    uint32_t num_threads
+);
+
+/// Out-of-bag variant of grf_compute_weights: computes α(x) using only
+/// trees that did not use each training row. Returns a buffer of length
+/// n_train_rows × n_train_rows (each row's weights over the OTHER rows).
+double* grf_compute_weights_oob(
+    const grf_forest_t* forest,
+    const double* train_data, size_t n_train_rows, size_t n_train_cols,
+    size_t* out_n_train,
+    uint32_t num_threads
+);
+
 #ifdef __cplusplus
 }
 #endif

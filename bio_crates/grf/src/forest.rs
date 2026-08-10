@@ -23,6 +23,8 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use grf_sys as sys;
 
 use crate::data::Matrix;
@@ -31,7 +33,7 @@ use crate::{GrfError, Result};
 /// Identifier for which forest type a [`ForestBlob`] holds.
 ///
 /// Used by [`ForestBlob::kind`] to dispatch prediction / analysis operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum ForestKind {
     Regression,
     Causal,
@@ -115,6 +117,20 @@ impl std::fmt::Debug for ForestBlob {
     }
 }
 
+// Manual Serialize impl — the inner `sys::Forest` is an opaque FFI handle
+// (no serde representation). We serialize only the discriminant metadata
+// so the DAG layer can use this struct as a tagged payload.
+impl Serialize for ForestBlob {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ForestBlob", 3)?;
+        st.serialize_field("kind", &self.kind)?;
+        st.serialize_field("n_features", &self.n_features)?;
+        st.serialize_field("num_trees", &self.inner.num_trees())?;
+        st.end()
+    }
+}
+
 impl ForestBlob {
     /// Take ownership of a raw `grf_sys::Forest`. Internal-use only.
     pub(crate) fn from_sys(
@@ -173,6 +189,39 @@ impl ForestBlob {
     /// Borrow the underlying grf-sys handle. Used by the predict / analysis
     /// helpers below; not generally needed by user code.
     pub fn inner(&self) -> &sys::Forest { &self.inner }
+
+    /// Forest weights α(test_row, train_row) — co-leaf occupancy counts
+    /// divided by total trees. Returns a dense column-major buffer of
+    /// shape `(n_train × n_test)`.
+    pub fn compute_weights(
+        &self,
+        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        test_data: &[f64], n_test_rows: usize, n_test_cols: usize,
+        num_threads: u32,
+    ) -> Option<Vec<f64>> {
+        self.inner.compute_weights(
+            train_data, n_train_rows, n_train_cols,
+            test_data, n_test_rows, n_test_cols,
+            num_threads,
+        )
+    }
+
+    /// OOB forest weights over the training set.
+    pub fn compute_weights_oob(
+        &self,
+        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        num_threads: u32,
+    ) -> Option<Vec<f64>> {
+        self.inner.compute_weights_oob(
+            train_data, n_train_rows, n_train_cols,
+            num_threads,
+        )
+    }
+
+    /// Compute split-frequency matrix (depth × n_features).
+    pub fn compute_split_frequencies(&self, max_depth: usize) -> Option<Vec<Vec<u64>>> {
+        self.inner.compute_split_frequencies(max_depth)
+    }
 }
 
 /// OOB predictions captured at training time.
@@ -184,7 +233,7 @@ pub struct OobPredictions {
 }
 
 /// Per-forest statistics surfaced to the agent layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ForestStats {
     pub kind: ForestKind,
     pub num_trees: usize,

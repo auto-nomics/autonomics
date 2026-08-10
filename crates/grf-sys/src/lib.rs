@@ -196,6 +196,83 @@ impl Forest {
         Some((slice.to_vec(), pred_length))
     }
 
+    /// Forest weights α(test_row, train_row) — count of trees in which
+    /// train_row and test_row share a leaf, divided by total trees.
+    /// Returns a dense column-major buffer of shape (n_train × n_test).
+    pub fn compute_weights(
+        &self,
+        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        test_data: &[f64], n_test_rows: usize, n_test_cols: usize,
+        num_threads: u32,
+    ) -> Option<Vec<f64>> {
+        let mut n_t = 0usize;
+        let mut n_s = 0usize;
+        let p = unsafe {
+            ffi::grf_compute_weights(
+                self.ptr.as_ptr(),
+                train_data.as_ptr(), n_train_rows, n_train_cols,
+                test_data.as_ptr(), n_test_rows, n_test_cols,
+                &mut n_t, &mut n_s,
+                num_threads,
+            )
+        };
+        if p.is_null() {
+            return None;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(p, n_t * n_s) };
+        let v = slice.to_vec();
+        unsafe { libc::free(p as *mut libc::c_void); }
+        Some(v)
+    }
+
+    /// OOB forest weights: each row's weights over the OTHER train rows.
+    pub fn compute_weights_oob(
+        &self,
+        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        num_threads: u32,
+    ) -> Option<Vec<f64>> {
+        let mut n_t = 0usize;
+        let p = unsafe {
+            ffi::grf_compute_weights_oob(
+                self.ptr.as_ptr(),
+                train_data.as_ptr(), n_train_rows, n_train_cols,
+                &mut n_t,
+                num_threads,
+            )
+        };
+        if p.is_null() {
+            return None;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(p, n_t * n_t) };
+        let v = slice.to_vec();
+        unsafe { libc::free(p as *mut libc::c_void); }
+        Some(v)
+    }
+
+    /// Compute split-frequency matrix (depth × n_features).
+    pub fn compute_split_frequencies(&self, max_depth: usize) -> Option<Vec<Vec<u64>>> {
+        let p = unsafe {
+            ffi::grf_compute_split_frequencies(self.ptr.as_ptr(), max_depth)
+        };
+        if p.is_null() {
+            return None;
+        }
+        unsafe {
+            let raw = &*p;
+            let n_features = raw.n_features;
+            let max_depth = raw.max_depth;
+            let slice = std::slice::from_raw_parts(raw.depths_x_features, max_depth * n_features);
+            let mut out = vec![vec![0u64; n_features]; max_depth];
+            for d in 0..max_depth {
+                for f in 0..n_features {
+                    out[d][f] = slice[d * n_features + f];
+                }
+            }
+            ffi::grf_split_freq_free(p);
+            Some(out)
+        }
+    }
+
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut len = 0usize;
         let p = unsafe { ffi::grf_forest_serialize(self.ptr.as_ptr(), &mut len) };
