@@ -158,9 +158,9 @@ impl IngestionExecutor {
         ctx: &SessionContext,
         spec: &IngestionSpec,
     ) -> anyhow::Result<datafusion::dataframe::DataFrame> {
-        match spec.source_format {
+        let df = match spec.source_format {
             SourceFormat::Parquet => {
-                Ok(ctx.read_parquet(&spec.source_path, ParquetReadOptions::default()).await?)
+                ctx.read_parquet(&spec.source_path, ParquetReadOptions::default()).await?
             }
             SourceFormat::Csv | SourceFormat::Tsv => {
                 let csv_opts = spec.csv_options.clone().unwrap_or_default();
@@ -174,8 +174,78 @@ impl IngestionExecutor {
                 if let Some(ext) = &csv_opts.file_extension {
                     opts = opts.file_extension(ext);
                 }
-                Ok(ctx.read_csv(&spec.source_path, opts).await?)
+                ctx.read_csv(&spec.source_path, opts).await?
             }
+        };
+
+        // Cast Utf8View columns to Utf8 — DataFusion ≥42 reads parquet string
+        // columns as Utf8View, but iceberg-rust expects Utf8 for writes.
+        // SQL CAST is optimized away by DataFusion's planner, so we must
+        // physically materialize: collect batches, cast Arrow arrays, register
+        // as a MemTable.
+        let needs_cast = df
+            .schema()
+            .fields()
+            .iter()
+            .any(|f| f.data_type() == &datafusion::arrow::datatypes::DataType::Utf8View);
+
+        if needs_cast {
+            tracing::debug!("physically casting Utf8View → Utf8 for Iceberg compatibility");
+            let orig_schema = df.schema().clone();
+            let batches = df.collect().await?;
+            let cast_schema = datafusion::arrow::datatypes::SchemaRef::new(
+                datafusion::arrow::datatypes::Schema::new(
+                    orig_schema
+                        .fields()
+                        .iter()
+                        .map(|f| {
+                            if f.data_type() == &datafusion::arrow::datatypes::DataType::Utf8View {
+                                datafusion::arrow::datatypes::Field::new(
+                                    f.name(),
+                                    datafusion::arrow::datatypes::DataType::Utf8,
+                                    f.is_nullable(),
+                                )
+                            } else {
+                                f.as_ref().clone()
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            );
+
+            let mut casted_batches = Vec::with_capacity(batches.len());
+            for batch in &batches {
+                let arrays: Vec<std::sync::Arc<dyn datafusion::arrow::array::Array>> = batch
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, col)| {
+                        if batch.schema().field(i).data_type()
+                            == &datafusion::arrow::datatypes::DataType::Utf8View
+                        {
+                            datafusion::arrow::compute::cast(col, &datafusion::arrow::datatypes::DataType::Utf8)
+                                .unwrap_or_else(|_| col.clone())
+                        } else {
+                            col.clone()
+                        }
+                    })
+                    .collect();
+                casted_batches.push(
+                    datafusion::arrow::record_batch::RecordBatch::try_new(
+                        cast_schema.clone(),
+                        arrays,
+                    )?,
+                );
+            }
+
+            let provider =
+                datafusion::datasource::MemTable::try_new(cast_schema, vec![casted_batches])?;
+            ctx.register_table("__cast_src", std::sync::Arc::new(provider))?;
+            let result = ctx.table("__cast_src").await?;
+            ctx.deregister_table("__cast_src")?;
+            Ok(result)
+        } else {
+            Ok(df)
         }
     }
 
