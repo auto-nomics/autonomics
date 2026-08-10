@@ -25,6 +25,12 @@ use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
 /// Default GraphQL endpoint (API v4).
 pub const DEFAULT_ENDPOINT: &str = "https://api.platform.opentargets.org/api/v4/graphql";
 
+/// Resolve the Open Targets GraphQL endpoint via the resource catalog,
+/// falling back to [`DEFAULT_ENDPOINT`] when no override is configured.
+pub fn endpoint() -> String {
+    resource_catalog::endpoint_or("endpoint.opentargets", DEFAULT_ENDPOINT)
+}
+
 // Maximum page size accepted by the API (server enforces ≤ 3000).
 const MAX_PAGE_SIZE: u32 = 3000;
 
@@ -118,7 +124,7 @@ impl Default for OpenTargetsClient {
 impl OpenTargetsClient {
     /// Create a client pointing at the default production endpoint.
     pub fn new() -> Self {
-        Self::with_endpoint(DEFAULT_ENDPOINT)
+        Self::with_endpoint(endpoint())
     }
 
     /// Create a client pointing at a custom GraphQL endpoint (useful for

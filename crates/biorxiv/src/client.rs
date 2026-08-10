@@ -10,6 +10,10 @@ use crate::types::*;
 /// as the canonical base since it additionally hosts the `/pub` endpoint.
 const BASE_URL: &str = "https://api.biorxiv.org";
 
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.biorxiv", BASE_URL)
+}
+
 /// Maximum results returned per API call.
 const PAGE_SIZE: u32 = 100;
 
@@ -123,7 +127,7 @@ impl BiorxivClient {
     pub async fn details_by_doi(&self, server: Server, doi: &str) -> Result<DetailsResponse> {
         let url = format!(
             "{base}/details/{server}/{doi}/na/json",
-            base = BASE_URL,
+            base = base_url(),
             server = server.segment(),
             doi = doi.trim(),
         );
@@ -150,21 +154,21 @@ impl BiorxivClient {
             Interval::Recent(n) => {
                 format!(
                     "{base}/details/{server}/{n}",
-                    base = BASE_URL,
+                    base = base_url(),
                     server = server.segment(),
                 )
             }
             Interval::Days(n) => {
                 format!(
                     "{base}/details/{server}/{n}d",
-                    base = BASE_URL,
+                    base = base_url(),
                     server = server.segment(),
                 )
             }
             Interval::DateRange { from, to } => {
                 format!(
                     "{base}/details/{server}/{from}/{to}/{cursor}",
-                    base = BASE_URL,
+                    base = base_url(),
                     server = server.segment(),
                 )
             }
@@ -288,7 +292,7 @@ impl BiorxivClient {
         to: chrono::NaiveDate,
         cursor: u32,
     ) -> Result<PubResponse> {
-        let url = format!("{base}/pub/{from}/{to}/{cursor}", base = BASE_URL,);
+        let url = format!("{base}/pub/{from}/{to}/{cursor}", base = base_url(),);
         self.get(&url).await
     }
 }

@@ -9,6 +9,10 @@ use crate::types::*;
 /// Base URL for all NCBI E-utility requests.
 const BASE_URL: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.eutils", BASE_URL)
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -81,7 +85,7 @@ impl EutilsClient {
         let mut p = params;
         self.inject_common(&mut p);
 
-        let url = format!("{BASE_URL}/{endpoint}");
+        let url = format!("{}/{endpoint}", base_url());
         let resp = self.client.get(&url).query(&p).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;
@@ -97,7 +101,7 @@ impl EutilsClient {
         let mut p = params;
         self.inject_common(&mut p);
 
-        let url = format!("{BASE_URL}/{endpoint}");
+        let url = format!("{}/{endpoint}", base_url());
         let resp = self.client.get(&url).query(&p).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;
@@ -117,7 +121,7 @@ impl EutilsClient {
             p.insert("api_key", key.clone());
         }
 
-        let url = format!("{BASE_URL}/{endpoint}");
+        let url = format!("{}/{endpoint}", base_url());
         let resp = self.client.post(&url).form(&p).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;
@@ -137,7 +141,7 @@ impl EutilsClient {
             p.insert("api_key", key.clone());
         }
 
-        let url = format!("{BASE_URL}/{endpoint}");
+        let url = format!("{}/{endpoint}", base_url());
         let resp = self.client.post(&url).form(&p).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;

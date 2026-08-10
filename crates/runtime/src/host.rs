@@ -496,6 +496,34 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
         vec!["runtime".into()],
     );
 
+    // ── External API endpoints ────────────────────────────────────────
+    // Registered so SDK clients can resolve via ResourceCatalog::global().
+    // Each SDK crate falls back to its own const when the global is not set.
+    for (logical, url, desc) in [
+        ("endpoint.eutils", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils", "NCBI E-utilities API"),
+        ("endpoint.embase", "https://api.elsevier.com/content/embase/article", "Elsevier Embase API"),
+        ("endpoint.openalex", "https://api.openalex.org", "OpenAlex REST API"),
+        ("endpoint.s2_graph", "https://api.semanticscholar.org/graph/v1", "Semantic Scholar Graph API"),
+        ("endpoint.s2_reco", "https://api.semanticscholar.org/recommendations/v1", "Semantic Scholar Recommendations API"),
+        ("endpoint.opentargets", "https://api.platform.opentargets.org/api/v4/graphql", "Open Targets GraphQL API"),
+        ("endpoint.crossref", "https://api.crossref.org", "Crossref REST API"),
+        ("endpoint.gwascatalog_ss", "https://www.ebi.ac.uk/gwas/summary-statistics/api", "GWAS Catalog Summary Stats API"),
+        ("endpoint.gwascatalog_rest", "https://www.ebi.ac.uk/gwas/rest/api", "GWAS Catalog REST API"),
+        ("endpoint.gwascatalog_search", "https://www.ebi.ac.uk/gwas/api/search", "GWAS Catalog Solr Search API"),
+        ("endpoint.gwascatalog_ftp", "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics", "GWAS Catalog FTP (summary stats files)"),
+        ("endpoint.europepmc", "https://www.ebi.ac.uk/europepmc/webservices/rest", "Europe PMC REST API"),
+        ("endpoint.biorxiv", "https://api.biorxiv.org", "bioRxiv/medRxiv API"),
+        ("endpoint.arxiv", "http://export.arxiv.org/api/query", "arXiv API"),
+    ] {
+        reg(
+            logical,
+            ResourceKind::Endpoint,
+            desc,
+            ResourceAddress::endpoint(url),
+            vec!["api".into()],
+        );
+    }
+
     // ── Config values (from env or defaults) ──────────────────────────
     let read_env = |key: &str| std::env::var(key).ok();
     if let Some(uri) = read_env("ICEBERG_REST_URI") {

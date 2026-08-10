@@ -45,7 +45,7 @@ pub mod tools;
 pub mod types;
 
 pub use associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
-pub use client::{DEFAULT_ENDPOINT, OpenTargetsClient};
+pub use client::{endpoint, DEFAULT_ENDPOINT, OpenTargetsClient};
 pub use error::{OpenTargetsError, Result};
 pub use search::{SearchResult, SearchResults};
 pub use tools::opentargets_registrations;

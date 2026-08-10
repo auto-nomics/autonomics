@@ -9,6 +9,16 @@ const GRAPH_BASE: &str = "https://api.semanticscholar.org/graph/v1";
 /// Base URL for the Semantic Scholar Recommendations API.
 const RECO_BASE: &str = "https://api.semanticscholar.org/recommendations/v1";
 
+/// Resolve the S2 Graph endpoint via the resource catalog.
+fn graph_base() -> String {
+    resource_catalog::endpoint_or("endpoint.s2_graph", GRAPH_BASE)
+}
+
+/// Resolve the S2 Recommendations endpoint via the resource catalog.
+fn reco_base() -> String {
+    resource_catalog::endpoint_or("endpoint.s2_reco", RECO_BASE)
+}
+
 // ===========================================================================
 // Client
 // ===========================================================================
@@ -184,7 +194,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, "/paper/search", &params).await
+        self.get_json(&graph_base(), "/paper/search", &params).await
     }
 
     /// Relevance search with full filter support.
@@ -226,7 +236,7 @@ impl S2Client {
         if let Some(mc) = filter.min_citation_count {
             params.push(("minCitationCount", mc.to_string()));
         }
-        self.get_json(GRAPH_BASE, "/paper/search", &params).await
+        self.get_json(&graph_base(), "/paper/search", &params).await
     }
 
     /// Bulk search with boolean query syntax and continuation token.
@@ -253,7 +263,7 @@ impl S2Client {
         if let Some(s) = sort {
             params.push(("sort", s.to_owned()));
         }
-        self.get_json(GRAPH_BASE, "/paper/search/bulk", &params)
+        self.get_json(&graph_base(), "/paper/search/bulk", &params)
             .await
     }
 
@@ -274,7 +284,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, &path, &params).await
+        self.get_json(&graph_base(), &path, &params).await
     }
 
     /// Get details for multiple papers (up to 500) in a single request.
@@ -290,7 +300,7 @@ impl S2Client {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
         let body = serde_json::json!({ "ids": ids });
-        self.post_json(GRAPH_BASE, "/paper/batch", &params, &body)
+        self.post_json(&graph_base(), "/paper/batch", &params, &body)
             .await
     }
 
@@ -316,7 +326,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_CITATION_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, &path, &params).await
+        self.get_json(&graph_base(), &path, &params).await
     }
 
     /// Get papers referenced by this paper.
@@ -337,7 +347,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_CITATION_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, &path, &params).await
+        self.get_json(&graph_base(), &path, &params).await
     }
 
     // ===================================================================
@@ -347,7 +357,7 @@ impl S2Client {
     /// Suggest paper query completions for interactive search.
     pub async fn autocomplete(&self, query: &str) -> Result<serde_json::Value> {
         let params: Vec<(&str, String)> = vec![("query", query.to_owned())];
-        self.get_json(GRAPH_BASE, "/paper/autocomplete", &params)
+        self.get_json(&graph_base(), "/paper/autocomplete", &params)
             .await
     }
 
@@ -373,7 +383,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_AUTHOR_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, "/author/search", &params).await
+        self.get_json(&graph_base(), "/author/search", &params).await
     }
 
     /// Get details about a single author.
@@ -385,7 +395,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_AUTHOR_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, &path, &params).await
+        self.get_json(&graph_base(), &path, &params).await
     }
 
     /// Get papers by a specific author.
@@ -406,7 +416,7 @@ impl S2Client {
         } else {
             params.push(("fields", AUTHOR_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(GRAPH_BASE, &path, &params).await
+        self.get_json(&graph_base(), &path, &params).await
     }
 
     // ===================================================================
@@ -427,7 +437,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(RECO_BASE, &path, &params).await
+        self.get_json(&reco_base(), &path, &params).await
     }
 }
 

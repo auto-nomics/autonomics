@@ -8,6 +8,12 @@ use crate::types::*;
 /// Base URL for all Crossref REST API requests.
 const BASE_URL: &str = "https://api.crossref.org";
 
+/// Resolve the Crossref endpoint via the resource catalog, falling back to
+/// [`BASE_URL`] when no override is configured.
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.crossref", BASE_URL)
+}
+
 // ===========================================================================
 // Builder
 // ===========================================================================
@@ -178,7 +184,7 @@ impl CrossrefClient {
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
-        let url = build_url(BASE_URL, path, params, self.mailto.as_deref());
+        let url = build_url(&base_url(), path, params, self.mailto.as_deref());
         let req = {
             let r = self.client.get(&url);
             if let Some(ref token) = self.bearer_token {

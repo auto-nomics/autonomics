@@ -9,6 +9,10 @@ use crate::types::*;
 /// Base URL for the arXiv API.
 const BASE_URL: &str = "http://export.arxiv.org/api/query";
 
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.arxiv", BASE_URL)
+}
+
 /// arXiv recommends at least 3 seconds between consecutive API calls.
 const RATE_LIMIT_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -86,7 +90,7 @@ impl ArxivClient {
             tokio::time::sleep(d).await;
         }
 
-        let resp = self.client.get(BASE_URL).query(params).send().await?;
+        let resp = self.client.get(&base_url()).query(params).send().await?;
 
         let status = resp.status().as_u16();
         let body = resp.text().await?;

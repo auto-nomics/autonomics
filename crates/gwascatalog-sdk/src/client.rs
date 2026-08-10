@@ -15,6 +15,26 @@ pub const SEARCH_BASE: &str = "https://www.ebi.ac.uk/gwas/api/search";
 /// HTTPS mirror of the FTP site hosting full summary-statistics files.
 pub const FTP_BASE: &str = "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics";
 
+/// Resolve the GWAS Catalog Summary Statistics endpoint via the resource catalog.
+pub fn ss_base() -> String {
+    resource_catalog::endpoint_or("endpoint.gwascatalog_ss", SS_BASE)
+}
+
+/// Resolve the GWAS Catalog REST endpoint via the resource catalog.
+pub fn rest_base() -> String {
+    resource_catalog::endpoint_or("endpoint.gwascatalog_rest", REST_BASE)
+}
+
+/// Resolve the GWAS Catalog Solr Search endpoint via the resource catalog.
+pub fn search_base() -> String {
+    resource_catalog::endpoint_or("endpoint.gwascatalog_search", SEARCH_BASE)
+}
+
+/// Resolve the GWAS Catalog FTP mirror endpoint via the resource catalog.
+pub fn ftp_base() -> String {
+    resource_catalog::endpoint_or("endpoint.gwascatalog_ftp", FTP_BASE)
+}
+
 /// Aggregate async client for all three GWAS Catalog APIs.
 ///
 /// Method groups per API:
@@ -37,10 +57,10 @@ impl GwasCatalogClient {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
-            ss_base: SS_BASE.to_string(),
-            rest_base: REST_BASE.to_string(),
-            search_base: SEARCH_BASE.to_string(),
-            ftp_base: FTP_BASE.to_string(),
+            ss_base: ss_base(),
+            rest_base: rest_base(),
+            search_base: search_base(),
+            ftp_base: ftp_base(),
         }
     }
 
@@ -50,9 +70,9 @@ impl GwasCatalogClient {
         Self {
             client: reqwest::Client::new(),
             ss_base: ss_base.into(),
-            rest_base: REST_BASE.to_string(),
-            search_base: SEARCH_BASE.to_string(),
-            ftp_base: FTP_BASE.to_string(),
+            rest_base: rest_base(),
+            search_base: search_base(),
+            ftp_base: ftp_base(),
         }
     }
 
@@ -67,7 +87,7 @@ impl GwasCatalogClient {
             ss_base: ss_base.into(),
             rest_base: rest_base.into(),
             search_base: search_base.into(),
-            ftp_base: FTP_BASE.to_string(),
+            ftp_base: ftp_base(),
         }
     }
 

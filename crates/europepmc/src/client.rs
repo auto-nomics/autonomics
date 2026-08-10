@@ -6,6 +6,10 @@ use crate::types::*;
 /// Base URL for all Europe PMC REST API requests.
 const BASE_URL: &str = "https://www.ebi.ac.uk/europepmc/webservices/rest";
 
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.europepmc", BASE_URL)
+}
+
 // ===========================================================================
 // Client
 // ===========================================================================
@@ -80,7 +84,7 @@ impl EuropePmcClient {
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
-        let url = build_url(BASE_URL, path, params);
+        let url = build_url(&base_url(), path, params);
         let resp = self.client.get(&url).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;
@@ -92,7 +96,7 @@ impl EuropePmcClient {
 
     /// Execute a GET request that returns raw text (e.g. fullTextXML).
     async fn get_text(&self, path: &str, params: &[(&str, String)]) -> Result<String> {
-        let url = build_url(BASE_URL, path, params);
+        let url = build_url(&base_url(), path, params);
         let resp = self.client.get(&url).send().await?;
         let status = resp.status().as_u16();
         let body = resp.text().await?;

@@ -7,6 +7,10 @@ use crate::types::*;
 /// Base URL for all Embase API requests.
 const BASE_URL: &str = "https://api.elsevier.com/content/embase/article";
 
+fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.embase", BASE_URL)
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -157,7 +161,7 @@ impl EmbaseClient {
             params.push(("sort", s.clone()));
         }
 
-        let url = build_url(BASE_URL, &params);
+        let url = build_url(&base_url(), &params);
         let v = self.get_json(&url).await?;
         serde_json::from_value(v).map_err(Into::into)
     }
@@ -173,7 +177,7 @@ impl EmbaseClient {
     pub async fn retrieve(&self, id_type: RetrievalId, id: &str) -> Result<RetrievalResponse> {
         let url = format!(
             "{}/{}/{}",
-            BASE_URL,
+            base_url(),
             id_type.path_segment(),
             urlencoding(id)
         );

@@ -24,6 +24,7 @@ arrow-array = "58.3.0"
 arrow-schema = "58.3.0"
 datafusion = { version = "53" }
 tracing = { workspace = true }
+resource-catalog = { path = "../resource-catalog" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

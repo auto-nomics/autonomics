@@ -13,6 +13,12 @@ use crate::types::*;
 /// Base URL for all OpenAlex API requests.
 pub const BASE_URL: &str = "https://api.openalex.org";
 
+/// Resolve the OpenAlex endpoint via the resource catalog, falling back to
+/// [`BASE_URL`] when no override is configured.
+pub fn base_url() -> String {
+    resource_catalog::endpoint_or("endpoint.openalex", BASE_URL)
+}
+
 /// All OpenAlex entity endpoints share the same set of query parameters.
 /// This builder collects them into one struct so each list method can
 /// forward it unchanged.
@@ -200,7 +206,7 @@ impl OpenAlexClient {
             .expect("reqwest client builder");
         Self {
             client,
-            base_url: BASE_URL.to_string(),
+            base_url: base_url(),
             api_key: api_key.map(|s| s.to_string()),
         }
     }
@@ -209,7 +215,7 @@ impl OpenAlexClient {
     pub fn with_client(client: Client, api_key: Option<&str>) -> Self {
         Self {
             client,
-            base_url: BASE_URL.to_string(),
+            base_url: base_url(),
             api_key: api_key.map(|s| s.to_string()),
         }
     }

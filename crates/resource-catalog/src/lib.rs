@@ -44,6 +44,16 @@ pub use kind::{DbKind, DocKind, ResourceAddress, ResourceKind};
 pub use persist::{ManifestStore, TursoManifestStore};
 pub use provider::ResourceProvider;
 pub use registry::ResourceRegistry;
+
+/// Resolve an endpoint URL from the global catalog, falling back to
+/// `fallback` when the global catalog is not set or the name is not
+/// registered. Convenience for SDK crates that want one-liner resolution
+/// without depending on the full catalog API.
+pub fn endpoint_or(logical: &str, fallback: &str) -> String {
+    ResourceCatalog::global()
+        .and_then(|cat| cat.resolve_endpoint(logical).ok())
+        .unwrap_or_else(|| fallback.to_string())
+}
 pub use resolve::IcebergIdent;
 
 #[cfg(test)]
