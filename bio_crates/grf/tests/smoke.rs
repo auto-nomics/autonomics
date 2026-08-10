@@ -6,11 +6,16 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, RecordBatch};
+use arrow_array::{Array, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 
 use grf::data::Matrix;
 use grf::forest::{PredictRequest, RegressionSpec, RegressionTrainer};
+use grf::nodes::{
+    MultiRegressionForestSpec, ProbabilityForestSpec, QuantileForestSpec,
+    SurvivalForestSpec,
+};
+use grf::nodes::regression_forest::NodeTrainOptions;
 use grf_sys as sys;
 
 /// Small deterministic regression dataset:
@@ -160,4 +165,134 @@ fn arrow_round_trip_through_dag_node() {
     let out = spec.fit(&[batch]).expect("node fit succeeds");
     assert_eq!(out.forest.num_trees(), 40);
     assert!(out.oob_predictions.is_some());
+}
+// ═══════════════════════════════════════════════════════════════════════
+// P2 baseline forest nodes
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn quantile_forest_smoke() {
+    let (x_rows, y) = make_synth(60, 3, 31);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("x2", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+    ]));
+    let mut cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y)),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols.clone()).unwrap();
+    let spec = grf::nodes::QuantileForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
+        y_column_name: "y".into(),
+        quantiles: vec![0.25, 0.5, 0.75],
+        regression_splitting: false,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 7, ..Default::default() },
+    };
+    let _ = cols.pop();
+    let out = spec.fit(&[batch]).expect("quantile fit");
+    assert_eq!(out.forest.num_trees(), 50);
+    // OOB is intentionally None for quantile (no predict strategy in grf).
+    assert!(out.oob_predictions.is_none());
+}
+
+#[test]
+fn probability_forest_smoke() {
+    use arrow_array::Int64Array;
+    let (x_rows, _) = make_synth(60, 2, 11);
+    let y: Vec<i64> = (0..60).map(|i| (i % 3) as i64).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("y",  DataType::Int64,   false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Int64Array::from(y)),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::ProbabilityForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        y_column_name: "y".into(),
+        num_classes: 3,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("probability fit");
+    assert_eq!(out.forest.num_trees(), 50);
+    let oob = out.oob_predictions.expect("oob");
+    assert_eq!(oob.values.len(), 60 * 3);
+    assert_eq!(oob.pred_length, 3);
+    // Per-row probabilities should sum to ~1.0 (column-major: class × row).
+    for i in 0..60 {
+        let s: f64 = (0..3).map(|c| oob.values[c * 60 + i]).sum();
+        assert!((s - 1.0).abs() < 1e-6, "row {i} probs sum to {s}");
+    }
+}
+
+#[test]
+fn survival_forest_smoke() {
+    use arrow_array::Int64Array;
+    let (x_rows, _) = make_synth(60, 2, 19);
+    let time: Vec<f64> = (1..=60).map(|i| i as f64 * 0.1).collect();
+    let censor: Vec<i64> = (0..60).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("time", DataType::Float64, false),
+        Field::new("censor", DataType::Int64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(time)),
+        Arc::new(Int64Array::from(censor)),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::SurvivalForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        time_column_name: "time".into(),
+        censor_column_name: "censor".into(),
+        failure_times: None,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 5, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("survival fit");
+    assert_eq!(out.forest.num_trees(), 50);
+}
+
+#[test]
+fn multi_regression_forest_smoke() {
+    let (x_rows, _) = make_synth(50, 2, 23);
+    let y0: Vec<f64> = x_rows.iter().map(|r| r[0] + r[1]).collect();
+    let y1: Vec<f64> = x_rows.iter().map(|r| r[0] - r[1]).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("y0", DataType::Float64, false),
+        Field::new("y1", DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y0)),
+        Arc::new(Float64Array::from(y1)),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::MultiRegressionForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        y_column_names: vec!["y0".into(), "y1".into()],
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 11, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("multi regression fit");
+    assert_eq!(out.forest.num_trees(), 50);
+    let oob = out.oob_predictions.expect("oob");
+    assert_eq!(oob.values.len(), 50 * 2);
+    assert_eq!(oob.pred_length, 2);
 }
