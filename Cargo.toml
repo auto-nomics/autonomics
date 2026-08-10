@@ -82,6 +82,8 @@ members = [
   "crates/writing-base",
   "crates/node-bundles/nodes-writing",
   "crates/crossref",
+  "crates/grf-sys",
+  "bio_crates/grf",
 ]
 resolver = "3"
 

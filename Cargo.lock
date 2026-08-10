@@ -4844,6 +4844,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "grf"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "faer",
+ "grf-sys",
+ "rand 0.8.7",
+ "rand_distr 0.4.3",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "grf-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "gwascatalog-sdk"
 version = "0.1.0"
 dependencies = [
@@ -5013,6 +5041,19 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hierint"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rayon",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "hmac"
@@ -7423,6 +7464,7 @@ dependencies = [
  "datalake",
  "epi",
  "faer",
+ "hierint",
  "schemars 1.2.2",
  "serde",
  "serde_json",
