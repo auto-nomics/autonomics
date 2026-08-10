@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::archive::ArchiveStatus;
 use crate::kind::{ResourceAddress, ResourceKind};
 
 /// A self-describing resource record: a stable logical `name` mapped to a
@@ -33,6 +34,16 @@ pub struct ResourceEntry {
     /// Optional free-form tags for filtering/grouping.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional archive configuration: where to back up this resource's
+    /// content in cloud object storage. When set, the catalog can
+    /// [`archive`](crate::catalog::ResourceCatalog::archive) /
+    /// [`restore`](crate::catalog::ResourceCatalog::restore) via rclone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_spec: Option<crate::archive::ArchiveSpec>,
+    /// Runtime archive state: tracks the last archive/restore/verify result.
+    /// Updated by archive operations; persisted with the manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_status: Option<ArchiveStatus>,
 }
 
 impl ResourceEntry {
@@ -50,6 +61,8 @@ impl ResourceEntry {
             address,
             metadata: BTreeMap::new(),
             tags: Vec::new(),
+            archive_spec: None,
+            archive_status: None,
         }
     }
 
@@ -62,6 +75,13 @@ impl ResourceEntry {
     /// Set tags on the entry.
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
+        self
+    }
+
+    /// Set the archive spec on the entry, declaring where this resource's
+    /// content is backed up in cloud object storage.
+    pub fn with_archive(mut self, spec: crate::archive::ArchiveSpec) -> Self {
+        self.archive_spec = Some(spec);
         self
     }
 }

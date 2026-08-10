@@ -132,6 +132,8 @@ impl ManifestStore for TursoManifestStore {
                         address,
                         metadata,
                         tags,
+                        archive_spec: None,
+                        archive_status: None,
                     });
                 }
                 Ok(None) => break,

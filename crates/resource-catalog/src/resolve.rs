@@ -179,7 +179,7 @@ impl ResourceCatalog {
     }
 }
 
-fn kind_str(address: &ResourceAddress) -> &'static str {
+pub(crate) fn kind_str(address: &ResourceAddress) -> &'static str {
     match address {
         ResourceAddress::IcebergTable { .. } => "iceberg_table",
         ResourceAddress::FilePath(_) => "file_path",

@@ -23,6 +23,7 @@
 //! - **Persistable**: the registered manifest (never a live scan) persists to
 //!   SQLite/Turso, matching the `DagHistory` pattern.
 
+pub mod archive;
 pub mod catalog;
 pub mod drift;
 pub mod entry;
@@ -43,6 +44,7 @@ pub use iceberg_const::CATALOG_NAME;
 pub use kind::{DbKind, DocKind, ResourceAddress, ResourceKind};
 pub use persist::{ManifestStore, TursoManifestStore};
 pub use provider::ResourceProvider;
+pub use archive::{ArchiveOutcome, ArchiveSpec, ArchiveStatus, ArchivableResource};
 pub use registry::ResourceRegistry;
 
 /// Resolve an endpoint URL from the global catalog, falling back to

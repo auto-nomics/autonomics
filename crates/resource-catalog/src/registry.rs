@@ -51,6 +51,11 @@ impl ResourceRegistry {
         self.by_name.get(name)
     }
 
+    /// Mutable lookup — needed for in-place archive_status updates.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut ResourceEntry> {
+        self.by_name.get_mut(name)
+    }
+
     /// All registered resources.
     pub fn list(&self) -> impl Iterator<Item = &ResourceEntry> {
         self.by_name.values()

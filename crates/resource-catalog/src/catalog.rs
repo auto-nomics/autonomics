@@ -20,7 +20,7 @@ static GLOBAL: OnceLock<Arc<ResourceCatalog>> = OnceLock::new();
 /// backend, and a base directory used to absolutize relative paths.
 #[derive(Clone)]
 pub struct ResourceCatalog {
-    inner: Arc<RwLock<ResourceRegistry>>,
+    pub(crate) inner: Arc<RwLock<ResourceRegistry>>,
     persist: Option<Arc<dyn ManifestStore>>,
     base_dir: PathBuf,
 }
