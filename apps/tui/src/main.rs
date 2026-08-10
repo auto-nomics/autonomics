@@ -20,7 +20,7 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     let log_dir = PathBuf::from("logs");
     std::fs::create_dir_all(&log_dir)?;
 
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "phloem-tui.log");
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "autonomics-tui.log");
     let file_writer = file_appender.with_max_level(Level::DEBUG);
 
     let timer = OffsetTime::new(

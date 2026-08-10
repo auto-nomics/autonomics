@@ -73,7 +73,7 @@ const DEFAULT_WRITING_DB: &str = "writing.db";
 /// Default TUI application database (model config, settings, etc.).
 ///
 /// Override via builder `.app_db_path(…)` or env `AUTONOMICS_APP_DB`.
-const DEFAULT_APP_DB: &str = "phloem.db";
+const DEFAULT_APP_DB: &str = "config.db";
 
 /// Default agent identity string.
 const DEFAULT_AGENT_IDENTITY: &str = "You are a biomedical research assistant \
