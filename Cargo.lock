@@ -4844,6 +4844,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "grf"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "faer",
+ "grf-sys",
+ "rand 0.8.7",
+ "rand_distr 0.4.3",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statkit",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "grf-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "gwascatalog-sdk"
 version = "0.1.0"
 dependencies = [
