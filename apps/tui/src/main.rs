@@ -467,11 +467,25 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
             // restore/archive linkage.
             if let Some(ref aspec) = archive_spec {
                 let src_name = format!("source.{}", a.name.strip_prefix("iceberg.").unwrap_or(&a.name));
+                // For archiving, use the base directory (strip glob wildcards)
+                // so rclone copies the actual directory, not a literal glob pattern.
+                let archive_path = {
+                    let p = std::path::Path::new(&a.source);
+                    // Walk up until we find a real directory (strip **/*.ext etc.)
+                    let mut dir = p.parent().unwrap_or(p);
+                    while !dir.is_dir() {
+                        dir = match dir.parent() {
+                            Some(p) => p,
+                            None => break,
+                        };
+                    }
+                    dir.to_path_buf()
+                };
                 let src_entry = ResourceEntry::new(
                     src_name.clone(),
                     ResourceKind::FilePath,
                     &format!("Source files for {}", a.name),
-                    ResourceAddress::path(&a.source),
+                    ResourceAddress::path(&archive_path),
                 )
                 .with_archive(aspec.clone());
                 catalog.register(src_entry)?;
