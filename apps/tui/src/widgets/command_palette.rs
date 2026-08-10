@@ -40,12 +40,6 @@ pub enum CommandAction {
     ToggleCollapseToolCalls,
     /// Toggle collapse for tool result blocks.
     ToggleCollapseToolResults,
-    /// Ingest registered source files into Iceberg tables.
-    IngestData,
-    /// Restore archivable resources from cloud storage.
-    RestoreData,
-    /// Archive resources to cloud storage.
-    ArchiveData,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -220,24 +214,6 @@ fn default_commands() -> Vec<Command> {
             keywords: "refresh providers model".into(),
             category: "config".into(),
             action: CommandAction::ReloadConfig,
-        },
-        Command {
-            title: "Ingest data → Iceberg".into(),
-            keywords: "parquet csv import upload sink ingest data lake table".into(),
-            category: "data".into(),
-            action: CommandAction::IngestData,
-        },
-        Command {
-            title: "Restore from archive".into(),
-            keywords: "rclone download pull cloud object storage backup".into(),
-            category: "data".into(),
-            action: CommandAction::RestoreData,
-        },
-        Command {
-            title: "Archive to cloud".into(),
-            keywords: "rclone upload push backup cloud object storage".into(),
-            category: "data".into(),
-            action: CommandAction::ArchiveData,
         },
         Command {
             title: "Quit".into(),

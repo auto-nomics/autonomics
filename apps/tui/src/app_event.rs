@@ -47,10 +47,4 @@ pub(crate) enum AppEvent {
         agent_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
     },
-    /// A data operation (ingest/archive/restore) completed.
-    DataOpCompleted {
-        op: String,
-        resource: String,
-        result: std::result::Result<String, String>,
-    },
 }
