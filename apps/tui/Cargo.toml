@@ -20,6 +20,8 @@ agentik-core = { path = "../../crates/agentik-core" }
 agentik-sdk = { path = "../../crates/agentik-sdk" }
 agentik-types = { path = "../../crates/agentik-types" }
 runtime = { path = "../../crates/runtime" }
+dag-core = { path = "../../crates/dag-core" }
+datalake = { path = "../../crates/datalake" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
 chrono = { workspace = true }

@@ -11689,6 +11689,8 @@ dependencies = [
  "clap",
  "color-eyre",
  "crossterm",
+ "dag-core",
+ "datalake",
  "fuzzy-matcher",
  "ignore",
  "itertools 0.14.0",

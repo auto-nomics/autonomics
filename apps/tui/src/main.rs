@@ -1,5 +1,6 @@
 use std::panic;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use time::macros::format_description;
@@ -112,6 +113,10 @@ enum Command {
 
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
+
+    /// Data operations — ingest source files into Iceberg, archive/restore
+    /// via cloud object storage (rclone).
+    Data(DataArgs),
 }
 
 #[derive(Debug, Args)]
@@ -251,6 +256,259 @@ struct ExportArgs {
     /// Maximum articles to export (default 100).
     #[arg(long)]
     limit: Option<usize>,
+}
+
+// ---------------------------------------------------------------------------
+// data subcommand
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+struct DataArgs {
+    #[command(subcommand)]
+    action: DataAction,
+
+    /// Specific resource name to operate on. If omitted, operates on ALL
+    /// resources that have the relevant spec (ingestion_spec or archive_spec).
+    #[arg(long, short = 'r', global = true)]
+    resource: Option<String>,
+}
+
+/// Subcommands under `autonomics-tui data ...`.
+#[derive(Debug, Subcommand)]
+enum DataAction {
+    /// Ingest source files (parquet/csv/tsv) into Iceberg tables.
+    /// Iterates all resources with an `ingestion_spec`, or a single
+    /// resource when `--resource` is given.
+    Ingest,
+
+    /// Restore resources from cloud object storage (rclone pull).
+    /// Iterates all resources with an `archive_spec`.
+    Restore,
+
+    /// Archive resources to cloud object storage (rclone push).
+    /// Iterates all resources with an `archive_spec`.
+    Archive,
+
+    /// List resources that have ingestion or archive specs configured.
+    /// Shows current status (archived_at, verified, etc.).
+    List,
+}
+
+fn run_data(args: DataArgs) -> color_eyre::Result<()> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+    runtime.block_on(async { run_data_async(args).await })
+}
+
+async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
+    use dag_core::resource_catalog::ResourceCatalog;
+    use runtime::config::RuntimeConfig;
+
+    let config = RuntimeConfig::default();
+    let manifest_db = config.state_dir.join("resource-manifest.db");
+    if let Some(parent) = manifest_db.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let catalog = Arc::new(
+        ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await,
+    );
+
+    // Register built-in resources (same as SharedInfra::open would do).
+    let _ = ResourceCatalog::set_global(catalog.clone());
+    // Re-register providers by opening a minimal engine.
+    // For now, the catalog should have persisted entries from a prior TUI run.
+
+    match args.action {
+        DataAction::Ingest => {
+            // Need Datalake for Iceberg table creation/insertion.
+            let datalake = Arc::new(datalake::Datalake::new());
+            let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
+
+            let targets: Vec<String> = match &args.resource {
+                Some(name) => vec![name.clone()],
+                None => catalog
+                    .list()
+                    .into_iter()
+                    .filter(|e| e.ingestion_spec.is_some())
+                    .map(|e| e.name)
+                    .collect(),
+            };
+
+            if targets.is_empty() {
+                println!("No resources with ingestion_spec registered.");
+                println!("Register resources with IngestionSpec via the ResourceCatalog first.");
+                return Ok(());
+            }
+
+            println!("Ingesting {} resource(s)…\n", targets.len());
+            let mut ok = 0u32;
+            let mut fail = 0u32;
+            for name in &targets {
+                print!("  {name}: ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                match executor.ingest(name).await {
+                    Err(e) => {
+                        println!("✗ {e}");
+                        fail += 1;
+                    }
+                    Ok(o) if o.skipped => {
+                        println!("⊘ skipped (already has data)");
+                        ok += 1;
+                    }
+                    Ok(o) => {
+                        println!(
+                            "✓ {} rows, {} files, {:.1}s",
+                            o.rows_written,
+                            o.files_processed,
+                            o.duration_ms as f64 / 1000.0
+                        );
+                        ok += 1;
+                    }
+                }
+            }
+            println!("\nDone: {ok} ok, {fail} failed.");
+        }
+
+        DataAction::Restore => {
+            let targets: Vec<String> = match &args.resource {
+                Some(name) => vec![name.clone()],
+                None => catalog
+                    .list_archivable()
+                    .into_iter()
+                    .map(|r| r.name)
+                    .collect(),
+            };
+
+            if targets.is_empty() {
+                println!("No resources with archive_spec registered.");
+                return Ok(());
+            }
+
+            println!("Restoring {} resource(s) from archive…\n", targets.len());
+            let mut ok = 0u32;
+            let mut fail = 0u32;
+            for name in &targets {
+                print!("  {name}: ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                match catalog.restore(name).await {
+                    Err(e) => {
+                        println!("✗ {e}");
+                        fail += 1;
+                    }
+                    Ok(o) => {
+                        println!(
+                            "✓ {} files, {} bytes, {:.1}s",
+                            o.files_transferred,
+                            o.size_bytes,
+                            o.duration_ms as f64 / 1000.0
+                        );
+                        ok += 1;
+                    }
+                }
+            }
+            println!("\nDone: {ok} ok, {fail} failed.");
+        }
+
+        DataAction::Archive => {
+            let targets: Vec<String> = match &args.resource {
+                Some(name) => vec![name.clone()],
+                None => catalog
+                    .list_archivable()
+                    .into_iter()
+                    .map(|r| r.name)
+                    .collect(),
+            };
+
+            if targets.is_empty() {
+                println!("No resources with archive_spec registered.");
+                return Ok(());
+            }
+
+            println!("Archiving {} resource(s) to cloud…\n", targets.len());
+            let mut ok = 0u32;
+            let mut fail = 0u32;
+            for name in &targets {
+                print!("  {name}: ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                match catalog.archive(name).await {
+                    Err(e) => {
+                        println!("✗ {e}");
+                        fail += 1;
+                    }
+                    Ok(o) => {
+                        println!(
+                            "✓ {} files, {} bytes, {:.1}s → {}",
+                            o.files_transferred,
+                            o.size_bytes,
+                            o.duration_ms as f64 / 1000.0,
+                            name
+                        );
+                        ok += 1;
+                    }
+                }
+            }
+            println!("\nDone: {ok} ok, {fail} failed.");
+        }
+
+        DataAction::List => {
+            // List ingestible resources.
+            let ingestible: Vec<_> = catalog
+                .list()
+                .into_iter()
+                .filter(|e| e.ingestion_spec.is_some())
+                .collect();
+            if !ingestible.is_empty() {
+                println!("Ingestible resources ({}):", ingestible.len());
+                for e in &ingestible {
+                    let spec = e.ingestion_spec.as_ref().unwrap();
+                    println!(
+                        "  {} [{} → {}]",
+                        e.name,
+                        spec.source_format.as_str(),
+                        e.kind.as_str()
+                    );
+                    println!("    source: {}", spec.source_path);
+                    if !spec.partition_by.is_empty() {
+                        println!("    partition: {}", spec.partition_by.join(", "));
+                    }
+                    println!("    mode: {}", spec.mode.as_str());
+                    if spec.restore_before {
+                        println!("    restore_before: ✓");
+                    }
+                    if spec.archive_after {
+                        println!("    archive_after: ✓");
+                    }
+                }
+                println!();
+            }
+
+            // List archivable resources.
+            let archivable = catalog.list_archivable();
+            if !archivable.is_empty() {
+                println!("Archivable resources ({}):", archivable.len());
+                for r in &archivable {
+                    let status = match (&r.archived_at, r.verified) {
+                        (Some(ts), Some(true)) => format!("archived ✓ ({ts})"),
+                        (Some(ts), _) => format!("archived ({ts})"),
+                        _ => "not archived".to_string(),
+                    };
+                    println!("  {} → {} ({})", r.name, r.remote, status);
+                }
+            }
+
+            if ingestible.is_empty() && archivable.is_empty() {
+                println!("No data resources registered.");
+                println!("Resources are registered via ResourceProvider in the runtime.");
+                println!("Run the TUI once to populate the catalog, then use this command.");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn run_tui(_args: TuiArgs) -> color_eyre::Result<()> {
@@ -619,5 +877,6 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(run_bib(bib))
         }
+        Command::Data(data) => run_data(data),
     }
 }
