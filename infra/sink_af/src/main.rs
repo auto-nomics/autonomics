@@ -27,7 +27,22 @@ use iceberg::{NamespaceIdent, TableCreation};
 
 const AF_NAMESPACE: &str = "af";
 const AF_TABLE: &str = "eur_af";
-const AF_DATA_PATH: &str = "/mnt/disk2/dataset/1000g_plink/eur/maf/";
+/// Source directory for 1000G EUR allele-frequency `.afreq` files.
+/// Overridable via `SINK_AF_DATA_PATH` env var or the resource catalog
+/// (`sink.af.data_path`) when running inside the autonomics runtime.
+const DEFAULT_AF_DATA_PATH: &str = "/mnt/disk2/dataset/1000g_plink/eur/maf/";
+
+fn af_data_path() -> String {
+    if let Ok(p) = std::env::var("SINK_AF_DATA_PATH") {
+        return p;
+    }
+    if let Some(cat) = resource_catalog::ResourceCatalog::global() {
+        if let Ok(p) = cat.resolve_path("sink.af.data_path") {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    DEFAULT_AF_DATA_PATH.to_string()
+}
 
 /// Target schema, in source-`.afreq` column order.
 ///
@@ -144,9 +159,10 @@ async fn main() -> Result<(), AnyError> {
     let datalake = Arc::new(Datalake::new());
     let namespace = NamespaceIdent::from_vec(vec![AF_NAMESPACE.to_string()])?;
 
-    let chromosomes = discover_chromosomes(AF_DATA_PATH);
+    let data_path = af_data_path();
+    let chromosomes = discover_chromosomes(&data_path);
     if chromosomes.is_empty() {
-        return Err(format!("no .afreq files found in {AF_DATA_PATH}").into());
+        return Err(format!("no .afreq files found in {data_path}").into());
     }
 
     // Create the single partitioned table once: partitioned by chrom (identity).

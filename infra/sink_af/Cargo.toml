@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 datalake = { path = '../../crates/datalake' }
+resource-catalog = { path = '../../crates/resource-catalog' }
 tokio.workspace = true
 iceberg.workspace = true
 datafusion.workspace = true

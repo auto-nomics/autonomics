@@ -10551,6 +10551,7 @@ dependencies = [
  "datafusion",
  "datalake",
  "iceberg",
+ "resource-catalog",
  "tokio",
 ]
 
@@ -10561,6 +10562,7 @@ dependencies = [
  "datafusion",
  "datalake",
  "iceberg",
+ "resource-catalog",
  "tokio",
 ]
 

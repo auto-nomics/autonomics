@@ -177,11 +177,13 @@ impl SharedInfra {
 
         // ── DAG history ──────────────────────────────────────────────
         if config.enable_dag_history {
-            let history_db = &config.dag_history_db;
+            let history_db = resources
+                .resolve_database("db.dag_history")
+                .unwrap_or_else(|_| config.dag_history_db.clone());
             if let Some(parent) = history_db.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            engine = match DagHistory::open(history_db).await {
+            engine = match DagHistory::open(&history_db).await {
                 Ok(history) => {
                     tracing::info!(
                         path = %history_db.display(),
@@ -206,9 +208,14 @@ impl SharedInfra {
         let datalake = Arc::new(Datalake::new());
 
         // ── Agent storage ────────────────────────────────────────────
-        let storage: Arc<dyn AgentStorage> = match TursoAgentStorage::open(&config.agent_db).await {
+        // Resolve DB paths from the catalog (allows provider overrides and
+        // persistence-backed path changes; falls back to RuntimeConfig).
+        let agent_db = resources
+            .resolve_database("db.agent")
+            .unwrap_or_else(|_| config.agent_db.clone());
+        let storage: Arc<dyn AgentStorage> = match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => {
-                tracing::info!(path = %config.agent_db.display(), "agent storage opened");
+                tracing::info!(path = %agent_db.display(), "agent storage opened");
                 Arc::new(s)
             }
             Err(e) => {
@@ -216,19 +223,25 @@ impl SharedInfra {
             }
         };
         // Profile registry — separate trait object on the same connection.
-        let profile_storage: Arc<dyn AgentProfileRegistry> = match TursoAgentStorage::open(&config.agent_db).await {
+        let profile_storage: Arc<dyn AgentProfileRegistry> = match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => Arc::new(s),
             Err(e) => return Err(HostError::Storage(e)),
         };
 
+        let bib_db_path = resources
+            .resolve_database("db.bib")
+            .unwrap_or_else(|_| config.bib_db_path.clone());
         let bib = Arc::new(
-            bib_base::BibShared::open_with(&config.bib_db_path, config.bib_http.clone())
+            bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
                 .await?,
         );
 
+        let writing_db_path = resources
+            .resolve_database("db.writing")
+            .unwrap_or_else(|_| config.writing_db_path.clone());
         let writing = Arc::new(
             writing_base::WritingShared::open_with(
-                &config.writing_db_path.to_string_lossy(),
+                &writing_db_path.to_string_lossy(),
                 Some(bib.clone()),
             )
             .await?,
@@ -494,6 +507,22 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
         "Directory for agent-internal state",
         ResourceAddress::path(&config.state_dir),
         vec!["runtime".into()],
+    );
+
+    // ── Infra bin data paths ─────────────────────────────────────────
+    reg(
+        "sink.ld_matrix.data_root",
+        ResourceKind::FilePath,
+        "Source LD matrix TSV root (1000G PLINK dataset)",
+        ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/"),
+        vec!["infra".into()],
+    );
+    reg(
+        "sink.af.data_path",
+        ResourceKind::FilePath,
+        "Source allele-frequency .afreq directory (1000G EUR)",
+        ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/eur/maf/"),
+        vec!["infra".into()],
     );
 
     // ── External API endpoints ────────────────────────────────────────

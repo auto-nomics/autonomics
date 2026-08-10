@@ -28,7 +28,23 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 const LD_NAMESPACE: &str = "ld_matrix";
-const DATA_ROOT: &str = "/mnt/disk2/dataset/1000g_plink/";
+/// Data root for source LD matrix TSV files.
+/// Overridable via `SINK_LD_MATRIX_DATA_ROOT` env var or the resource catalog
+/// (`sink.ld_matrix.data_root`) when running inside the autonomics runtime.
+const DEFAULT_DATA_ROOT: &str = "/mnt/disk2/dataset/1000g_plink/";
+
+fn data_root() -> String {
+    if let Ok(root) = std::env::var("SINK_LD_MATRIX_DATA_ROOT") {
+        return root;
+    }
+    // Try resource catalog global (set by SharedInfra::open when in-runtime)
+    if let Some(cat) = resource_catalog::ResourceCatalog::global() {
+        if let Ok(p) = cat.resolve_path("sink.ld_matrix.data_root") {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    DEFAULT_DATA_ROOT.to_string()
+}
 
 /// All 1000G super-populations.
 const ALL_POPS: &[&str] = &["EUR", "EAS", "AFR", "SAS", "AMR"];
@@ -59,11 +75,12 @@ type AnyError = Box<dyn std::error::Error + Send + Sync>;
 /// `ld_matrix_unphased_r2.sh`). Falls back to the legacy `<pop_lower>/ld/`
 /// layout used by the original EUR run.
 fn resolve_data_dir(pop: &str) -> String {
-    let canonical = format!("{DATA_ROOT}unphased_r2/{pop}/ld/");
+    let root = data_root();
+    let canonical = format!("{root}unphased_r2/{pop}/ld/");
     if std::path::Path::new(&canonical).read_dir().is_ok() {
         return canonical;
     }
-    let legacy = format!("{DATA_ROOT}{}/ld/", pop.to_lowercase());
+    let legacy = format!("{root}{}/ld/", pop.to_lowercase());
     if std::path::Path::new(&legacy).read_dir().is_ok() {
         return legacy;
     }
