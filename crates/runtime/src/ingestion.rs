@@ -68,8 +68,8 @@ impl IngestionExecutor {
         let namespace = NamespaceIdent::from_vec(vec![schema])?;
 
         // ── Read source data via DataFusion ───────────────────────────
-        let ctx = ice(self.datalake.get_ctx().await)?;
-        let df = self.read_source(&ctx, spec).await?;
+        let read_ctx = ice(self.datalake.get_ctx().await)?;
+        let df = self.read_source(&read_ctx, spec).await?;
         let rows = df.clone().count().await?;
         let files_processed = count_source_files(&spec.source_path);
 
@@ -97,6 +97,9 @@ impl IngestionExecutor {
                 }
             }
         }
+
+        // ── Get a FRESH context (the table was just created) ──────────
+        let ctx = ice(self.datalake.get_ctx().await)?;
 
         // ── Check if already has data (for CreateIfNotExists) ─────────
         if spec.mode == WriteMode::CreateIfNotExists {
