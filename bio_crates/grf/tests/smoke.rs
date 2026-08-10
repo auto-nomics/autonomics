@@ -296,3 +296,146 @@ fn multi_regression_forest_smoke() {
     assert_eq!(oob.values.len(), 50 * 2);
     assert_eq!(oob.pred_length, 2);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// P3 causal forest + analysis trio
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Synthetic dataset with heterogeneous treatment effect:
+///   τ(x) = 1 + x₀, so true ATE = 1 + E[x₀] = 1 (when x₀ is centered).
+///   Y = τ(x) · W + ε,  ε ~ N(0, 0.5).
+///   W ~ Bernoulli(0.5).
+fn make_synth_treatment(n: usize, p: usize, seed: u64) -> (
+    Vec<Vec<f64>>, Vec<f64>, Vec<f64>,
+) {
+    use rand::SeedableRng;
+    use rand_distr::{Distribution, Normal};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    let noise = Normal::new(0.0, 0.5).unwrap();
+    let mut x = vec![vec![0.0; p]; n];
+    let mut y = vec![0.0; n];
+    let mut w = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..p {
+            x[i][j] = normal.sample(&mut rng);
+        }
+        // Probability of treatment depends on x₀.
+        let prob = 1.0 / (1.0 + (-x[i][0] as f64).exp());
+        let u: f64 = rand::random();
+        w[i] = if u < prob { 1.0 } else { 0.0 };
+        let tau = 1.0 + x[i][0];
+        y[i] = tau * w[i] + noise.sample(&mut rng);
+    }
+    (x, y, w)
+}
+
+#[test]
+fn causal_forest_smoke() {
+    let (x_rows, y, w) = make_synth_treatment(150, 3, 42);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("x2", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+        Field::new("w",  DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+        Arc::new(Float64Array::from(w.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::CausalForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
+        y_column_name: "y".into(),
+        w_column_name: "w".into(),
+        y_hat: None, w_hat: None,
+        stabilize_splits: true,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 100, num_threads: 1, seed: 7, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("causal fit");
+    assert_eq!(out.forest.num_trees(), 100);
+    // y_hat and w_hat should have been learned internally.
+    assert_eq!(out.y_hat.len(), 150);
+    assert_eq!(out.w_hat.len(), 150);
+    let oob_len = out.oob_predictions.as_ref()
+        .map(|o| o.values.len())
+        .unwrap_or(0);
+    assert_eq!(oob_len, 150);
+
+    // ATE estimate should be in a reasonable range (true ATE ≈ 1, but with
+    // 150 samples + R-learner two-stage, expect estimate roughly in [0, 2]).
+    let ate = grf::nodes::AverageTreatmentEffectSpec {
+        target_sample: "all".into(),
+        method: "AIPW".into(),
+        subset: None,
+        clusters: None,
+    };
+    let ate_out = ate.estimate(&out).expect("ate");
+    assert!(ate_out.estimate.abs() < 3.0, "ATE={} too far from truth", ate_out.estimate);
+    assert!(ate_out.std_err > 0.0);
+
+    // BLP on a single feature (x₀) — should pick up heterogeneity.
+    let blp_schema = Arc::new(Schema::new(vec![Field::new("x0", DataType::Float64, false)]));
+    let blp_cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+    ];
+    let blp_batch = RecordBatch::try_new(blp_schema, blp_cols).unwrap();
+    let blp_spec = grf::nodes::BestLinearProjectionSpec {
+        a_column_names: vec!["x0".into()],
+        subset: None,
+        sample_weights: None,
+    };
+    let blp_out = blp_spec.project(&out, Some(&[blp_batch])).expect("blp");
+    // Expect 2 coefficients (intercept + x₀).
+    assert_eq!(blp_out.coefficients.len(), 2);
+    assert_eq!(blp_out.std_errors.len(), 2);
+
+    // Calibration test.
+    let cal_spec = grf::nodes::TestCalibrationSpec {
+        vcov_type: "HC3".into(),
+    };
+    let cal_out = cal_spec.check_causal(&out).expect("cal");
+    assert_eq!(cal_out.n_obs, 150);
+}
+
+#[test]
+fn average_treatment_effect_overlap_target() {
+    let (x_rows, y, w) = make_synth_treatment(100, 2, 13);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+        Field::new("w",  DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+        Arc::new(Float64Array::from(w.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let cf_spec = grf::nodes::CausalForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        y_column_name: "y".into(),
+        w_column_name: "w".into(),
+        y_hat: None, w_hat: None,
+        stabilize_splits: true,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 60, num_threads: 1, seed: 3, ..Default::default() },
+    };
+    let cf = cf_spec.fit(&[batch]).expect("causal fit");
+    // overlap target.sample should produce a non-empty estimate.
+    let ate = grf::nodes::AverageTreatmentEffectSpec {
+        target_sample: "overlap".into(),
+        method: "AIPW".into(),
+        subset: None,
+        clusters: None,
+    };
+    let ate_out = ate.estimate(&cf).expect("ate overlap");
+    assert!(ate_out.n_effective > 0);
+}

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 grf-sys = { path = "../../crates/grf-sys" }
 thiserror.workspace = true
 faer.workspace = true
+statkit = { path = "../../stat_crates/statkit" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 async-trait.workspace = true

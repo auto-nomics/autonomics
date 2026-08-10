@@ -4858,6 +4858,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "statkit",
  "thiserror 2.0.19",
  "tokio",
 ]

@@ -57,6 +57,11 @@ pub enum GrfError {
     #[error("grf: {0}")]
     Sys(#[from] sys::GrfError),
 
+    /// Convenience: a string-form C++ error, used by Rust-side helpers
+    /// (statkit OLS, etc.) that don't have a richer grf-sys error to wrap.
+    #[error("grf: {0}")]
+    Cpp(String),
+
     #[error("grf: shape mismatch: {0}")]
     Shape(String),
 
