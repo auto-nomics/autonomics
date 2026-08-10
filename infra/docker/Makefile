@@ -1,14 +1,15 @@
 # =============================================================================
 # Autonomics Data Lake — Docker Operations
 # =============================================================================
-#   make up       Start all services
-#   make down     Stop all services
-#   make logs     Tail logs (all or one: make logs svc=garage)
-#   make ps       Show service status
-#   make restart  Restart one: make restart svc=garage
-#   make shell    Shell into:  make shell svc=iceberg-catalog-db
-#   make health   Check service health
-#   make nuke     Stop + delete volumes (DESTRUCTIVE)
+#   make up           Start all services + bootstrap the S3 warehouse
+#   make down         Stop all services
+#   make logs         Tail logs (all or one: make logs svc=garage)
+#   make ps           Show service status
+#   make restart      Restart one: make restart svc=garage
+#   make shell        Shell into:  make shell svc=iceberg-catalog-db
+#   make health       Check service health
+#   make setup        Idempotently (re)initialize the Garage warehouse
+#   make nuke         Stop + delete volumes (DESTRUCTIVE)
 #
 # The unified .env lives at the workspace root (../../.env) and is passed
 # via --env-file so docker compose can interpolate ${VAR} values.
@@ -21,7 +22,7 @@ SVC         ?=
 GARAGE_TPL  = garage/garage.toml.template
 GARAGE_OUT  = garage/garage.toml
 
-.PHONY: check-env garage-config init up down logs ps restart shell health clean nuke
+.PHONY: check-env garage-config warehouse-setup init up down logs ps restart shell health clean nuke
 .PHONY: $(GARAGE_OUT)
 
 check-env:
@@ -42,16 +43,31 @@ $(GARAGE_OUT): $(GARAGE_TPL) $(ENV_FILE) scripts/render-garage-config.sh
 # Alias so users can `make garage-config` to re-render on demand.
 garage-config: $(GARAGE_OUT)
 
+# Idempotently reconcile the S3 warehouse against .env:
+#   garage-warehouse-setup.sh   ensure the Garage bucket + access key exist
+#   lakekeeper-warehouse-setup.sh  ensure Lakekeeper has a Warehouse wired to
+#                                  that bucket (the REST catalog prefix)
+# Requires garage + lakekeeper running, so this runs after `up -d`; also
+# exposed standalone for manual re-runs / repairs.
+warehouse-setup:
+	@./scripts/garage-warehouse-setup.sh $(ENV_FILE)
+	@./scripts/lakekeeper-warehouse-setup.sh $(ENV_FILE)
+
+# First-time bring-up: validate, pull, start, then bootstrap the warehouse.
 init: check-env $(GARAGE_OUT)
 	@echo ">>> Validating compose file..."
 	$(COMPOSE) config --quiet
 	@echo ">>> Pulling images..."
 	$(COMPOSE) pull
-	@echo ">>> Setup complete. Run 'make up' to start."
+	@echo ">>> Starting stack..."
+	$(COMPOSE) up -d
+	@$(MAKE) warehouse-setup
+	@echo ">>> Init complete: stack up + warehouse ready. Lakekeeper API: http://localhost:8181"
 
 up: check-env $(GARAGE_OUT)
 	$(COMPOSE) up -d
-	@echo ">>> Started. Lakekeeper API: http://localhost:8181"
+	@$(MAKE) warehouse-setup
+	@echo ">>> Started + warehouse ready. Lakekeeper API: http://localhost:8181"
 
 down:
 	$(COMPOSE) down
