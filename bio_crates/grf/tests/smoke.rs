@@ -439,3 +439,148 @@ fn average_treatment_effect_overlap_target() {
     let ate_out = ate.estimate(&cf).expect("ate overlap");
     assert!(ate_out.n_effective > 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// P4: IV + LM + LL + boosted
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn instrumental_forest_smoke() {
+    let (x_rows, y) = make_synth(120, 3, 17);
+    // Construct a synthetic instrument Z correlated with W:
+    //   Z = sign(X[:,0]) + noise;  W = Z > 0.3 + small noise.
+    let z: Vec<f64> = x_rows.iter().map(|r| r[0].signum()).collect();
+    let w: Vec<f64> = z.iter().map(|&zi| if zi > 0.3 { 1.0 } else { 0.0 }).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("x2", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+        Field::new("w",  DataType::Float64, false),
+        Field::new("z",  DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+        Arc::new(Float64Array::from(w.clone())),
+        Arc::new(Float64Array::from(z.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::InstrumentalForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
+        y_column_name: "y".into(),
+        w_column_name: "w".into(),
+        z_column_name: "z".into(),
+        y_hat: None, w_hat: None, z_hat: None,
+        reduced_form_weight: 0.0,
+        stabilize_splits: true,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 80, num_threads: 1, seed: 13, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("iv fit");
+    assert_eq!(out.forest.num_trees(), 80);
+    assert_eq!(out.y_hat.len(), 120);
+    assert_eq!(out.w_hat.len(), 120);
+    assert_eq!(out.z_hat.len(), 120);
+}
+
+#[test]
+fn lm_forest_smoke() {
+    let (x_rows, _) = make_synth(80, 2, 9);
+    let y: Vec<f64> = x_rows.iter().map(|r| r[0] * 1.5 + r[1] * 0.3).collect();
+    let w0: Vec<f64> = x_rows.iter().map(|r| r[0]).collect();
+    let w1: Vec<f64> = x_rows.iter().map(|r| r[1]).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+        Field::new("w0", DataType::Float64, false),
+        Field::new("w1", DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+        Arc::new(Float64Array::from(w0.clone())),
+        Arc::new(Float64Array::from(w1.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::LmForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        y_column_names: vec!["y".into()],
+        w_column_names: vec!["w0".into(), "w1".into()],
+        gradient_weights: None,
+        sample_weights_column: None,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("lm fit");
+    assert_eq!(out.forest.num_trees(), 50);
+    let oob = out.oob_predictions.expect("oob");
+    // pred_length = num_regressors × num_outcomes = 2 × 1 = 2
+    assert_eq!(oob.pred_length, 2);
+    assert_eq!(oob.values.len(), 80 * 2);
+}
+
+#[test]
+fn ll_regression_forest_smoke() {
+    let (x_rows, y) = make_synth(100, 3, 25);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("x2", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::LlRegressionForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
+        y_column_name: "y".into(),
+        sample_weights_column: None,
+        ll_split_lambda: 0.1,
+        ll_split_weight_penalty: false,
+        ll_split_variables: vec![],
+        ll_split_cutoff: 0,
+        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("ll fit");
+    assert_eq!(out.forest.num_trees(), 50);
+}
+
+#[test]
+fn boosted_regression_forest_smoke() {
+    let (x_rows, y) = make_synth(60, 2, 33);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", DataType::Float64, false),
+        Field::new("x1", DataType::Float64, false),
+        Field::new("y",  DataType::Float64, false),
+    ]));
+    let cols: Vec<Arc<dyn Array>> = vec![
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(y.clone())),
+    ];
+    let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
+    let spec = grf::nodes::BoostedRegressionForestSpec {
+        x_column_names: vec!["x0".into(), "x1".into()],
+        y_column_name: "y".into(),
+        sample_weights_column: None,
+        boost_max_steps: Some(3),
+        boost_trees_tune: 30,
+        boost_error_reduction: 0.0005,
+        options: NodeTrainOptions { num_trees: 30, num_threads: 1, seed: 1, ..Default::default() },
+    };
+    let out = spec.fit(&[batch]).expect("boosted fit");
+    // At least one step should be taken.
+    assert!(!out.forests.is_empty(), "no boosting steps taken");
+    assert!(out.oob_predictions.len() >= 60);
+    // The OOB error should be finite.
+    assert!(out.oob_error.is_finite());
+    assert!(out.oob_error >= 0.0);
+}

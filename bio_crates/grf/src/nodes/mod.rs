@@ -15,6 +15,10 @@ pub mod dr_scores;
 pub mod average_treatment_effect;
 pub mod best_linear_projection;
 pub mod test_calibration;
+pub mod instrumental_forest;
+pub mod lm_forest;
+pub mod ll_regression_forest;
+pub mod boosted_regression_forest;
 
 pub use regression_forest::{RegressionForestFactory, RegressionForestSpec};
 pub use predict_forest::{PredictForestFactory, PredictForestSpec, PredictForestOutput};
@@ -35,4 +39,16 @@ pub use best_linear_projection::{
 };
 pub use test_calibration::{
     TestCalibrationFactory, TestCalibrationSpec, TestCalibrationOutput,
+};
+pub use instrumental_forest::{
+    InstrumentalForestFactory, InstrumentalForestSpec, InstrumentalForestOutput,
+};
+pub use lm_forest::{
+    LmForestFactory, LmForestSpec, LmForestOutput,
+};
+pub use ll_regression_forest::{
+    LlRegressionForestFactory, LlRegressionForestSpec, LlRegressionForestOutput,
+};
+pub use boosted_regression_forest::{
+    BoostedRegressionForestFactory, BoostedRegressionForestSpec, BoostedRegressionForestOutput,
 };
