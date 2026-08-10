@@ -6,7 +6,6 @@ target
 *.db-shm
 *.db-tshm
 .history
-.envrc
 .autonomics
 
 
