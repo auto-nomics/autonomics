@@ -65,6 +65,24 @@ impl ResourceCatalog {
         }
     }
 
+    /// Resolve a logical name to the raw (unresolved) filesystem path,
+    /// without substituting template placeholders. Useful when the caller
+    /// needs the template string itself (e.g. `{N}` patterns passed to
+    /// downstream tools that do their own substitution).
+    pub fn resolve_path_raw(&self, name: &str) -> Result<PathBuf> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        match &entry.address {
+            ResourceAddress::FilePath(p) => Ok(p.clone()),
+            other => Err(ResourceError::KindMismatch {
+                name: name.to_string(),
+                expected: "file_path",
+                found: kind_str(other),
+            }),
+        }
+    }
+
     /// Resolve a logical name to a filesystem path (no placeholders).
     pub fn resolve_path(&self, name: &str) -> Result<PathBuf> {
         let entry = self

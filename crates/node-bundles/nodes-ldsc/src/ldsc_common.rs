@@ -10,6 +10,20 @@ use dag_core::resource_catalog::{IcebergIdent, ResourceCatalog};
 
 // ── Catalog-aware table references ────────────────────────────────────────
 
+/// Resolve a PLINK reference prefix template from the catalog, falling back
+/// to `fallback` when the logical name is not registered.
+///
+/// Returns the **raw template** (with `{N}` placeholder intact) so that
+/// downstream tools (e.g. `magma::plink::BedFile::open_template`,
+/// `lava::plink::load_reference_template`) can substitute chromosomes
+/// themselves.
+pub fn resolve_ref_prefix(catalog: &ResourceCatalog, fallback: &str) -> String {
+    match catalog.resolve_path_raw("plink.1000g_eur.ref_prefix") {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => fallback.to_string(),
+    }
+}
+
 /// A resolved LD-score table reference: the fully-qualified SQL identifiers
 /// for the main panel and its companion `_m` (M_5_50) table.
 ///

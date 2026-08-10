@@ -61,6 +61,12 @@ impl ResourceProvider for Resources {
                 "1000G EUR pairwise LD-matrix base table (per-chromosome: eur_chr{N})",
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_matrix", "eur_chr"),
             ),
+            ResourceEntry::new(
+                "plink.1000g_eur.ref_prefix",
+                ResourceKind::FilePath,
+                "1000G EUR PLINK reference prefix (per-chromosome .bed/.bim/.fam, {N}=chrom)",
+                ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc"),
+            ),
         ]
     }
 }

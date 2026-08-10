@@ -442,7 +442,11 @@ impl DagNode for MagmaGeneNode {
 
         // Load PLINK + annotation
         let chroms: Vec<u32> = (1..=22).collect();
-        let mut bed = magma::plink::BedFile::open_template(REF_PREFIX_TEMPLATE, &chroms)
+        let ref_prefix = nodes_ldsc::ldsc_common::resolve_ref_prefix(
+            &node_ctx.resources,
+            REF_PREFIX_TEMPLATE,
+        );
+        let mut bed = magma::plink::BedFile::open_template(&ref_prefix, &chroms)
             .map_err(MagmaNodeError::from)?;
         let annot =
             magma::geneinput::GeneAnnot::read(std::path::Path::new(&self.config.gene_annot))
