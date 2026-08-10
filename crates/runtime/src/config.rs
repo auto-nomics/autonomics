@@ -52,6 +52,7 @@ const DEFAULT_DATA_DIR: &str = "/mnt/disk3/test";
 /// Default directory for agent-internal databases (DAG history).
 ///
 /// Override via builder `.state_dir(…)` or env `AUTONOMICS_STATE_DIR`.
+/// Defaults to `~/.autonomics` (absolute, independent of CWD).
 const DEFAULT_STATE_DIR: &str = ".autonomics";
 
 /// Default DAG history SQLite filename (relative to `state_dir`).
@@ -237,7 +238,12 @@ impl RuntimeConfig {
         let state_dir = base
             .and_then(|b| b.state_dir.clone())
             .or_else(|| env_path(ENV_STATE_DIR))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+            .unwrap_or_else(|| {
+                // Default: ~/.autonomics (absolute, independent of CWD).
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(DEFAULT_STATE_DIR))
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR))
+            });
 
         let dag_history_db = base
             .and_then(|b| b.dag_history_db.clone())
