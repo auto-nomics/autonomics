@@ -131,7 +131,7 @@ async fn write_to_iceberg(
         .unwrap();
 
     let fresh_provider = datalake.get_provider().await.unwrap();
-    ctx.register_catalog("iceberg", Arc::new(fresh_provider));
+    ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(fresh_provider));
 }
 
 /// `SELECT col FROM iceberg.<ident> LIMIT 3` succeeds iff it collects rows.

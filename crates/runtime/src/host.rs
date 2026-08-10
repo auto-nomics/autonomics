@@ -24,7 +24,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use dag_core::resource_catalog::{
-    ResourceCatalog, ResourceEntry, ResourceKind, ResourceAddress, DbKind,
+    ResourceCatalog, ResourceEntry, ResourceKind, ResourceAddress, DbKind, DocKind,
 };
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
@@ -508,6 +508,23 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
         ResourceAddress::path(&config.state_dir),
         vec!["runtime".into()],
     );
+
+    // ── Doc / reference paths ────────────────────────────────────────
+    for (logical, path, desc, kind) in [
+        ("doc.docs", "docs", "Project documentation root", DocKind::Notes),
+        ("doc.logs", "logs", "Application logs directory", DocKind::Notes),
+        ("doc.reference", "reference", "Reference data / panels", DocKind::Notes),
+        ("doc.fixtures", "test_datasets", "Test fixture data", DocKind::Notes),
+    ] {
+        let p = config.data_dir.join(path);
+        reg(
+            logical,
+            ResourceKind::Doc,
+            desc,
+            ResourceAddress::doc(kind, &p),
+            vec!["doc".into()],
+        );
+    }
 
     // ── Infra bin data paths ─────────────────────────────────────────
     reg(

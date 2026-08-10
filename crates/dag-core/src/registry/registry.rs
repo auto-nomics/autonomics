@@ -36,7 +36,7 @@ pub fn new_isolated_ctx(
         .build();
     let ctx = SessionContext::new_with_state(state);
     if let Some(cat) = iceberg_catalog {
-        ctx.register_catalog("iceberg", cat);
+        ctx.register_catalog(resource_catalog::CATALOG_NAME, cat);
     }
     ctx
 }

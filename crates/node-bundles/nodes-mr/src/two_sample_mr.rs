@@ -1662,7 +1662,7 @@ mod tests {
         catalog
             .register_schema("ld_matrix", std::sync::Arc::new(ld_schema))
             .unwrap();
-        session.register_catalog("iceberg", std::sync::Arc::new(catalog));
+        session.register_catalog(dag_core::resource_catalog::CATALOG_NAME, std::sync::Arc::new(catalog));
     }
 
     /// Build 4 test instruments: rs1 (most significant) through rs4.

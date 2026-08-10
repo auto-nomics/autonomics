@@ -110,7 +110,7 @@ async fn sink_chromosome(
 
     // Fresh provider so the planner sees the table created in main().
     let provider = datalake.get_provider().await?;
-    ctx.register_catalog("iceberg", Arc::new(provider) as Arc<dyn CatalogProvider>);
+    ctx.register_catalog(resource_catalog::CATALOG_NAME, Arc::new(provider) as Arc<dyn CatalogProvider>);
 
     // Idempotent: skip if this chrom partition already has data (partition-pruned).
     let existing: i64 = ctx

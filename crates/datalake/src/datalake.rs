@@ -139,6 +139,8 @@ impl Datalake {
             IcebergCatalogProvider::try_new(rest_catalog.clone()).await?;
 
         let ctx = SessionContext::new();
+        // The catalog name "iceberg" matches resource_catalog::CATALOG_NAME;
+        // kept as a literal here to avoid pulling resource-catalog into datalake.
         ctx.register_catalog("iceberg", Arc::new(catalog_provider));
 
         Ok(ctx)

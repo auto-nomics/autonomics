@@ -840,7 +840,7 @@ mod tests {
         catalog
             .register_schema("ld_score", Arc::new(ld_schema))
             .unwrap();
-        ctx.register_catalog("iceberg", Arc::new(catalog));
+        ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(catalog));
         ctx
     }
 
