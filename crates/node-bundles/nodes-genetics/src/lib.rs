@@ -2,6 +2,7 @@
 
 pub mod bivariate_mixer;
 pub mod cpassoc;
+pub mod genomic_sem;
 pub mod hdl_l;
 pub mod hdl_l_scan;
 pub mod lava;
@@ -39,6 +40,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));
         registry.register(Box::new(univariate_mixer::UnivariateMixerNodeFactory {}));
         registry.register(Box::new(bivariate_mixer::BivariateMixerNodeFactory {}));
+        registry.register(Box::new(genomic_sem::GsemUsermodelNodeFactory {}));
+        registry.register(Box::new(genomic_sem::GsemCommonfactorNodeFactory {}));
+        registry.register(Box::new(genomic_sem::GsemRgmodelNodeFactory {}));
     }
 }
 
