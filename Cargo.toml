@@ -86,6 +86,7 @@ members = [
   "crates/crossref",
   "crates/grf-sys",
   "bio_crates/grf",
+  "bio_crates/genomic_sem",
 ]
 resolver = "3"
 
