@@ -145,11 +145,7 @@ impl DagNode for SvmNode {
                     msg: e.to_string(),
                 }
             })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -272,11 +268,7 @@ impl DagNode for AdaBoostNode {
                     node_type: "ml_adaboost".into(),
                     msg: e.to_string(),
                 })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -395,11 +387,7 @@ impl DagNode for IsolationForestNode {
                     node_type: "ml_isolation_forest".into(),
                     msg: e.to_string(),
                 })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new(
             "anomaly_score",
             DataType::Float64,
@@ -504,11 +492,7 @@ impl DagNode for ZscoreOutlierNode {
                 msg: e.to_string(),
             }
         })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("max_zscore", DataType::Float64, false)));
         arrays.push(Arc::new(Float64Array::from(result.scores)));
         fields.push(Arc::new(Field::new("is_outlier", DataType::Boolean, false)));
@@ -608,11 +592,7 @@ impl DagNode for LofNode {
                 node_type: "ml_lof".into(),
                 msg: e.to_string(),
             })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("lof_score", DataType::Float64, false)));
         arrays.push(Arc::new(Float64Array::from(result.scores)));
         fields.push(Arc::new(Field::new("is_outlier", DataType::Boolean, false)));

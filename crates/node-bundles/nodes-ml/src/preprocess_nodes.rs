@@ -796,16 +796,14 @@ impl DagNode for LabelEncodeNode {
             .collect();
         let encoded: Vec<u32> = values.iter().map(|v| *map.get(v).unwrap_or(&0)).collect();
 
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = Vec::new();
+        let (schema, mut fields, concat_arrays) = common::concat_input(&batches)?;
         let mut arrays: Vec<Arc<dyn Array>> = Vec::new();
         for (i, f) in schema.fields().iter().enumerate() {
             if f.name() == &self.column {
-                fields.push(Arc::new(Field::new(&self.column, DataType::UInt32, true)));
+                fields[i] = Arc::new(Field::new(&self.column, DataType::UInt32, true));
                 arrays.push(Arc::new(UInt32Array::from(encoded.clone())));
             } else {
-                fields.push(f.clone());
-                arrays.push(batches.first().unwrap().column(i).clone());
+                arrays.push(concat_arrays[i].clone());
             }
         }
         let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| {
@@ -1151,15 +1149,7 @@ fn replace_columns_with_names(
     new_col_names: &[String],
     new_data: &Mat<f64>,
 ) -> Result<RecordBatch, DagError> {
-    let schema = batches.first().ok_or(DagError::NodeError {
-        node_type: "ml".into(),
-        msg: "no input rows".into(),
-    })?;
-    let orig_schema = schema.schema();
-    let mut fields: Vec<Arc<Field>> = orig_schema.fields().iter().cloned().collect();
-    let mut arrays: Vec<Arc<dyn Array>> = (0..orig_schema.fields().len())
-        .map(|i| batches.first().unwrap().column(i).clone())
-        .collect();
+    let (_schema, mut fields, mut arrays) = common::concat_input(batches)?;
 
     let (nrows, ncols) = new_data.shape();
     for j in 0..ncols {

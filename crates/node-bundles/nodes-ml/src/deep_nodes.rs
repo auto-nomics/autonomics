@@ -177,11 +177,7 @@ impl DagNode for MlpNode {
         })?;
         let preds = ml::deep::mlp_predict(&model, &data);
         let probs = ml::deep::mlp_predict_proba(&model, &data);
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             preds.iter().map(|&p| p as u32).collect::<Vec<_>>(),
@@ -312,11 +308,7 @@ impl DagNode for AutoencoderNode {
             msg: e.to_string(),
         })?;
 
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         for d in 0..self.latent_dim {
             let col: Vec<f64> = result.encoded.iter().map(|row| row[d]).collect();
             fields.push(Arc::new(Field::new(

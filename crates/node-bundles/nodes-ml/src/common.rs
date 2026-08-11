@@ -7,7 +7,7 @@ use arrow_array::{
     Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch,
     StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use faer::Mat;
 
 use dag_core::dag::DagError;
@@ -149,4 +149,44 @@ fn extract_numeric_dispatch(col: &dyn Array, callback: &mut impl FnMut(Option<f6
     for _ in 0..col.len() {
         callback(None);
     }
+}
+
+/// Concatenate all input batches' columns into single per-column arrays.
+///
+/// ML nodes receive a `Vec<RecordBatch>` that may contain multiple chunks
+/// (Arrow's default batch size is 8,192 rows).  Building the output
+/// `RecordBatch` from only `batches[0]` produces columns whose length is
+/// shorter than the prediction/probability vectors computed over **all**
+/// rows, causing:
+///
+/// ```text
+/// Invalid argument error: all columns in a record batch must have the same length
+/// ```
+///
+/// This helper concatenates every column across all batches so the returned
+/// arrays are the full row count.  It also returns the shared schema and the
+/// cloned field list, which is what every node needs to build its output batch.
+pub fn concat_input(
+    batches: &[RecordBatch],
+) -> Result<(Arc<Schema>, Vec<FieldRef>, Vec<Arc<dyn Array>>), DagError> {
+    let batch0 = batches.first().ok_or_else(|| DagError::NodeError {
+        node_type: "ml".into(),
+        msg: "no input rows".into(),
+    })?;
+    let schema = batch0.schema();
+    let n_cols = schema.fields().len();
+
+    let mut arrays = Vec::with_capacity(n_cols);
+    for col_idx in 0..n_cols {
+        let chunks: Vec<&dyn Array> =
+            batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
+        let combined = arrow_select::concat::concat(&chunks).map_err(|e| DagError::NodeError {
+            node_type: "ml".into(),
+            msg: format!("concat input columns: {e}"),
+        })?;
+        arrays.push(combined);
+    }
+
+    let fields: Vec<FieldRef> = schema.fields().iter().cloned().collect();
+    Ok((schema, fields, arrays))
 }

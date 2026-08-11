@@ -146,11 +146,7 @@ impl DagNode for LogisticNode {
             node_type: "ml_logistic".into(),
             msg: e.to_string(),
         })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -264,11 +260,7 @@ impl DagNode for GaussianNbNode {
                 node_type: "ml_gaussian_nb".into(),
                 msg: e.to_string(),
             })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -385,11 +377,7 @@ impl DagNode for KnnNode {
                 msg: e.to_string(),
             }
         })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -524,11 +512,7 @@ impl DagNode for DecisionTreeNode {
             node_type: "ml_decision_tree".into(),
             msg: e.to_string(),
         })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(
             result
@@ -635,11 +619,7 @@ impl DagNode for LinearRegressNode {
                 node_type: "ml_linear_regress".into(),
                 msg: e.to_string(),
             })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::Float64, false)));
         arrays.push(Arc::new(Float64Array::from(result.predictions)));
         emit_batch(
@@ -775,11 +755,7 @@ impl DagNode for ElasticNetNode {
             node_type: "ml_elastic_net".into(),
             msg: e.to_string(),
         })?;
-        let schema = batches.first().unwrap().schema();
-        let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-        let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-            .map(|i| batches.first().unwrap().column(i).clone())
-            .collect();
+        let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::Float64, false)));
         arrays.push(Arc::new(Float64Array::from(result.predictions)));
         emit_batch(

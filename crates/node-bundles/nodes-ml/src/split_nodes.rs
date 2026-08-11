@@ -454,17 +454,7 @@ fn append_column(
     array: Arc<dyn Array>,
     dtype: DataType,
 ) -> Result<RecordBatch, DagError> {
-    let schema = batches
-        .first()
-        .ok_or(DagError::NodeError {
-            node_type: "ml_split".into(),
-            msg: "no input rows".into(),
-        })?
-        .schema();
-    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-    let mut arrays: Vec<Arc<dyn Array>> = (0..schema.fields().len())
-        .map(|i| batches.first().unwrap().column(i).clone())
-        .collect();
+    let (_schema, mut fields, mut arrays) = common::concat_input(batches)?;
     fields.push(Arc::new(Field::new(name, dtype, true)));
     arrays.push(array);
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| DagError::NodeError {

@@ -602,18 +602,7 @@ fn build_cluster_output(
     cluster_col: &str,
     dist_col: &str,
 ) -> Result<RecordBatch, DagError> {
-    let schema = batches
-        .first()
-        .ok_or(DagError::NodeError {
-            node_type: "ml_cluster".into(),
-            msg: "no input rows".into(),
-        })?
-        .schema();
-    let orig_schema = schema.as_ref();
-    let mut fields: Vec<Arc<Field>> = orig_schema.fields().iter().cloned().collect();
-    let mut arrays: Vec<Arc<dyn Array>> = (0..orig_schema.fields().len())
-        .map(|i| batches.first().unwrap().column(i).clone())
-        .collect();
+    let (_schema, mut fields, mut arrays) = common::concat_input(batches)?;
 
     // cluster column
     fields.push(Arc::new(Field::new(cluster_col, DataType::UInt32, true)));
@@ -638,18 +627,7 @@ fn build_int_cluster_output(
     labels: &[i32],
     cluster_col: &str,
 ) -> Result<RecordBatch, DagError> {
-    let schema = batches
-        .first()
-        .ok_or(DagError::NodeError {
-            node_type: "ml_cluster".into(),
-            msg: "no input rows".into(),
-        })?
-        .schema();
-    let orig_schema = schema.as_ref();
-    let mut fields: Vec<Arc<Field>> = orig_schema.fields().iter().cloned().collect();
-    let mut arrays: Vec<Arc<dyn Array>> = (0..orig_schema.fields().len())
-        .map(|i| batches.first().unwrap().column(i).clone())
-        .collect();
+    let (_schema, mut fields, mut arrays) = common::concat_input(batches)?;
     fields.push(Arc::new(Field::new(cluster_col, DataType::Int32, true)));
     arrays.push(Arc::new(Int32Array::from(Vec::from(labels))));
     RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| DagError::NodeError {
