@@ -166,20 +166,21 @@ fn xval_scenario1_parameter_recovery() {
 
     let true_loadings = json_to_vec(&scen["true_loadings"]);
     for (i, r) in loading_results.iter().enumerate() {
+        // Exact match expected for saturated model: machine precision
         assert!(
-            close(r.unstand_est, true_loadings[i], 0.10, 0.02),
-            "Loading {}: Rust={} vs true={}",
+            close(r.unstand_est, true_loadings[i], 1e-6, 1e-8),
+            "Loading {}: Rust={:.10} vs true={:.10}",
             i, r.unstand_est, true_loadings[i]
         );
     }
 
-    // Compare model-implied covariance against lavaan's
+    // Compare model-implied covariance against lavaan's: machine precision
     let golden_implied = json_to_mat(&scen["implied"]);
     for i in 0..3 {
         for j in 0..3 {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 0.05, 0.005),
-                "Implied[{},{}]: Rust={} vs lavaan={}",
+                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
                 i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
             );
         }
@@ -222,8 +223,8 @@ fn xval_scenario2_implied_covariance() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 0.02, 0.005),
-                "Implied[{},{}]: Rust={} vs lavaan={}",
+                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
                 i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
             );
         }
@@ -262,9 +263,10 @@ fn xval_scenario2_loading_estimates() {
 
         match (golden_est, rust_est) {
             (Some((ge, _)), Some(re)) => {
+                // Machine precision match: Rust optimizer converges to same point as lavaan
                 assert!(
-                    close(re.unstand_est, ge, 0.10, 0.02),
-                    "Loading F1=~{}: Rust={} vs lavaan={}",
+                    close(re.unstand_est, ge, 1e-5, 1e-8),
+                    "Loading F1=~{}: Rust={:.10} vs lavaan={:.10}",
                     varname, re.unstand_est, ge
                 );
             }
@@ -294,9 +296,10 @@ fn xval_scenario2_residual_variances() {
 
         match (golden_est, rust_est) {
             (Some((ge, _)), Some(re)) => {
+                // Machine precision match
                 assert!(
-                    close(re.unstand_est, ge, 0.15, 0.03),
-                    "Resid var {}~~{}: Rust={} vs lavaan={}",
+                    close(re.unstand_est, ge, 1e-5, 1e-8),
+                    "Resid var {}~~{}: Rust={:.10} vs lavaan={:.10}",
                     varname, varname, re.unstand_est, ge
                 );
             }
@@ -338,8 +341,8 @@ fn xval_scenario3_implied_covariance() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 0.03, 0.005),
-                "Implied[{},{}]: Rust={} vs lavaan={}",
+                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
                 i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
             );
         }
@@ -371,8 +374,8 @@ fn xval_scenario3_factor_loadings() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 0.03, 0.005),
-                "Implied[{},{}]: Rust={} vs lavaan={}",
+                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
                 i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
             );
         }
@@ -387,11 +390,11 @@ fn xval_scenario3_factor_loadings() {
             .find(|r| r.lhs == *var && r.op == "~~" && r.rhs == *var);
         match (golden_est, rust_est) {
             (Some((ge, _)), Some(re)) => {
-                // Residual variances may differ slightly due to different
-                // factor variance scales, but should be in the right ballpark
+                // Residual variances are identified: θ_i = S[i,i] - Σ[i,i] + θ_i
+                // Machine precision expected since implied cov matches.
                 assert!(
-                    close(re.unstand_est, ge, 0.15, 0.03),
-                    "Resid {}~~{}: Rust={} vs lavaan={}",
+                    close(re.unstand_est, ge, 1e-6, 1e-8),
+                    "Resid {}~~{}: Rust={:.10} vs lavaan={:.10}",
                     var, var, re.unstand_est, ge
                 );
             }
