@@ -324,20 +324,24 @@ impl Session {
                 true
             }
             InternalEvent::BgTaskComplete { id: _, seq } => {
-                // Auto-inject the REAL result — no more "call view_task_results" hint.
-                // The agent's next LLM turn sees the actual output and can act on it
-                // immediately, saving a round-trip.
-                if let Some((name, result)) = self.toolset.finished_task_result(seq).await {
-                    let is_error = result.is_error.unwrap_or(false);
+                // Notify-only: inject a lightweight completion notice so the
+                // agent can decide when (and whether) to pull the full result
+                // via `view_task_results` or `wait_task`. The actual output is
+                // NOT injected — this keeps the context window lean and gives
+                // the agent agency over result consumption.
+                if let Some((name, ok)) = self.toolset.task_brief(seq).await {
                     self.shared
-                        .send_event(AgentEvent::ToolBackgroundComplete { seq, ok: !is_error });
-                    let content = result.text_content();
-                    let note = if is_error {
+                        .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
+                    let note = if ok {
                         format!(
-                            "Background task '{name}' (#{seq}) completed with error:\n{content}"
+                            "Background task '{name}' (#{seq}) has completed. \
+                             Use `view_task_results` with task={seq} to view the output."
                         )
                     } else {
-                        format!("Background task '{name}' (#{seq}) completed.\nResult:\n{content}")
+                        format!(
+                            "Background task '{name}' (#{seq}) has failed. \
+                             Use `view_task_results` with task={seq} to view the error details."
+                        )
                     };
                     let _ = self.memory.remember(Message::user(note));
                 }

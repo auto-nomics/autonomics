@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::task_runtime::{TaskStatus, TaskStore};
+use crate::tools::task_runtime::TaskStore;
 use crate::tools::{ExecutionMode, ProgressBuffer, ProgressLog, ToolContext};
 
 use super::DynToolFunction;
@@ -192,8 +192,9 @@ impl Toolset {
     /// The result is injected directly as a `tool_result` message.
     ///
     /// **Async tools** return a placeholder immediately. The tool runs in the
-    /// background; when it completes, the real result is auto-injected into
-    /// the agent's context via `BgTaskComplete`.
+    /// background; when it completes, a lightweight notification (task name +
+    /// status) is injected via `BgTaskComplete`. The agent then pulls the
+    /// full result on demand using `view_task_results` or `wait_task`.
     pub async fn execute(
         &self,
         toolcalls: &[ToolUse],
@@ -338,15 +339,16 @@ impl Toolset {
         self.registry.definitions()
     }
 
-    /// Look up a finished async task by seq and return the real result
-    /// for auto-injection into the agent's context.
+    /// Look up a task by seq and return `(name, is_success)` for the
+    /// lightweight completion notification.
     ///
+    /// Does **not** return the full result — the agent pulls the actual
+    /// output on demand via `view_task_results` or `wait_task`.
     /// Returns `None` when the task is unknown or still running.
-    pub async fn finished_task_result(&self, seq: u64) -> Option<(String, ToolResult)> {
+    pub async fn task_brief(&self, seq: u64) -> Option<(String, bool)> {
         let tasks = self.tasks.read().await;
         let entry = tasks.iter().find(|t| t.seq() == seq)?;
-        let result = entry.tool_result()?;
-        Some((entry.name().to_string(), result))
+        Some((entry.name().to_string(), entry.is_done()))
     }
 
     /// Check whether any background tasks are still running.

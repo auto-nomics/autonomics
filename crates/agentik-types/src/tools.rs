@@ -164,19 +164,8 @@ impl ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: ToolResultContent::Text(format!(
                 "Task #{seq} is running in background. \
-                 The result will be delivered automatically when it completes."
-            )),
-            is_error: None,
-        }
-    }
-
-    #[must_use]
-    pub fn task_finish_notification(tool_use_id: &str, seq: u64) -> Self {
-        Self {
-            tool_use_id: tool_use_id.to_string(),
-            content: ToolResultContent::Text(format!(
-                "Task #{seq} has finished. \
-                 Use `view_task_results` with task={seq} to view output."
+                 You will be notified when it completes; use `view_task_results` \
+                 with task={seq} to retrieve the output."
             )),
             is_error: None,
         }

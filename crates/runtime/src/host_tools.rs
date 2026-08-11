@@ -242,8 +242,8 @@ struct DelegateToTool {
 impl ToolFunction for DelegateToTool {
     type Input = DelegateToInput;
 
-    /// Async — the target agent's full response is auto-injected when it
-    /// finishes. The caller continues immediately.
+    /// Async — the caller is notified when the target agent finishes; the
+    /// full response is pulled on demand via `view_task_results`.
     fn execution_mode(&self) -> agentik_core::tools::ExecutionMode {
         agentik_core::tools::ExecutionMode::Async
     }
@@ -495,10 +495,9 @@ struct WaitAgentTool {
 impl ToolFunction for WaitAgentTool {
     type Input = WaitAgentInput;
 
-    /// Background execution — `delegate_to` style. The caller can fire
-    /// wait_agent and continue other work, retrieving the result via
-    /// Async — the wait result is auto-injected when the target agent
-    /// reaches a terminal status.
+    /// Background execution — the caller is notified when the target agent
+    /// reaches a terminal status; the result is pulled on demand via
+    /// `view_task_results`.
     fn execution_mode(&self) -> agentik_core::tools::ExecutionMode {
         agentik_core::tools::ExecutionMode::Async
     }
@@ -908,7 +907,7 @@ mod tests {
         assert_eq!(tool.timeout_seconds(), 3600);
     }
 
-    /// `DelegateToTool` is Async (target response auto-injected later).
+    /// `DelegateToTool` is Async (result pulled on demand after notification).
     /// `SendMessageTool` is Sync (no response injection). This is the
     /// key semantic distinction.
     #[test]

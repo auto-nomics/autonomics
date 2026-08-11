@@ -84,8 +84,9 @@ pub type BgTaskNotifyTx = tokio::sync::mpsc::UnboundedSender<InternalEvent>;
 ///
 /// When an async task completes, the monitor task sends
 /// [`InternalEvent::BgTaskComplete`] through the optional `notify_tx`,
-/// allowing the agent to wake up without polling. Sync tasks are consumed
-/// inline by [`Toolset::execute`] and never need `notify_tx`.
+/// waking the agent so it can decide whether to pull the result via
+/// `view_task_results` / `wait_task`. Sync tasks are consumed inline by
+/// [`Toolset::execute`] and never need `notify_tx`.
 pub struct TaskEntry {
     /// Short 1-based task number (allocated by [`TaskStore::alloc_seq`]).
     /// Used by the LLM to reference background tasks via `wait_task` /
@@ -135,9 +136,9 @@ impl TaskEntry {
     ///
     /// `notify_tx`: when `Some`, the monitor task sends
     /// [`InternalEvent::BgTaskComplete`] when the tool finishes. Pass `Some`
-    /// for **async** tools (their result needs to wake the agent for
-    /// auto-injection); pass `None` for **sync** tools (consumed inline by
-    /// `execute()`, no wake-up needed).
+    /// for **async** tools (their completion needs to wake the agent so it
+    /// can pull the result); pass `None` for **sync** tools (consumed inline
+    /// by `execute()`, no wake-up needed).
     ///
     /// `output` is the shared progress buffer the executing tool pushes
     /// structured [`ProgressRecord`]s onto (so it must be created before the
@@ -185,9 +186,10 @@ impl TaskEntry {
                     .ok();
                 }
             }
-            // Notify the agent's event loop when an async task finishes.
-            // notify_tx is Some only for async tools — sync tools are
-            // consumed inline by execute() and never need a wake-up.
+            // Notify the agent's event loop when an async task finishes so
+            // it can pull the result. notify_tx is Some only for async tools
+            // — sync tools are consumed inline by execute() and never need
+            // a wake-up.
             if let Some(notify) = bg_notify {
                 let _ = notify.send(InternalEvent::BgTaskComplete {
                     id: task_id,
@@ -230,6 +232,14 @@ impl TaskEntry {
     /// the result is embedded in the status itself.
     pub fn status(&self) -> TaskStatus {
         self.status.borrow().clone()
+    }
+
+    /// Check whether the task completed successfully, without cloning the
+    /// full result. Used by the notification path to decide success vs.
+    /// failure message wording without pulling the (potentially large)
+    /// result content.
+    pub fn is_done(&self) -> bool {
+        matches!(*self.status.borrow(), TaskStatus::Done(_))
     }
 
     /// The real final result of the tool, once execution has finished.

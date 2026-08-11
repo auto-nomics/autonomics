@@ -280,7 +280,8 @@ pub trait ToolFunction: Send + Sync {
     ///   fires. The result is injected directly into the agent's context.
     /// - [`ExecutionMode::Async`]: the toolset returns a placeholder
     ///   immediately. The tool runs in the background; when it completes,
-    ///   the real result is auto-injected into the agent's context.
+    ///   a lightweight notification is injected. The agent pulls the full
+    ///   result on demand via `view_task_results` or `wait_task`.
     fn execution_mode(&self) -> ExecutionMode {
         ExecutionMode::Sync
     }
@@ -305,7 +306,7 @@ pub trait ToolFunction: Send + Sync {
 /// started in a synchronous window and then optionally transitioned to
 /// background. The new model is explicit: a tool is either fully
 /// synchronous (blocks the agent) or fully asynchronous (returns
-/// immediately, result auto-injected later).
+/// immediately, result pulled on demand).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
     /// Block the agent until the tool completes or times out.
@@ -313,8 +314,8 @@ pub enum ExecutionMode {
     Sync,
 
     /// Return a placeholder immediately. The tool runs in the background.
-    /// When it completes, the real result is auto-injected into the
-    /// agent's context as a user message.
+    /// When it completes, a lightweight notification is injected; the agent
+    /// pulls the full result via `view_task_results` or `wait_task`.
     Async,
 }
 
