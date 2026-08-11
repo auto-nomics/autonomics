@@ -1263,6 +1263,7 @@ impl AgentProfileRegistry for TursoAgentStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProfileOverrides;
     use crate::lifecycle::AgentLifecycleStatus;
     use crate::memory::{Memory, MemoryItem};
     use crate::message_ext::AgentMessageExt;

@@ -110,6 +110,14 @@ fn json_to_opt<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
 #[async_trait]
 impl ManifestStore for TursoManifestStore {
     async fn save(&self, entries: &[ResourceEntry]) -> Result<()> {
+        // Clear all existing rows first — save is a full snapshot write,
+        // not an incremental upsert. This ensures deregistered entries
+        // are actually removed from the manifest.
+        self.conn
+            .execute("DELETE FROM resource_manifest", ())
+            .await
+            .map_err(|e| ResourceError::Persistence(format!("clear manifest: {e}")))?;
+
         for entry in entries {
             let address_json = serde_json::to_string(&entry.address)?;
             let metadata_json = serde_json::to_string(&entry.metadata)?;

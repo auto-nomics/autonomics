@@ -56,6 +56,16 @@ impl ResourceRegistry {
         self.by_name.get_mut(name)
     }
 
+    /// Remove an entry by name. Returns the removed entry if it existed.
+    pub fn remove(&mut self, name: &str) -> Option<ResourceEntry> {
+        let entry = self.by_name.remove(name)?;
+        // Also remove from by_kind index.
+        if let Some(names) = self.by_kind.get_mut(&entry.kind) {
+            names.retain(|n| n != name);
+        }
+        Some(entry)
+    }
+
     /// All registered resources.
     pub fn list(&self) -> impl Iterator<Item = &ResourceEntry> {
         self.by_name.values()

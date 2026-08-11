@@ -104,6 +104,12 @@ impl ResourceCatalog {
         self.inner.write().expect("catalog lock").register(entry)
     }
 
+    /// Remove a resource by logical name from the in-memory registry.
+    /// Call [`persist`](Self::persist) afterwards to update the manifest.
+    pub fn deregister(&self, name: &str) -> Option<ResourceEntry> {
+        self.inner.write().expect("catalog lock").remove(name)
+    }
+
     /// Register a provider's resources, surfacing validation/duplicate errors.
     pub fn register_provider(&self, provider: &dyn crate::provider::ResourceProvider) -> Result<()> {
         for entry in provider.resources() {

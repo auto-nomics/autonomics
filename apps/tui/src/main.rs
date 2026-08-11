@@ -458,18 +458,30 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 None
             };
 
-            // For archiving, resolve the base directory (strip glob wildcards)
-            // so rclone copies the actual directory.
+            // For archiving, resolve what to upload:
+            // - Single file → archive just that file
+            // - Directory → archive that directory
+            // - Glob pattern → walk up to the first real directory
             let archive_local_path = {
                 let p = std::path::Path::new(&a.source);
-                let mut dir = p.parent().unwrap_or(p);
-                while !dir.is_dir() {
-                    dir = match dir.parent() {
-                        Some(p) => p,
-                        None => break,
-                    };
+                if p.is_file() {
+                    // Single file — rclone copies just this file.
+                    p.to_path_buf()
+                } else if p.is_dir() {
+                    // Directory — rclone copies the directory contents.
+                    p.to_path_buf()
+                } else {
+                    // Glob pattern (e.g. /data/**/*.parquet) — walk up
+                    // to the first existing directory.
+                    let mut dir = p.parent().unwrap_or(p);
+                    while !dir.is_dir() {
+                        dir = match dir.parent() {
+                            Some(p) => p,
+                            None => break,
+                        };
+                    }
+                    dir.to_path_buf()
                 }
-                dir.to_path_buf()
             };
 
             // Build the ingestion spec.
@@ -583,24 +595,12 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
         }
 
         DataAction::Remove(a) => {
-            // We need mutable access to unregister. Since ResourceCatalog
-            // doesn't have unregister, we rebuild without the entry.
-            let entries: Vec<_> = catalog
-                .list()
-                .into_iter()
-                .filter(|e| e.name != a.name)
-                .collect();
-            // Clear and re-register all remaining entries.
-            // (ResourceRegistry doesn't have a delete method yet, so we
-            // recreate the catalog.)
-            let new_catalog = Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
-                config.data_dir.clone(),
-            ));
-            for e in entries {
-                let _ = new_catalog.register(e);
+            if catalog.deregister(&a.name).is_some() {
+                catalog.persist().await;
+                println!("✓ Removed resource '{}'", a.name);
+            } else {
+                println!("— resource '{}' not found in catalog", a.name);
             }
-            new_catalog.persist().await;
-            println!("✓ Removed resource '{}'", a.name);
             return Ok(());
         }
 
