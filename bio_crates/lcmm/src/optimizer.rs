@@ -159,9 +159,10 @@ pub fn marq_lev_alg<O: Objective>(
         }
 
         // ---- Compute Marquardt-damped step --------------------------------
-        // NB: Fortran `tr = sum(|v[ii]|)/m` where ii = i*(i+1)/2 (1-indexed).
-        // In 0-indexed packed: ii0 = i*(i+1)/2 for i in 0..m (diagonal entries).
-        let tr: f64 = (0..m).map(|i| v_packed[i * (i + 1) / 2].abs()).sum::<f64>() / m as f64;
+        // Fortran 1-indexed: diagonal (i,i) at packed position i*(i-1)/2+i.
+        // 0-indexed packed column-major upper-tri: diagonal (i,i) at i*(i+1)/2+i.
+        let diag_idx = |i: usize| i * (i + 1) / 2 + i;
+        let tr: f64 = (0..m).map(|i| v_packed[diag_idx(i)].abs()).sum::<f64>() / m as f64;
 
         let mut ncount = 0_i32;
         let mut ga = 0.01_f64;
@@ -171,7 +172,7 @@ pub fn marq_lev_alg<O: Objective>(
         loop {
             damped_packed = v_packed[..nfmax].to_vec();
             for i in 0..m {
-                let ii = i * (i + 1) / 2;
+                let ii = diag_idx(i);
                 let diag = damped_packed[ii];
                 if diag != 0.0 {
                     damped_packed[ii] = diag + da * ((1.0 - ga) * diag.abs() + ga * tr);

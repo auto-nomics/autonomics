@@ -337,21 +337,26 @@ fn build_model_data(
     Ok((data, spec, labels))
 }
 
-/// Extract subject IDs from a column, accepting integer types.
+/// Extract subject IDs from a column, accepting integer and float types.
+///
+/// Float columns (e.g. Float64) are truncated to i64 — this is essential
+/// because many real-world datasets store integer IDs as floats. Without this,
+/// all rows would silently get ID=0, collapsing every observation into one
+/// "subject" and causing ni² matrix allocations to OOM.
 fn extract_subject_ids(batches: &[RecordBatch], name: &str) -> Result<Vec<i64>, HlmeNodeError> {
     let idx = column_index(batches, name)?;
     let mut ids = Vec::new();
     for batch in batches {
         let col = batch.column(idx);
-        extract_int_dispatch(col, &mut |v: Option<i64>| {
+        extract_id_dispatch(col, &mut |v: Option<i64>| {
             ids.push(v.unwrap_or(0));
         });
     }
     Ok(ids)
 }
 
-fn extract_int_dispatch(col: &dyn Array, emit: &mut impl FnMut(Option<i64>)) {
-    macro_rules! cast {
+fn extract_id_dispatch(col: &dyn Array, emit: &mut impl FnMut(Option<i64>)) {
+    macro_rules! cast_int {
         ($arr:expr, $T:ty) => {
             if let Some(a) = $arr.as_any().downcast_ref::<$T>() {
                 for v in a.iter() {
@@ -361,14 +366,27 @@ fn extract_int_dispatch(col: &dyn Array, emit: &mut impl FnMut(Option<i64>)) {
             }
         };
     }
-    cast!(col, arrow_array::Int8Array);
-    cast!(col, arrow_array::Int16Array);
-    cast!(col, arrow_array::Int32Array);
-    cast!(col, arrow_array::Int64Array);
-    cast!(col, arrow_array::UInt8Array);
-    cast!(col, arrow_array::UInt16Array);
-    cast!(col, arrow_array::UInt32Array);
-    cast!(col, arrow_array::UInt64Array);
+    cast_int!(col, arrow_array::Int8Array);
+    cast_int!(col, arrow_array::Int16Array);
+    cast_int!(col, arrow_array::Int32Array);
+    cast_int!(col, arrow_array::Int64Array);
+    cast_int!(col, arrow_array::UInt8Array);
+    cast_int!(col, arrow_array::UInt16Array);
+    cast_int!(col, arrow_array::UInt32Array);
+    cast_int!(col, arrow_array::UInt64Array);
+    // Float types: truncate to i64 (common when IDs are stored as Float64).
+    macro_rules! cast_float {
+        ($arr:expr, $T:ty) => {
+            if let Some(a) = $arr.as_any().downcast_ref::<$T>() {
+                for v in a.iter() {
+                    emit(v.map(|val| val as i64));
+                }
+                return;
+            }
+        };
+    }
+    cast_float!(col, arrow_array::Float32Array);
+    cast_float!(col, arrow_array::Float64Array);
     for _ in 0..col.len() {
         emit(None);
     }
@@ -380,26 +398,97 @@ fn extract_int_dispatch(col: &dyn Array, emit: &mut impl FnMut(Option<i64>)) {
 
 /// Compute a default starting parameter vector for the optimizer.
 ///
+/// Uses OLS estimates for fixed effects and residual-variance-based estimates
+/// for variance components. Starting fixed effects at 0 (the old behaviour)
+/// causes the finite-difference Hessian to be numerically degenerate —
+/// `step_size(0)=1e-7` produces second-difference numerators at the f64 noise
+/// floor (~5e-13 on loglik ~ ±2000), yielding a non-PD Hessian and an
+/// immediate `istop=3` (PartialH) with `niter=0`.
+///
 /// - NPROB: 0.0 (equal class probabilities)
-/// - NEF: 0.0 for overall; for class-specific, reference class=0, others small perturbation
-/// - NVC: Cholesky diagonal=1.0, off-diagonal=0.0
+/// - NEF: OLS estimates from regressing Y on the fixed-effect design columns
+/// - NVC: Cholesky diagonal = sqrt(resid_var / 2), off-diagonal = 0.0
 /// - NW: 1.0 (no class scaling difference)
-/// - STDERR: standard deviation of the outcome
+/// - STDERR: sqrt(resid_var / 2)
 fn default_init_b(data: &LongData, spec: &ModelSpec) -> Vec<f64> {
     let layout = spec.layout();
     let mut b = vec![0.0_f64; layout.npm];
 
-    // Variance-covariance Cholesky block.
+    // --- OLS starting values for fixed effects ---
+    let fixed_cols: Vec<usize> = (0..layout.nv)
+        .filter(|&k| spec.idg[k] != 0)
+        .collect();
+    let p = fixed_cols.len();
+    let betas = if p > 0 {
+        compute_ols(data, &fixed_cols, layout.nv)
+    } else {
+        Vec::new()
+    };
+
+    // Fill NEF entries. idg=1 covariates get 1 slot; idg=2 get ng slots
+    // (all initialised to the same OLS estimate).
+    let mut idx = layout.i_nef;
+    let mut beta_idx = 0usize;
+    for k in 0..layout.nv {
+        match spec.idg[k] {
+            1 => {
+                if beta_idx < betas.len() {
+                    b[idx] = betas[beta_idx];
+                }
+                beta_idx += 1;
+                idx += 1;
+            }
+            2 => {
+                let beta = betas.get(beta_idx).copied().unwrap_or(0.0);
+                beta_idx += 1;
+                for _ in 0..layout.ng {
+                    b[idx] = beta;
+                    idx += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // --- Residual variance from OLS (or total Y variance as fallback) ---
+    let resid_var = if !betas.is_empty() {
+        let mut rss = 0.0_f64;
+        for r in 0..data.nobs {
+            let pred: f64 = fixed_cols
+                .iter()
+                .enumerate()
+                .map(|(j, &k)| betas[j] * data.x[r * layout.nv + k])
+                .sum();
+            let resid = data.y[r] - pred;
+            rss += resid * resid;
+        }
+        let df = data.nobs.saturating_sub(p).max(1);
+        rss / df as f64
+    } else {
+        let y_mean = data.y.iter().sum::<f64>() / data.y.len().max(1) as f64;
+        data.y.iter().map(|y| (y - y_mean).powi(2)).sum::<f64>() / data.y.len().max(1) as f64
+    };
+
+    // Split residual variance equally between random effects and noise.
+    let vc_std = (resid_var / 2.0).sqrt().max(0.1);
+
+    // --- Variance-covariance Cholesky block ---
+    // Diagonal entries = vc_std; off-diagonal entries = small non-zero value
+    // (10% of vc_std). Starting off-diagonals at exactly 0.0 causes the same
+    // finite-difference noise floor issue as zero fixed effects, because
+    // step_size(0)=1e-7 produces Hessian second-differences at f64 precision.
     if layout.nvc > 0 {
         if spec.idiag {
             for j in 0..layout.nea {
-                b[layout.i_nvc + j] = 1.0;
+                b[layout.i_nvc + j] = vc_std;
             }
         } else {
-            // Upper-triangular packed: diagonal entries = 1.0.
+            let off_diag = 0.1 * vc_std;
             for i in 0..layout.nea {
-                let diag_idx = layout.i_nvc + i * (i + 1) / 2 + i;
-                b[diag_idx] = 1.0;
+                for l in 0..=i {
+                    let idx = layout.i_nvc + l + i * (i + 1) / 2;
+                    b[idx] = if l == i { vc_std } else { off_diag };
+                }
             }
         }
     }
@@ -409,11 +498,101 @@ fn default_init_b(data: &LongData, spec: &ModelSpec) -> Vec<f64> {
         b[layout.i_nw + k] = 1.0;
     }
 
-    // Residual stderr: use sample standard deviation of Y.
-    let y_mean = data.y.iter().sum::<f64>() / data.y.len() as f64;
-    let y_var = data.y.iter().map(|y| (y - y_mean).powi(2)).sum::<f64>() / data.y.len() as f64;
-    b[layout.i_stderr] = y_var.sqrt().max(0.1);
+    // Residual stderr.
+    b[layout.i_stderr] = vc_std;
     b
+}
+
+/// Simple OLS via normal equations + Cholesky solve.
+///
+/// Returns coefficient vector for the `fixed_cols` design columns. Falls back
+/// to the Y mean for intercept-like (all-ones) columns when X'X is singular.
+fn compute_ols(data: &LongData, fixed_cols: &[usize], nv: usize) -> Vec<f64> {
+    let p = fixed_cols.len();
+    let n = data.nobs;
+    if p == 0 || n == 0 {
+        return vec![0.0; p];
+    }
+
+    // Build X'X (p×p) and X'y (p) in a single pass over observations.
+    let mut xtx = vec![0.0_f64; p * p];
+    let mut xty = vec![0.0_f64; p];
+    for r in 0..n {
+        // Extract row r of the fixed-effect design.
+        let xr: Vec<f64> = fixed_cols.iter().map(|&k| data.x[r * nv + k]).collect();
+        for i in 0..p {
+            xty[i] += xr[i] * data.y[r];
+            for j in i..p {
+                xtx[i * p + j] += xr[i] * xr[j];
+            }
+        }
+    }
+    // Symmetrize X'X (only upper triangle was filled).
+    for i in 0..p {
+        for j in 0..i {
+            xtx[i * p + j] = xtx[j * p + i];
+        }
+    }
+
+    match cholesky_solve(&xtx, &xty, p) {
+        Some(beta) => beta,
+        None => {
+            // X'X singular: use Y mean for intercept-like columns, 0 otherwise.
+            let y_mean = data.y.iter().sum::<f64>() / n.max(1) as f64;
+            (0..p)
+                .map(|j| {
+                    let is_intercept = (0..n)
+                        .all(|r| (data.x[r * nv + fixed_cols[j]] - 1.0).abs() < 1e-8);
+                    if is_intercept { y_mean } else { 0.0 }
+                })
+                .collect()
+        }
+    }
+}
+
+/// Solve the SPD system `A x = rhs` via Cholesky factorisation. Returns `None`
+/// if `A` is not positive-definite.
+fn cholesky_solve(a: &[f64], rhs: &[f64], n: usize) -> Option<Vec<f64>> {
+    // Cholesky: L L' = A (lower-triangular L).
+    let mut l = vec![0.0_f64; n * n];
+    for j in 0..n {
+        let mut d = a[j * n + j];
+        for k in 0..j {
+            d -= l[j * n + k] * l[j * n + k];
+        }
+        if d <= 1e-30 {
+            return None;
+        }
+        let dj = d.sqrt();
+        l[j * n + j] = dj;
+        let inv = 1.0 / dj;
+        for i in (j + 1)..n {
+            let mut s = a[i * n + j];
+            for k in 0..j {
+                s -= l[i * n + k] * l[j * n + k];
+            }
+            l[i * n + j] = s * inv;
+        }
+    }
+    // Forward solve L y = rhs.
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let mut s = rhs[i];
+        for k in 0..i {
+            s -= l[i * n + k] * y[k];
+        }
+        y[i] = s / l[i * n + i];
+    }
+    // Back solve L' x = y.
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        for k in (i + 1)..n {
+            s -= l[k * n + i] * x[k];
+        }
+        x[i] = s / l[i * n + i];
+    }
+    Some(x)
 }
 
 // =====================================================================
@@ -1595,9 +1774,11 @@ mod tests {
         );
         let b = default_init_b(&data, &spec);
         assert_eq!(b.len(), 6);
-        // NPROB = 0, NEF = 0, STDERR > 0
-        assert_eq!(b[0], 0.0); // NPROB
-        assert!(b[5] > 0.0); // STDERR
+        // NPROB = 0 (class membership always starts at 0).
+        assert_eq!(b[0], 0.0);
+        // NEF slots should now hold OLS estimates (non-zero for intercept).
+        // STDERR > 0.
+        assert!(b[5] > 0.0);
     }
 
     #[test]
@@ -1626,9 +1807,10 @@ mod tests {
         );
         let b = default_init_b(&data, &spec);
         assert_eq!(b.len(), 8);
-        // Cholesky diagonal entries should be 1.0.
-        assert_eq!(b[4], 1.0); // i_nvc + 0 = 4
-        assert_eq!(b[6], 1.0); // i_nvc + 2 = 6 (diag of 2×2 upper-tri)
+        // Cholesky diagonal entries should be derived from residual variance.
+        // i_nvc=4: diag at indices 4 and 6. Both should be > 0.
+        assert!(b[4] > 0.0); // i_nvc + 0 = 4
+        assert!(b[6] > 0.0); // i_nvc + 2 = 6 (diag of 2×2 upper-tri)
     }
 }
 
@@ -1653,7 +1835,7 @@ mod cross_validation {
 
     fn fixtures_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../bio_crates/lcmm/tests/fixtures")
+            .join("../../../bio_crates/lcmm/tests/fixtures")
     }
 
     // ---- CSV → RecordBatch ---------------------------------------------
@@ -2386,6 +2568,307 @@ mod cross_validation {
             posterior.num_rows(),
             0,
             "posterior port should be empty with maxiter=0"
+        );
+    }
+
+    // ---- Full optimization convergence tests ---------------------------
+    // These exercise the complete pipeline: default OLS init → Marquardt-
+    // Levenberg optimization → convergence → posterior computation.
+    // They verify that the node's default initialization (OLS-based, not
+    // zero-based) produces a well-conditioned finite-difference Hessian
+    // and the optimizer actually iterates to convergence.
+
+    /// Helper: run the hlme node with default init (no explicit init_b) and
+    /// return (loglik, niter, conv, ng, posterior_rows).
+    async fn run_full_opt(
+        cfg: HlmeConfig,
+    ) -> (f64, i32, String, usize, usize) {
+        let batch = load_data_batch();
+        let df = SessionContext::new().read_batch(batch).unwrap();
+        let input = NodeInput { port: 0, data: df };
+
+        let mut node = HlmeNode::new(cfg);
+        let res = node
+            .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
+            .await
+            .expect("node execute should succeed");
+
+        let summary_df = res.get(&0).unwrap().clone();
+        let summary = summary_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let loglik = summary
+            .column_by_name("loglik")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+        let niter = summary
+            .column_by_name("niter")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0);
+        let conv = summary
+            .column_by_name("conv")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_string();
+        let ng = summary
+            .column_by_name("ng")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0) as usize;
+
+        // Count posterior rows.
+        let posterior_df = res.get(&2).unwrap().clone();
+        let posterior = posterior_df
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let posterior_rows = posterior.num_rows();
+
+        (loglik, niter, conv, ng, posterior_rows)
+    }
+
+    /// GBTM ng=1 full optimization: the optimizer must iterate (>0) and
+    /// converge to the R golden loglik.
+    #[tokio::test]
+    async fn optimize_gbtm1_default_init() {
+        let golden = load_golden();
+        let gf = golden_fit(&golden, "gbtm1");
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+
+        let (loglik, niter, conv, ng, posterior_rows) = run_full_opt(HlmeConfig {
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time".into()],
+            mixture: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
+        })
+        .await;
+
+        // Must have iterated (the old zero-init bug gave niter=0).
+        assert!(
+            niter > 0,
+            "gbtm1: optimizer did not iterate (niter=0), conv={conv}"
+        );
+        // Must converge (not PartialH or Failed).
+        assert!(
+            conv == "Converged" || conv == "MaxIter",
+            "gbtm1: bad convergence status: {conv}"
+        );
+        // Loglik must match R golden.
+        let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(
+            rel < 1e-6,
+            "gbtm1 opt loglik mismatch: Rust={loglik:.8}, R={golden_ll:.8}, rel={rel:.3e}"
+        );
+        // Posterior port should have ns rows (100 subjects).
+        assert_eq!(ng, 1);
+        assert_eq!(posterior_rows, 100, "posterior should have 100 subjects");
+        eprintln!(
+            "PASS optimize_gbtm1_default_init: loglik={loglik:.6} R={golden_ll:.6} niter={niter} conv={conv}"
+        );
+    }
+
+    /// LMM ng=1 with random effects (m1 model): Y ~ Time*X1, random=~Time.
+    /// This exercises the OLS init for a model with random intercept+slope.
+    #[tokio::test]
+    async fn optimize_m1_default_init() {
+        let golden = load_golden();
+        let gf = golden_fit(&golden, "m1");
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+
+        let (loglik, niter, conv, ng, posterior_rows) = run_full_opt(HlmeConfig {
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time*X1".into()],
+            mixture: vec![],
+            random: vec!["Time".into()],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
+        })
+        .await;
+
+        assert!(
+            niter > 0,
+            "m1: optimizer did not iterate (niter=0), conv={conv}"
+        );
+        assert!(
+            conv == "Converged" || conv == "MaxIter",
+            "m1: bad convergence status: {conv}"
+        );
+        let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(
+            rel < 1e-6,
+            "m1 opt loglik mismatch: Rust={loglik:.8}, R={golden_ll:.8}, rel={rel:.3e}"
+        );
+        assert_eq!(ng, 1);
+        assert_eq!(posterior_rows, 100);
+        eprintln!(
+            "PASS optimize_m1_default_init: loglik={loglik:.6} R={golden_ll:.6} niter={niter} conv={conv}"
+        );
+    }
+
+    // ---- Float64 subject ID tests -------------------------------------
+    // Verifies the OOM fix: Float64 subject IDs must be correctly parsed.
+
+    /// Build a RecordBatch where the ID column is Float64 (simulating real
+    /// datasets that store integer IDs as doubles).
+    fn load_data_batch_float64_id() -> RecordBatch {
+        let path = fixtures_dir().join("data_hlme.csv");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to read {}: Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                path.display()
+            )
+        });
+
+        let mut ids = Vec::new();
+        let mut ys = Vec::new();
+        let mut times = Vec::new();
+        let mut x1s = Vec::new();
+        let mut x2s = Vec::new();
+        let mut x3s = Vec::new();
+
+        for (i, line) in text.lines().enumerate() {
+            if i == 0 {
+                continue;
+            }
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() < 6 {
+                continue;
+            }
+            ids.push(f[0].parse::<f64>().unwrap());
+            ys.push(f[1].parse::<f64>().unwrap());
+            times.push(f[2].parse::<f64>().unwrap());
+            x1s.push(f[3].parse::<f64>().unwrap());
+            x2s.push(f[4].parse::<f64>().unwrap());
+            x3s.push(f[5].parse::<f64>().unwrap());
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ID", DataType::Float64, false), // ← Float64, not Int64
+            Field::new("Y", DataType::Float64, false),
+            Field::new("Time", DataType::Float64, false),
+            Field::new("X1", DataType::Float64, false),
+            Field::new("X2", DataType::Float64, false),
+            Field::new("X3", DataType::Float64, false),
+        ]));
+
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(ids)),
+                Arc::new(Float64Array::from(ys)),
+                Arc::new(Float64Array::from(times)),
+                Arc::new(Float64Array::from(x1s)),
+                Arc::new(Float64Array::from(x2s)),
+                Arc::new(Float64Array::from(x3s)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Verify that Float64 ID columns produce the same subject count and
+    /// loglik as Int64 ID columns.
+    #[tokio::test]
+    async fn float64_id_same_as_int64() {
+        let golden = load_golden();
+        let gf = golden_fit(&golden, "gbtm1");
+        let golden_ll = gf["loglik"].as_f64().unwrap();
+
+        let batch = load_data_batch_float64_id();
+        let df = SessionContext::new().read_batch(batch).unwrap();
+        let input = NodeInput { port: 0, data: df };
+
+        let mut node = HlmeNode::new(HlmeConfig {
+            subject: "ID".into(),
+            outcome: "Y".into(),
+            ng: 1,
+            intercept: true,
+            fixed: vec!["Time".into()],
+            mixture: vec![],
+            random: vec![],
+            classmb: vec![],
+            idiag: false,
+            nwg: false,
+            maxiter: 500,
+            init_b: vec![],
+        });
+
+        let res = node
+            .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
+            .await
+            .expect("node execute with Float64 ID should succeed");
+
+        let summary = res
+            .get(&0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let ns = summary
+            .column_by_name("ns")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0);
+        let loglik = summary
+            .column_by_name("loglik")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+
+        // ns must be 100 (not 1 — the old bug collapsed all obs to one subject).
+        assert_eq!(
+            ns, 100,
+            "Float64 ID: expected 100 subjects, got {ns} (Float64 ID parsing bug)"
+        );
+        // Loglik should match the golden gbtm1 value (which uses Int64 IDs).
+        let rel = (loglik - golden_ll).abs() / golden_ll.abs().max(1e-10);
+        assert!(
+            rel < 1e-6,
+            "Float64 ID loglik mismatch: Rust={loglik:.8}, R={golden_ll:.8}, rel={rel:.3e}"
+        );
+        eprintln!(
+            "PASS float64_id_same_as_int64: ns={ns}, loglik={loglik:.6} R={golden_ll:.6}"
         );
     }
 }
