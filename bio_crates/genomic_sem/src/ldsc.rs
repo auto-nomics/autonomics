@@ -195,7 +195,7 @@ pub fn block_jackknife_regression(
     }
 
     // Solve xtx · reg = xty
-    let reg = solve_small(&xtx, &xty);
+    let reg = solve_small_pub(&xtx, &xty);
     let intercept = reg[n_annot];
     let coef = reg[0] / n_bar;
     let reg_tot = coef * m;
@@ -211,7 +211,7 @@ pub fn block_jackknife_regression(
                 xtx_del[j][k] -= xtx_blocks[b][j][k];
             }
         }
-        delete_values[b] = solve_small(&xtx_del, &xty_del);
+        delete_values[b] = solve_small_pub(&xtx_del, &xty_del);
     }
 
     // Pseudo-values
@@ -288,8 +288,8 @@ fn block_tos(from: &[usize], n_snps: usize, n_blocks: usize) -> Vec<usize> {
     out
 }
 
-/// Solve a small linear system A·x = b using Cramer's rule or Gaussian elimination.
-fn solve_small(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+/// Solve a small linear system A·x = b using Gaussian elimination with partial pivoting.
+pub fn solve_small_pub(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
     let mut aug = vec![vec![0.0; n + 1]; n];
     for i in 0..n {
@@ -475,7 +475,7 @@ mod tests {
     fn test_solve_small_2x2() {
         let a = vec![vec![2.0, 1.0], vec![1.0, 3.0]];
         let b = vec![3.0, 5.0];
-        let x = solve_small(&a, &b);
+        let x = solve_small_pub(&a, &b);
         // Solution: x = [0.8, 1.4]
         assert!((x[0] - 0.8).abs() < 1e-10);
         assert!((x[1] - 1.4).abs() < 1e-10);
