@@ -146,6 +146,24 @@ impl Datalake {
         Ok(ctx)
     }
 
+    /// Like [`get_ctx`](Self::get_ctx) but with a custom `target_partitions`
+    /// setting.  Use a low value (e.g. 1–2) for large bulk INSERTs to avoid
+    /// memory spikes from many concurrent scan partitions.
+    pub async fn get_ctx_with_partitions(
+        &self,
+        partitions: usize,
+    ) -> crate::error::Result<SessionContext> {
+        let rest_catalog = self.get_catalog().await?;
+        let catalog_provider: IcebergCatalogProvider =
+            IcebergCatalogProvider::try_new(rest_catalog.clone()).await?;
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.target_partitions = partitions;
+        let ctx = SessionContext::new_with_config(config);
+        ctx.register_catalog("iceberg", Arc::new(catalog_provider));
+        Ok(ctx)
+    }
+
     // /// Get a new SessionContext with shared runtime_env.
     // ///
     // /// This method provider a better SessionContext that keeps object store and iceberg connected

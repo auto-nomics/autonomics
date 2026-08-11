@@ -9828,6 +9828,7 @@ dependencies = [
  "datalake",
  "datalake-tools",
  "fs",
+ "futures",
  "gwascatalog-sdk",
  "iceberg",
  "opengwas",

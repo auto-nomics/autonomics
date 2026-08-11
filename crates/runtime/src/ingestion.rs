@@ -11,6 +11,7 @@
 //! [archive] → restore_before → read source → create/append Iceberg → archive_after
 //! ```
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dag_core::resource_catalog::{
@@ -18,9 +19,19 @@ use dag_core::resource_catalog::{
 };
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions, SessionContext};
 use datalake::Datalake;
+use futures::StreamExt;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
-use iceberg::spec::{PartitionSpecBuilder, Transform};
+use iceberg::spec::{
+    DataFileFormat, PartitionSpecBuilder, TableProperties, Transform,
+};
+use iceberg::transaction::{Transaction, ApplyTransactionAction};
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::file_writer::{ParquetWriterBuilder, rolling_writer::RollingFileWriterBuilder};
+use iceberg::writer::file_writer::location_generator::{DefaultLocationGenerator, DefaultFileNameGenerator};
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
 /// Executes ingestion jobs declared on `ResourceEntry`s.
 pub struct IngestionExecutor {
@@ -39,6 +50,12 @@ impl IngestionExecutor {
     }
 
     /// Ingest data into the Iceberg table identified by `resource_name`.
+    ///
+    /// Uses iceberg-rust's **direct writer API** (DataFileWriter + RollingFileWriter)
+    /// instead of DataFusion's INSERT INTO.  DataFusion reads the source parquet
+    /// streaming; each batch is handed to the iceberg writer which accumulates
+    /// 512 MB data files before flushing to S3.  This avoids the OOM caused by
+    /// iceberg-datafusion's TableSink buffering all data in memory.
     pub async fn ingest(&self, resource_name: &str) -> anyhow::Result<IngestionOutcome> {
         let entry = self.catalog.get(resource_name)
             .ok_or_else(|| anyhow::anyhow!("unknown resource '{resource_name}'"))?;
@@ -64,21 +81,37 @@ impl IngestionExecutor {
         // ── Resolve target table ident ────────────────────────────────
         let ident = self.catalog.resolve_iceberg(resource_name)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let (_catalog_name, schema, table) = ident.ident();
-        let namespace = NamespaceIdent::from_vec(vec![schema])?;
+        let (_catalog_name, schema_name, table_name) = ident.ident();
+        let namespace = NamespaceIdent::from_vec(vec![schema_name])?;
 
-        // ── Read source data via DataFusion ───────────────────────────
+        // ── Expand source files ───────────────────────────────────────
+        let source_files = expand_source_files(&spec.source_path);
+        let files_processed = source_files.len() as u64;
+
+        if source_files.is_empty() {
+            anyhow::bail!("no source files found at '{}'", spec.source_path);
+        }
+
+        tracing::info!(
+            "ingesting {} file(s) from {} via direct writer",
+            source_files.len(),
+            spec.source_path
+        );
+
+        // ── Read first file to get schema ─────────────────────────────
         let read_ctx = ice(self.datalake.get_ctx().await)?;
-        let df = self.read_source(&read_ctx, spec).await?;
-        let rows = df.clone().count().await?;
-        let files_processed = count_source_files(&spec.source_path);
+        let first_spec = IngestionSpec {
+            source_path: source_files[0].clone(),
+            ..spec.clone()
+        };
+        let (first_df, _) = self.read_source(&read_ctx, &first_spec).await?;
+        let arrow_schema = first_df.schema().inner().clone();
+        drop(first_df);
+        drop(read_ctx);
 
-        // ── Get Arrow schema from the source DataFrame ────────────────
-        let arrow_schema = df.schema().inner().clone();
-
-        // ── Create/drop table based on write mode ─────────────────────
+        // ── Create / drop table ───────────────────────────────────────
         let rest_catalog = ice(self.datalake.get_catalog().await)?;
-        let table_ident = TableIdent::new(namespace.clone(), table.clone());
+        let table_ident = TableIdent::new(namespace.clone(), table_name.clone());
 
         match spec.mode {
             WriteMode::CreateOrReplace => {
@@ -86,10 +119,10 @@ impl IngestionExecutor {
                     ice(rest_catalog.drop_table(&table_ident).await)?;
                     tracing::info!("dropped existing table for replacement");
                 }
-                self.create_table(&namespace, &table, &arrow_schema, &spec.partition_by).await?;
+                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by).await?;
             }
             WriteMode::CreateIfNotExists => {
-                self.create_table(&namespace, &table, &arrow_schema, &spec.partition_by).await?;
+                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by).await?;
             }
             WriteMode::Append => {
                 if !ice(rest_catalog.table_exists(&table_ident).await)? {
@@ -98,12 +131,10 @@ impl IngestionExecutor {
             }
         }
 
-        // ── Get a FRESH context (the table was just created) ──────────
-        let ctx = ice(self.datalake.get_ctx().await)?;
-
-        // ── Check if already has data (for CreateIfNotExists) ─────────
+        // ── Check if already has data (CreateIfNotExists) ─────────────
         if spec.mode == WriteMode::CreateIfNotExists {
             let fqn = ident.sql();
+            let ctx = ice(self.datalake.get_ctx_with_partitions(1).await)?;
             if let Ok(df) = ctx.sql(&format!("SELECT COUNT(*) AS n FROM {fqn}")).await {
                 if let Ok(batches) = df.collect().await {
                     if let Some(count) = batches.first()
@@ -122,16 +153,97 @@ impl IngestionExecutor {
             }
         }
 
-        // ── INSERT INTO target SELECT * FROM source ───────────────────
-        let fqn = ident.sql();
-        let src_name = format!("__ingest_src_{table}");
-        ctx.register_table(&src_name, df.into_view())?;
-        let sql = format!("INSERT INTO {fqn} SELECT * FROM {src_name}");
-        ctx.sql(&sql).await?.collect().await?;
-        ctx.deregister_table(&src_name)?;
+        // ── Load table for direct writing ─────────────────────────────
+        let table = ice(rest_catalog.load_table(&table_ident).await)?;
+        let file_io = table.file_io().clone();
+        let table_props = ice(table.metadata().table_properties())?;
+        let iceberg_schema = table.metadata().current_schema().clone();
+        let target_file_size = table_props.write_target_file_size_bytes;
 
         tracing::info!(
-            "ingested {rows} rows into {fqn} from {} ({files_processed} files, {}ms)",
+            "table loaded, target_file_size = {} MB",
+            target_file_size / 1024 / 1024
+        );
+
+        let mut total_rows: u64 = 0;
+
+        for (i, file_path) in source_files.iter().enumerate() {
+            let file_start = std::time::Instant::now();
+
+            // ── Build writer chain ────────────────────────────────────
+            let parquet_builder = ParquetWriterBuilder::from_table_properties(
+                &table_props,
+                iceberg_schema.clone(),
+            )
+            .with_match_mode(iceberg::arrow::FieldMatchMode::Name);
+            let location_gen = ice(DefaultLocationGenerator::new(table.metadata()))?;
+            let file_name_gen = DefaultFileNameGenerator::new(
+                uuid::Uuid::new_v4().to_string(),
+                None,
+                DataFileFormat::Parquet,
+            );
+            let rolling_builder = RollingFileWriterBuilder::new(
+                parquet_builder,
+                target_file_size,
+                file_io.clone(),
+                location_gen,
+                file_name_gen,
+            );
+            let data_file_builder = DataFileWriterBuilder::new(rolling_builder);
+
+            // Build the actual writer
+            let mut writer = ice(data_file_builder.build(None).await)?;
+
+            // ── Stream source parquet → writer ────────────────────────
+            let ctx = ice(self.datalake.get_ctx_with_partitions(1).await)?;
+            let file_spec = IngestionSpec {
+                source_path: file_path.clone(),
+                ..spec.clone()
+            };
+            let (df, _) = self.read_source(&ctx, &file_spec).await?;
+            let mut stream = df.execute_stream().await?;
+
+            let mut file_rows: u64 = 0;
+            let mut batch_count = 0u32;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                file_rows += batch.num_rows() as u64;
+                writer.write(batch).await
+                    .map_err(|e| anyhow::anyhow!("writer error: {e}"))?;
+                batch_count += 1;
+            }
+            drop(stream);
+            drop(ctx);
+
+            // ── Close writer → collect data files ─────────────────────
+            let data_files = writer.close().await
+                .map_err(|e| anyhow::anyhow!("writer close error: {e}"))?;
+
+            total_rows += file_rows;
+
+            tracing::info!(
+                "[{}/{}] {} — {file_rows} rows, {} data files, {} batches ({}ms, total {total_rows})",
+                i + 1, source_files.len(),
+                std::path::Path::new(file_path).file_name().unwrap_or_default().to_string_lossy(),
+                data_files.len(),
+                batch_count,
+                file_start.elapsed().as_millis(),
+            );
+
+            // ── Commit via Transaction::fast_append ───────────────────
+            let tx = Transaction::new(&table);
+            let action = tx.fast_append().add_data_files(data_files);
+            action
+                .apply(tx)
+                .map_err(|e| anyhow::anyhow!("apply error: {e}"))?
+                .commit(rest_catalog.as_ref())
+                .await
+                .map_err(|e| anyhow::anyhow!("commit error: {e}"))?;
+        }
+
+        let fqn = ident.sql();
+        tracing::info!(
+            "ingested {total_rows} rows into {fqn} from {} ({files_processed} files, {}ms)",
             spec.source_path, start.elapsed().as_millis()
         );
 
@@ -145,7 +257,7 @@ impl IngestionExecutor {
         }
 
         Ok(IngestionOutcome {
-            rows_written: rows as u64,
+            rows_written: total_rows,
             files_processed,
             duration_ms: start.elapsed().as_millis(),
             skipped: false,
@@ -153,14 +265,57 @@ impl IngestionExecutor {
     }
 
     /// Read source files into a DataFrame based on the format.
+    ///
+    /// For parquet sources with Utf8View columns (DataFusion ≥42 default), we
+    /// re-read with an explicit Utf8 schema so the Arrow decoder produces Utf8
+    /// arrays directly — no temp file, no `collect()`, fully streaming.
     async fn read_source(
         &self,
         ctx: &SessionContext,
         spec: &IngestionSpec,
-    ) -> anyhow::Result<datafusion::dataframe::DataFrame> {
+    ) -> anyhow::Result<(datafusion::dataframe::DataFrame, Option<PathBuf>)> {
         let df = match spec.source_format {
             SourceFormat::Parquet => {
-                ctx.read_parquet(&spec.source_path, ParquetReadOptions::default()).await?
+                // First read infers the schema (reads parquet footer only, no data).
+                let df = ctx
+                    .read_parquet(&spec.source_path, ParquetReadOptions::default())
+                    .await?;
+
+                // If any string columns came back as Utf8View, re-read with an
+                // explicit Utf8 schema so iceberg-rust can consume the batches
+                // without any cast or materialisation.
+                let has_utf8view = df
+                    .schema()
+                    .fields()
+                    .iter()
+                    .any(|f| f.data_type() == &DataType::Utf8View);
+
+                if has_utf8view {
+                    let orig = df.schema().inner();
+                    let utf8_schema = Schema::new(
+                        orig.fields()
+                            .iter()
+                            .map(|f| {
+                                if f.data_type() == &DataType::Utf8View {
+                                    Field::new(f.name(), DataType::Utf8, f.is_nullable())
+                                } else {
+                                    f.as_ref().clone()
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    tracing::debug!("re-reading parquet with Utf8 schema (avoiding Utf8View)");
+                    ctx.read_parquet(
+                        &spec.source_path,
+                        ParquetReadOptions {
+                            schema: Some(&utf8_schema),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                } else {
+                    df
+                }
             }
             SourceFormat::Csv | SourceFormat::Tsv => {
                 let csv_opts = spec.csv_options.clone().unwrap_or_default();
@@ -178,75 +333,7 @@ impl IngestionExecutor {
             }
         };
 
-        // Cast Utf8View columns to Utf8 — DataFusion ≥42 reads parquet string
-        // columns as Utf8View, but iceberg-rust expects Utf8 for writes.
-        // SQL CAST is optimized away by DataFusion's planner, so we must
-        // physically materialize: collect batches, cast Arrow arrays, register
-        // as a MemTable.
-        let needs_cast = df
-            .schema()
-            .fields()
-            .iter()
-            .any(|f| f.data_type() == &datafusion::arrow::datatypes::DataType::Utf8View);
-
-        if needs_cast {
-            tracing::debug!("physically casting Utf8View → Utf8 for Iceberg compatibility");
-            let orig_schema = df.schema().clone();
-            let batches = df.collect().await?;
-            let cast_schema = datafusion::arrow::datatypes::SchemaRef::new(
-                datafusion::arrow::datatypes::Schema::new(
-                    orig_schema
-                        .fields()
-                        .iter()
-                        .map(|f| {
-                            if f.data_type() == &datafusion::arrow::datatypes::DataType::Utf8View {
-                                datafusion::arrow::datatypes::Field::new(
-                                    f.name(),
-                                    datafusion::arrow::datatypes::DataType::Utf8,
-                                    f.is_nullable(),
-                                )
-                            } else {
-                                f.as_ref().clone()
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                ),
-            );
-
-            let mut casted_batches = Vec::with_capacity(batches.len());
-            for batch in &batches {
-                let arrays: Vec<std::sync::Arc<dyn datafusion::arrow::array::Array>> = batch
-                    .columns()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, col)| {
-                        if batch.schema().field(i).data_type()
-                            == &datafusion::arrow::datatypes::DataType::Utf8View
-                        {
-                            datafusion::arrow::compute::cast(col, &datafusion::arrow::datatypes::DataType::Utf8)
-                                .unwrap_or_else(|_| col.clone())
-                        } else {
-                            col.clone()
-                        }
-                    })
-                    .collect();
-                casted_batches.push(
-                    datafusion::arrow::record_batch::RecordBatch::try_new(
-                        cast_schema.clone(),
-                        arrays,
-                    )?,
-                );
-            }
-
-            let provider =
-                datafusion::datasource::MemTable::try_new(cast_schema, vec![casted_batches])?;
-            ctx.register_table("__cast_src", std::sync::Arc::new(provider))?;
-            let result = ctx.table("__cast_src").await?;
-            ctx.deregister_table("__cast_src")?;
-            Ok(result)
-        } else {
-            Ok(df)
-        }
+        Ok((df, None))
     }
 
     /// Create an Iceberg table with optional partition spec.
@@ -275,16 +362,74 @@ impl IngestionExecutor {
     }
 }
 
-/// Count files matching a path (best-effort).
-fn count_source_files(path: &str) -> u64 {
+/// Expand a source path (which may contain glob wildcards) into individual
+/// file paths.  Handles:
+/// - Literal file path → single-element vec
+/// - Glob like `/dir/*.parquet` → all matching files, sorted
+/// - Directory → all files within, sorted
+fn expand_source_files(path: &str) -> Vec<String> {
     let p = std::path::Path::new(path);
+
+    // Literal file
     if p.is_file() {
-        return 1;
+        return vec![path.to_string()];
     }
+
+    // Check if path contains glob characters
+    if path.contains('*') || path.contains('?') {
+        // Split into directory + pattern
+        let parent = p.parent().unwrap_or(std::path::Path::new("."));
+        let pattern = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            let mut files: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .filter(|e| {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    glob_match(pattern, &name)
+                })
+                .map(|e| e.path().to_string_lossy().to_string())
+                .collect();
+            files.sort();
+            return files;
+        }
+    }
+
+    // Directory: list all files
     if p.is_dir() {
-        return std::fs::read_dir(p)
-            .map(|entries| entries.filter(|e| e.as_ref().map(|e| e.path().is_file()).unwrap_or(false)).count() as u64)
-            .unwrap_or(1);
+        if let Ok(entries) = std::fs::read_dir(p) {
+            let mut files: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .map(|e| e.path().to_string_lossy().to_string())
+                .collect();
+            files.sort();
+            return files;
+        }
     }
-    1
+
+    Vec::new()
+}
+
+/// Simple glob matcher supporting `*` (any chars) and `?` (single char).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_match_inner(&p, &t)
+}
+
+fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
+    match (pattern.first(), text.first()) {
+        (None, None) => true,
+        (Some('?'), Some(_)) => glob_match_inner(&pattern[1..], &text[1..]),
+        (Some('*'), _) => {
+            // Try matching zero or more characters
+            glob_match_inner(&pattern[1..], text)
+                || text.first().map_or(false, |_| glob_match_inner(pattern, &text[1..]))
+        }
+        (Some(&pc), Some(&tc)) if pc == tc => glob_match_inner(&pattern[1..], &text[1..]),
+        _ => false,
+    }
 }
