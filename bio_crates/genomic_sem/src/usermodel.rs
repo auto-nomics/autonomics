@@ -45,6 +45,8 @@ impl Default for UserModelConfig {
 pub struct UserModelResult {
     pub modelfit: ModelFit,
     pub results: Vec<ParamResult>,
+    /// Model-implied covariance matrix from unstandardized fit.
+    pub sem_implied: Mat<f64>,
 }
 
 /// Model fit statistics.
@@ -173,7 +175,7 @@ pub fn usermodel(covstruc: &Covstruc, config: &UserModelConfig) -> Result<UserMo
         srmr: sem_result.srmr,
     };
 
-    Ok(UserModelResult { modelfit, results })
+    Ok(UserModelResult { modelfit, results, sem_implied: sem_result.implied })
 }
 
 /// Find which trait indices are used in the model.
