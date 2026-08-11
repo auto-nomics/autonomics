@@ -337,21 +337,11 @@ struct AddDataArgs {
     #[arg(long, default_value = "create_if_not_exists")]
     mode: String,
 
-    /// Restore source from archive before ingest (requires --archive-remote).
+    /// Archive source to cloud AND ingest into Iceberg in one step.
+    /// Reads ARCHIVE_REMOTE and ARCHIVE_BUCKET env vars for cloud config.
+    /// Archive path is auto-derived as $ARCHIVE_BUCKET/<schema>/<table>/.
     #[arg(long)]
-    restore_before: bool,
-
-    /// Archive source after successful ingest (requires --archive-remote).
-    #[arg(long)]
-    archive_after: bool,
-
-    /// rclone remote for source archiving, e.g. "aliyun".
-    #[arg(long)]
-    archive_remote: Option<String>,
-
-    /// rclone remote path for source archiving, e.g. "autonomics-data/gwas/".
-    #[arg(long)]
-    archive_path: Option<String>,
+    archive: bool,
 
     /// CSV delimiter character (default: ','). For tsv, '\t' is used.
     #[arg(long)]
@@ -451,60 +441,67 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 _ => None,
             };
 
+            // Resolve archive config: --archive flag + env vars.
+            let archive_spec = if a.archive {
+                let remote = std::env::var("ARCHIVE_REMOTE")
+                    .map_err(|_| color_eyre::eyre::eyre!(
+                        "--archive requires ARCHIVE_REMOTE env var (e.g. 'aliyun')"
+                    ))?;
+                let bucket = std::env::var("ARCHIVE_BUCKET")
+                    .map_err(|_| color_eyre::eyre::eyre!(
+                        "--archive requires ARCHIVE_BUCKET env var (e.g. 'autonomics-data')"
+                    ))?;
+                // Auto-derive archive path: bucket/schema/table/
+                let remote_path = format!("{}/{}/", a.schema, a.table);
+                Some(ArchiveSpec { remote, remote_path: format!("{bucket}/{remote_path}"), checksum: true })
+            } else {
+                None
+            };
+
+            // For archiving, resolve the base directory (strip glob wildcards)
+            // so rclone copies the actual directory.
+            let archive_local_path = {
+                let p = std::path::Path::new(&a.source);
+                let mut dir = p.parent().unwrap_or(p);
+                while !dir.is_dir() {
+                    dir = match dir.parent() {
+                        Some(p) => p,
+                        None => break,
+                    };
+                }
+                dir.to_path_buf()
+            };
+
             // Build the ingestion spec.
-            let mut spec = IngestionSpec {
+            let src_name = if archive_spec.is_some() {
+                Some(format!("source.{}", a.name.strip_prefix("iceberg.").unwrap_or(&a.name)))
+            } else {
+                None
+            };
+
+            let spec = IngestionSpec {
                 source_path: a.source.clone(),
                 source_format: format,
                 partition_by: a.partition.clone(),
                 mode,
-                restore_before: a.restore_before,
-                archive_after: a.archive_after,
-                source_resource: None,
+                restore_before: false,
+                archive_after: false,
+                source_resource: src_name.clone(),
                 csv_options,
             };
 
-            // Optional archive spec for the source.
-            let archive_spec = match (&a.archive_remote, &a.archive_path) {
-                (Some(remote), Some(path)) => Some(ArchiveSpec {
-                    remote: remote.clone(),
-                    remote_path: path.clone(),
-                    checksum: true,
-                }),
-                (Some(_), None) | (None, Some(_)) => {
-                    return Err(color_eyre::eyre::eyre!(
-                        "--archive-remote and --archive-path must both be set (or both omitted)"
-                    ))
+            // Register source FilePath resource (for archive linkage).
+            if let Some(ref sn) = src_name {
+                if let Some(ref aspec) = archive_spec {
+                    let src_entry = ResourceEntry::new(
+                        sn.clone(),
+                        ResourceKind::FilePath,
+                        &format!("Source files for {}", a.name),
+                        ResourceAddress::path(&archive_local_path),
+                    )
+                    .with_archive(aspec.clone());
+                    catalog.register(src_entry)?;
                 }
-                _ => None,
-            };
-
-            // If archive spec is set, also register a source resource for
-            // restore/archive linkage.
-            if let Some(ref aspec) = archive_spec {
-                let src_name = format!("source.{}", a.name.strip_prefix("iceberg.").unwrap_or(&a.name));
-                // For archiving, use the base directory (strip glob wildcards)
-                // so rclone copies the actual directory, not a literal glob pattern.
-                let archive_path = {
-                    let p = std::path::Path::new(&a.source);
-                    // Walk up until we find a real directory (strip **/*.ext etc.)
-                    let mut dir = p.parent().unwrap_or(p);
-                    while !dir.is_dir() {
-                        dir = match dir.parent() {
-                            Some(p) => p,
-                            None => break,
-                        };
-                    }
-                    dir.to_path_buf()
-                };
-                let src_entry = ResourceEntry::new(
-                    src_name.clone(),
-                    ResourceKind::FilePath,
-                    &format!("Source files for {}", a.name),
-                    ResourceAddress::path(&archive_path),
-                )
-                .with_archive(aspec.clone());
-                catalog.register(src_entry)?;
-                spec.source_resource = Some(src_name);
             }
 
             // Register the target IcebergTable entry.
@@ -516,19 +513,14 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
             )
             .with_ingestion(spec);
 
-            // Apply optional metadata + tags for self-describing entries.
             if !a.metadata.is_empty() {
-                entry_builder = entry_builder.with_metadata(
-                    a.metadata.iter().cloned().collect(),
-                );
+                entry_builder = entry_builder.with_metadata(a.metadata.iter().cloned().collect());
             }
             if !a.tag.is_empty() {
                 entry_builder = entry_builder.with_tags(a.tag.clone());
             }
 
-            let entry = entry_builder;
-
-            catalog.register(entry)?;
+            catalog.register(entry_builder)?;
             catalog.persist().await;
 
             println!("✓ Registered resource '{}'", a.name);
@@ -547,10 +539,46 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
             if !a.tag.is_empty() {
                 println!("  tags: {}", a.tag.join(", "));
             }
-            if let Some(aspec) = &archive_spec {
+            if let Some(ref aspec) = archive_spec {
                 println!("  archive: {}:{}", aspec.remote, aspec.remote_path);
             }
-            println!("\nTo ingest: autonomics-tui data ingest -r {}", a.name);
+
+            // ── If --archive: execute archive + ingest in one shot ──────
+            if a.archive {
+                let Some(ref src_name) = src_name else { unreachable!() };
+
+                // Step 1: Archive source to cloud.
+                println!("\n[1/2] Archiving source…");
+                match catalog.archive(src_name).await {
+                    Ok(o) => println!("  ✓ {} files, {} bytes, {:.1}s",
+                        o.files_transferred, o.size_bytes, o.duration_ms as f64 / 1000.0),
+                    Err(e) => {
+                        println!("  ✗ archive failed: {e}");
+                        println!("\nResource registered but archive/ingest incomplete.");
+                        println!("Retry: autonomics-tui data archive -r {src_name}");
+                        return Ok(());
+                    }
+                }
+
+                // Step 2: Ingest into Iceberg.
+                println!("\n[2/2] Ingesting into Iceberg…");
+                let datalake = Arc::new(datalake::Datalake::new());
+                let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
+                match executor.ingest(&a.name).await {
+                    Ok(o) if o.skipped => println!("  ⊘ skipped (table already has data)"),
+                    Ok(o) => println!("  ✓ {} rows, {} files, {:.1}s",
+                        o.rows_written, o.files_processed, o.duration_ms as f64 / 1000.0),
+                    Err(e) => {
+                        println!("  ✗ ingest failed: {e}");
+                        println!("\nSource archived ✓ but ingest incomplete.");
+                        println!("Retry: autonomics-tui data ingest -r {}", a.name);
+                        return Ok(());
+                    }
+                }
+                println!("\n✓ Done — registered + archived + ingested.");
+            } else {
+                println!("\nTo ingest: autonomics-tui data ingest -r {}", a.name);
+            }
             return Ok(());
         }
 

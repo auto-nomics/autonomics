@@ -337,9 +337,7 @@ impl Session {
                             "Background task '{name}' (#{seq}) completed with error:\n{content}"
                         )
                     } else {
-                        format!(
-                            "Background task '{name}' (#{seq}) completed.\nResult:\n{content}"
-                        )
+                        format!("Background task '{name}' (#{seq}) completed.\nResult:\n{content}")
                     };
                     let _ = self.memory.remember(Message::user(note));
                 }
@@ -696,7 +694,7 @@ impl Session {
         // passes and the next iteration begins.
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
 
-        tracing::debug!(?tool_results, "tool execution results");
+        // tracing::debug!(?tool_results, "tool execution results");
 
         for tr in &tool_results {
             self.shared.send_event(AgentEvent::ToolResult {

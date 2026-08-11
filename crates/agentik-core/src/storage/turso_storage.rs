@@ -63,7 +63,7 @@ use agentik_types::AgentPlan;
 
 use crate::storage::{
     AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
-    PersistedAgentGraph, ProfileOverrides, RelationKind, StorageError,
+    PersistedAgentGraph, RelationKind, StorageError,
 };
 
 /// Turso-backed implementation of [`AgentStorage`].
@@ -911,7 +911,9 @@ impl AgentStorage for TursoAgentStorage {
                  WHERE path = ?4",
                 params_from_iter([
                     Value::Text(status_json.to_string()),
-                    last_event.map(|s| Value::Text(s.to_string())).unwrap_or(Value::Null),
+                    last_event
+                        .map(|s| Value::Text(s.to_string()))
+                        .unwrap_or(Value::Null),
                     Value::Integer(now),
                     Value::Text(path.to_string()),
                 ]),
@@ -931,9 +933,7 @@ impl AgentStorage for TursoAgentStorage {
         Ok(())
     }
 
-    async fn list_persisted_agents(
-        &self,
-    ) -> Result<Vec<PersistedAgentGraph>, StorageError> {
+    async fn list_persisted_agents(&self) -> Result<Vec<PersistedAgentGraph>, StorageError> {
         let mut rows = self
             .conn
             .query(
@@ -955,10 +955,7 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Null => None,
                         other => {
                             return Err(turso::Error::ToSqlConversionFailure(
-                                format!(
-                                    "expected TEXT or NULL at column 1, got {other:?}"
-                                )
-                                .into(),
+                                format!("expected TEXT or NULL at column 1, got {other:?}").into(),
                             )
                             .into());
                         }
@@ -976,10 +973,7 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Null => None,
                         other => {
                             return Err(turso::Error::ToSqlConversionFailure(
-                                format!(
-                                    "expected TEXT or NULL at column 5, got {other:?}"
-                                )
-                                .into(),
+                                format!("expected TEXT or NULL at column 5, got {other:?}").into(),
                             )
                             .into());
                         }
@@ -1894,7 +1888,10 @@ mod tests {
         store.create_profile(child2.clone()).await.unwrap();
 
         // Unrelated root profile.
-        store.create_profile(sample_profile("writer")).await.unwrap();
+        store
+            .create_profile(sample_profile("writer"))
+            .await
+            .unwrap();
 
         let children = store.list_child_profiles("researcher").await.unwrap();
         assert_eq!(children.len(), 2);
@@ -2200,7 +2197,10 @@ mod tests {
 
         // Removing again is idempotent (no error).
         store.remove_agent_graph_entry("/root/q").await.unwrap();
-        store.remove_agent_graph_entry("/root/never_existed").await.unwrap();
+        store
+            .remove_agent_graph_entry("/root/never_existed")
+            .await
+            .unwrap();
         assert!(store.list_persisted_agents().await.unwrap().is_empty());
     }
 
