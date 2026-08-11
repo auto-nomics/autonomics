@@ -80,12 +80,13 @@ pub fn logistic_regression(
 
 pub struct NbResult {
     pub predictions: Vec<usize>,
+    pub probabilities: Vec<f64>,
 }
 
 pub fn gaussian_nb(data: &Mat<f64>, labels: &[usize]) -> Result<NbResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
-    use linfa_bayes::GaussianNb;
+    use linfa_bayes::{GaussianNb, NaiveBayes};
 
     let (nrows, _) = data.shape();
     if nrows == 0 {
@@ -109,7 +110,19 @@ pub fn gaussian_nb(data: &Mat<f64>, labels: &[usize]) -> Result<NbResult> {
     let predicted = model.predict(dataset.records());
     let predictions: Vec<usize> = predicted.iter().copied().collect();
 
-    Ok(NbResult { predictions })
+    // Compute posterior probabilities P(class=1|x) via predict_proba
+    let (proba_matrix, classes) = model.predict_proba(dataset.records().view());
+    // classes is sorted; find column for class 1
+    let class1_col = classes
+        .iter()
+        .position(|&c| *c == 1usize)
+        .unwrap_or_else(|| classes.len().saturating_sub(1));
+    let probabilities: Vec<f64> = proba_matrix.column(class1_col).iter().copied().collect();
+
+    Ok(NbResult {
+        predictions,
+        probabilities,
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -118,6 +131,7 @@ pub fn gaussian_nb(data: &Mat<f64>, labels: &[usize]) -> Result<NbResult> {
 
 pub struct KnnResult {
     pub predictions: Vec<usize>,
+    pub probabilities: Vec<f64>,
 }
 
 pub fn knn_classify(
@@ -138,41 +152,50 @@ pub fn knn_classify(
         });
     }
 
-    let predictions: Vec<usize> = (0..n_test)
-        .map(|i| {
-            let test_point: Vec<f64> = (0..n_features).map(|j| test_data[(i, j)]).collect();
-            // Compute distances to all training points
-            let mut dists: Vec<(f64, usize)> = (0..n_train)
-                .map(|t| {
-                    let train_point: Vec<f64> =
-                        (0..n_features).map(|j| train_data[(t, j)]).collect();
-                    let d: f64 = test_point
-                        .iter()
-                        .zip(&train_point)
-                        .map(|(a, b)| (a - b).powi(2))
-                        .sum::<f64>()
-                        .sqrt();
-                    (d, train_labels[t])
-                })
-                .collect();
-            dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut predictions = Vec::with_capacity(n_test);
+    let mut probabilities = Vec::with_capacity(n_test);
 
-            // Majority vote among k nearest
-            let k = k.min(dists.len());
-            let mut vote_counts: std::collections::HashMap<usize, usize> =
-                std::collections::HashMap::new();
-            for (_, label) in dists.iter().take(k) {
-                *vote_counts.entry(*label).or_insert(0) += 1;
-            }
-            vote_counts
-                .into_iter()
-                .max_by_key(|(_, c)| *c)
-                .map(|(l, _)| l)
-                .unwrap_or(0)
-        })
-        .collect();
+    for i in 0..n_test {
+        let test_point: Vec<f64> = (0..n_features).map(|j| test_data[(i, j)]).collect();
+        // Compute distances to all training points
+        let mut dists: Vec<(f64, usize)> = (0..n_train)
+            .map(|t| {
+                let train_point: Vec<f64> =
+                    (0..n_features).map(|j| train_data[(t, j)]).collect();
+                let d: f64 = test_point
+                    .iter()
+                    .zip(&train_point)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                (d, train_labels[t])
+            })
+            .collect();
+        dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    Ok(KnnResult { predictions })
+        // Majority vote among k nearest
+        let kk = k.min(dists.len());
+        let mut vote_counts: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for (_, label) in dists.iter().take(kk) {
+            *vote_counts.entry(*label).or_insert(0) += 1;
+        }
+        let pred = vote_counts
+            .into_iter()
+            .max_by_key(|(_, c)| *c)
+            .map(|(l, _)| l)
+            .unwrap_or(0);
+        predictions.push(pred);
+
+        // Probability = fraction of class-1 neighbors among k nearest
+        let n_pos: usize = dists.iter().take(kk).filter(|(_, l)| *l != 0).count();
+        probabilities.push(n_pos as f64 / kk as f64);
+    }
+
+    Ok(KnnResult {
+        predictions,
+        probabilities,
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -181,6 +204,26 @@ pub fn knn_classify(
 
 pub struct DecisionTreeResult {
     pub predictions: Vec<usize>,
+    pub probabilities: Vec<f64>,
+}
+
+/// Traverse the tree to the leaf for a single sample.
+fn dt_traverse_to_leaf<'a>(
+    sample: &[f64],
+    node: &'a linfa_trees::TreeNode<f64, usize>,
+) -> &'a linfa_trees::TreeNode<f64, usize> {
+    if node.is_leaf() {
+        node
+    } else {
+        let (feat, threshold, _) = node.split();
+        let children = node.children();
+        // linfa-trees convention: feature < threshold → left, else → right
+        if sample[feat] < threshold {
+            dt_traverse_to_leaf(sample, children[0].as_ref().unwrap())
+        } else {
+            dt_traverse_to_leaf(sample, children[1].as_ref().unwrap())
+        }
+    }
 }
 
 pub fn decision_tree(
@@ -194,7 +237,7 @@ pub fn decision_tree(
     use linfa::traits::{Fit, Predict};
     use linfa_trees::DecisionTree;
 
-    let (nrows, _) = data.shape();
+    let (nrows, ncols) = data.shape();
     if nrows == 0 {
         return Err(ClassifyError::Empty);
     }
@@ -218,7 +261,42 @@ pub fn decision_tree(
     let predicted = model.predict(dataset.records());
     let predictions: Vec<usize> = predicted.iter().copied().collect();
 
-    Ok(DecisionTreeResult { predictions })
+    // Compute leaf-level class proportions as probability estimates.
+    // For each training sample, traverse to its leaf and record class counts;
+    // then for each sample's leaf, P(class=1|leaf) = n_pos / (n_pos + n_neg).
+    let mut leaf_stats: std::collections::HashMap<usize, (usize, usize)> =
+        std::collections::HashMap::new();
+    for i in 0..nrows {
+        let sample: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
+        let leaf = dt_traverse_to_leaf(&sample, model.root_node());
+        let key = leaf as *const _ as usize;
+        let entry = leaf_stats.entry(key).or_insert((0, 0));
+        if labels[i] != 0 {
+            entry.1 += 1;
+        } else {
+            entry.0 += 1;
+        }
+    }
+
+    let probabilities: Vec<f64> = (0..nrows)
+        .map(|i| {
+            let sample: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
+            let leaf = dt_traverse_to_leaf(&sample, model.root_node());
+            let key = leaf as *const _ as usize;
+            let (n_neg, n_pos) = leaf_stats.get(&key).copied().unwrap_or((0, 0));
+            let total = n_neg + n_pos;
+            if total == 0 {
+                0.5
+            } else {
+                n_pos as f64 / total as f64
+            }
+        })
+        .collect();
+
+    Ok(DecisionTreeResult {
+        predictions,
+        probabilities,
+    })
 }
 
 #[cfg(test)]
@@ -246,6 +324,9 @@ mod tests {
         let test = mat_from_row_major(2, 2, &[0.1, 0.1, 5.2, 5.3]);
         let result = knn_classify(&train, &labels, &test, 3).unwrap();
         assert_eq!(result.predictions, vec![0, 1]);
+        assert_eq!(result.probabilities.len(), 2);
+        assert!(result.probabilities[0] < 0.5); // near class 0 cluster
+        assert!(result.probabilities[1] > 0.5); // near class 1 cluster
     }
 
     #[test]
@@ -253,6 +334,8 @@ mod tests {
         let (data, labels) = make_binary_data();
         let result = gaussian_nb(&data, &labels).unwrap();
         assert_eq!(result.predictions, labels);
+        assert_eq!(result.probabilities.len(), labels.len());
+        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
     }
 
     #[test]

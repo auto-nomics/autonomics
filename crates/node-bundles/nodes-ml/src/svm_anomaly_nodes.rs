@@ -154,6 +154,8 @@ impl DagNode for SvmNode {
                 .map(|&p| p as u32)
                 .collect::<Vec<_>>(),
         )));
+        fields.push(Arc::new(Field::new("probability", DataType::Float64, false)));
+        arrays.push(Arc::new(Float64Array::from(result.probabilities)));
         emit_batch(
             ctx,
             RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| {
@@ -277,6 +279,8 @@ impl DagNode for AdaBoostNode {
                 .map(|&p| p as u32)
                 .collect::<Vec<_>>(),
         )));
+        fields.push(Arc::new(Field::new("probability", DataType::Float64, false)));
+        arrays.push(Arc::new(Float64Array::from(result.probabilities)));
         emit_batch(
             ctx,
             RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| {

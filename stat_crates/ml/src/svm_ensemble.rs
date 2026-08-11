@@ -25,6 +25,74 @@ pub type Result<T> = std::result::Result<T, SvmEnsembleError>;
 
 pub struct SvmResult {
     pub predictions: Vec<usize>,
+    pub probabilities: Vec<f64>,
+}
+
+/// Platt scaling: fit sigmoid `P(y=1|f) = 1/(1+exp(A*f+B))` to decision values.
+///
+/// Uses Newton-Raphson on the cross-entropy loss (same algorithm as libsvm).
+/// Returns coefficients `(A, B)`.
+fn platt_scale(decision_values: &[f64], labels: &[bool]) -> (f64, f64) {
+    let n_pos = labels.iter().filter(|&&l| l).count() as f64;
+    let n_neg = labels.iter().filter(|&&l| !l).count() as f64;
+    if n_pos == 0.0 {
+        return (1.0, 50.0); // always predict 0
+    }
+    if n_neg == 0.0 {
+        return (-1.0, 50.0); // always predict 1
+    }
+
+    let hi_target = (n_pos + 1.0) / (n_pos + 2.0);
+    let lo_target = 1.0 / (n_neg + 2.0);
+
+    let mut a = 0.0f64;
+    let mut b = ((n_neg + 1.0) / (n_pos + 1.0)).ln();
+
+    for _ in 0..100 {
+        let (mut h11, mut h22, mut h21) = (1e-3f64, 1e-3f64, 0.0f64);
+        let (mut g1, mut g2) = (0.0f64, 0.0f64);
+
+        for (&f, &label) in decision_values.iter().zip(labels) {
+            let t = if label { hi_target } else { lo_target };
+            let f_apb = f * a + b;
+            let (p, d2) = if f_apb >= 0.0 {
+                let e = (-f_apb).exp();
+                (e / (1.0 + e), e / (1.0 + e).powi(2))
+            } else {
+                let e = f_apb.exp();
+                (1.0 / (1.0 + e), e / (1.0 + e).powi(2))
+            };
+            h11 += f * f * d2;
+            h22 += d2;
+            h21 += f * d2;
+            g1 += f * (t - p);
+            g2 += t - p;
+        }
+
+        // Solve 2×2 Hessian system
+        let det = h11 * h22 - h21 * h21;
+        if det.abs() < 1e-300 {
+            break;
+        }
+        let da = (h22 * g1 - h21 * g2) / det;
+        let db = (-h21 * g1 + h11 * g2) / det;
+        a += da;
+        b += db;
+        if da.abs() < 1e-10 && db.abs() < 1e-10 {
+            break;
+        }
+    }
+    (a, b)
+}
+
+/// Numerically stable sigmoid `1 / (1 + exp(A*x + B))`.
+fn sigmoid(f: f64, a: f64, b: f64) -> f64 {
+    let f_apb = a * f + b;
+    if f_apb >= 0.0 {
+        (-f_apb).exp() / (1.0 + (-f_apb).exp())
+    } else {
+        1.0 / (1.0 + f_apb.exp())
+    }
 }
 
 pub fn svm_classify(data: &Mat<f64>, labels: &[usize], kernel: &str, c: f64) -> Result<SvmResult> {
@@ -39,7 +107,7 @@ pub fn svm_classify(data: &Mat<f64>, labels: &[usize], kernel: &str, c: f64) -> 
 
     let x = faer_to_ndarray(data);
     let y: Vec<bool> = labels.iter().map(|&l| l != 0).collect();
-    let dataset = DatasetBase::new(x, ndarray::Array1::from(y));
+    let dataset = DatasetBase::new(x, ndarray::Array1::from(y.clone()));
 
     let mut params = Svm::<_, bool>::params().pos_neg_weights(1.0, 1.0);
     match kernel {
@@ -64,7 +132,19 @@ pub fn svm_classify(data: &Mat<f64>, labels: &[usize], kernel: &str, c: f64) -> 
     let predicted = model.predict(dataset.records());
     let predictions: Vec<usize> = predicted.iter().map(|&p| if p { 1 } else { 0 }).collect();
 
-    Ok(SvmResult { predictions })
+    // Compute decision values and apply Platt scaling for probability estimates
+    let decision_values: Vec<f64> = dataset
+        .records()
+        .outer_iter()
+        .map(|row| model.weighted_sum(&row) - model.rho)
+        .collect();
+    let (pa, pb) = platt_scale(&decision_values, &y);
+    let probabilities: Vec<f64> = decision_values.iter().map(|&f| sigmoid(f, pa, pb)).collect();
+
+    Ok(SvmResult {
+        predictions,
+        probabilities,
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -162,21 +242,26 @@ pub fn adaboost(
         }
     }
 
-    // Predict using weighted ensemble
-    let predictions: Vec<usize> = (0..nrows)
-        .map(|i| {
-            let mut score = 0.0;
-            for &(feat, thresh, dir, alpha) in &weak_learners {
-                let val = data[(i, feat)];
-                let pred = if val * dir > thresh * dir { 1.0 } else { -1.0 };
-                score += alpha * pred;
-            }
-            if score > 0.0 { 1 } else { 0 }
-        })
-        .collect();
+    // Predict using weighted ensemble + compute probability via sigmoid of raw score
+    let mut predictions = Vec::with_capacity(nrows);
+    let mut probabilities = Vec::with_capacity(nrows);
+    for i in 0..nrows {
+        let mut score = 0.0;
+        for &(feat, thresh, dir, alpha) in &weak_learners {
+            let val = data[(i, feat)];
+            let pred = if val * dir > thresh * dir { 1.0 } else { -1.0 };
+            score += alpha * pred;
+        }
+        predictions.push(if score > 0.0 { 1 } else { 0 });
+        // SAMME.R-style sigmoid: P(y=1|x) = sigmoid(score)
+        probabilities.push(sigmoid(score, 1.0, 0.0));
+    }
 
     let _ = learning_rate; // TODO: apply learning_rate scaling
-    Ok(SvmResult { predictions })
+    Ok(SvmResult {
+        predictions,
+        probabilities,
+    })
 }
 
 #[cfg(test)]
@@ -196,6 +281,8 @@ mod tests {
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let result = svm_classify(&data, &labels, "linear", 1.0).unwrap();
         assert_eq!(result.predictions.len(), 8);
+        assert_eq!(result.probabilities.len(), 8);
+        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
     }
 
     #[test]
@@ -210,5 +297,7 @@ mod tests {
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let result = adaboost(&data, &labels, 10, 1.0).unwrap();
         assert_eq!(result.predictions.len(), 8);
+        assert_eq!(result.probabilities.len(), 8);
+        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
     }
 }
