@@ -7501,6 +7501,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nodes-rd"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "datalake",
+ "rand 0.9.5",
+ "rdpower",
+ "rdrobust",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "nodes-regression"
 version = "0.1.0"
 dependencies = [
@@ -9516,6 +9536,32 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rdpower"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "faer",
+ "rdrobust",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "rdrobust"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
