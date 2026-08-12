@@ -482,7 +482,6 @@ grf_forest_t* grf_train_causal(
     bool stabilize_splits,
     const grf_train_opts_t* opts
 ) {
-    (void)stabilize_splits; // grf's causal_trainer is regression under residualization
     try {
         configure_runtime(opts);
         auto weights_aug = maybe_augment_weights(data, n_rows, n_cols, sample_weights,
@@ -491,22 +490,27 @@ grf_forest_t* grf_train_causal(
                     sample_weights ? n_cols + 1 : n_cols);
         d.set_outcome_index(outcome_index);
         d.set_treatment_index(treatment_index);
+        d.set_instrument_index(treatment_index); // causal = instrumental with Z = W
         if (sample_weights) d.set_weight_index(n_cols);
         auto options = make_options(opts);
         grf::runtime_context.forest_name = "causal";
-        // The R-learner first stage (Y.hat, W.hat) is computed at a higher
-        // layer in the Rust DAG node; we just train on (Y-Y.hat, W-W.hat).
-        auto trainer = grf::regression_trainer();
+        // R's causal_forest is instrumental_trainer with reduced_form_weight = 0
+        // and instrument = treatment. The R-learner first stage (Y.hat, W.hat)
+        // is computed at a higher layer in the Rust DAG node; we train on
+        // (Y - Y.hat, W - W.hat).
+        auto trainer = grf::instrumental_trainer(0.0, stabilize_splits);
         auto forest = trainer.train(d, options);
 
         std::vector<grf::Prediction> oob;
         if (opts->compute_oob_predictions) {
             grf::runtime_context.verbose_stream = nullptr;
-            auto predictor = grf::regression_predictor(opts->num_threads);
+            auto predictor = grf::instrumental_predictor(opts->num_threads);
             oob = predictor.predict_oob(forest, d, false);
         }
         auto* h = new grf_forest_t;
         h->kind = "causal";
+        h->treatment_index = treatment_index;
+        h->stabilize_splits = stabilize_splits;
         h->forest = std::make_unique<grf::Forest>(std::move(forest));
         if (!oob.empty()) {
             copy_predictions_to_buffer(oob, h->oob_predictions, h->oob_pred_length);
@@ -941,9 +945,9 @@ size_t grf_forest_oob_num_samples(const grf_forest_t* forest) {
 
 static grf::ForestPredictor make_predictor(const grf_forest_t* forest, uint num_threads) {
     const std::string& kind = forest->kind;
-    if (kind == "regression" || kind == "causal") {
+    if (kind == "regression") {
         return grf::regression_predictor(num_threads);
-    } else if (kind == "instrumental") {
+    } else if (kind == "causal" || kind == "instrumental") {
         return grf::instrumental_predictor(num_threads);
     } else if (kind == "quantile") {
         return grf::quantile_predictor(num_threads, forest->quantiles);
@@ -994,6 +998,10 @@ grf_predictions_t* grf_predict(
         if (forest->kind == "survival") {
             train.set_censor_index(forest->censor_index);
         }
+        if (forest->kind == "causal" || forest->kind == "instrumental") {
+            train.set_treatment_index(forest->treatment_index);
+            train.set_instrument_index(forest->treatment_index);
+        }
         grf::Data test(test_data, n_test_rows, n_test_cols);
         grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict(*forest->forest, train, test, estimate_variance);
@@ -1030,6 +1038,10 @@ grf_predictions_t* grf_predict_oob(
         train.set_outcome_index(train_outcome_index);
         if (forest->kind == "survival") {
             train.set_censor_index(forest->censor_index);
+        }
+        if (forest->kind == "causal" || forest->kind == "instrumental") {
+            train.set_treatment_index(forest->treatment_index);
+            train.set_instrument_index(forest->treatment_index);
         }
         grf::ForestPredictor predictor = make_predictor(forest, num_threads);
         auto preds = predictor.predict_oob(*forest->forest, train, estimate_variance);
@@ -1093,6 +1105,8 @@ uint8_t* grf_forest_serialize(const grf_forest_t* forest, size_t* out_len) {
         // round-tripped forest can still relabel/predict identically.
         append_vec(buf, forest->failure_times);
         write_size(buf, forest->censor_index);
+        // Causal forest: treatment column index (instrument = treatment).
+        write_size(buf, forest->treatment_index);
 
         auto* out = static_cast<uint8_t*>(std::malloc(buf.size()));
         if (!out) { set_error("malloc failed"); return nullptr; }
@@ -1149,10 +1163,15 @@ grf_forest_t* grf_forest_deserialize(const uint8_t* buf, size_t len) {
         // reader treats a clean EOF as "not stored" to stay forward-tolerant).
         std::vector<double> failure_times;
         size_t censor_index = 0;
+        size_t treatment_index = 0;
         if (read_vec(p, end, failure_times)) {
             if (!read_size(p, end, censor_index)) {
                 set_error("survival grid malformed");
                 return nullptr;
+            }
+            // Causal forest treatment_index (may not be present in older blobs).
+            if (!read_size(p, end, treatment_index)) {
+                treatment_index = 0; // tolerate older blobs
             }
         }
 
@@ -1162,6 +1181,7 @@ grf_forest_t* grf_forest_deserialize(const uint8_t* buf, size_t len) {
         h->oob_predictions = std::move(oob_predictions);
         h->failure_times = std::move(failure_times);
         h->censor_index = censor_index;
+        h->treatment_index = treatment_index;
         // grf::Forest's ctor takes a non-const lvalue ref to the trees vector;
         // bind to a named local first.
         std::vector<std::unique_ptr<grf::Tree>> trees_lvalue = std::move(trees);

@@ -584,3 +584,57 @@ fn boosted_regression_forest_smoke() {
     assert!(out.oob_error.is_finite());
     assert!(out.oob_error >= 0.0);
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Causal forest correctness: verify CATE OOB mean and AIPW ATE recover
+// the true ATE on generate_causal_data (n=2000, p=5).
+// This catches the regression_trainer-vs-instrumental_trainer bug.
+// ──────────────────────────────────────────────────────────────────────
+
+#[test]
+fn causal_forest_ate_correctness() {
+    use grf::nodes::{CausalForestSpec, AverageTreatmentEffectSpec, GenerateCausalDataSpec};
+    use arrow_array::Array;
+
+    let batch = GenerateCausalDataSpec { n: 2000, p: 5, seed: 42 }
+        .generate().expect("gen");
+
+    let y_col = batch.column_by_name("y").unwrap();
+    let w_col = batch.column_by_name("w").unwrap();
+    let tau_col = batch.column_by_name("true_tau").unwrap();
+    let n = batch.num_rows();
+    let true_tau: Vec<f64> = (0..n)
+        .map(|i| tau_col.as_any().downcast_ref::<Float64Array>().unwrap().value(i))
+        .collect();
+    let true_ate: f64 = true_tau.iter().sum::<f64>() / n as f64;
+
+    let spec = CausalForestSpec {
+        x_column_names: vec!["x0".into(),"x1".into(),"x2".into(),"x3".into(),"x4".into()],
+        y_column_name: "y".into(),
+        w_column_name: "w".into(),
+        y_hat: None, w_hat: None,
+        stabilize_splits: true,
+        sample_weights_column: None,
+        options: NodeTrainOptions::default(),
+    };
+    let out = spec.fit(std::slice::from_ref(&batch)).expect("fit");
+    let oob = out.oob_predictions.as_ref().expect("oob");
+    let pred_mean: f64 = oob.values.iter().sum::<f64>() / oob.values.len() as f64;
+    eprintln!("True ATE={true_ate:.4}, OOB CATE mean={pred_mean:.4}");
+    assert!(
+        (pred_mean - true_ate).abs() < 0.3,
+        "CATE mean {pred_mean:.4} too far from true ATE {true_ate:.4}"
+    );
+
+    let ate = AverageTreatmentEffectSpec {
+        target_sample: "all".into(),
+        method: "AIPW".into(),
+        subset: None,
+        clusters: None,
+    }.estimate(&out).expect("ate");
+    eprintln!("AIPW ATE={:.4} ± {:.4} (true={true_ate:.4})", ate.estimate, ate.std_err);
+    assert!(
+        (ate.estimate - true_ate).abs() < 0.3,
+        "AIPW ATE {} too far from true ATE {true_ate}", ate.estimate
+    );
+}
