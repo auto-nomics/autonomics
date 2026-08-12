@@ -46,13 +46,46 @@ fn restore_terminal() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Global flag set by the panic hook so the main render loop can detect
+/// a panic on a *background* thread and stop drawing before the restored
+/// terminal gets garbled.
+pub(crate) static PANIC_OCCURRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Install a panic hook that restores the terminal before running the
 /// original hook. This ensures the user's shell is usable even if the TUI
-/// panics. Modeled after codex's `tui.rs:set_panic_hook`.
+/// panics.
+///
+/// **Thread-safety**: `Once` guarantees `restore_terminal` runs exactly
+/// once even when multiple threads panic simultaneously. After restoring
+/// we flush stdout so that any buffered TUI draw commands are fully
+/// drained *before* the panic message is written to stderr — otherwise
+/// the two streams interleave and produce garbled output.
 fn set_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal();
+        PANIC_OCCURRED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        static RESTORE: std::sync::Once = std::sync::Once::new();
+        RESTORE.call_once(|| {
+            let _ = restore_terminal();
+            // Drain any buffered TUI output on stdout so it doesn't
+            // interleave with the stderr panic message below.
+            let _ = std::io::stdout().flush();
+        });
+
+        // Always print a readable panic message to stderr — the logging
+        // hook (installed by `init_logging`) writes to the log file only
+        // in normal mode, so without this the crash would be completely
+        // silent to the user.
+        eprintln!();
+        eprintln!("══════════════════════════════════════════════");
+        eprintln!("  Autonomics TUI panicked");
+        eprintln!("══════════════════════════════════════════════");
+        eprintln!("{info}");
+        eprintln!();
+
+        // Delegate to the logging hook (tracing + backtrace capture).
         hook(info);
     }));
 }
@@ -630,6 +663,15 @@ impl App {
 
                 // ── Fixed-rate render tick ──
                 _ = render_tick.tick() => {
+                    // If a background thread panicked, the global panic
+                    // hook has already restored the terminal. Stop drawing
+                    // immediately so we don't write TUI escape codes onto
+                    // the restored terminal and garble the panic output.
+                    if PANIC_OCCURRED.load(std::sync::atomic::Ordering::SeqCst) {
+                        self.should_quit = true;
+                        break Ok(());
+                    }
+
                     let active_status = self.state.active_status();
                     let show_animation = active_status.is_active()
                         || active_status == AgentStatus::Waiting;

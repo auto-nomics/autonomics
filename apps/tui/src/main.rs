@@ -1,4 +1,3 @@
-use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,34 +27,19 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
     );
 
-    // Retain the previously-installed hook so it can be re-invoked once the
-    // TUI's own panic handling is finalised; currently we log only.
-    let _default = panic::take_hook();
-    if nocapture {
-        // In nocapture mode: log the panic AND print to stderr (default hook).
-        std::panic::set_hook(Box::new(move |info| {
-            let bt = std::backtrace::Backtrace::force_capture();
-            tracing::error!(
-                target: "panic",
-                payload = %info,
-                backtrace = %bt,
-                "thread panicked"
-            );
-            // Re-invoke the default hook so the panic message is visible on stderr.
-            _default(info);
-        }));
-    } else {
-        std::panic::set_hook(Box::new(move |info| {
-            let bt = std::backtrace::Backtrace::force_capture();
-            tracing::error!(
-                target: "panic",
-                payload = %info,
-                backtrace = %bt,
-                "thread panicked"
-            );
-            // _default(info); // 保留默认行为(打到 stderr)
-        }));
-    }
+    // The TUI's `set_panic_hook` (app.rs) wraps this hook and handles
+    // terminal restoration + readable stderr output. Here we only need
+    // to log the full panic + backtrace to the log file. The readable
+    // message to stderr is handled by `set_panic_hook`.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        tracing::error!(
+            target: "panic",
+            payload = %info,
+            backtrace = %bt,
+            "thread panicked"
+        );
+    }));
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new("tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug")
