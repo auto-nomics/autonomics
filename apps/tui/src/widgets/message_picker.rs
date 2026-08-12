@@ -755,28 +755,65 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
 }
 
 /// Send an OSC 52 escape sequence to set the clipboard via the terminal
-/// emulator. Writes to `/dev/tty` so it works even when stdout is
-/// redirected or captured (e.g. by ratatui's rendering loop).
+/// emulator.
+///
+/// Tries `/dev/tty` first (so the sequence reaches the terminal even
+/// when stdout is buffered by ratatui's rendering loop). If `/dev/tty`
+/// is unavailable (e.g. headless container without a controlling
+/// terminal), falls back to `stdout` — which still works because the
+/// TUI's stdout is connected to the terminal emulator.
+///
+/// When running inside tmux (`$TMUX` is set), the sequence is wrapped
+/// in a DCS passthrough envelope so tmux forwards it to the outer
+/// terminal.
 fn osc52_copy(text: &str) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    // OSC 52 spec: ESC ] 52 ; <clipboard> ; <base64 data> BEL
-    //   clipboard = 'c' (clipboard selection) or 'p' (primary).
-    //   We target the clipboard selection ('c') so paste works with
-    //   Ctrl+V / Cmd+V in the user's GUI editor.
-    let encoded = STANDARD.encode(text.as_bytes());
-    let seq = format!("\x1b]52;c;{encoded}\x07");
-
-    // Write to /dev/tty so the sequence reaches the terminal even if
-    // stdout is in raw/alternate-screen mode or piped through tmux.
-    let mut tty = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|e| format!("/dev/tty open failed: {e}"))?;
     use std::io::Write;
-    tty.write_all(seq.as_bytes())
-        .map_err(|e| format!("OSC 52 write failed: {e}"))?;
-    tty.flush()
-        .map_err(|e| format!("OSC 52 flush failed: {e}"))
+
+    const OSC52_MAX_BYTES: usize = 100_000;
+    if text.len() > OSC52_MAX_BYTES {
+        return Err(format!(
+            "OSC 52 payload too large ({} bytes; max {OSC52_MAX_BYTES})",
+            text.len()
+        ));
+    }
+
+    let encoded = STANDARD.encode(text.as_bytes());
+    let in_tmux = std::env::var_os("TMUX").is_some();
+    let seq = if in_tmux {
+        // DCS passthrough: ESC P tmux ; ESC ESC ] 52 ; c ; <data> BEL ESC \
+        format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}\x07\x1b\\")
+    } else {
+        format!("\x1b]52;c;{encoded}\x07")
+    };
+
+    // Strategy 1: /dev/tty (preferred — independent of stdout buffering).
+    #[cfg(unix)]
+    {
+        match std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            Ok(mut tty) => {
+                if let Err(e) = tty.write_all(seq.as_bytes()) {
+                    tracing::debug!("OSC 52 /dev/tty write failed: {e}; trying stdout");
+                } else if let Err(e) = tty.flush() {
+                    tracing::debug!("OSC 52 /dev/tty flush failed: {e}; trying stdout");
+                } else {
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                tracing::debug!("OSC 52 /dev/tty open failed: {e}; trying stdout");
+            }
+        }
+    }
+
+    // Strategy 2: stdout fallback (when /dev/tty is unavailable).
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(seq.as_bytes())
+        .map_err(|e| format!("OSC 52 stdout write failed: {e}"))?;
+    stdout
+        .flush()
+        .map_err(|e| format!("OSC 52 stdout flush failed: {e}"))
 }
 
 /// Pipe `text` to the first available clipboard CLI tool.
