@@ -9545,7 +9545,9 @@ dependencies = [
 name = "rddensity"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "faer",
+ "rand 0.9.5",
  "rdrobust",
  "schemars 1.2.2",
  "serde",
@@ -9558,6 +9560,7 @@ dependencies = [
 name = "rdlocrand"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rdrobust",
@@ -9572,6 +9575,7 @@ dependencies = [
 name = "rdmulti"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "rdrobust",
  "schemars 1.2.2",
  "serde",

@@ -475,15 +475,31 @@ pub fn rddensity(cfg: &RdDensityConfig) -> Result<RdDensityResult, RdDensityErro
     }
 
     // Bandwidth
-    let (hl, hr) = match cfg.h {
+    let (mut hl, mut hr) = match cfg.h {
         Some((hl, hr)) => (hl, hr),
         None => {
             let (hl, hr) = rdbwdensity(&x, c, q, cfg.kernel, cfg.vce);
-            // For "comb" bwselect with unrestricted: median(each, diff, sum)
-            // Simplified: use the computed bandwidth
             (hl, hr)
         }
     };
+
+    // Safeguard: ensure bandwidth is positive and finite
+    let iqr_val = {
+        let mut sorted = x.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let q25 = sorted[n / 4];
+        let q75 = sorted[3 * n / 4];
+        (q75 - q25).abs().max(1e-10)
+    };
+    let sd_val = {
+        let mean = x.iter().sum::<f64>() / n as f64;
+        let var = x.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+        var.sqrt().max(1e-10)
+    };
+    let scale_bw = sd_val.min(iqr_val / 1.349);
+    let fallback_bw = scale_bw * 2.0; // reasonable default bandwidth
+    if !hl.is_finite() || hl <= 0.0 { hl = fallback_bw; }
+    if !hr.is_finite() || hr <= 0.0 { hr = fallback_bw; }
 
     // Center at cutoff
     let xc: Vec<f64> = x.iter().map(|xi| xi - c).collect();
