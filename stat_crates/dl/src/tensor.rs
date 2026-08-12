@@ -1,91 +1,70 @@
-//! Tensor — a dense matrix wrapper around `faer::Mat<f64>`.
+//! Tensor — a dense 2-D matrix of `f64` values backed by a flat `Vec<f64>`.
 //!
-//! Unlike a full autodiff framework, this crate uses **explicit forward/backward
-//! per layer** (micrograd style).  The `Tensor` type is simply a shaped matrix
-//! with convenience methods — no computation graph is recorded.
+//! This is the **public API tensor** used at the boundary between the `dl`
+//! crate and the DAG node layer (`nodes-dl`). Internally, model training and
+//! inference use Burn tensors (`Tensor<BurnBackend, D>`); conversions happen
+//! in [`crate::data`].
 
-use faer::Mat;
+// ─── Tensor ────────────────────────────────────────────────────────────
 
-/// A 2-D tensor of `f64` values stored in row-major logical layout.
-///
-/// Internally backed by `faer::Mat<f64>` (column-major), but all public APIs
-/// work with `(row, col)` indexing and row-major slices so that callers never
-/// need to think about faer's memory layout.
+/// A row-major 2-D tensor of `f64` values.
 #[derive(Debug, Clone)]
 pub struct Tensor {
-    pub data: Mat<f64>,
+    pub(crate) data: Vec<f64>,
+    pub(crate) nrows: usize,
+    pub(crate) ncols: usize,
 }
 
 impl Tensor {
     /// Create from row-major flat data.
     pub fn from_rows(nrows: usize, ncols: usize, data: &[f64]) -> Self {
         assert_eq!(data.len(), nrows * ncols, "data length mismatch");
-        Self {
-            data: Mat::from_fn(nrows, ncols, |i, j| data[i * ncols + j]),
-        }
+        Self { data: data.to_vec(), nrows, ncols }
     }
 
-    /// Create an all-zeros tensor.
+    /// All-zeros tensor.
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
-        Self {
-            data: Mat::zeros(nrows, ncols),
-        }
+        Self { data: vec![0.0; nrows * ncols], nrows, ncols }
     }
 
-    /// Shape as `(nrows, ncols)`.
+    /// Shape `(nrows, ncols)`.
     pub fn shape(&self) -> (usize, usize) {
-        self.data.shape()
+        (self.nrows, self.ncols)
     }
 
     /// Number of rows.
-    pub fn nrows(&self) -> usize {
-        self.data.nrows()
-    }
+    pub fn nrows(&self) -> usize { self.nrows }
 
     /// Number of columns.
-    pub fn ncols(&self) -> usize {
-        self.data.ncols()
-    }
+    pub fn ncols(&self) -> usize { self.ncols }
 
-    /// Element-wise access.
+    /// Element access.
     pub fn at(&self, row: usize, col: usize) -> f64 {
-        self.data[(row, col)]
+        self.data[row * self.ncols + col]
     }
 
-    /// Mutable element-wise access.
+    /// Mutable element access.
     pub fn set(&mut self, row: usize, col: usize, val: f64) {
-        self.data[(row, col)] = val;
+        self.data[row * self.ncols + col] = val;
     }
 
-    /// Extract row `i` as a `Vec<f64>`.
+    /// Row `i` as `Vec<f64>`.
     pub fn row(&self, i: usize) -> Vec<f64> {
-        (0..self.ncols()).map(|j| self.data[(i, j)]).collect()
+        (0..self.ncols).map(|j| self.at(i, j)).collect()
     }
 
-    /// Extract column `j` as a `Vec<f64>`.
+    /// Column `j` as `Vec<f64>`.
     pub fn col(&self, j: usize) -> Vec<f64> {
-        (0..self.nrows()).map(|i| self.data[(i, j)]).collect()
+        (0..self.nrows).map(|i| self.at(i, j)).collect()
     }
 
-    /// Create from a `Mat<f64>`.
-    pub fn from_mat(mat: Mat<f64>) -> Self {
-        Self { data: mat }
-    }
-
-    /// Borrow the underlying `Mat<f64>`.
-    pub fn as_mat(&self) -> &Mat<f64> {
+    /// Flat row-major data.
+    pub fn as_flat(&self) -> &[f64] {
         &self.data
-    }
-
-    /// Consume into the underlying `Mat<f64>`.
-    pub fn into_mat(self) -> Mat<f64> {
-        self.data
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Tensor conversion helpers
-// ═══════════════════════════════════════════════════════════════════════
+// ─── Free helpers ──────────────────────────────────────────────────────
 
 /// Build a `Tensor` from a slice of row vectors.
 pub fn from_row_vecs(rows: &[Vec<f64>]) -> Tensor {
@@ -98,11 +77,9 @@ pub fn from_row_vecs(rows: &[Vec<f64>]) -> Tensor {
     Tensor::from_rows(nrows, ncols, &flat)
 }
 
-/// Convert a `Tensor` back to row-major `Vec<Vec<f64>>`.
+/// Convert a `Tensor` to row-major `Vec<Vec<f64>>`.
 pub fn to_row_vecs(t: &Tensor) -> Vec<Vec<f64>> {
-    (0..t.nrows())
-        .map(|i| t.row(i))
-        .collect()
+    (0..t.nrows()).map(|i| t.row(i)).collect()
 }
 
 #[cfg(test)]
@@ -129,7 +106,17 @@ mod tests {
         let rows = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
         let t = from_row_vecs(&rows);
         assert_eq!(t.shape(), (2, 2));
-        let back = to_row_vecs(&t);
-        assert_eq!(back, rows);
+        assert_eq!(to_row_vecs(&t), rows);
+    }
+
+    #[test]
+    fn test_zeros() {
+        let t = Tensor::zeros(3, 4);
+        assert_eq!(t.shape(), (3, 4));
+        for i in 0..3 {
+            for j in 0..4 {
+                assert_eq!(t.at(i, j), 0.0);
+            }
+        }
     }
 }

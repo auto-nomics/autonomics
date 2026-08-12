@@ -1,7 +1,7 @@
 //! StandardScaler — compute and apply per-feature standardisation.
 //!
 //! Stores mean and std for each feature column so that the same transform
-//! can be re-applied at inference time.  Serialised as part of `DLModelArtifact`.
+//! can be re-applied at inference time. Serialised as part of `DLModelArtifact`.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ pub struct StandardScaler {
 }
 
 impl StandardScaler {
-    /// Fit from a `(n_samples × n_features)` tensor.
+    /// Fit from a `(n_samples x n_features)` tensor.
     pub fn fit(data: &Tensor) -> Self {
         let (nrows, ncols) = data.shape();
         let mut mean = vec![0.0; ncols];
@@ -33,14 +33,13 @@ impl StandardScaler {
                 let d = data.at(i, j) - mean[j];
                 var += d * d;
             }
-            // Population std with epsilon to avoid division by zero.
             std[j] = (var / nrows as f64).sqrt().max(1e-8);
         }
 
         Self { mean, std }
     }
 
-    /// Transform in-place: returns a new standardised tensor.
+    /// Transform: returns a new standardised tensor.
     pub fn transform(&self, data: &Tensor) -> Tensor {
         let (nrows, ncols) = data.shape();
         let mut out = Tensor::zeros(nrows, ncols);
@@ -50,13 +49,6 @@ impl StandardScaler {
             }
         }
         out
-    }
-
-    /// Fit + transform in one call.
-    pub fn fit_transform(data: &Tensor) -> Self {
-        let scaler = Self::fit(data);
-        // Return scaler; caller calls transform separately.
-        scaler
     }
 
     /// Number of features.
@@ -71,15 +63,10 @@ mod tests {
 
     #[test]
     fn test_scaler_fit_transform() {
-        let data = Tensor::from_rows(
-            4,
-            2,
-            &[1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
-        );
+        let data = Tensor::from_rows(4, 2, &[1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0]);
         let scaler = StandardScaler::fit(&data);
         let transformed = scaler.transform(&data);
 
-        // Each column should have mean ≈ 0 and std ≈ 1.
         for j in 0..2 {
             let mut mean = 0.0;
             let mut var = 0.0;
@@ -102,7 +89,6 @@ mod tests {
         let data = Tensor::from_rows(3, 1, &[5.0, 5.0, 5.0]);
         let scaler = StandardScaler::fit(&data);
         let transformed = scaler.transform(&data);
-        // std clamped to 1e-8, so (5-5)/1e-8 = 0.
         for i in 0..3 {
             assert_eq!(transformed.at(i, 0), 0.0);
         }

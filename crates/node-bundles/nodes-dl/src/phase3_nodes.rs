@@ -581,22 +581,11 @@ impl DagNode for EmbedNode {
             Architecture::Mlp => {
                 let mut model: MlpModel = serde_json::from_str(&artifact.checkpoint_json)
                     .map_err(|e| common::err("dl_embed", format!("deserialize MLP: {e}")))?;
-                // Extract last hidden layer output as embeddings.
-                let x_scaled = model.scaler.as_ref().map(|s| s.transform(&x)).unwrap_or_else(|| x.clone());
-                let n_hidden = model.layers.len().saturating_sub(1);
-                if n_hidden > 0 {
-                    let mut h = x_scaled;
-                    for l in 0..n_hidden {
-                        h = model.layers[l].forward(&h);
-                        if l < model.activations.len() {
-                            h = model.activations[l].forward(&h);
-                        }
-                    }
-                    for d in 0..h.ncols() {
-                        let col: Vec<f64> = (0..h.nrows()).map(|i| h.at(i, d)).collect();
-                        fields.push(Arc::new(Field::new(format!("embed_{d}"), DataType::Float64, false)));
-                        arrays.push(Arc::new(Float64Array::from(col)));
-                    }
+                let h = dl::embed_mlp(&mut model, &x);
+                for d in 0..h.ncols() {
+                    let col: Vec<f64> = (0..h.nrows()).map(|i| h.at(i, d)).collect();
+                    fields.push(Arc::new(Field::new(format!("embed_{d}"), DataType::Float64, false)));
+                    arrays.push(Arc::new(Float64Array::from(col)));
                 }
             }
             _ => {
