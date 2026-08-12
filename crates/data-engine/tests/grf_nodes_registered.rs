@@ -9,6 +9,17 @@ use datalake::Datalake;
 use dag_core::registry::NodeRegistry;
 
 fn registry() -> NodeRegistry {
+    // The datalake config reads these env vars at construction; the test
+    // doesn't connect to a real catalog, so dummies are fine.
+    if std::env::var("ICEBERG_REST_URI").is_err() {
+        // SAFETY: single-threaded test, no other code reads these vars
+        // concurrently.
+        unsafe {
+            std::env::set_var("ICEBERG_REST_URI", "http://localhost:8181/catalog");
+            std::env::set_var("ICEBERG_S3_ACCESS_KEY_ID", "test");
+            std::env::set_var("ICEBERG_S3_SECRET_ACCESS_KEY", "test");
+        }
+    }
     let ctx = SessionContext::new();
     data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
