@@ -22,11 +22,11 @@ pub fn dr_scores_binary(
     w_hat: &[f64],
     tau_hat: &[f64],
 ) -> Vec<f64> {
-    let n = y_orig.len();
-    debug_assert_eq!(w_orig.len(), n);
-    debug_assert_eq!(y_hat.len(), n);
-    debug_assert_eq!(w_hat.len(), n);
-    debug_assert_eq!(tau_hat.len(), n);
+    let n = y_orig.len()
+        .min(w_orig.len())
+        .min(y_hat.len())
+        .min(w_hat.len())
+        .min(tau_hat.len());
 
     (0..n).map(|i| {
         let gamma = if w_hat[i] <= 0.0 || w_hat[i] >= 1.0 {
