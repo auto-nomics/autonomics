@@ -69,15 +69,18 @@ fn platt_scale(decision_values: &[f64], labels: &[bool]) -> (f64, f64) {
             g2 += t - p;
         }
 
-        // Solve 2×2 Hessian system
+        // Solve 2×2 Hessian system: H * d = g.
+        // Our sigmoid is the Platt form p = 1/(1+exp(A*f+B)), so g1 = dL/dA
+        // where L is the cross-entropy loss.  The Newton step for *minimising*
+        // L is θ ← θ − H⁻¹·g, hence the minus sign below.
         let det = h11 * h22 - h21 * h21;
         if det.abs() < 1e-300 {
             break;
         }
         let da = (h22 * g1 - h21 * g2) / det;
         let db = (-h21 * g1 + h11 * g2) / det;
-        a += da;
-        b += db;
+        a -= da;
+        b -= db;
         if da.abs() < 1e-10 && db.abs() < 1e-10 {
             break;
         }
@@ -253,8 +256,9 @@ pub fn adaboost(
             score += alpha * pred;
         }
         predictions.push(if score > 0.0 { 1 } else { 0 });
-        // SAMME.R-style sigmoid: P(y=1|x) = sigmoid(score)
-        probabilities.push(sigmoid(score, 1.0, 0.0));
+        // P(y=1|x) = 1/(1+exp(-score)) — our `sigmoid(f, a, b)` computes
+        // 1/(1+exp(a*f+b)), so we pass a=-1 to get the standard logistic.
+        probabilities.push(sigmoid(score, -1.0, 0.0));
     }
 
     let _ = learning_rate; // TODO: apply learning_rate scaling
@@ -283,6 +287,13 @@ mod tests {
         assert_eq!(result.predictions.len(), 8);
         assert_eq!(result.probabilities.len(), 8);
         assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        // Verify probability direction: class-1 samples should have higher P
+        let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
+        let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;
+        assert!(
+            mean_pos > mean_neg,
+            "P(class=1) should be higher for class-1 samples, got pos={mean_pos} neg={mean_neg}"
+        );
     }
 
     #[test]
@@ -299,5 +310,12 @@ mod tests {
         assert_eq!(result.predictions.len(), 8);
         assert_eq!(result.probabilities.len(), 8);
         assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        // Verify probability direction: class-1 samples should have higher P
+        let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
+        let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;
+        assert!(
+            mean_pos > mean_neg,
+            "P(class=1) should be higher for class-1 samples, got pos={mean_pos} neg={mean_neg}"
+        );
     }
 }
