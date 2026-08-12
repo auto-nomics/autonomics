@@ -49,7 +49,9 @@ pub fn eigen_sym(mat: &Mat<f64>) -> (Vec<f64>, Mat<f64>) {
     let u = e.U();
     let sv = s.column_vector();
     let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_by(|&i, &j| sv[j].partial_cmp(&sv[i]).unwrap());
+    // Sort descending; use total_cmp to handle NaN gracefully (NaN sorts as
+    // largest, matching R's eigen which can produce NaN for degenerate inputs).
+    idx.sort_by(|&i, &j| sv[j].total_cmp(&sv[i]));
     let lambda: Vec<f64> = idx.iter().map(|&i| sv[i]).collect();
     let q = Mat::from_fn(n, n, |row, col| u[(row, idx[col])]);
     (lambda, q)

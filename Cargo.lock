@@ -2587,6 +2587,7 @@ dependencies = [
  "nodes-ml",
  "nodes-mr",
  "nodes-opengwas",
+ "nodes-rd",
  "nodes-regression",
  "nodes-sql",
  "nodes-survey",
@@ -7861,6 +7862,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleo"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5262af4c94921c2646c5ac6ff7900c2af9cbb08dc26a797e18130a7019c039d4"
+dependencies = [
+ "nucleo-matcher",
+ "parking_lot",
+ "rayon",
+]
+
+[[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9902,6 +9924,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
 dependencies = [
  "bitflags 2.13.1",
+ "chrono",
  "fallible-iterator",
  "fallible-streaming-iterator",
  "hashlink",
@@ -11735,6 +11758,7 @@ dependencies = [
  "agentik-types",
  "arboard",
  "arc-swap",
+ "base64 0.22.1",
  "bib-base",
  "chrono",
  "clap",
@@ -13054,6 +13078,37 @@ name = "wit-bindgen"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
+
+[[package]]
+name = "workflow-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "clap",
+ "color-eyre",
+ "crossterm",
+ "futures",
+ "nucleo",
+ "parking_lot",
+ "petgraph",
+ "ratatui",
+ "rusqlite",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
+ "uuid",
+]
 
 [[package]]
 name = "write16"

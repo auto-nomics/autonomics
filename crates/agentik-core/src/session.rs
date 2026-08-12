@@ -152,6 +152,34 @@ impl AgentShared {
         }
     }
 
+    /// Build a minimal `AgentShared` suitable for unit-testing Session /
+    /// add_message logic. No model, storage, persistence, or context provider
+    /// is wired up.
+    #[cfg(test)]
+    pub(crate) fn new_for_tests() -> Arc<Self> {
+        Arc::new(Self {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(ArcSwapOption::empty()),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            skill_runtime: None,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            tasks: Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            )),
+            event_tx: ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+            plan: Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                agentik_types::AgentPlan::new(),
+            ))),
+        })
+    }
+
     // ── Plan (first-class persistent task plan) ───────────
 
     /// Load a snapshot of the current plan.
@@ -217,6 +245,17 @@ pub struct Session {
 }
 
 impl Session {
+    /// Build a Session wired to a freshly-constructed `AgentShared`. Used
+    /// only by unit tests that exercise `remember` / `add_message` without a
+    /// full agent bootstrap.
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(
+        shared: Arc<AgentShared>,
+        _path: agentik_types::AgentPath,
+    ) -> Self {
+        Self::new(Uuid::new_v4(), shared)
+    }
+
     /// Create a new empty session.
     pub(crate) fn new(id: Uuid, shared: Arc<AgentShared>) -> Self {
         let toolset = Toolset::from_registry_with_tasks(
@@ -391,6 +430,14 @@ impl Session {
 
     /// Add a message to the conversation, ensuring tool_result blocks are
     /// placed adjacent to their corresponding tool_use blocks.
+    ///
+    /// Duplicate `tool_result` blocks for the same `tool_use_id` are
+    /// collapsed at insert time — the API rejects multiple tool_results for
+    /// the same id, and silently letting them in risks a 400 once the
+    /// request finally goes out. Keeping the *first* occurrence (the one
+    /// already in the conversation) is safer than keeping the new one,
+    /// because the existing block already matches what the conversation
+    /// expects the model to have seen.
     fn add_message(&mut self, msg: Message) -> Result<()> {
         let mut tool_results: Vec<(String, Option<String>, Option<bool>)> = Vec::new();
         let mut others_content_blocks: Vec<ContentBlock> = Vec::new();
@@ -413,6 +460,19 @@ impl Session {
         }
 
         for (tool_use_id, content, is_error) in tool_results {
+            // De-dupe: if a tool_result for this id already exists anywhere
+            // in the conversation, skip the new one. (The sanitisers in
+            // `agentik_sdk::model::sanitize` would also catch this, but
+            // stopping it at the entry point avoids needless churn and
+            // prevents the duplicate from ever reaching the WAL.)
+            if self.has_tool_result(&tool_use_id) {
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    "dropping duplicate tool_result at insert time"
+                );
+                continue;
+            }
+
             let tc_msg_index = self.get_tooluse_msg_index(&tool_use_id).ok_or(
                 error::Error::OrphanToolResult {
                     tool_use_id: tool_use_id.clone(),
@@ -447,6 +507,16 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// True when any message in the conversation already carries a
+    /// `tool_result` block for `tool_use_id`.
+    fn has_tool_result(&self, tool_use_id: &str) -> bool {
+        self.messages.iter().any(|m| {
+            m.content.iter().any(|c| {
+                matches!(c, ContentBlock::ToolResult { tool_use_id: id, .. } if id == tool_use_id)
+            })
+        })
     }
 
     /// Get index of message with a tool_use block matching `tool_call_id`.
@@ -1475,4 +1545,122 @@ fn build_compaction_prompt(head: &str, previous_summary: Option<&str>) -> String
          continue the work. Respond with plain text only — do NOT call any tools.\n\n\
          Conversation to summarize:\n{head}"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message_ext::AgentMessageExt;
+    use agentik_types::messages::ContentBlock;
+
+    /// Regression for `add_message` collapsing duplicate `tool_result` blocks
+    /// when the unconditional `.push()` in the next-message branch would
+    /// otherwise leave two `tool_result` blocks for the same `tool_use_id`
+    /// in the conversation. Without this guard the next request would 400
+    /// with `each tool_use must have a single result`.
+    #[test]
+    fn add_message_drops_duplicate_tool_result_on_remember() {
+        let mut session = make_test_session();
+        session
+            .remember(Message::user("hello"))
+            .expect("first remember ok");
+        session
+            .remember(Message::assistant_tool_use(
+                "call_001",
+                "bash",
+                serde_json::json!({}),
+            ))
+            .expect("tool_use remember ok");
+
+        // First tool_result — this is the legitimate one.
+        session
+            .remember(Message::tool_result("call_001", "first", false))
+            .expect("first tool_result ok");
+
+        // Snapshot how many tool_result blocks for call_001 exist now.
+        let count_before = count_tool_results(&session.messages, "call_001");
+        assert_eq!(count_before, 1);
+
+        // Second remember with the same tool_use_id — must be dropped.
+        session
+            .remember(Message::tool_result("call_001", "second (duplicate)", false))
+            .expect("duplicate tool_result should not error");
+
+        let count_after = count_tool_results(&session.messages, "call_001");
+        assert_eq!(
+            count_after, 1,
+            "duplicate tool_result must be collapsed at insert time"
+        );
+        // And the *first* content should be preserved.
+        let first_body = session
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .find_map(|c| match c {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } if tool_use_id == "call_001" => Some(content.clone()),
+                _ => None,
+            })
+            .expect("at least one tool_result remains");
+        assert_eq!(first_body.as_deref(), Some("first"));
+    }
+
+    /// Two distinct `tool_use_id`s must both be retained — the dedup is
+    /// per-id, not "drop everything past the first".
+    #[test]
+    fn add_message_keeps_distinct_tool_results() {
+        let mut session = make_test_session();
+        session.remember(Message::user("hi")).unwrap();
+        session
+            .remember(Message {
+                id: "a".into(),
+                type_: "message".into(),
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "call_a".into(),
+                        name: "bash".into(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "call_b".into(),
+                        name: "bash".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            })
+            .unwrap();
+        session
+            .remember(Message::tool_result("call_a", "alpha", false))
+            .unwrap();
+        session
+            .remember(Message::tool_result("call_b", "beta", false))
+            .unwrap();
+        let a = count_tool_results(&session.messages, "call_a");
+        let b = count_tool_results(&session.messages, "call_b");
+        assert_eq!(a, 1);
+        assert_eq!(b, 1);
+    }
+
+    fn count_tool_results(msgs: &[Message], tool_use_id: &str) -> usize {
+        msgs.iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id: id, .. } if id == tool_use_id))
+            .count()
+    }
+
+    /// Construct a Session with no model / no storage / no events wired.
+    /// Sufficient for testing `remember` / `add_message` paths in isolation.
+    fn make_test_session() -> Session {
+        let shared = AgentShared::new_for_tests();
+        Session::new_for_tests(shared, agentik_types::AgentPath::root())
+    }
 }

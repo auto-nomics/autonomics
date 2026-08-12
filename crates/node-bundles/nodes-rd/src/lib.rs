@@ -25,3 +25,24 @@ pub use rdpower::*;
 pub use rd_extra::*;
 pub use rdrobust_node::*;
 pub use rdsampsi::*;
+
+use dag_core::{NodePlugin, NodeRegistry};
+
+/// Plugin entry point for all regression-discontinuity DAG nodes.
+pub struct Plugin;
+
+impl NodePlugin for Plugin {
+    fn name(&self) -> &'static str {
+        "rd"
+    }
+
+    fn register(&self, registry: &mut NodeRegistry) {
+        registry.register(Box::new(rdrobust_node::RdRobustNodeFactory));
+        registry.register(Box::new(rdpower::RdPowerNodeFactory));
+        registry.register(Box::new(rdsampsi::RdSampsiNodeFactory));
+        registry.register(Box::new(rdmde::RdMdeNodeFactory));
+        registry.register(Box::new(rd_extra::RdMcNodeFactory));
+        registry.register(Box::new(rd_extra::RdDensityNodeFactory));
+        registry.register(Box::new(rd_extra::RdRandInfNodeFactory));
+    }
+}

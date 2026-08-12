@@ -266,14 +266,29 @@ impl SessionPicker {
     pub fn new() -> Self {
         Self {
             accent: Color::Magenta,
-            popup_width: 70,
-            popup_height: 22,
-            list_width: 28,
+            popup_width: 0,
+            popup_height: 0,
+            list_width: 34,
         }
     }
 
     pub fn accent(mut self, c: Color) -> Self {
         self.accent = c;
+        self
+    }
+
+    pub fn popup_width(mut self, w: u16) -> Self {
+        self.popup_width = w;
+        self
+    }
+
+    pub fn popup_height(mut self, h: u16) -> Self {
+        self.popup_height = h;
+        self
+    }
+
+    pub fn list_width(mut self, w: u16) -> Self {
+        self.list_width = w;
         self
     }
 }

@@ -42,6 +42,8 @@ unicode-segmentation = "1.12"
 serde_json.workspace = true
 clap = { version = "4.6.1", features = ["derive"] }
 arc-swap.workspace = true
+arboard = "3.6"
+base64 = "0.22"
 
 [lints]
 workspace = true

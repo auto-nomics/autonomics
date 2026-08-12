@@ -1149,6 +1149,14 @@ impl App {
             return;
         }
 
+        // Message picker popup captures keys when visible. Sits below the
+        // session/profile/agent pickers so they remain authoritative when
+        // a higher-level picker is also open.
+        if self.state.message_picker.is_visible() {
+            self.handle_message_picker_key(key);
+            return;
+        }
+
         // Model config popup captures keys when visible.
         if self.state.model_config_visible {
             self.handle_model_config_key(key);
@@ -2151,6 +2159,9 @@ impl App {
                     self.state.display_settings.collapse_tool_results,
                 );
             }
+            CommandAction::CopyMessage => {
+                self.open_message_picker();
+            }
         }
     }
 
@@ -2160,6 +2171,76 @@ impl App {
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
             rusqlite::params![key, if value { "1" } else { "0" }],
         );
+    }
+
+    /// Open the message-copy picker. Snapshots every text-bearing chat
+    /// line from the active session so the picker survives mid-stream
+    /// mutations of the underlying `Vec`. No-op when there are no
+    /// text messages to copy.
+    fn open_message_picker(&mut self) {
+        let messages = self.state.active_tab_state().messages.clone();
+        let items = crate::widgets::message_picker::collect_text_messages(&messages);
+        if items.is_empty() {
+            tracing::info!("message picker: no text messages in active session");
+            return;
+        }
+        tracing::info!(
+            count = items.len(),
+            "opening message picker for clipboard copy"
+        );
+        self.state.message_picker.open_with(items);
+    }
+
+    /// Key handling while the message-copy picker is open.
+    ///
+    /// All keys are delegated to `MessagePickerState::handle_key`, which
+    /// forwards text-editing keys to the embedded `TextArea` and
+    /// intercepts Esc / Enter / Up / Down for popup control. The
+    /// `TextArea` provides cursor navigation (Left/Right/Home/End),
+    /// word deletion (Ctrl+W), undo/redo (Ctrl+Z), yank (Ctrl+Y), and
+    /// paste (Ctrl+V) within the search input.
+    fn handle_message_picker_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::message_picker::MessagePickerKeyOutcome;
+        let outcome = self.state.message_picker.handle_key(*key);
+        match outcome {
+            MessagePickerKeyOutcome::Close => {
+                self.state.message_picker.close();
+            }
+            MessagePickerKeyOutcome::CopySelected => {
+                if let Some(item) = self.state.message_picker.selected_item() {
+                    let preview = item.preview.clone();
+                    let role_tag = item.role.tag().to_string();
+                    let char_count = item.full_text.chars().count();
+                    self.state.message_picker.close();
+                    match crate::widgets::message_picker::copy_to_clipboard(&item.full_text) {
+                        Ok(()) => {
+                            tracing::info!(
+                                role = role_tag,
+                                chars = char_count,
+                                preview = %preview,
+                                "copied message to clipboard"
+                            );
+                            self.state.toasts.success(
+                                "Copied to clipboard",
+                                Some(format!("{char_count} chars • {preview}")),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                role = role_tag,
+                                error = %e,
+                                "failed to copy message to clipboard"
+                            );
+                            self.state.toasts.error(
+                                "Clipboard failed",
+                                Some(e),
+                            );
+                        }
+                    }
+                }
+            }
+            MessagePickerKeyOutcome::Consumed => {}
+        }
     }
 
     /// Key handling while the delete-agent confirmation popup is open.
@@ -2519,11 +2600,28 @@ impl App {
         // ── Session picker popup ──
         if self.state.session_picker.visible {
             use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::session_picker::SessionPicker::new().render(
+            crate::widgets::session_picker::SessionPicker::new()
+                .popup_width((frame.area().width * 85 / 100).max(80))
+                .popup_height((frame.area().height * 80 / 100).max(24))
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.session_picker,
+                );
+        }
+
+        // ── Message picker popup (top-most overlay) ──
+        if self.state.message_picker.is_visible() {
+            crate::widgets::message_picker::render_message_picker(
                 frame.area(),
                 frame.buffer_mut(),
-                &mut self.state.session_picker,
+                &mut self.state.message_picker,
             );
+            // Position the hardware cursor inside the search input so the
+            // user sees the caret where they are typing.
+            if let Some((cx, cy)) = self.state.message_picker.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+            }
         }
 
         // ── Name input popup ──
@@ -2546,6 +2644,10 @@ impl App {
                 &mut self.state.model_config_state,
             );
         }
+
+        // ── Toast notifications (top-most overlay, bottom-right corner) ──
+        self.state.toasts.tick();
+        self.state.toasts.render(frame.area(), frame.buffer_mut());
     }
 
     /// Key handling while the model config popup is open.

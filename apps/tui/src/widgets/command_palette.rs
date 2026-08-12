@@ -40,6 +40,8 @@ pub enum CommandAction {
     ToggleCollapseToolCalls,
     /// Toggle collapse for tool result blocks.
     ToggleCollapseToolResults,
+    /// Open the message picker to copy a chat message to the clipboard.
+    CopyMessage,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -208,6 +210,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "collapse fold hide tool result output response".into(),
             category: "view".into(),
             action: CommandAction::ToggleCollapseToolResults,
+        },
+        Command {
+            title: "Copy message".into(),
+            keywords: "copy clipboard snippet transcript chat pick select text message".into(),
+            category: "clipboard".into(),
+            action: CommandAction::CopyMessage,
         },
         Command {
             title: "Reload config".into(),

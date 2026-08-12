@@ -1,0 +1,78 @@
+[package]
+name = "workflow-editor"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Visual workflow editor with skill = DAG subgraph, TUI canvas, and unified Rust API."
+
+[dependencies]
+# Workspace deps
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+unicode-width.workspace = true
+futures.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# DAG / hashing
+petgraph = "0.8"
+blake3 = "1.8.5"
+
+# Persistence (rusqlite chosen over sqlx for workspace compatibility — `apps/tui`
+# already pins libsqlite3-sys 0.38, while sqlx 0.8 would demand an older
+# version; mixing both would break the link to native sqlite3).
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+parking_lot = "0.12"
+
+# IDs / time
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Errors / panic
+anyhow = "1"
+color-eyre = "0.6"
+
+# TUI (only used by the editor binary; library users don't pay for it)
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", optional = true, features = [
+    "event-stream",
+    "bracketed-paste",
+] }
+nucleo = { version = "0.5", optional = true }
+unicode-segmentation = { version = "1", optional = true }
+
+# CLI
+clap = { version = "4", features = ["derive"], optional = true }
+
+# Logging
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+
+[features]
+default = ["tui"]
+tui = [
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:nucleo",
+    "dep:unicode-segmentation",
+]
+cli = ["dep:clap", "dep:tracing-subscriber"]
+
+[lib]
+name = "workflow_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "workflow-editor"
+path = "src/bin/workflow_editor.rs"
+required-features = ["cli"]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

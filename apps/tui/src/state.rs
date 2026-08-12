@@ -807,6 +807,13 @@ pub struct AppState {
     pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
     pub name_input: crate::widgets::name_input::NameInputState,
     pub session_picker: crate::widgets::session_picker::SessionPickerState,
+    /// Message picker popup (Ctrl+P → "Copy message"). Lists text-bearing
+    /// messages from the active session and lets the user copy one to the
+    /// system clipboard.
+    pub message_picker: crate::widgets::message_picker::MessagePickerState,
+    /// Transient toast notifications (success / error / info / warning).
+    /// Auto-dismiss after a variant-specific timeout.
+    pub toasts: crate::widgets::toast::ToastManager,
     /// When `true`, the name input popup is collecting a **session name**
     /// (not an agent name). The Enter handler checks this flag.
     pub pending_session_name: bool,
@@ -847,6 +854,8 @@ impl Default for AppState {
             agent_picker: Default::default(),
             name_input: Default::default(),
             session_picker: Default::default(),
+            message_picker: Default::default(),
+            toasts: Default::default(),
             pending_session_name: false,
             pending_session_rename_id: None,
             pending_profile: None,

@@ -12,6 +12,7 @@ pub mod dimred_nodes;
 pub mod feat_select_nodes;
 pub mod metrics_nodes;
 pub mod model_nodes;
+pub mod predict_node;
 pub mod preprocess_nodes;
 pub mod split_nodes;
 pub mod supervised_nodes;
@@ -103,5 +104,8 @@ impl NodePlugin for Plugin {
         // ── Deep learning (2) ───────────────────────────────────────────────
         registry.register(Box::new(deep_nodes::MlpFactory));
         registry.register(Box::new(deep_nodes::AutoencoderFactory));
+
+        // ── Train/predict separation (1) ────────────────────────────────────
+        registry.register(Box::new(predict_node::PredictFactory));
     }
 }

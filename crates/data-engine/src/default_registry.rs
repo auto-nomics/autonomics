@@ -60,6 +60,8 @@ pub fn build_default_registry(
     // ── GRF bundle ────────────────────────────────────────────────────
     #[cfg(feature = "bundle-grf")]
     registry.register_plugin(&nodes_grf::Plugin);
+    #[cfg(feature = "bundle-rd")]
+    registry.register_plugin(&nodes_rd::Plugin);
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]

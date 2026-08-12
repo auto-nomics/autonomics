@@ -38,24 +38,36 @@ pub fn logistic_regression(
     alpha: f64,
     max_iter: usize,
 ) -> Result<LogisticResult> {
+    logistic_fit_predict(data, labels, data, alpha, max_iter)
+}
+
+/// Train logistic regression on `train_data`/`train_labels` and predict on
+/// `test_data`.  This enables proper train:test separation.
+pub fn logistic_fit_predict(
+    train_data: &Mat<f64>,
+    train_labels: &[usize],
+    test_data: &Mat<f64>,
+    alpha: f64,
+    max_iter: usize,
+) -> Result<LogisticResult> {
     use linfa::dataset::{AsTargets, DatasetBase};
     use linfa::traits::{Fit, Predict};
     use linfa_logistic::LogisticRegression;
 
-    let (nrows, _) = data.shape();
+    let (nrows, _) = train_data.shape();
     if nrows == 0 {
         return Err(ClassifyError::Empty);
     }
-    if labels.len() != nrows {
+    if train_labels.len() != nrows {
         return Err(ClassifyError::LabelMismatch {
-            labels: labels.len(),
+            labels: train_labels.len(),
             rows: nrows,
         });
     }
 
-    let x = faer_to_ndarray(data);
+    let x = faer_to_ndarray(train_data);
     // Convert labels to bool for binary logistic
-    let y: Vec<bool> = labels.iter().map(|&l| l != 0).collect();
+    let y: Vec<bool> = train_labels.iter().map(|&l| l != 0).collect();
     let dataset = DatasetBase::new(x, ndarray::Array1::from(y));
 
     let model = LogisticRegression::default()
@@ -64,7 +76,8 @@ pub fn logistic_regression(
         .fit(&dataset)
         .map_err(|e| ClassifyError::Linfa(e.to_string()))?;
 
-    let raw_probs = model.predict_probabilities(dataset.records());
+    let x_test = faer_to_ndarray(test_data);
+    let raw_probs = model.predict_probabilities(&x_test);
 
     // linfa-logistic's `predict_probabilities` returns P(positive_class), where
     // "positive_class" is the MORE FREQUENT label in the training data (not
@@ -98,34 +111,44 @@ pub struct NbResult {
 }
 
 pub fn gaussian_nb(data: &Mat<f64>, labels: &[usize]) -> Result<NbResult> {
+    gaussian_nb_fit_predict(data, labels, data)
+}
+
+/// Train Gaussian NB on `train_data`/`train_labels` and predict on `test_data`.
+pub fn gaussian_nb_fit_predict(
+    train_data: &Mat<f64>,
+    train_labels: &[usize],
+    test_data: &Mat<f64>,
+) -> Result<NbResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
     use linfa_bayes::{GaussianNb, NaiveBayes};
 
-    let (nrows, _) = data.shape();
+    let (nrows, _) = train_data.shape();
     if nrows == 0 {
         return Err(ClassifyError::Empty);
     }
-    if labels.len() != nrows {
+    if train_labels.len() != nrows {
         return Err(ClassifyError::LabelMismatch {
-            labels: labels.len(),
+            labels: train_labels.len(),
             rows: nrows,
         });
     }
 
-    let x = faer_to_ndarray(data);
-    let y = ndarray::Array1::from_vec(labels.to_vec());
+    let x = faer_to_ndarray(train_data);
+    let y = ndarray::Array1::from_vec(train_labels.to_vec());
     let dataset = DatasetBase::new(x, y);
 
     let model = GaussianNb::params()
         .fit(&dataset)
         .map_err(|e| ClassifyError::Linfa(e.to_string()))?;
 
-    let predicted = model.predict(dataset.records());
+    let x_test = faer_to_ndarray(test_data);
+    let predicted = model.predict(&x_test);
     let predictions: Vec<usize> = predicted.iter().copied().collect();
 
     // Compute posterior probabilities P(class=1|x) via predict_proba
-    let (proba_matrix, classes) = model.predict_proba(dataset.records().view());
+    let (proba_matrix, classes) = model.predict_proba(x_test.view());
     // classes is sorted; find column for class 1
     let class1_col = classes
         .iter()
@@ -244,6 +267,20 @@ pub fn decision_tree(
     data: &Mat<f64>,
     labels: &[usize],
     max_depth: usize,
+    min_samples_split: usize,
+    min_samples_leaf: usize,
+) -> Result<DecisionTreeResult> {
+    decision_tree_fit_predict(data, labels, data, max_depth, min_samples_split, min_samples_leaf)
+}
+
+/// Train a decision tree on `train_data`/`train_labels` and predict on
+/// `test_data`.  Leaf-level class proportions for probability estimates are
+/// computed from the **training** data (as they should be).
+pub fn decision_tree_fit_predict(
+    train_data: &Mat<f64>,
+    train_labels: &[usize],
+    test_data: &Mat<f64>,
+    max_depth: usize,
     _min_samples_split: usize,
     _min_samples_leaf: usize,
 ) -> Result<DecisionTreeResult> {
@@ -251,50 +288,50 @@ pub fn decision_tree(
     use linfa::traits::{Fit, Predict};
     use linfa_trees::DecisionTree;
 
-    let (nrows, ncols) = data.shape();
-    if nrows == 0 {
+    let (n_train, n_cols) = train_data.shape();
+    let (n_test, _) = test_data.shape();
+    if n_train == 0 {
         return Err(ClassifyError::Empty);
     }
-    if labels.len() != nrows {
+    if train_labels.len() != n_train {
         return Err(ClassifyError::LabelMismatch {
-            labels: labels.len(),
-            rows: nrows,
+            labels: train_labels.len(),
+            rows: n_train,
         });
     }
 
-    let x = faer_to_ndarray(data);
-    let y = ndarray::Array1::from_vec(labels.to_vec());
+    let x = faer_to_ndarray(train_data);
+    let y = ndarray::Array1::from_vec(train_labels.to_vec());
     let dataset = DatasetBase::new(x, y);
 
     let params = DecisionTree::params().max_depth(Some(max_depth));
-    // linfa-trees builder methods
     let model = params
         .fit(&dataset)
         .map_err(|e| ClassifyError::Linfa(e.to_string()))?;
 
-    let predicted = model.predict(dataset.records());
+    let x_test = faer_to_ndarray(test_data);
+    let predicted = model.predict(&x_test);
     let predictions: Vec<usize> = predicted.iter().copied().collect();
 
-    // Compute leaf-level class proportions as probability estimates.
-    // For each training sample, traverse to its leaf and record class counts;
-    // then for each sample's leaf, P(class=1|leaf) = n_pos / (n_pos + n_neg).
+    // Compute leaf-level class proportions from **training** data, then apply
+    // to test samples' leaves for probability estimates.
     let mut leaf_stats: std::collections::HashMap<usize, (usize, usize)> =
         std::collections::HashMap::new();
-    for i in 0..nrows {
-        let sample: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
+    for i in 0..n_train {
+        let sample: Vec<f64> = (0..n_cols).map(|j| train_data[(i, j)]).collect();
         let leaf = dt_traverse_to_leaf(&sample, model.root_node());
         let key = leaf as *const _ as usize;
         let entry = leaf_stats.entry(key).or_insert((0, 0));
-        if labels[i] != 0 {
+        if train_labels[i] != 0 {
             entry.1 += 1;
         } else {
             entry.0 += 1;
         }
     }
 
-    let probabilities: Vec<f64> = (0..nrows)
+    let probabilities: Vec<f64> = (0..n_test)
         .map(|i| {
-            let sample: Vec<f64> = (0..ncols).map(|j| data[(i, j)]).collect();
+            let sample: Vec<f64> = (0..n_cols).map(|j| test_data[(i, j)]).collect();
             let leaf = dt_traverse_to_leaf(&sample, model.root_node());
             let key = leaf as *const _ as usize;
             let (n_neg, n_pos) = leaf_stats.get(&key).copied().unwrap_or((0, 0));
@@ -317,6 +354,44 @@ pub fn decision_tree(
 mod tests {
     use super::*;
     use crate::cluster::mat_from_row_major;
+
+    /// Train-predict separation: train on one set, predict on a different set
+    /// with overlapping but non-identical points. Verifies that the `_fit_predict`
+    /// variants produce correct output lengths and probability directions.
+    #[test]
+    fn test_fit_predict_separation() {
+        // Training data: 4 class-0 + 4 class-1 (well separated)
+        let train = mat_from_row_major(
+            8,
+            2,
+            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1],
+        );
+        let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
+
+        // Test data: 2 new points not in the training set
+        let test = mat_from_row_major(2, 2, &[0.2, 0.3, 4.8, 5.2]);
+
+        // Logistic
+        let r = logistic_fit_predict(&train, &labels, &test, 0.1, 200).unwrap();
+        assert_eq!(r.predictions.len(), 2);
+        assert_eq!(r.predictions, vec![0, 1]);
+        assert!(r.probabilities[0] < 0.5);
+        assert!(r.probabilities[1] > 0.5);
+
+        // Gaussian NB
+        let r = gaussian_nb_fit_predict(&train, &labels, &test).unwrap();
+        assert_eq!(r.predictions.len(), 2);
+        assert_eq!(r.predictions, vec![0, 1]);
+
+        // KNN (already had separate train/test)
+        let r = knn_classify(&train, &labels, &test, 3).unwrap();
+        assert_eq!(r.predictions, vec![0, 1]);
+
+        // Decision tree
+        let r = decision_tree_fit_predict(&train, &labels, &test, 10, 2, 1).unwrap();
+        assert_eq!(r.predictions.len(), 2);
+        assert_eq!(r.predictions, vec![0, 1]);
+    }
 
     fn make_binary_data() -> (Mat<f64>, Vec<usize>) {
         // Two well-separated clusters: class 0 and class 1

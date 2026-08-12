@@ -46,10 +46,10 @@ pub trait PickerItem: Clone {
 pub struct PickerState<T: PickerItem> {
     pub visible: bool,
     pub query: String,
-    items: Vec<T>,
-    filtered: Vec<usize>,
-    selected: usize,
-    list_state: ListState,
+    pub items: Vec<T>,
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+    pub list_state: ListState,
 }
 
 impl<T: PickerItem> PickerState<T> {
@@ -146,6 +146,15 @@ impl<T: PickerItem> PickerState<T> {
 
     pub fn item_count(&self) -> usize {
         self.items.len()
+    }
+
+    /// Replace the query and re-run the filter. Used by callers that
+    /// manage their own text input (e.g. an embedded `TextArea`) and
+    /// need to sync external edits into the picker state.
+    pub fn set_query(&mut self, query: &str) {
+        self.query.clear();
+        self.query.push_str(query);
+        self.refilter();
     }
 
     // ── Filtering ──

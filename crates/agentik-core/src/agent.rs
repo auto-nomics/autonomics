@@ -502,15 +502,16 @@ impl Agent {
         session.cancel_token = self.cancel_token.clone();
         self.sessions.insert(id, session);
 
-        // Persist the session title so it survives restarts. The WAL session
-        // row is created by resume() below; we update its title here.
+        // resume() (called by handle_switch_session) creates the sessions
+        // table row via start_session(). We must persist the title *after*
+        // that row exists, otherwise the UPDATE matches zero rows.
+        self.handle_switch_session(id).await;
         if let Some(storage) = &self.shared.storage {
             if let Some(ref t) = title {
                 let _ = storage.update_session_title(id, t).await;
             }
         }
 
-        self.handle_switch_session(id).await;
         let title = self.sessions.get(&id).and_then(|s| s.title.clone());
         self.shared
             .send_event(AgentEvent::SessionActivated { id, title });

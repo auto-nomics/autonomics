@@ -93,6 +93,7 @@ members = [
   "bio_crates/rddensity",
   "bio_crates/rdlocrand",
   "crates/node-bundles/nodes-rd",
+  "crates/workflow-editor",
 ]
 resolver = "3"
 
