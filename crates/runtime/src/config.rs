@@ -821,22 +821,48 @@ mod tests {
 
     #[test]
     fn defaults() {
+        // Guard against env-var pollution from parallel tests like
+        // `env_data_dir_override` that set AUTONOMICS_DATA_DIR.
+        let saved_data_dir = std::env::var_os(ENV_DATA_DIR);
+        let saved_state_dir = std::env::var_os(ENV_STATE_DIR);
+        // SAFETY: single-threaded within this test fn.
+        unsafe {
+            std::env::remove_var(ENV_DATA_DIR);
+            std::env::remove_var(ENV_STATE_DIR);
+        }
+
         let cfg = RuntimeConfig::default();
         assert_eq!(cfg.name, "default");
         assert_eq!(cfg.data_dir, PathBuf::from(DEFAULT_DATA_DIR));
-        assert_eq!(cfg.state_dir, PathBuf::from(DEFAULT_STATE_DIR));
+
+        // state_dir resolves to $HOME/.autonomics when HOME is set.
+        let expected_state_dir = std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(DEFAULT_STATE_DIR))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
+        assert_eq!(cfg.state_dir, expected_state_dir);
         assert_eq!(
             cfg.dag_history_db,
-            PathBuf::from(DEFAULT_STATE_DIR).join(DEFAULT_DAG_HISTORY_DB)
+            expected_state_dir.join(DEFAULT_DAG_HISTORY_DB)
         );
-        assert_eq!(cfg.bib_db_path, PathBuf::from(DEFAULT_BIB_DB));
-        assert_eq!(cfg.app_db_path, PathBuf::from(DEFAULT_APP_DB));
+        assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
+        assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
         assert!(cfg.enable_iceberg);
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
+
+        // Restore env vars.
+        // SAFETY: single-threaded within this test fn.
+        unsafe {
+            if let Some(v) = saved_data_dir {
+                std::env::set_var(ENV_DATA_DIR, v);
+            }
+            if let Some(v) = saved_state_dir {
+                std::env::set_var(ENV_STATE_DIR, v);
+            }
+        }
     }
 
     #[test]
