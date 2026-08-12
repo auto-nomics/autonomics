@@ -348,6 +348,11 @@ pub fn compute_liab_s(
 ) -> Vec<f64> {
     let mut liab_s = vec![1.0; n_traits];
     for j in 0..n_traits {
+        // Guard: slices may be shorter than n_traits (e.g. continuous traits
+        // with no prevalence info). Only compute conversion if both are present.
+        if j >= sample_prev.len() || j >= population_prev.len() {
+            continue;
+        }
         if let (Some(sp), Some(pp)) = (sample_prev[j], population_prev[j]) {
             if sp.is_finite() && pp.is_finite() && sp > 0.0 && pp > 0.0 {
                 liab_s[j] = crate::utils::liability_conversion_factor(pp, sp);
