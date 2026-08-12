@@ -16,10 +16,12 @@
 pub mod common;
 pub mod rdmde;
 pub mod rdpower;
+pub mod rd_extra;
 pub mod rdrobust_node;
 pub mod rdsampsi;
 
 pub use rdmde::*;
 pub use rdpower::*;
+pub use rd_extra::*;
 pub use rdrobust_node::*;
 pub use rdsampsi::*;

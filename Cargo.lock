@@ -7511,6 +7511,9 @@ dependencies = [
  "datafusion",
  "datalake",
  "rand 0.9.5",
+ "rddensity",
+ "rdlocrand",
+ "rdmulti",
  "rdpower",
  "rdrobust",
  "schemars 1.2.2",
@@ -9536,6 +9539,45 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rddensity"
+version = "0.1.0"
+dependencies = [
+ "faer",
+ "rdrobust",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "rdlocrand"
+version = "0.1.0"
+dependencies = [
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "rdrobust",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "rdmulti"
+version = "0.1.0"
+dependencies = [
+ "rdrobust",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

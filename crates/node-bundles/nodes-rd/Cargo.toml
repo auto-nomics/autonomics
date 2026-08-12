@@ -10,6 +10,9 @@ description = "Regression discontinuity DAG node bundle (rdrobust, rdpower, rdsa
 dag-core = { path = "../../dag-core" }
 rdrobust = { path = "../../../bio_crates/rdrobust" }
 rdpower = { path = "../../../bio_crates/rdpower" }
+rdmulti = { path = "../../../bio_crates/rdmulti" }
+rddensity = { path = "../../../bio_crates/rddensity" }
+rdlocrand = { path = "../../../bio_crates/rdlocrand" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
