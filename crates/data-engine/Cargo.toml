@@ -47,9 +47,10 @@ nodes-mice = { path = "../node-bundles/nodes-mice", optional = true }
 nodes-writing = { path = "../node-bundles/nodes-writing", optional = true }
 nodes-grf = { path = "../node-bundles/nodes-grf", optional = true }
 nodes-rd = { path = "../node-bundles/nodes-rd", optional = true }
+nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
 
 [features]
-default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-grf", "bundle-rd"]
+default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-grf", "bundle-rd", "bundle-dl"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml = ["dep:nodes-ml"]
 bundle-viz = ["dep:nodes-viz"]
@@ -70,6 +71,7 @@ bundle-mice = ["dep:nodes-mice"]
 bundle-writing = ["dep:nodes-writing"]
 bundle-grf = ["dep:nodes-grf"]
 bundle-rd = ["dep:nodes-rd"]
+bundle-dl = ["dep:nodes-dl"]
 
 [dev-dependencies]
 datalake = { path = "../datalake" }

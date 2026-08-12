@@ -97,5 +97,9 @@ pub fn build_default_registry(
     #[cfg(feature = "bundle-hypothesize")]
     registry.register_plugin(&nodes_hypothesize::Plugin);
 
+    // ── Phase 1.5: DL bundle ────────────────────────────────────────────
+    #[cfg(feature = "bundle-dl")]
+    registry.register_plugin(&nodes_dl::Plugin);
+
     registry
 }
