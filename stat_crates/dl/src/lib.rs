@@ -26,6 +26,7 @@ pub mod scaler;
 pub mod scheduler;
 pub mod survival;
 pub mod tensor;
+pub mod transformer;
 
 // Re-exports for convenience.
 pub use artifact::{Architecture, ArtifactTaskType, DLModelArtifact, TrainingMeta};
@@ -38,3 +39,7 @@ pub use scaler::StandardScaler;
 pub use scheduler::{Scheduler, SchedulerConfig};
 pub use survival::{c_index, td_auc, brier_score, TimeBins};
 pub use tensor::Tensor;
+pub use transformer::{
+    predict_transformer, train_transformer, Pooling, PositionalEncoding, TransformerConfig,
+    TransformerModel,
+};

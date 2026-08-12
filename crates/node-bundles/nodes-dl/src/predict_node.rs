@@ -14,8 +14,8 @@ use dag_core::registry::{NodeCtx, NodeFactory};
 
 use super::common;
 use dl::{
-    Architecture, DLModelArtifact, MlpModel, DeepSurvModel,
-    predict_mlp, predict_deepsurv,
+    Architecture, DLModelArtifact, MlpModel, DeepSurvModel, TransformerModel,
+    predict_mlp, predict_deepsurv, predict_transformer,
 };
 
 const NODE: &str = "dl_predict";
@@ -114,6 +114,24 @@ impl DagNode for PredictNode {
                 let vals: Vec<f64> = (0..risks.nrows()).map(|i| risks.at(i, 0)).collect();
                 fields.push(Arc::new(Field::new("pred_risk_score", DataType::Float64, false)));
                 arrays.push(Arc::new(Float64Array::from(vals)));
+            }
+            Architecture::Transformer => {
+                let mut model: TransformerModel = serde_json::from_str(&artifact.checkpoint_json)
+                    .map_err(|e| common::err(NODE, format!("deserialize Transformer: {e}")))?;
+                let preds = predict_transformer(&mut model, &x);
+                match artifact.task_type {
+                    dl::ArtifactTaskType::Classification => {
+                        let probs: Vec<f64> = (0..preds.nrows()).map(|i| preds.at(i, 0)).collect();
+                        fields.push(Arc::new(Field::new("pred_probability", DataType::Float64, false)));
+                        arrays.push(Arc::new(Float64Array::from(probs)));
+                    }
+                    dl::ArtifactTaskType::Regression => {
+                        let vals: Vec<f64> = (0..preds.nrows()).map(|i| preds.at(i, 0)).collect();
+                        fields.push(Arc::new(Field::new("pred_value", DataType::Float64, false)));
+                        arrays.push(Arc::new(Float64Array::from(vals)));
+                    }
+                    _ => return Err(common::err(NODE, "Transformer model has unexpected task type")),
+                }
             }
             _ => return Err(common::err(NODE, format!("unsupported architecture: {:?}", artifact.architecture))),
         }

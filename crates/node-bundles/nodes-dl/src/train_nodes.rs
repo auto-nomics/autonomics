@@ -74,14 +74,21 @@ pub struct EarlyStoppingSpec {
     pub mode: String,
 }
 
-fn d_hidden() -> Vec<usize> { vec![128, 64] }
-fn d_act() -> String { "relu".into() }
-fn d_opt() -> String { "adam".into() }
-fn d_lr() -> f64 { 0.001 }
-fn d_epochs() -> usize { 100 }
-fn d_batch() -> usize { 32 }
-fn d_seed() -> u64 { 42 }
-fn d_std() -> bool { true }
+pub fn d_hidden() -> Vec<usize> { vec![128, 64] }
+pub fn d_act() -> String { "relu".into() }
+pub fn d_opt() -> String { "adam".into() }
+pub fn d_lr() -> f64 { 0.001 }
+pub fn d_epochs() -> usize { 100 }
+pub fn d_batch() -> usize { 32 }
+pub fn d_seed() -> u64 { 42 }
+pub fn d_std() -> bool { true }
+pub fn d_d_model() -> usize { 64 }
+pub fn d_n_heads() -> usize { 4 }
+pub fn d_n_layers() -> usize { 2 }
+pub fn d_d_ff() -> usize { 256 }
+pub fn d_dropout() -> f64 { 0.1 }
+pub fn d_pooling() -> String { "mean".into() }
+pub fn d_pos_enc() -> String { "sinusoidal".into() }
 
 impl MlpTrainSpec {
     fn to_config(&self) -> Result<MlpConfig, DagError> {
@@ -512,7 +519,7 @@ impl DagNode for DeepSurvTrainNode {
 // Shared helpers
 // ═══════════════════════════════════════════════════════════════════════
 
-fn build_training_log_batch(log: &[dl::mlp::EpochLog]) -> Result<RecordBatch, DagError> {
+pub fn build_training_log_batch(log: &[dl::mlp::EpochLog]) -> Result<RecordBatch, DagError> {
     let n = log.len();
     let epochs: Vec<Int64ArrayItem> = log.iter().map(|l| l.epoch as i64).collect();
     let train_loss: Vec<f64> = log.iter().map(|l| l.train_loss).collect();

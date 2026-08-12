@@ -19,6 +19,7 @@ pub mod model_nodes;
 pub mod predict_node;
 pub mod split_node;
 pub mod train_nodes;
+pub mod transformer_nodes;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -37,6 +38,7 @@ impl NodePlugin for Plugin {
         // ── L1: Training ────────────────────────────────────────────────
         registry.register(Box::new(train_nodes::MlpTrainFactory));
         registry.register(Box::new(train_nodes::DeepSurvTrainFactory));
+        registry.register(Box::new(transformer_nodes::TransformerTrainFactory));
 
         // ── L2: Inference ───────────────────────────────────────────────
         registry.register(Box::new(predict_node::PredictFactory));
