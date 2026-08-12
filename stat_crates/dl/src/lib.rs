@@ -17,11 +17,14 @@
 //! | Artifact | [`artifact`] | `DLModelArtifact` — serialised model |
 
 pub mod artifact;
+pub mod autoencoder;
+pub mod deephit;
 pub mod deepsurv;
 pub mod layers;
 pub mod losses;
 pub mod mlp;
 pub mod optimizer;
+pub mod rnn;
 pub mod scaler;
 pub mod scheduler;
 pub mod survival;
@@ -30,11 +33,19 @@ pub mod transformer;
 
 // Re-exports for convenience.
 pub use artifact::{Architecture, ArtifactTaskType, DLModelArtifact, TrainingMeta};
+pub use autoencoder::{
+    predict_autoencoder_latent, predict_autoencoder_reconstruct, train_autoencoder,
+    AeKind, AeLoss, AutoEncoderConfig, AutoEncoderModel,
+};
+pub use deephit::{train_deephit, DeepHitConfig, DeepHitModel};
 pub use deepsurv::{predict_deepsurv, train_deepsurv, DeepSurvConfig, DeepSurvModel};
 pub use layers::{Activation, BatchNorm1d, Dropout, Linear};
 pub use losses::{binary_cross_entropy, cox_partial_likelihood_loss, mse, sigmoid_stable};
 pub use mlp::{predict_mlp, train_mlp, MlpConfig, MlpModel, TaskType, TrainConfig};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerKind};
+pub use rnn::{
+    predict_rnn, train_rnn, CellType, SeqPooling, RnnConfig, RnnModel,
+};
 pub use scaler::StandardScaler;
 pub use scheduler::{Scheduler, SchedulerConfig};
 pub use survival::{c_index, td_auc, brier_score, TimeBins};

@@ -16,6 +16,7 @@
 pub mod common;
 pub mod metrics_nodes;
 pub mod model_nodes;
+pub mod phase3_nodes;
 pub mod predict_node;
 pub mod split_node;
 pub mod train_nodes;
@@ -39,6 +40,13 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(train_nodes::MlpTrainFactory));
         registry.register(Box::new(train_nodes::DeepSurvTrainFactory));
         registry.register(Box::new(transformer_nodes::TransformerTrainFactory));
+        registry.register(Box::new(phase3_nodes::AutoEncoderTrainFactory));
+        registry.register(Box::new(phase3_nodes::DeepHitTrainFactory));
+        registry.register(Box::new(phase3_nodes::RnnTrainFactory));
+
+        // ── L2: Inference + Embedding ───────────────────────────────────
+        registry.register(Box::new(predict_node::PredictFactory));
+        registry.register(Box::new(phase3_nodes::EmbedFactory));
 
         // ── L2: Inference ───────────────────────────────────────────────
         registry.register(Box::new(predict_node::PredictFactory));
