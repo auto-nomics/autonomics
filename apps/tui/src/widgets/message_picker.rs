@@ -291,11 +291,13 @@ impl MessagePickerState {
 
 /// Walk a transcript and emit [`MessageItem`]s for every **User** or
 /// **Assistant** text message, skipping everything else. The returned
-/// `Vec` is in display order (matches the chat scroll direction).
+/// `Vec` is in **reverse** order (newest first) so the most recent
+/// messages appear at the top of the picker list.
 pub fn collect_text_messages(messages: &[ChatLine]) -> Vec<MessageItem> {
     messages
         .iter()
         .enumerate()
+        .rev()
         .filter_map(|(i, line)| MessageItem::from_chat_line(line, i + 1))
         .collect()
 }
@@ -898,12 +900,13 @@ mod tests {
         let msgs = make_messages();
         let items = collect_text_messages(&msgs);
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].role, MessageRole::User);
-        assert_eq!(items[0].index, 1);
-        assert_eq!(items[0].preview, "hello world");
-        assert_eq!(items[1].role, MessageRole::Assistant);
-        assert_eq!(items[1].index, 2);
-        assert_eq!(items[1].preview, "hi! how can I help?");
+        // Reverse order: newest (assistant, index 2) first.
+        assert_eq!(items[0].role, MessageRole::Assistant);
+        assert_eq!(items[0].index, 2);
+        assert_eq!(items[0].preview, "hi! how can I help?");
+        assert_eq!(items[1].role, MessageRole::User);
+        assert_eq!(items[1].index, 1);
+        assert_eq!(items[1].preview, "hello world");
     }
 
     #[test]
