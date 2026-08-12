@@ -204,6 +204,9 @@ pub struct AgentTabState {
     pub compact_state: CompactState,
     /// Agent task plan (updated via `update_plan` tool events).
     pub plan: PlanState,
+    /// True when the user pressed Ctrl+C and we're waiting for the agent
+    /// to actually abort. Drives the "cancelling…" status indicator.
+    pub cancel_pending: bool,
 }
 
 #[derive(Debug, Default)]
@@ -250,6 +253,7 @@ impl Default for AgentTabState {
             frame: 0,
             compact_state: CompactState::default(),
             plan: PlanState::default(),
+            cancel_pending: false,
         }
     }
 }

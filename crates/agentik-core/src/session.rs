@@ -629,7 +629,10 @@ impl Session {
                 false
             }
             InternalEvent::ResetCancelToken(token) => {
-                self.cancel_token = token;
+                self.cancel_token = token.clone();
+                // Wire the fresh cancel token into the toolset so that
+                // Ctrl+C also interrupts running tool tasks.
+                self.toolset.set_cancel_token(token);
                 true
             }
             // Session management events are handled by Agent, never reach
@@ -654,6 +657,11 @@ impl Session {
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared
             .send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
+
+        // Ensure the toolset is wired to the current cancel token so that
+        // Ctrl+C interrupts running tools. ResetCancelToken updates this
+        // on subsequent turns, but the first turn needs it set here.
+        self.toolset.set_cancel_token(self.cancel_token.clone());
 
         // Ensure WAL session is open.
         if self.persist_tx.is_none() {
@@ -1056,9 +1064,31 @@ impl Session {
 
         let all_tools = self.visible_tools(allowed);
 
-        let mut stream = model.request_stream(context, &all_tools).await?;
+        // Race the initial HTTP request against cancellation so that
+        // Ctrl+C interrupts even before the first stream event arrives.
+        let mut stream = tokio::select! {
+            r = model.request_stream(context, &all_tools) => r?,
+            _ = self.cancel_token.cancelled() => {
+                tracing::info!("LLM request cancelled before stream started");
+                return Err(crate::error::AgentError::Cancelled);
+            }
+        };
 
-        while let Some(event) = stream.next().await {
+        loop {
+            // Race the next stream event against cancellation so that
+            // Ctrl+C interrupts an in-flight LLM stream immediately.
+            let event = tokio::select! {
+                ev = stream.next() => match ev {
+                    Some(ev) => ev,
+                    None => break,
+                },
+                _ = self.cancel_token.cancelled() => {
+                    tracing::info!("LLM stream cancelled by user");
+                    stream.abort();
+                    return Err(crate::error::AgentError::Cancelled);
+                }
+            };
+
             let stream_event = match event {
                 Ok(e) => e,
                 Err(e) => match &e {

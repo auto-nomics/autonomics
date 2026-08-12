@@ -195,15 +195,19 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             ""
         };
         let title: String = if running {
-            let base = match ts.status {
-                AgentStatus::Requesting => format!("{spinner} thinking…"),
-                AgentStatus::Streaming => format!("{spinner} responding…"),
-                AgentStatus::Retrying => format!("{spinner} retrying…"),
-                AgentStatus::Compacting => format!("{spinner} compacting…"),
-                AgentStatus::Waiting => format!("{spinner} waiting…"),
-                AgentStatus::Error => "error".to_string(),
-                AgentStatus::Cancelled => "cancelled".to_string(),
-                _ => format!("{spinner} running…"),
+            let base = if ts.cancel_pending {
+                "⏹ cancelling… (Ctrl+C again to force quit)".to_string()
+            } else {
+                match ts.status {
+                    AgentStatus::Requesting => format!("{spinner} thinking…"),
+                    AgentStatus::Streaming => format!("{spinner} responding…"),
+                    AgentStatus::Retrying => format!("{spinner} retrying…"),
+                    AgentStatus::Compacting => format!("{spinner} compacting…"),
+                    AgentStatus::Waiting => format!("{spinner} waiting…"),
+                    AgentStatus::Error => "error".to_string(),
+                    AgentStatus::Cancelled => "cancelled".to_string(),
+                    _ => format!("{spinner} running…"),
+                }
             };
             if queued > 0 {
                 format!("{base} ({queued} queued)")

@@ -1052,6 +1052,7 @@ impl App {
     /// Reset the cancel-request timestamp (called when the agent returns to Idle).
     fn clear_cancel_pending(&mut self) {
         self.cancel_requested_at = None;
+        self.state.active_tab_state_mut().cancel_pending = false;
     }
 
     /// Handle mouse events: scroll wheel scrolls the chat in Agent tab.
@@ -1168,21 +1169,26 @@ impl App {
                 return;
             }
             // Agent is running — check for force-quit (double Ctrl+C).
-            if let Some(ts) = self.cancel_requested_at {
-                if ts.elapsed() < FORCE_QUIT_WINDOW {
-                    tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                    let agent_name = self
-                        .state
-                        .sessions
-                        .get(self.state.active_agent_idx)
-                        .map(|s| s.name.clone());
-                    if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().shutdown_agent(&an);
+            // Only treat as a double-press if the active tab is already
+            // showing "cancel pending" (i.e., the first Ctrl+C targeted
+            // *this* agent, not a different tab).
+            if self.state.active_tab_state().cancel_pending {
+                if let Some(ts) = self.cancel_requested_at {
+                    if ts.elapsed() < FORCE_QUIT_WINDOW {
+                        tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
+                        let agent_name = self
+                            .state
+                            .sessions
+                            .get(self.state.active_agent_idx)
+                            .map(|s| s.name.clone());
+                        if let Some(an) = agent_name {
+                            if let Some(host) = self.host.as_ref() {
+                                host.control().shutdown_agent(&an);
+                            }
                         }
+                        self.should_quit = true;
+                        return;
                     }
-                    self.should_quit = true;
-                    return;
                 }
             }
             // First Ctrl+C: cooperative cancel.
@@ -1197,6 +1203,9 @@ impl App {
                 }
             }
             self.cancel_requested_at = Some(Instant::now());
+            // Mark the active agent's tab as "cancel pending" so the UI
+            // can show a "cancelling…" indicator.
+            self.state.active_tab_state_mut().cancel_pending = true;
             // Clear any pending queued messages — the user cancelled, so
             // we don't want queued messages to immediately re-trigger
             // the agent when the TurnAborted event arrives.
@@ -2015,6 +2024,7 @@ impl App {
                         }
                     }
                     self.cancel_requested_at = Some(Instant::now());
+                    self.state.active_tab_state_mut().cancel_pending = true;
                 }
             }
             CommandAction::EnterInput => {

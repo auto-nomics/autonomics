@@ -125,6 +125,10 @@ pub struct Toolset {
     registry: Arc<ToolRegistry>,
     tasks: Arc<RwLock<TaskStore>>,
     agent_event_tx: Option<UnboundedSender<AgentEvent>>,
+    /// Session-level cancel token. When set (via [`set_cancel_token`]),
+    /// each spawned tool task gets a child token so that cancelling the
+    /// session immediately interrupts running tools.
+    session_cancel: Option<CancellationToken>,
 }
 
 impl Toolset {
@@ -158,6 +162,7 @@ impl Toolset {
             registry,
             tasks,
             agent_event_tx,
+            session_cancel: None,
         }
     }
 
@@ -174,6 +179,13 @@ impl Toolset {
     /// inspect background tasks without going through the agent loop.
     pub fn tasks_handle(&self) -> Arc<RwLock<TaskStore>> {
         self.tasks.clone()
+    }
+
+    /// Set the session-level cancel token. Each spawned tool task will
+    /// get a child token derived from this, so cancelling the session
+    /// immediately interrupts running tools.
+    pub fn set_cancel_token(&mut self, token: CancellationToken) {
+        self.session_cancel = Some(token);
     }
 
     /// Access the shared tool registry.
@@ -225,7 +237,14 @@ impl Toolset {
             let tool_name = tc.name.clone();
 
             let seq = self.tasks.read().await.alloc_seq();
-            let cancel_token = CancellationToken::new();
+            // Derive the per-task cancel token from the session token
+            // (if set) so that cancelling the session immediately
+            // interrupts running tools. Otherwise create a standalone
+            // token (preserving the original behaviour for tests).
+            let cancel_token = match &self.session_cancel {
+                Some(parent) => parent.child_token(),
+                None => CancellationToken::new(),
+            };
             let cancel = cancel_token.clone();
 
             let output: ProgressBuffer = Arc::new(std::sync::Mutex::new(ProgressLog::new()));
