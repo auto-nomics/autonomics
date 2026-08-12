@@ -689,7 +689,19 @@ impl Session {
                 .agent_workflow(internal_event_tx, retry_feedback.take())
                 .await
             {
-                Ok(()) => true, // no tool calls → idle
+                Ok(()) => {
+                    // After agent_workflow, if the lifecycle is still
+                    // "running" it means tool calls were executed and the
+                    // agent needs another API round.  Only stop when the
+                    // lifecycle has transitioned away from running (e.g.
+                    // Idle via self.stop(), or Error).
+                    if !self.lifecycle.is_running() {
+                        self.shared.send_event(AgentEvent::Done);
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Err(e) => {
                     if self.cancel_token.is_cancelled() {
                         was_cancelled = true;
