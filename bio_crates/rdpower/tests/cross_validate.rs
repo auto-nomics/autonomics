@@ -29,8 +29,8 @@ fn load_senate() -> (Vec<f64>, Vec<f64>) {
     let mut r = Vec::new();
     for result in rdr.records() {
         let record = result.unwrap();
-        // demvoteshfor2 = outcome, demmv = running variable
-        let outcome: f64 = record.get(8).unwrap().parse().unwrap_or(f64::NAN); // demvoteshfor2
+        // demvoteshfor2 = outcome (col 9), demmv = running variable (col 5)
+        let outcome: f64 = record.get(9).unwrap().parse().unwrap_or(f64::NAN); // demvoteshfor2
         let margin: f64 = record.get(5).unwrap().parse().unwrap_or(f64::NAN);  // demmv
         if outcome.is_finite() && margin.is_finite() {
             y.push(outcome);

@@ -781,8 +781,9 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     let beta_p_r_mat = &inv_g_p_r * &weighted_crossprod(&r_p_r, &w_h_r_eff, &d_r);
     let beta_q_l_mat = &inv_g_q_l * &weighted_crossprod(&r_q_l, &w_b_l_eff, &d_l);
     let beta_q_r_mat = &inv_g_q_r * &weighted_crossprod(&r_q_r, &w_b_r_eff, &d_r);
-    let beta_bc_l_mat = &inv_g_p_l * &weighted_crossprod(&q_q_l, &w_h_l_eff, &d_l);
-    let beta_bc_r_mat = &inv_g_p_r * &weighted_crossprod(&q_q_r, &w_h_r_eff, &d_r);
+    // Q_q already incorporates the kernel weights — use PLAIN crossprod, not weighted.
+    let beta_bc_l_mat = &inv_g_p_l * &crossprod(&q_q_l, &d_l);
+    let beta_bc_r_mat = &inv_g_p_r * &crossprod(&q_q_r, &d_r);
 
     // beta_p = beta_p_r - beta_p_l (difference at cutoff)
     // beta_bc = beta_bc_r - beta_bc_l
