@@ -13,7 +13,7 @@
 //!     agent_id    TEXT NOT NULL,
 //!     ts          INTEGER NOT NULL,
 //!     status      TEXT NOT NULL,
-//!     memory      TEXT NOT NULL
+//!     state       TEXT NOT NULL
 //! );
 //! CREATE INDEX idx_snapshots_agent_ts ON snapshots(agent_id, ts DESC);
 //!
@@ -153,7 +153,7 @@ impl TursoAgentStorage {
                     agent_id    TEXT NOT NULL,
                     ts          INTEGER NOT NULL,
                     status      TEXT NOT NULL,
-                    memory      TEXT NOT NULL
+                    state       TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshots_agent_ts
                     ON snapshots(agent_id, ts DESC);
@@ -366,7 +366,7 @@ impl AgentStorage for TursoAgentStorage {
         self.conn
             .execute(
                 "INSERT INTO snapshots
-                    (snapshot_id, agent_id, ts, status, memory, session_id)
+                    (snapshot_id, agent_id, ts, status, state, session_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params_from_iter([
                     Value::Text(snapshot.snapshot_id.to_string()),
@@ -385,7 +385,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
+                "SELECT snapshot_id, agent_id, ts, status, state, session_id
                  FROM snapshots WHERE snapshot_id = ?1",
                 params_from_iter([Value::Text(snapshot_id.to_string())]),
             )
@@ -405,7 +405,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
+                "SELECT snapshot_id, agent_id, ts, status, state, session_id
                  FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -421,7 +421,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
+                "SELECT snapshot_id, agent_id, ts, status, state, session_id
                  FROM snapshots WHERE agent_id = ?1 ORDER BY ts DESC LIMIT 1",
                 params_from_iter([Value::Text(agent_id.to_string())]),
             )
@@ -808,7 +808,7 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT snapshot_id, agent_id, ts, status, memory, session_id
+                "SELECT snapshot_id, agent_id, ts, status, state, session_id
                  FROM snapshots
                  WHERE session_id = ?1
                  ORDER BY ts DESC LIMIT 1",
