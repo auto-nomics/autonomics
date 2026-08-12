@@ -87,6 +87,12 @@ members = [
   "crates/grf-sys",
   "bio_crates/grf",
   "bio_crates/genomic_sem",
+  "bio_crates/rdrobust",
+  "bio_crates/rdpower",
+  "bio_crates/rdmulti",
+  "bio_crates/rddensity",
+  "bio_crates/rdlocrand",
+  "crates/node-bundles/nodes-rd",
 ]
 resolver = "3"
 
