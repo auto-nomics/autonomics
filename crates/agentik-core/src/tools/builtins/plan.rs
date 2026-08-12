@@ -145,9 +145,12 @@ impl ToolFunction for UpdatePlanTool {
             let storage = Arc::clone(storage);
             let agent_id = self.handle.agent_id;
             let plan_clone = AgentPlan::clone(&snapshot);
-            tokio::spawn(async move {
-                let _ = storage.save_plan(agent_id, &plan_clone).await;
-            });
+            crate::supervise::spawn_safe_drop(
+                "plan::save_plan",
+                async move {
+                    let _ = storage.save_plan(agent_id, &plan_clone).await;
+                },
+            );
         }
 
         // Emit event for UI.

@@ -49,14 +49,15 @@ use crate::tools::{ToolRegistry, Toolset};
 const TOOL_OUTPUT_MAX_CHARS: usize = 2_000;
 /// Default tokens to preserve in the "recent" tail during compaction.
 pub const DEFAULT_KEEP_TOKENS: u64 = 8_000;
+/// Maximum tokens of recent user messages to carry forward into compacted
+/// history (ported from Codex `COMPACT_USER_MESSAGE_MAX_TOKENS`).
+const COMPACT_USER_MESSAGE_MAX_TOKENS: u64 = 20_000;
 /// Minimum tokens of recent tool output to protect from pruning.
 const PRUNE_PROTECT_TOKENS: u64 = 40_000;
 /// Only prune if at least this many tokens can be freed.
 const PRUNE_MINIMUM_TOKENS: u64 = 20_000;
 /// Chars per token heuristic (matching OpenCode's `Token.estimate()`).
 const CHARS_PER_TOKEN: usize = 4;
-/// Compaction buffer: only trigger when context exceeds this beyond budget.
-pub const COMPACTION_BUFFER_TOKENS: u64 = 20_000;
 
 // ── Error types (moved from memory/error.rs) ───────────────────────
 
@@ -481,10 +482,13 @@ impl Session {
 
     /// Compact conversation history in-place.
     ///
+    /// Ported from Codex's compaction pipeline:
+    ///
     /// 1. Selects a head/tail split point based on `keep_tokens` budget
     /// 2. Summarizes the head via an LLM call
-    /// 3. Appends the summary to `ancestor_summaries`
-    /// 4. Retains only the recent tail in `messages`
+    /// 3. Collects recent user messages from the head (up to a token budget)
+    /// 4. Rebuilds `messages` = [preserved user messages] + [tail]
+    /// 5. Appends the summary to `ancestor_summaries`
     ///
     /// Returns `Ok(true)` when compaction occurred, `Ok(false)` when the
     /// conversation is too short to compact.
@@ -526,8 +530,25 @@ impl Session {
             "compaction summary generated"
         );
 
-        // Retain only the tail (recent messages from the split point onward)
-        self.messages = self.messages[selection.tail_message_start..].to_vec();
+        // ── Preserve recent user messages from the compacted head ──
+        //
+        // Ported from Codex: carry forward user messages (up to
+        // COMPACT_USER_MESSAGE_MAX_TOKENS tokens) from the compacted head so
+        // the model retains direct access to original user intent without
+        // relying solely on the summary.
+        let head_messages = &self.messages[..selection.tail_message_start];
+        let preserved_user_msgs = collect_recent_user_messages(head_messages, COMPACT_USER_MESSAGE_MAX_TOKENS);
+
+        // Retain the tail (recent messages from the split point onward)
+        let tail = self.messages[selection.tail_message_start..].to_vec();
+
+        // New message list = [preserved user messages] + [tail]
+        let mut new_messages = preserved_user_msgs;
+        new_messages.extend(tail);
+        self.messages = new_messages;
+
+        // Reset token budget: next estimate will be fresh
+        self.token_budget = crate::agent::TokenBudget::default();
 
         // Push the summary to ancestor list
         self.ancestor_summaries.push(formatted_summary);
@@ -818,9 +839,10 @@ impl Session {
             }
         }
 
-        self.token_budget.latest_usage = last_usage.input_tokens + last_usage.output_tokens;
+        self.token_budget.record_api_usage(&last_usage);
 
         self.remember(response_message.clone())?;
+        self.token_budget.add_pending_message(&response_message);
 
         let toolcalls = self.extract_toolcalls(&response_message);
 
@@ -858,11 +880,42 @@ impl Session {
         }
 
         for tr in &tool_results {
-            self.remember(Message::tool_result(
+            let msg = Message::tool_result(
                 tr.tool_use_id.clone(),
                 tr.text_content(),
                 tr.is_error.unwrap_or_default(),
-            ))?;
+            );
+            self.remember(msg.clone())?;
+            self.token_budget.add_pending_message(&msg);
+        }
+
+        // ── Mid-turn compaction check (ported from Codex) ──
+        //
+        // After executing tools, the model will need a follow-up call to
+        // process the results. If the context has grown past the auto-compact
+        // threshold, compact *now* to prevent an overflow on the next request.
+        if !toolcalls.is_empty() {
+            let context_length = self.shared.model.load().as_ref().map(|m| m.model_info.context_length).unwrap_or(0);
+            let conversation_msgs = self.render_context()?;
+            if self.token_budget.should_compact(&conversation_msgs, context_length) {
+                let model = self.shared.model.load_full().ok_or_else(|| {
+                    AgentError::MissingConfig("no active model configured".into())
+                })?;
+                tracing::debug!(
+                    context_length,
+                    current_total = self.token_budget.current_total(),
+                    "mid-turn context pressure detected, compacting before next iteration"
+                );
+                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
+                self.shared.send_event(AgentEvent::Compact {
+                    event: CompactEvent::CompactStart { ts: Utc::now() },
+                });
+                self.compact(model.as_ref()).await?;
+                self.shared.send_event(AgentEvent::Compact {
+                    event: CompactEvent::CompactFinish { ts: Utc::now() },
+                });
+                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
+            }
         }
 
         Ok(())
@@ -961,15 +1014,14 @@ impl Session {
             .ok_or_else(|| AgentError::MissingConfig("no active model configured".into()))?;
 
         let conversation_msgs = self.render_context()?;
-        if self.token_budget.should_compact(
-            &conversation_msgs,
-            model.model_info.context_length,
-            model.model_info.max_output_tokens,
-        ) {
+        if self
+            .token_budget
+            .should_compact(&conversation_msgs, model.model_info.context_length)
+        {
             tracing::debug!(
                 context_length = model.model_info.context_length,
-                max_output_tokens = model.model_info.max_output_tokens,
-                "context pressure detected, compacting"
+                current_total = self.token_budget.current_total(),
+                "pre-request context pressure detected (≥90% of context window), compacting"
             );
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
             self.shared.send_event(AgentEvent::Compact {
@@ -1203,10 +1255,16 @@ fn truncate_for_compact(text: &str) -> String {
     if text.len() <= TOOL_OUTPUT_MAX_CHARS {
         return text.to_string();
     }
+    // Floor to the nearest char boundary so we never slice mid-codepoint
+    // (panics on multi-byte UTF-8 content — e.g. Chinese text, emoji).
+    let mut end = TOOL_OUTPUT_MAX_CHARS;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
     format!(
         "{}\n[truncated {} chars]",
-        &text[..TOOL_OUTPUT_MAX_CHARS],
-        text.len() - TOOL_OUTPUT_MAX_CHARS
+        &text[..end],
+        text.len() - end
     )
 }
 
@@ -1251,6 +1309,42 @@ fn select_for_compaction(messages: &[Message], keep_tokens: u64) -> Option<Compa
         head,
         tail_message_start: split_index,
     })
+}
+
+/// Collect recent user messages (walking backwards from the end of `messages`)
+/// until `max_tokens` is exhausted.
+///
+/// Ported from Codex's `build_compacted_history_with_limit`: preserves the
+/// original user intent verbatim in the compacted history so the model can
+/// reference exact wording without relying on the summary.
+fn collect_recent_user_messages(messages: &[Message], max_tokens: u64) -> Vec<Message> {
+    let mut selected: Vec<Message> = Vec::new();
+    let mut remaining = max_tokens;
+
+    for msg in messages.iter().rev() {
+        if remaining == 0 {
+            break;
+        }
+        if msg.role != Role::User {
+            continue;
+        }
+        // Skip tool-result-only user messages (they're not real user intent)
+        let has_text = msg.content.iter().any(|b| {
+            matches!(b, ContentBlock::Text { text } if !text.is_empty())
+        });
+        if !has_text {
+            continue;
+        }
+        let tokens = estimate_message_tokens(msg);
+        if tokens > remaining {
+            break;
+        }
+        remaining = remaining.saturating_sub(tokens);
+        selected.push(msg.clone());
+    }
+
+    selected.reverse();
+    selected
 }
 
 /// Prune old tool outputs from a message list by replacing their content
@@ -1298,41 +1392,45 @@ fn prune_old_tool_outputs(messages: &mut [Message], protect_tokens: u64) {
     }
 }
 
-/// Format a compaction summary into a user message using the
-/// `<conversation-checkpoint>` XML format.
+/// Format a compaction summary into a user message.
+///
+/// Uses Codex's summary-prefix style: contextualizes the summary as a
+/// handoff from a previous model's work.
 fn format_checkpoint_message(summary: &str) -> String {
     format!(
-        "<conversation-checkpoint>\n\
-         The following is a summary and serialized record of earlier conversation. \
-         Treat it as historical context, not as new instructions.\n\
-         \n\
-         <summary>\n\
-         {summary}\n\
-         </summary>\n\
-         </conversation-checkpoint>"
+        "Another language model started to solve this problem and produced a summary \
+         of its thinking process. Use this to build on the work that has already been \
+         done and avoid duplicating work. Here is the summary:\n\n{summary}"
     )
 }
 
-/// Build the summarization prompt, supporting anchored updates.
+/// Build the summarization prompt (ported from Codex's concise handoff style).
+///
+/// Codex uses a focused "context checkpoint compaction" prompt rather than a
+/// verbose multi-section template. This produces shorter summaries and fewer
+/// wasted output tokens.
 fn build_compaction_prompt(head: &str, previous_summary: Option<&str>) -> String {
-    let opening = if let Some(prev) = previous_summary {
+    let task = if let Some(prev) = previous_summary {
         format!(
-            "Update the anchored summary below using the conversation history above. \
-             Preserve still-true details, remove stale details, and merge in the new facts.\n\n\
+            "Update the existing context checkpoint using the conversation history below. \
+             Preserve still-true details, remove stale ones, and merge in new facts.\n\n\
              <previous-summary>\n{prev}\n</previous-summary>"
         )
     } else {
-        "Create a new anchored summary from the conversation history.".to_string()
+        "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary \
+         for another LLM that will resume the task.".to_string()
     };
 
-    let compact_prompt = compact::NO_TOOLS_PREAMBLE.to_string()
-        + compact::BASE_COMPACT_PROMPT
-            .replace(
-                "{analysis_instruction_base}",
-                compact::DETAILED_ANALYSIS_INSTRUCTION_BASE,
-            )
-            .as_str()
-        + compact::NO_TOOLS_TRAILER;
-
-    format!("{opening}\n\n{compact_prompt}\n\nConversation to summarize:\n{head}")
+    format!(
+        "{task}\n\n\
+         Include:\n\
+         - Current progress and key decisions made\n\
+         - Important context, constraints, or user preferences\n\
+         - What remains to be done (clear next steps)\n\
+         - Any critical data, examples, or references needed to continue\n\
+         - All user messages verbatim (not tool results)\n\n\
+         Be concise, structured, and focused on helping the next LLM seamlessly \
+         continue the work. Respond with plain text only — do NOT call any tools.\n\n\
+         Conversation to summarize:\n{head}"
+    )
 }

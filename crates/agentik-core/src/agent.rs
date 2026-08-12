@@ -278,7 +278,10 @@ impl Agent {
                     session.persist_tx = Some(tx.clone());
                 }
             }
-            tokio::spawn(persist_worker(persist_rx, storage));
+            crate::supervise::spawn_safe_drop(
+                "persist_worker",
+                persist_worker(persist_rx, storage),
+            );
         }
 
         // ── Restore sessions from storage ──
@@ -606,48 +609,77 @@ impl Agent {
 // TokenBudget (stays here — re-exported)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Default token buffer before compaction triggers (matching OpenCode).
-const COMPACTION_BUFFER_TOKENS: u64 = 20_000;
+/// Soft compaction trigger: fire when context usage reaches this percentage
+/// of the model's `context_length`. Matches Codex's default
+/// `auto_compact_token_limit` derivation (`context_window * 90%`).
+const AUTO_COMPACT_THRESHOLD_PERCENT: u64 = 90;
 
+/// Chars per token heuristic for estimating messages without API usage data.
+const CHARS_PER_TOKEN: u64 = 4;
+
+/// Tracks token usage for compaction decisions.
+///
+/// Ported from Codex: uses real API-reported `total_tokens` as the primary
+/// signal, with char-based estimation for items appended since the last API
+/// response (tool results, new user messages).
 #[derive(Default)]
 pub struct TokenBudget {
-    pub(crate) append_tokens: u64,
-    pub(crate) latest_usage: u64,
+    /// Last API-reported total tokens (input + output) from the most recent
+    /// model response. This is the most accurate context-size signal.
+    pub(crate) last_api_total: u64,
+    /// Estimated tokens of conversation items added *after* the last API
+    /// response (tool results, injected messages). Added to `last_api_total`
+    /// for the next pre-request compaction check.
+    pub(crate) pending_tokens: u64,
 }
 
 impl TokenBudget {
-    pub fn count_token_est(&self, msg: &agentik_sdk::types::Message) -> u64 {
-        if let Some(usage) = &msg.usage {
-            return usage.input_tokens;
-        }
-        let content_str = serde_json::to_string(&msg.content)
-            .expect("Convert message to JSON string failed during counting token budget");
-        content_str.len() as u64 / 4
+    /// Record real token usage from an API response.
+    pub fn record_api_usage(&mut self, usage: &agentik_types::Usage) {
+        self.last_api_total = usage.total_tokens();
+        self.pending_tokens = 0;
     }
 
+    /// Accumulate estimated tokens for a message added since last API response.
+    pub fn add_pending_message(&mut self, msg: &agentik_sdk::types::Message) {
+        self.pending_tokens += estimate_message_tokens(msg);
+    }
+
+    /// Current best estimate of total context tokens.
+    pub fn current_total(&self) -> u64 {
+        self.last_api_total.saturating_add(self.pending_tokens)
+    }
+
+    /// Fallback: estimate tokens by iterating messages (chars/4 heuristic).
     pub fn estimate_messages_tokens(&self, messages: &[agentik_sdk::types::Message]) -> u64 {
-        messages.iter().map(|m| self.count_token_est(m)).sum()
+        messages.iter().map(|m| estimate_message_tokens(m)).sum()
     }
 
-    pub fn increment_new_msg(&mut self, msg: &agentik_sdk::types::Message) {
-        self.append_tokens = self.count_token_est(msg);
-    }
-
-    pub fn estimate_total_token(&self, system_prompt_token: u64) -> u64 {
-        self.append_tokens + self.latest_usage + system_prompt_token
-    }
-
+    /// Returns `true` when context usage reaches the auto-compact threshold
+    /// (90&nbsp;% of `context_length`).
+    ///
+    /// Prefers real API usage + pending estimates; falls back to pure
+    /// message-level estimation when no API response has been received yet
+    /// (e.g. first turn).
     pub fn should_compact(
         &self,
         messages: &[agentik_sdk::types::Message],
         context_length: u64,
-        max_output_tokens: u64,
     ) -> bool {
-        let total = self.estimate_messages_tokens(messages);
-        let reserve = max_output_tokens.max(COMPACTION_BUFFER_TOKENS);
-        let usable = context_length.saturating_sub(reserve);
-        total >= usable
+        let total = if self.last_api_total > 0 {
+            self.current_total()
+        } else {
+            self.estimate_messages_tokens(messages)
+        };
+        let threshold = context_length.saturating_mul(AUTO_COMPACT_THRESHOLD_PERCENT) / 100;
+        total >= threshold
     }
+}
+
+/// Estimate token count for a single message using chars/4 heuristic.
+fn estimate_message_tokens(msg: &agentik_sdk::types::Message) -> u64 {
+    let content_str = serde_json::to_string(&msg.content).unwrap_or_default();
+    content_str.len() as u64 / CHARS_PER_TOKEN
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -759,12 +791,11 @@ mod tests {
 
         let budget = TokenBudget::default();
         let context_length = 128_000u64;
-        let max_output_tokens = 32_000u64;
 
         let msgs = state.messages;
 
         assert!(
-            budget.should_compact(&msgs, context_length, max_output_tokens),
+            budget.should_compact(&msgs, context_length),
             "should_compact must fire for a 500K-char single-segment conversation"
         );
     }

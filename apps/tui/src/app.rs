@@ -901,7 +901,10 @@ impl App {
         for session_id in to_load {
             let storage = storage.clone();
             let tx = tx.clone();
-            self.runtime_handle.spawn(async move {
+            agentik_core::supervise::spawn_safe_on_drop(
+                &self.runtime_handle,
+                &format!("load_session_history::{session_id}"),
+                async move {
                 use agentik_core::storage::AgentStorage;
                 // Load per-session state (snapshot + WAL replay).
                 let state = match agentik_core::storage::restore_session_state(
@@ -943,7 +946,8 @@ impl App {
                         messages,
                     });
                 }
-            });
+            },
+            );
         }
 
         // ── Restore the agent's persistent plan ──
@@ -952,14 +956,18 @@ impl App {
         // `PlanState` would stay empty. We fetch it here and push a
         // `PlanLoaded` event to surface the restored checklist.
         let tx = self.app_event_tx.clone();
-        self.runtime_handle.spawn(async move {
-            use agentik_core::storage::AgentStorage;
-            if let Ok(Some(plan)) = storage.load_plan(agent_id).await {
-                if !plan.is_empty() {
-                    tx.send(crate::app_event::AppEvent::PlanLoaded { agent_id, plan });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "restore_plan",
+            async move {
+                use agentik_core::storage::AgentStorage;
+                if let Ok(Some(plan)) = storage.load_plan(agent_id).await {
+                    if !plan.is_empty() {
+                        tx.send(crate::app_event::AppEvent::PlanLoaded { agent_id, plan });
+                    }
                 }
-            }
-        });
+            },
+        );
     }
     fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
@@ -1239,38 +1247,42 @@ impl App {
         let profile_name_owned = profile.path.clone();
         let tx = self.app_event_tx.clone();
 
-        self.runtime_handle.spawn(async move {
-            tracing::debug!(
-                profile = %profile_clone.path,
-                agent = %agent_name_owned,
-                "async spawn task started"
-            );
-            let result = control
-                .spawn_with_profile(
-                    &agent_name_owned,
-                    &agentik_types::AgentPath::root(),
-                    profile_clone,
-                    model_override,
-                )
-                .await;
-            let event = match result {
-                Ok(name) => {
-                    tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with host");
-                    crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_owned,
-                        result: Ok(name),
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            &format!("spawn_agent::{agent_name_owned}"),
+            async move {
+                tracing::debug!(
+                    profile = %profile_clone.path,
+                    agent = %agent_name_owned,
+                    "async spawn task started"
+                );
+                let result = control
+                    .spawn_with_profile(
+                        &agent_name_owned,
+                        &agentik_types::AgentPath::root(),
+                        profile_clone,
+                        model_override,
+                    )
+                    .await;
+                let event = match result {
+                    Ok(name) => {
+                        tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with host");
+                        crate::app_event::AppEvent::AgentSpawned {
+                            profile_name: profile_name_owned,
+                            result: Ok(name),
+                        }
                     }
-                }
-                Err(e) => {
-                    tracing::error!(profile = %profile_name_owned, error = %e, "agent spawn failed");
-                    crate::app_event::AppEvent::AgentSpawned {
-                        profile_name: profile_name_owned,
-                        result: Err(e),
+                    Err(e) => {
+                        tracing::error!(profile = %profile_name_owned, error = %e, "agent spawn failed");
+                        crate::app_event::AppEvent::AgentSpawned {
+                            profile_name: profile_name_owned,
+                            result: Err(e),
+                        }
                     }
-                }
-            };
-            tx.send(event);
-        });
+                };
+                tx.send(event);
+            },
+        );
 
         tracing::info!(profile = %profile.path, "spawning agent...");
     }
@@ -1288,18 +1300,22 @@ impl App {
             return;
         };
         let tx = self.app_event_tx.clone();
-        self.runtime_handle.spawn(async move {
-            tracing::debug!("querying list_agents from storage");
-            match storage.list_agents().await {
-                Ok(records) => {
-                    tracing::info!(count = records.len(), "list_agents succeeded");
-                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "list_agents",
+            async move {
+                tracing::debug!("querying list_agents from storage");
+                match storage.list_agents().await {
+                    Ok(records) => {
+                        tracing::info!(count = records.len(), "list_agents succeeded");
+                        tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to list agents");
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to list agents");
-                }
-            }
-        });
+            },
+        );
     }
 
     /// Key handling while the agent resume picker popup is open.
@@ -1433,17 +1449,21 @@ impl App {
             return;
         };
         let tx = self.app_event_tx.clone();
-        self.runtime_handle.spawn(async move {
-            match storage.delete_agent(agent_id).await {
-                Ok(()) => {
-                    tracing::info!(%agent_id, "agent deleted from storage");
-                    tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "delete_agent_record",
+            async move {
+                match storage.delete_agent(agent_id).await {
+                    Ok(()) => {
+                        tracing::info!(%agent_id, "agent deleted from storage");
+                        tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
+                    }
+                    Err(e) => {
+                        tracing::error!(%agent_id, error = %e, "failed to delete agent");
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(%agent_id, error = %e, "failed to delete agent");
-                }
-            }
-        });
+            },
+        );
     }
 
     /// Rename an agent record in storage: updates `agents.name` to the new
@@ -1457,24 +1477,28 @@ impl App {
         };
         let new_name = new_path.as_str().to_string();
         let tx = self.app_event_tx.clone();
-        self.runtime_handle.spawn(async move {
-            // Read the current record, update its name, and upsert.
-            let Some(mut record) = storage.get_agent(agent_id).await.ok().flatten() else {
-                tracing::error!(%agent_id, "agent record not found for rename");
-                return;
-            };
-            record.name = new_name;
-            record.last_active = chrono::Utc::now().timestamp_millis();
-            if let Err(e) = storage.upsert_agent(record).await {
-                tracing::error!(%agent_id, error = %e, "failed to rename agent");
-                return;
-            }
-            tracing::info!(%agent_id, new_path = %new_path, "agent renamed in storage");
-            tx.send(crate::app_event::AppEvent::AgentRenamed {
-                agent_id,
-                new_path,
-            });
-        });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "rename_agent_record",
+            async move {
+                // Read the current record, update its name, and upsert.
+                let Some(mut record) = storage.get_agent(agent_id).await.ok().flatten() else {
+                    tracing::error!(%agent_id, "agent record not found for rename");
+                    return;
+                };
+                record.name = new_name;
+                record.last_active = chrono::Utc::now().timestamp_millis();
+                if let Err(e) = storage.upsert_agent(record).await {
+                    tracing::error!(%agent_id, error = %e, "failed to rename agent");
+                    return;
+                }
+                tracing::info!(%agent_id, new_path = %new_path, "agent renamed in storage");
+                tx.send(crate::app_event::AppEvent::AgentRenamed {
+                    agent_id,
+                    new_path,
+                });
+            },
+        );
     }
 
     /// Key handling while the name input popup is open.
@@ -2481,32 +2505,36 @@ impl App {
         };
         let name = agent_name.to_string();
         let spec = model_spec.to_string();
-        self.runtime_handle.spawn(async move {
-            // Read the current record.
-            let Some(mut record) = storage
-                .get_agent_by_name(&name)
-                .await
-                .ok()
-                .flatten()
-            else {
-                tracing::warn!(agent = %name, "agent record not found for model persistence");
-                return;
-            };
-            // Update preferred_model inside config_json.
-            if let Some(obj) = record.config_json.as_object_mut() {
-                obj.insert(
-                    "preferred_model".to_string(),
-                    serde_json::Value::String(spec.clone()),
-                );
-            }
-            record.last_active = chrono::Utc::now().timestamp_millis();
-            // Upsert the updated record.
-            if let Err(e) = storage.upsert_agent(record).await {
-                tracing::error!(agent = %name, error = %e, "failed to persist model spec");
-            } else {
-                tracing::info!(agent = %name, model = %spec, "model spec persisted to agent record");
-            }
-        });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "persist_agent_model",
+            async move {
+                // Read the current record.
+                let Some(mut record) = storage
+                    .get_agent_by_name(&name)
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    tracing::warn!(agent = %name, "agent record not found for model persistence");
+                    return;
+                };
+                // Update preferred_model inside config_json.
+                if let Some(obj) = record.config_json.as_object_mut() {
+                    obj.insert(
+                        "preferred_model".to_string(),
+                        serde_json::Value::String(spec.clone()),
+                    );
+                }
+                record.last_active = chrono::Utc::now().timestamp_millis();
+                // Upsert the updated record.
+                if let Err(e) = storage.upsert_agent(record).await {
+                    tracing::error!(agent = %name, error = %e, "failed to persist model spec");
+                } else {
+                    tracing::info!(agent = %name, model = %spec, "model spec persisted to agent record");
+                }
+            },
+        );
     }
 
     fn handle_model_config_key(&mut self, key: &KeyEvent) {

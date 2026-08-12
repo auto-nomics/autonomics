@@ -222,6 +222,7 @@ impl Toolset {
             let implementation = registration.implementation.clone();
             let input = tc.input.clone();
             let task_id = tc.id.clone();
+            let tool_name = tc.name.clone();
 
             let seq = self.tasks.read().await.alloc_seq();
             let cancel_token = CancellationToken::new();
@@ -233,11 +234,37 @@ impl Toolset {
             };
 
             let task_handle = tokio::spawn(async move {
+                // Catch panics from tool execution so they become proper
+                // ToolErrors instead of crashing the task silently.
+                use std::panic::AssertUnwindSafe;
+                use futures::FutureExt;
+
                 let exec_fut = implementation.execute_with_context(input, &ctx);
-                tokio::pin!(exec_fut);
 
                 let result = tokio::select! {
-                    r = &mut exec_fut => r,
+                    r = AssertUnwindSafe(exec_fut).catch_unwind() => {
+                        match r {
+                            Ok(r) => r,
+                            Err(payload) => {
+                                let msg = payload
+                                    .downcast_ref::<&'static str>()
+                                    .map(|s| (*s).to_string())
+                                    .or_else(|| payload.downcast_ref::<String>().map(|s| s.clone()))
+                                    .unwrap_or_else(|| "<non-string panic>".to_string());
+                                let bt = std::backtrace::Backtrace::force_capture();
+                                tracing::error!(
+                                    target: "spawn_safe",
+                                    tool = %tool_name,
+                                    panic = %msg,
+                                    backtrace = %bt,
+                                    "tool execution panicked"
+                                );
+                                Err(ToolError::ExecutionFailed {
+                                    source: format!("tool panicked: {msg}").into(),
+                                })
+                            }
+                        }
+                    }
                     _ = cancel.cancelled() => Err(ToolError::Cancel),
                     _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
                         Err(ToolError::Timeout { seconds: timeout_secs })

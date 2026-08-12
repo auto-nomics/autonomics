@@ -12,6 +12,7 @@
 //! [`AgentNetwork`].
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use agentik_core::Agent;
@@ -30,6 +31,7 @@ use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use datalake::Datalake;
+use futures::FutureExt;
 use fs::OpendalFileStorage;
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -213,20 +215,21 @@ impl SharedInfra {
         let agent_db = resources
             .resolve_database("db.agent")
             .unwrap_or_else(|_| config.agent_db.clone());
-        let storage: Arc<dyn AgentStorage> = match TursoAgentStorage::open(&agent_db).await {
+        // Open once and clone — both trait objects share the same underlying
+        // connection (and its Mutex).  Opening the file twice creates two
+        // separate Database objects and risks file-lock contention.
+        let turso_store = match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => {
                 tracing::info!(path = %agent_db.display(), "agent storage opened");
-                Arc::new(s)
+                s
             }
             Err(e) => {
                 return Err(HostError::Storage(e));
             }
         };
-        // Profile registry — separate trait object on the same connection.
-        let profile_storage: Arc<dyn AgentProfileRegistry> = match TursoAgentStorage::open(&agent_db).await {
-            Ok(s) => Arc::new(s),
-            Err(e) => return Err(HostError::Storage(e)),
-        };
+        let storage: Arc<dyn AgentStorage> = Arc::new(turso_store.clone());
+        // Profile registry — clone of the same storage (shares one connection).
+        let profile_storage: Arc<dyn AgentProfileRegistry> = Arc::new(turso_store);
 
         let bib_db_path = resources
             .resolve_database("db.bib")
@@ -332,9 +335,17 @@ impl SharedInfra {
         let internal_tx = agent.internal_event_tx();
         let model_handle = agent.model_handle().clone();
 
-        let agent_task = self.runtime_handle.spawn(async move {
-            agent.run().await;
-        });
+        // Wrap `agent.run()` in catch_unwind so a panic inside the agent
+        // loop (e.g. a bug in compact, tool execution, or message handling)
+        // is logged with a backtrace instead of silently killing the task.
+        let agent_path_str = agent_path.as_str().to_string();
+        let agent_task = agentik_core::supervise::spawn_safe_on(
+            &self.runtime_handle,
+            &format!("agent::{agent_path_str}"),
+            async move {
+                agent.run().await;
+            },
+        );
 
         Ok(AgentHandle {
             agent_id,
@@ -655,7 +666,7 @@ pub struct AgentHandle {
     pub profile_path: String,
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
-    agent_task: tokio::task::JoinHandle<()>,
+    agent_task: tokio::task::JoinHandle<Result<(), agentik_core::supervise::TaskPanic>>,
     cancel_token: CancellationToken,
     model: Arc<ArcSwapOption<Model>>,
 }
@@ -699,8 +710,28 @@ impl AgentHandle {
     /// Consume and await the background agent task. Call this after
     /// [`shutdown`](Self::shutdown) to ensure all sessions are paused and
     /// snapshots are persisted before the runtime is torn down.
+    ///
+    /// If the agent task panicked at any point (detected via `catch_unwind`),
+    /// the panic details are logged here as an additional safety net.
     pub async fn join(self) {
-        let _ = self.agent_task.await;
+        match self.agent_task.await {
+            Ok(Ok(())) => {} // clean exit
+            Ok(Err(panic)) => {
+                tracing::error!(
+                    agent = %self.path,
+                    panic_task = %panic.task,
+                    panic_msg = %panic.msg,
+                    "agent task had panicked before join"
+                );
+            }
+            Err(join_err) => {
+                tracing::error!(
+                    agent = %self.path,
+                    error = %join_err,
+                    "agent task join failed (panic or cancellation)"
+                );
+            }
+        }
     }
 
     pub fn poll_event(&mut self) -> Option<AgentEvent> {
@@ -874,7 +905,7 @@ enum AgentCommand {
 /// Internal entry for one registered agent.
 struct AgentEntry {
     cmd_tx: UnboundedSender<AgentCommand>,
-    _relay_task: JoinHandle<()>,
+    _relay_task: JoinHandle<Result<(), agentik_core::supervise::TaskPanic>>,
     /// Full hierarchical path — source of truth for identity.
     /// Mirrors the HashMap key but kept here for typed access within entries.
     #[allow(dead_code)]
@@ -1075,17 +1106,35 @@ impl RuntimeHost {
                 let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra
-                        .spawn_agent(&path_for_spawn, &profile, model, None)
-                        .await
-                    {
-                        Ok(handle) => {
+                    let result = AssertUnwindSafe(async {
+                        infra
+                            .spawn_agent(&path_for_spawn, &profile, model, None)
+                            .await
+                    })
+                    .catch_unwind()
+                    .await;
+                    match result {
+                        Ok(Ok(handle)) => {
                             let registered_path = handle.path.as_str().to_string();
                             let _ = reply_tx.send(Ok(registered_path));
                             let _ = reg_tx.send((handle, info));
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(e.to_string()));
+                        }
+                        Err(panic_payload) => {
+                            let msg = panic_payload
+                                .downcast_ref::<&'static str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
+                            tracing::error!(
+                                target: "spawn_safe",
+                                task = "host::spawn_agent",
+                                panic = %msg,
+                                "spawn_agent task panicked"
+                            );
+                            let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
                         }
                     }
                 });
@@ -1128,17 +1177,35 @@ impl RuntimeHost {
                 let path_for_spawn = child_path.clone();
 
                 self.infra.runtime_handle.spawn(async move {
-                    match infra
-                        .spawn_agent(&path_for_spawn, &profile, model, None)
-                        .await
-                    {
-                        Ok(handle) => {
+                    let result = AssertUnwindSafe(async {
+                        infra
+                            .spawn_agent(&path_for_spawn, &profile, model, None)
+                            .await
+                    })
+                    .catch_unwind()
+                    .await;
+                    match result {
+                        Ok(Ok(handle)) => {
                             let registered_path = handle.path.as_str().to_string();
                             let _ = reply_tx.send(Ok(registered_path));
                             let _ = reg_tx.send((handle, info));
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(e.to_string()));
+                        }
+                        Err(panic_payload) => {
+                            let msg = panic_payload
+                                .downcast_ref::<&'static str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
+                            tracing::error!(
+                                target: "spawn_safe",
+                                task = "host::spawn_with_profile",
+                                panic = %msg,
+                                "spawn_with_profile task panicked"
+                            );
+                            let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
                         }
                     }
                 });
@@ -1186,14 +1253,33 @@ impl RuntimeHost {
                 let child_for_persist = child.clone();
                 let child_path = child.path.clone();
                 self.infra.runtime_handle.spawn(async move {
-                    match profile_storage.create_profile(child_for_persist).await {
-                        Ok(()) => {
+                    let result = AssertUnwindSafe(async {
+                        profile_storage.create_profile(child_for_persist).await
+                    })
+                    .catch_unwind()
+                    .await;
+                    match result {
+                        Ok(Ok(())) => {
                             let _ = reply_tx.send(Ok(child_path));
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(format!(
                                 "Failed to persist derived profile: {e}"
                             )));
+                        }
+                        Err(panic_payload) => {
+                            let msg = panic_payload
+                                .downcast_ref::<&'static str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .unwrap_or_else(|| "<panic in create_profile>".to_string());
+                            tracing::error!(
+                                target: "spawn_safe",
+                                task = "host::create_profile",
+                                panic = %msg,
+                                "create_profile task panicked"
+                            );
+                            let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
                         }
                     }
                 });
@@ -1393,17 +1479,39 @@ impl RuntimeHost {
                 let storage = self.infra.storage.clone();
                 let runtime_handle = self.infra.runtime_handle.clone();
                 runtime_handle.spawn(async move {
-                    let result = match storage.list_persisted_agents().await {
-                        Ok(entries) => entries,
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "list_persisted_agents failed; returning empty list"
-                            );
-                            Vec::new()
+                    let result = AssertUnwindSafe(async {
+                        match storage.list_persisted_agents().await {
+                            Ok(entries) => entries,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "list_persisted_agents failed; returning empty list"
+                                );
+                                Vec::new()
+                            }
                         }
-                    };
-                    let _ = reply_tx.send(result);
+                    })
+                    .catch_unwind()
+                    .await;
+                    match result {
+                        Ok(entries) => {
+                            let _ = reply_tx.send(entries);
+                        }
+                        Err(panic_payload) => {
+                            let msg = panic_payload
+                                .downcast_ref::<&'static str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .unwrap_or_else(|| "<panic in list_persisted_agents>".to_string());
+                            tracing::error!(
+                                target: "spawn_safe",
+                                task = "host::list_persisted_agents",
+                                panic = %msg,
+                                "list_persisted_agents task panicked"
+                            );
+                            let _ = reply_tx.send(Vec::new());
+                        }
+                    }
                 });
             }
         }
@@ -1643,9 +1751,13 @@ impl RuntimeHost {
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
 
-        let relay_task = self.infra.runtime_handle.spawn(async move {
-            relay_loop(handle, cmd_rx, event_tx, relay_name).await;
-        });
+        let relay_task = agentik_core::supervise::spawn_safe_on(
+            &self.infra.runtime_handle,
+            &format!("relay::{relay_name}"),
+            async move {
+                relay_loop(handle, cmd_rx, event_tx, relay_name).await;
+            },
+        );
 
         self.agents.insert(
             path.as_str().to_string(),
@@ -1697,32 +1809,36 @@ impl RuntimeHost {
         };
         let last_event = info.last_event.clone();
 
-        self.infra.runtime_handle.spawn(async move {
-            // Wall-clock millis since the unix epoch. std::time::SystemTime
-            // is the only reliable source here (the runtime crate doesn't
-            // depend on chrono at runtime — it's a dev-dep only).
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            let entry = PersistedAgentGraph {
-                path: path_str.clone(),
-                parent_path,
-                profile_path,
-                agent_id,
-                status_json,
-                last_event,
-                created_at: now,
-                updated_at: now,
-            };
-            if let Err(e) = storage.upsert_agent_graph_entry(entry).await {
-                tracing::warn!(
-                    agent = %path_str,
-                    error = %e,
-                    "failed to persist agent graph entry (non-fatal)"
-                );
-            }
-        });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.infra.runtime_handle,
+            &format!("persist_upsert_agent_graph::{path_str}"),
+            async move {
+                // Wall-clock millis since the unix epoch. std::time::SystemTime
+                // is the only reliable source here (the runtime crate doesn't
+                // depend on chrono at runtime — it's a dev-dep only).
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let entry = PersistedAgentGraph {
+                    path: path_str.clone(),
+                    parent_path,
+                    profile_path,
+                    agent_id,
+                    status_json,
+                    last_event,
+                    created_at: now,
+                    updated_at: now,
+                };
+                if let Err(e) = storage.upsert_agent_graph_entry(entry).await {
+                    tracing::warn!(
+                        agent = %path_str,
+                        error = %e,
+                        "failed to persist agent graph entry (non-fatal)"
+                    );
+                }
+            },
+        );
     }
 
     /// Spawn a background task that updates the agent's persisted status.
@@ -1744,18 +1860,22 @@ impl RuntimeHost {
         };
         let last_event = last_event.clone();
 
-        self.infra.runtime_handle.spawn(async move {
-            if let Err(e) = storage
-                .update_agent_graph_status(&path_str, &status_json, last_event.as_deref())
-                .await
-            {
-                tracing::warn!(
-                    agent = %path_str,
-                    error = %e,
-                    "failed to persist agent status (non-fatal)"
-                );
-            }
-        });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.infra.runtime_handle,
+            &format!("persist_agent_status::{path_str}"),
+            async move {
+                if let Err(e) = storage
+                    .update_agent_graph_status(&path_str, &status_json, last_event.as_deref())
+                    .await
+                {
+                    tracing::warn!(
+                        agent = %path_str,
+                        error = %e,
+                        "failed to persist agent status (non-fatal)"
+                    );
+                }
+            },
+        );
     }
 
     /// Spawn a background task that removes the agent's persisted graph row.
@@ -1764,15 +1884,19 @@ impl RuntimeHost {
         let storage = self.infra.storage.clone();
         let path_str = path.to_string();
 
-        self.infra.runtime_handle.spawn(async move {
-            if let Err(e) = storage.remove_agent_graph_entry(&path_str).await {
-                tracing::warn!(
-                    agent = %path_str,
-                    error = %e,
-                    "failed to remove persisted agent graph entry (non-fatal)"
-                );
-            }
-        });
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.infra.runtime_handle,
+            &format!("persist_remove_agent_graph::{path_str}"),
+            async move {
+                if let Err(e) = storage.remove_agent_graph_entry(&path_str).await {
+                    tracing::warn!(
+                        agent = %path_str,
+                        error = %e,
+                        "failed to remove persisted agent graph entry (non-fatal)"
+                    );
+                }
+            },
+        );
     }
 
     /// Spawn an agent and immediately register it with the host's
@@ -1860,7 +1984,20 @@ impl RuntimeHost {
         // `handle.join().await` before exiting, which in turn waits for
         // the agent's `run()` to complete its session-pause shutdown.
         for task in relay_tasks {
-            let _ = task.await;
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(panic)) => {
+                    tracing::error!(
+                        target: "spawn_safe",
+                        task = %panic.task,
+                        panic = %panic.msg,
+                        "relay task panicked during shutdown"
+                    );
+                }
+                Err(join_err) => {
+                    tracing::error!(error = %join_err, "relay task join error during shutdown");
+                }
+            }
         }
     }
 

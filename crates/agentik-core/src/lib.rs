@@ -9,6 +9,7 @@ pub mod prompt;
 pub mod session;
 pub mod skill;
 pub mod storage;
+pub mod supervise;
 pub mod testing;
 pub mod tools;
 

@@ -53,9 +53,11 @@
 //! ```
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use turso::{Value, params_from_iter};
+use tokio::sync::Mutex;
+use turso::{Value, params_from_iter, IntoParams};
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
@@ -66,10 +68,36 @@ use crate::storage::{
     PersistedAgentGraph, RelationKind, StorageError,
 };
 
+/// Mutex-guarded wrapper around [`turso::Connection`].
+///
+/// A single `turso::Connection` forbids concurrent use — its internal
+/// `ConcurrentGuard` returns `"concurrent use forbidden"` when two tasks
+/// query simultaneously. Since `TursoAgentStorage` is shared (via `Clone`)
+/// across the host's status-persistence tasks and each agent's persist
+/// worker, we wrap the connection in a `tokio::sync::Mutex` to serialize
+/// access. Every call site that used `self.conn.execute(...)` etc. works
+/// unchanged because this wrapper exposes the same surface.
+#[derive(Clone)]
+struct LockedConn(Arc<Mutex<turso::Connection>>);
+
+impl LockedConn {
+    async fn execute(&self, sql: impl AsRef<str>, params: impl IntoParams) -> turso::Result<u64> {
+        self.0.lock().await.execute(sql, params).await
+    }
+
+    async fn query(&self, sql: impl AsRef<str>, params: impl IntoParams) -> turso::Result<turso::Rows> {
+        self.0.lock().await.query(sql, params).await
+    }
+
+    async fn execute_batch(&self, sql: impl AsRef<str>) -> turso::Result<()> {
+        self.0.lock().await.execute_batch(sql).await
+    }
+}
+
 /// Turso-backed implementation of [`AgentStorage`].
 #[derive(Clone)]
 pub struct TursoAgentStorage {
-    conn: turso::Connection,
+    conn: LockedConn,
 }
 
 impl TursoAgentStorage {
@@ -123,7 +151,9 @@ impl TursoAgentStorage {
             .await
             .map_err(|e| StorageError::Other(format!("set busy_timeout: {e}").into()))?;
 
-        let storage = Self { conn };
+        let storage = Self {
+            conn: LockedConn(Arc::new(Mutex::new(conn))),
+        };
         storage.init_schema().await?;
         tracing::info!(db = path_str, "turso agent storage opened");
         Ok(storage)
@@ -140,7 +170,9 @@ impl TursoAgentStorage {
             .connect()
             .map_err(|e| StorageError::Other(format!("connect in-memory db: {e}").into()))?;
 
-        let storage = Self { conn };
+        let storage = Self {
+            conn: LockedConn(Arc::new(Mutex::new(conn))),
+        };
         storage.init_schema().await?;
         Ok(storage)
     }
