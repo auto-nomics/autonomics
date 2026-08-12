@@ -7,18 +7,18 @@ rust-version.workspace = true
 description = "Agent tools for querying the Iceberg data lake."
 
 [dependencies]
-schemars.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 datalake = { path = "../datalake" }
 async-trait.workspace = true
-serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 datafusion.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 
+serde = { workspace = true }
+schemars.workspace = true
 [lints]
 workspace = true

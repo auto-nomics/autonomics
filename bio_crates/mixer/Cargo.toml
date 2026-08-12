@@ -6,15 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-faer.workspace = true
-thiserror.workspace = true
 rand = { version = "0.8", features = ["small_rng"] }
 rand_distr = "0.4"
 rand_mt = "4.2"
-flate2 = "1.0"
 rayon = "1.10"
 
 [dev-dependencies]
+flate2 = "1.1"
 serde_json.workspace = true
 # e2e test only（test_univariate_mixer_e2e）：从 Iceberg 数据湖读真实 GWAS。
 datalake = { path = "../../crates/datalake" }

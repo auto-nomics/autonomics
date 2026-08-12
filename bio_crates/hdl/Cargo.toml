@@ -21,7 +21,6 @@ lava = { path = "../lava" }
 # χ² quantiles for the likelihood-based CI cutoff c = exp(-qchisq(1-alpha,1)/2).
 # Matches the `lava`/`mr` convention (statrs for χ²/F survival + inverse CDF).
 statrs = "0.18"
-rayon = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true

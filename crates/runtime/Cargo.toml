@@ -13,7 +13,6 @@ agentik-network = { path = "../agentik-network" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-types = { path = "../agentik-types" }
 async-trait = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true }
 opengwas = { path = "../opengwas" }
 opentargets = { path = "../opentargets" }
@@ -39,6 +38,7 @@ serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 futures = { workspace = true }
 
+schemars.workspace = true
 [lints]
 workspace = true
 

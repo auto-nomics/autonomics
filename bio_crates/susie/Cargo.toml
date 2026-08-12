@@ -11,9 +11,12 @@ path = "src/lib.rs"
 
 [dependencies]
 faer.workspace = true
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true

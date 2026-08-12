@@ -15,18 +15,13 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 datafusion.workspace = true
 tokio = { workspace = true }
-arrow = { workspace = true, features = ["prettyprint"] }
 arrow-array.workspace = true
 arrow-schema.workspace = true
-arrow-select.workspace = true
 async-trait.workspace = true
 petgraph = "0.8"
 tracing.workspace = true
 futures.workspace = true
-ahash = "0.8"
 blake3 = "1.8.5"
-nanoid = "0.5.0"
-derive_more.workspace = true
 schemars.workspace = true
 turso.workspace = true
 chrono.workspace = true

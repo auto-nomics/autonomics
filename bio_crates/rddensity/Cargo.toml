@@ -15,8 +15,6 @@ rdrobust = { path = "../rdrobust" }
 faer.workspace = true
 statrs = "0.18"
 thiserror.workspace = true
-serde = { workspace = true, features = ["derive"] }
-schemars.workspace = true
 
 [dev-dependencies]
 csv = "1.3"

@@ -15,8 +15,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
-futures.workspace = true
-schemars.workspace = true
 
+schemars.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

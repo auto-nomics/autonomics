@@ -10,7 +10,6 @@ description = "Core data types for the LaTeX writing system — pure data, no I/
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-schemars.workspace = true
 
 [lints]
 workspace = true

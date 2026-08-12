@@ -19,7 +19,6 @@ statrs = "0.18"
 rand = "0.9"
 rand_distr = "0.5"
 rand_chacha = "0.9"
-rayon = "1.10"
 # LDSC (cross-trait rg / gencov / h²) and IVW-MR / Egger stages reuse the
 # already-validated `ldsc` and `mr` crates instead of re-porting them.
 ldsc = { path = "../ldsc" }

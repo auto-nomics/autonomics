@@ -20,7 +20,6 @@ statrs = "0.18"
 rand = "0.9"
 rand_distr = "0.5"
 rand_chacha = "0.9"
-rayon = "1.10"
 
 [dev-dependencies]
 serde_json.workspace = true

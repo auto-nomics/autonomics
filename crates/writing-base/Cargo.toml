@@ -17,14 +17,13 @@ chrono = { workspace = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "fs"] }
 async-trait.workspace = true
-tracing.workspace = true
 
 # Agent tools
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
-schemars.workspace = true
 
+schemars.workspace = true
 [lints]
 workspace = true
 

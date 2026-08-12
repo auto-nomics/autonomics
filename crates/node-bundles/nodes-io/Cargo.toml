@@ -17,11 +17,9 @@ semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
 mr = { path = "../../../bio_crates/mr" }
 iceberg.workspace = true
-iceberg-catalog-rest.workspace = true
 arrow-array.workspace = true
 arrow.workspace = true
 arrow-schema.workspace = true
-arrow-select.workspace = true
 parquet.workspace = true
 async-trait.workspace = true
 schemars.workspace = true

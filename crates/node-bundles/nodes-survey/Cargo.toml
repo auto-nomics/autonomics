@@ -15,7 +15,6 @@ async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-thiserror.workspace = true
 statrs = "0.18"
 arrow.workspace = true
 datafusion.workspace = true

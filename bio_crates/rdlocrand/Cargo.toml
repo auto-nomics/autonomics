@@ -14,8 +14,6 @@ path = "src/lib.rs"
 rdrobust = { path = "../rdrobust" }
 statrs = "0.18"
 thiserror.workspace = true
-serde = { workspace = true, features = ["derive"] }
-schemars.workspace = true
 rand = "0.9"
 rand_chacha = "0.9"
 

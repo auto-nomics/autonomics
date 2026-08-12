@@ -16,9 +16,6 @@ thiserror.workspace = true
 statrs = "0.18"
 # Seeded RNG (ChaCha8) for reproducible permutation p-values.
 rand = "0.9"
-rand_distr = "0.5"
-rand_chacha = "0.9"
-rayon = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true

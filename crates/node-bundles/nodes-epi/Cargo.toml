@@ -10,7 +10,6 @@ description = "Epidemiology DAG node bundle (RCS, ROC, LASSO, WQS, E-value)."
 dag-core = { path = "../../dag-core" }
 epi = { path = "../../../stat_crates/epi" }
 evalue = { path = "../../../bio_crates/evalue" }
-statrs = "0.18"
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

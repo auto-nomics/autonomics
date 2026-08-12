@@ -7,7 +7,6 @@ description = "Domain-agnostic agent runtime. Plug in any AgentContext to specia
 license.workspace = true
 
 [dependencies]
-schemars.workspace = true
 tokio = { version = "1", features = [
   "rt",
   "rt-multi-thread",
@@ -30,6 +29,7 @@ regex = "1"
 tokio-util = { version = "0.7", features = ["rt"] }
 arc-swap.workspace = true
 chrono = { workspace = true }
+schemars.workspace = true
 
 [dev-dependencies]
 dotenvy = "0.15"

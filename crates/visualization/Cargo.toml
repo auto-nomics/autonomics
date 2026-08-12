@@ -7,8 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 arrow = { workspace = true, features = ["ipc"] }
-arrow-array = { workspace = true }
-arrow-csv = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "rt", "time"] }
 thiserror = { workspace = true }
 serde = { workspace = true }

@@ -8,7 +8,6 @@ description = "Async Rust SDK for the Semantic Scholar Academic Graph API with a
 
 [dependencies]
 bib-types = { path = "../bib-types" }
-schemars.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
@@ -20,6 +19,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 resource-catalog = { path = "../resource-catalog" }
 
+schemars.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test = "3"

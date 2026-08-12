@@ -30,7 +30,6 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "time"] }
 futures = { version = "0.3", features = ["alloc"] }
 thiserror.workspace = true
 tracing = "0.1"
-dotenvy = "0.15"
 url = "2.5"
 bytes = "1.5"
 mime = "0.3.17"
@@ -38,12 +37,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 eventsource-stream = "0.2"
 pin-project = "1.0"
 async-trait = "0.1"
-tempfile = "3.0"
 sha2 = "0.11"
 base64 = "0.22"
 backoff = "0.4"
-tower = "0.5"
-once_cell = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 mockall = "0.14"
@@ -52,6 +48,7 @@ mockall = "0.14"
 default = []
 
 [dev-dependencies]
+dotenvy = "0.15"
 tokio-test = "0.4"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 chrono = "0.4"

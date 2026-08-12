@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-schemars.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
@@ -21,6 +20,7 @@ serde_urlencoded = "0.7"
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
 async-trait.workspace = true
 
+schemars.workspace = true
 [dev-dependencies]
 tempfile = "3.27.0"
 

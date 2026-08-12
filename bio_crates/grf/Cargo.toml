@@ -13,15 +13,11 @@ path = "src/lib.rs"
 [dependencies]
 grf-sys = { path = "../../crates/grf-sys" }
 thiserror.workspace = true
-faer.workspace = true
 statkit = { path = "../../stat_crates/statkit" }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-async-trait.workspace = true
 schemars.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
-arrow.workspace = true
 rand = "0.8"
 rand_distr = "0.4"
 

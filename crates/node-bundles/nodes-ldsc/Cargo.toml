@@ -17,7 +17,6 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror.workspace = true
-tracing.workspace = true
 faer.workspace = true
 datafusion.workspace = true
 datalake = { path = "../../datalake" }

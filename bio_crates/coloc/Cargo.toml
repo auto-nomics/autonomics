@@ -10,11 +10,8 @@ name = "coloc"
 path = "src/lib.rs"
 
 [dependencies]
-faer.workspace = true
-statrs = "0.18"
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
-schemars.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
