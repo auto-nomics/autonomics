@@ -297,11 +297,18 @@ pub async fn op_write(
     )))
 }
 
-/// `edit` — exact string replacement.
+/// `edit` — fuzzy line-based string replacement backed by `apply-patch`.
+///
+/// Uses [`apply_patch::fuzzy_edit`] which matches `old_string` as a sequence
+/// of complete lines with progressive tolerance:
+///
+/// 1. **Exact** — byte-for-byte equality per line.
+/// 2. **rstrip** — ignore trailing whitespace.
+/// 3. **trim** — ignore leading and trailing whitespace.
+/// 4. **Unicode-normalised** — map smart quotes, en-dashes, NBSP, … to ASCII.
 ///
 /// All error paths return `Ok(ToolResult::error(...))` (never `Err`) so the
-/// LLM always receives a structured result.  Mirrors the behaviour of the
-/// original `agentik-tools` `EditTool`.
+/// LLM always receives a structured result.
 pub async fn op_edit(
     op: &opendal::Operator,
     path: Option<&str>,
@@ -353,33 +360,180 @@ pub async fn op_edit(
     };
 
     let replace_all = replace_all.unwrap_or(false);
-    let count = text.matches(old).count();
+    let outcome = apply_patch::fuzzy_edit(&text, old, new, replace_all);
 
-    if count == 0 {
-        return Ok(AgentToolResult::error("old_string not found in file"));
+    match outcome {
+        apply_patch::FuzzyEditOutcome::NotFound => {
+            Ok(AgentToolResult::error(
+                "old_string not found in file (tried exact, rstrip, trim, and Unicode-normalised matching)",
+            ))
+        }
+        apply_patch::FuzzyEditOutcome::Ambiguous { count } => {
+            Ok(AgentToolResult::error(format!(
+                "old_string matches {count} locations; set replace_all=true or make old_string unique"
+            )))
+        }
+        apply_patch::FuzzyEditOutcome::Replaced { new_content, count, fuzzy } => {
+            if let Err(e) = op.write(&vpath, new_content.into_bytes()).await {
+                return Ok(AgentToolResult::error(format!(
+                    "Failed to write {raw_path}: {e}"
+                )));
+            }
+            Ok(AgentToolResult::success_json(serde_json::json!({
+                "path": raw_path,
+                "replacements": count,
+                "fuzzy": fuzzy,
+            })))
+        }
     }
-    if count > 1 && !replace_all {
-        return Ok(AgentToolResult::error(format!(
-            "old_string matches {count} locations; set replace_all=true or make old_string unique"
-        )));
-    }
+}
 
-    let new_text = if replace_all {
-        text.replace(old, new)
-    } else {
-        text.replacen(old, new, 1)
+/// `patch` — apply a Codex-format multi-file patch through the VFS.
+///
+/// Parses the patch text with [`apply_patch::parse_patch`], then for each
+/// hunk performs the appropriate OpenDAL operation:
+///
+/// * **AddFile** — write new content (creates parent dirs implicitly via
+///   OpenDAL).
+/// * **DeleteFile** — remove the file.
+/// * **UpdateFile** — read original, compute new content via
+///   [`apply_patch::compute_updated_content`] (fuzzy line matching), write
+///   result.  If `*** Move to:` is present, writes to the destination and
+///   deletes the original.
+///
+/// All error paths return `Ok(ToolResult::error(...))` so the LLM always
+/// receives a structured result.
+pub async fn op_patch(
+    op: &opendal::Operator,
+    patch: Option<&str>,
+) -> Result<AgentToolResult, ToolError> {
+    let patch_text = match patch {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => {
+            return Ok(AgentToolResult::error(
+                "missing or empty 'patch' for patch op",
+            ));
+        }
     };
 
-    if let Err(e) = op.write(&vpath, new_text.into_bytes()).await {
-        return Ok(AgentToolResult::error(format!(
-            "Failed to write {raw_path}: {e}"
-        )));
+    let args = match apply_patch::parse_patch(patch_text) {
+        Ok(a) => a,
+        Err(e) => {
+            return Ok(AgentToolResult::error(format!("Parse error: {e}")));
+        }
+    };
+
+    if args.hunks.is_empty() {
+        return Ok(AgentToolResult::error("Patch contains no file operations"));
     }
 
-    let n = if replace_all { count as u64 } else { 1 };
+    let mut changes = Vec::new();
+
+    for hunk in &args.hunks {
+        match hunk {
+            apply_patch::Hunk::AddFile { path, contents } => {
+                let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                if let Err(e) = op.write(&vpath, contents.clone().into_bytes()).await {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to write {}: {e}",
+                        path.display()
+                    )));
+                }
+                changes.push(serde_json::json!({
+                    "action": "add",
+                    "path": path.display().to_string(),
+                }));
+            }
+
+            apply_patch::Hunk::DeleteFile { path } => {
+                let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                if let Err(e) = op.delete(&vpath).await {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to delete {}: {e}",
+                        path.display()
+                    )));
+                }
+                changes.push(serde_json::json!({
+                    "action": "delete",
+                    "path": path.display().to_string(),
+                }));
+            }
+
+            apply_patch::Hunk::UpdateFile {
+                path,
+                move_path,
+                chunks,
+            } => {
+                let src_vpath =
+                    OpendalFileStorage::normalize_path(&path.display().to_string());
+
+                // Read original content.
+                let buf = match op.read(&src_vpath).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return Ok(AgentToolResult::error(format!(
+                            "Failed to read {}: {e}",
+                            path.display()
+                        )));
+                    }
+                };
+                let original = match String::from_utf8(buf.to_vec()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Ok(AgentToolResult::error(format!(
+                            "File {} is not valid UTF-8",
+                            path.display()
+                        )));
+                    }
+                };
+
+                // Compute new content (fuzzy line matching, no I/O).
+                let new_content = match apply_patch::compute_updated_content(&original, chunks) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Ok(AgentToolResult::error(format!(
+                            "Failed to compute patch for {}: {e}",
+                            path.display()
+                        )));
+                    }
+                };
+
+                let dest_display = move_path
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+
+                let dest_vpath =
+                    OpendalFileStorage::normalize_path(&dest_display);
+
+                // Write result.
+                if let Err(e) = op.write(&dest_vpath, new_content.into_bytes()).await {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to write {}: {e}",
+                        dest_display
+                    )));
+                }
+
+                // Remove original on move.
+                if move_path.is_some() {
+                    if let Err(e) = op.delete(&src_vpath).await {
+                        return Ok(AgentToolResult::error(format!(
+                            "Failed to remove original {}: {e}",
+                            path.display()
+                        )));
+                    }
+                }
+
+                changes.push(serde_json::json!({
+                    "action": if move_path.is_some() { "move" } else { "update" },
+                    "path": dest_display,
+                }));
+            }
+        }
+    }
+
     Ok(AgentToolResult::success_json(serde_json::json!({
-        "path": raw_path,
-        "replacements": n,
+        "changes": changes,
     })))
 }
 

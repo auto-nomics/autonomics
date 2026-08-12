@@ -343,14 +343,9 @@ dependencies = [
 name = "apply-patch"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "pretty_assertions",
- "serde",
- "serde_json",
  "similar",
- "tempfile",
  "thiserror 2.0.19",
- "tokio",
 ]
 
 [[package]]
@@ -2620,6 +2615,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tracing",
  "turso",
 ]
@@ -4242,6 +4238,7 @@ dependencies = [
  "agentik-core",
  "agentik-proc",
  "agentik-sdk",
+ "apply-patch",
  "async-stream",
  "async-trait",
  "base64 0.22.1",

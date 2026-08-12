@@ -62,9 +62,6 @@ pub fn host_tools(
             control: ctrl.clone(),
             self_path: self_path.clone(),
         }),
-        ToolRegistration::from(WaitAgentTool {
-            control: ctrl.clone(),
-        }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
         // discover peers via route_task/get_agent_info and delegate via
@@ -220,11 +217,11 @@ impl ToolFunction for DeriveProfileTool {
 
 #[tool(
     name = "delegate_to",
-    description = "Delegate a task to another agent. The target agent's COMPLETE response \
-                   is injected back into your context as this tool's result — you will \
-                   see and can act on the full output. Runs in the background; use \
-                   wait_task / view_task_results to retrieve the response. \
-                   Multiple delegates can run concurrently."
+    description = "Delegate a task to another agent. Runs in the background and returns \
+                   a task number (#N) immediately. Use `wait_task` with the task number \
+                   to block until the result is ready, or `view_task_results` to poll \
+                   for the output. Multiple delegates can run concurrently. \
+                   The target agent's COMPLETE response becomes the task's result."
 )]
 struct DelegateToInput {
     /// Name of the target agent. Accepts a short name (e.g. "researcher")
@@ -277,7 +274,7 @@ impl ToolFunction for DelegateToTool {
                    Unlike delegate_to, the target agent's output is NOT injected back \
                    into your context — you only get a delivery confirmation. Use this when:\n\
                    - You want to notify another agent without needing its reply.\n\
-                   - You want to kick off work and check results later via wait_agent.\n\
+                   - You want to kick off work and check results later via list_agents.\n\
                    - You need to broadcast to multiple agents without consuming each response.\n\
                    The target agent processes the message in its own turn. If it is \
                    currently busy, the message is queued and handled on its next turn."
@@ -450,89 +447,6 @@ impl ToolFunction for ListAgentsTool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Wait Agent — block until peer reaches Completed/Failed
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Default wait timeout — 5 minutes. Long enough for most delegated
-/// analyses, short enough that a runaway wait doesn't pin the caller
-/// forever.
-const DEFAULT_WAIT_TIMEOUT_MS: u64 = 300_000;
-
-/// Minimum wait timeout — 1 second. Prevents tight-loop waits when
-/// the LLM asks for `timeout_ms = 0`.
-const MIN_WAIT_TIMEOUT_MS: u64 = 1_000;
-
-/// Maximum wait timeout — 1 hour. Hard ceiling even if the LLM asks
-/// for more. Past this, the caller should use multiple sequential
-/// waits or `delegate_to` directly.
-const MAX_WAIT_TIMEOUT_MS: u64 = 3_600_000;
-
-#[tool(
-    name = "wait_agent",
-    description = "Block until the named agent reaches Completed or Failed status, \
-                   or until the timeout elapses. Use after delegate_to when you \
-                   want to wait for a background task's result instead of \
-                   polling list_agents. Returns JSON with the final status, \
-                   last event, and timed_out flag. Default timeout 5min, \
-                   clamped to [1s, 1h]."
-)]
-struct WaitAgentInput {
-    /// Name of the agent to wait for. Accepts a short name (e.g. \
-    /// "researcher") or full path (e.g. "/root/researcher/worker").
-    agent_name: String,
-    /// How long to wait in milliseconds. Defaults to 300000 (5 min). \
-    /// Clamped to [1000, 3600000] ([1s, 1h]).
-    #[serde(default)]
-    timeout_ms: Option<u64>,
-}
-
-struct WaitAgentTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for WaitAgentTool {
-    type Input = WaitAgentInput;
-
-    /// Background execution — the caller is notified when the target agent
-    /// reaches a terminal status; the result is pulled on demand via
-    /// `view_task_results`.
-    fn execution_mode(&self) -> agentik_core::tools::ExecutionMode {
-        agentik_core::tools::ExecutionMode::Async
-    }
-
-    /// Hard cap 24 hours. The inner wait is clamped to 1 hour, so
-    /// the 24h ceiling only matters if the host command channel itself
-    /// is jammed — let the timeout fire rather than pin a tool slot.
-    fn timeout_seconds(&self) -> u64 {
-        86400
-    }
-
-    async fn run(
-        &self,
-        input: WaitAgentInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        let timeout_ms = input
-            .timeout_ms
-            .unwrap_or(DEFAULT_WAIT_TIMEOUT_MS)
-            .clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS);
-
-        match self.control.wait_agent(&input.agent_name, timeout_ms).await {
-            Some(Ok(result)) => Ok(ToolResult::success_json(
-                serde_json::to_value(&result).unwrap_or_default(),
-            )),
-            Some(Err(e)) => Ok(ToolResult::success(format!(
-                "wait_agent failed: {e}"
-            ))),
-            None => Ok(ToolResult::success(
-                "wait_agent: host command channel closed (runtime shut down)",
-            )),
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // Connect Agents (disabled — delegate-driven cooperation)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -799,7 +713,7 @@ impl ToolFunction for InterruptAgentTool {
     /// immediately to any in-flight LLM request or tool execution.
     /// The agent then emits `LifecycleChanged(Cancelled)` through the
     /// event stream; if you're tracking the result, follow up with
-    /// `wait_agent` to see the Cancelled status.
+    /// `view_task_results` to see the Cancelled status.
     /// Sync (default) — fast fire-and-forget, returns near-instantly.
     /// 1 hour cap — interrupt itself should be near-instant; the cap
     /// only matters if the host command channel is jammed.

@@ -10,8 +10,7 @@ pub mod liability;
 use std::collections::BTreeMap;
 
 use dag_core::resource_catalog::{
-    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
-    CATALOG_NAME,
+    CATALOG_NAME, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -31,30 +30,37 @@ impl NodePlugin for Plugin {
 
 // ── Resource metadata helpers ─────────────────────────────────────────────
 
-/// Build the common metadata map for an LD-score panel entry.
-fn panel_metadata(
-    source_doi: &str,
-    raw_archive: &str,
-    parquet_archive: &str,
-    population: &str,
-    annotation_version: &str,
+/// Provenance and sizing fields shared by every LD-score panel entry.
+///
+/// Grouped into a struct to keep [`panel_metadata`] under clippy's
+/// argument-count threshold.
+struct PanelSpec<'a> {
+    source_doi: &'a str,
+    raw_archive: &'a str,
+    parquet_archive: &'a str,
+    population: &'a str,
+    annotation_version: &'a str,
     n_annotations: usize,
     n_snps: usize,
-    consumer_nodes: &str,
-    extra: &[(&str, &str)],
-) -> BTreeMap<String, String> {
+    consumer_nodes: &'a str,
+}
+
+/// Build the common metadata map for an LD-score panel entry.
+fn panel_metadata(spec: &PanelSpec<'_>, extra: &[(&str, &str)]) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
-    m.insert("source".into(), source_doi.into());
-    m.insert("raw_archive".into(), raw_archive.into());
-    m.insert("parquet_archive".into(), parquet_archive.into());
-    m.insert("population".into(), population.into());
+    m.insert("source".into(), spec.source_doi.into());
+    m.insert("raw_archive".into(), spec.raw_archive.into());
+    m.insert("parquet_archive".into(), spec.parquet_archive.into());
+    m.insert("population".into(), spec.population.into());
     m.insert("reference_panel".into(), "1000G".into());
-    m.insert("annotation_version".into(), annotation_version.into());
-    m.insert("n_annotations".into(), n_annotations.to_string());
-    m.insert("n_snps".into(), n_snps.to_string());
-    m.insert("convert_script".into(),
-        "/mnt/disk3/autonomics/infra/sink_ldsc_panel/convert_to_parquet.py".into());
-    m.insert("consumer_nodes".into(), consumer_nodes.into());
+    m.insert("annotation_version".into(), spec.annotation_version.into());
+    m.insert("n_annotations".into(), spec.n_annotations.to_string());
+    m.insert("n_snps".into(), spec.n_snps.to_string());
+    m.insert(
+        "convert_script".into(),
+        "/mnt/disk3/autonomics/infra/sink_ldsc_panel/convert_to_parquet.py".into(),
+    );
+    m.insert("consumer_nodes".into(), spec.consumer_nodes.into());
     for (k, v) in extra {
         m.insert((*k).into(), (*v).into());
     }
@@ -93,14 +99,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "1000g_eur"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "baselineLD v2.2 (base annotation only)",
-                1,
-                1_187_349,
-                "ldsc (h²), ldsc_rg (genetic correlation)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "baselineLD v2.2 (base annotation only)",
+                    n_annotations: 1,
+                    n_snps: 1_187_349,
+                    consumer_nodes: "ldsc (h²), ldsc_rg (genetic correlation)",
+                },
                 &[
                     ("columns", "locus<contig,position>, rsid, ld_score, w_ld"),
                     ("m_5_50_base", "5961159"),
@@ -128,14 +136,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "1000g_eur_m"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "baselineLD v2.2 (base annotation only)",
-                1,
-                1, // M table has 1 row
-                "ldsc (h²), ldsc_rg (genetic correlation)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "baselineLD v2.2 (base annotation only)",
+                    n_annotations: 1,
+                    n_snps: 1, // M table has 1 row
+                    consumer_nodes: "ldsc (h²), ldsc_rg (genetic correlation)",
+                },
                 &[
                     ("columns", "annotation:string, m_5_50:double"),
                     ("m_5_50_base", "5961159"),
@@ -170,14 +180,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "baselineLD_v2_2_eur"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "baselineLD v2.2 (97 annotations)",
-                97,
-                1_187_349,
-                "sldsc (partitioned / stratified heritability)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "baselineLD v2.2 (97 annotations)",
+                    n_annotations: 97,
+                    n_snps: 1_187_349,
+                    consumer_nodes: "sldsc (partitioned / stratified heritability)",
+                },
                 &[
                     ("columns", "locus<contig,position>, rsid, 97×{annot}L2:double, w_ld"),
                     ("annotation_categories", "base, Coding_UCSC, Conserved, CTCF, DGF, DHS, Enhancer, Promoter, SuperEnhancer, TFBS, TSS, ..."),
@@ -209,14 +221,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "baselineLD_v2_2_eur_m"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "baselineLD v2.2 (97 annotations)",
-                97,
-                97, // M table has 97 rows
-                "sldsc (partitioned / stratified heritability)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "baselineLD v2.2 (97 annotations)",
+                    n_annotations: 97,
+                    n_snps: 97, // M table has 97 rows
+                    consumer_nodes: "sldsc (partitioned / stratified heritability)",
+                },
                 &[
                     ("columns", "annotation:string, m_5_50:double"),
                     ("panel_table", "iceberg.ld_score.baselineLD_v2_2_eur"),
@@ -245,14 +259,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "1000g_eur_frq"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "1000G Phase 3 QC frequencies",
-                0, // not annotations
-                4_501_760,
-                "sldsc (MAF QC), ldsc (allele alignment)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "1000G Phase 3 QC frequencies",
+                    n_annotations: 0, // not annotations
+                    n_snps: 4_501_760,
+                    consumer_nodes: "sldsc (MAF QC), ldsc (allele alignment)",
+                },
                 &[
                     ("columns", "chr:int32, rsid:string, a1:string, a2:string, maf:double, nchrobs:int32"),
                     ("qc_filter", "MAF >= 0.01; 18 malformed rows (missing A2/MAF) dropped"),
@@ -281,14 +297,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "baselineLD_v2_2_eur_annot"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "baselineLD v2.2 raw annotation matrix",
-                97,
-                9_997_231,
-                "sldsc (annotation enrichment), custom annotation pipeline",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "baselineLD v2.2 raw annotation matrix",
+                    n_annotations: 97,
+                    n_snps: 9_997_231,
+                    consumer_nodes: "sldsc (annotation enrichment), custom annotation pipeline",
+                },
                 &[
                     ("columns", "locus<contig,position>, rsid, 97×annotation:double"),
                     ("annotation_categories",
@@ -320,14 +338,16 @@ impl ResourceProvider for Resources {
                 ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "hm3_no_mhc"),
             )
             .with_metadata(panel_metadata(
-                "https://zenodo.org/records/10515792",
-                "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
-                "aliyun:autonomics-data/ldsc/panels/",
-                "EUR",
-                "HapMap3 no-MHC backbone",
-                0,
-                1_217_311,
-                "ldsc, ldsc_rg, sldsc (SNP filtering backbone)",
+                &PanelSpec {
+                    source_doi: "https://zenodo.org/records/10515792",
+                    raw_archive: "aliyun:autonomics-data/ldsc/s-ldsc-ref/",
+                    parquet_archive: "aliyun:autonomics-data/ldsc/panels/",
+                    population: "EUR",
+                    annotation_version: "HapMap3 no-MHC backbone",
+                    n_annotations: 0,
+                    n_snps: 1_217_311,
+                    consumer_nodes: "ldsc, ldsc_rg, sldsc (SNP filtering backbone)",
+                },
                 &[
                     ("columns", "rsid:string"),
                     ("exclusion", "MHC region (chr6:25-35Mb)"),

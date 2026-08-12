@@ -40,6 +40,8 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));
         registry.register(Box::new(univariate_mixer::UnivariateMixerNodeFactory {}));
         registry.register(Box::new(bivariate_mixer::BivariateMixerNodeFactory {}));
+        registry.register(Box::new(genomic_sem::GsemMungeNodeFactory {}));
+        registry.register(Box::new(genomic_sem::GsemLdscNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemUsermodelNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemCommonfactorNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemRgmodelNodeFactory {}));

@@ -284,26 +284,29 @@ impl Toolset {
             }
         }
 
-        // ---- Insert all entries into the task store ----
-        // Then move sync entries back out for waiting (same pattern as the
-        // old Fg/Bg partition, but simpler: we know which entries are sync
-        // at spawn time rather than discovering it via run_mode).
-        let mut to_wait: Vec<TaskEntry> = {
-            let mut tasks = self.tasks.write().await;
-            tasks.extend(new_entries);
-            // Remove sync entries (those whose id is NOT in async_meta).
-            let async_ids: Vec<&str> = async_meta.iter().map(|(_, id, _)| id.as_str()).collect();
-            let mut fg = Vec::new();
-            let mut i = 0;
-            while i < tasks.len() {
-                if async_ids.contains(&tasks[i].id()) {
-                    i += 1; // async — leave in store
-                } else {
-                    fg.push(tasks.swap_remove(i)); // sync — take out to wait
-                }
+        // ---- Partition new entries: sync → wait inline, async → store ----
+        // Sync entries are never inserted into the shared task store — they
+        // live only for the duration of this `execute()` call. This prevents
+        // the store-scanning partition loop from accidentally pulling out
+        // async tasks from *previous* batches (which caused background tasks
+        // to disappear when a subsequent execute() ran).
+        let async_ids: std::collections::HashSet<&str> =
+            async_meta.iter().map(|(_, id, _)| id.as_str()).collect();
+        let mut to_wait: Vec<TaskEntry> = Vec::new();
+        let mut to_store: Vec<TaskEntry> = Vec::new();
+        for entry in new_entries {
+            if async_ids.contains(entry.id()) {
+                to_store.push(entry);
+            } else {
+                to_wait.push(entry);
             }
-            fg
-        };
+        }
+
+        // Insert only async entries into the task store.
+        {
+            let mut tasks = self.tasks.write().await;
+            tasks.extend(to_store);
+        }
 
         // ---- Wait for sync tasks (block until done/timeout/cancel) ----
         let sync_results = join_all(to_wait.iter_mut().map(|t| t.wait_for_result())).await;
@@ -323,10 +326,11 @@ impl Toolset {
             results.push(ToolResult::from_pending_task(id, *seq));
         }
 
-        // ---- Cleanup: remove completed sync tasks, keep async tasks ----
+        // ---- GC: remove consumed async tasks (marked read by ----
+        // view_task_results / wait_task in a prior turn). Sync entries were
+        // never in the store so they don't need re-removal.
         {
             let mut tasks = self.tasks.write().await;
-            tasks.extend(to_wait);
             tasks.retain(|t| !t.is_read());
         }
 
@@ -712,5 +716,61 @@ mod tests {
         let b_tasks = toolset_b.tasks_handle();
         let b_tasks = b_tasks.read().await;
         assert!(b_tasks.is_empty(), "session B should have no tasks from A");
+    }
+
+    /// Regression: an async task spawned in a prior `execute()` call must
+    /// survive a subsequent `execute()` that runs a sync tool. The old code
+    /// scanned the entire store and pulled prior-batch async entries into
+    /// `to_wait`, causing them to be waited on (blocking) and then evicted
+    /// by `retain(|t| !t.is_read())`.
+    #[tokio::test]
+    async fn test_prior_async_task_survives_next_execute() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![
+            MockAsyncTool::new("async result").into(),
+            MockTool::new("sync result").into(),
+        ]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        // Batch 1: spawn an async task (e.g. delegate_to).
+        toolset
+            .execute(
+                &[ToolUse {
+                    id: "async_1".to_string(),
+                    name: "test_async_tool".to_string(),
+                    input: json!({ "reason": "a" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Batch 2: execute a sync tool in the same toolset.
+        let results = toolset
+            .execute(
+                &[ToolUse {
+                    id: "sync_1".to_string(),
+                    name: "test_tool".to_string(),
+                    input: json!({ "reason": "s" }),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Sync result should be correct.
+        assert_eq!(results[0].text_content(), "sync result");
+
+        // The async task from batch 1 must still be in the store.
+        let tasks = toolset.tasks_handle();
+        let tasks = tasks.read().await;
+        let async_entry = tasks
+            .iter()
+            .find(|t| t.id() == "async_1")
+            .expect("prior async task must survive a subsequent execute() call");
+        assert!(
+            !async_entry.is_read(),
+            "prior async task should not be marked read"
+        );
     }
 }

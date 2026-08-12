@@ -10,6 +10,7 @@ schemars.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
+apply-patch = { path = "../apply-patch" }
 datafusion = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }

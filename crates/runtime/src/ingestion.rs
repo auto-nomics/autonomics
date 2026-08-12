@@ -22,7 +22,8 @@ use datalake::Datalake;
 use futures::StreamExt;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::spec::{
-    DataFileFormat, PartitionSpecBuilder, TableProperties, Transform,
+    DataFileFormat, Literal, PartitionKey, PartitionSpecBuilder, Struct,
+    TableProperties, Transform,
 };
 use iceberg::transaction::{Transaction, ApplyTransactionAction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
@@ -191,10 +192,7 @@ impl IngestionExecutor {
             );
             let data_file_builder = DataFileWriterBuilder::new(rolling_builder);
 
-            // Build the actual writer
-            let mut writer = ice(data_file_builder.build(None).await)?;
-
-            // ── Stream source parquet → writer ────────────────────────
+            // ── Read source to get partition value ────────────────────
             let ctx = ice(self.datalake.get_ctx_with_partitions(1).await)?;
             let file_spec = IngestionSpec {
                 source_path: file_path.clone(),
@@ -203,8 +201,51 @@ impl IngestionExecutor {
             let (df, _) = self.read_source(&ctx, &file_spec).await?;
             let mut stream = df.execute_stream().await?;
 
-            let mut file_rows: u64 = 0;
-            let mut batch_count = 0u32;
+            let first_batch = stream.next().await
+                .ok_or_else(|| anyhow::anyhow!("empty source: {file_path}"))??;
+
+            // Extract partition key from first batch
+            let p_spec = table.metadata().default_partition_spec().clone();
+            let partition_key = if p_spec.is_unpartitioned() {
+                None
+            } else {
+                let mut vals: Vec<Option<Literal>> = Vec::new();
+                for pf in p_spec.fields() {
+                    // Look up field name by source_id from iceberg schema
+                    let pf_schema = iceberg_schema.as_ref();
+                    let src_field = pf_schema.field_by_id(pf.source_id)
+                        .ok_or_else(|| anyhow::anyhow!("partition source_id {} not in schema", pf.source_id))?;
+                    let idx = arrow_schema.fields().iter()
+                        .position(|f| f.name() == &src_field.name)
+                        .ok_or_else(|| anyhow::anyhow!("partition col '{}' missing in arrow", src_field.name))?;
+                    let col = first_batch.column(idx);
+                    use datafusion::arrow::array::*;
+                    let lit = match col.data_type() {
+                        datafusion::arrow::datatypes::DataType::Int64 =>
+                            Literal::long(col.as_any().downcast_ref::<Int64Array>().unwrap().value(0)),
+                        datafusion::arrow::datatypes::DataType::Int32 =>
+                            Literal::int(col.as_any().downcast_ref::<Int32Array>().unwrap().value(0)),
+                        datafusion::arrow::datatypes::DataType::Utf8 =>
+                            Literal::string(col.as_any().downcast_ref::<StringArray>().unwrap().value(0)),
+                        dt => anyhow::bail!("unsupported partition type: {dt:?}"),
+                    };
+                    vals.push(Some(lit));
+                }
+                Some(PartitionKey::new(
+                    p_spec.as_ref().clone(),
+                    iceberg_schema.clone(),
+                    Struct::from_iter(vals),
+                ))
+            };
+
+            // Build writer with partition key
+            let mut writer = ice(data_file_builder.build(partition_key).await)?;
+
+            // Write first batch + remaining
+            let mut file_rows: u64 = first_batch.num_rows() as u64;
+            writer.write(first_batch).await
+                .map_err(|e| anyhow::anyhow!("writer error: {e}"))?;
+            let mut batch_count = 1u32;
             while let Some(result) = stream.next().await {
                 let batch = result?;
                 file_rows += batch.num_rows() as u64;
@@ -214,6 +255,7 @@ impl IngestionExecutor {
             }
             drop(stream);
             drop(ctx);
+
 
             // ── Close writer → collect data files ─────────────────────
             let data_files = writer.close().await

@@ -820,9 +820,9 @@ pub struct RuntimeHost {
     notify_rx: tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
     /// Broadcast event channel — same `HostEvent` stream as `notify_tx`,
     /// but multi-consumer. Each subscriber gets its own `broadcast::Receiver`
-    /// that lags independently. Used by `wait_agent` tools so multiple
-    /// agents can wait on different peer agents concurrently without
-    /// stealing events from each other (or from the TUI's mpsc channel).
+    /// that lags independently. Used by event subscribers (e.g. the TUI)
+    /// so multiple consumers can observe agent status changes concurrently
+    /// without stealing events from each other.
     /// Buffer of 256 should be plenty for in-flight status transitions;
     /// if it overflows, subscribers see `RecvError::Lagged` and skip ahead.
     event_broadcast: tokio::sync::broadcast::Sender<HostEvent>,
@@ -1333,140 +1333,6 @@ impl RuntimeHost {
                             .map(|p| capability_from_profile(p.name(), &p.path, p))
                     });
                 let _ = reply_tx.send(info);
-            }
-
-            // ── wait_agent: block until agent reaches Completed/Failed ──
-            // Optimistically checks the entry's current status first (no
-            // spawn / no wait if already terminal — fast path for agents
-            // that finished before the tool was called). Otherwise spawns
-            // a background task that subscribes to the host's broadcast
-            // event channel and listens for `AgentStatusChanged` matching
-            // the resolved path.
-            HostCommand::WaitAgentStatus {
-                agent_name,
-                timeout_ms,
-                reply_tx,
-            } => {
-                let resolved = self.resolve_agent(&agent_name);
-                let Some(path) = resolved else {
-                    let _ = reply_tx.send(Err(format!(
-                        "wait_agent: agent '{agent_name}' not found. \
-                         Use list_agents to see available agents."
-                    )));
-                    return;
-                };
-
-                // Snapshot current status. If already terminal, reply
-                // immediately — no point spawning a wait task that will
-                // only sit there until timeout.
-                let (cur_status, cur_event) = match self.agents.get(&path) {
-                    Some(entry) => (entry.status.clone(), entry.last_event.clone()),
-                    None => {
-                        let _ = reply_tx.send(Err(format!(
-                            "wait_agent: agent '{agent_name}' was unregistered while resolving"
-                        )));
-                        return;
-                    }
-                };
-                if is_final_status(&cur_status) {
-                    let _ = reply_tx.send(Ok(crate::control::WaitAgentResult {
-                        agent_path: path.clone(),
-                        status: cur_status,
-                        last_event: cur_event,
-                        timed_out: false,
-                    }));
-                    return;
-                }
-
-                // Non-terminal: spawn a wait task that subscribes to the
-                // broadcast channel and waits for a final status matching
-                // `path`. The task owns `reply_tx` and exits on the first
-                // final status OR on timeout.
-                let event_broadcast = self.event_broadcast.clone();
-                let path_for_filter = path.clone();
-                let runtime_handle = self.infra.runtime_handle.clone();
-                runtime_handle.spawn(async move {
-                    let deadline = tokio::time::Instant::now()
-                        + tokio::time::Duration::from_millis(timeout_ms);
-                    let mut rx = event_broadcast.subscribe();
-
-                    // Loop until final status or deadline. The first
-                    // poll re-checks the current status (a status change
-                    // could have happened between the snapshot above and
-                    // the subscribe below — closing that race).
-                    let mut last_observed: (AgentStatus, Option<String>) =
-                        (cur_status, cur_event);
-                    let outcome = tokio::time::timeout_at(deadline, async {
-                        loop {
-                            if is_final_status(&last_observed.0) {
-                                // Clone out so the outer scope can still
-                                // observe the same status on timeout.
-                                return Ok((last_observed.0.clone(), last_observed.1.clone()));
-                            }
-                            match rx.recv().await {
-                                Ok(HostEvent::AgentStatusChanged {
-                                    path: ev_path,
-                                    status,
-                                    last_event,
-                                }) if ev_path == path_for_filter => {
-                                    last_observed = (status, last_event);
-                                }
-                                Ok(_) => continue, // unrelated event
-                                Err(
-                                    tokio::sync::broadcast::error::RecvError::Lagged(_),
-                                ) => {
-                                    // Subscriber fell behind — skip ahead.
-                                    // The status we cared about may have
-                                    // already passed; we re-check on the
-                                    // next iteration. To avoid spinning
-                                    // forever on a lagged terminal event,
-                                    // also peek the current snapshot via
-                                    // a fresh status read — but the only
-                                    // way to do that without the registry
-                                    // would be to add a separate query.
-                                    // For now, accept a small chance of
-                                    // a timeout when a fast burst overruns
-                                    // the 256-slot buffer.
-                                    tracing::warn!(
-                                        agent = %path_for_filter,
-                                        "wait_agent subscriber lagged broadcast buffer"
-                                    );
-                                    continue;
-                                }
-                                Err(
-                                    tokio::sync::broadcast::error::RecvError::Closed,
-                                ) => {
-                                    return Err(format!(
-                                        "wait_agent: host event channel closed"
-                                    ));
-                                }
-                            }
-                        }
-                    })
-                    .await;
-
-                    let reply = match outcome {
-                        Ok(Ok((status, last_event))) => Ok(crate::control::WaitAgentResult {
-                            agent_path: path_for_filter.clone(),
-                            status,
-                            last_event,
-                            timed_out: false,
-                        }),
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => {
-                            // Timeout — report the last-observed status
-                            // so the caller knows what the agent was
-                            // doing when the wait expired.
-                            Ok(crate::control::WaitAgentResult {
-                                agent_path: path_for_filter.clone(),
-                                status: last_observed.0,
-                                last_event: last_observed.1,
-                                timed_out: true,
-                            })
-                        }
-                    };
-                    let _ = reply_tx.send(reply);
-                });
             }
 
             // ── Session management (forwarded to relay) ──
@@ -2116,7 +1982,7 @@ impl RuntimeHost {
     }
 
     /// Send a `HostEvent` to both the mpsc channel (TUI / `recv_event`)
-    /// and the broadcast channel (`wait_agent` subscribers). The mpsc
+    /// and the broadcast channel (event subscribers). The mpsc
     /// send is silently dropped if no receiver is alive; the broadcast
     /// send only fails if no receiver has ever subscribed (and we don't
     /// care in that case either — the broadcast keeps a 0-receiver
@@ -2432,14 +2298,13 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
 }
 
 /// Returns `true` if `status` is terminal — i.e. the agent won't
-/// transition further on its own. Used by `wait_agent` to decide when
-/// to return without polling.
+/// transition further on its own.
 ///
 /// `Completed` is terminal-in-turn but **not** sticky across shutdown:
-/// a fresh message flips the agent back to `Running`. From a
-/// `wait_agent` caller's perspective, `Completed` IS terminal — the
-/// caller has the response it needed and any subsequent turn is a new
-/// request the caller must opt into via `send_message` / `delegate_to`.
+/// a fresh message flips the agent back to `Running`. From a caller's
+/// perspective, `Completed` IS terminal — the caller has the response
+/// it needed and any subsequent turn is a new request the caller must
+/// opt into via `send_message` / `delegate_to`.
 ///
 /// `Failed` is sticky until the agent is shut down: every subsequent
 /// event re-asserts the same failure.
@@ -2658,7 +2523,7 @@ mod status_derivation_tests {
 }
 
 #[cfg(test)]
-mod wait_agent_tests {
+mod status_tests {
     use super::*;
 
     // ── is_final_status ──
@@ -2690,36 +2555,6 @@ mod wait_agent_tests {
         assert!(is_final_status(&AgentStatus::Failed {
             message: "boom".into()
         }));
-    }
-
-    // ── WaitAgentResult JSON shape ──
-
-    #[test]
-    fn wait_result_serializes_with_status_and_timed_out() {
-        let r = crate::control::WaitAgentResult {
-            agent_path: "/root/researcher".into(),
-            status: AgentStatus::Completed,
-            last_event: Some("done".into()),
-            timed_out: false,
-        };
-        let json = serde_json::to_value(&r).expect("serialize");
-        assert_eq!(json["agent_path"], "/root/researcher");
-        assert_eq!(json["status"]["kind"], "completed");
-        assert_eq!(json["last_event"], "done");
-        assert_eq!(json["timed_out"], false);
-    }
-
-    #[test]
-    fn wait_result_omits_last_event_when_none() {
-        let r = crate::control::WaitAgentResult {
-            agent_path: "/root/w".into(),
-            status: AgentStatus::Running,
-            last_event: None,
-            timed_out: true,
-        };
-        let json = serde_json::to_value(&r).expect("serialize");
-        assert!(json.get("last_event").is_none(), "should skip None");
-        assert_eq!(json["timed_out"], true);
     }
 
     // ── AgentStatus::tag for log lines ──
@@ -2865,9 +2700,8 @@ mod interrupt_agent_tests {
 
     /// The `is_final_status` predicate interacts with interrupt:
     /// after `cancel_agent`, the agent emits `LifecycleChanged(Cancelled)`
-    /// which `derive_agent_status` maps to `AgentStatus::Failed` (we
-    /// chose Failed so wait_agent picks it up). Verify the chain
-    /// `Cancelled → Failed → is_final` returns true.
+    /// which `derive_agent_status` maps to `AgentStatus::Failed`. Verify
+    /// the chain `Cancelled → Failed → is_final` returns true.
     #[test]
     fn cancelled_lifecycle_maps_to_failed_via_derive() {
         let (status, _) = derive_agent_status(&AgentEvent::LifecycleChanged(
@@ -2875,13 +2709,13 @@ mod interrupt_agent_tests {
         ));
         assert!(
             is_final_status(&status),
-            "wait_agent must observe Cancelled as terminal so the caller \
-             doesn't wait forever after interrupt_agent fires"
+            "Cancelled must map to a terminal status so delegated tasks \
+             don't hang forever after interrupt_agent fires"
         );
     }
 
     /// Same for `Error` lifecycle — fatal system errors must also be
-    /// terminal so wait_agent returns.
+    /// terminal.
     #[test]
     fn error_lifecycle_maps_to_failed_via_derive() {
         let (status, _) = derive_agent_status(&AgentEvent::LifecycleChanged(

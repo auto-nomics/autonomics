@@ -10,7 +10,7 @@ use datafusion::object_store::Error as ObjectStoreError;
 use datafusion::object_store::{
     Attributes, CopyMode, CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload,
     ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
-    PutPayload, PutResult, path::Path,
+    PutPayload, PutResult, UploadPart, path::Path,
 };
 use datafusion::prelude::SessionContext;
 use futures::stream::BoxStream;
@@ -162,7 +162,7 @@ impl ObjectStore for OpendalFileStorage {
 
     fn put_multipart_opts<'life0, 'life1, 'async_trait>(
         &'life0 self,
-        _location: &'life1 Path,
+        location: &'life1 Path,
         _opts: PutMultipartOptions,
     ) -> std::pin::Pin<
         Box<
@@ -176,10 +176,16 @@ impl ObjectStore for OpendalFileStorage {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
-        Box::pin(async {
-            Err(ObjectStoreError::NotSupported {
-                source: "multipart upload is not supported".into(),
-            })
+        let path = location.to_string();
+        let op = self.op.clone();
+        Box::pin(async move {
+            let writer = op
+                .writer(&path)
+                .await
+                .map_err(opendal_to_object_store_error)?;
+            Ok(Box::new(OpendalMultipartUpload {
+                writer: Arc::new(tokio::sync::Mutex::new(writer)),
+            }) as Box<dyn MultipartUpload>)
         })
     }
 
@@ -384,6 +390,60 @@ impl ObjectStore for OpendalFileStorage {
     }
 }
 
+/// Adapter that bridges `object_store::MultipartUpload` onto OpenDAL's
+/// chunked `Writer` API.
+///
+/// DataFusion's single-file sink always writes through `WriteMultipart`,
+/// which calls `put_part` for each 5 MiB chunk and then `complete`. OpenDAL's
+/// `Writer` natively supports multi-chunk writes (`write` + `close`), so the
+/// bridge is a straightforward forward: each `put_part` appends to the writer,
+/// and `complete`/`abort` close or discard it.
+///
+/// `put_part` returns a `'static` future (per the `MultipartUpload` trait)
+/// and DataFusion may poll several concurrently via a `JoinSet`. To allow
+/// shared access from multiple futures without moving the writer in and out
+/// of `&mut self`, we wrap it in `Arc<Mutex<…>>` and clone the `Arc` per part.
+struct OpendalMultipartUpload {
+    writer: Arc<tokio::sync::Mutex<opendal::Writer>>,
+}
+
+impl std::fmt::Debug for OpendalMultipartUpload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpendalMultipartUpload").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for OpendalMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        let writer = self.writer.clone();
+        Box::pin(async move {
+            let mut buf = Vec::with_capacity(data.content_length());
+            for chunk in data.iter() {
+                buf.extend_from_slice(chunk);
+            }
+            let mut w = writer.lock().await;
+            w.write(buf).await.map_err(opendal_to_object_store_error)?;
+            Ok(())
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult, ObjectStoreError> {
+        let mut w = self.writer.lock().await;
+        w.close().await.map_err(opendal_to_object_store_error)?;
+        Ok(PutResult {
+            e_tag: None,
+            version: None,
+        })
+    }
+
+    async fn abort(&mut self) -> Result<(), ObjectStoreError> {
+        let mut w = self.writer.lock().await;
+        w.abort().await.map_err(opendal_to_object_store_error)?;
+        Ok(())
+    }
+}
+
 /// Convert an opendal error into an object_store error.
 fn opendal_to_object_store_error(err: opendal::Error) -> ObjectStoreError {
     let msg = err.message().to_string();
@@ -511,5 +571,46 @@ mod tests {
         assert_eq!(OpendalFileStorage::normalize_path(".."), "/");
         assert_eq!(OpendalFileStorage::normalize_path("../.."), "/");
         assert_eq!(OpendalFileStorage::normalize_path("/../../.."), "/");
+    }
+
+    // ── multipart upload ──
+
+    #[tokio::test]
+    async fn test_multipart_upload_roundtrip() {
+        use datafusion::object_store::{ObjectStoreExt, PutPayload};
+
+        let storage = OpendalFileStorage::new_temp();
+        let path = datafusion::object_store::path::Path::from("big_file.bin");
+
+        // Write 6 MiB — larger than the 5 MiB default chunk size, forcing
+        // multiple `put_part` calls if used via WriteMultipart.
+        let part_data = vec![0xABu8; 6 * 1024 * 1024];
+        let payload = PutPayload::from_bytes(part_data.clone().into());
+
+        storage.put(&path, payload).await.unwrap();
+
+        let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.len(), 6 * 1024 * 1024);
+        assert!(got.iter().all(|&b| b == 0xAB));
+    }
+
+    #[tokio::test]
+    async fn test_multipart_upload_multiple_parts() {
+        use datafusion::object_store::{ObjectStoreExt, WriteMultipart};
+
+        let storage = OpendalFileStorage::new_temp();
+        let path = datafusion::object_store::path::Path::from("multipart_test.bin");
+
+        // Use WriteMultipart exactly like DataFusion's single-file sink does.
+        let upload = storage.put_multipart(&path).await.unwrap();
+        let mut writer = WriteMultipart::new_with_chunk_size(upload, 1024);
+
+        // Write 50 KiB in a pattern we can verify → ~50 parts of ~1 KiB each.
+        let data: Vec<u8> = (0..50 * 1024).map(|i| (i % 256) as u8).collect();
+        writer.write(&data);
+        writer.finish().await.unwrap();
+
+        let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.as_ref(), data.as_slice());
     }
 }

@@ -20,7 +20,7 @@
 /// When `eof` is true the search starts from the end of the file so that
 /// patterns intended to match file endings are applied at the end, falling back
 /// to a forward search from `start` if needed.
-pub(crate) fn seek_sequence(
+pub fn seek_sequence(
     lines: &[String],
     pattern: &[String],
     start: usize,
@@ -95,7 +95,7 @@ pub(crate) fn seek_sequence(
 }
 
 /// Normalise common Unicode punctuation to ASCII equivalents, then trim.
-fn normalise(s: &str) -> String {
+pub fn normalise(s: &str) -> String {
     s.trim()
         .chars()
         .map(|c| match c {
@@ -113,6 +113,72 @@ fn normalise(s: &str) -> String {
             other => other,
         })
         .collect::<String>()
+}
+
+/// Check whether `pattern` matches `lines` starting at `pos`, using any of
+/// the four progressively-lenient passes (exact → rstrip → trim → unicode).
+///
+/// Unlike [`seek_sequence`], which scans forward to find the *best* match,
+/// this function checks a single position against *all* passes.
+pub fn matches_at(lines: &[String], pattern: &[String], pos: usize) -> bool {
+    if pattern.is_empty() || pos + pattern.len() > lines.len() {
+        return false;
+    }
+    let slice = &lines[pos..pos + pattern.len()];
+
+    // Pass 1: exact.
+    if slice == pattern {
+        return true;
+    }
+    // Pass 2: rstrip.
+    if pattern
+        .iter()
+        .enumerate()
+        .all(|(j, p)| slice[j].trim_end() == p.trim_end())
+    {
+        return true;
+    }
+    // Pass 3: trim.
+    if pattern
+        .iter()
+        .enumerate()
+        .all(|(j, p)| slice[j].trim() == p.trim())
+    {
+        return true;
+    }
+    // Pass 4: Unicode-normalised.
+    if pattern
+        .iter()
+        .enumerate()
+        .all(|(j, p)| normalise(&slice[j]) == normalise(p))
+    {
+        return true;
+    }
+    false
+}
+
+/// Find all non-overlapping match positions for `pattern` in `lines`,
+/// scanning left-to-right from position 0.
+///
+/// At each position, the pattern is checked against all four matching passes
+/// (exact → rstrip → trim → unicode).  This is the right function for
+/// "replace all" semantics; [`seek_sequence`] is better for single-replacement
+/// patch application where the best (earliest-pass) match is preferred.
+pub fn find_all_matches(lines: &[String], pattern: &[String]) -> Vec<usize> {
+    if pattern.is_empty() || pattern.len() > lines.len() {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i <= lines.len().saturating_sub(pattern.len()) {
+        if matches_at(lines, pattern, i) {
+            result.push(i);
+            i += pattern.len(); // non-overlapping
+        } else {
+            i += 1;
+        }
+    }
+    result
 }
 
 #[cfg(test)]

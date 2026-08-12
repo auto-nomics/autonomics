@@ -23,11 +23,11 @@ use crate::storage::OpendalFileStorage;
     description = "Virtual filesystem operations through OpenDAL VFS. \
         All operations execute in pure Rust — no system shell is spawned. \
         Supported ops: read, cat, ls, cp, mv, rm, mkdir, stat, touch, \
-        write, edit, head, tail, wc, grep, glob, tree. \
+        write, edit, patch, head, tail, wc, grep, glob, tree. \
         Unsupported (will error): chmod, chown, ln, pipes, redirects."
 )]
 pub struct VfsBashInput {
-    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|head|tail|wc|grep|glob|tree"]
+    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree"]
     pub op: String,
     #[desc = "Primary path (file or directory)."]
     pub path: Option<String>,
@@ -37,18 +37,35 @@ pub struct VfsBashInput {
     pub dst: Option<String>,
     #[desc = "Content to write (for write op)."]
     pub content: Option<String>,
-    #[desc = "Text to find (for edit op)."]
+    #[desc = "Text to find (for edit op). Matched as whole lines with \
+        fuzzy tolerance: exact, whitespace-trim, and Unicode-normalised."]
     pub old_string: Option<String>,
     #[desc = "Replacement text (for edit op)."]
     pub new_string: Option<String>,
     #[desc = "Replace all occurrences (for edit op). Default false."]
     pub replace_all: Option<bool>,
+    #[desc = "Codex-format patch text (for patch op). Multi-file add/delete/update \
+        with fuzzy line matching. Format: '*** Begin Patch\\n*** Update File: path\\n@@\\n-old\\n+new\\n*** End Patch'"]
+    pub patch: Option<String>,
     #[desc = "List recursively (for ls/tree). Default varies by op."]
     pub recursive: Option<bool>,
-    #[desc = "Regex pattern (for grep) or glob pattern (for glob op)."]
+    #[desc = "Regex pattern (for grep, searches a directory tree or a single \
+        file) or glob pattern (for glob op)."]
     pub pattern: Option<String>,
     #[desc = "Glob filter to narrow grep file candidates, e.g. '*.rs'."]
     pub glob: Option<String>,
+    #[desc = "Grep output mode: 'content' (matching lines, default), \
+        'files_with_matches' (just filenames with hits), or \
+        'count' (per-file match counts)."]
+    pub output_mode: Option<String>,
+    #[desc = "Context lines before each match (grep -B). Content mode only."]
+    pub before: Option<usize>,
+    #[desc = "Context lines after each match (grep -A). Content mode only."]
+    pub after: Option<usize>,
+    #[desc = "Case-insensitive matching for grep. Default: smart-case — \
+        auto-insensitive when pattern has no uppercase letters. \
+        Set true to force insensitive, false to force sensitive."]
+    pub case_insensitive: Option<bool>,
     #[desc = "Starting line number, 1-indexed (for cat/read/head/tail), \
         or number of entries to skip (for ls pagination)."]
     pub offset: Option<usize>,
@@ -90,6 +107,7 @@ impl ToolFunction for VfsBashTool {
                 .await
             }
             "touch" => ops::op_touch(op, input.path.as_deref()).await,
+            "patch" => ops::op_patch(op, input.patch.as_deref()).await,
 
             // ── filesystem ──
             "ls" => {
@@ -117,6 +135,10 @@ impl ToolFunction for VfsBashTool {
                     input.path.as_deref(),
                     input.pattern.as_deref(),
                     input.glob.as_deref(),
+                    input.output_mode.as_deref(),
+                    input.before,
+                    input.after,
+                    input.case_insensitive,
                 )
                 .await
             }
@@ -125,7 +147,7 @@ impl ToolFunction for VfsBashTool {
             // ── unsupported ──
             other => Ok(AgentToolResult::error(format!(
                 "Unknown or unsupported operation '{other}'. \
-                 Supported: read cat ls cp mv rm mkdir stat touch write edit \
+                 Supported: read cat ls cp mv rm mkdir stat touch write edit patch \
                  head tail wc grep glob tree."
             ))),
         }
@@ -165,9 +187,14 @@ mod tests {
             old_string: None,
             new_string: None,
             replace_all: None,
+            patch: None,
             recursive: None,
             pattern: None,
             glob: None,
+            output_mode: None,
+            before: None,
+            after: None,
+            case_insensitive: None,
             offset: None,
             limit: None,
         }
@@ -284,22 +311,267 @@ mod tests {
 
         let mut w = input("write");
         w.path = Some("/t.txt".into());
-        w.content = Some("foo bar baz".into());
+        w.content = Some("foo bar baz\n".into());
         tool.run(w).await.unwrap();
 
+        // Line-based edit: old_string must match complete line(s).
         let mut e = input("edit");
         e.path = Some("/t.txt".into());
-        e.old_string = Some("bar".into());
-        e.new_string = Some("QUX".into());
+        e.old_string = Some("foo bar baz".into());
+        e.new_string = Some("foo QUX baz".into());
         let result = tool.run(e).await.unwrap();
         let json = result_json(result);
         assert_eq!(json["replacements"], 1);
+        assert_eq!(json["fuzzy"], false);
 
         let mut c = input("cat");
         c.path = Some("/t.txt".into());
         let result = tool.run(c).await.unwrap();
         let json = result_json(result);
         assert!(json["content"].as_str().unwrap().contains("QUX"));
+    }
+
+    #[tokio::test]
+    async fn edit_fuzzy_whitespace_tolerance() {
+        let tool = make_tool();
+        // File line has trailing spaces; old_string does not.
+        let mut w = input("write");
+        w.path = Some("/fw.txt".into());
+        w.content = Some("foo  \nbar\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut e = input("edit");
+        e.path = Some("/fw.txt".into());
+        e.old_string = Some("foo".into());
+        e.new_string = Some("FOO".into());
+        let result = tool.run(e).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["replacements"], 1);
+        assert_eq!(json["fuzzy"], true);
+
+        let mut c = input("cat");
+        c.path = Some("/fw.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "FOO\nbar");
+    }
+
+    #[tokio::test]
+    async fn edit_fuzzy_indentation_tolerance() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/fi.txt".into());
+        w.content = Some("fn main() {\n    println!(\"hi\");\n}\n".into());
+        tool.run(w).await.unwrap();
+
+        // old_string omits leading indentation — trim pass should catch it.
+        let mut e = input("edit");
+        e.path = Some("/fi.txt".into());
+        e.old_string = Some("println!(\"hi\");".into());
+        e.new_string = Some("    println!(\"bye\");".into());
+        let result = tool.run(e).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["replacements"], 1);
+        assert_eq!(json["fuzzy"], true);
+
+        let mut c = input("cat");
+        c.path = Some("/fi.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert!(json["content"].as_str().unwrap().contains("bye"));
+    }
+
+    #[tokio::test]
+    async fn edit_not_found_error() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/nf.txt".into());
+        w.content = Some("hello\nworld\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut e = input("edit");
+        e.path = Some("/nf.txt".into());
+        e.old_string = Some("nonexistent".into());
+        e.new_string = Some("X".into());
+        let result = tool.run(e).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/ra.txt".into());
+        w.content = Some("foo\nfoo\nbar\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut e = input("edit");
+        e.path = Some("/ra.txt".into());
+        e.old_string = Some("foo".into());
+        e.new_string = Some("X".into());
+        e.replace_all = Some(true);
+        let result = tool.run(e).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["replacements"], 2);
+
+        let mut c = input("cat");
+        c.path = Some("/ra.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "X\nX\nbar");
+    }
+
+    #[tokio::test]
+    async fn edit_multi_line_old_string() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/ml.txt".into());
+        w.content = Some("a\nb\nc\nd\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut e = input("edit");
+        e.path = Some("/ml.txt".into());
+        e.old_string = Some("b\nc".into());
+        e.new_string = Some("X\nY".into());
+        let result = tool.run(e).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["replacements"], 1);
+
+        let mut c = input("cat");
+        c.path = Some("/ml.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "a\nX\nY\nd");
+    }
+
+    #[tokio::test]
+    async fn patch_update_file() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/p.txt".into());
+        w.content = Some("foo\nbar\nbaz\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut p = input("patch");
+        p.patch = Some(
+            "*** Begin Patch\n\
+             *** Update File: /p.txt\n\
+             @@\n\
+             -bar\n\
+             +BAR\n\
+             *** End Patch"
+                .into(),
+        );
+        let result = tool.run(p).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["changes"].as_array().unwrap().len(), 1);
+
+        let mut c = input("cat");
+        c.path = Some("/p.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "foo\nBAR\nbaz");
+    }
+
+    #[tokio::test]
+    async fn patch_add_and_delete_file() {
+        let tool = make_tool();
+
+        // Pre-create a file to delete.
+        let mut w = input("write");
+        w.path = Some("/old.txt".into());
+        w.content = Some("bye\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut p = input("patch");
+        p.patch = Some(
+            "*** Begin Patch\n\
+             *** Add File: /new.txt\n\
+             +hello world\n\
+             *** Delete File: /old.txt\n\
+             *** End Patch"
+                .into(),
+        );
+        let result = tool.run(p).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["changes"].as_array().unwrap().len(), 2);
+
+        // new.txt exists, old.txt gone.
+        let mut c = input("cat");
+        c.path = Some("/new.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "hello world");
+
+        let mut s = input("stat");
+        s.path = Some("/old.txt".into());
+        let result = tool.run(s).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn patch_move_file() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/src.txt".into());
+        w.content = Some("data\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut p = input("patch");
+        p.patch = Some(
+            "*** Begin Patch\n\
+             *** Update File: /src.txt\n\
+             *** Move to: /dst.txt\n\
+             @@\n\
+             -data\n\
+             +DATA\n\
+             *** End Patch"
+                .into(),
+        );
+        let result = tool.run(p).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["changes"][0]["action"], "move");
+
+        // src removed, dst has new content.
+        let mut c = input("cat");
+        c.path = Some("/dst.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "DATA");
+
+        let mut s = input("stat");
+        s.path = Some("/src.txt".into());
+        let result = tool.run(s).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn patch_fuzzy_matching() {
+        let tool = make_tool();
+        // File has trailing spaces; patch doesn't include them.
+        let mut w = input("write");
+        w.path = Some("/fz.txt".into());
+        w.content = Some("foo  \nbar\n".into());
+        tool.run(w).await.unwrap();
+
+        let mut p = input("patch");
+        p.patch = Some(
+            "*** Begin Patch\n\
+             *** Update File: /fz.txt\n\
+             @@\n\
+             -foo\n\
+             +FOO\n\
+             *** End Patch"
+                .into(),
+        );
+        let result = tool.run(p).await.unwrap();
+        assert_eq!(result.is_error, None);
+
+        let mut c = input("cat");
+        c.path = Some("/fz.txt".into());
+        let result = tool.run(c).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["content"].as_str().unwrap(), "FOO\nbar");
     }
 
     #[tokio::test]

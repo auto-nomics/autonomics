@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::json_err;
 use crate::format::format_download;
 use crate::{OpengwasClient, types::GwasInfoFilesRequest};
-use agentik_core::tools::{ProgressRecord, ToolContext, ToolError, ToolFunction};
+use agentik_core::tools::{ExecutionMode, ProgressRecord, ToolContext, ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
@@ -73,10 +73,15 @@ impl DownloadFilesTool {
 impl ToolFunction for DownloadFilesTool {
     type Input = DownloadFilesInput;
 
-    // Downloads are I/O-bound and typically exceed 30s for .vcf.gz files
-    // Downloads can take a very long time (often several GiB). Sync mode
-    // with a generous timeout — the agent blocks until the download finishes
-    // or times out. Progress is streamed via ToolContext::output.
+    // Downloads are I/O-bound and typically exceed 30s for .vcf.gz files.
+    // Async mode — returns a background task immediately so the agent can
+    // continue working. The caller retrieves the result via `wait_task` /
+    // `view_task_results`, and real-time progress is available via
+    // `view_task_status`.
+    fn execution_mode(&self) -> ExecutionMode {
+        ExecutionMode::Async
+    }
+
     fn timeout_seconds(&self) -> u64 {
         6000
     }

@@ -50,19 +50,6 @@ pub enum Hunk {
 }
 
 impl Hunk {
-    /// Resolve the hunk's path relative to `cwd`, returning an absolute path.
-    pub fn resolve_path(&self, cwd: &Path) -> PathBuf {
-        let path = match self {
-            Hunk::UpdateFile { path, .. } => path,
-            Hunk::AddFile { .. } | Hunk::DeleteFile { .. } => self.path(),
-        };
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            cwd.join(path)
-        }
-    }
-
     /// Returns the path affected by this hunk, using the move destination for
     /// rename hunks.
     pub fn path(&self) -> &Path {

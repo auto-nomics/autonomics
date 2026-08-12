@@ -1,50 +1,58 @@
 //! Patch-based file editing engine, ported from Codex's `apply_patch`.
 //!
-//! This crate provides a self-contained engine for parsing and applying
-//! structured patches (add / delete / update / move files) with fuzzy
-//! line-matching, delta tracking, and `tokio::fs` as the file system backend.
+//! **Pure computation** — no filesystem I/O. The crate parses structured
+//! patches (Codex `***` format) and computes new file contents using fuzzy
+//! line-matching. All reads and writes are the caller's responsibility,
+//! typically routed through an OpenDAL VFS layer.
 //!
 //! ## Quick start
 //!
-//! ```ignore
-//! use apply_patch::apply_patch;
+//! ```
+//! use apply_patch::fuzzy_edit;
+//!
+//! let outcome = fuzzy_edit("foo\nbar\n", "bar", "QUX", false);
+//! // outcome produces "foo\nQUX\n"
+//! ```
+//!
+//! For multi-file Codex-format patches:
+//!
+//! ```
+//! use apply_patch::{parse_patch, compute_updated_content};
 //!
 //! let patch = "*** Begin Patch
 //! *** Update File: src/main.rs
 //! @@
-//! -fn old() {}
-//! +fn new() {}
+//!  fn main
+//! -    println!(\"old\");
+//! +    println!(\"new\");
 //! *** End Patch";
 //!
-//! let delta = apply_patch(patch, std::path::Path::new("/project")).await?;
+//! let args = parse_patch(patch).unwrap();
+//! for hunk in &args.hunks {
+//!     // caller reads original content from VFS, then:
+//!     // let new = compute_updated_content(&original, chunks)?;
+//!     // caller writes `new` back to VFS
+//! #     let _ = hunk;
+//! }
 //! ```
 
 mod parser;
-mod seek_sequence;
-
-use std::collections::HashMap;
-use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+pub mod seek_sequence;
 
 use thiserror::Error;
 
-pub use parser::Hunk;
-pub use parser::ParseError;
-pub use parser::UpdateFileChunk;
-pub use parser::parse_patch;
+pub use parser::{Hunk, ParseError, UpdateFileChunk, parse_patch};
 
 // ---------------------------------------------------------------------------
-// Error types
+// Error type
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
 pub enum ApplyPatchError {
     #[error(transparent)]
     ParseError(#[from] ParseError),
-    #[error("{0}")]
-    IoError(String),
-    /// Error while computing replacements for an update chunk.
+    /// Error while computing replacements for an update chunk (e.g. the
+    /// chunk's context or old-lines could not be located in the file).
     #[error("{0}")]
     ComputeReplacements(String),
 }
@@ -53,7 +61,7 @@ pub enum ApplyPatchError {
 // Parsed patch data model
 // ---------------------------------------------------------------------------
 
-/// Parsed patch arguments: the raw text plus the parsed hunks.
+/// Parsed patch: the raw text plus the parsed [`Hunk`]s.
 #[derive(Debug, PartialEq)]
 pub struct ApplyPatchArgs {
     pub patch: String,
@@ -62,544 +70,23 @@ pub struct ApplyPatchArgs {
 }
 
 // ---------------------------------------------------------------------------
-// Delta tracking
+// In-memory: compute updated content from chunks
 // ---------------------------------------------------------------------------
 
-/// A committed file change, preserved in the order it was applied.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AppliedPatchChange {
-    pub path: PathBuf,
-    pub change: AppliedPatchFileChange,
-}
-
-/// Textual file change committed during patch application.
-#[derive(Clone, Debug, PartialEq)]
-pub enum AppliedPatchFileChange {
-    Add {
-        content: String,
-        overwritten_content: Option<String>,
-    },
-    Delete {
-        content: String,
-    },
-    Update {
-        move_path: Option<PathBuf>,
-        old_content: String,
-        new_content: String,
-    },
-}
-
-/// All committed changes from a patch application, plus an `exact` flag that
-/// is `false` when a partial failure may have left the filesystem in an
-/// indeterminate state.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AppliedPatchDelta {
-    changes: Vec<AppliedPatchChange>,
-    exact: bool,
-}
-
-impl AppliedPatchDelta {
-    fn new(changes: Vec<AppliedPatchChange>, exact: bool) -> Self {
-        Self { changes, exact }
-    }
-
-    fn empty() -> Self {
-        Self::new(Vec::new(), true)
-    }
-
-    pub fn changes(&self) -> &[AppliedPatchChange] {
-        &self.changes
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.changes.is_empty()
-    }
-
-    pub fn is_exact(&self) -> bool {
-        self.exact
-    }
-
-    /// Append a later delta, preserving aggregate exactness.
-    pub fn append(&mut self, other: Self) {
-        self.changes.extend(other.changes);
-        self.exact &= other.exact;
-    }
-}
-
-impl Default for AppliedPatchDelta {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-/// A failed patch application with the textual mutations committed before
-/// the failure was observed.
-#[derive(Debug, Error)]
-#[error("{error}")]
-pub struct ApplyPatchFailure {
-    error: ApplyPatchError,
-    delta: AppliedPatchDelta,
-}
-
-impl ApplyPatchFailure {
-    pub fn delta(&self) -> &AppliedPatchDelta {
-        &self.delta
-    }
-
-    pub fn into_parts(self) -> (ApplyPatchError, AppliedPatchDelta) {
-        (self.error, self.delta)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Affected paths summary
-// ---------------------------------------------------------------------------
-
-pub struct AffectedPaths {
-    pub added: Vec<PathBuf>,
-    pub modified: Vec<PathBuf>,
-    pub deleted: Vec<PathBuf>,
-}
-
-// ---------------------------------------------------------------------------
-// Public API: apply_patch
-// ---------------------------------------------------------------------------
-
-/// Applies a patch text relative to `cwd` using `tokio::fs`.
+/// Compute the result of applying update `chunks` to `original`.
 ///
-/// Returns the [`AppliedPatchDelta`] on success, or an [`ApplyPatchFailure`]
-/// carrying the error and any partial changes committed before the failure.
-pub async fn apply_patch(patch: &str, cwd: &Path) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
-    let hunks = match parse_patch(patch) {
-        Ok(source) => source.hunks,
-        Err(e) => {
-            return Err(ApplyPatchFailure::new(
-                ApplyPatchError::ParseError(e),
-                AppliedPatchDelta::empty(),
-            ));
-        }
-    };
-
-    apply_hunks(&hunks, cwd).await
-}
-
-// ---------------------------------------------------------------------------
-// Public API: preview_patch (dry-run)
-// ---------------------------------------------------------------------------
-
-/// A preview of what a patch would do, without writing anything to disk.
-#[derive(Debug)]
-pub struct PatchPreview {
-    pub changes: Vec<PreviewChange>,
-}
-
-/// One file-level preview.
-#[derive(Debug)]
-pub enum PreviewChange {
-    /// A new file would be created (possibly overwriting an existing one).
-    Add {
-        path: PathBuf,
-        content: String,
-        overwrites: Option<String>,
-    },
-    /// A file would be deleted.
-    Delete { path: PathBuf, content: String },
-    /// A file would be modified (and optionally moved).
-    Update {
-        path: PathBuf,
-        move_path: Option<PathBuf>,
-        old_content: String,
-        new_content: String,
-        /// Unified diff of old → new.
-        diff: String,
-    },
-}
-
-impl PatchPreview {
-    /// Returns a human-readable summary string (A/M/D per file).
-    pub fn summary(&self) -> String {
-        use std::fmt::Write;
-        let mut out = String::new();
-        for c in &self.changes {
-            let (tag, path, extra) = match c {
-                PreviewChange::Add { path, content, .. } => (
-                    "A",
-                    path.display().to_string(),
-                    format!("({} bytes)", content.len()),
-                ),
-                PreviewChange::Delete { path, .. } => {
-                    ("D", path.display().to_string(), String::new())
-                }
-                PreviewChange::Update {
-                    path,
-                    move_path,
-                    diff,
-                    ..
-                } => {
-                    let extra = if let Some(dest) = move_path {
-                        format!("→ {}", dest.display())
-                    } else {
-                        format!("({} diff lines)", diff.lines().count())
-                    };
-                    ("M", path.display().to_string(), extra)
-                }
-            };
-            let _ = writeln!(out, "{tag} {path} {extra}");
-        }
-        out.trim_end().to_string()
-    }
-
-    /// Returns the full unified diff for all update changes.
-    pub fn full_diff(&self) -> String {
-        let mut out = String::new();
-        for c in &self.changes {
-            if let PreviewChange::Update { diff, .. } = c {
-                out.push_str(diff);
-                out.push('\n');
-            }
-        }
-        out
-    }
-}
-
-/// Preview what a patch would do without writing anything to disk.
+/// Reads no files — works purely on the in-memory string. Uses
+/// [`seek_sequence`](crate::seek_sequence) fuzzy matching (exact → rstrip →
+/// trim → Unicode-normalise) to locate each chunk's `old_lines` within the
+/// original content, then splices in the `new_lines`.
 ///
-/// Parses the patch, reads existing files, computes the resulting content for
-/// each hunk, and returns a [`PatchPreview`]. No files are created, modified,
-/// or deleted.
-pub async fn preview_patch(patch: &str, cwd: &Path) -> Result<PatchPreview, ApplyPatchError> {
-    let hunks = parse_patch(patch)
-        .map_err(ApplyPatchError::ParseError)?
-        .hunks;
-
-    if hunks.is_empty() {
-        return Err(ApplyPatchError::IoError(
-            "No files were modified.".to_string(),
-        ));
-    }
-
-    let mut changes = Vec::with_capacity(hunks.len());
-
-    for hunk in &hunks {
-        let path = hunk.resolve_path(cwd);
-        match hunk {
-            Hunk::AddFile { contents, .. } => {
-                let overwrites = tokio::fs::read_to_string(&path)
-                    .await
-                    .ok()
-                    .filter(|c| !c.is_empty());
-                changes.push(PreviewChange::Add {
-                    path,
-                    content: contents.clone(),
-                    overwrites,
-                });
-            }
-            Hunk::DeleteFile { .. } => {
-                let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-                    ApplyPatchError::IoError(format!(
-                        "Failed to read file to delete {}: {e}",
-                        path.display()
-                    ))
-                })?;
-                changes.push(PreviewChange::Delete { path, content });
-            }
-            Hunk::UpdateFile {
-                move_path, chunks, ..
-            } => {
-                let AppliedPatchContents {
-                    original_contents,
-                    new_contents,
-                } = derive_new_contents_from_chunks(&path, chunks).await?;
-
-                let diff = make_unified_diff(&original_contents, &new_contents);
-
-                let dest = move_path.as_ref().map(|dest| {
-                    if dest.is_absolute() {
-                        dest.clone()
-                    } else {
-                        cwd.join(dest)
-                    }
-                });
-
-                changes.push(PreviewChange::Update {
-                    path,
-                    move_path: dest,
-                    old_content: original_contents,
-                    new_content: new_contents,
-                    diff,
-                });
-            }
-        }
-    }
-
-    Ok(PatchPreview { changes })
-}
-
-/// Generate a minimal unified diff between two strings.
-fn make_unified_diff(old: &str, new: &str) -> String {
-    use similar::TextDiff;
-    TextDiff::from_lines(old, new)
-        .unified_diff()
-        .context_radius(3)
-        .to_string()
-}
-
-/// Applies pre-parsed hunks relative to `cwd`.
-pub async fn apply_hunks(
-    hunks: &[Hunk],
-    cwd: &Path,
-) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
-    let mut delta = AppliedPatchDelta::empty();
-    match apply_hunks_to_files(hunks, cwd, &mut delta).await {
-        Ok(affected) => {
-            print_summary(&affected);
-            Ok(delta)
-        }
-        Err(error) => {
-            let apply_err = if let Some(io_err) = error.downcast_ref::<io::Error>() {
-                ApplyPatchError::IoError(io_err.to_string())
-            } else {
-                ApplyPatchError::IoError(error.to_string())
-            };
-            Err(ApplyPatchFailure::new(apply_err, delta))
-        }
-    }
-}
-
-impl ApplyPatchFailure {
-    fn new(error: ApplyPatchError, delta: AppliedPatchDelta) -> Self {
-        Self { error, delta }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Core application logic
-// ---------------------------------------------------------------------------
-
-async fn apply_hunks_to_files(
-    hunks: &[Hunk],
-    cwd: &Path,
-    delta: &mut AppliedPatchDelta,
-) -> anyhow::Result<AffectedPaths> {
-    if hunks.is_empty() {
-        anyhow::bail!("No files were modified.");
-    }
-
-    let mut added: Vec<PathBuf> = Vec::new();
-    let mut modified: Vec<PathBuf> = Vec::new();
-    let mut deleted: Vec<PathBuf> = Vec::new();
-
-    // A failed write can still have modified the target before surfacing an
-    // error (e.g. truncating before ENOSPC), so the delta is no longer exact.
-    macro_rules! try_write {
-        ($result:expr) => {
-            match $result {
-                Ok(value) => value,
-                Err(error) => {
-                    delta.exact = false;
-                    return Err(anyhow::Error::from(error));
-                }
-            }
-        };
-    }
-
-    for hunk in hunks {
-        let affected_path = hunk.path().to_path_buf();
-        let path = hunk.resolve_path(cwd);
-        match hunk {
-            Hunk::AddFile { contents, .. } => {
-                let overwritten_content = read_optional_file_text(&path, &mut delta.exact).await;
-                try_write!(
-                    write_file_with_missing_parent_retry(&path, contents.clone().into_bytes())
-                        .await
-                );
-                delta.changes.push(AppliedPatchChange {
-                    path: path.clone(),
-                    change: AppliedPatchFileChange::Add {
-                        content: contents.clone(),
-                        overwritten_content,
-                    },
-                });
-                added.push(affected_path);
-            }
-            Hunk::DeleteFile { .. } => {
-                let deleted_content = tokio::fs::read_to_string(&path).await.ok();
-                if deleted_content.is_none() {
-                    // File may not exist — check if it's a directory.
-                    if let Ok(meta) = tokio::fs::metadata(&path).await {
-                        if meta.is_dir() {
-                            anyhow::bail!(
-                                "Failed to delete file {}: path is a directory",
-                                path.display()
-                            );
-                        }
-                    }
-                    delta.exact = false;
-                }
-                match tokio::fs::remove_file(&path).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // If the file content matches what we expected, the
-                        // failure was side-effect-free.
-                        if let Some(expected) = &deleted_content {
-                            if let Ok(current) = tokio::fs::read_to_string(&path).await {
-                                if &current == expected {
-                                    // Side-effect-free, delta stays exact.
-                                } else {
-                                    delta.exact = false;
-                                }
-                            } else {
-                                delta.exact = false;
-                            }
-                        } else {
-                            delta.exact = false;
-                        }
-                        return Err(anyhow::Error::from(ApplyPatchError::IoError(format!(
-                            "Failed to delete file {}: {e}",
-                            path.display()
-                        ))));
-                    }
-                }
-                if let Some(content) = deleted_content {
-                    delta.changes.push(AppliedPatchChange {
-                        path: path.clone(),
-                        change: AppliedPatchFileChange::Delete { content },
-                    });
-                }
-                deleted.push(affected_path);
-            }
-            Hunk::UpdateFile {
-                move_path, chunks, ..
-            } => {
-                let AppliedPatchContents {
-                    original_contents,
-                    new_contents,
-                } = derive_new_contents_from_chunks(&path, chunks).await?;
-
-                if let Some(dest) = move_path {
-                    let dest_path = if dest.is_absolute() {
-                        dest.clone()
-                    } else {
-                        cwd.join(dest)
-                    };
-                    try_write!(
-                        write_file_with_missing_parent_retry(
-                            &dest_path,
-                            new_contents.clone().into_bytes()
-                        )
-                        .await
-                    );
-                    delta.changes.push(AppliedPatchChange {
-                        path: dest_path.clone(),
-                        change: AppliedPatchFileChange::Update {
-                            move_path: Some(dest_path.clone()),
-                            old_content: original_contents.clone(),
-                            new_content: new_contents.clone(),
-                        },
-                    });
-                    // Remove original.
-                    if let Err(e) = tokio::fs::remove_file(&path).await {
-                        // Destination was already written.
-                        if let Ok(current) = tokio::fs::read_to_string(&path).await {
-                            if current != original_contents {
-                                delta.exact = false;
-                            }
-                        } else {
-                            delta.exact = false;
-                        }
-                        return Err(anyhow::Error::from(ApplyPatchError::IoError(format!(
-                            "Failed to remove original {}: {e}",
-                            path.display()
-                        ))));
-                    }
-                    modified.push(affected_path);
-                } else {
-                    try_write!(
-                        tokio::fs::write(&path, new_contents.clone().into_bytes())
-                            .await
-                            .map_err(|e| ApplyPatchError::IoError(format!(
-                                "Failed to write file {}: {e}",
-                                path.display()
-                            )))
-                    );
-                    delta.changes.push(AppliedPatchChange {
-                        path: path.clone(),
-                        change: AppliedPatchFileChange::Update {
-                            move_path: None,
-                            old_content: original_contents,
-                            new_content: new_contents,
-                        },
-                    });
-                    modified.push(affected_path);
-                }
-            }
-        }
-    }
-    Ok(AffectedPaths {
-        added,
-        modified,
-        deleted,
-    })
-}
-
-async fn read_optional_file_text(path: &Path, exact: &mut bool) -> Option<String> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(content) => Some(content),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-        Err(_) => {
-            *exact = false;
-            None
-        }
-    }
-}
-
-/// Write a file, retrying after creating parent directories if the initial
-/// write fails with NotFound.
-async fn write_file_with_missing_parent_retry(
-    path: &Path,
-    contents: Vec<u8>,
-) -> Result<(), ApplyPatchError> {
-    match tokio::fs::write(path, &contents).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    ApplyPatchError::IoError(format!(
-                        "Failed to create parent directories for {}: {e}",
-                        path.display()
-                    ))
-                })?;
-            }
-            tokio::fs::write(path, &contents).await.map_err(|e| {
-                ApplyPatchError::IoError(format!("Failed to write file {}: {e}", path.display()))
-            })?;
-            Ok(())
-        }
-        Err(e) => Err(ApplyPatchError::IoError(format!(
-            "Failed to write file {}: {e}",
-            path.display()
-        ))),
-    }
-}
-
-struct AppliedPatchContents {
-    original_contents: String,
-    new_contents: String,
-}
-
-/// Read the file at `path`, apply `chunks` to derive the new content.
-async fn derive_new_contents_from_chunks(
-    path: &Path,
+/// The caller is responsible for reading the original file content and
+/// writing the result back (typically through OpenDAL VFS).
+pub fn compute_updated_content(
+    original: &str,
     chunks: &[UpdateFileChunk],
-) -> Result<AppliedPatchContents, ApplyPatchError> {
-    let original_contents = tokio::fs::read_to_string(path).await.map_err(|e| {
-        ApplyPatchError::IoError(format!(
-            "Failed to read file to update {}: {e}",
-            path.display()
-        ))
-    })?;
-
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
+) -> Result<String, ApplyPatchError> {
+    let mut original_lines: Vec<String> = original.split('\n').map(String::from).collect();
 
     // Drop the trailing empty element from the final newline so line counts
     // match standard `diff` behaviour.
@@ -607,18 +94,130 @@ async fn derive_new_contents_from_chunks(
         original_lines.pop();
     }
 
-    let path_text = path.display().to_string();
-    let replacements = compute_replacements(&original_lines, &path_text, chunks)?;
-    let new_lines = apply_replacements(original_lines, &replacements);
-    let mut new_lines = new_lines;
+    let replacements = compute_replacements(&original_lines, "(memory)", chunks)?;
+    let mut new_lines = apply_replacements(original_lines, &replacements);
+
     if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
-    Ok(AppliedPatchContents {
-        original_contents,
-        new_contents,
-    })
+
+    Ok(new_lines.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
+// In-memory: fuzzy single-replacement edit
+// ---------------------------------------------------------------------------
+
+/// Outcome of a [`fuzzy_edit`] call.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FuzzyEditOutcome {
+    /// Replacement was applied successfully.
+    Replaced {
+        new_content: String,
+        count: usize,
+        /// `true` when at least one match required fuzzy matching (i.e. was
+        /// not a byte-for-byte exact line match).
+        fuzzy: bool,
+    },
+    /// `old` was not found in `original`.
+    NotFound,
+    /// `old` matched multiple locations and `replace_all` was `false`.
+    Ambiguous { count: usize },
+}
+
+/// Fuzzy-replace `old` with `new` in `original` using line-based matching
+/// with progressive tolerance (exact → rstrip → trim → Unicode-normalise).
+///
+/// Both `old` and `new` are treated as sequences of complete lines. A single
+/// trailing newline in either argument is stripped (so `"bar\n"` and `"bar"`
+/// are equivalent patterns for a one-line replacement).
+///
+/// When `replace_all` is `false`, exactly one match location is required;
+/// multiple matches return [`FuzzyEditOutcome::Ambiguous`].
+pub fn fuzzy_edit(original: &str, old: &str, new: &str, replace_all: bool) -> FuzzyEditOutcome {
+    if old == new {
+        return FuzzyEditOutcome::Replaced {
+            new_content: original.to_string(),
+            count: 0,
+            fuzzy: false,
+        };
+    }
+
+    let orig_lines: Vec<String> = split_lines(original);
+    let pattern_lines: Vec<String> = split_lines(old);
+    let new_lines: Vec<String> = split_lines(new);
+
+    if pattern_lines.is_empty() || pattern_lines.len() > orig_lines.len() {
+        return FuzzyEditOutcome::NotFound;
+    }
+
+    let positions = seek_sequence::find_all_matches(&orig_lines, &pattern_lines);
+
+    if positions.is_empty() {
+        return FuzzyEditOutcome::NotFound;
+    }
+
+    if positions.len() > 1 && !replace_all {
+        return FuzzyEditOutcome::Ambiguous {
+            count: positions.len(),
+        };
+    }
+
+    let fuzzy = positions
+        .iter()
+        .any(|&pos| orig_lines[pos..pos + pattern_lines.len()] != pattern_lines[..]);
+
+    // Apply replacements in descending position order so earlier replacements
+    // don't shift indices of later ones.
+    let mut result = orig_lines.clone();
+    let pattern_len = pattern_lines.len();
+    for &pos in positions.iter().rev() {
+        for _ in 0..pattern_len {
+            if pos < result.len() {
+                result.remove(pos);
+            }
+        }
+        for (offset, line) in new_lines.iter().enumerate() {
+            result.insert(pos + offset, line.clone());
+        }
+    }
+
+    if !result.last().is_some_and(String::is_empty) {
+        result.push(String::new());
+    }
+
+    FuzzyEditOutcome::Replaced {
+        new_content: result.join("\n"),
+        count: positions.len(),
+        fuzzy,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility: unified diff
+// ---------------------------------------------------------------------------
+
+/// Generate a minimal unified diff between two strings.
+pub fn make_unified_diff(old: &str, new: &str) -> String {
+    use similar::TextDiff;
+    TextDiff::from_lines(old, new)
+        .unified_diff()
+        .context_radius(3)
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Split `s` by `\n` into owned lines, dropping a single trailing empty string
+/// produced by a final newline.
+fn split_lines(s: &str) -> Vec<String> {
+    let mut lines: Vec<String> = s.split('\n').map(String::from).collect();
+    if lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
 }
 
 /// Compute `(start_index, old_len, new_lines)` replacements from the chunk
@@ -650,7 +249,10 @@ fn compute_replacements(
 
         if chunk.old_lines.is_empty() {
             // Pure addition.
-            let insertion_idx = if original_lines.last().is_some_and(String::is_empty) {
+            let insertion_idx = if original_lines
+                .last()
+                .is_some_and(String::is_empty)
+            {
                 original_lines.len() - 1
             } else {
                 original_lines.len()
@@ -721,20 +323,6 @@ fn apply_replacements(
     lines
 }
 
-/// Print a git-style summary of changes to stdout.
-pub fn print_summary(affected: &AffectedPaths) {
-    println!("Success. Updated the following files:");
-    for path in &affected.added {
-        println!("A {}", path.display());
-    }
-    for path in &affected.modified {
-        println!("M {}", path.display());
-    }
-    for path in &affected.deleted {
-        println!("D {}", path.display());
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -743,316 +331,280 @@ pub fn print_summary(affected: &AffectedPaths) {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::fs;
-    use tempfile::tempdir;
 
-    fn wrap_patch(body: &str) -> String {
-        format!("*** Begin Patch\n{body}\n*** End Patch")
+    // ── compute_updated_content tests ──
+
+    #[test]
+    fn test_compute_simple_update() {
+        let original = "foo\nbar\nbaz\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["bar".into()],
+            new_lines: vec!["BAR".into()],
+            is_end_of_file: false,
+        }];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "foo\nBAR\nbaz\n");
     }
 
-    #[tokio::test]
-    async fn test_add_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("add.txt");
-        let patch = wrap_patch(&format!("*** Add File: {}\n+ab\n+cd", path.display()));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "ab\ncd\n");
+    #[test]
+    fn test_compute_multi_chunk() {
+        let original = "foo\nbar\nbaz\nqux\n";
+        let chunks = vec![
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["bar".into()],
+                new_lines: vec!["BAR".into()],
+                is_end_of_file: false,
+            },
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["qux".into()],
+                new_lines: vec!["QUX".into()],
+                is_end_of_file: false,
+            },
+        ];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "foo\nBAR\nbaz\nQUX\n");
     }
 
-    #[tokio::test]
-    async fn test_delete_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("del.txt");
-        fs::write(&path, "x").unwrap();
-        let patch = wrap_patch(&format!("*** Delete File: {}", path.display()));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-        assert!(!path.exists());
+    #[test]
+    fn test_compute_with_context_anchor() {
+        let original = "fn a() {}\nfn b() {}\nfn c() {}\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: Some("fn b() {}".into()),
+            old_lines: vec!["fn c() {}".into()],
+            new_lines: vec!["fn d() {}".into()],
+            is_end_of_file: false,
+        }];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "fn a() {}\nfn b() {}\nfn d() {}\n");
     }
 
-    #[tokio::test]
-    async fn test_update_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("update.txt");
-        fs::write(&path, "foo\nbar\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n foo\n-bar\n+baz",
-            path.display()
-        ));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "foo\nbaz\n");
+    #[test]
+    fn test_compute_pure_addition() {
+        let original = "a\nb\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec![],
+            new_lines: vec!["c".into()],
+            is_end_of_file: false,
+        }];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "a\nb\nc\n");
     }
 
-    #[tokio::test]
-    async fn test_update_file_move() {
-        let dir = tempdir().unwrap();
-        let src = dir.path().join("src.txt");
-        let dest = dir.path().join("dst.txt");
-        fs::write(&src, "line\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n*** Move to: {}\n@@\n-line\n+line2",
-            src.display(),
-            dest.display()
-        ));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        assert!(!src.exists());
-        let contents = fs::read_to_string(&dest).unwrap();
-        assert_eq!(contents, "line2\n");
+    #[test]
+    fn test_compute_fuzzy_whitespace() {
+        // Original has trailing spaces; chunk's old_lines don't.
+        let original = "foo  \nbar\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["foo".into()],
+            new_lines: vec!["FOO".into()],
+            is_end_of_file: false,
+        }];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "FOO\nbar\n");
     }
 
-    #[tokio::test]
-    async fn test_multiple_update_chunks_single_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("multi.txt");
-        fs::write(&path, "foo\nbar\nbaz\nqux\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n foo\n-bar\n+BAR\n@@\n baz\n-qux\n+QUX",
-            path.display()
-        ));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "foo\nBAR\nbaz\nQUX\n");
+    #[test]
+    fn test_compute_not_found_error() {
+        let original = "hello\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["world".into()],
+            new_lines: vec!["WORLD".into()],
+            is_end_of_file: false,
+        }];
+        assert!(compute_updated_content(original, &chunks).is_err());
     }
 
-    #[tokio::test]
-    async fn test_update_with_context_anchor() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("code.rs");
-        fs::write(&path, "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
-        // Use "fn b() {}" as context to target the second function.
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@ fn b() {{}}\n-fn c() {{}}\n+fn d() {{}}",
-            path.display()
-        ));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "fn a() {}\nfn b() {}\nfn d() {}\n");
+    #[test]
+    fn test_compute_multi_line_chunk() {
+        let original = "a\nb\nc\nd\n";
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["b".into(), "c".into()],
+            new_lines: vec!["X".into(), "Y".into()],
+            is_end_of_file: false,
+        }];
+        let result = compute_updated_content(original, &chunks).unwrap();
+        assert_eq!(result, "a\nX\nY\nd\n");
     }
 
-    #[tokio::test]
-    async fn test_pure_addition_at_eof() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("append.txt");
-        fs::write(&path, "a\nb\nc\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n+a\n*** End of File",
-            path.display()
-        ));
+    // ── fuzzy_edit tests ──
 
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "a\nb\nc\na\n");
-    }
-
-    #[tokio::test]
-    async fn test_unicode_dash_matching() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("unicode.py");
-        let original = "import asyncio  # local import \u{2013} avoids dep\n";
-        fs::write(&path, original).unwrap();
-
-        // Patch uses plain ASCII dash.
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n-import asyncio  # local import - avoids dep\n+import asyncio  # HELLO",
-            path.display()
-        ));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "import asyncio  # HELLO\n");
-    }
-
-    #[tokio::test]
-    async fn test_add_file_creates_parent_dirs() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("nested/deep/file.txt");
-        let patch = wrap_patch(&format!("*** Add File: {}\n+hello", path.display()));
-
-        apply_patch(&patch, dir.path()).await.unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "hello\n");
-    }
-
-    #[tokio::test]
-    async fn test_delta_tracking_on_success() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("track.txt");
-        fs::write(&path, "old\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n-old\n+new",
-            path.display()
-        ));
-
-        let delta = apply_patch(&patch, dir.path()).await.unwrap();
-        assert!(delta.is_exact());
-        assert_eq!(delta.changes().len(), 1);
-        match &delta.changes()[0].change {
-            AppliedPatchFileChange::Update {
-                old_content,
-                new_content,
-                ..
-            } => {
-                assert_eq!(old_content, "old\n");
-                assert_eq!(new_content, "new\n");
+    #[test]
+    fn test_fuzzy_edit_exact_single_line() {
+        let original = "foo\nbar\nbaz\n";
+        let outcome = fuzzy_edit(original, "bar", "QUX", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, count, fuzzy } => {
+                assert_eq!(new_content, "foo\nQUX\nbaz\n");
+                assert_eq!(count, 1);
+                assert!(!fuzzy);
             }
-            other => panic!("expected Update, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
     }
 
-    #[tokio::test]
-    async fn test_empty_patch_is_error() {
-        let dir = tempdir().unwrap();
-        let patch = "*** Begin Patch\n*** End Patch";
-        let result = apply_patch(patch, dir.path()).await;
-        assert!(result.is_err());
-    }
-
-    // ----- dry-run preview tests -----
-
-    #[tokio::test]
-    async fn test_preview_add_file_no_write() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("new.txt");
-        let patch = wrap_patch(&format!("*** Add File: {}\n+hello", path.display()));
-
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        assert_eq!(preview.changes.len(), 1);
-        match &preview.changes[0] {
-            PreviewChange::Add {
-                content,
-                overwrites,
-                ..
-            } => {
-                assert_eq!(content, "hello\n");
-                assert!(overwrites.is_none());
+    #[test]
+    fn test_fuzzy_edit_exact_multi_line() {
+        let original = "a\nb\nc\nd\n";
+        let outcome = fuzzy_edit(original, "b\nc", "X\nY", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+                assert_eq!(new_content, "a\nX\nY\nd\n");
+                assert_eq!(count, 1);
             }
-            other => panic!("expected Add, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
-        // File must NOT exist after preview.
-        assert!(!path.exists());
     }
 
-    #[tokio::test]
-    async fn test_preview_update_shows_diff() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("code.rs");
-        fs::write(&path, "fn old() {}\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n@@\n-fn old() {{}}\n+fn new() {{}}",
-            path.display()
-        ));
-
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        match &preview.changes[0] {
-            PreviewChange::Update {
-                diff,
-                old_content,
-                new_content,
-                ..
-            } => {
-                assert!(diff.contains("-fn old() {}"));
-                assert!(diff.contains("+fn new() {}"));
-                assert_eq!(old_content, "fn old() {}\n");
-                assert_eq!(new_content, "fn new() {}\n");
+    #[test]
+    fn test_fuzzy_edit_whitespace_tolerance() {
+        let original = "foo  \nbar\n";
+        let outcome = fuzzy_edit(original, "foo", "FOO", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, fuzzy, .. } => {
+                assert_eq!(new_content, "FOO\nbar\n");
+                assert!(fuzzy, "should be flagged as fuzzy match");
             }
-            other => panic!("expected Update, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
-        // File must be unchanged.
-        assert_eq!(fs::read_to_string(&path).unwrap(), "fn old() {}\n");
     }
 
-    #[tokio::test]
-    async fn test_preview_delete_shows_content() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("del.txt");
-        fs::write(&path, "bye bye\n").unwrap();
-        let patch = wrap_patch(&format!("*** Delete File: {}", path.display()));
-
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        match &preview.changes[0] {
-            PreviewChange::Delete { content, .. } => {
-                assert_eq!(content, "bye bye\n");
+    #[test]
+    fn test_fuzzy_edit_indentation_tolerance() {
+        let original = "fn main() {\n    println!(\"hi\");\n}\n";
+        let outcome = fuzzy_edit(original, "println!(\"hi\");", "println!(\"bye\");", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, fuzzy, .. } => {
+                assert!(new_content.contains("bye"));
+                assert!(fuzzy);
             }
-            other => panic!("expected Delete, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
-        // File must still exist.
-        assert!(path.exists());
     }
 
-    #[tokio::test]
-    async fn test_preview_move_shows_dest() {
-        let dir = tempdir().unwrap();
-        let src = dir.path().join("src.txt");
-        let dest = dir.path().join("dst.txt");
-        fs::write(&src, "line\n").unwrap();
-        let patch = wrap_patch(&format!(
-            "*** Update File: {}\n*** Move to: {}\n@@\n-line\n+line2",
-            src.display(),
-            dest.display()
-        ));
+    #[test]
+    fn test_fuzzy_edit_unicode_dash() {
+        let original = "import x  # local \u{2013} fast\n";
+        let outcome = fuzzy_edit(original, "import x  # local - fast", "import y", false);
+        assert!(matches!(outcome, FuzzyEditOutcome::Replaced { .. }));
+    }
 
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        match &preview.changes[0] {
-            PreviewChange::Update {
-                move_path,
-                new_content,
-                ..
-            } => {
-                assert_eq!(move_path.as_ref().unwrap(), &dest);
-                assert_eq!(new_content, "line2\n");
+    #[test]
+    fn test_fuzzy_edit_not_found() {
+        let outcome = fuzzy_edit("foo\nbar\n", "baz", "qux", false);
+        assert_eq!(outcome, FuzzyEditOutcome::NotFound);
+    }
+
+    #[test]
+    fn test_fuzzy_edit_ambiguous_without_replace_all() {
+        let outcome = fuzzy_edit("foo\nfoo\n", "foo", "bar", false);
+        match outcome {
+            FuzzyEditOutcome::Ambiguous { count } => assert_eq!(count, 2),
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_edit_replace_all() {
+        let outcome = fuzzy_edit("foo\nfoo\nbar\n", "foo", "X", true);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+                assert_eq!(new_content, "X\nX\nbar\n");
+                assert_eq!(count, 2);
             }
-            other => panic!("expected Update, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
-        // Neither file should have changed.
-        assert!(src.exists());
-        assert!(!dest.exists());
     }
 
-    #[tokio::test]
-    async fn test_preview_overwrite_detection() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("existing.txt");
-        fs::write(&path, "old content\n").unwrap();
-        let patch = wrap_patch(&format!("*** Add File: {}\n+new content", path.display()));
-
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        match &preview.changes[0] {
-            PreviewChange::Add { overwrites, .. } => {
-                assert_eq!(overwrites.as_deref(), Some("old content\n"));
+    #[test]
+    fn test_fuzzy_edit_delete_line() {
+        let outcome = fuzzy_edit("a\nb\nc\n", "b", "", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+                assert_eq!(new_content, "a\nc\n");
+                assert_eq!(count, 1);
             }
-            other => panic!("expected Add, got {other:?}"),
+            other => panic!("expected Replaced, got {other:?}"),
         }
-        // File must be unchanged.
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old content\n");
     }
 
-    #[tokio::test]
-    async fn test_preview_summary_and_full_diff() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("f.txt");
-        fs::write(&path, "a\nb\nc\n").unwrap();
-        let patch = wrap_patch(&format!("*** Update File: {}\n@@\n-b\n+B", path.display()));
+    #[test]
+    fn test_fuzzy_edit_same_old_new_is_noop() {
+        let outcome = fuzzy_edit("foo\nbar\n", "foo", "foo", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { count, fuzzy, .. } => {
+                assert_eq!(count, 0);
+                assert!(!fuzzy);
+            }
+            other => panic!("expected Replaced, got {other:?}"),
+        }
+    }
 
-        let preview = preview_patch(&patch, dir.path()).await.unwrap();
-        let summary = preview.summary();
-        assert!(summary.starts_with("M "));
-        assert!(summary.contains("f.txt"));
+    #[test]
+    fn test_fuzzy_edit_trailing_newline_in_old() {
+        let outcome = fuzzy_edit("foo\nbar\nbaz\n", "bar\n", "QUX", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced { new_content, .. } => {
+                assert_eq!(new_content, "foo\nQUX\nbaz\n");
+            }
+            other => panic!("expected Replaced, got {other:?}"),
+        }
+    }
 
-        let diff = preview.full_diff();
+    // ── parse + compute integration ──
+
+    #[test]
+    fn test_parse_then_compute() {
+        let patch = "*** Begin Patch
+*** Update File: test.rs
+@@
+ fn main
+-old
++new
+*** End Patch";
+        let args = parse_patch(patch).unwrap();
+        assert_eq!(args.hunks.len(), 1);
+        match &args.hunks[0] {
+            Hunk::UpdateFile { chunks, .. } => {
+                let original = "fn main\nold\n".to_string();
+                let result = compute_updated_content(&original, chunks).unwrap();
+                assert_eq!(result, "fn main\nnew\n");
+            }
+            other => panic!("expected UpdateFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_add_file() {
+        let r = parse_patch("*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch").unwrap();
+        assert_eq!(
+            r.hunks,
+            vec![Hunk::AddFile {
+                path: std::path::PathBuf::from("foo"),
+                contents: "hi\n".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_patch_returns_no_hunks() {
+        // The parser accepts an empty patch (no hunks); it's the caller's
+        // responsibility to treat zero hunks as a no-op or error.
+        let args = parse_patch("*** Begin Patch\n*** End Patch").unwrap();
+        assert!(args.hunks.is_empty());
+    }
+
+    // ── unified diff utility ──
+
+    #[test]
+    fn test_make_unified_diff() {
+        let diff = make_unified_diff("a\nb\nc\n", "a\nB\nc\n");
         assert!(diff.contains("-b"));
         assert!(diff.contains("+B"));
     }

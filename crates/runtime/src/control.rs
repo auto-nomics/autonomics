@@ -38,8 +38,7 @@ impl HostControl {
 
     /// Construct a `HostControl` without a broadcast subscription (for
     /// tests or contexts where event streaming isn't needed). The
-    /// `subscribe_events` and `wait_agent` methods will return `None`
-    /// / fail-soft when constructed this way.
+    /// `subscribe_events` method will return `None` when constructed this way.
     #[cfg(test)]
     pub fn new_without_broadcast(cmd_tx: UnboundedSender<HostCommand>) -> Self {
         Self {
@@ -54,8 +53,8 @@ impl HostControl {
     /// [`new_without_broadcast`](Self::new_without_broadcast)).
     ///
     /// Each subscriber gets its own independent lag counter — multiple
-    /// `wait_agent` calls can subscribe concurrently without interfering
-    /// with each other or with the TUI's mpsc event channel.
+    /// callers can subscribe concurrently without interfering with each
+    /// other or with the TUI's mpsc event channel.
     pub fn subscribe_events(
         &self,
     ) -> Option<tokio::sync::broadcast::Receiver<crate::host::HostEvent>> {
@@ -318,27 +317,6 @@ impl HostControl {
         .flatten()
     }
 
-    /// Block until `agent_name` reaches `Completed` / `Failed` or
-    /// `timeout_ms` elapses. Returns `None` if the host command channel
-    /// closed (host shutdown). On timeout, the returned `WaitAgentResult`
-    /// carries `timed_out = true` and the snapshot status at that moment.
-    ///
-    /// If the agent is already in a terminal status at call time, returns
-    /// immediately with that status — no polling, no wait task spawned.
-    /// This matches codex v1 `wait` semantics.
-    pub async fn wait_agent(
-        &self,
-        agent_name: &str,
-        timeout_ms: u64,
-    ) -> Option<Result<WaitAgentResult, String>> {
-        self.ask(|tx| HostCommand::WaitAgentStatus {
-            agent_name: agent_name.into(),
-            timeout_ms,
-            reply_tx: tx,
-        })
-        .await
-    }
-
     /// List all agents persisted in the storage graph (Phase 4 query
     /// entry). Includes agents that are not currently registered with
     /// the host (e.g. leftover from a previous process run). The caller
@@ -462,24 +440,6 @@ pub enum HostCommand {
     GetAgentInfo {
         name: String,
         reply_tx: oneshot::Sender<Option<AgentInfo>>,
-    },
-
-    /// Block until a named agent reaches a terminal status (Completed
-    /// or Failed) or the timeout elapses. Reply: `Ok(WaitAgentResult)`
-    /// if the agent reached a final status, `Err(msg)` if the timeout
-    /// elapsed, the agent wasn't found, or the broadcast channel closed.
-    ///
-    /// Modeled after codex's `multi_agents_v1::wait` tool
-    /// (`codex-rs/core/src/tools/handlers/multi_agents/wait.rs:46-222`):
-    /// subscribe to the per-agent status stream, then poll until the
-    /// status is final. Autonomics uses the host's broadcast event
-    /// channel (`HostEvent::AgentStatusChanged`) instead of a per-agent
-    /// `watch::Sender<AgentStatus>` because the runtime already derives
-    /// status centrally in `RuntimeHost::observe_status`.
-    WaitAgentStatus {
-        agent_name: String,
-        timeout_ms: u64,
-        reply_tx: oneshot::Sender<Result<WaitAgentResult, String>>,
     },
 
     /// List all agents currently persisted in the storage graph
@@ -665,20 +625,3 @@ pub struct RouteCandidate {
     pub matched_tags: Vec<String>,
 }
 
-/// Result of a `wait_agent` call: the agent's final status and
-/// whether the wait timed out before reaching it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WaitAgentResult {
-    /// Resolved agent full path (e.g. `/root/researcher`).
-    pub agent_path: String,
-    /// The final status observed. If `timed_out`, this is the status
-    /// at the time of timeout (typically `Running` or `AwaitingTool`).
-    pub status: AgentStatus,
-    /// Last event summary from when this status was observed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_event: Option<String>,
-    /// `true` if the timeout fired before the agent reached a terminal
-    /// status. In that case `status` is non-final and `last_event` is
-    /// the snapshot from timeout time.
-    pub timed_out: bool,
-}

@@ -395,8 +395,8 @@ impl LdscSldscNode {
                     .ok_or(LdscSldscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
                         "M table 'm_5_50' column is not Float64".into(),
                     )))?;
-                for i in 0..batch.num_rows() {
-                    names.push(name_vals[i].clone().unwrap_or_default());
+                for (i, name) in name_vals.iter().enumerate().take(batch.num_rows()) {
+                    names.push(name.clone().unwrap_or_default());
                     values.push(val_col.value(i));
                 }
             }
