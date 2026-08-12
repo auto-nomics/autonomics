@@ -263,7 +263,8 @@ pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::node
     let forest = decode_forest(node, batch)?;
     let y_hat = bytes_to_f64vec(get_binary(node, batch, CAUSAL_Y_HAT)?)?;
     let w_hat = bytes_to_f64vec(get_binary(node, batch, CAUSAL_W_HAT)?)?;
-    let ow = bytes_to_f64vec(get_binary(node, batch, CAUSAL_Y_ORIG)?)?;
+    let y_orig = bytes_to_f64vec(get_binary(node, batch, CAUSAL_Y_ORIG)?)?;
+    let w_orig = bytes_to_f64vec(get_binary(node, batch, CAUSAL_W_ORIG)?)?;
     let oob = match get_binary(node, batch, OOB_BIN) {
         Ok(b) if !b.is_empty() => {
             let pred_length = get_i32(node, batch, OOB_PRED_LENGTH)? as usize;
@@ -272,8 +273,6 @@ pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::node
         }
         _ => None,
     };
-    let n = ow.len();
-    let (y_orig, w_orig) = ow.split_at(n / 2);
     let stats = grf::forest::ForestStats {
         kind: forest.kind(),
         num_trees: forest.num_trees(),
@@ -281,14 +280,22 @@ pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::node
         pred_length: oob.as_ref().map(|o| o.pred_length).unwrap_or(1),
         has_oob_predictions: oob.is_some(),
     };
+    // Validate length consistency to catch encoding bugs early.
+    let n = y_orig.len();
+    if w_orig.len() != n || y_hat.len() != n || w_hat.len() != n {
+        return Err(dag_err(node, &format!(
+            "causal batch length mismatch: y_orig={}, w_orig={}, y_hat={}, w_hat={}",
+            n, w_orig.len(), y_hat.len(), w_hat.len()
+        )));
+    }
     Ok(grf::nodes::CausalForestOutput::from_parts(
         forest,
         y_hat,
         w_hat,
         oob,
         stats,
-        y_orig.to_vec(),
-        w_orig.to_vec(),
+        y_orig,
+        w_orig,
     ))
 }
 
