@@ -281,10 +281,20 @@ impl DAG {
                 in_flight += 1;
                 let tx = tx.clone();
                 let sem = sem.clone();
+                let global_sem = engine_ctx.global_sem.clone();
                 let job_id = id.clone();
                 let reporter = NodeReporter::new(job_id.clone(), tx.clone());
                 let engine_ctx = Arc::clone(&engine_ctx);
                 tokio::spawn(async move {
+                    // Acquire the **global** semaphore first (limits total
+                    // concurrent node executions across ALL agents), then the
+                    // per-run semaphore (limits concurrency within this DAG).
+                    // Ordering matters: global-before-local prevents one agent's
+                    // DAG from monopolising all tokio worker threads while
+                    // waiting for a local permit it will never get.
+                    if let Some(gs) = &global_sem {
+                        let _global_permit = gs.acquire().await.ok();
+                    }
                     let _permit = sem.acquire().await.ok();
                     let mut node = node_box;
                     let start = std::time::Instant::now();

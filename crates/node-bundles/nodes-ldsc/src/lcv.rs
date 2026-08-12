@@ -355,8 +355,8 @@ impl DagNode for LcvNode {
         let ctx = node_ctx.session();
         let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
             &node_ctx.resources,
-            "ldscore.ukbb_eur",
-            "ukbb_eur",
+            "ldscore.1000g_eur",
+            "1000g_eur",
         );
         let (out, n_snp) =
             Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.config).await?;
@@ -571,6 +571,7 @@ mod tests {
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            global_sem: None,
         }
     }
     use super::*;
@@ -669,7 +670,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a SessionContext with an in-memory `iceberg.ld_score.ukbb_eur`.
+    /// Build a SessionContext with an in-memory `iceberg.ld_score.1000g_eur`.
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);
@@ -677,7 +678,7 @@ mod tests {
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
         let ld_schema = MemorySchemaProvider::new();
         ld_schema
-            .register_table("ukbb_eur".to_string(), Arc::new(table))
+            .register_table("1000g_eur".to_string(), Arc::new(table))
             .unwrap();
         let catalog = MemoryCatalogProvider::new();
         catalog
@@ -700,8 +701,8 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 20000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 50000.0)).unwrap();
         let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
         };
         LcvNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
             .await
@@ -789,8 +790,8 @@ mod tests {
         let df2 = ctx.read_batch(sumstats_batch(&z, &rs2, 1000.0)).unwrap();
 
         let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
+            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
         };
         let res = LcvNode::run_with_ctx(
             &ctx,

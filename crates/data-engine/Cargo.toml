@@ -13,6 +13,7 @@ iceberg.workspace = true
 iceberg-catalog-rest.workspace = true
 datafusion.workspace = true
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 arrow = { workspace = true, features = ["prettyprint"] }
 arrow-array.workspace = true
 arrow-schema.workspace = true

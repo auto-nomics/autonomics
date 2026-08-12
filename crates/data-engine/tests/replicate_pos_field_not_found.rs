@@ -118,6 +118,7 @@ async fn write_to_iceberg(
         datalake: datalake.clone(),
         opendal: None,
         resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+        global_sem: None,
     };
     let mut sink_node =
         IcebergSinkNode::new(ident.to_string(), SinkMode::Overwrite, datalake.clone());

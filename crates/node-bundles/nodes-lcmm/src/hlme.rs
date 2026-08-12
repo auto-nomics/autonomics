@@ -2341,6 +2341,7 @@ mod cross_validation {
             datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            global_sem: None,
         }
     }
 

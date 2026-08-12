@@ -61,6 +61,15 @@ impl DataEngine {
         opendal: Option<Arc<OpendalFileStorage>>,
         resources: Arc<ResourceCatalog>,
     ) -> Self {
+        // Global concurrency limiter shared across all agent sessions.
+        // Sized to leave ≥ 2 worker threads for SessionServer actors +
+        // tool execution, preventing CPU-bound node work from starving
+        // inter-agent communication on the shared tokio runtime.
+        let global_permits = std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(2).max(1))
+            .unwrap_or(4);
+        let global_sem = Some(Arc::new(tokio::sync::Semaphore::new(global_permits)));
+
         let engine_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: runtime_env.clone(),
             iceberg_catalog: iceberg_catalog.clone(),
@@ -69,6 +78,7 @@ impl DataEngine {
                 .unwrap_or_else(|| Arc::new(Datalake::default())),
             opendal: opendal.clone(),
             resources: resources.clone(),
+            global_sem,
         };
         let node_registry = build_default_registry(
             runtime_env.clone(),

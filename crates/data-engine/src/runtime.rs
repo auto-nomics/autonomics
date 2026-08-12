@@ -21,10 +21,12 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use datafusion::common::HashMap;
 use futures::FutureExt;
 use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
 use crate::data_engine::DataEngine;
 use crate::node_registry::NodeRegistry;
@@ -74,6 +76,7 @@ impl SessionServer {
                 event_tx,
                 commit_message,
                 reply,
+                cancel_token,
             } => {
                 if self.running.swap(true, Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -85,16 +88,34 @@ impl SessionServer {
                 let engine = Arc::clone(&self.engine);
                 let running = Arc::clone(&self.running);
                 tokio::spawn(async move {
-                    let result = AssertUnwindSafe(async {
+                    // Race the DAG run against cancellation. When the caller
+                    // drops the reply receiver (e.g. the agent task is
+                    // cancelled), `cancel_token` fires and we abort early —
+                    // releasing the engine mutex and resetting `running`
+                    // instead of leaving the session stuck.
+                    let run_fut = AssertUnwindSafe(async {
                         let mut engine = engine.lock().await;
                         engine.set_commit_message(commit_message);
                         match event_tx {
                             Some(sink) => engine.run_with_events(sink).await,
                             None => engine.run().await,
                         }
-                    })
-                    .catch_unwind()
-                    .await;
+                    });
+
+                    let result = tokio::select! {
+                        r = run_fut.catch_unwind() => r,
+                        _ = cancel_token.cancelled() => {
+                            tracing::info!(
+                                "DAG run cancelled by caller; releasing engine lock"
+                            );
+                            running.store(false, Ordering::SeqCst);
+                            // reply receiver is already gone — send fails silently.
+                            let _ = reply.send(Err(crate::error::Error::Custom(
+                                "DAG run cancelled".to_string(),
+                            )));
+                            return;
+                        }
+                    };
 
                     running.store(false, Ordering::SeqCst);
 
@@ -428,6 +449,39 @@ impl SessionServer {
 // Client (Layer 1: metadata bypass)
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Wraps a `oneshot::Receiver` for a DAG run reply so that **dropping the
+/// receiver cancels the in-progress DAG run**.
+///
+/// When the agent task is cancelled (e.g. user interrupts), the tool's
+/// future — and therefore this receiver — is dropped. The `Drop`
+/// implementation fires the shared `CancellationToken`, which the spawned
+/// DAG run task in `SessionServer` listens on via `select!`. Without this
+/// guard the DAG task would continue running in the background, holding the
+/// engine mutex and leaving `running = true` forever.
+pub struct CancelOnDropReceiver {
+    rx: tokio::sync::oneshot::Receiver<
+        std::result::Result<crate::dag::RunReport, crate::error::Error>,
+    >,
+    cancel: CancellationToken,
+}
+
+impl std::future::Future for CancelOnDropReceiver {
+    type Output = std::result::Result<
+        std::result::Result<crate::dag::RunReport, crate::error::Error>,
+        tokio::sync::oneshot::error::RecvError,
+    >;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.rx).poll(cx)
+    }
+}
+
+impl Drop for CancelOnDropReceiver {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
 /// Channel-based client for the DataEngine actor.
 ///
 /// Each client carries a `session_id` that routes to the right per-agent
@@ -483,11 +537,19 @@ impl DataEngineClient {
 
     // ── Actor-routed commands ─────────────────────────────────────────────
 
-    async fn request<T>(
+    async fn request<T, Rx>(
         &self,
         cmd: DataEngineCmd,
-        reply_rx: tokio::sync::oneshot::Receiver<std::result::Result<T, crate::error::Error>>,
-    ) -> Result<T> {
+        reply_rx: Rx,
+    ) -> Result<T>
+    where
+        Rx: std::future::Future<
+            Output = std::result::Result<
+                std::result::Result<T, crate::error::Error>,
+                tokio::sync::oneshot::error::RecvError,
+            >,
+        >,
+    {
         self.tx
             .send(EngineMsg {
                 session_id: self.session_id.clone(),
@@ -540,13 +602,19 @@ impl DataEngineClient {
 
     pub async fn run_dag(&self) -> Result<crate::dag::RunReport> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+        let wrapped = CancelOnDropReceiver {
+            rx: reply_rx,
+            cancel: cancel.clone(),
+        };
         self.request(
             DataEngineCmd::RunDag {
                 event_tx: None,
                 commit_message: None,
                 reply: reply_tx,
+                cancel_token: cancel,
             },
-            reply_rx,
+            wrapped,
         )
         .await
     }
@@ -557,24 +625,36 @@ impl DataEngineClient {
     /// concurrently with awaiting `reply_rx` (the final [`RunReport`]).
     /// Events are lightweight observations (status/progress/log/finished) and
     /// may be dropped on a full channel — they never affect the run's outcome.
+    ///
+    /// `reply_rx` is a [`CancelOnDropReceiver`]: dropping it (e.g. when the
+    /// agent task is cancelled) cancels the DAG run and releases the engine
+    /// lock promptly.
     pub fn run_dag_stream(
         &self,
         commit_message: Option<String>,
     ) -> (
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
-        tokio::sync::oneshot::Receiver<crate::error::Result<crate::dag::RunReport>>,
+        CancelOnDropReceiver,
     ) {
         let (event_tx, event_rx) = mpsc::channel::<crate::dag::node_event::NodeEvent>(128);
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
         let _ = self.tx.send(EngineMsg {
             session_id: self.session_id.clone(),
             cmd: DataEngineCmd::RunDag {
                 event_tx: Some(event_tx),
                 commit_message,
                 reply: reply_tx,
+                cancel_token: cancel.clone(),
             },
         });
-        (event_rx, reply_rx)
+        (
+            event_rx,
+            CancelOnDropReceiver {
+                rx: reply_rx,
+                cancel,
+            },
+        )
     }
 
     pub async fn get_output(&self, id: String) -> Result<Option<crate::dag::graph::PortOutputs>> {
@@ -912,4 +992,69 @@ pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()
         std::future::pending::<()>().await;
     });
     (client, handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data_engine::DataEngine;
+    use crate::nodes::meta::NodePorts;
+    use crate::dag::graph::PortOutputs;
+
+    /// A node that sleeps for 2s — long enough to be interrupted by cancellation.
+    #[derive(Clone)]
+    struct LongSleepNode(NodePorts);
+    #[async_trait::async_trait]
+    impl crate::nodes::DagNode for LongSleepNode {
+        fn ports(&self) -> &NodePorts { &self.0 }
+        fn clone_box(&self) -> Box<dyn crate::nodes::DagNode> { Box::new((*self).clone()) }
+        fn kind(&self) -> &'static str { "long_sleep" }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        async fn execute(
+            &mut self,
+            _ctx: &crate::node_registry::registry::NodeCtx,
+            _inputs: &[crate::nodes::NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, crate::dag::DagError> {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            Ok(PortOutputs::new())
+        }
+    }
+
+    /// Dropping the `CancelOnDropReceiver` must:
+    /// 1. Fire the `CancellationToken`
+    /// 2. Abort the spawned DAG run task
+    /// 3. Reset `running` to `false`
+    /// 4. Release the engine mutex so the next `run_dag` succeeds
+    #[tokio::test]
+    async fn dropping_receiver_cancels_dag_and_frees_session() {
+        let mut engine = DataEngine::builder().build();
+        let meta = NodePorts::new().add_output_port(None);
+        engine.add_node("slow".to_string(), LongSleepNode(meta)).unwrap();
+
+        let (client, _handle) = spawn_with_engine(engine);
+
+        // Start a streaming DAG run, then immediately drop the receiver —
+        // simulating agent task cancellation.
+        let (_event_rx, reply_rx) = client.run_dag_stream(None);
+        drop(reply_rx);
+
+        // Give the actor + spawned task a moment to process the cancellation.
+        // The DAG run task selects on the cancel token, so this should be
+        // nearly instant once the token fires.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // The session must be usable again — the `running` flag is reset and
+        // the mutex is released. A second run should not get "already running".
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.run_dag(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "second run_dag timed out — session was not freed after cancellation"
+        );
+    }
 }

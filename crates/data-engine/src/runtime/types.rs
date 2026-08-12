@@ -1,4 +1,5 @@
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::dag::RunReport;
 use crate::dag::graph::PortOutputs;
@@ -39,6 +40,12 @@ pub enum DataEngineCmd {
         /// Commit message for the history snapshot. If `None`, a default is used.
         commit_message: Option<String>,
         reply: oneshot::Sender<EngineResult<RunReport>>,
+        /// Cancellation token shared with the caller. When the caller drops
+        /// the reply receiver (e.g. the agent task is cancelled), this token
+        /// fires and the spawned DAG run task aborts early — releasing the
+        /// engine mutex and resetting the `running` flag instead of leaving
+        /// the session stuck.
+        cancel_token: CancellationToken,
     },
     GetOutput {
         id: String,

@@ -1287,6 +1287,7 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
             datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            global_sem: None,
         };
 
         // Build the node through the factory so spec validation runs.
@@ -1347,6 +1348,7 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            global_sem: None,
         };
 
         let registry = test_registry();

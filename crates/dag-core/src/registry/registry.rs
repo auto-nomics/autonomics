@@ -121,6 +121,18 @@ pub struct NodeCtx {
     /// resource addresses (Iceberg tables, file paths, endpoints, config).
     /// Nodes resolve resources through this instead of hardcoding names/paths.
     pub resources: Arc<ResourceCatalog>,
+    /// **Cross-agent global concurrency limiter.**
+    ///
+    /// When `Some`, every node execution acquires a permit from this semaphore
+    /// *before* the per-run semaphore. This caps the total number of
+    /// concurrently executing nodes across **all** agents / DAG runs, so that
+    /// CPU-bound node work (faer, ML algorithms, …) cannot saturate every
+    /// tokio worker thread and starve agent message processing.
+    ///
+    /// Sized to `num_cpus.saturating_sub(2).max(1)` — leaving ≥ 2 worker
+    /// threads for `SessionServer` actors and tool execution. `None` in
+    /// tests and legacy code paths (unlimited).
+    pub global_sem: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 impl NodeCtx {
@@ -141,6 +153,7 @@ impl NodeCtx {
             datalake,
             opendal,
             resources: Arc::new(ResourceCatalog::new(PathBuf::from("."))),
+            global_sem: None,
         }
     }
 
