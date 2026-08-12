@@ -481,6 +481,9 @@ fn extract_snippet(
         if let Some(pos) = text_lower.find(&query_lower) {
             let start = pos.saturating_sub(SNIPPET_RADIUS);
             let end = (pos + query.len() + SNIPPET_RADIUS).min(text.len());
+            // Snap to UTF-8 char boundaries so we never slice mid-character.
+            let start = text.floor_char_boundary(start);
+            let end = text.ceil_char_boundary(end);
             let prefix = if start > 0 { "…" } else { "" };
             let suffix = if end < text.len() { "…" } else { "" };
             return format!("{prefix}{}{suffix}", &text[start..end]);
