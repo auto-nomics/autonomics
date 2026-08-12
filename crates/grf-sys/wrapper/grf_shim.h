@@ -68,6 +68,12 @@ struct grf_forest_t {
     size_t censor_index = 0;
     size_t num_outcomes = 0;                // multi_regression, multi_causal, lm
     size_t num_treatments = 0;              // multi_causal, lm
+    // Causal forest: the treatment column index in the training data. R's
+    // causal_forest is instrumental_trainer with instrument = treatment; the
+    // predict path needs both indices to reconstruct the instrumental
+    // prediction strategy.
+    size_t treatment_index = 0;
+    bool stabilize_splits = false;
 };
 struct grf_predictions_t {
     std::vector<double> values;
