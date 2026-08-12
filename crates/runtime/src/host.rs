@@ -18,7 +18,7 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
-use agentik_core::storage::{AgentStorage, AgentProfileRegistry, restore_memory};
+use agentik_core::storage::{AgentStorage, AgentProfileRegistry};
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
@@ -323,11 +323,8 @@ impl SharedInfra {
                 "restoring agent from storage"
             );
             builder = builder.with_id(record.id);
-
-            if let Ok(memory) = restore_memory(storage.as_ref(), record.id).await {
-                builder = builder.with_memory(memory);
-                tracing::info!("memory restored from snapshot + WAL");
-            }
+            // Session state is restored from storage in Agent::run() bootstrap
+            // via per-session snapshot + WAL replay. No builder-level restore needed.
         }
 
         let mut agent = builder.build().await?;

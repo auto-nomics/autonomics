@@ -5,7 +5,7 @@ use agentik_sdk::types::tools::ToolUse;
 
 use crate::tools::ToolError;
 
-use crate::memory::error::Error as MemoryError;
+use crate::session::error::Error as SessionStateError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Error = AgentError;
@@ -56,8 +56,8 @@ pub enum AgentError {
     #[error("ApiClient request error: {0}")]
     ApiRequestError(#[from] AnthropicError),
 
-    #[error("memory error: {0}")]
-    MemoryError(#[from] MemoryError),
+    #[error("session state error: {0}")]
+    SessionStateError(#[from] SessionStateError),
 
     #[error("Unknown tool requested:  {0:?}. Existed tools: {1:?}")]
     UnknownTool(Vec<ToolUse>, Vec<agentik_sdk::types::ToolDefinition>),

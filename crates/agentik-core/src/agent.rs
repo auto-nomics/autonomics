@@ -94,11 +94,9 @@ pub struct Agent {
     pub(crate) internal_event_tx: UnboundedSender<InternalEvent>,
     /// Receiver consumed once by [`run()`]; `None` after that.
     pub(crate) internal_event_rx: Option<UnboundedReceiver<InternalEvent>>,
-    /// Memory from the builder's `with_memory` path. Used as a fallback
-    /// when no session records exist in storage (e.g. agents created
-    /// before the session abstraction). Consumed (set to `None`) during
-    /// `run()` after the fallback session is created.
-    pub(crate) initial_memory: Option<crate::memory::Memory>,
+    /// Initial messages from the builder. Used as a fallback when no
+    /// session records exist in storage. Consumed during `run()`.
+    pub(crate) initial_messages: Option<Vec<agentik_sdk::types::messages::Message>>,
     /// Cancel token from the builder, used when auto-creating sessions.
     pub(crate) cancel_token: CancellationToken,
 }
@@ -274,10 +272,10 @@ impl Agent {
 
             // Store in shared so sessions created later can also access it.
             let _ = self.shared.persist_tx.set(persist_tx);
-            // Wire into existing sessions' memories.
+            // Wire into existing sessions.
             for session in self.sessions.values_mut() {
                 if let Some(tx) = self.shared.persist_tx.get() {
-                    session.memory.persist_tx = Some(tx.clone());
+                    session.persist_tx = Some(tx.clone());
                 }
             }
             tokio::spawn(persist_worker(persist_rx, storage));
@@ -291,10 +289,8 @@ impl Agent {
             match storage.as_ref().list_session_records(self.shared.id).await {
                 Ok(records) => {
                     for rec in records {
-                        // Skip if this session is already in the HashMap
-                        // (e.g. the default session from the builder).
+                        // Skip if this session is already in the HashMap.
                         if self.sessions.contains_key(&rec.session_id) {
-                            // Just update the title if we have one.
                             if let Some(t) = &rec.title {
                                 if let Some(s) = self.sessions.get_mut(&rec.session_id) {
                                     if s.title.is_none() {
@@ -304,74 +300,33 @@ impl Agent {
                             }
                             continue;
                         }
-                        // Rebuild a session from storage, restoring its memory from
-                        // per-session snapshot + WAL messages.
+                        // Rebuild a session from storage using the unified
+                        // restore_session_state helper (snapshot + WAL).
                         let mut s = Session::new(rec.session_id, self.shared.clone());
                         s.cancel_token = self.cancel_token.clone();
                         s.title = rec.title;
                         s.created_at = rec.started_at;
 
-                        // Restore memory: latest snapshot for this session +
-                        // WAL messages since the snapshot timestamp.
-                        match storage
-                            .as_ref()
-                            .get_latest_snapshot_for_session(self.shared.id, rec.session_id)
-                            .await
+                        match crate::storage::restore_session_state(
+                            storage.as_ref(),
+                            self.shared.id,
+                            rec.session_id,
+                        )
+                        .await
                         {
-                            Ok(Some(snap)) => {
-                                let snap_ts = snap.ts;
-                                s.memory = snap.memory;
-                                // Replay WAL messages for this session.
-                                match storage
-                                    .as_ref()
-                                    .get_messages_since_for_session(rec.session_id, snap_ts)
-                                    .await
-                                {
-                                    Ok(msgs) => {
-                                        for msg in msgs {
-                                            let _ = s.memory.remember(msg);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "failed to replay WAL for session {}", rec.session_id
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                // No snapshot — try replaying all WAL messages.
-                                match storage
-                                    .as_ref()
-                                    .get_messages_since_for_session(rec.session_id, 0)
-                                    .await
-                                {
-                                    Ok(msgs) => {
-                                        for msg in msgs {
-                                            let _ = s.memory.remember(msg);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "failed to replay WAL for session {}", rec.session_id
-                                        );
-                                    }
-                                }
+                            Ok(state) => {
+                                s.messages = state.messages;
+                                s.summary = state.summary;
+                                s.ancestor_summaries = state.ancestor_summaries;
                             }
                             Err(e) => {
                                 tracing::warn!(
                                     error = %e,
-                                    "failed to load snapshot for session {}", rec.session_id
+                                    "failed to restore session state for {}", rec.session_id
                                 );
                             }
                         }
 
-                        // Wire persist_tx.
-                        if let Some(tx) = self.shared.persist_tx.get() {
-                            s.memory.persist_tx = Some(tx.clone());
-                        }
                         tracing::info!(
                             session_id = %rec.session_id,
                             title = ?s.title,
@@ -387,26 +342,27 @@ impl Agent {
         }
 
         // ── Fallback: no session records in storage ──
-        // If the builder provided memory (from the old restore path) and
-        // no sessions were loaded from storage, create one session with
-        // that memory so the conversation history isn't lost.
+        // If the builder provided initial messages and no sessions were
+        // loaded from storage, create one session with those messages.
         if self.sessions.is_empty() {
-            if let Some(memory) = self.initial_memory.take() {
+            if let Some(messages) = self.initial_messages.take() {
                 let id = Uuid::new_v4();
-                let mut s = Session::new_with_memory(
+                let state = crate::session::SessionState {
+                    messages,
+                    summary: None,
+                    ancestor_summaries: Vec::new(),
+                };
+                let mut s = Session::new_with_state(
                     id,
                     self.shared.clone(),
-                    memory,
+                    state,
                     self.cancel_token.clone(),
                 );
                 s.title = Some("Restored".into());
-                if let Some(tx) = self.shared.persist_tx.get() {
-                    s.memory.persist_tx = Some(tx.clone());
-                }
                 s.resume().await;
                 self.sessions.insert(id, s);
                 self.active_session_id = Some(id);
-                tracing::info!("created fallback session from builder memory");
+                tracing::info!("created fallback session from builder initial messages");
             }
         } else if self.active_session_id.is_none() {
             // Sessions exist but none is active — activate the first one.
@@ -433,9 +389,6 @@ impl Agent {
                 let mut s = Session::new(id, self.shared.clone());
                 s.title = Some("New conversation".into());
                 s.cancel_token = self.cancel_token.clone();
-                if let Some(tx) = self.shared.persist_tx.get() {
-                    s.memory.persist_tx = Some(tx.clone());
-                }
                 s.resume().await;
                 self.sessions.insert(id, s);
                 self.active_session_id = Some(id);
@@ -795,16 +748,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_compaction_noop_does_not_loop() {
-        use crate::memory::Memory;
+        use crate::session::SessionState;
 
-        let mut memory = Memory::new();
-        memory.remember(Message::user("x".repeat(500_000))).unwrap();
+        let messages = vec![Message::user("x".repeat(500_000))];
+        let state = SessionState {
+            messages: messages.clone(),
+            summary: None,
+            ancestor_summaries: Vec::new(),
+        };
 
         let budget = TokenBudget::default();
         let context_length = 128_000u64;
         let max_output_tokens = 32_000u64;
 
-        let msgs = memory.render_context().unwrap();
+        let msgs = state.messages;
 
         assert!(
             budget.should_compact(&msgs, context_length, max_output_tokens),

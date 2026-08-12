@@ -8,7 +8,6 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
-use crate::memory::Memory;
 use crate::session::AgentShared;
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
@@ -31,9 +30,6 @@ pub struct AgentBuilder {
     path: Option<agentik_types::AgentPath>,
     /// Opaque configuration JSON persisted to the registry (e.g. RuntimeConfig).
     config_json: Option<serde_json::Value>,
-    /// Pre-built memory (used to restore from a snapshot). When set, overrides
-    /// `initial_messages`.
-    memory: Option<Memory>,
     /// Optional skill workflow to attach to the agent.
     skill: Option<Skill>,
     cancel_token: Option<CancellationToken>,
@@ -54,7 +50,6 @@ impl Clone for AgentBuilder {
             id: self.id,
             path: self.path.clone(),
             config_json: self.config_json.clone(),
-            memory: self.memory.clone(),
             skill: self.skill.clone(),
             cancel_token: self.cancel_token.clone(),
         }
@@ -76,7 +71,6 @@ impl AgentBuilder {
             id: None,
             path: None,
             config_json: None,
-            memory: None,
             skill: None,
             cancel_token: None,
         }
@@ -166,11 +160,6 @@ impl AgentBuilder {
         self
     }
 
-    pub fn with_memory(mut self, memory: Memory) -> Self {
-        self.memory = Some(memory);
-        self
-    }
-
     pub fn with_cancel_token(mut self, cancel_token: CancellationToken) -> Self {
         self.cancel_token = Some(cancel_token);
         self
@@ -184,20 +173,15 @@ impl AgentBuilder {
         let (internal_event_tx, internal_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // ── Build the shared tool registry ──────────────────
-        // User tools + builtin task tools (tied to a tasks handle that will
-        // be shared with the initial session's Toolset) + skill todo tool.
         let tasks: Arc<tokio::sync::RwLock<crate::tools::task_runtime::TaskStore>> = Arc::new(
             tokio::sync::RwLock::new(crate::tools::task_runtime::TaskStore::new()),
         );
 
-        // Plan state is created early so the update_plan tool can share it.
         let agent_id = self.id.unwrap_or_else(Uuid::new_v4);
         let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
             agentik_types::AgentPlan::new(),
         )));
 
-        // Event channel — created early so both the plan tool and AgentShared
-        // can reference the same ArcSwap.
         let event_tx = ArcSwapOption::new(self.agent_event_tx.clone().map(Arc::new));
 
         let plan_handle = crate::tools::builtins::PlanHandle::new(
@@ -237,21 +221,8 @@ impl AgentBuilder {
 
         // ── No default session at build time ────────────────
         // Sessions are restored from storage in `Agent::run()` or
-        // auto-created on the first `MessageInject`. The builder-memory
-        // (from `with_memory`) is stashed as `initial_memory` for `run()`
-        // to pick up as a fallback when no session records exist in storage.
+        // auto-created on the first `MessageInject`.
         let cancel_token = self.cancel_token.unwrap_or_default();
-        let initial_memory = if let Some(memory) = self.memory {
-            Some(memory)
-        } else if !self.initial_messages.is_empty() {
-            let mut memory = Memory::new();
-            for msg in self.initial_messages {
-                let _ = memory.remember(msg);
-            }
-            Some(memory)
-        } else {
-            None
-        };
 
         Ok(Agent {
             shared,
@@ -259,7 +230,11 @@ impl AgentBuilder {
             active_session_id: None,
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),
-            initial_memory,
+            initial_messages: if self.initial_messages.is_empty() {
+                None
+            } else {
+                Some(self.initial_messages)
+            },
             cancel_token,
         })
     }

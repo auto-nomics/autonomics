@@ -14,22 +14,23 @@ use uuid::Uuid;
 use agentik_sdk::types::messages::Message;
 use agentik_types::AgentPlan;
 
-use crate::{lifecycle::AgentLifecycleStatus, memory::Memory};
+use crate::lifecycle::AgentLifecycleStatus;
+use crate::session::SessionState;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
 // ═══════════════════════════════════════════════════════════════════════
 
-/// One full-memory checkpoint. Stored in the `snapshots` table.
+/// One session-state checkpoint. Stored in the `snapshots` table.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentSnapshot {
     pub snapshot_id: Uuid,
     pub ts: i64,
     pub agent_id: Uuid,
     pub agent_status: AgentLifecycleStatus,
-    pub memory: Memory,
-    /// Which session this snapshot belongs to. `None` for snapshots from
-    /// older versions that predate per-session snapshots.
+    /// Serialized session conversation state (messages + summaries).
+    pub state: SessionState,
+    /// Which session this snapshot belongs to.
     #[serde(default)]
     pub session_id: Option<Uuid>,
 }
@@ -128,7 +129,7 @@ impl RelationKind {
 
 /// Operations sent through the async persistence channel (WAL).
 ///
-/// `Memory::remember()` pushes `AppendMessage` ops; the agent loop pushes
+/// `Session::remember()` pushes `AppendMessage` ops; the agent loop pushes
 /// `StartSession` / `EndSession` at session boundaries. A background worker
 /// drains the channel and writes to the database without blocking the LLM
 /// loop.
@@ -628,30 +629,27 @@ pub trait AgentProfileRegistry: Send + Sync {
 // Restore helper
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Reconstruct an agent's [`Memory`] from storage.
+/// Reconstruct a session's [`SessionState`] from storage.
 ///
 /// Loads the latest snapshot as a base, then replays all messages persisted
 /// after the snapshot's timestamp. The snapshot's `ts` acts as a watermark:
 /// any message with `ts > snapshot.ts` was appended to the WAL after the
-/// snapshot was taken and therefore is not yet in the snapshot's memory.
-pub async fn restore_memory(
+/// snapshot was taken and therefore is not yet in the snapshot's state.
+pub async fn restore_session_state(
     storage: &dyn AgentStorage,
     agent_id: Uuid,
-) -> Result<Memory, StorageError> {
-    let snapshot = storage.get_latest_snapshot(agent_id).await?;
+    session_id: Uuid,
+) -> Result<SessionState, StorageError> {
+    let snapshot = storage
+        .get_latest_snapshot_for_session(agent_id, session_id)
+        .await?;
     let snapshot_ts = snapshot.as_ref().map(|s| s.ts).unwrap_or(0);
-    // Use Memory::new() (which seeds one empty MemoryItem) instead of
-    // Memory::default() (which has an empty items vector). Without this,
-    // the first remember() call panics with EmptyMemoryItem.
-    let mut memory = snapshot.map(|s| s.memory).unwrap_or_else(Memory::new);
-    // Defensive: even a restored snapshot might have an empty items vector
-    // (e.g. from a corrupt or edge-case state). Ensure at least one segment.
-    if memory.items.is_empty() {
-        memory.items.push(crate::memory::MemoryItem::default());
-    }
-    let messages = storage.get_messages_since(agent_id, snapshot_ts).await?;
-    for msg in messages {
-        let _ = memory.remember(msg);
-    }
-    Ok(memory)
+    let mut state = snapshot
+        .map(|s| s.state)
+        .unwrap_or_default();
+    let messages = storage
+        .get_messages_since_for_session(session_id, snapshot_ts)
+        .await?;
+    state.messages.extend(messages);
+    Ok(state)
 }

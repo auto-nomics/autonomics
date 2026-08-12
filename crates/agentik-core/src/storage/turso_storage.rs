@@ -313,7 +313,7 @@ fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
             .map_err(|e| StorageError::Other(format!("parse agent_id: {e}").into()))?,
         ts,
         agent_status: serde_json::from_str(&status_json)?,
-        memory: serde_json::from_str(&memory_json)?,
+        state: serde_json::from_str(&memory_json)?,
         session_id,
     })
 }
@@ -357,7 +357,7 @@ impl AgentStorage for TursoAgentStorage {
     // ── Snapshot ─────────────────────────────────────────────
 
     async fn create_snapshot(&self, snapshot: AgentSnapshot) -> Result<(), StorageError> {
-        let memory_json = serde_json::to_string(&snapshot.memory)?;
+        let memory_json = serde_json::to_string(&snapshot.state)?;
         let status_json = serde_json::to_string(&snapshot.agent_status)?;
         let session_id_val = snapshot
             .session_id
@@ -1265,7 +1265,7 @@ mod tests {
     use super::*;
     use crate::ProfileOverrides;
     use crate::lifecycle::AgentLifecycleStatus;
-    use crate::memory::{Memory, MemoryItem};
+    use crate::session::SessionState;
     use crate::message_ext::AgentMessageExt;
 
     fn now_ms() -> i64 {
@@ -1288,7 +1288,7 @@ mod tests {
             ts,
             agent_id,
             agent_status: AgentLifecycleStatus::Idle,
-            memory: Memory::new(),
+            state: SessionState::default(),
             session_id: None,
         }
     }
@@ -1577,24 +1577,22 @@ mod tests {
     // ── Restore ──────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_restore_memory() {
-        use crate::storage::restore_memory;
+    async fn test_restore_session_state() {
+        use crate::storage::restore_session_state;
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
 
-        // Snapshot with an initial memory state
+        // Snapshot with an initial session state
         let mut snap = sample_snapshot(agent_id, 1000);
-        snap.memory = Memory {
-            items: vec![MemoryItem {
-                messages: vec![Message::user("snapshotted")],
-                summary: None,
-            }],
+        snap.session_id = Some(session_id);
+        snap.state = SessionState {
+            messages: vec![Message::user("snapshotted")],
             ..Default::default()
         };
         store.create_snapshot(snap).await.unwrap();
 
         // Messages after the snapshot
-        let session_id = Uuid::new_v4();
         store.start_session(agent_id, session_id).await.unwrap();
         // Wait so messages have ts > 1000
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
@@ -1603,15 +1601,12 @@ mod tests {
             .await
             .unwrap();
 
-        let memory = restore_memory(&store, agent_id).await.unwrap();
+        let state = restore_session_state(&store, agent_id, session_id)
+            .await
+            .unwrap();
         // Should contain both the snapshotted message and the new one
-        let all_msgs: Vec<_> = memory
-            .items
-            .iter()
-            .flat_map(|i| i.messages.iter())
-            .collect();
         assert!(
-            all_msgs.len() >= 2,
+            state.messages.len() >= 2,
             "expected at least 2 messages after restore"
         );
     }
@@ -1634,7 +1629,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_e2e_persistence_cycle() {
-        use crate::storage::restore_memory;
+        use crate::storage::restore_session_state;
 
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
 
@@ -1665,31 +1660,28 @@ mod tests {
             .unwrap();
         store.end_session(sess1).await.unwrap();
 
-        // Snapshot after session 1.
-        let snap1 = sample_snapshot(agent_id, now_ms());
+        // Snapshot after session 1 (with session_id set).
+        let mut snap1 = sample_snapshot(agent_id, now_ms());
+        snap1.session_id = Some(sess1);
         store.create_snapshot(snap1).await.unwrap();
 
-        // 3. Session 2: more messages after the snapshot.
+        // 3. More messages after the snapshot (same session).
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        let sess2 = Uuid::new_v4();
-        store.start_session(agent_id, sess2).await.unwrap();
+        store.start_session(agent_id, sess1).await.unwrap();
         store
-            .append_message(sess2, &Message::user("message-3"))
+            .append_message(sess1, &Message::user("message-3"))
             .await
             .unwrap();
-        store.end_session(sess2).await.unwrap();
+        store.end_session(sess1).await.unwrap();
 
         // 4. Restore.
-        let memory = restore_memory(&store, agent_id).await.unwrap();
-        let all_msgs: Vec<_> = memory
-            .items
-            .iter()
-            .flat_map(|i| i.messages.iter())
-            .collect();
-        // Snapshot had empty memory, so all 3 messages should be replayed.
+        let state = restore_session_state(&store, agent_id, sess1)
+            .await
+            .unwrap();
+        // Snapshot had empty state, so all 3 messages should be replayed.
         assert!(
-            !all_msgs.is_empty(),
-            "restored memory should contain replayed messages"
+            !state.messages.is_empty(),
+            "restored state should contain replayed messages"
         );
 
         // 5. Verify agent record is still there.

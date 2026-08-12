@@ -3,7 +3,6 @@ pub mod agent_builder;
 pub mod context;
 pub mod error;
 pub mod lifecycle;
-pub mod memory;
 pub mod message_ext;
 // pub mod process; // TODO: process module lives in runtime
 pub mod prompt;
