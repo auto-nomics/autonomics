@@ -135,6 +135,11 @@ pub struct JackknifeResult {
 ///
 /// This is the heart of the LDSC algorithm: weighted least squares with
 /// block jackknife to estimate standard errors.
+///
+/// **Note**: This function applies `weights` uniformly to both the design
+/// matrix and the response. For the cross-trait GenomicSEM case where
+/// different weights are needed for X vs y, use
+/// [`block_jackknife_regression_r`] instead.
 pub fn block_jackknife_regression(
     l2: &[f64],
     chi: &[f64],
@@ -143,19 +148,44 @@ pub fn block_jackknife_regression(
     n_bar: f64,
     m: f64,
 ) -> JackknifeResult {
+    block_jackknife_regression_r(l2, chi, weights, weights, n_blocks, n_bar, m)
+}
+
+/// R-compatible block jackknife regression with **separate weights** for the
+/// design matrix (X) and the response (y).
+///
+/// In GenomicSEM's `ldsc.R`:
+/// - For heritability (j==k): `weights_ld == weights_chi` (same weights).
+/// - For genetic covariance (j≠k): `weights_ld` = trait-j weights;
+///   `weights_chi` = average of trait-j and trait-k weights.
+///
+/// Also fixes the jackknife covariance: R's `cov(pv)/n.blocks` divides by
+/// `(n.blocks - 1) * n.blocks`, while the original Rust version only divided
+/// by `n.blocks`.
+pub fn block_jackknife_regression_r(
+    l2: &[f64],
+    chi: &[f64],
+    weights_ld: &[f64],
+    weights_chi: &[f64],
+    n_blocks: usize,
+    n_bar: f64,
+    m: f64,
+) -> JackknifeResult {
     let n_snps = l2.len();
     let n_annot = 1;
 
     // Build weighted LD (n_snps × 2) and weighted chi (n_snps,)
+    // R: weighted.LD <- cbind(L2, intercept) * weights
+    //    weighted.chi <- chi * weights_chi   (different weights for gencov!)
     let mut weighted_ld = vec![vec![0.0; n_annot + 1]; n_snps];
     let mut weighted_chi = vec![0.0; n_snps];
     for i in 0..n_snps {
-        weighted_ld[i][0] = l2[i] * weights[i];
-        weighted_ld[i][1] = 1.0 * weights[i]; // intercept
-        weighted_chi[i] = chi[i] * weights[i];
+        weighted_ld[i][0] = l2[i] * weights_ld[i];
+        weighted_ld[i][1] = 1.0 * weights_ld[i]; // intercept
+        weighted_chi[i] = chi[i] * weights_chi[i];
     }
 
-    // Block boundaries
+    // Block boundaries — matches R's floor(seq(1, n.snps, length.out=n.blocks+1))
     let select_from = block_boundaries(n_snps, n_blocks, 0);
     let select_to = block_tos(&select_from, n_snps, n_blocks);
 
@@ -214,7 +244,7 @@ pub fn block_jackknife_regression(
         delete_values[b] = solve_small_pub(&xtx_del, &xty_del);
     }
 
-    // Pseudo-values
+    // Pseudo-values: R: pv = n.blocks * reg - (n.blocks-1) * delete
     let nb = n_blocks as f64;
     let mut pseudo_values = vec![vec![0.0; n_annot + 1]; n_blocks];
     for b in 0..n_blocks {
@@ -223,7 +253,8 @@ pub fn block_jackknife_regression(
         }
     }
 
-    // Jackknife covariance
+    // Jackknife covariance — R: cov(pseudo.values) / n.blocks
+    // R's cov() divides by (n-1), so total denom = n * (n-1)
     let mut jack_cov = vec![vec![0.0; n_annot + 1]; n_annot + 1];
     let mut means = vec![0.0; n_annot + 1];
     for j in 0..(n_annot + 1) {
@@ -233,13 +264,14 @@ pub fn block_jackknife_regression(
         }
         means[j] = s / nb;
     }
+    let denom_cov = (n_blocks as f64) * ((n_blocks - 1) as f64);
     for j in 0..(n_annot + 1) {
         for k in 0..(n_annot + 1) {
             let mut s = 0.0;
             for b in 0..n_blocks {
                 s += (pseudo_values[b][j] - means[j]) * (pseudo_values[b][k] - means[k]);
             }
-            jack_cov[j][k] = s / nb;
+            jack_cov[j][k] = s / denom_cov;
         }
     }
 

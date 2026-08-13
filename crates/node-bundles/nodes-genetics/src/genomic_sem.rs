@@ -1256,9 +1256,149 @@ fn extract_arrays(
     })
 }
 
-/// Run the multivariate LDSC regression: for each (i,j) pair with i ≤ j,
-/// compute χ² or cross-product, run block-jackknife weighted LS, and
-/// assemble the S/V/I/N covariance structure.
+/// Compute GenomicSEM IRWLS weights for a single trait's h² regression.
+///
+/// Port of ldsc.R lines 231-243 (heritability case):
+/// ```r
+/// tot.agg <- (M*(mean(chi1)-1))/mean(L2*N)
+/// tot.agg <- max(min(tot.agg, 1), 0)
+/// ld <- pmax(L2, 1);  w.ld <- pmax(wLD, 1)
+/// c <- tot.agg * N / M
+/// het.w <- 1/(2*(1+c*ld)^2)
+/// oc.w  <- 1/w.ld
+/// w     <- het.w * oc.w
+/// initial.w <- sqrt(w)
+/// weights   <- initial.w / sum(initial.w)
+/// ```
+///
+/// Returns (weights, n_bar) where n_bar = mean(N).
+fn compute_h2_weights(
+    l2: &[f64],
+    chi: &[f64],
+    wld: &[f64],
+    n_vals: &[f64],
+    m: f64,
+) -> (Vec<f64>, f64) {
+    let n_snps = l2.len();
+
+    // Aggregate h² estimate from mean χ².
+    let mean_chi: f64 = chi.iter().sum::<f64>() / n_snps as f64;
+    let mean_l2_n: f64 = (0..n_snps).map(|i| l2[i] * n_vals[i]).sum::<f64>() / n_snps as f64;
+    let mut tot_agg = if mean_l2_n > 0.0 {
+        (m * (mean_chi - 1.0)) / mean_l2_n
+    } else {
+        0.0
+    };
+    tot_agg = tot_agg.clamp(0.0, 1.0);
+
+    // Per-SNP weights.
+    let mut initial_w = Vec::with_capacity(n_snps);
+    for i in 0..n_snps {
+        let ld = l2[i].max(1.0);
+        let w_ld = wld[i].max(1.0);
+        let c = tot_agg * n_vals[i] / m;
+        let het_w = 1.0 / (2.0 * (1.0 + c * ld).powi(2));
+        let oc_w = 1.0 / w_ld;
+        let w = het_w * oc_w;
+        initial_w.push(w.sqrt());
+    }
+    let sum_iw: f64 = initial_w.iter().sum();
+    let weights: Vec<f64> = if sum_iw > 0.0 {
+        initial_w.iter().map(|w| w / sum_iw).collect()
+    } else {
+        vec![1.0 / n_snps as f64; n_snps]
+    };
+
+    let n_bar: f64 = n_vals.iter().sum::<f64>() / n_snps as f64;
+    (weights, n_bar)
+}
+
+/// Compute GenomicSEM IRWLS weights for a cross-trait gencov regression.
+///
+/// Port of ldsc.R lines 362-394 (genetic covariance case):
+/// Two sets of h²-style weights are computed (one per trait), then averaged
+/// and normalized for the chi (ZZ) response. The XtX uses trait-j's weights.
+///
+/// Returns (weights_ld, weights_chi, n_bar) where:
+/// - weights_ld = trait-j's normalized weights (for design matrix XtX)
+/// - weights_chi = average of both traits' initial.w, normalized (for XtY)
+/// - n_bar = sqrt(mean(N_x) * mean(N_y))
+fn compute_gencov_weights(
+    l2: &[f64],
+    wld: &[f64],
+    chi1: &[f64],
+    n1: &[f64],
+    chi2: &[f64],
+    n2: &[f64],
+    m: f64,
+) -> (Vec<f64>, Vec<f64>, f64) {
+    let n_snps = l2.len();
+
+    // Compute initial.w for both traits using the IRWLS weight function.
+    // R: initial.w  = sqrt(het.w  * oc.w),  using tot.agg  from trait 1's chi²
+    //    initial.w2 = sqrt(het.w2 * oc.w),  using tot.agg2 from trait 2's chi²
+    let mean_chi1: f64 = chi1.iter().sum::<f64>() / n_snps as f64;
+    let mean_l2_n1: f64 = (0..n_snps).map(|i| l2[i] * n1[i]).sum::<f64>() / n_snps as f64;
+    let ta1 = if mean_l2_n1 > 0.0 {
+        ((m * (mean_chi1 - 1.0)) / mean_l2_n1).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let mean_chi2: f64 = chi2.iter().sum::<f64>() / n_snps as f64;
+    let mean_l2_n2: f64 = (0..n_snps).map(|i| l2[i] * n2[i]).sum::<f64>() / n_snps as f64;
+    let ta2 = if mean_l2_n2 > 0.0 {
+        ((m * (mean_chi2 - 1.0)) / mean_l2_n2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let mut iw1 = Vec::with_capacity(n_snps);
+    let mut iw2 = Vec::with_capacity(n_snps);
+    for i in 0..n_snps {
+        let ld = l2[i].max(1.0);
+        let w_ld = wld[i].max(1.0);
+        let oc = 1.0 / w_ld;
+
+        let c1 = ta1 * n1[i] / m;
+        let het1 = 1.0 / (2.0 * (1.0 + c1 * ld).powi(2));
+        iw1.push((het1 * oc).sqrt());
+
+        let c2 = ta2 * n2[i] / m;
+        let het2 = 1.0 / (2.0 * (1.0 + c2 * ld).powi(2));
+        iw2.push((het2 * oc).sqrt());
+    }
+
+    // weights (for XtX) = initial.w / sum(initial.w)  [trait-j only]
+    let sum_iw1: f64 = iw1.iter().sum();
+    let weights_ld: Vec<f64> = if sum_iw1 > 0.0 {
+        iw1.iter().map(|w| w / sum_iw1).collect()
+    } else {
+        vec![1.0 / n_snps as f64; n_snps]
+    };
+
+    // weights_cov (for XtY) = (initial.w + initial.w2) / sum(initial.w + initial.w2)
+    let sum_both: f64 = (0..n_snps).map(|i| iw1[i] + iw2[i]).sum();
+    let weights_chi: Vec<f64> = if sum_both > 0.0 {
+        (0..n_snps).map(|i| (iw1[i] + iw2[i]) / sum_both).collect()
+    } else {
+        vec![1.0 / n_snps as f64; n_snps]
+    };
+
+    // N.bar = sqrt(mean(N_x) * mean(N_y))
+    let mean_n1: f64 = n1.iter().sum::<f64>() / n_snps as f64;
+    let mean_n2: f64 = n2.iter().sum::<f64>() / n_snps as f64;
+    let n_bar = (mean_n1 * mean_n2).sqrt();
+
+    (weights_ld, weights_chi, n_bar)
+}
+
+/// Run the multivariate LDSC regression — faithful port of GenomicSEM ldsc.R.
+///
+/// For each pair (j,k) with j ≤ k:
+/// - **Diagonal (j==k)**: χ² = Z², h² weights, N.bar = mean(N).
+/// - **Off-diagonal (j≠k)**: ZZ = Z_j·Z_k (with allele alignment),
+///   gencov weights (separate for X and y), N.bar = sqrt(mean(N_j)·mean(N_k)).
 fn run_multivariate_ldsc(
     arrays: &LdscArrays,
     k: usize,
@@ -1274,121 +1414,150 @@ fn run_multivariate_ldsc(
     let z_dim = k * (k + 1) / 2;
     let n_blocks_actual = n_blocks.min(n_snps);
 
-    // Pre-compute chi values for each pair (i,j) with i ≤ j.
-    // Pair index follows vech order: (0,0), (1,0), (1,1), (2,0), (2,1), (2,2), ...
-    let mut chi_values: Vec<Vec<f64>> = Vec::with_capacity(z_dim);
-    let mut n_bars: Vec<f64> = Vec::with_capacity(z_dim);
+    // Determine chisq_max: R default = max(0.001 * max(N), 80).
+    let chisq_max_eff = chisq_max.unwrap_or_else(|| {
+        let max_n = (0..k)
+            .flat_map(|t| arrays.n[t].iter().copied())
+            .fold(0.0f64, f64::max);
+        (0.001 * max_n).max(80.0)
+    });
 
-    for j in 0..k {
-        for i in 0..=j {
-            let chi: Vec<f64> = (0..n_snps)
-                .map(|snp| {
-                    if i == j {
-                        arrays.z[i][snp] * arrays.z[i][snp] // χ² for h²
-                    } else {
-                        arrays.z[i][snp] * arrays.z[j][snp] // Z_i·Z_j for gencov
-                    }
-                })
-                .collect();
-            // N_bar for pair (i,j) = (1/M) Σ sqrt(n_i * n_j) — per Bulik-Sullivan 2015.
-            let n_bar: f64 = (0..n_snps)
-                .map(|snp| (arrays.n[i][snp] * arrays.n[j][snp]).sqrt())
-                .sum::<f64>()
-                / n_snps as f64;
-            chi_values.push(chi);
-            n_bars.push(n_bar);
-        }
-    }
-
-    // Run block-jackknife regression for each pair.
+    // Run regression for each pair (j, k) with j ≤ k in vech order.
     let mut s_cov = Mat::zeros(k, k);
     let mut intercepts = Mat::zeros(k, k);
-    let mut v_hold = Mat::zeros(n_blocks_actual, z_dim); // pseudo-values matrix
+    let mut v_hold = Mat::zeros(n_blocks_actual, z_dim);
+    let mut n_bars = vec![0.0f64; z_dim];
 
     let mut pair_idx = 0;
     for j in 0..k {
         for i in 0..=j {
-            // Apply chisq_max filter: remove SNPs with extreme χ² that can
-            // destabilise the WLS regression (GenomicSEM convention).
-            let (l2_f, chi_f, wld_f): (Vec<&f64>, Vec<&f64>, Vec<&f64>) =
-                if let Some(max_chi) = chisq_max {
-                    let mut l2_f = Vec::new();
-                    let mut chi_f = Vec::new();
-                    let mut wld_f = Vec::new();
-                    for s in 0..n_snps {
-                        let chi_abs = chi_values[pair_idx][s].abs();
-                        if chi_abs <= max_chi {
-                            l2_f.push(&arrays.l2[s]);
-                            chi_f.push(&chi_values[pair_idx][s]);
-                            wld_f.push(&arrays.wld[s]);
-                        }
+            // ── Per-pair data (possibly allele-aligned for gencov) ──
+            let (l2_p, chi_p, wld_p, n_j_p, n_k_p): (
+                Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>,
+            ) = if i == j {
+                // h²: chi = Z². Filter by chisq_max on Z².
+                let mut l2 = Vec::new();
+                let mut chi = Vec::new();
+                let mut wld = Vec::new();
+                let mut nv = Vec::new();
+                let mut nk = Vec::new();
+                for s in 0..n_snps {
+                    let z2 = arrays.z[i][s] * arrays.z[i][s];
+                    if z2 <= chisq_max_eff {
+                        l2.push(arrays.l2[s]);
+                        chi.push(z2);
+                        wld.push(arrays.wld[s]);
+                        nv.push(arrays.n[i][s]);
+                        nk.push(arrays.n[i][s]);
                     }
-                    (l2_f, chi_f, wld_f)
-                } else {
-                    (
-                        (0..n_snps).map(|s| &arrays.l2[s]).collect(),
-                        (0..n_snps).map(|s| &chi_values[pair_idx][s]).collect(),
-                        (0..n_snps).map(|s| &arrays.wld[s]).collect(),
-                    )
-                };
+                }
+                (l2, chi, wld, nv, nk)
+            } else {
+                // gencov: chi = Z_i * Z_j. Allele alignment: flip Z_i sign
+                // if A1 alleles differ (done in the munge/combine step upstream;
+                // here we assume alignment is already correct). Filter by
+                // both traits' chisq_max.
+                let mut l2 = Vec::new();
+                let mut chi = Vec::new();
+                let mut wld = Vec::new();
+                let mut nv_i = Vec::new();
+                let mut nv_j = Vec::new();
+                // chi1 and chi2 for weight computation.
+                let mut c1 = Vec::new();
+                let mut c2 = Vec::new();
+                for s in 0..n_snps {
+                    let z2_i = arrays.z[i][s] * arrays.z[i][s];
+                    let z2_j = arrays.z[j][s] * arrays.z[j][s];
+                    if z2_i <= chisq_max_eff && z2_j <= chisq_max_eff {
+                        l2.push(arrays.l2[s]);
+                        chi.push(arrays.z[i][s] * arrays.z[j][s]);
+                        wld.push(arrays.wld[s]);
+                        nv_i.push(arrays.n[i][s]);
+                        nv_j.push(arrays.n[j][s]);
+                        c1.push(z2_i);
+                        c2.push(z2_j);
+                    }
+                }
+                // Store chi1/chi2 for weight computation via a side channel.
+                // We'll recompute inline below.
+                (l2, chi, wld, nv_i, nv_j)
+            };
 
-            let n_filter = l2_f.len();
+            let n_filter = l2_p.len();
             if n_filter < n_blocks_actual {
                 return Err(DagError::NodeError {
                     node_type: "gsem_ldsc".into(),
                     msg: format!(
-                        "only {n_filter} SNPs survived chisq_max filter \
-                         (pair ({i},{j}), chisq_max={:?}); need at least \
-                         {n_blocks_actual} for jackknife",
-                        chisq_max
+                        "only {n_filter} SNPs survived chisq_max={chisq_max_eff:.1} filter \
+                         (pair ({i},{j})); need ≥ {n_blocks_actual} for jackknife"
                     ),
                 });
             }
 
-            // GenomicSEM weight: w = wld / (N_bar * sqrt(M)), then the WLS
-            // multiplier is sqrt(w). See Grotzinger et al. 2019, ldsc.R.
-            let n_bar_pair = n_bars[pair_idx];
-            let denom = n_bar_pair * m.sqrt();
-            let weights: Vec<f64> = (0..n_filter)
-                .map(|s| (wld_f[s] / denom).sqrt())
-                .collect();
+            // ── Compute weights ──
+            let (weights_ld, weights_chi, n_bar) = if i == j {
+                let (w, nb) = compute_h2_weights(&l2_p, &chi_p, &wld_p, &n_j_p, m);
+                (w.clone(), w, nb)
+            } else {
+                // Recompute chi1 and chi2 for the filtered SNPs.
+                let chi1: Vec<f64> = (0..n_filter)
+                    .map(|_| 0.0) // placeholder
+                    .collect();
+                let _ = chi1;
+                // We need chi1 = Z_i² and chi2 = Z_j² for the filtered SNPs.
+                // But we don't have the individual Z's here, only chi = Z_i*Z_j.
+                // Recompute from arrays using the same filter.
+                let mut c1 = Vec::with_capacity(n_filter);
+                let mut c2 = Vec::with_capacity(n_filter);
+                let mut idx = 0;
+                for s in 0..n_snps {
+                    let z2_i = arrays.z[i][s] * arrays.z[i][s];
+                    let z2_j = arrays.z[j][s] * arrays.z[j][s];
+                    if z2_i <= chisq_max_eff && z2_j <= chisq_max_eff {
+                        if idx < n_filter {
+                            c1.push(z2_i);
+                            c2.push(z2_j);
+                            idx += 1;
+                        }
+                    }
+                }
+                compute_gencov_weights(&l2_p, &wld_p, &c1, &n_j_p, &c2, &n_k_p, m)
+            };
 
-            // Dereference slices for the regression function.
-            let l2_slice: Vec<f64> = l2_f.iter().map(|&v| *v).collect();
-            let chi_slice: Vec<f64> = chi_f.iter().map(|&v| *v).collect();
+            n_bars[pair_idx] = n_bar;
 
-            let result = genomic_sem::ldsc::block_jackknife_regression(
-                &l2_slice,
-                &chi_slice,
-                &weights,
+            let result = genomic_sem::ldsc::block_jackknife_regression_r(
+                &l2_p,
+                &chi_p,
+                &weights_ld,
+                &weights_chi,
                 n_blocks_actual,
-                n_bars[pair_idx],
+                n_bar,
                 m,
             );
 
             // Check for NaN immediately with per-pair diagnostics.
             if !result.reg_tot.is_finite() || !result.intercept.is_finite() {
-                // Compute summary stats for the error message.
-                let l2_min = l2_slice.iter().cloned().fold(f64::INFINITY, f64::min);
-                let l2_max = l2_slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                let chi_min = chi_slice.iter().cloned().fold(f64::INFINITY, f64::min);
-                let chi_max = chi_slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                let wld_min = wld_f.iter().map(|&&v| v).fold(f64::INFINITY, f64::min);
-                let wld_max = wld_f.iter().map(|&&v| v).fold(f64::NEG_INFINITY, f64::max);
-                let w_min = weights.iter().cloned().fold(f64::INFINITY, f64::min);
-                let w_max = weights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let l2_min = l2_p.iter().cloned().fold(f64::INFINITY, f64::min);
+                let l2_max = l2_p.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let chi_min = chi_p.iter().cloned().fold(f64::INFINITY, f64::min);
+                let chi_max = chi_p.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let wld_min = wld_p.iter().cloned().fold(f64::INFINITY, f64::min);
+                let wld_max = wld_p.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let wl_min = weights_ld.iter().cloned().fold(f64::INFINITY, f64::min);
+                let wl_max = weights_ld.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 return Err(DagError::NodeError {
                     node_type: "gsem_ldsc".into(),
                     msg: format!(
                         "LDSC regression for pair ({i},{j}) produced non-finite \
                          result: reg_tot={}, intercept={}, coef={:.6e}\n\
                          Inputs: n_snps={n_snps}, n_filtered={n_filter}, \
-                         n_blocks={n_blocks_actual}, m={m}, n_bar={n_bar_pair:.1}\n\
+                         n_blocks={n_blocks_actual}, m={m}, n_bar={n_bar:.1}\n\
                          l2 range:      [{l2_min:.4}, {l2_max:.4}]\n\
                          chi range:     [{chi_min:.4}, {chi_max:.4}]\n\
                          wld range:     [{wld_min:.4}, {wld_max:.4}]\n\
-                         weight range:  [{w_min:.4e}, {w_max:.4e}]\n\
-                         chisq_max:     {chisq_max:?}",
+                         weights_ld:    [{wl_min:.4e}, {wl_max:.4e}]\n\
+                         chisq_max:     {chisq_max_eff:.1}",
                         result.reg_tot,
                         result.intercept,
                         result.coef,
@@ -1396,14 +1565,11 @@ fn run_multivariate_ldsc(
                 });
             }
 
-            // S[i,j] = S[j,i] = reg_tot = coef * M
             s_cov[(i, j)] = result.reg_tot;
             s_cov[(j, i)] = result.reg_tot;
-            // Intercepts
             intercepts[(i, j)] = result.intercept;
             intercepts[(j, i)] = result.intercept;
 
-            // Fill pseudo-value column for this pair.
             let pv = &result.pseudo_values_col0;
             let n_fill = pv.len().min(n_blocks_actual);
             for b in 0..n_fill {
