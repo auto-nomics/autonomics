@@ -94,6 +94,8 @@ members = [
   "bio_crates/rdlocrand",
   "crates/node-bundles/nodes-rd",
   "crates/workflow-editor",
+  "stat_crates/dl",
+  "crates/node-bundles/nodes-dl",
 ]
 resolver = "3"
 
