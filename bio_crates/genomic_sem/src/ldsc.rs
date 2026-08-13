@@ -414,14 +414,22 @@ pub fn scale_to_liability(
 ) -> (Mat<f64>, Mat<f64>) {
     let k = cov.nrows();
 
-    // S = cov * tcrossprod(sqrt(liab_s))
+    // S = cov * tcrossprod(sqrt(liab_s))  — ELEMENT-WISE (R's `*` operator)
+    // NOT matrix multiplication! R uses `cov * ratio` which is element-wise.
+    // faer's `*` on Mat is matrix multiplication, so we must use explicit
+    // element-wise multiplication to match R semantics.
     let mut ratio = Mat::zeros(k, k);
     for i in 0..k {
         for j in 0..k {
             ratio[(i, j)] = (liab_s[i] * liab_s[j]).sqrt();
         }
     }
-    let s = cov * &ratio;
+    let mut s = Mat::zeros(k, k);
+    for i in 0..k {
+        for j in 0..k {
+            s[(i, j)] = cov[(i, j)] * ratio[(i, j)];
+        }
+    }
 
     // scaleO = lowerTriangle(ratio, diag=TRUE)
     let scale_o = linalg::vech(&ratio);

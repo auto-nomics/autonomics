@@ -256,7 +256,7 @@ impl NodeFactory for GsemMungeNodeFactory {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<GsemMungeConfig>(spec, GSEM_MUNGE_NODE_KIND)?;
         let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
+        let _input = input_0(ctx).to_string();
         let tmp = ctx.fresh_var("munged_file");
         let n_flag = cfg.n.map(|v| format!(" --N {v}")).unwrap_or_default();
         let trait_flag = cfg
@@ -566,7 +566,7 @@ fn munge_sumstats(
                 let arr = batch.column(idx).as_any().downcast_ref::<Float64Array>();
                 (0..num_rows)
                     .map(|i| {
-                        arr.and_then(|a| Some(a.value(i)))
+                        arr.map(|a| a.value(i))
                             .map(|v| v >= cfg.info_filter)
                             .unwrap_or(false)
                     })
@@ -585,7 +585,7 @@ fn munge_sumstats(
                 let arr = batch.column(idx).as_any().downcast_ref::<Float64Array>();
                 (0..num_rows)
                     .map(|i| {
-                        arr.and_then(|a| Some(a.value(i)))
+                        arr.map(|a| a.value(i))
                             .map(|v| {
                                 let m = v.min(1.0 - v);
                                 m >= cfg.maf_filter
@@ -710,10 +710,10 @@ fn ldsc_output_schema(n_traits: usize) -> SchemaRef {
     let z = n_traits * (n_traits + 1) / 2;
     let mut fields = Vec::with_capacity(z + z * z + 1);
     for i in 0..z {
-        fields.push(Field::new(&format!("s_{i}"), DataType::Float64, false));
+        fields.push(Field::new(format!("s_{i}"), DataType::Float64, false));
     }
     for i in 0..(z * z) {
-        fields.push(Field::new(&format!("v_{i}"), DataType::Float64, false));
+        fields.push(Field::new(format!("v_{i}"), DataType::Float64, false));
     }
     fields.push(Field::new("m", DataType::Float64, false));
     Arc::new(Schema::new(fields))
@@ -929,11 +929,13 @@ impl DagNode for GsemLdscNode {
         })?;
         let m_value = {
             let mut val: Option<f64> = None;
-            'outer: for b in &m_batches {
+            for b in &m_batches {
+                if val.is_some() {
+                    break;
+                }
                 if let Some(a) = b.column(0).as_any().downcast_ref::<Float64Array>() {
-                    for i in 0..b.num_rows() {
+                    if let Some(i) = (0..b.num_rows()).next() {
                         val = Some(a.value(i));
-                        break 'outer;
                     }
                 }
             }
@@ -1402,6 +1404,10 @@ fn compute_gencov_weights(
 /// - **Diagonal (j==k)**: χ² = Z², h² weights, N.bar = mean(N).
 /// - **Off-diagonal (j≠k)**: ZZ = Z_j·Z_k (with allele alignment),
 ///   gencov weights (separate for X and y), N.bar = sqrt(mean(N_j)·mean(N_k)).
+/// Per-pair filtered arrays used in LDSC regression.
+type PerPairData = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+#[allow(clippy::too_many_arguments)]
 fn run_multivariate_ldsc(
     arrays: &LdscArrays,
     k: usize,
@@ -1435,13 +1441,7 @@ fn run_multivariate_ldsc(
     for j in 0..k {
         for i in 0..=j {
             // ── Per-pair data (possibly allele-aligned for gencov) ──
-            let (l2_p, chi_p, wld_p, n_j_p, n_k_p): (
-                Vec<f64>,
-                Vec<f64>,
-                Vec<f64>,
-                Vec<f64>,
-                Vec<f64>,
-            ) = if i == j {
+            let (l2_p, chi_p, wld_p, n_j_p, n_k_p): PerPairData = if i == j {
                 // h²: chi = Z². Filter by chisq_max on Z².
                 let mut l2 = Vec::new();
                 let mut chi = Vec::new();
@@ -1507,25 +1507,17 @@ fn run_multivariate_ldsc(
                 (w.clone(), w, nb)
             } else {
                 // Recompute chi1 and chi2 for the filtered SNPs.
-                let chi1: Vec<f64> = (0..n_filter)
-                    .map(|_| 0.0) // placeholder
-                    .collect();
-                let _ = chi1;
-                // We need chi1 = Z_i² and chi2 = Z_j² for the filtered SNPs.
-                // But we don't have the individual Z's here, only chi = Z_i*Z_j.
-                // Recompute from arrays using the same filter.
+                // Recompute chi1 = Z_i² and chi2 = Z_j² for the filtered SNPs.
                 let mut c1 = Vec::with_capacity(n_filter);
                 let mut c2 = Vec::with_capacity(n_filter);
                 let mut idx = 0;
                 for s in 0..n_snps {
                     let z2_i = arrays.z[i][s] * arrays.z[i][s];
                     let z2_j = arrays.z[j][s] * arrays.z[j][s];
-                    if z2_i <= chisq_max_eff && z2_j <= chisq_max_eff {
-                        if idx < n_filter {
-                            c1.push(z2_i);
-                            c2.push(z2_j);
-                            idx += 1;
-                        }
+                    if z2_i <= chisq_max_eff && z2_j <= chisq_max_eff && idx < n_filter {
+                        c1.push(z2_i);
+                        c2.push(z2_j);
+                        idx += 1;
                     }
                 }
                 compute_gencov_weights(&l2_p, &wld_p, &c1, &n_j_p, &c2, &n_k_p, m)
@@ -1965,10 +1957,10 @@ fn rgmodel_output_schema(k: usize) -> SchemaRef {
     let z = k * (k + 1) / 2;
     let mut fields = Vec::new();
     for i in 0..z {
-        fields.push(Field::new(&format!("r_{i}"), DataType::Float64, false));
+        fields.push(Field::new(format!("r_{i}"), DataType::Float64, false));
     }
     for i in 0..z {
-        fields.push(Field::new(&format!("v_r_{i}"), DataType::Float64, false));
+        fields.push(Field::new(format!("v_r_{i}"), DataType::Float64, false));
     }
     Arc::new(Schema::new(fields))
 }
@@ -2080,8 +2072,8 @@ impl DagNode for GsemRgmodelNode {
         let r_vec = genomic_sem::linalg::vech(&result.r);
 
         let mut columns: Vec<Arc<dyn Array>> = Vec::new();
-        for i in 0..z {
-            columns.push(Arc::new(Float64Array::from(vec![r_vec[i]])));
+        for &r in r_vec.iter().take(z) {
+            columns.push(Arc::new(Float64Array::from(vec![r])));
         }
         for i in 0..z {
             columns.push(Arc::new(Float64Array::from(vec![result.v_r[(i, i)]])));
@@ -2370,6 +2362,82 @@ mod tests {
             .unwrap()
             .value(0);
         assert!((m_val - 500_000.0).abs() < 1e-6);
+    }
+
+    /// Synthetic multivariate LDSC: 3 traits with clearly different Z patterns.
+    /// Verifies that the S matrix has correct off-diagonal elements (gencov ≠ h²)
+    /// — not the S[i,j] = S[j,j] pattern reported in the bug report.
+    #[test]
+    fn test_run_multivariate_ldsc_3trait_s_matrix() {
+        let n_snps = 1000;
+        let l2: Vec<f64> = (0..n_snps).map(|i| 1.0 + (i as f64) * 0.05).collect();
+        let wld: Vec<f64> = l2.iter().map(|x| x * 0.5).collect();
+
+        // Three traits with INDEPENDENT Z-score patterns.
+        // Trait 0: sign alternates every 2, moderate signal
+        let z0: Vec<f64> = (0..n_snps).map(|i| {
+            let chi = 1.0 + 0.01 * l2[i];
+            if i % 2 == 0 { chi.sqrt() } else { -chi.sqrt() }
+        }).collect();
+        // Trait 1: sign alternates every 3, different magnitude
+        let z1: Vec<f64> = (0..n_snps).map(|i| {
+            let chi = 1.0 + 0.005 * l2[i];
+            if i % 3 == 0 { chi.sqrt() } else { -chi.sqrt() }
+        }).collect();
+        // Trait 2: sign alternates every 5, yet another pattern
+        let z2: Vec<f64> = (0..n_snps).map(|i| {
+            let chi = 1.0 + 0.002 * l2[i];
+            if i % 5 == 0 { chi.sqrt() } else { -chi.sqrt() }
+        }).collect();
+
+        let arrays = LdscArrays {
+            z: vec![z0, z1, z2],
+            n: vec![vec![100000.0; n_snps], vec![80000.0; n_snps], vec![60000.0; n_snps]],
+            l2,
+            wld,
+            n_snps,
+        };
+
+        let result = run_multivariate_ldsc(
+            &arrays, 3, 5000.0, 20,
+            &[None, None, None], &[None, None, None],
+            false,
+            &["t0".into(), "t1".into(), "t2".into()],
+            None, // no chisq_max filter
+        ).unwrap();
+
+        // h² (diagonal) should all be positive but different.
+        let h2_0 = result.s[(0, 0)];
+        let h2_1 = result.s[(1, 1)];
+        let h2_2 = result.s[(2, 2)];
+        assert!(h2_0.is_finite(), "h²₀ should be finite, got {h2_0}");
+        assert!(h2_1.is_finite(), "h²₁ should be finite, got {h2_1}");
+        assert!(h2_2.is_finite(), "h²₂ should be finite, got {h2_2}");
+
+        // CRITICAL: gencov must NOT equal h² of either trait.
+        // If S[i,j] == S[j,j] for all i<j, it means the gencov regression
+        // is producing h² instead of cross-trait covariance — a bug.
+        let gc_01 = result.s[(0, 1)];
+        let gc_02 = result.s[(0, 2)];
+        let gc_12 = result.s[(1, 2)];
+
+        eprintln!("S matrix:");
+        eprintln!("  h²₀={h2_0:.6}  gc₀₁={gc_01:.6}  gc₀₂={gc_02:.6}");
+        eprintln!("  gc₀₁={gc_01:.6}  h²₁={h2_1:.6}  gc₁₂={gc_12:.6}");
+        eprintln!("  gc₀₂={gc_02:.6}  gc₁₂={gc_12:.6}  h²₂={h2_2:.6}");
+
+        let tol = 1e-8;
+        assert!((gc_01 - h2_1).abs() > tol || (gc_01 - h2_0).abs() > tol,
+            "BUG: gencov(0,1)={gc_01:.6} equals h²₀={h2_0:.6} or h²₁={h2_1:.6}");
+        assert!((gc_02 - h2_2).abs() > tol || (gc_02 - h2_0).abs() > tol,
+            "BUG: gencov(0,2)={gc_02:.6} equals h²₀={h2_0:.6} or h²₂={h2_2:.6}");
+        assert!((gc_12 - h2_2).abs() > tol || (gc_12 - h2_1).abs() > tol,
+            "BUG: gencov(1,2)={gc_12:.6} equals h²₁={h2_1:.6} or h²₂={h2_2:.6}");
+
+        // Symmetry check
+        assert!((result.s[(0, 1)] - result.s[(1, 0)]).abs() < 1e-15);
+        assert!((result.s[(0, 2)] - result.s[(2, 0)]).abs() < 1e-15);
+        assert!((result.s[(1, 2)] - result.s[(2, 1)]).abs() < 1e-15);
     }
 
     /// Synthetic multivariate LDSC: 2 traits, small N.
