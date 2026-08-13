@@ -42,6 +42,8 @@ pub enum CommandAction {
     ToggleCollapseToolResults,
     /// Open the message picker to copy a chat message to the clipboard.
     CopyMessage,
+    /// Manually compact the active agent's conversation history.
+    Compact,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -174,6 +176,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "stop abort interrupt request".into(),
             category: "agent".into(),
             action: CommandAction::CancelAgent,
+        },
+        Command {
+            title: "Compact conversation".into(),
+            keywords: "compact compress summarize context memory shrink reduce".into(),
+            category: "agent".into(),
+            action: CommandAction::Compact,
         },
         Command {
             title: "Scroll to bottom".into(),

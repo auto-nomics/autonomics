@@ -2160,6 +2160,18 @@ impl App {
             CommandAction::CopyMessage => {
                 self.open_message_picker();
             }
+            CommandAction::Compact => {
+                let agent_name = self
+                    .state
+                    .sessions
+                    .get(self.state.active_agent_idx)
+                    .map(|s| s.name.clone());
+                if let Some(an) = agent_name {
+                    if let Some(host) = self.host.as_ref() {
+                        host.control().compact_agent(&an);
+                    }
+                }
+            }
         }
     }
 
