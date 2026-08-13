@@ -437,17 +437,19 @@ impl LdscHsqNode {
         //    register a DataFusion `ListingTable` for the panel and its
         //    companion `_m` table against the engine's object store. Legacy
         //    Iceberg callers skip this and read `iceberg.ld_score.*` directly.
+        //
+        //    The backend descriptor (`ld_ref.backend`) carries the connection
+        //    details (scheme/endpoint/region/credentials/root) that
+        //    [`register_listing_table`] uses to compose the bucket URL.
+        //    The engine layer is responsible for registering a matching
+        //    `ObjectStore` on `runtime_env` before this is called.
         if ld_ref.uses_object_storage() {
-            // scheme "oss" mirrors the aliyun OSS bucket used in production;
-            // the runtime `RuntimeEnv` has already registered an OSS-backed
-            // `opendal::Operator` for this URL prefix.
-            const PANEL_SCHEME: &str = "oss";
             if let Some(handle) = &ld_ref.handle {
                 crate::ldsc_common::register_listing_table(
                     ctx,
                     &ld_ref.table_name,
                     handle,
-                    PANEL_SCHEME,
+                    &ld_ref.backend,
                 )
                 .await
                 .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
@@ -457,7 +459,7 @@ impl LdscHsqNode {
                     ctx,
                     &ld_ref.m_table_name,
                     m_handle,
-                    PANEL_SCHEME,
+                    &ld_ref.m_backend,
                 )
                 .await
                 .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
@@ -705,6 +707,8 @@ mod tests {
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
             handle: None,
             m_handle: None,
+            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
+            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
             table_name: String::new(),
             m_table_name: String::new(),
         };
@@ -848,6 +852,8 @@ mod tests {
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
             handle: None,
             m_handle: None,
+            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
+            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
             table_name: String::new(),
             m_table_name: String::new(),
         };

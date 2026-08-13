@@ -707,6 +707,8 @@ mod tests {
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
             handle: None,
             m_handle: None,
+            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
+            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
             table_name: String::new(),
             m_table_name: String::new(),
         };
@@ -800,6 +802,8 @@ mod tests {
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
             handle: None,
             m_handle: None,
+            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
+            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
             table_name: String::new(),
             m_table_name: String::new(),
         };

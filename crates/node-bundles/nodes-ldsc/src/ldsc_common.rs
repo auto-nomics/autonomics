@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use arrow_array::Float64Array;
 use dag_core::resource_catalog::{
-    IcebergIdent, ObjectStorageHandle, ResourceCatalog,
+    IcebergIdent, ObjectStorageBackend, ObjectStorageHandle, ResourceCatalog,
 };
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -61,6 +61,13 @@ pub struct LdScoreRef {
     pub handle: Option<ObjectStorageHandle>,
     /// Object-storage address for the companion `_m` table.
     pub m_handle: Option<ObjectStorageHandle>,
+    /// Backend descriptor (Oss / S3 / Local) for the panel — used by
+    /// [`register_listing_table`] to compose the URL scheme. Mirrors
+    /// `handle`'s backend when present; defaults to `Local{root: "/"}` in
+    /// the legacy Iceberg path.
+    pub backend: ObjectStorageBackend,
+    /// Backend descriptor for the companion `_m` table.
+    pub m_backend: ObjectStorageBackend,
     /// DataFusion table name under which a `ListingTable` is registered for
     /// `handle` (used in SQL as `<table_name>`). Stable per logical name.
     pub table_name: String,
@@ -90,11 +97,17 @@ impl LdScoreRef {
         if let Ok(handle) = catalog.resolve_object_storage(logical) {
             let m_logical = format!("{logical}.m");
             let m_handle = catalog.resolve_object_storage(&m_logical).ok();
+            let m_backend = m_handle
+                .as_ref()
+                .map(|h| h.backend.clone())
+                .unwrap_or_default();
             return Self {
                 sql: String::new(),
                 m_sql: String::new(),
-                handle: Some(handle),
-                m_handle,
+                handle: Some(handle.clone()),
+                m_handle: m_handle.clone(),
+                backend: handle.backend.clone(),
+                m_backend,
                 table_name: object_storage_table_name(logical),
                 m_table_name: object_storage_table_name(&m_logical),
             };
@@ -108,6 +121,8 @@ impl LdScoreRef {
                 m_sql: m_ident.sql(),
                 handle: None,
                 m_handle: None,
+                backend: ObjectStorageBackend::default(),
+                m_backend: ObjectStorageBackend::default(),
                 table_name: String::new(),
                 m_table_name: String::new(),
             };
@@ -119,6 +134,8 @@ impl LdScoreRef {
             m_sql: format!("iceberg.ld_score.\"{fallback_table}_m\""),
             handle: None,
             m_handle: None,
+            backend: ObjectStorageBackend::default(),
+            m_backend: ObjectStorageBackend::default(),
             table_name: String::new(),
             m_table_name: String::new(),
         }
@@ -204,19 +221,24 @@ pub fn object_storage_table_name(logical: &str) -> String {
 /// Register a DataFusion `ListingTable` for the given object-storage handle,
 /// using the bucket's already-registered `opendal`-backed `ObjectStore`.
 ///
-/// `scheme` is the URL scheme registered for the bucket — typically `"s3"`,
-/// `"oss"`, or `"file"`. The bucket is mapped to `<scheme>://<bucket>` and
-/// the handle's prefix is appended; `ListingTable` discovers and prunes
-/// files under that URL.
+/// **The engine is responsible for the actual ObjectStore**: the
+/// `runtime_env` shared by every node execution must have a DataFusion
+/// `ObjectStore` registered under `backend.scheme()` (e.g. `"oss://"`,
+/// `"s3://"`, `"file://"`) *before* this helper is called. The engine layer
+/// (`data-engine`) reads `ResourceKind::ObjectStorage` entries from the
+/// catalog at startup and wires OSS / S3 / Local ObjectStores based on the
+/// entries' [`ObjectStorageBackend`] descriptors (endpoint, region, ak/sk).
+/// This helper only:
+/// - Composes the URL `<scheme>://<bucket><prefix>` from the handle + backend.
+/// - Infers the parquet schema at that URL.
+/// - Registers the resulting `ListingTable` under `table_name`.
 ///
-/// The table is registered under `table_name`. Re-registration with the
-/// same `table_name` is a no-op (DataFusion returns the existing
-/// `TableProvider`).
+/// Re-registration with the same `table_name` is a no-op.
 pub async fn register_listing_table(
     ctx: &SessionContext,
     table_name: &str,
     handle: &ObjectStorageHandle,
-    scheme: &str,
+    backend: &ObjectStorageBackend,
 ) -> Result<(), LdscCommonError> {
     // Already registered (e.g. catalog warmed by a prior call) → skip.
     match ctx.table_exist(table_name) {
@@ -225,7 +247,7 @@ pub async fn register_listing_table(
         Err(e) => return Err(LdscCommonError::ReadBatch(e)),
     }
 
-    let url = format!("{scheme}://{}{}", handle.bucket, handle.prefix);
+    let url = format!("{}://{}{}", backend.scheme(), handle.bucket, handle.prefix);
     let table_url = ListingTableUrl::parse(&url).map_err(|e| {
         LdscCommonError::InvalidInput(format!(
             "failed to parse object-storage url '{url}': {e}"

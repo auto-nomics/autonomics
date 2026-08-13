@@ -61,6 +61,7 @@ pub fn endpoint_or(logical: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 pub use resolve::{IcebergIdent, ObjectStorageHandle};
+pub use kind::{ObjectFileFormat, ObjectStorageBackend};
 
 #[cfg(test)]
 mod tests;

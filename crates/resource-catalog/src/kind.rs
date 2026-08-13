@@ -119,16 +119,27 @@ pub enum ResourceAddress {
     /// A partition of self-describing files in an object-store bucket.
     ///
     /// `bucket` is the scheme-agnostic bucket name (e.g. `"autonomics"`); the
-    /// actual scheme (`s3://`, `oss://`, `file://`) is supplied at runtime by
-    /// the registered [`opendal::Operator`]. `prefix` is the path within the
-    /// bucket (e.g. `"/ld_score/1000g_eur/"`). `file_format` selects the
-    /// reader (currently only `Parquet` is wired through `ListingTable`).
-    /// `partition_columns` lists the hive-style partition columns present
-    /// under `prefix` (e.g. `["chr"]` for chr-partitioned LD matrices); empty
-    /// means unpartitioned.
+    /// actual scheme (`s3://`, `oss://`, `file://`) is supplied by `backend`.
+    /// `prefix` is the path within the bucket (e.g. `"/ld_score/1000g_eur/"`).
+    /// `file_format` selects the reader (currently only `Parquet` is wired
+    /// through `ListingTable`). `partition_columns` lists the hive-style
+    /// partition columns present under `prefix` (e.g. `["chr"]` for
+    /// chr-partitioned LD matrices); empty means unpartitioned.
+    ///
+    /// `backend` carries the **connection description** (endpoint, region,
+    /// credentials, or local root). All `Option`s on cloud backends default
+    /// to `None` meaning "use opendal's default" (env var / IAM role /
+    /// anonymous); explicit credentials override. See [`ObjectStorageBackend`].
+    ///
+    /// **Migration**: `backend` is `#[serde(default)]` — manifests written
+    /// before this field existed deserialize as `Local{root:"/"}` which will
+    /// fail loudly at read time rather than at load time; the operator is
+    /// expected to re-register affected entries.
     ObjectStorage {
         bucket: String,
         prefix: String,
+        #[serde(default)]
+        backend: ObjectStorageBackend,
         file_format: ObjectFileFormat,
         #[serde(default)]
         partition_columns: Vec<String>,
@@ -148,6 +159,120 @@ impl ObjectFileFormat {
         match self {
             ObjectFileFormat::Parquet => "parquet",
         }
+    }
+}
+
+/// Connection description for an [`ResourceAddress::ObjectStorage`] entry.
+///
+/// Stores enough information for `register_listing_table` to construct an
+/// `opendal::Operator` (and wrap it as a DataFusion `ObjectStore`) without
+/// depending on a process-global runtime configuration. Each cloud backend's
+/// fields are `Option<String>` so the same struct covers both **explicit
+/// credentials** (set inline) and **implicit** (None → env var, IAM role,
+/// anonymous). When all credential fields are `None`, the operator falls
+/// through to whatever opendal's default credential chain provides.
+///
+/// Serialised with `#[serde(tag = "type")]` so each backend's JSON is
+/// self-describing: `{"type":"oss","endpoint":"…","region":"…"}`.
+///
+/// **Default**: `Local { root: "/" }` — used when a pre-`backend` manifest
+/// is reloaded; reads against this default will fail at runtime (no file at
+/// `/<bucket>/<prefix>`) which is the desired loud failure mode for
+/// un-migrated entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ObjectStorageBackend {
+    /// Alibaba Cloud OSS.
+    Oss {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_key_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_access_key: Option<String>,
+    },
+    /// AWS S3 (or S3-compatible stores — set `endpoint` to point at MinIO etc.).
+    S3 {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_key_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret_access_key: Option<String>,
+    },
+    /// Local filesystem (development / testing / offline analysis). `root`
+    /// is the directory the bucket's URL is resolved against.
+    Local {
+        root: PathBuf,
+    },
+}
+
+impl Default for ObjectStorageBackend {
+    fn default() -> Self {
+        // Old manifests (pre-`backend`) deserialize to this; reads against
+        // it will fail at runtime, which is the desired loud-failure mode.
+        ObjectStorageBackend::Local {
+            root: PathBuf::from("/"),
+        }
+    }
+}
+
+impl ObjectStorageBackend {
+    /// URL scheme for the bucket: `"oss"` / `"s3"` / `"file"`.
+    pub fn scheme(&self) -> &'static str {
+        match self {
+            ObjectStorageBackend::Oss { .. } => "oss",
+            ObjectStorageBackend::S3 { .. } => "s3",
+            ObjectStorageBackend::Local { .. } => "file",
+        }
+    }
+
+    /// Convenience: an `Oss` backend with explicit credentials.
+    pub fn oss(
+        endpoint: impl Into<String>,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+    ) -> Self {
+        ObjectStorageBackend::Oss {
+            endpoint: Some(endpoint.into()),
+            region: None,
+            access_key_id: Some(access_key_id.into()),
+            secret_access_key: Some(secret_access_key.into()),
+        }
+    }
+
+    /// Convenience: an `Oss` backend that defers credentials to opendal's
+    /// default chain (env vars, ECS metadata, …).
+    pub fn oss_default(endpoint: impl Into<String>) -> Self {
+        ObjectStorageBackend::Oss {
+            endpoint: Some(endpoint.into()),
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+        }
+    }
+
+    /// Convenience: an `S3` backend with explicit credentials.
+    pub fn s3(
+        region: impl Into<String>,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+    ) -> Self {
+        ObjectStorageBackend::S3 {
+            endpoint: None,
+            region: Some(region.into()),
+            access_key_id: Some(access_key_id.into()),
+            secret_access_key: Some(secret_access_key.into()),
+        }
+    }
+
+    /// Convenience: a `Local` backend rooted at `root`.
+    pub fn local(root: impl Into<PathBuf>) -> Self {
+        ObjectStorageBackend::Local { root: root.into() }
     }
 }
 
@@ -208,8 +333,11 @@ impl ResourceAddress {
         }
     }
 
-    /// A parquet (or other self-describing) partition in an object-store bucket.
-    /// Convenience for the common case of un-partitioned, single-format data.
+    /// A parquet (or other self-describing) partition in an object-store bucket
+    /// with a `Local` backend rooted at `.` — **dev-only convenience** for
+    /// tests and offline analysis. Production code should call
+    /// [`object_storage_with_backend`](Self::object_storage_with_backend)
+    /// with an explicit [`ObjectStorageBackend::Oss`] / [`S3`].
     pub fn object_storage(
         bucket: impl Into<String>,
         prefix: impl Into<String>,
@@ -217,24 +345,42 @@ impl ResourceAddress {
         ResourceAddress::ObjectStorage {
             bucket: bucket.into(),
             prefix: prefix.into(),
+            backend: ObjectStorageBackend::local("."),
             file_format: ObjectFileFormat::Parquet,
             partition_columns: Vec::new(),
         }
     }
 
     /// Full constructor for [`ResourceAddress::ObjectStorage`] with explicit
-    /// `file_format` and `partition_columns`.
+    /// `file_format`, `partition_columns`, and `backend`.
     pub fn object_storage_with(
         bucket: impl Into<String>,
         prefix: impl Into<String>,
+        backend: ObjectStorageBackend,
         file_format: ObjectFileFormat,
         partition_columns: Vec<String>,
     ) -> Self {
         ResourceAddress::ObjectStorage {
             bucket: bucket.into(),
             prefix: prefix.into(),
+            backend,
             file_format,
             partition_columns,
+        }
+    }
+
+    /// Production-friendly constructor: OSS / S3 / Local with explicit backend.
+    pub fn object_storage_with_backend(
+        bucket: impl Into<String>,
+        prefix: impl Into<String>,
+        backend: ObjectStorageBackend,
+    ) -> Self {
+        ResourceAddress::ObjectStorage {
+            bucket: bucket.into(),
+            prefix: prefix.into(),
+            backend,
+            file_format: ObjectFileFormat::Parquet,
+            partition_columns: Vec::new(),
         }
     }
 }

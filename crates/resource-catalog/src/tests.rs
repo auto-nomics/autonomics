@@ -274,6 +274,7 @@ fn object_storage_validation_rejects_empty_bucket_and_unprefixed_path() {
         ResourceAddress::ObjectStorage {
             bucket: String::new(),
             prefix: "/foo/".into(),
+            backend: crate::kind::ObjectStorageBackend::local("."),
             file_format: crate::kind::ObjectFileFormat::Parquet,
             partition_columns: vec![],
         },
@@ -290,6 +291,7 @@ fn object_storage_validation_rejects_empty_bucket_and_unprefixed_path() {
         ResourceAddress::ObjectStorage {
             bucket: "b".into(),
             prefix: "foo/".into(), // must start with /
+            backend: crate::kind::ObjectStorageBackend::local("."),
             file_format: crate::kind::ObjectFileFormat::Parquet,
             partition_columns: vec![],
         },
@@ -309,6 +311,7 @@ fn object_storage_with_partition_columns_round_trips() {
         ResourceAddress::object_storage_with(
             "autonomics",
             "/ld_matrix/eur/",
+            crate::kind::ObjectStorageBackend::local("/data"),
             crate::kind::ObjectFileFormat::Parquet,
             vec!["chr".into()],
         ),
@@ -343,4 +346,133 @@ fn object_storage_entry_with_different_name() -> ResourceEntry {
         "EUR LD matrix",
         ResourceAddress::object_storage("autonomics", "/ld_matrix/eur/"),
     )
+}
+
+// ── ObjectStorageBackend descriptor ────────────────────────────────────
+
+#[test]
+fn object_storage_backend_oss_round_trip() {
+    use crate::kind::{ObjectFileFormat, ObjectStorageBackend};
+    let entry = ResourceEntry::new(
+        "ldscore.1000g_eur",
+        ResourceKind::ObjectStorage,
+        "1000G EUR LD scores (aliyun OSS)",
+        ResourceAddress::object_storage_with(
+            "autonomics-data",
+            "/ld_score/1000g_eur/",
+            ObjectStorageBackend::oss("https://oss-cn-hangzhou.aliyuncs.com", "AKID", "SECRET"),
+            ObjectFileFormat::Parquet,
+            vec![],
+        ),
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: ResourceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+    match &back.address {
+        ResourceAddress::ObjectStorage { backend, .. } => {
+            assert!(matches!(backend, ObjectStorageBackend::Oss { .. }));
+            assert_eq!(backend.scheme(), "oss");
+        }
+        _ => panic!("expected ObjectStorage"),
+    }
+}
+
+#[test]
+fn object_storage_backend_s3_round_trip() {
+    use crate::kind::{ObjectFileFormat, ObjectStorageBackend};
+    let entry = ResourceEntry::new(
+        "ldscore.1000g_eur",
+        ResourceKind::ObjectStorage,
+        "1000G EUR LD scores (S3)",
+        ResourceAddress::object_storage_with(
+            "my-bucket",
+            "/ld_score/1000g_eur/",
+            ObjectStorageBackend::s3("us-east-1", "AKID", "SECRET"),
+            ObjectFileFormat::Parquet,
+            vec![],
+        ),
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: ResourceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+    match &back.address {
+        ResourceAddress::ObjectStorage { backend, .. } => assert_eq!(backend.scheme(), "s3"),
+        _ => panic!("expected ObjectStorage"),
+    }
+}
+
+#[test]
+fn object_storage_backend_local_round_trip() {
+    use crate::kind::{ObjectFileFormat, ObjectStorageBackend};
+    let entry = ResourceEntry::new(
+        "ldscore.1000g_eur",
+        ResourceKind::ObjectStorage,
+        "1000G EUR LD scores (local)",
+        ResourceAddress::object_storage_with(
+            "my-bucket",
+            "/ld_score/1000g_eur/",
+            ObjectStorageBackend::local("/data/buckets"),
+            ObjectFileFormat::Parquet,
+            vec![],
+        ),
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: ResourceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+    match &back.address {
+        ResourceAddress::ObjectStorage { backend, .. } => assert_eq!(backend.scheme(), "file"),
+        _ => panic!("expected ObjectStorage"),
+    }
+}
+
+#[test]
+fn object_storage_backend_oss_default_no_credentials() {
+    use crate::kind::{ObjectFileFormat, ObjectStorageBackend};
+    // oss_default leaves credentials `None` so the engine falls through to
+    // opendal's default credential chain (env vars / ECS metadata).
+    let backend = ObjectStorageBackend::oss_default("https://oss-cn-hangzhou.aliyuncs.com");
+    match backend {
+        ObjectStorageBackend::Oss {
+            endpoint,
+            region,
+            access_key_id,
+            secret_access_key,
+        } => {
+            assert_eq!(endpoint.as_deref(), Some("https://oss-cn-hangzhou.aliyuncs.com"));
+            assert!(region.is_none());
+            assert!(access_key_id.is_none());
+            assert!(secret_access_key.is_none());
+        }
+        _ => panic!("expected Oss"),
+    }
+}
+
+#[test]
+fn object_storage_backend_default_when_missing_from_manifest() {
+    use crate::kind::{ObjectFileFormat, ObjectStorageBackend};
+    // Old manifest without `backend` field deserializes to the loud-failure
+    // default — Local{root:"/"}. Reads against this fail at runtime, not
+    // silently.
+    let legacy_json = r#"{
+        "name": "ldscore.1000g_eur",
+        "kind": "ObjectStorage",
+        "description": "1000G EUR LD scores (parquet)",
+        "address": {
+            "ObjectStorage": {
+                "bucket": "autonomics-data",
+                "prefix": "/ld_score/1000g_eur/",
+                "file_format": "Parquet",
+                "partition_columns": []
+            }
+        }
+    }"#;
+    let back: ResourceEntry = serde_json::from_str(legacy_json).unwrap();
+    match &back.address {
+        ResourceAddress::ObjectStorage { backend, .. } => {
+            assert_eq!(backend, &ObjectStorageBackend::local("/"));
+        }
+        _ => panic!("expected ObjectStorage"),
+    }
+    // Suppress unused warnings in case the file_format variant is renamed.
+    let _ = ObjectFileFormat::Parquet;
 }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::catalog::ResourceCatalog;
 use crate::error::{ResourceError, Result};
-use crate::kind::{ObjectFileFormat, ResourceAddress};
+use crate::kind::{ObjectFileFormat, ObjectStorageBackend, ResourceAddress};
 
 /// A fully-qualified Iceberg table identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +65,7 @@ impl IcebergIdent {
 pub struct ObjectStorageHandle {
     pub bucket: String,
     pub prefix: String,
+    pub backend: ObjectStorageBackend,
     pub file_format: ObjectFileFormat,
     pub partition_columns: Vec<String>,
 }
@@ -232,11 +233,13 @@ impl ResourceCatalog {
             ResourceAddress::ObjectStorage {
                 bucket,
                 prefix,
+                backend,
                 file_format,
                 partition_columns,
             } => Ok(ObjectStorageHandle {
                 bucket: bucket.clone(),
                 prefix: prefix.clone(),
+                backend: backend.clone(),
                 file_format: *file_format,
                 partition_columns: partition_columns.clone(),
             }),

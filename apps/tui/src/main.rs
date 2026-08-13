@@ -420,6 +420,39 @@ struct ResourceAddArgs {
     #[arg(long)]
     prefix: Option<String>,
 
+    /// Backend type for object_storage: oss, s3, or local
+    /// (default: oss when --endpoint/--access-key provided, else local).
+    /// Determines which connection fields apply.
+    #[arg(long, value_parser = ["oss", "s3", "local"])]
+    backend: Option<String>,
+
+    /// Cloud backend endpoint URL
+    /// (e.g. "https://oss-cn-hangzhou.aliyuncs.com"). Defaults: aliyun OSS for
+    /// --backend=oss; AWS S3 default region for --backend=s3. Ignored for local.
+    #[arg(long)]
+    endpoint: Option<String>,
+
+    /// Cloud backend region (e.g. "us-east-1" for S3, "oss-cn-hangzhou" for OSS).
+    /// Ignored for local backend.
+    #[arg(long)]
+    region: Option<String>,
+
+    /// Explicit access-key id for OSS / S3. Omit to defer to opendal's
+    /// default credential chain (env vars / IAM role).
+    #[arg(long)]
+    access_key: Option<String>,
+
+    /// Explicit secret access-key for OSS / S3. Omit to defer to opendal's
+    /// default credential chain. Should accompany --access-key; if only one is
+    /// set the entry will fail loudly at first read.
+    #[arg(long)]
+    secret: Option<String>,
+
+    /// Local filesystem root for backend=local (ignored otherwise).
+    /// The bucket's URL resolves under this directory.
+    #[arg(long)]
+    local_root: Option<String>,
+
     // ── Ingestion spec fields (iceberg_table only) ────────────────────
     /// Source file path or glob for ingestion (e.g. "/data/gwas/*.parquet").
     /// When set, an ingestion_spec is attached to the resource.
@@ -842,13 +875,99 @@ async fn resource_add(
                 ResourceAddress::doc(doc_kind, path)
             }
             ResourceKind::ObjectStorage => {
+                use dag_core::resource_catalog::ObjectStorageBackend;
                 let bucket = args.bucket.as_deref().ok_or_else(|| {
                     color_eyre::eyre::eyre!("--bucket is required for kind=object_storage")
                 })?;
                 let prefix = args.prefix.as_deref().ok_or_else(|| {
                     color_eyre::eyre::eyre!("--prefix is required for kind=object_storage")
                 })?;
-                ResourceAddress::object_storage(bucket, prefix)
+
+                // Default backend when the operator didn't specify one:
+                // - if any explicit credential/region was supplied → assume OSS
+                // - otherwise → local with relative "." root (development).
+                // Either can be overridden by --backend.
+                let backend_kind = args.backend.as_deref().unwrap_or_else(|| {
+                    if args.access_key.is_some()
+                        || args.secret.is_some()
+                        || args.region.is_some()
+                        || args.endpoint.is_some()
+                    {
+                        "oss"
+                    } else {
+                        "local"
+                    }
+                });
+
+                let backend = match backend_kind {
+                    "oss" => {
+                        let endpoint = args
+                            .endpoint
+                            .clone()
+                            .unwrap_or_else(|| "https://oss-cn-hangzhou.aliyuncs.com".to_string());
+                        let region = args.region.clone();
+                        let ak = args.access_key.clone();
+                        let sk = args.secret.clone();
+                        // All-`None` ⇒ defer to opendal's default chain
+                        // (env vars, ECS metadata, IAM role). Otherwise build
+                        // an explicit-credentials variant.
+                        match (ak, sk) {
+                            (Some(ak), Some(sk)) => ObjectStorageBackend::Oss {
+                                endpoint: Some(endpoint),
+                                region,
+                                access_key_id: Some(ak),
+                                secret_access_key: Some(sk),
+                            },
+                            _ => ObjectStorageBackend::Oss {
+                                endpoint: Some(endpoint),
+                                region,
+                                access_key_id: None,
+                                secret_access_key: None,
+                            },
+                        }
+                    }
+                    "s3" => {
+                        let endpoint = args.endpoint.clone();
+                        let region = args.region.clone();
+                        let ak = args.access_key.clone();
+                        let sk = args.secret.clone();
+                        match (ak, sk) {
+                            (Some(ak), Some(sk)) => ObjectStorageBackend::S3 {
+                                endpoint,
+                                region,
+                                access_key_id: Some(ak),
+                                secret_access_key: Some(sk),
+                            },
+                            _ => ObjectStorageBackend::S3 {
+                                endpoint,
+                                region,
+                                access_key_id: None,
+                                secret_access_key: None,
+                            },
+                        }
+                    }
+                    "local" => ObjectStorageBackend::Local {
+                        root: args
+                            .local_root
+                            .clone()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from(".")),
+                    },
+                    other => {
+                        return Err(color_eyre::eyre::eyre!(
+                            "unsupported --backend '{other}' for kind=object_storage \
+                             (expected oss, s3, or local)"
+                        ));
+                    }
+                };
+
+                ResourceAddress::ObjectStorage {
+                    bucket: bucket.to_string(),
+                    prefix: prefix.to_string(),
+                    backend,
+                    file_format: dag_core::resource_catalog::ObjectFileFormat::Parquet,
+                    partition_columns: args.partition.clone(),
+                }
             }
         };
 

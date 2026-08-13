@@ -10,7 +10,7 @@ pub mod liability;
 use std::collections::BTreeMap;
 
 use dag_core::resource_catalog::{
-    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
+    ObjectStorageBackend, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -88,8 +88,11 @@ impl ResourceProvider for Resources {
     fn resources(&self) -> Vec<ResourceEntry> {
         // OSS bucket shared by every LD-score panel. Read via the engine's
         // opendal `oss://` operator, registered against the runtime
-        // `RuntimeEnv` at engine bootstrap.
+        // `RuntimeEnv` at engine bootstrap. Connection details are carried
+        // by [`ObjectStorageBackend::oss_default`] — credentials fall through
+        // to the standard opendal chain (env vars, ECS metadata).
         const PANEL_BUCKET: &str = "autonomics-data";
+        let oss_backend = ObjectStorageBackend::oss_default("https://oss-cn-hangzhou.aliyuncs.com");
 
         vec![
             // ── Univariate panel (base annotation) ──────────────────────
@@ -111,7 +114,7 @@ impl ResourceProvider for Resources {
                  \n\n**Storage**: object-storage parquet partition — \
                  read via DataFusion `ListingTable` over the engine's opendal \
                  `oss://autonomics-data/ld_score/1000g_eur/` prefix.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/1000g_eur/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -150,7 +153,7 @@ impl ResourceProvider for Resources {
                  M_5_50 overestimates M and inflates h² proportionally.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/1000g_eur_m/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/1000g_eur_m/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur_m/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -196,7 +199,7 @@ impl ResourceProvider for Resources {
                  97 × {annotation}L2:double, w_ld:double. 1,187,349 SNPs.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -239,7 +242,7 @@ impl ResourceProvider for Resources {
                  summed across 22 autosomes.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur_m/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_m/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_m/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -279,7 +282,7 @@ impl ResourceProvider for Resources {
                  Source: Zenodo DOI 10.5281/zenodo.10515792 (1000G Phase 3 EUR QC).\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/1000g_eur_frq/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/1000g_eur_frq/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur_frq/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -319,7 +322,7 @@ impl ResourceProvider for Resources {
                  ~10M SNPs. Source: Zenodo DOI 10.5281/zenodo.10515792 (baselineLD v2.2, 1000G EUR).\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur_annot/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_annot/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_annot/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -362,7 +365,7 @@ impl ResourceProvider for Resources {
                  Schema: rsid:string only. Source: Zenodo DOI 10.5281/zenodo.10515792.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/hm3_no_mhc/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/hm3_no_mhc/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/hm3_no_mhc/", oss_backend.clone()),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -397,7 +400,7 @@ impl ResourceProvider for Resources {
                  fail at query time until data is loaded.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/ukbb_eur/`.",
-                ResourceAddress::object_storage(PANEL_BUCKET, "/ld_score/ukbb_eur/"),
+                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/ukbb_eur/", oss_backend.clone()),
             )
             .with_tags(vec![
                 "ld_score".into(),
