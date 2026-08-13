@@ -127,6 +127,11 @@ impl HostControl {
         self.fire(HostCommand::Shutdown { name: name.into() });
     }
 
+    /// Trigger manual compaction on a named agent's active session.
+    pub fn compact_agent(&self, name: &str) {
+        self.fire(HostCommand::CompactAgent { name: name.into() });
+    }
+
     pub fn add_node(&self, name: &str, profile: &str) {
         self.fire(HostCommand::AddNode {
             name: name.into(),
@@ -455,6 +460,9 @@ pub enum HostCommand {
     // ── Session management ──
     /// Cancel the current turn of a named agent.
     CancelAgent { name: String },
+
+    /// Trigger manual compaction on a named agent's active session.
+    CompactAgent { name: String },
 
     /// Request session list from a named agent.
     ListSessions { name: String },

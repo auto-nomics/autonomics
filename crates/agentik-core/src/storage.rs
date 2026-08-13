@@ -138,6 +138,14 @@ pub enum PersistOp {
     StartSession { agent_id: Uuid, session_id: Uuid },
     AppendMessage { session_id: Uuid, message: Message },
     EndSession { session_id: Uuid },
+    /// Compaction replaced the session's message history in-place.
+    /// The WAL must persist the new state so a crash after compaction
+    /// doesn't restore stale pre-compaction messages.
+    ReplaceSessionState {
+        agent_id: Uuid,
+        session_id: Uuid,
+        state: SessionState,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -527,6 +535,18 @@ pub trait AgentStorage: Send + Sync {
     /// Permanently delete a session and its messages from storage.
     /// Used when the user explicitly closes a session.
     async fn delete_session(&self, session_id: Uuid) -> Result<(), StorageError>;
+
+    /// Replace a session's full conversation state after compaction.
+    ///
+    /// Deletes all existing messages for the session, inserts the new
+    /// (compacted) messages, and records a fresh snapshot so that
+    /// `restore_session_state` picks up the post-compaction state.
+    async fn replace_session_state(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+        state: &SessionState,
+    ) -> Result<(), StorageError>;
     async fn get_messages_since(
         &self,
         agent_id: Uuid,

@@ -745,6 +745,70 @@ impl AgentStorage for TursoAgentStorage {
         Ok(())
     }
 
+    async fn replace_session_state(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+        state: &crate::storage::SessionState,
+    ) -> Result<(), StorageError> {
+        let sid = session_id.to_string();
+
+        // 1. Delete all existing messages for this session.
+        self.conn
+            .execute(
+                "DELETE FROM messages WHERE session_id = ?1",
+                params_from_iter([Value::Text(sid.clone())]),
+            )
+            .await?;
+
+        // 2. Re-insert the post-compaction messages with fresh timestamps.
+        let now = chrono::Utc::now().timestamp_millis();
+        for (seq, message) in state.messages.iter().enumerate() {
+            let message_json = serde_json::to_string(message)?;
+            self.conn
+                .execute(
+                    "INSERT INTO messages (session_id, seq, message_json, ts)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params_from_iter([
+                        Value::Text(sid.clone()),
+                        Value::Integer(seq as i64),
+                        Value::Text(message_json),
+                        Value::Integer(now),
+                    ]),
+                )
+                .await?;
+        }
+
+        // 3. Write a fresh snapshot so restore picks up the new state.
+        let snapshot = crate::storage::AgentSnapshot {
+            snapshot_id: Uuid::new_v4(),
+            ts: now,
+            agent_id,
+            agent_status: agentik_types::AgentLifecycleStatus::Idle,
+            state: state.clone(),
+            session_id: Some(session_id),
+        };
+        let memory_json = serde_json::to_string(&snapshot.state)?;
+        let status_json = serde_json::to_string(&snapshot.agent_status)?;
+        self.conn
+            .execute(
+                "INSERT INTO snapshots
+                    (snapshot_id, agent_id, ts, status, state, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params_from_iter([
+                    Value::Text(snapshot.snapshot_id.to_string()),
+                    Value::Text(snapshot.agent_id.to_string()),
+                    Value::Integer(snapshot.ts),
+                    Value::Text(status_json),
+                    Value::Text(memory_json),
+                    Value::Text(sid),
+                ]),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn get_messages_since(
         &self,
         agent_id: Uuid,
