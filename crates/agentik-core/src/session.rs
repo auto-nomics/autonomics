@@ -382,7 +382,29 @@ impl Session {
         }
     }
 
-    pub fn inject_message(&mut self, user_content: Vec<ContentBlock>) -> Result<()> {
+    pub fn inject_message(
+        &mut self,
+        user_content: Vec<ContentBlock>,
+        from_user: bool,
+    ) -> Result<()> {
+        // Emit a display event only for externally-sourced messages
+        // (delegate_to / send_message / background-task notice). User-typed
+        // messages are already shown locally by the TUI before being sent,
+        // so emitting here would cause a duplicate display.
+        if !from_user {
+            let preview: String = user_content
+                .iter()
+                .filter_map(|cb| match cb {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !preview.is_empty() {
+                self.shared.send_event(AgentEvent::MessageInjected(preview));
+            }
+        }
+
         let message = Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
@@ -618,8 +640,24 @@ impl Session {
         // Reset token budget: next estimate will be fresh
         self.token_budget = crate::agent::TokenBudget::default();
 
-        // Push the summary to ancestor list
+        // Store the latest summary on the session (primary) and append to
+        // the ancestor list (for context rendering).
+        self.summary = Some(formatted_summary.clone());
         self.ancestor_summaries.push(formatted_summary);
+
+        // Persist the compacted state to the WAL so a crash after compaction
+        // doesn't restore stale pre-compaction messages.
+        if let Some(tx) = &self.persist_tx {
+            let _ = tx.send(PersistOp::ReplaceSessionState {
+                agent_id: self.shared.id,
+                session_id: self.id,
+                state: SessionState {
+                    messages: self.messages.clone(),
+                    summary: self.summary.clone(),
+                    ancestor_summaries: self.ancestor_summaries.clone(),
+                },
+            });
+        }
 
         tracing::debug!(
             messages = self.messages.len(),
@@ -628,6 +666,50 @@ impl Session {
         );
 
         Ok(true)
+    }
+
+    /// Manually trigger compaction on the active session.
+    ///
+    /// Unlike the automatic compaction in `request()` / `agent_workflow()`,
+    /// this is initiated by the user (via a command) rather than by context
+    /// pressure. Emits Compact start/finish events so the TUI can show
+    /// progress. Does **not** start a new LLM turn — the caller can inject a
+    /// follow-up message if it wants the agent to resume work.
+    async fn do_manual_compact(&mut self) {
+        let model = match self.shared.model.load_full() {
+            Some(m) => m,
+            None => {
+                tracing::warn!("manual compact requested but no model is configured");
+                self.shared
+                    .send_event(AgentEvent::Error("No model configured for compaction".into()));
+                return;
+            }
+        };
+
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
+        self.shared.send_event(AgentEvent::Compact {
+            event: CompactEvent::CompactStart { ts: Utc::now() },
+        });
+
+        match self.compact(model.as_ref()).await {
+            Ok(compacted) => {
+                if compacted {
+                    tracing::info!("manual compaction completed");
+                } else {
+                    tracing::info!("manual compaction skipped — conversation too short");
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "manual compaction failed");
+                self.shared
+                    .send_event(AgentEvent::Error(format!("Compaction failed: {e}")));
+            }
+        }
+
+        self.shared.send_event(AgentEvent::Compact {
+            event: CompactEvent::CompactFinish { ts: Utc::now() },
+        });
+        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
     }
 
     // ── Pause / Resume ────────────────────────────────────
@@ -665,8 +747,16 @@ impl Session {
     /// terminal control signals.
     pub(crate) async fn apply_internal_event(&mut self, event: InternalEvent) -> bool {
         match event {
-            InternalEvent::MessageInject(content) => {
-                let _ = self.inject_message(content);
+            InternalEvent::MessageInject { content, from_user } => {
+                let _ = self.inject_message(content, from_user);
+                true
+            }
+            InternalEvent::Compact => {
+                self.do_manual_compact().await;
+                // Compact doesn't start a new LLM turn by itself — the
+                // caller (TUI / command) can inject a follow-up message
+                // if it wants the agent to resume work. Return true so the
+                // agent's run() loop continues listening for events.
                 true
             }
             InternalEvent::BgTaskComplete { id: _, seq } => {
@@ -912,7 +1002,7 @@ impl Session {
         retry_feedback: Option<String>,
     ) -> Result<()> {
         if let Some(feedback) = retry_feedback {
-            self.inject_message(vec![ContentBlock::Text { text: feedback }])
+            self.inject_message(vec![ContentBlock::Text { text: feedback }], false)
                 .unwrap();
         }
 
@@ -1164,9 +1254,10 @@ impl Session {
                     None => format!("Background task #{task_seq} no longer exists."),
                 }
             };
-            let _ = tx.send(InternalEvent::MessageInject(vec![ContentBlock::Text {
-                text: message,
-            }]));
+            let _ = tx.send(InternalEvent::MessageInject {
+                content: vec![ContentBlock::Text { text: message }],
+                from_user: false,
+            });
             return;
         };
 
@@ -1223,9 +1314,10 @@ impl Session {
             )
         };
 
-        let _ = tx.send(InternalEvent::MessageInject(vec![ContentBlock::Text {
-            text: message,
-        }]));
+        let _ = tx.send(InternalEvent::MessageInject {
+            content: vec![ContentBlock::Text { text: message }],
+            from_user: false,
+        });
     }
 
     pub(crate) fn stop(&mut self) {
@@ -1492,8 +1584,12 @@ fn estimate_tokens(text: &str) -> u64 {
     (text.len() / CHARS_PER_TOKEN) as u64
 }
 
-/// Estimate token count for a single message.
-fn estimate_message_tokens(msg: &Message) -> u64 {
+/// Estimate token count for a single message by summing its content blocks.
+///
+/// This is the single source of truth for token estimation across the
+/// agent — `TokenBudget` (in `agent.rs`) and compaction helpers both
+/// delegate here.
+pub fn estimate_message_tokens(msg: &Message) -> u64 {
     let text: String = msg
         .content
         .iter()

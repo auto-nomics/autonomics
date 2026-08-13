@@ -786,11 +786,11 @@ impl AgentHandle {
 
 impl AgentHandle {
     pub fn send_message(&self, text: String) {
-        let _ = self
-            .internal_tx
-            .send(InternalEvent::MessageInject(vec![ContentBlock::Text {
-                text,
-            }]));
+        // TUI user input — already shown locally, no MessageInjected event.
+        let _ = self.internal_tx.send(InternalEvent::MessageInject {
+            content: vec![ContentBlock::Text { text }],
+            from_user: true,
+        });
     }
 
     pub fn cancel(&mut self) {
@@ -800,6 +800,11 @@ impl AgentHandle {
             .internal_tx
             .send(InternalEvent::ResetCancelToken(new_token.clone()));
         self.cancel_token = new_token;
+    }
+
+    /// Trigger compaction on the agent's active session.
+    pub fn compact(&self) {
+        let _ = self.internal_tx.send(InternalEvent::Compact);
     }
 
     /// Gracefully signal the agent to shut down.
@@ -1006,6 +1011,7 @@ enum AgentCommand {
         title: String,
     },
     SetModel(Model),
+    Compact,
 }
 
 /// Internal entry for one registered agent.
@@ -1529,6 +1535,9 @@ impl RuntimeHost {
             // ── Session management (forwarded to relay) ──
             HostCommand::CancelAgent { name } => {
                 self.send_agent_command(&name, AgentCommand::Cancel);
+            }
+            HostCommand::CompactAgent { name } => {
+                self.send_agent_command(&name, AgentCommand::Compact);
             }
             HostCommand::ListSessions { name } => {
                 self.send_agent_command(&name, AgentCommand::ListSessions);
@@ -2524,6 +2533,10 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => (AgentStatus::Running, None),
 
+        // ── Injected message (delegate_to, send_message) — not a status
+        //    change by itself; the agent will start processing on its own ──
+        AgentEvent::MessageInjected(_) => (AgentStatus::Idle, None),
+
         // ── Session lifecycle events — out of scope for runtime status ──
         AgentEvent::SessionActivated { .. }
         | AgentEvent::SessionPaused { .. }
@@ -3171,6 +3184,9 @@ async fn relay_loop(
                 }
                 Some(AgentCommand::SetModel(model)) => {
                     handle.set_model(model);
+                }
+                Some(AgentCommand::Compact) => {
+                    handle.compact();
                 }
                 Some(AgentCommand::Shutdown) | None => {
                     handle.shutdown();

@@ -50,8 +50,17 @@ impl Default for AgentConfig {
 /// [`Agent::internal_event_tx`] to drive the agent without holding a
 /// reference to the `Agent` struct.
 pub enum InternalEvent {
-    /// User injected a new message (already in memory via `inject_message`).
-    MessageInject(Vec<ContentBlock>),
+    /// User injected a new message.
+    ///
+    /// `from_user` is `true` when the message originated from the TUI user
+    /// input (already shown locally — no display event needed). It is `false`
+    /// when the message was injected by an external source such as
+    /// `delegate_to` / `send_message` (caller hasn't shown it — TUI must
+    /// render it via `AgentEvent::MessageInjected`).
+    MessageInject {
+        content: Vec<ContentBlock>,
+        from_user: bool,
+    },
     /// A background tool task finished.
     /// `id` is the `tool_use_id`, `seq` is the short task number.
     BgTaskComplete {
@@ -85,6 +94,8 @@ pub enum InternalEvent {
         id: Uuid,
         title: String,
     },
+    /// Manually trigger compaction on the active session.
+    Compact,
 }
 
 pub struct Agent {
@@ -212,9 +223,13 @@ impl Agent {
             .unwrap_or(false)
     }
 
-    pub fn inject_message(&mut self, user_content: Vec<ContentBlock>) -> Result<()> {
+    pub fn inject_message(
+        &mut self,
+        user_content: Vec<ContentBlock>,
+        from_user: bool,
+    ) -> Result<()> {
         self.active_session_mut()
-            .map(|s| s.inject_message(user_content))
+            .map(|s| s.inject_message(user_content, from_user))
             .transpose()
             .map(|_| ())
     }
@@ -386,7 +401,7 @@ impl Agent {
             // ── Auto-create a session on first message ──
             // If no session exists yet, create one before processing the
             // event so the message isn't lost.
-            if matches!(event, InternalEvent::MessageInject(_)) && self.active_session_id.is_none()
+            if matches!(event, InternalEvent::MessageInject { .. }) && self.active_session_id.is_none()
             {
                 let id = Uuid::new_v4();
                 let mut s = Session::new(id, self.shared.clone());
@@ -431,7 +446,7 @@ impl Agent {
                     self.handle_rename_session(*id, title.clone()).await;
                     false
                 }
-                InternalEvent::MessageInject(_) | InternalEvent::BgTaskComplete { .. } => true,
+                InternalEvent::MessageInject { .. } | InternalEvent::BgTaskComplete { .. } => true,
                 _ => false,
             };
 
@@ -615,9 +630,6 @@ impl Agent {
 /// `auto_compact_token_limit` derivation (`context_window * 90%`).
 const AUTO_COMPACT_THRESHOLD_PERCENT: u64 = 90;
 
-/// Chars per token heuristic for estimating messages without API usage data.
-const CHARS_PER_TOKEN: u64 = 4;
-
 /// Tracks token usage for compaction decisions.
 ///
 /// Ported from Codex: uses real API-reported `total_tokens` as the primary
@@ -643,7 +655,7 @@ impl TokenBudget {
 
     /// Accumulate estimated tokens for a message added since last API response.
     pub fn add_pending_message(&mut self, msg: &agentik_sdk::types::Message) {
-        self.pending_tokens += estimate_message_tokens(msg);
+        self.pending_tokens += crate::session::estimate_message_tokens(msg);
     }
 
     /// Current best estimate of total context tokens.
@@ -653,7 +665,10 @@ impl TokenBudget {
 
     /// Fallback: estimate tokens by iterating messages (chars/4 heuristic).
     pub fn estimate_messages_tokens(&self, messages: &[agentik_sdk::types::Message]) -> u64 {
-        messages.iter().map(|m| estimate_message_tokens(m)).sum()
+        messages
+            .iter()
+            .map(crate::session::estimate_message_tokens)
+            .sum()
     }
 
     /// Returns `true` when context usage reaches the auto-compact threshold
@@ -677,12 +692,6 @@ impl TokenBudget {
     }
 }
 
-/// Estimate token count for a single message using chars/4 heuristic.
-fn estimate_message_tokens(msg: &agentik_sdk::types::Message) -> u64 {
-    let content_str = serde_json::to_string(&msg.content).unwrap_or_default();
-    content_str.len() as u64 / CHARS_PER_TOKEN
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // Persistence worker
 // ═══════════════════════════════════════════════════════════════════════
@@ -702,6 +711,13 @@ async fn persist_worker(
                 message,
             } => storage.append_message(session_id, &message).await,
             PersistOp::EndSession { session_id } => storage.end_session(session_id).await,
+            PersistOp::ReplaceSessionState {
+                agent_id,
+                session_id,
+                state,
+            } => storage
+                .replace_session_state(agent_id, session_id, &state)
+                .await,
         };
         if let Err(e) = result {
             tracing::warn!("persist op failed (non-fatal): {e}");

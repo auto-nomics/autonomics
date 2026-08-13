@@ -113,6 +113,12 @@ pub enum AgentEvent {
     /// An error occurred.
     Error(String),
 
+    /// A user message was injected into the conversation by an external
+    /// source (delegate_to, send_message, or background-task completion
+    /// notice). This lets observers (e.g. the TUI) display the message
+    /// even though it wasn't typed directly by the user.
+    MessageInjected(String),
+
     // ── Session lifecycle ──
     /// A session was activated (became the active session).
     SessionActivated { id: Uuid, title: Option<String> },

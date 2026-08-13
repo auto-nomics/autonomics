@@ -563,6 +563,12 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.scroll_to_bottom();
             }
         }
+        AgentEvent::MessageInjected(text) => {
+            state.push_line(ChatLine::User(text));
+            if state.auto_scroll {
+                state.scroll_to_bottom();
+            }
+        }
         // Streaming protocol events — not surfaced directly to the chat view
         AgentEvent::StreamStart { .. }
         | AgentEvent::ContentBlockStart { .. }

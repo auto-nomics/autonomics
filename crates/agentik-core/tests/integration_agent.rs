@@ -60,9 +60,12 @@ async fn test_agent_basic_workflow_with_mimo() {
 
     // `run()` is event-driven: it blocks on the internal channel and only runs
     // a session once a `MessageInject` arrives. Seed messages alone won't start it.
-    let _ = internal_tx.send(InternalEvent::MessageInject(vec![ContentBlock::Text {
-        text: "Say exactly: hello world".into(),
-    }]));
+    let _ = internal_tx.send(InternalEvent::MessageInject {
+        content: vec![ContentBlock::Text {
+            text: "Say exactly: hello world".into(),
+        }],
+        from_user: false,
+    });
 
     let events = tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let mut evts = vec![];
