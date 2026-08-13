@@ -685,6 +685,17 @@ pub struct GsemLdscConfig {
     /// Whether to compute standardized (genetic correlation) output.
     #[serde(default)]
     pub stand: bool,
+    /// Maximum χ² value; SNPs with χ² > chisq_max are removed before
+    /// regression. This filters extreme outliers (e.g. genotyping errors,
+    /// GWAS catalog hits with z > ~20) that can destabilize the WLS
+    /// regression. `None` = no filter. GenomicSEM default is `None`,
+    /// but for real-data robustness we default to 200.
+    #[serde(default = "default_chisq_max")]
+    pub chisq_max: Option<f64>,
+}
+
+fn default_chisq_max() -> Option<f64> {
+    Some(200.0)
 }
 
 fn default_n_blocks_ldsc() -> usize {
@@ -939,6 +950,7 @@ impl DagNode for GsemLdscNode {
             &self.config.population_prev,
             self.config.stand,
             &trait_names,
+            self.config.chisq_max,
         )?;
 
         // ── 8. Build output ──
@@ -1256,16 +1268,11 @@ fn run_multivariate_ldsc(
     population_prev: &[Option<f64>],
     stand: bool,
     trait_names: &[String],
+    chisq_max: Option<f64>,
 ) -> Result<genomic_sem::utils::Covstruc, DagError> {
     let n_snps = arrays.n_snps;
     let z_dim = k * (k + 1) / 2;
     let n_blocks_actual = n_blocks.min(n_snps);
-
-    // Weights: wld / (n_bar * sqrt(m)) — GenomicSEM uses this as initial weights.
-    // For simplicity, use uniform weights = wld_i (the weight LD score).
-    // GenomicSEM's actual weight function is more complex (IRWLS), but the
-    // first-pass uses hsq_weights(ld, wld, N, M, ...). For the multivariate case,
-    // we use the per-pair N_bar.
 
     // Pre-compute chi values for each pair (i,j) with i ≤ j.
     // Pair index follows vech order: (0,0), (1,0), (1,1), (2,0), (2,1), (2,2), ...
@@ -1283,7 +1290,7 @@ fn run_multivariate_ldsc(
                     }
                 })
                 .collect();
-            // N_bar for pair (i,j) = geometric mean of per-SNP N_i and N_j
+            // N_bar for pair (i,j) = (1/M) Σ sqrt(n_i * n_j) — per Bulik-Sullivan 2015.
             let n_bar: f64 = (0..n_snps)
                 .map(|snp| (arrays.n[i][snp] * arrays.n[j][snp]).sqrt())
                 .sum::<f64>()
@@ -1301,21 +1308,93 @@ fn run_multivariate_ldsc(
     let mut pair_idx = 0;
     for j in 0..k {
         for i in 0..=j {
+            // Apply chisq_max filter: remove SNPs with extreme χ² that can
+            // destabilise the WLS regression (GenomicSEM convention).
+            let (l2_f, chi_f, wld_f): (Vec<&f64>, Vec<&f64>, Vec<&f64>) =
+                if let Some(max_chi) = chisq_max {
+                    let mut l2_f = Vec::new();
+                    let mut chi_f = Vec::new();
+                    let mut wld_f = Vec::new();
+                    for s in 0..n_snps {
+                        let chi_abs = chi_values[pair_idx][s].abs();
+                        if chi_abs <= max_chi {
+                            l2_f.push(&arrays.l2[s]);
+                            chi_f.push(&chi_values[pair_idx][s]);
+                            wld_f.push(&arrays.wld[s]);
+                        }
+                    }
+                    (l2_f, chi_f, wld_f)
+                } else {
+                    (
+                        (0..n_snps).map(|s| &arrays.l2[s]).collect(),
+                        (0..n_snps).map(|s| &chi_values[pair_idx][s]).collect(),
+                        (0..n_snps).map(|s| &arrays.wld[s]).collect(),
+                    )
+                };
+
+            let n_filter = l2_f.len();
+            if n_filter < n_blocks_actual {
+                return Err(DagError::NodeError {
+                    node_type: "gsem_ldsc".into(),
+                    msg: format!(
+                        "only {n_filter} SNPs survived chisq_max filter \
+                         (pair ({i},{j}), chisq_max={:?}); need at least \
+                         {n_blocks_actual} for jackknife",
+                        chisq_max
+                    ),
+                });
+            }
+
             // GenomicSEM weight: w = wld / (N_bar * sqrt(M)), then the WLS
             // multiplier is sqrt(w). See Grotzinger et al. 2019, ldsc.R.
             let n_bar_pair = n_bars[pair_idx];
             let denom = n_bar_pair * m.sqrt();
-            let weights: Vec<f64> = (0..n_snps)
-                .map(|s| (arrays.wld[s] / denom).sqrt())
+            let weights: Vec<f64> = (0..n_filter)
+                .map(|s| (wld_f[s] / denom).sqrt())
                 .collect();
+
+            // Dereference slices for the regression function.
+            let l2_slice: Vec<f64> = l2_f.iter().map(|&v| *v).collect();
+            let chi_slice: Vec<f64> = chi_f.iter().map(|&v| *v).collect();
+
             let result = genomic_sem::ldsc::block_jackknife_regression(
-                &arrays.l2,
-                &chi_values[pair_idx],
+                &l2_slice,
+                &chi_slice,
                 &weights,
                 n_blocks_actual,
                 n_bars[pair_idx],
                 m,
             );
+
+            // Check for NaN immediately with per-pair diagnostics.
+            if !result.reg_tot.is_finite() || !result.intercept.is_finite() {
+                // Compute summary stats for the error message.
+                let l2_min = l2_slice.iter().cloned().fold(f64::INFINITY, f64::min);
+                let l2_max = l2_slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let chi_min = chi_slice.iter().cloned().fold(f64::INFINITY, f64::min);
+                let chi_max = chi_slice.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let wld_min = wld_f.iter().map(|&&v| v).fold(f64::INFINITY, f64::min);
+                let wld_max = wld_f.iter().map(|&&v| v).fold(f64::NEG_INFINITY, f64::max);
+                let w_min = weights.iter().cloned().fold(f64::INFINITY, f64::min);
+                let w_max = weights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                return Err(DagError::NodeError {
+                    node_type: "gsem_ldsc".into(),
+                    msg: format!(
+                        "LDSC regression for pair ({i},{j}) produced non-finite \
+                         result: reg_tot={}, intercept={}, coef={:.6e}\n\
+                         Inputs: n_snps={n_snps}, n_filtered={n_filter}, \
+                         n_blocks={n_blocks_actual}, m={m}, n_bar={n_bar_pair:.1}\n\
+                         l2 range:      [{l2_min:.4}, {l2_max:.4}]\n\
+                         chi range:     [{chi_min:.4}, {chi_max:.4}]\n\
+                         wld range:     [{wld_min:.4}, {wld_max:.4}]\n\
+                         weight range:  [{w_min:.4e}, {w_max:.4e}]\n\
+                         chisq_max:     {chisq_max:?}",
+                        result.reg_tot,
+                        result.intercept,
+                        result.coef,
+                    ),
+                });
+            }
 
             // S[i,j] = S[j,i] = reg_tot = coef * M
             s_cov[(i, j)] = result.reg_tot;
@@ -2168,6 +2247,7 @@ mod tests {
             &[None, None],
             false, // no standardization
             &["t1".into(), "t2".into()],
+            None, // no chisq_max filter
         )
         .unwrap();
 
@@ -2286,6 +2366,7 @@ mod tests {
             &[None, None],
             false,
             &["t1".into(), "t2".into()],
+            None,
         );
 
         // With constant l2, the XtX matrix is singular but solve_small_pub
