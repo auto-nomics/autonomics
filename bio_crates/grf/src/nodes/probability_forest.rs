@@ -6,14 +6,12 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
 use crate::forest::{ForestBlob, ForestStats, OobPredictions, ProbabilitySpec, ProbabilityTrainer};
-use crate::nodes::regression_forest::{
-    arrow_batches_to_matrix, NodeTrainOptions,
-};
+use crate::nodes::regression_forest::{NodeTrainOptions, arrow_batches_to_matrix};
 use crate::{GrfError, Result};
 use grf_sys as sys;
 
@@ -48,7 +46,9 @@ pub struct ProbabilityForestOutput {
 pub struct ProbabilityForestFactory;
 
 impl ProbabilityForestFactory {
-    pub fn kind() -> &'static str { "grf_probability_forest" }
+    pub fn kind() -> &'static str {
+        "grf_probability_forest"
+    }
 }
 
 impl ProbabilityForestSpec {
@@ -59,10 +59,14 @@ impl ProbabilityForestSpec {
         }
         let schema = batches[0].schema();
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| f.name() != &self.y_column_name
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    f.name() != &self.y_column_name && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
@@ -70,13 +74,19 @@ impl ProbabilityForestSpec {
         let y_vec = arrow_batches_to_int64(batches, &self.y_column_name, n_rows)?;
 
         // Validate class labels are in [0, num_classes).
-        if let Some(&bad) = y_vec.iter().find(|&&c| c < 0 || c >= self.num_classes as i64) {
+        if let Some(&bad) = y_vec
+            .iter()
+            .find(|&&c| c < 0 || c >= self.num_classes as i64)
+        {
             return Err(GrfError::Shape(format!(
-                "class label {} outside [0, {})", bad, self.num_classes
+                "class label {} outside [0, {})",
+                bad, self.num_classes
             )));
         }
 
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64_safe(batches, c, n_rows))
             .transpose()?;
 
@@ -98,14 +108,15 @@ impl ProbabilityForestSpec {
     }
 }
 
-fn arrow_batches_to_int64(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
-) -> Result<Vec<i64>> {
+fn arrow_batches_to_int64(batches: &[RecordBatch], col: &str, n_rows: usize) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Int64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Int64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Int64", col)))?;
         for i in 0..batch.num_rows() {
             out.push(if arr.is_null(i) { 0 } else { arr.value(i) });
@@ -115,16 +126,25 @@ fn arrow_batches_to_int64(
 }
 
 fn arrow_batches_to_f64_safe(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
+    batches: &[RecordBatch],
+    col: &str,
+    n_rows: usize,
 ) -> Result<Vec<f64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Float64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Float64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Float64", col)))?;
         for i in 0..batch.num_rows() {
-            out.push(if arr.is_null(i) { f64::NAN } else { arr.value(i) });
+            out.push(if arr.is_null(i) {
+                f64::NAN
+            } else {
+                arr.value(i)
+            });
         }
     }
     Ok(out)
@@ -136,7 +156,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(ProbabilityForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(ProbabilityForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

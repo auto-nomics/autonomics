@@ -52,10 +52,7 @@ pub struct Scheduler {
 impl Scheduler {
     /// Construct a scheduler wrapped in `Arc<Self>`. Used by the manager
     /// and by `SubgraphNode` for recursive execution.
-    pub fn new(
-        node_registry: Arc<NodeRegistry>,
-        skill_registry: Arc<SkillRegistry>,
-    ) -> Arc<Self> {
+    pub fn new(node_registry: Arc<NodeRegistry>, skill_registry: Arc<SkillRegistry>) -> Arc<Self> {
         Arc::new(Self {
             node_registry,
             skill_registry,
@@ -65,7 +62,10 @@ impl Scheduler {
     /// Build a `NodeExecutor` for one node, consulting the registries.
     /// `kind == "skill"` resolves to a `SubgraphNode`; everything else looks
     /// up a `NodeFactory`.
-    pub fn build_executor(self: &Arc<Self>, node: &crate::model::NodeEntry) -> Result<Box<dyn NodeExecutor>> {
+    pub fn build_executor(
+        self: &Arc<Self>,
+        node: &crate::model::NodeEntry,
+    ) -> Result<Box<dyn NodeExecutor>> {
         if node.kind == "skill" {
             let skill_name = node
                 .params
@@ -86,22 +86,21 @@ impl Scheduler {
                 Arc::clone(self),
             )));
         }
-        let factory = self.node_registry.get(&node.kind).ok_or_else(|| {
-            ExecutorError::Internal(format!("unknown node kind: {}", node.kind))
-        })?;
+        let factory = self
+            .node_registry
+            .get(&node.kind)
+            .ok_or_else(|| ExecutorError::Internal(format!("unknown node kind: {}", node.kind)))?;
         // Phase 1: factories return a `Box<dyn Any>`; we don't have a way to
         // bridge to `NodeExecutor` here yet. Each registered factory must
         // itself be a `NodeExecutor` (Phase 1 keeps that an opt-in by
         // returning a trivial `RegistryAdapterNode`).
         let params = node.params.clone();
-        let exec: Box<dyn NodeExecutor> = factory
-            .build_executor(params)
-            .ok_or_else(|| {
-                ExecutorError::Internal(format!(
-                    "node factory for '{}' does not yet implement NodeExecutor",
-                    node.kind
-                ))
-            })?;
+        let exec: Box<dyn NodeExecutor> = factory.build_executor(params).ok_or_else(|| {
+            ExecutorError::Internal(format!(
+                "node factory for '{}' does not yet implement NodeExecutor",
+                node.kind
+            ))
+        })?;
         Ok(exec)
     }
 
@@ -361,10 +360,7 @@ mod tests {
             fn outputs(&self) -> Vec<PortSpec> {
                 vec![PortSpec::new("out", "out")]
             }
-            fn build_executor(
-                &self,
-                _params: serde_json::Value,
-            ) -> Option<Box<dyn NodeExecutor>> {
+            fn build_executor(&self, _params: serde_json::Value) -> Option<Box<dyn NodeExecutor>> {
                 Some(Box::new(EchoNode))
             }
         }
@@ -474,9 +470,11 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = scheduler.run(&m, Default::default(), cancel).await.unwrap();
         // Both nodes executed and emitted the literal "echoed" via the `out` port.
-        assert!(result
-            .outputs
-            .values()
-            .any(|v| v == &serde_json::json!("echoed")));
+        assert!(
+            result
+                .outputs
+                .values()
+                .any(|v| v == &serde_json::json!("echoed"))
+        );
     }
 }

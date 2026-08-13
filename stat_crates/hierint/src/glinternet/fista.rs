@@ -31,7 +31,11 @@ pub fn group_lasso(
 
     // Extract initial values
     let mut intercept = if betahat_init.is_empty() {
-        if family.is_gaussian() { y.iter().sum::<f64>() / n as f64 } else { 0.0 }
+        if family.is_gaussian() {
+            y.iter().sum::<f64>() / n as f64
+        } else {
+            0.0
+        }
     } else {
         betahat_init[0]
     };
@@ -140,7 +144,15 @@ pub fn group_lasso(
 
     // Compute final objective
     obj = transform::compute_objective(
-        y, &residual, &linear, intercept, &beta, &group_sizes, lambda, n, family,
+        y,
+        &residual,
+        &linear,
+        intercept,
+        &beta,
+        &group_sizes,
+        lambda,
+        n,
+        family,
     );
 
     (intercept, beta, residual, obj, group_sizes)
@@ -220,12 +232,7 @@ fn optimize_step(
 /// Port of `update_theta()` in `fista.c`.
 /// If the gradient at the new point points opposite to the momentum direction,
 /// reset theta to 1 (restart momentum).
-fn update_theta(
-    beta: &[f64],
-    intermediate: &[f64],
-    intermediate_old: &[f64],
-    theta: &f64,
-) -> f64 {
+fn update_theta(beta: &[f64], intermediate: &[f64], intermediate_old: &[f64], theta: &f64) -> f64 {
     let mut value = 0.0;
     for i in 0..beta.len() {
         value += (beta[i] - intermediate[i]) * (intermediate[i] - intermediate_old[i]);

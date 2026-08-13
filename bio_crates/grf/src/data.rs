@@ -21,7 +21,11 @@ pub struct Matrix {
 
 impl Matrix {
     pub fn empty() -> Self {
-        Self { data: Vec::new(), n_rows: 0, n_cols: 0 }
+        Self {
+            data: Vec::new(),
+            n_rows: 0,
+            n_cols: 0,
+        }
     }
 
     /// Build a column-major matrix from a row-major row-of-vectors input.
@@ -35,13 +39,21 @@ impl Matrix {
                 data[j * n_rows + i] = v;
             }
         }
-        Self { data, n_rows, n_cols }
+        Self {
+            data,
+            n_rows,
+            n_cols,
+        }
     }
 
     /// Flatten a flat column-major `&[f64]` into the proper Matrix shape.
     pub fn from_column_major(data: Vec<f64>, n_rows: usize, n_cols: usize) -> Self {
         debug_assert_eq!(data.len(), n_rows * n_cols);
-        Self { data, n_rows, n_cols }
+        Self {
+            data,
+            n_rows,
+            n_cols,
+        }
     }
 
     /// View a column-major matrix as row-of-vectors. Useful for emitting
@@ -62,7 +74,11 @@ impl Matrix {
         assert_eq!(col.len(), self.n_rows, "new column must be n_rows long");
         let mut data = self.data.clone();
         data.extend_from_slice(col);
-        Self { data, n_rows: self.n_rows, n_cols: self.n_cols + 1 }
+        Self {
+            data,
+            n_rows: self.n_rows,
+            n_cols: self.n_cols + 1,
+        }
     }
 
     /// View a single column as a slice (no copy).
@@ -73,7 +89,9 @@ impl Matrix {
 
     /// View a single row as a slice (no copy).
     pub fn row(&self, i: usize) -> Vec<f64> {
-        (0..self.n_cols).map(|j| self.data[j * self.n_rows + i]).collect()
+        (0..self.n_cols)
+            .map(|j| self.data[j * self.n_rows + i])
+            .collect()
     }
 }
 

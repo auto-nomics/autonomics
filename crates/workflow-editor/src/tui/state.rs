@@ -286,12 +286,8 @@ impl AppState {
             "new" => CommandKind::New,
             "export" => CommandKind::Export(tokens.get(1).map(|s| s.to_string())),
             "import" => CommandKind::Import(tokens.get(1).map(|s| s.to_string())),
-            "export-skill" => {
-                CommandKind::ExportSkill(tokens.get(1).map(|s| s.to_string()))
-            }
-            "import-skill" => {
-                CommandKind::ImportSkill(tokens.get(1).map(|s| s.to_string()))
-            }
+            "export-skill" => CommandKind::ExportSkill(tokens.get(1).map(|s| s.to_string())),
+            "import-skill" => CommandKind::ImportSkill(tokens.get(1).map(|s| s.to_string())),
             "undo" => CommandKind::Undo,
             "redo" => CommandKind::Redo,
             _ => return None,

@@ -182,8 +182,8 @@ mod tests {
             outputs: vec![PortSpec::new("out", "out")],
             params: serde_json::json!({}),
         });
-        let s = Skill::new("sk", inner)
-            .with_surface_inputs(vec![PortSpec::new("GHOST", "missing")]);
+        let s =
+            Skill::new("sk", inner).with_surface_inputs(vec![PortSpec::new("GHOST", "missing")]);
         assert!(s.validate().is_err());
     }
 }

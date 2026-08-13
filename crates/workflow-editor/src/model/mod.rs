@@ -9,7 +9,7 @@ pub mod skill;
 pub mod snapshot;
 pub mod tool;
 
-pub use manifest::{NodeEntry, EdgeEntry, Viewport, WorkflowManifest, CURRENT_SCHEMA_VERSION};
+pub use manifest::{CURRENT_SCHEMA_VERSION, EdgeEntry, NodeEntry, Viewport, WorkflowManifest};
 pub use port::PortSpec;
 pub use skill::{Skill, SkillInfo};
 pub use snapshot::SnapshotInfo;

@@ -537,18 +537,14 @@ impl DataEngineClient {
 
     // ── Actor-routed commands ─────────────────────────────────────────────
 
-    async fn request<T, Rx>(
-        &self,
-        cmd: DataEngineCmd,
-        reply_rx: Rx,
-    ) -> Result<T>
+    async fn request<T, Rx>(&self, cmd: DataEngineCmd, reply_rx: Rx) -> Result<T>
     where
         Rx: std::future::Future<
-            Output = std::result::Result<
-                std::result::Result<T, crate::error::Error>,
-                tokio::sync::oneshot::error::RecvError,
+                Output = std::result::Result<
+                    std::result::Result<T, crate::error::Error>,
+                    tokio::sync::oneshot::error::RecvError,
+                >,
             >,
-        >,
     {
         self.tx
             .send(EngineMsg {
@@ -713,7 +709,10 @@ impl DataEngineClient {
     pub async fn node_exists(&self, id: String) -> Result<bool> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::NodeExists { id, reply: reply_tx },
+            DataEngineCmd::NodeExists {
+                id,
+                reply: reply_tx,
+            },
             reply_rx,
         )
         .await
@@ -1015,19 +1014,27 @@ pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dag::graph::PortOutputs;
     use crate::data_engine::DataEngine;
     use crate::nodes::meta::NodePorts;
-    use crate::dag::graph::PortOutputs;
 
     /// A node that sleeps for 2s — long enough to be interrupted by cancellation.
     #[derive(Clone)]
     struct LongSleepNode(NodePorts);
     #[async_trait::async_trait]
     impl crate::nodes::DagNode for LongSleepNode {
-        fn ports(&self) -> &NodePorts { &self.0 }
-        fn clone_box(&self) -> Box<dyn crate::nodes::DagNode> { Box::new((*self).clone()) }
-        fn kind(&self) -> &'static str { "long_sleep" }
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn ports(&self) -> &NodePorts {
+            &self.0
+        }
+        fn clone_box(&self) -> Box<dyn crate::nodes::DagNode> {
+            Box::new((*self).clone())
+        }
+        fn kind(&self) -> &'static str {
+            "long_sleep"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
         async fn execute(
             &mut self,
             _ctx: &crate::node_registry::registry::NodeCtx,
@@ -1048,7 +1055,9 @@ mod tests {
     async fn dropping_receiver_cancels_dag_and_frees_session() {
         let mut engine = DataEngine::builder().build();
         let meta = NodePorts::new().add_output_port(None);
-        engine.add_node("slow".to_string(), LongSleepNode(meta)).unwrap();
+        engine
+            .add_node("slow".to_string(), LongSleepNode(meta))
+            .unwrap();
 
         let (client, _handle) = spawn_with_engine(engine);
 
@@ -1064,11 +1073,8 @@ mod tests {
 
         // The session must be usable again — the `running` flag is reset and
         // the mutex is released. A second run should not get "already running".
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            client.run_dag(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), client.run_dag()).await;
 
         assert!(
             result.is_ok(),

@@ -1,6 +1,6 @@
 //! Top-level TUI app — event loop + state plumbing.
 
-use std::io::{stdout, Stdout};
+use std::io::{Stdout, stdout};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -9,10 +9,10 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use crate::api::{WorkflowClient, WorkflowManager};
@@ -21,7 +21,7 @@ use crate::model::{EdgeEntry, NodeEntry, SnapshotInfo, WorkflowManifest};
 use crate::registry::NodeRegistry;
 
 use super::event::{AppEvent, AppEventSender};
-use super::keymap::{action_for, hint, Action};
+use super::keymap::{Action, action_for, hint};
 use super::layout::PaneLayout;
 use super::mode::{Focus, Mode};
 use super::state::{AppState, CommandKind};
@@ -380,10 +380,8 @@ impl App {
                             Err(e) => self.state.flash_err(e.to_string()),
                         }
                     } else {
-                        self.state.flash_err(format!(
-                            "unknown command: {}",
-                            self.state.command_buffer
-                        ));
+                        self.state
+                            .flash_err(format!("unknown command: {}", self.state.command_buffer));
                     }
                     self.state.command_buffer.clear();
                     self.state.mode = Mode::Normal;
@@ -461,7 +459,11 @@ impl App {
         let sched = self.manager.scheduler.clone();
         let result = futures::executor::block_on(async {
             sched
-                .run(&m, Default::default(), tokio_util::sync::CancellationToken::new())
+                .run(
+                    &m,
+                    Default::default(),
+                    tokio_util::sync::CancellationToken::new(),
+                )
                 .await
         });
         match result {
@@ -517,23 +519,24 @@ impl App {
         // is reversible.
         self.state.push_undo("checkout");
         let mgr_client = self.client.clone();
-        let res = futures::executor::block_on(async move {
-            mgr_client.checkout(wf_id, snap.id).await
-        });
+        let res =
+            futures::executor::block_on(async move { mgr_client.checkout(wf_id, snap.id).await });
         match res {
             Ok(()) => {
                 // Reload manifest from storage so the canvas reflects the
                 // restored state.
                 let mgr_client = self.client.clone();
-                let loaded = futures::executor::block_on(async move {
-                    mgr_client.load_workflow(wf_id).await
-                });
+                let loaded =
+                    futures::executor::block_on(
+                        async move { mgr_client.load_workflow(wf_id).await },
+                    );
                 match loaded {
                     Ok(new_manifest) => {
                         self.state.manifest = Some(new_manifest);
                         self.state.mode = Mode::Normal;
                         self.state.dirty = true;
-                        self.state.flash(format!("checked out {}", &snap.commit_message));
+                        self.state
+                            .flash(format!("checked out {}", &snap.commit_message));
                     }
                     Err(e) => self.state.flash_err(e.to_string()),
                 }
@@ -592,7 +595,8 @@ impl App {
         self.state.dirty = false;
         self.state.undo.clear();
         self.state.redo.clear();
-        self.state.flash(format!("imported from {}", path.display()));
+        self.state
+            .flash(format!("imported from {}", path.display()));
         Ok(())
     }
 
@@ -626,7 +630,8 @@ impl App {
         let client = self.client.clone();
         let json = futures::executor::block_on(async move { client.export_skill(pick).await })?;
         std::fs::write(&path, json)?;
-        self.state.flash(format!("exported skill to {}", path.display()));
+        self.state
+            .flash(format!("exported skill to {}", path.display()));
         Ok(())
     }
 
@@ -679,7 +684,9 @@ impl App {
     }
 
     fn edit_selection(&mut self) {
-        let Some(m) = self.state.manifest.clone() else { return };
+        let Some(m) = self.state.manifest.clone() else {
+            return;
+        };
         let Some(nid) = self.state.selected_node else {
             self.state.flash_err("no node selected");
             return;
@@ -704,7 +711,9 @@ impl App {
     }
 
     fn start_edge_draw(&mut self) {
-        let Some(m) = &self.state.manifest else { return };
+        let Some(m) = &self.state.manifest else {
+            return;
+        };
         let Some(nid) = self.state.selected_node else {
             self.state.flash_err("select a source node first");
             return;
@@ -712,14 +721,20 @@ impl App {
         let Some(node) = m.nodes.iter().find(|n| n.id == nid) else {
             return;
         };
-        let port = node.outputs.first().map(|p| p.id.clone()).unwrap_or_else(|| "out".into());
+        let port = node
+            .outputs
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| "out".into());
         self.edge_draw_source = Some((nid, port));
         self.state.mode = Mode::EdgeDrawing;
         self.state.flash("select target node + port");
     }
 
     fn start_sop_edit(&mut self) {
-        let Some(m) = self.state.manifest.clone() else { return };
+        let Some(m) = self.state.manifest.clone() else {
+            return;
+        };
         self.state.mode = Mode::SopEditor;
         self.state.sop_buffer = m.sop.clone().unwrap_or_default();
     }
@@ -743,7 +758,9 @@ impl App {
     }
 
     fn commit_spec_edit(&mut self) {
-        let Some(nid) = self.state.selected_node else { return };
+        let Some(nid) = self.state.selected_node else {
+            return;
+        };
         let new_params: serde_json::Value = match serde_json::from_str(&self.state.spec_buffer) {
             Ok(v) => v,
             Err(e) => {
@@ -773,7 +790,11 @@ impl App {
             return;
         }
         let id = uuid::Uuid::new_v4();
-        let kind_info = self.node_registry.list().into_iter().find(|k| k.kind == chosen);
+        let kind_info = self
+            .node_registry
+            .list()
+            .into_iter()
+            .find(|k| k.kind == chosen);
         let (label, category) = kind_info
             .map(|k| (k.label.clone(), k.category.clone()))
             .unwrap_or_else(|| (chosen.clone(), "?".to_string()));

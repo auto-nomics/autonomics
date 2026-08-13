@@ -10,8 +10,8 @@
 //!   `surface_inputs`, `surface_outputs`, and the inner manifest.
 
 use uuid::Uuid;
-use workflow_editor::model::{NodeEntry, PortSpec, Skill, WorkflowManifest};
 use workflow_editor::WorkflowManager;
+use workflow_editor::model::{NodeEntry, PortSpec, Skill, WorkflowManifest};
 
 fn make_skill(name: &str) -> Skill {
     let mut inner = WorkflowManifest::new("inner");

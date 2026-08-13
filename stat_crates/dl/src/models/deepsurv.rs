@@ -3,21 +3,21 @@
 //! Same architecture as MLP; uses the negative Cox partial log-likelihood
 //! as the training loss. Burn autodiff computes all gradients.
 
-use burn::optim::{Adam, GradientsParams, Optimizer};
 use burn::module::AutodiffModule;
+use burn::optim::{Adam, GradientsParams, Optimizer};
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend, B};
+use crate::backend::{self, B, Backend};
 use crate::configs::{
     Activation, EpochLog, LayerWeights, OptimizerKind, SchedulerConfig, TrainConfig,
 };
 use crate::data;
 use crate::models::burn_net::{self, BurnMlp};
-use crate::scheduler::Scheduler;
 use crate::scaler::StandardScaler;
+use crate::scheduler::Scheduler;
 use crate::survival;
 use crate::tensor::Tensor;
 

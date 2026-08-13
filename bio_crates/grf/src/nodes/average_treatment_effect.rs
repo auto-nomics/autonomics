@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::forest::{ForestBlob, ForestKind, OobPredictions};
@@ -44,8 +44,12 @@ pub struct AverageTreatmentEffectSpec {
     pub clusters: Option<Vec<i64>>,
 }
 
-fn default_target_sample() -> String { "all".into() }
-fn default_method() -> String { "AIPW".into() }
+fn default_target_sample() -> String {
+    "all".into()
+}
+fn default_method() -> String {
+    "AIPW".into()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AverageTreatmentEffectOutput {
@@ -59,7 +63,9 @@ pub struct AverageTreatmentEffectOutput {
 pub struct AverageTreatmentEffectFactory;
 
 impl AverageTreatmentEffectFactory {
-    pub fn kind() -> &'static str { "grf_average_treatment_effect" }
+    pub fn kind() -> &'static str {
+        "grf_average_treatment_effect"
+    }
 }
 
 impl AverageTreatmentEffectSpec {
@@ -75,9 +81,15 @@ impl AverageTreatmentEffectSpec {
         }
         let y_hat = &causal.y_hat;
         let w_hat = &causal.w_hat;
-        let tau_hat = causal.oob_predictions.as_ref()
-            .ok_or_else(|| GrfError::Missing(
-                "forest missing OOB tau predictions; retrain with compute_oob_predictions=true".into()))?
+        let tau_hat = causal
+            .oob_predictions
+            .as_ref()
+            .ok_or_else(|| {
+                GrfError::Missing(
+                    "forest missing OOB tau predictions; retrain with compute_oob_predictions=true"
+                        .into(),
+                )
+            })?
             .values
             .clone();
 
@@ -89,7 +101,9 @@ impl AverageTreatmentEffectSpec {
             Some((y, w)) => (y, w),
             None => return Err(GrfError::Missing(
                 "CausalForestOutput missing original Y/W; pass them via set_original_outcomes() \
-                 or wire a column-carrying DAG input port".into())),
+                 or wire a column-carrying DAG input port"
+                    .into(),
+            )),
         };
 
         let n = y_orig.len();
@@ -99,35 +113,49 @@ impl AverageTreatmentEffectSpec {
         let dr = dr_scores_binary(y_orig, w_orig, y_hat, w_hat, &tau_hat);
 
         // Subset.
-        let mask = self.subset.as_ref().cloned().unwrap_or_else(|| vec![true; n]);
+        let mask = self
+            .subset
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| vec![true; n]);
         if mask.len() != n {
             return Err(GrfError::Shape("subset length mismatch".into()));
         }
 
         // target.sample filter.
         let target = self.target_sample.as_str();
-        let include: Vec<bool> = (0..n).map(|i| {
-            if !mask[i] { return false; }
-            match target {
-                "all" => true,
-                "treated" => w_orig[i] == 1.0,
-                "control" => w_orig[i] == 0.0,
-                "overlap" => w_hat[i] > 0.0 && w_hat[i] < 1.0,
-                _ => return false, // unknown target → silently skip; grf R would error
-            }
-        }).collect();
+        let include: Vec<bool> = (0..n)
+            .map(|i| {
+                if !mask[i] {
+                    return false;
+                }
+                match target {
+                    "all" => true,
+                    "treated" => w_orig[i] == 1.0,
+                    "control" => w_orig[i] == 0.0,
+                    "overlap" => w_hat[i] > 0.0 && w_hat[i] < 1.0,
+                    _ => return false, // unknown target → silently skip; grf R would error
+                }
+            })
+            .collect();
 
-        let dr_f: Vec<f64> = dr.iter().zip(include.iter())
+        let dr_f: Vec<f64> = dr
+            .iter()
+            .zip(include.iter())
             .filter(|x| *x.1)
             .map(|x| *x.0)
             .collect();
-        let w_f: Vec<f64> = weights.iter().zip(include.iter())
+        let w_f: Vec<f64> = weights
+            .iter()
+            .zip(include.iter())
             .filter(|x| *x.1)
             .map(|x| *x.0)
             .collect();
         let n_eff = dr_f.len();
         if n_eff == 0 {
-            return Err(GrfError::Shape("subset / target.sample produced 0 observations".into()));
+            return Err(GrfError::Shape(
+                "subset / target.sample produced 0 observations".into(),
+            ));
         }
 
         // Weighted mean.
@@ -175,11 +203,17 @@ fn cluster_robust_se(dr: &[f64], w: &[f64], clusters: &[i64], tau_mean: f64) -> 
 
 #[allow(dead_code)]
 fn _schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new("estimate", DataType::Float64, false)]))
+    Arc::new(Schema::new(vec![Field::new(
+        "estimate",
+        DataType::Float64,
+        false,
+    )]))
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(AverageTreatmentEffectSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(AverageTreatmentEffectSpec)
+}
 
 #[allow(dead_code)]
 fn _oob_marker(_: OobPredictions) {}

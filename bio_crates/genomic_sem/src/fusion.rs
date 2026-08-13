@@ -42,12 +42,7 @@ impl Default for FusionConfig {
 /// For continuous traits:
 ///   effect = Z / sqrt(N * HSQ)
 ///   SE = |effect / Z|
-pub fn compute_effect_se(
-    z: f64,
-    hsq: f64,
-    n: f64,
-    is_binary: bool,
-) -> (f64, f64) {
+pub fn compute_effect_se(z: f64, hsq: f64, n: f64, is_binary: bool) -> (f64, f64) {
     if is_binary {
         let denom = ((n / 4.0) * hsq).max(1e-10);
         let effect = z / denom.sqrt();

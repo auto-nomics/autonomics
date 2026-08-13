@@ -15,14 +15,7 @@ use super::interactions::{cross_prod, ut, utd};
 ///          + (alpha - something)^2 related to bp, bn constraint
 ///
 /// Port of `f()` in `hierNet.c`.
-fn f_onerow(
-    alpha: f64,
-    a: &[f64],
-    q: usize,
-    b: &[f64],
-    c: f64,
-    mu: f64,
-) -> f64 {
+fn f_onerow(alpha: f64, a: &[f64], q: usize, b: &[f64], c: f64, mu: f64) -> f64 {
     // a: a_k values for each k (interaction gradient + current th)
     // b: b_k = sign indicators
     // c: lambda_l1 penalty for main effect budget
@@ -32,7 +25,13 @@ fn f_onerow(
     for k in 0..q {
         let t = a[k] * alpha;
         // soft-threshold
-        let st = if t > c { t - c } else if t < -c { t + c } else { 0.0 };
+        let st = if t > c {
+            t - c
+        } else if t < -c {
+            t + c
+        } else {
+            0.0
+        };
         let d = st - b[k];
         val += d * d;
     }
@@ -63,7 +62,11 @@ pub fn prox_zz_given_r(
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     // (th, bp, bn)
 
-    let cp2 = if diagonal { p * (p - 1) / 2 + p } else { p * (p - 1) / 2 };
+    let cp2 = if diagonal {
+        p * (p - 1) / 2 + p
+    } else {
+        p * (p - 1) / 2
+    };
 
     // Compute gradient: cm = X^T r (main effects), ci = ZZ^T r (interactions)
     let cm = cross_prod(x, n, p, r);
@@ -118,7 +121,11 @@ pub fn prox_zz_given_r(
             } else {
                 0.0
             };
-            let st = if lam_l2 > 0.0 { st / (1.0 + lam_l2 * t) } else { st };
+            let st = if lam_l2 > 0.0 {
+                st / (1.0 + lam_l2 * t)
+            } else {
+                st
+            };
             th[j + p * k] = st;
         }
     }
@@ -163,5 +170,7 @@ pub fn prox_zz_given_r_logistic(
     t: f64,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     // Same as Gaussian — the only difference is how r is computed
-    prox_zz_given_r(x, n, p, zz, diagonal, r, lam_l1, lam_l2, rho, v, curth, curbp, curbn, t)
+    prox_zz_given_r(
+        x, n, p, zz, diagonal, r, lam_l1, lam_l2, rho, v, curth, curbp, curbn, t,
+    )
 }

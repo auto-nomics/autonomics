@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use dl::*;
-    use rand::SeedableRng;
     use rand::Rng;
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     fn make_classification_data(n: usize, seed: u64) -> (Tensor, Tensor) {
@@ -57,7 +57,11 @@ mod tests {
             batch_norm: false,
             task_type: TaskType::Classification,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.01, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.01,
+                    ..Default::default()
+                },
                 n_epochs: 50,
                 batch_size: 10,
                 ..Default::default()
@@ -79,7 +83,12 @@ mod tests {
             time_column: None,
             event_column: None,
             scaler_json: None,
-            training_meta: TrainingMeta { n_epochs_run: 10, best_epoch: Some(5), best_val_metric: Some(0.9), total_params: 100 },
+            training_meta: TrainingMeta {
+                n_epochs_run: 10,
+                best_epoch: Some(5),
+                best_val_metric: Some(0.9),
+                total_params: 100,
+            },
         };
         let bytes = artifact.to_bytes().unwrap();
         let restored: DLModelArtifact = DLModelArtifact::from_bytes(&bytes).unwrap();
@@ -95,7 +104,11 @@ mod tests {
             activation: Activation::Relu,
             dropout: 0.0,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.01, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.01,
+                    ..Default::default()
+                },
                 n_epochs: 50,
                 batch_size: 16,
                 ..Default::default()
@@ -117,7 +130,11 @@ mod tests {
             batch_norm: false,
             task_type: TaskType::Classification,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.01, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.01,
+                    ..Default::default()
+                },
                 n_epochs: 30,
                 batch_size: 10,
                 ..Default::default()

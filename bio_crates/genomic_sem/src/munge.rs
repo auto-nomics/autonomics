@@ -10,16 +10,137 @@ use crate::error::{GenomicSemError, Result};
 /// Mirrors `.get_renamed_colnames` in `R/utils.R`.
 pub fn map_column_names(header: &[String]) -> HashMap<String, String> {
     let aliases: &[(&str, &[&str])] = &[
-        ("SNP", &["SNP", "SNPID", "RSID", "RS_NUMBER", "RS_NUMBERS", "MARKERNAME", "ID", "PREDICTOR", "SNP_ID", "VARIANTID", "VARIANT_ID", "RSIDS", "RS_ID"]),
-        ("A1", &["A1", "ALLELE1", "EFFECT_ALLELE", "INC_ALLELE", "REFERENCE_ALLELE", "EA", "REF"]),
-        ("A2", &["A2", "ALLELE2", "ALLELE0", "OTHER_ALLELE", "NON_EFFECT_ALLELE", "DEC_ALLELE", "OA", "NEA", "ALT", "A0"]),
-        ("effect", &["OR", "B", "BETA", "LOG_ODDS", "EFFECTS", "EFFECT", "SIGNED_SUMSTAT", "EST", "BETA1", "LOGOR"]),
+        (
+            "SNP",
+            &[
+                "SNP",
+                "SNPID",
+                "RSID",
+                "RS_NUMBER",
+                "RS_NUMBERS",
+                "MARKERNAME",
+                "ID",
+                "PREDICTOR",
+                "SNP_ID",
+                "VARIANTID",
+                "VARIANT_ID",
+                "RSIDS",
+                "RS_ID",
+            ],
+        ),
+        (
+            "A1",
+            &[
+                "A1",
+                "ALLELE1",
+                "EFFECT_ALLELE",
+                "INC_ALLELE",
+                "REFERENCE_ALLELE",
+                "EA",
+                "REF",
+            ],
+        ),
+        (
+            "A2",
+            &[
+                "A2",
+                "ALLELE2",
+                "ALLELE0",
+                "OTHER_ALLELE",
+                "NON_EFFECT_ALLELE",
+                "DEC_ALLELE",
+                "OA",
+                "NEA",
+                "ALT",
+                "A0",
+            ],
+        ),
+        (
+            "effect",
+            &[
+                "OR",
+                "B",
+                "BETA",
+                "LOG_ODDS",
+                "EFFECTS",
+                "EFFECT",
+                "SIGNED_SUMSTAT",
+                "EST",
+                "BETA1",
+                "LOGOR",
+            ],
+        ),
         ("INFO", &["INFO", "IMPINFO"]),
-        ("P", &["P", "PVALUE", "PVAL", "P_VALUE", "P-VALUE", "P.VALUE", "P_VAL", "GC_PVALUE", "WALD_P"]),
-        ("N", &["N", "WEIGHT", "NCOMPLETESAMPLES", "TOTALSAMPLESIZE", "TOTALN", "TOTAL_N", "N_COMPLETE_SAMPLES", "SAMPLESIZE", "NEFF", "N_EFF", "N_EFFECTIVE", "SUMNEFF"]),
-        ("MAF", &["MAF", "CEUAF", "FREQ1", "EAF", "FREQ1.HAPMAP", "FREQALLELE1HAPMAPCEU", "FREQ.ALLELE1.HAPMAPCEU", "EFFECT_ALLELE_FREQ", "FREQ.A1", "A1FREQ", "ALLELEFREQ", "EFFECT_ALLELE_FREQUENCY"]),
-        ("Z", &["Z", "ZSCORE", "Z-SCORE", "ZSTATISTIC", "ZSTAT", "Z-STATISTIC"]),
-        ("SE", &["STDERR", "SE", "STDERRLOGOR", "SEBETA", "STANDARDERROR", "STANDARD_ERROR"]),
+        (
+            "P",
+            &[
+                "P",
+                "PVALUE",
+                "PVAL",
+                "P_VALUE",
+                "P-VALUE",
+                "P.VALUE",
+                "P_VAL",
+                "GC_PVALUE",
+                "WALD_P",
+            ],
+        ),
+        (
+            "N",
+            &[
+                "N",
+                "WEIGHT",
+                "NCOMPLETESAMPLES",
+                "TOTALSAMPLESIZE",
+                "TOTALN",
+                "TOTAL_N",
+                "N_COMPLETE_SAMPLES",
+                "SAMPLESIZE",
+                "NEFF",
+                "N_EFF",
+                "N_EFFECTIVE",
+                "SUMNEFF",
+            ],
+        ),
+        (
+            "MAF",
+            &[
+                "MAF",
+                "CEUAF",
+                "FREQ1",
+                "EAF",
+                "FREQ1.HAPMAP",
+                "FREQALLELE1HAPMAPCEU",
+                "FREQ.ALLELE1.HAPMAPCEU",
+                "EFFECT_ALLELE_FREQ",
+                "FREQ.A1",
+                "A1FREQ",
+                "ALLELEFREQ",
+                "EFFECT_ALLELE_FREQUENCY",
+            ],
+        ),
+        (
+            "Z",
+            &[
+                "Z",
+                "ZSCORE",
+                "Z-SCORE",
+                "ZSTATISTIC",
+                "ZSTAT",
+                "Z-STATISTIC",
+            ],
+        ),
+        (
+            "SE",
+            &[
+                "STDERR",
+                "SE",
+                "STDERRLOGOR",
+                "SEBETA",
+                "STANDARDERROR",
+                "STANDARD_ERROR",
+            ],
+        ),
     ];
 
     let mut mapping = HashMap::new();
@@ -121,9 +242,16 @@ mod tests {
 
     #[test]
     fn test_map_column_names() {
-        let header = vec!["CHR".to_string(), "BP".to_string(), "SNP".to_string(),
-                          "A1".to_string(), "A2".to_string(), "B".to_string(),
-                          "P".to_string(), "N".to_string()];
+        let header = vec![
+            "CHR".to_string(),
+            "BP".to_string(),
+            "SNP".to_string(),
+            "A1".to_string(),
+            "A2".to_string(),
+            "B".to_string(),
+            "P".to_string(),
+            "N".to_string(),
+        ];
         let mapping = map_column_names(&header);
         assert_eq!(mapping.get("SNP"), Some(&"SNP".to_string()));
         assert_eq!(mapping.get("B"), Some(&"effect".to_string()));

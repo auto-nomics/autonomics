@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::model::{NodeKindInfo, PortSpec};
 use crate::store::pool::DbPool;
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 #[derive(Clone)]
 #[allow(missing_docs)]

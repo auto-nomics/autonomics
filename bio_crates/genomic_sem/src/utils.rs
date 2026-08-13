@@ -102,14 +102,22 @@ pub fn get_v_snp(
         if x != y {
             let val = match gc {
                 GcMode::Conserv => {
-                    se_snp_row[y] * se_snp_row[x] * i_ld[(x, y)] * i_ld[(x, x)] * i_ld[(y, y)]
-                        * var_snp_i * var_snp_i
+                    se_snp_row[y]
+                        * se_snp_row[x]
+                        * i_ld[(x, y)]
+                        * i_ld[(x, x)]
+                        * i_ld[(y, y)]
+                        * var_snp_i
+                        * var_snp_i
                 }
                 GcMode::Standard => {
-                    se_snp_row[y] * se_snp_row[x] * i_ld[(x, y)]
+                    se_snp_row[y]
+                        * se_snp_row[x]
+                        * i_ld[(x, y)]
                         * i_ld[(x, x)].sqrt()
                         * i_ld[(y, y)].sqrt()
-                        * var_snp_i * var_snp_i
+                        * var_snp_i
+                        * var_snp_i
                 }
                 GcMode::None => {
                     se_snp_row[y] * se_snp_row[x] * i_ld[(x, y)] * var_snp_i * var_snp_i
@@ -118,12 +126,8 @@ pub fn get_v_snp(
             v_snp[(x, y)] = val;
         } else {
             let val = match gc {
-                GcMode::Conserv => {
-                    (se_snp_row[x] * i_ld[(x, x)] * var_snp_i).powi(2)
-                }
-                GcMode::Standard => {
-                    (se_snp_row[x] * i_ld[(x, x)].sqrt() * var_snp_i).powi(2)
-                }
+                GcMode::Conserv => (se_snp_row[x] * i_ld[(x, x)] * var_snp_i).powi(2),
+                GcMode::Standard => (se_snp_row[x] * i_ld[(x, x)].sqrt() * var_snp_i).powi(2),
                 GcMode::None => (se_snp_row[x] * var_snp_i).powi(2),
             };
             v_snp[(x, x)] = val;
@@ -218,19 +222,13 @@ pub fn get_z_pre(
     let k = beta_snp_row.len();
     let diag = linalg::diag_to_vec(i_ld);
     match gc {
-        GcMode::Conserv => {
-            (0..k)
-                .map(|i| beta_snp_row[i] / (se_snp_row[i] * diag[i]))
-                .collect()
-        }
-        GcMode::Standard => {
-            (0..k)
-                .map(|i| beta_snp_row[i] / (se_snp_row[i] * diag[i].sqrt()))
-                .collect()
-        }
-        GcMode::None => {
-            (0..k).map(|i| beta_snp_row[i] / se_snp_row[i]).collect()
-        }
+        GcMode::Conserv => (0..k)
+            .map(|i| beta_snp_row[i] / (se_snp_row[i] * diag[i]))
+            .collect(),
+        GcMode::Standard => (0..k)
+            .map(|i| beta_snp_row[i] / (se_snp_row[i] * diag[i].sqrt()))
+            .collect(),
+        GcMode::None => (0..k).map(|i| beta_snp_row[i] / se_snp_row[i]).collect(),
     }
 }
 
@@ -436,7 +434,14 @@ mod tests {
     fn test_get_v_snp_standard() {
         let se = vec![0.01, 0.02];
         let i_ld = Mat::identity(2, 2);
-        let v_snp = get_v_snp(&se, &i_ld, 0.5, GcMode::Standard, &[(0, 0), (0, 1), (1, 1)], 2);
+        let v_snp = get_v_snp(
+            &se,
+            &i_ld,
+            0.5,
+            GcMode::Standard,
+            &[(0, 0), (0, 1), (1, 1)],
+            2,
+        );
         // Standard GC: diag = (se * sqrt(1) * varSNP)^2
         let expected_00: f64 = (0.01_f64 * 1.0 * 0.5).powi(2);
         assert!((v_snp[(0, 0)] - expected_00).abs() < 1e-12);

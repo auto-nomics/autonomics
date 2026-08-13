@@ -11,9 +11,7 @@ use crate::api::commands::WorkflowCmd;
 use crate::api::manager::WorkflowManager;
 use crate::error::{ApiError, Result};
 use crate::executor::{Scheduler, ValidationReport, WorkflowResult};
-use crate::model::{
-    EdgeEntry, NodeEntry, Skill, SkillInfo, SnapshotInfo, WorkflowManifest,
-};
+use crate::model::{EdgeEntry, NodeEntry, Skill, SkillInfo, SnapshotInfo, WorkflowManifest};
 use crate::registry::{NodeRegistry, SkillRegistry};
 use crate::store::{DbPool, NodeKindRepo, SkillRepo, WorkflowRepo, WorkflowSummary};
 use std::sync::Arc;
@@ -92,8 +90,11 @@ impl WorkflowClient {
 
     /// Remove a node and its connected edges.
     pub async fn remove_node(&self, workflow_id: Uuid, node_id: Uuid) -> Result<()> {
-        self.request(RemoveNodeInput { workflow_id, node_id })
-            .await
+        self.request(RemoveNodeInput {
+            workflow_id,
+            node_id,
+        })
+        .await
     }
 
     /// Add an edge.
@@ -103,8 +104,11 @@ impl WorkflowClient {
 
     /// Remove an edge.
     pub async fn remove_edge(&self, workflow_id: Uuid, edge_id: Uuid) -> Result<()> {
-        self.request(RemoveEdgeInput { workflow_id, edge_id })
-            .await
+        self.request(RemoveEdgeInput {
+            workflow_id,
+            edge_id,
+        })
+        .await
     }
 
     /// Validate a manifest without persisting.
@@ -204,18 +208,34 @@ macro_rules! input_struct {
     };
 }
 
-input_struct!(CreateWorkflowInput { manifest: WorkflowManifest });
+input_struct!(CreateWorkflowInput {
+    manifest: WorkflowManifest
+});
 input_struct!(LoadWorkflowInput { id: Uuid });
 input_struct!(SaveWorkflowInput {
     id: Uuid,
     manifest: WorkflowManifest,
     message: String,
 });
-input_struct!(AddNodeInput { workflow_id: Uuid, node: NodeEntry });
-input_struct!(RemoveNodeInput { workflow_id: Uuid, node_id: Uuid });
-input_struct!(AddEdgeInput { workflow_id: Uuid, edge: EdgeEntry });
-input_struct!(RemoveEdgeInput { workflow_id: Uuid, edge_id: Uuid });
-input_struct!(ValidateInput { manifest: WorkflowManifest });
+input_struct!(AddNodeInput {
+    workflow_id: Uuid,
+    node: NodeEntry
+});
+input_struct!(RemoveNodeInput {
+    workflow_id: Uuid,
+    node_id: Uuid
+});
+input_struct!(AddEdgeInput {
+    workflow_id: Uuid,
+    edge: EdgeEntry
+});
+input_struct!(RemoveEdgeInput {
+    workflow_id: Uuid,
+    edge_id: Uuid
+});
+input_struct!(ValidateInput {
+    manifest: WorkflowManifest
+});
 input_struct!(RunInput {
     workflow_id: Uuid,
     inputs: serde_json::Map<String, serde_json::Value>,
@@ -225,14 +245,15 @@ input_struct!(SaveSkillInput { skill: Skill });
 input_struct!(ListWorkflowsInput);
 input_struct!(ListSkillsInput);
 input_struct!(HistoryInput { workflow_id: Uuid });
-input_struct!(CheckoutInput { workflow_id: Uuid, snapshot_id: Uuid });
+input_struct!(CheckoutInput {
+    workflow_id: Uuid,
+    snapshot_id: Uuid
+});
 input_struct!(ExportSkillInput { skill_id: Uuid });
 input_struct!(ImportSkillInput { json: String });
 
 impl IntoRequest<Uuid> for CreateWorkflowInput {
-    fn into_cmd_with_reply(
-        input: Self,
-    ) -> (WorkflowCmd, oneshot::Receiver<Result<Uuid>>) {
+    fn into_cmd_with_reply(input: Self) -> (WorkflowCmd, oneshot::Receiver<Result<Uuid>>) {
         let (tx, rx) = oneshot::channel();
         let cmd = WorkflowCmd::CreateWorkflow {
             manifest: input.manifest,
@@ -246,14 +267,15 @@ impl IntoRequest<WorkflowManifest> for LoadWorkflowInput {
         input: Self,
     ) -> (WorkflowCmd, oneshot::Receiver<Result<WorkflowManifest>>) {
         let (tx, rx) = oneshot::channel();
-        let cmd = WorkflowCmd::LoadWorkflow { id: input.id, reply: tx };
+        let cmd = WorkflowCmd::LoadWorkflow {
+            id: input.id,
+            reply: tx,
+        };
         (cmd, rx)
     }
 }
 impl IntoRequest<Uuid> for SaveWorkflowInput {
-    fn into_cmd_with_reply(
-        input: Self,
-    ) -> (WorkflowCmd, oneshot::Receiver<Result<Uuid>>) {
+    fn into_cmd_with_reply(input: Self) -> (WorkflowCmd, oneshot::Receiver<Result<Uuid>>) {
         let (tx, rx) = oneshot::channel();
         let cmd = WorkflowCmd::SaveWorkflow {
             id: input.id,
@@ -460,7 +482,8 @@ async fn actor_loop(
                 let r = (|| -> Result<()> {
                     let mut m = workflow_repo.get(workflow_id)?;
                     m.nodes.retain(|n| n.id != node_id);
-                    m.edges.retain(|e| e.source != node_id && e.target != node_id);
+                    m.edges
+                        .retain(|e| e.source != node_id && e.target != node_id);
                     m.validate()?;
                     workflow_repo.save(workflow_id, &m, "remove_node")?;
                     Ok(())
@@ -529,10 +552,7 @@ async fn actor_loop(
                 let r = skill_repo.list();
                 let _ = reply.send(r);
             }
-            WorkflowCmd::History {
-                workflow_id,
-                reply,
-            } => {
+            WorkflowCmd::History { workflow_id, reply } => {
                 let r = workflow_repo.history(workflow_id);
                 let _ = reply.send(r);
             }
@@ -547,12 +567,12 @@ async fn actor_loop(
             WorkflowCmd::ExportSkill { skill_id, reply } => {
                 // Read from the latest version of the skill directly.
                 let r = (|| -> Result<String> {
-                    let skill = skill_repo
-                        .latest_by_id(skill_id)?
-                        .ok_or(crate::error::StorageError::NotFound {
+                    let skill = skill_repo.latest_by_id(skill_id)?.ok_or(
+                        crate::error::StorageError::NotFound {
                             kind: "skill",
                             id: skill_id.to_string(),
-                        })?;
+                        },
+                    )?;
                     Ok(serde_json::to_string_pretty(&skill)?)
                 })();
                 let _ = reply.send(r);

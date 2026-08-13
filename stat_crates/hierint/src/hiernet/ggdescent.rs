@@ -3,9 +3,9 @@
 //! Solves the proximal subproblem: min Loss + Penalty,
 //! using backtracking line search and the proximal operator from `prox.rs`.
 
-use super::interactions::{compute_dot_grad_del, compute_yhat, compute_phat, cross_prod};
-use super::prox;
 use super::HierNetCoefs;
+use super::interactions::{compute_dot_grad_del, compute_phat, compute_yhat, cross_prod};
+use super::prox;
 
 /// Generalized gradient descent for Gaussian loss.
 ///
@@ -42,8 +42,7 @@ pub fn ggdescent(
         };
 
         let (ttaken, maxabsdel) = ggstep(
-            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, v,
-            &cur, tt, backtrack, &mut best,
+            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, v, &cur, tt, backtrack, &mut best,
         );
 
         ttt[l % stepwindow] = ttaken;
@@ -96,8 +95,7 @@ fn ggstep(
     while tt > small {
         // Take a proximal step
         let (th, bp, bn) = prox::prox_zz_given_r(
-            x, n, p, zz, diagonal, &curr, lam_l1, lam_l2, rho, v,
-            &cur.th, &cur.bp, &cur.bn, tt,
+            x, n, p, zz, diagonal, &curr, lam_l1, lam_l2, rho, v, &cur.th, &cur.bp, &cur.bn, tt,
         );
 
         // Compute new residual and left (loss)
@@ -190,8 +188,7 @@ pub fn ggdescent_logistic(
         };
 
         let (ttaken, maxabsdel) = ggstep_logistic(
-            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, v,
-            &cur, tt, backtrack, &mut best,
+            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, v, &cur, tt, backtrack, &mut best,
         );
 
         ttt[l % stepwindow] = ttaken;
@@ -247,8 +244,7 @@ fn ggstep_logistic(
         let new_b0 = cur.b0 + tt * sum_curr;
 
         let (th, bp, bn) = prox::prox_zz_given_r_logistic(
-            x, n, p, zz, diagonal, &curr, lam_l1, lam_l2, rho, v,
-            &cur.th, &cur.bp, &cur.bn, tt,
+            x, n, p, zz, diagonal, &curr, lam_l1, lam_l2, rho, v, &cur.th, &cur.bp, &cur.bn, tt,
         );
 
         // Compute new loss
@@ -272,7 +268,16 @@ fn ggstep_logistic(
         }
         sqnorm /= 2.0 * tt;
 
-        let delyhat = compute_yhat(x, n, p, zz, diagonal, &delth, &bp_minus(&cur.bp, &bp), &bp_minus(&cur.bn, &bn));
+        let delyhat = compute_yhat(
+            x,
+            n,
+            p,
+            zz,
+            diagonal,
+            &delth,
+            &bp_minus(&cur.bp, &bp),
+            &bp_minus(&cur.bn, &bn),
+        );
         let mut right = curloss + sqnorm;
         for i in 0..n {
             right -= (delyhat[i] + delb0) * curr[i];

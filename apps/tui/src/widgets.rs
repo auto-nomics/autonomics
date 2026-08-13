@@ -14,6 +14,6 @@ pub mod session_list;
 pub mod session_picker;
 pub mod sidebar;
 pub mod status_bar;
-pub mod todo_widget;
 pub mod toast;
+pub mod todo_widget;
 pub mod tool_exec_widget;

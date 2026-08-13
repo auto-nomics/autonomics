@@ -58,25 +58,25 @@ pub mod near_pd;
 pub mod stats;
 pub mod utils;
 
+pub mod commonfactor;
+pub mod enrich;
+pub mod fusion;
+pub mod gwas;
+pub mod index;
 pub mod ldsc;
 pub mod munge;
-pub mod sumstats;
-pub mod sem;
-pub mod usermodel;
-pub mod commonfactor;
-pub mod rgmodel;
-pub mod gwas;
-pub mod sldsc;
-pub mod enrich;
 pub mod paldsc;
+pub mod rgmodel;
+pub mod sem;
 pub mod sim;
-pub mod write_model;
+pub mod sldsc;
 pub mod summary_gls;
-pub mod index;
-pub mod fusion;
+pub mod sumstats;
+pub mod usermodel;
+pub mod write_model;
 
 pub use error::{GenomicSemError, Result};
 
 // Re-export key types for convenience.
-pub use ldsc::{LdscOutput, LdscConfig};
+pub use ldsc::{LdscConfig, LdscOutput};
 pub use utils::{Covstruc, GcMode};

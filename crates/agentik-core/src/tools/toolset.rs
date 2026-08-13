@@ -255,8 +255,8 @@ impl Toolset {
             let task_handle = tokio::spawn(async move {
                 // Catch panics from tool execution so they become proper
                 // ToolErrors instead of crashing the task silently.
-                use std::panic::AssertUnwindSafe;
                 use futures::FutureExt;
+                use std::panic::AssertUnwindSafe;
 
                 let exec_fut = implementation.execute_with_context(input, &ctx);
 
@@ -420,7 +420,6 @@ impl Toolset {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

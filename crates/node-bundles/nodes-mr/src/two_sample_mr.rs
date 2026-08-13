@@ -1169,7 +1169,8 @@ impl DagNode for TwoSampleMrNode {
         // Resolve the LD-matrix base table from the catalog (falls back to
         // hardcoded `iceberg.ld_matrix.eur_chr{N}` when not registered).
         let ld_base = node_ctx.resources.resolve_iceberg("ldmatrix.eur_chr").ok();
-        let hinputs = clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_ref()).await?;
+        let hinputs =
+            clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_ref()).await?;
 
         // ---- harmonise ----
         let harmonised =
@@ -1662,7 +1663,10 @@ mod tests {
         catalog
             .register_schema("ld_matrix", std::sync::Arc::new(ld_schema))
             .unwrap();
-        session.register_catalog(dag_core::resource_catalog::CATALOG_NAME, std::sync::Arc::new(catalog));
+        session.register_catalog(
+            dag_core::resource_catalog::CATALOG_NAME,
+            std::sync::Arc::new(catalog),
+        );
     }
 
     /// Build 4 test instruments: rs1 (most significant) through rs4.

@@ -120,9 +120,21 @@ pub fn strong_rules(candidates: &Candidates, lambda: f64, lambda_prev: f64) -> A
     ActiveSet {
         cat: filter1(&candidates.variables.cat, &candidates.norms.cat, constant),
         cont: filter1(&candidates.variables.cont, &candidates.norms.cont, constant),
-        catcat: filter2(&candidates.variables.catcat, &candidates.norms.catcat, constant),
-        contcont: filter2(&candidates.variables.contcont, &candidates.norms.contcont, constant),
-        catcont: filter2(&candidates.variables.catcont, &candidates.norms.catcont, constant),
+        catcat: filter2(
+            &candidates.variables.catcat,
+            &candidates.norms.catcat,
+            constant,
+        ),
+        contcont: filter2(
+            &candidates.variables.contcont,
+            &candidates.norms.contcont,
+            constant,
+        ),
+        catcont: filter2(
+            &candidates.variables.catcont,
+            &candidates.norms.catcont,
+            constant,
+        ),
     }
 }
 
@@ -173,7 +185,10 @@ pub fn check_kkt(
     if let Some(ref vars) = candidates.variables.cat {
         for (i, &[vi]) in vars.iter().enumerate() {
             if norms.cat[i] > lambda {
-                let already = expanded.cat.as_ref().map_or(false, |av| av.iter().any(|a| a[0] == vi));
+                let already = expanded
+                    .cat
+                    .as_ref()
+                    .map_or(false, |av| av.iter().any(|a| a[0] == vi));
                 if !already {
                     match &mut expanded.cat {
                         Some(v) => v.push([vi]),
@@ -187,7 +202,10 @@ pub fn check_kkt(
     if let Some(ref vars) = candidates.variables.cont {
         for (i, &[vi]) in vars.iter().enumerate() {
             if norms.cont[i] > lambda {
-                let already = expanded.cont.as_ref().map_or(false, |av| av.iter().any(|a| a[0] == vi));
+                let already = expanded
+                    .cont
+                    .as_ref()
+                    .map_or(false, |av| av.iter().any(|a| a[0] == vi));
                 if !already {
                     match &mut expanded.cont {
                         Some(v) => v.push([vi]),
@@ -204,7 +222,9 @@ pub fn check_kkt(
         for (i, pair) in vars.iter().enumerate() {
             if norms.catcat[i] > lambda {
                 let already = expanded.catcat.as_ref().map_or(false, |av| {
-                    av.iter().any(|a| (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0]))
+                    av.iter().any(|a| {
+                        (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0])
+                    })
                 });
                 if !already {
                     match &mut expanded.catcat {
@@ -222,7 +242,9 @@ pub fn check_kkt(
         for (i, pair) in vars.iter().enumerate() {
             if norms.contcont[i] > lambda {
                 let already = expanded.contcont.as_ref().map_or(false, |av| {
-                    av.iter().any(|a| (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0]))
+                    av.iter().any(|a| {
+                        (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0])
+                    })
                 });
                 if !already {
                     match &mut expanded.contcont {

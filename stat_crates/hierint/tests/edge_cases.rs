@@ -33,9 +33,7 @@ impl<'de> serde::Deserialize<'de> for NumLevelsField {
         match v {
             serde_json::Value::Number(n) => Ok(NumLevelsField::Single(n.as_f64().unwrap())),
             serde_json::Value::Array(arr) => {
-                let vals = arr.into_iter()
-                    .map(|v| v.as_f64().unwrap())
-                    .collect();
+                let vals = arr.into_iter().map(|v| v.as_f64().unwrap()).collect();
                 Ok(NumLevelsField::Vec(vals))
             }
             _ => Err(Error::custom("expected number or array")),
@@ -72,7 +70,11 @@ fn edge_single_variable_fits() {
 
     // With p=1, there can be no interactions. Only main effect at most.
     for active in &fit.active_set {
-        assert_eq!(active.n_vars()[2], 0, "no contcont possible with 1 variable");
+        assert_eq!(
+            active.n_vars()[2],
+            0,
+            "no contcont possible with 1 variable"
+        );
         assert_eq!(active.n_vars()[3], 0, "no catcat possible");
         assert_eq!(active.n_vars()[4], 0, "no catcont possible");
     }
@@ -82,7 +84,11 @@ fn edge_single_variable_fits() {
 
     // At smallest lambda, main effect should enter
     let last = fit.active_set.last().unwrap();
-    assert_eq!(last.n_vars()[1], 1, "continuous main effect should be active");
+    assert_eq!(
+        last.n_vars()[1],
+        1,
+        "continuous main effect should be active"
+    );
 }
 
 #[test]
@@ -102,7 +108,10 @@ fn edge_single_variable_prediction_matches_mean_at_max() {
 
     let mean_y = fx.y.iter().sum::<f64>() / fx.n as f64;
     for &p in &preds[0] {
-        assert!((p - mean_y).abs() < 1e-4, "prediction at lambda_max should be mean(y)");
+        assert!(
+            (p - mean_y).abs() < 1e-4,
+            "prediction at lambda_max should be mean(y)"
+        );
     }
 }
 
@@ -157,7 +166,10 @@ fn edge_binary_cat_catcat_hierarchy() {
 
     // Last lambda: model should have some active groups (interactions or main effects)
     let last = fit.active_set.last().unwrap();
-    assert!(last.num_groups() > 0, "expected active groups at smallest lambda");
+    assert!(
+        last.num_groups() > 0,
+        "expected active groups at smallest lambda"
+    );
 
     // The model should produce finite predictions
     let preds = glinternet::predict(&fit, &x_cat, &[], &num_levels, fx.n);
@@ -174,7 +186,13 @@ fn edge_binary_cat_catcat_hierarchy() {
 
 #[test]
 fn edge_empty_data_errors() {
-    let result = glinternet::fit(&[], &[], &[], &[1], &glinternet::GlinternetConfig::default());
+    let result = glinternet::fit(
+        &[],
+        &[],
+        &[],
+        &[1],
+        &glinternet::GlinternetConfig::default(),
+    );
     assert!(result.is_err(), "empty data should error");
 }
 
@@ -190,14 +208,14 @@ fn edge_two_vars_interaction_possible() {
     let z: Vec<f64> = {
         let mut v = vec![0.0; n * 2];
         for i in 0..n {
-            v[i] = (i as f64 - 25.0) / 10.0;       // column 0
-            v[n + i] = ((i as f64) / 20.0).sin();   // column 1
+            v[i] = (i as f64 - 25.0) / 10.0; // column 0
+            v[n + i] = ((i as f64) / 20.0).sin(); // column 1
         }
         v
     };
-    let y: Vec<f64> = (0..n).map(|i| {
-        z[i] + z[n + i] * 2.0 + z[i] * z[n + i] + 0.1 * (i as f64).sin()
-    }).collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| z[i] + z[n + i] * 2.0 + z[i] * z[n + i] + 0.1 * (i as f64).sin())
+        .collect();
 
     let config = glinternet::GlinternetConfig {
         family: glinternet::Family::Gaussian,
@@ -210,7 +228,7 @@ fn edge_two_vars_interaction_possible() {
     // With p=2, at most 1 contcont interaction pair, and no cat/catcont
     for active in &fit.active_set {
         assert!(active.n_vars()[2] <= 1, "at most 1 contcont pair");
-        assert_eq!(active.n_vars()[0], 0, "no catcat possible");  // index 0 = cat
+        assert_eq!(active.n_vars()[0], 0, "no catcat possible"); // index 0 = cat
         assert_eq!(active.n_vars()[4], 0, "no catcont possible"); // index 4 = catcont
     }
     assert!(fit.lambda.len() > 0);

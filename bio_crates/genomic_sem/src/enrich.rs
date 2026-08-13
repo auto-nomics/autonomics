@@ -42,8 +42,16 @@ pub fn enrich(s_covstruc: &SldscOutput, config: &EnrichConfig) -> Result<Vec<Use
 
     for partition in &s_covstruc.partitions {
         let covstruc = crate::utils::Covstruc {
-            v: if config.tau { partition.v_tau.clone() } else { partition.v.clone() },
-            s: if config.tau { partition.s_tau.clone() } else { partition.s.clone() },
+            v: if config.tau {
+                partition.v_tau.clone()
+            } else {
+                partition.v.clone()
+            },
+            s: if config.tau {
+                partition.s_tau.clone()
+            } else {
+                partition.s.clone()
+            },
             i_mat: s_covstruc.intercepts.clone(),
             n: s_covstruc.n.clone(),
             m: 0.0,

@@ -30,7 +30,9 @@ impl<'a> Widget for SopEditorWidget<'a> {
             .map(|l| Line::from(Span::raw(l.to_string())))
             .chain(std::iter::once(Line::from(Span::styled(
                 "▌".to_string(),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::SLOW_BLINK),
             ))))
             .collect();
 

@@ -166,9 +166,10 @@ impl ResourceCatalog {
             cmd.arg("--checksum");
         }
         cmd.arg(&local).arg(spec.remote_target());
-        let output = cmd.output().await.map_err(|e| {
-            ResourceError::Persistence(format!("failed to spawn rclone: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| ResourceError::Persistence(format!("failed to spawn rclone: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ResourceError::Persistence(format!(
@@ -335,10 +336,7 @@ impl ResourceCatalog {
                         .archive_status
                         .as_ref()
                         .and_then(|s| s.archived_at.clone()),
-                    verified: e
-                        .archive_status
-                        .as_ref()
-                        .and_then(|s| s.verified),
+                    verified: e.archive_status.as_ref().and_then(|s| s.verified),
                 })
             })
             .collect()

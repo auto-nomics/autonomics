@@ -209,9 +209,7 @@ impl NodeFactory for EpiLassoNodeFactory {
             format!("  lambda = {cv_fit}$lambda,"),
             format!("  cv_mean = {cv_fit}$cvm,"),
             format!("  cv_se = {cv_fit}$cvsd,"),
-            format!(
-                "  n_selected = {cv_fit}$nzero,"
-            ),
+            format!("  n_selected = {cv_fit}$nzero,"),
             format!("  is_lambda_min = {cv_fit}$lambda == {cv_fit}$lambda.min,"),
             format!("  is_lambda_1se = {cv_fit}$lambda == {cv_fit}$lambda.1se"),
             format!(")"),
@@ -376,17 +374,9 @@ impl DagNode for EpiLassoNode {
         let cv_lambdas: Float64Array = cv.lambdas.iter().copied().collect();
         let cv_means: Float64Array = cv.cv_mean.iter().copied().collect();
         let cv_ses: Float64Array = cv.cv_se.iter().copied().collect();
-        let cv_nsel: Int32Array = cv
-            .n_selected_path
-            .iter()
-            .map(|&n| n as i32)
-            .collect();
-        let is_min: BooleanArray = (0..nl)
-            .map(|i| i == cv.idx_min)
-            .collect();
-        let is_1se: BooleanArray = (0..nl)
-            .map(|i| i == cv.idx_1se)
-            .collect();
+        let cv_nsel: Int32Array = cv.n_selected_path.iter().map(|&n| n as i32).collect();
+        let is_min: BooleanArray = (0..nl).map(|i| i == cv.idx_min).collect();
+        let is_1se: BooleanArray = (0..nl).map(|i| i == cv.idx_1se).collect();
 
         let cv_batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![

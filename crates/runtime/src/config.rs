@@ -549,23 +549,47 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
 pub fn default_system_prompt() -> String {
     struct AllEnabled;
     impl PromptCapabilities for AllEnabled {
-        fn enable_bibliography(&self) -> bool { true }
-        fn enable_opengwas(&self) -> bool { true }
-        fn enable_opentargets(&self) -> bool { true }
-        fn enable_gwascatalog(&self) -> bool { true }
-        fn enable_iceberg(&self) -> bool { true }
-        fn enable_dag_history(&self) -> bool { true }
+        fn enable_bibliography(&self) -> bool {
+            true
+        }
+        fn enable_opengwas(&self) -> bool {
+            true
+        }
+        fn enable_opentargets(&self) -> bool {
+            true
+        }
+        fn enable_gwascatalog(&self) -> bool {
+            true
+        }
+        fn enable_iceberg(&self) -> bool {
+            true
+        }
+        fn enable_dag_history(&self) -> bool {
+            true
+        }
     }
     build_system_prompt(&AllEnabled)
 }
 
 impl PromptCapabilities for RuntimeConfig {
-    fn enable_bibliography(&self) -> bool { self.enable_bibliography }
-    fn enable_opengwas(&self) -> bool { self.enable_opengwas }
-    fn enable_opentargets(&self) -> bool { self.enable_opentargets }
-    fn enable_gwascatalog(&self) -> bool { self.enable_gwascatalog }
-    fn enable_iceberg(&self) -> bool { self.enable_iceberg }
-    fn enable_dag_history(&self) -> bool { self.enable_dag_history }
+    fn enable_bibliography(&self) -> bool {
+        self.enable_bibliography
+    }
+    fn enable_opengwas(&self) -> bool {
+        self.enable_opengwas
+    }
+    fn enable_opentargets(&self) -> bool {
+        self.enable_opentargets
+    }
+    fn enable_gwascatalog(&self) -> bool {
+        self.enable_gwascatalog
+    }
+    fn enable_iceberg(&self) -> bool {
+        self.enable_iceberg
+    }
+    fn enable_dag_history(&self) -> bool {
+        self.enable_dag_history
+    }
 }
 
 impl RuntimeConfig {

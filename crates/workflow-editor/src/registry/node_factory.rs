@@ -65,6 +65,8 @@ pub trait NodeFactory: Send + Sync {
 }
 
 /// Reference-stable convenience: register a factory and return the same Arc.
-pub async fn noop_build(_params: serde_json::Value) -> Result<Box<dyn std::any::Any + Send + Sync>> {
+pub async fn noop_build(
+    _params: serde_json::Value,
+) -> Result<Box<dyn std::any::Any + Send + Sync>> {
     Ok(Box::new(()))
 }

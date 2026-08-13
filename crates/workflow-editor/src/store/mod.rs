@@ -18,6 +18,6 @@ pub mod workflow_repo;
 
 pub use migrations::run;
 pub use node_kind_repo::NodeKindRepo;
-pub use pool::{open, open_file, DbPool};
+pub use pool::{DbPool, open, open_file};
 pub use skill_repo::SkillRepo;
 pub use workflow_repo::{WorkflowRepo, WorkflowSummary};

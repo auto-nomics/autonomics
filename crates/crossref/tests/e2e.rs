@@ -371,7 +371,9 @@ async fn dag_node_works_dataframe() {
         iceberg_catalog: None,
         datalake: Arc::new(datalake::Datalake::default()),
         opendal: None,
-        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
         global_sem: None,
     };
 

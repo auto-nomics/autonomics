@@ -44,12 +44,20 @@ fn spec_for(kind: &str) -> serde_json::Value {
         "grf_probability_forest" => json!({"y_column_name":"y","num_classes":2}),
         "grf_survival_forest" => json!({"time_column_name":"time","censor_column_name":"censor"}),
         "grf_multi_regression_forest" => json!({"y_column_names":["y0"]}),
-        "grf_instrumental_forest" => json!({"y_column_name":"y","w_column_name":"w","z_column_name":"z"}),
+        "grf_instrumental_forest" => {
+            json!({"y_column_name":"y","w_column_name":"w","z_column_name":"z"})
+        }
         "grf_lm_forest" => json!({"y_column_names":["y0"],"w_column_names":["w0"]}),
-        "grf_ll_regression_forest" => json!({"y_column_name":"y","ll_split_lambda":0.1,"ll_split_weight_penalty":false,"ll_split_variables":[]}),
-        "grf_boosted_regression_forest" => json!({"y_column_name":"y","boost_trees_tune":1,"boost_error_reduction":0.0}),
+        "grf_ll_regression_forest" => {
+            json!({"y_column_name":"y","ll_split_lambda":0.1,"ll_split_weight_penalty":false,"ll_split_variables":[]})
+        }
+        "grf_boosted_regression_forest" => {
+            json!({"y_column_name":"y","boost_trees_tune":1,"boost_error_reduction":0.0})
+        }
         "grf_multi_arm_causal_forest" => json!({"y_column_names":["y0"],"w_column_name":"w"}),
-        "grf_causal_survival_forest" => json!({"time_column_name":"time","w_column_name":"w","censor_column_name":"censor","target":0,"horizon":1.0}),
+        "grf_causal_survival_forest" => {
+            json!({"time_column_name":"time","w_column_name":"w","censor_column_name":"censor","target":0,"horizon":1.0})
+        }
         // Prediction + causal analysis
         "grf_predict_forest" => json!({}),
         "grf_average_treatment_effect" => json!({"target_sample":"all","method":"AIPW"}),

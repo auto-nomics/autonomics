@@ -98,8 +98,16 @@ pub fn rescale_betahat(
                 }
                 mean /= n as f64;
                 mean_z /= n as f64;
-                let norm = if norm_sq.abs() > 1e-30 { (norm_sq - n as f64 * mean * mean).sqrt() } else { 1.0 };
-                let norm_z = if norm_z_sq.abs() > 1e-30 { (norm_z_sq - n as f64 * mean_z * mean_z).sqrt() } else { 1.0 };
+                let norm = if norm_sq.abs() > 1e-30 {
+                    (norm_sq - n as f64 * mean * mean).sqrt()
+                } else {
+                    1.0
+                };
+                let norm_z = if norm_z_sq.abs() > 1e-30 {
+                    (norm_z_sq - n as f64 * mean_z * mean_z).sqrt()
+                } else {
+                    1.0
+                };
 
                 result[offset] /= (factor * norm);
                 result[offset + 1] /= (factor * norm_z);
@@ -153,7 +161,8 @@ pub fn rescale_betahat(
                 };
                 for i in 0..size {
                     result[offset + size + i] /= (factor * norm);
-                    result[offset + i] = result[offset + i] / factor1 - mean * result[offset + size + i];
+                    result[offset + i] =
+                        result[offset + i] / factor1 - mean * result[offset + size + i];
                 }
                 offset += 2 * size;
             }
@@ -198,7 +207,11 @@ pub fn initialize_betahat(
     let new_sizes = new_active.group_sizes(_levels);
     let total_new: usize = new_sizes.iter().sum();
     let mut beta = vec![0.0; total_new + 1];
-    beta[0] = if !old_betahat.is_empty() { old_betahat[0] } else { 0.0 };
+    beta[0] = if !old_betahat.is_empty() {
+        old_betahat[0]
+    } else {
+        0.0
+    };
 
     let mut new_offset = 1; // skip intercept
     let mut new_group_idx = 0usize;
@@ -213,11 +226,31 @@ pub fn initialize_betahat(
         let n_type = old_nv[group_type];
         for g in 0..n_type {
             let indices: Vec<usize> = match group_type {
-                0 => old_active.cat.as_ref().map(|v| vec![v[g][0]]).unwrap_or_default(),
-                1 => old_active.cont.as_ref().map(|v| vec![v[g][0]]).unwrap_or_default(),
-                2 => old_active.catcat.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
-                3 => old_active.contcont.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
-                4 => old_active.catcont.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
+                0 => old_active
+                    .cat
+                    .as_ref()
+                    .map(|v| vec![v[g][0]])
+                    .unwrap_or_default(),
+                1 => old_active
+                    .cont
+                    .as_ref()
+                    .map(|v| vec![v[g][0]])
+                    .unwrap_or_default(),
+                2 => old_active
+                    .catcat
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
+                3 => old_active
+                    .contcont
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
+                4 => old_active
+                    .catcont
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
                 _ => unreachable!(),
             };
             old_groups.push((group_type, indices));
@@ -231,11 +264,31 @@ pub fn initialize_betahat(
         let n_type = new_nv[group_type];
         for g in 0..n_type {
             let new_indices: Vec<usize> = match group_type {
-                0 => new_active.cat.as_ref().map(|v| vec![v[g][0]]).unwrap_or_default(),
-                1 => new_active.cont.as_ref().map(|v| vec![v[g][0]]).unwrap_or_default(),
-                2 => new_active.catcat.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
-                3 => new_active.contcont.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
-                4 => new_active.catcont.as_ref().map(|v| v[g].to_vec()).unwrap_or_default(),
+                0 => new_active
+                    .cat
+                    .as_ref()
+                    .map(|v| vec![v[g][0]])
+                    .unwrap_or_default(),
+                1 => new_active
+                    .cont
+                    .as_ref()
+                    .map(|v| vec![v[g][0]])
+                    .unwrap_or_default(),
+                2 => new_active
+                    .catcat
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
+                3 => new_active
+                    .contcont
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
+                4 => new_active
+                    .catcont
+                    .as_ref()
+                    .map(|v| v[g].to_vec())
+                    .unwrap_or_default(),
                 _ => unreachable!(),
             };
             let size = new_sizes[new_group_idx];
@@ -277,11 +330,7 @@ pub fn initialize_betahat(
 /// Predict using rescaled coefficients (in original variable space).
 ///
 /// Port of `x_times_rescaled_beta()` in `c_routines.c`.
-pub fn predict_one(
-    active: &ActiveSet,
-    betahat: &[f64],
-    data: &GlinternetData,
-) -> Vec<f64> {
+pub fn predict_one(active: &ActiveSet, betahat: &[f64], data: &GlinternetData) -> Vec<f64> {
     let n = data.n;
     let mut result = vec![betahat[0]; n];
     let mut offset = 1usize;
@@ -369,7 +418,8 @@ pub fn predict_one(
             let wptr = &data.z[(ci - 1) * n..ci * n];
             let zptr = &data.z[(cj - 1) * n..cj * n];
             for i in 0..n {
-                result[i] += wptr[i] * betahat[offset] + zptr[i] * betahat[offset + 1]
+                result[i] += wptr[i] * betahat[offset]
+                    + zptr[i] * betahat[offset + 1]
                     + wptr[i] * zptr[i] * betahat[offset + 2];
             }
             offset += 3;

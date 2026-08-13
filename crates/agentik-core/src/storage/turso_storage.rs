@@ -57,7 +57,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
-use turso::{Value, params_from_iter, IntoParams};
+use turso::{IntoParams, Value, params_from_iter};
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
@@ -85,7 +85,11 @@ impl LockedConn {
         self.0.lock().await.execute(sql, params).await
     }
 
-    async fn query(&self, sql: impl AsRef<str>, params: impl IntoParams) -> turso::Result<turso::Rows> {
+    async fn query(
+        &self,
+        sql: impl AsRef<str>,
+        params: impl IntoParams,
+    ) -> turso::Result<turso::Rows> {
         self.0.lock().await.query(sql, params).await
     }
 
@@ -1297,8 +1301,8 @@ mod tests {
     use super::*;
     use crate::ProfileOverrides;
     use crate::lifecycle::AgentLifecycleStatus;
-    use crate::session::SessionState;
     use crate::message_ext::AgentMessageExt;
+    use crate::session::SessionState;
 
     fn now_ms() -> i64 {
         chrono::Utc::now().timestamp_millis()

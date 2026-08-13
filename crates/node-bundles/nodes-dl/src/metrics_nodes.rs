@@ -34,20 +34,34 @@ pub struct SurvivalMetricsSpec {
     pub seed: u64,
 }
 
-fn d_metrics() -> Vec<String> { vec!["cindex".into()] }
-fn d_time_points() -> Vec<f64> { vec![5.0, 10.0] }
-fn d_n_boot() -> usize { 0 }
-fn d_seed() -> u64 { 42 }
+fn d_metrics() -> Vec<String> {
+    vec!["cindex".into()]
+}
+fn d_time_points() -> Vec<f64> {
+    vec![5.0, 10.0]
+}
+fn d_n_boot() -> usize {
+    0
+}
+fn d_seed() -> u64 {
+    42
+}
 
 pub struct SurvivalMetricsFactory;
 impl NodeFactory for SurvivalMetricsFactory {
-    fn kind(&self) -> &'static str { NODE }
-    fn desc(&self) -> &'static str { "Survival model evaluation metrics." }
+    fn kind(&self) -> &'static str {
+        NODE
+    }
+    fn desc(&self) -> &'static str {
+        "Survival model evaluation metrics."
+    }
     fn doc(&self) -> &'static str {
         "dl_survival_metrics: computes Harrell's C-index, time-dependent AUC, and Brier score \
         for survival model predictions. Supports bootstrap confidence intervals."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(SurvivalMetricsSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(SurvivalMetricsSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new().add_input_port(None).add_output_port(None)
     }
@@ -57,7 +71,10 @@ impl NodeFactory for SurvivalMetricsFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: SurvivalMetricsSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(SurvivalMetricsNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(SurvivalMetricsNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -69,10 +86,18 @@ struct SurvivalMetricsNode {
 
 #[async_trait]
 impl DagNode for SurvivalMetricsNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { NODE }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        NODE
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -106,7 +131,8 @@ impl DagNode for SurvivalMetricsNode {
                 "brier" => {
                     // For Brier, convert risk scores to survival probabilities.
                     // S(t|x) ≈ exp(-exp(risk_score)) as a rough approximation.
-                    let probs: Vec<f64> = scores.iter()
+                    let probs: Vec<f64> = scores
+                        .iter()
                         .map(|&r| (-r.exp()).max(-50.0).exp())
                         .collect();
                     for &t in &self.spec.time_points {
@@ -130,7 +156,8 @@ impl DagNode for SurvivalMetricsNode {
                 Arc::new(StringArray::from(metric_names)),
                 Arc::new(Float64Array::from(metric_values)),
             ],
-        ).map_err(|e| common::err(NODE, format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err(NODE, format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, NODE)
     }
@@ -152,18 +179,28 @@ pub struct CalibrationSpec {
     pub methods: Vec<String>,
 }
 
-fn d_n_bins() -> usize { 10 }
-fn d_cal_methods() -> Vec<String> { vec!["brier".into(), "calibration_curve".into()] }
+fn d_n_bins() -> usize {
+    10
+}
+fn d_cal_methods() -> Vec<String> {
+    vec!["brier".into(), "calibration_curve".into()]
+}
 
 pub struct CalibrationFactory;
 impl NodeFactory for CalibrationFactory {
-    fn kind(&self) -> &'static str { NODE_CAL }
-    fn desc(&self) -> &'static str { "Model calibration assessment." }
+    fn kind(&self) -> &'static str {
+        NODE_CAL
+    }
+    fn desc(&self) -> &'static str {
+        "Model calibration assessment."
+    }
     fn doc(&self) -> &'static str {
         "dl_calibration: evaluates prediction calibration via Brier score, Hosmer-Lemeshow test, \
         and calibration curve. Outputs a summary table and decile calibration data."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(CalibrationSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(CalibrationSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new().add_input_port(None).add_output_port(None)
     }
@@ -173,7 +210,10 @@ impl NodeFactory for CalibrationFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: CalibrationSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(CalibrationNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(CalibrationNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -185,10 +225,18 @@ struct CalibrationNode {
 
 #[async_trait]
 impl DagNode for CalibrationNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { NODE_CAL }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        NODE_CAL
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -207,16 +255,19 @@ impl DagNode for CalibrationNode {
         for method in &self.spec.methods {
             match method.as_str() {
                 "brier" => {
-                    let bs: f64 = (0..n)
-                        .map(|i| (scores[i] - labels[i]).powi(2))
-                        .sum::<f64>() / n as f64;
+                    let bs: f64 =
+                        (0..n).map(|i| (scores[i] - labels[i]).powi(2)).sum::<f64>() / n as f64;
                     names.push("brier_score".into());
                     values.push(bs);
                 }
                 "hl_test" | "hosmer_lemeshow" => {
                     // Hosmer-Lemeshow chi-squared statistic.
                     let mut sorted_idx: Vec<usize> = (0..n).collect();
-                    sorted_idx.sort_by(|&a, &b| scores[a].partial_cmp(&scores[b]).unwrap_or(std::cmp::Ordering::Equal));
+                    sorted_idx.sort_by(|&a, &b| {
+                        scores[a]
+                            .partial_cmp(&scores[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
 
                     let group_size = (n + self.spec.n_bins - 1) / self.spec.n_bins;
                     let mut chi_sq = 0.0f64;
@@ -224,7 +275,9 @@ impl DagNode for CalibrationNode {
                     for g in 0..self.spec.n_bins {
                         let start = g * group_size;
                         let end = ((g + 1) * group_size).min(n);
-                        if start >= end { break; }
+                        if start >= end {
+                            break;
+                        }
                         let group: Vec<usize> = (start..end).map(|i| sorted_idx[i]).collect();
                         let gn = group.len() as f64;
                         let mean_pred: f64 = group.iter().map(|&i| scores[i]).sum::<f64>() / gn;
@@ -251,13 +304,19 @@ impl DagNode for CalibrationNode {
                     // Will be output as separate rows in a second port.
                     // For now, just compute mean absolute calibration error.
                     let mut sorted_idx: Vec<usize> = (0..n).collect();
-                    sorted_idx.sort_by(|&a, &b| scores[a].partial_cmp(&scores[b]).unwrap_or(std::cmp::Ordering::Equal));
+                    sorted_idx.sort_by(|&a, &b| {
+                        scores[a]
+                            .partial_cmp(&scores[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
                     let group_size = (n + self.spec.n_bins - 1) / self.spec.n_bins;
                     let mut cal_error = 0.0;
                     for g in 0..self.spec.n_bins {
                         let start = g * group_size;
                         let end = ((g + 1) * group_size).min(n);
-                        if start >= end { break; }
+                        if start >= end {
+                            break;
+                        }
                         let group: Vec<usize> = (start..end).map(|i| sorted_idx[i]).collect();
                         let gn = group.len() as f64;
                         let mean_pred: f64 = group.iter().map(|&i| scores[i]).sum::<f64>() / gn;
@@ -280,7 +339,8 @@ impl DagNode for CalibrationNode {
                 Arc::new(StringArray::from(names)),
                 Arc::new(Float64Array::from(values)),
             ],
-        ).map_err(|e| common::err(NODE_CAL, format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err(NODE_CAL, format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, NODE_CAL)
     }
@@ -301,17 +361,25 @@ pub struct NriSpec {
     pub thresholds: Vec<f64>,
 }
 
-fn d_thresholds() -> Vec<f64> { vec![0.05, 0.10, 0.20] }
+fn d_thresholds() -> Vec<f64> {
+    vec![0.05, 0.10, 0.20]
+}
 
 pub struct NriFactory;
 impl NodeFactory for NriFactory {
-    fn kind(&self) -> &'static str { NODE_NRI }
-    fn desc(&self) -> &'static str { "Net Reclassification Index (NRI) and IDI." }
+    fn kind(&self) -> &'static str {
+        NODE_NRI
+    }
+    fn desc(&self) -> &'static str {
+        "Net Reclassification Index (NRI) and IDI."
+    }
     fn doc(&self) -> &'static str {
         "dl_nri: computes categorical and continuous NRI (Net Reclassification Index) and \
         IDI (Integrated Discrimination Improvement) for comparing two prediction models."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(NriSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(NriSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new().add_input_port(None).add_output_port(None)
     }
@@ -321,7 +389,10 @@ impl NodeFactory for NriFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: NriSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(NriNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(NriNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -333,10 +404,18 @@ struct NriNode {
 
 #[async_trait]
 impl DagNode for NriNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { NODE_NRI }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        NODE_NRI
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -354,7 +433,9 @@ impl DagNode for NriNode {
         let categorize = |score: f64, thresholds: &[f64]| -> usize {
             let mut cat = 0;
             for &t in thresholds {
-                if score >= t { cat += 1; }
+                if score >= t {
+                    cat += 1;
+                }
             }
             cat
         };
@@ -373,24 +454,56 @@ impl DagNode for NriNode {
 
             if is_event {
                 n_events += 1.0;
-                if c2 > c1 { up_events += 1.0; }
-                if c2 < c1 { down_events += 1.0; }
+                if c2 > c1 {
+                    up_events += 1.0;
+                }
+                if c2 < c1 {
+                    down_events += 1.0;
+                }
             } else {
                 n_nonevents += 1.0;
-                if c2 > c1 { up_nonevents += 1.0; }
-                if c2 < c1 { down_nonevents += 1.0; }
+                if c2 > c1 {
+                    up_nonevents += 1.0;
+                }
+                if c2 < c1 {
+                    down_nonevents += 1.0;
+                }
             }
         }
 
-        let nri_event = if n_events > 0.0 { (up_events - down_events) / n_events } else { 0.0 };
-        let nri_nonevent = if n_nonevents > 0.0 { (down_nonevents - up_nonevents) / n_nonevents } else { 0.0 };
+        let nri_event = if n_events > 0.0 {
+            (up_events - down_events) / n_events
+        } else {
+            0.0
+        };
+        let nri_nonevent = if n_nonevents > 0.0 {
+            (down_nonevents - up_nonevents) / n_nonevents
+        } else {
+            0.0
+        };
         let nri_total = nri_event + nri_nonevent;
 
         // IDI.
-        let mean_s1_events: f64 = (0..n).filter(|&i| labels[i] > 0.5).map(|i| s1[i]).sum::<f64>() / n_events.max(1.0_f64);
-        let mean_s1_nonevents: f64 = (0..n).filter(|&i| labels[i] <= 0.5).map(|i| s1[i]).sum::<f64>() / n_nonevents.max(1.0_f64);
-        let mean_s2_events: f64 = (0..n).filter(|&i| labels[i] > 0.5).map(|i| s2[i]).sum::<f64>() / n_events.max(1.0_f64);
-        let mean_s2_nonevents: f64 = (0..n).filter(|&i| labels[i] <= 0.5).map(|i| s2[i]).sum::<f64>() / n_nonevents.max(1.0_f64);
+        let mean_s1_events: f64 = (0..n)
+            .filter(|&i| labels[i] > 0.5)
+            .map(|i| s1[i])
+            .sum::<f64>()
+            / n_events.max(1.0_f64);
+        let mean_s1_nonevents: f64 = (0..n)
+            .filter(|&i| labels[i] <= 0.5)
+            .map(|i| s1[i])
+            .sum::<f64>()
+            / n_nonevents.max(1.0_f64);
+        let mean_s2_events: f64 = (0..n)
+            .filter(|&i| labels[i] > 0.5)
+            .map(|i| s2[i])
+            .sum::<f64>()
+            / n_events.max(1.0_f64);
+        let mean_s2_nonevents: f64 = (0..n)
+            .filter(|&i| labels[i] <= 0.5)
+            .map(|i| s2[i])
+            .sum::<f64>()
+            / n_nonevents.max(1.0_f64);
         let idi = (mean_s2_events - mean_s2_nonevents) - (mean_s1_events - mean_s1_nonevents);
 
         let batch = RecordBatch::try_new(
@@ -400,13 +513,20 @@ impl DagNode for NriNode {
             ])),
             vec![
                 Arc::new(StringArray::from(vec![
-                    "nri_event", "nri_nonevent", "nri_total", "idi",
+                    "nri_event",
+                    "nri_nonevent",
+                    "nri_total",
+                    "idi",
                 ])),
                 Arc::new(Float64Array::from(vec![
-                    nri_event, nri_nonevent, nri_total, idi,
+                    nri_event,
+                    nri_nonevent,
+                    nri_total,
+                    idi,
                 ])),
             ],
-        ).map_err(|e| common::err(NODE_NRI, format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err(NODE_NRI, format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, NODE_NRI)
     }

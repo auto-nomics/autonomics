@@ -37,10 +37,7 @@ impl WritingShared {
 
     /// Open with an existing `BibShared` for citation resolution and
     /// auto-detect the best LaTeX engine.
-    pub async fn open_with(
-        db_path: impl AsRef<str>,
-        bib: Option<Arc<BibShared>>,
-    ) -> Result<Self> {
+    pub async fn open_with(db_path: impl AsRef<str>, bib: Option<Arc<BibShared>>) -> Result<Self> {
         let store = WritingStore::open(db_path).await?;
 
         // Auto-detect engine: prefer XeLaTeX (CJK-capable), fallback to Null.

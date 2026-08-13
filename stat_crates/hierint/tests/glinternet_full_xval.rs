@@ -56,12 +56,12 @@ fn gauss_objective_values_match() {
     let fit = run_fit(&fx);
 
     for i in 0..fit.lambda.len() {
-        let re = (fit.obj_value[i] - fx.obj_value[i]).abs()
-            / fx.obj_value[i].abs().max(1e-10);
+        let re = (fit.obj_value[i] - fx.obj_value[i]).abs() / fx.obj_value[i].abs().max(1e-10);
         assert!(
             re < 0.05,
             "obj[{i}]: Rust={:.6}, R={:.6}, re={re:.4}",
-            fit.obj_value[i], fx.obj_value[i]
+            fit.obj_value[i],
+            fx.obj_value[i]
         );
     }
 }
@@ -77,7 +77,9 @@ fn gauss_monotone_active_set_growth() {
         assert!(
             counts[i] >= counts[i - 1],
             "active set should not shrink: [{i}] {} < [{}] {}",
-            counts[i], i - 1, counts[i - 1]
+            counts[i],
+            i - 1,
+            counts[i - 1]
         );
     }
 }
@@ -87,13 +89,25 @@ fn gauss_monotone_active_set_growth() {
 fn gauss_prediction_at_max_is_mean_y() {
     let fx = load();
     let fit = run_fit(&fx);
-    let preds = glinternet::predict(&fit, &[], &fx.x, &fx.num_levels.iter().map(|&v| v as usize).collect::<Vec<_>>(), fx.n);
+    let preds = glinternet::predict(
+        &fit,
+        &[],
+        &fx.x,
+        &fx.num_levels
+            .iter()
+            .map(|&v| v as usize)
+            .collect::<Vec<_>>(),
+        fx.n,
+    );
 
     let mean_y = fx.y.iter().sum::<f64>() / fx.n as f64;
     let pred0 = &preds[0];
     for &p in pred0 {
         let re = (p - mean_y).abs() / mean_y.abs().max(1e-10);
-        assert!(re < 1e-4, "prediction at lambda_max should be mean(Y)={mean_y:.6}, got {p:.6}");
+        assert!(
+            re < 1e-4,
+            "prediction at lambda_max should be mean(Y)={mean_y:.6}, got {p:.6}"
+        );
     }
 }
 
@@ -106,14 +120,21 @@ fn gauss_discovers_interaction_at_small_lambda() {
     // The planted interaction is x3*x4 → contcont pair (3,4)
     let last = fit.active_set.last().unwrap();
     if let Some(ref cc) = last.contcont {
-        let found = cc.iter().any(|&[a, b]| {
-            (a == 3 && b == 4) || (a == 4 && b == 3)
-        });
-        assert!(found, "expected contcont (3,4) at smallest lambda, got {:?}", cc);
+        let found = cc
+            .iter()
+            .any(|&[a, b]| (a == 3 && b == 4) || (a == 4 && b == 3));
+        assert!(
+            found,
+            "expected contcont (3,4) at smallest lambda, got {:?}",
+            cc
+        );
     } else {
         // Even if not found, check main effects are present
         let n_groups = last.num_groups();
-        assert!(n_groups >= 2, "expected at least 2 main effects at smallest lambda");
+        assert!(
+            n_groups >= 2,
+            "expected at least 2 main effects at smallest lambda"
+        );
     }
 }
 
@@ -133,9 +154,17 @@ fn gauss_strong_hierarchy_holds() {
         if let Some(ref cc) = active.contcont {
             for &[a, b] in cc {
                 total_interactions += 1;
-                let has_a = active.cont.as_ref().map_or(false, |v| v.iter().any(|&[i]| i == a));
-                let has_b = active.cont.as_ref().map_or(false, |v| v.iter().any(|&[i]| i == b));
-                if !has_a || !has_b { total_violations += 1; }
+                let has_a = active
+                    .cont
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[i]| i == a));
+                let has_b = active
+                    .cont
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[i]| i == b));
+                if !has_a || !has_b {
+                    total_violations += 1;
+                }
             }
         }
     }
@@ -146,7 +175,8 @@ fn gauss_strong_hierarchy_holds() {
         // Should be close to R's rate (allow ±20% difference)
         assert!(
             rate < 1.0,
-            "hierarchy violation rate {} should be < 100%", rate
+            "hierarchy violation rate {} should be < 100%",
+            rate
         );
     }
 }
@@ -176,6 +206,10 @@ fn gauss_fitted_values_first_lambda() {
     let r_fitted = &fx.fitted[..fx.n];
     for i in 0..fx.n {
         let re = (r_fitted[i] - mean_y).abs() / mean_y.abs().max(1e-10);
-        assert!(re < 1e-4, "fitted[{i}] at lambda_max: R={:.6}, expected mean={mean_y:.6}", r_fitted[i]);
+        assert!(
+            re < 1e-4,
+            "fitted[{i}] at lambda_max: R={:.6}, expected mean={mean_y:.6}",
+            r_fitted[i]
+        );
     }
 }

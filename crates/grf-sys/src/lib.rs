@@ -160,7 +160,10 @@ pub struct Forest {
 impl Forest {
     /// Take ownership of a raw FFI pointer. Returns `None` if `ptr` is null.
     pub unsafe fn from_raw(ptr: *mut ffi::grf_forest_t) -> Option<Self> {
-        NonNull::new(ptr).map(|p| Self { ptr: p, _not_send: PhantomData })
+        NonNull::new(ptr).map(|p| Self {
+            ptr: p,
+            _not_send: PhantomData,
+        })
     }
 
     /// Borrow the raw C handle. Used by grf to call predict / serialize /
@@ -186,11 +189,7 @@ impl Forest {
         let mut total_len = 0usize;
         let mut pred_length = 0usize;
         let p = unsafe {
-            ffi::grf_forest_oob_predictions(
-                self.ptr.as_ptr(),
-                &mut total_len,
-                &mut pred_length,
-            )
+            ffi::grf_forest_oob_predictions(self.ptr.as_ptr(), &mut total_len, &mut pred_length)
         };
         if p.is_null() || total_len == 0 || pred_length == 0 {
             return None;
@@ -204,8 +203,12 @@ impl Forest {
     /// Returns a dense column-major buffer of shape (n_train × n_test).
     pub fn compute_weights(
         &self,
-        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
-        test_data: &[f64], n_test_rows: usize, n_test_cols: usize,
+        train_data: &[f64],
+        n_train_rows: usize,
+        n_train_cols: usize,
+        test_data: &[f64],
+        n_test_rows: usize,
+        n_test_cols: usize,
         num_threads: u32,
     ) -> Option<Vec<f64>> {
         let mut n_t = 0usize;
@@ -213,9 +216,14 @@ impl Forest {
         let p = unsafe {
             ffi::grf_compute_weights(
                 self.ptr.as_ptr(),
-                train_data.as_ptr(), n_train_rows, n_train_cols,
-                test_data.as_ptr(), n_test_rows, n_test_cols,
-                &mut n_t, &mut n_s,
+                train_data.as_ptr(),
+                n_train_rows,
+                n_train_cols,
+                test_data.as_ptr(),
+                n_test_rows,
+                n_test_cols,
+                &mut n_t,
+                &mut n_s,
                 num_threads,
             )
         };
@@ -224,21 +232,27 @@ impl Forest {
         }
         let slice = unsafe { std::slice::from_raw_parts(p, n_t * n_s) };
         let v = slice.to_vec();
-        unsafe { libc::free(p as *mut libc::c_void); }
+        unsafe {
+            libc::free(p as *mut libc::c_void);
+        }
         Some(v)
     }
 
     /// OOB forest weights: each row's weights over the OTHER train rows.
     pub fn compute_weights_oob(
         &self,
-        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        train_data: &[f64],
+        n_train_rows: usize,
+        n_train_cols: usize,
         num_threads: u32,
     ) -> Option<Vec<f64>> {
         let mut n_t = 0usize;
         let p = unsafe {
             ffi::grf_compute_weights_oob(
                 self.ptr.as_ptr(),
-                train_data.as_ptr(), n_train_rows, n_train_cols,
+                train_data.as_ptr(),
+                n_train_rows,
+                n_train_cols,
                 &mut n_t,
                 num_threads,
             )
@@ -248,15 +262,15 @@ impl Forest {
         }
         let slice = unsafe { std::slice::from_raw_parts(p, n_t * n_t) };
         let v = slice.to_vec();
-        unsafe { libc::free(p as *mut libc::c_void); }
+        unsafe {
+            libc::free(p as *mut libc::c_void);
+        }
         Some(v)
     }
 
     /// Compute split-frequency matrix (depth × n_features).
     pub fn compute_split_frequencies(&self, max_depth: usize) -> Option<Vec<Vec<u64>>> {
-        let p = unsafe {
-            ffi::grf_compute_split_frequencies(self.ptr.as_ptr(), max_depth)
-        };
+        let p = unsafe { ffi::grf_compute_split_frequencies(self.ptr.as_ptr(), max_depth) };
         if p.is_null() {
             return None;
         }
@@ -284,7 +298,9 @@ impl Forest {
         }
         let slice = unsafe { std::slice::from_raw_parts(p, len) };
         let bytes = slice.to_vec();
-        unsafe { libc::free(p as *mut libc::c_void); }
+        unsafe {
+            libc::free(p as *mut libc::c_void);
+        }
         Ok(bytes)
     }
 
@@ -302,7 +318,9 @@ impl Forest {
             return None;
         }
         let bytes = unsafe { std::slice::from_raw_parts(p, len) }.to_vec();
-        unsafe { libc::free(p as *mut libc::c_void); }
+        unsafe {
+            libc::free(p as *mut libc::c_void);
+        }
         Some(bytes)
     }
 
@@ -312,8 +330,10 @@ impl Forest {
         if forests.is_empty() {
             return None;
         }
-        let ptrs: Vec<*const ffi::grf_forest_t> =
-            forests.iter().map(|f| f.ptr.as_ptr() as *const ffi::grf_forest_t).collect();
+        let ptrs: Vec<*const ffi::grf_forest_t> = forests
+            .iter()
+            .map(|f| f.ptr.as_ptr() as *const ffi::grf_forest_t)
+            .collect();
         let ptr = unsafe { ffi::grf_forest_merge(ptrs.as_ptr(), forests.len()) };
         unsafe { Self::from_raw(ptr) }
     }
@@ -368,14 +388,18 @@ impl Predictions {
 
     pub fn debiased_error(&self) -> Option<Vec<f64>> {
         let p = unsafe { ffi::grf_predictions_debiased_error(self.ptr.as_ptr()) };
-        if p.is_null() { return None; }
+        if p.is_null() {
+            return None;
+        }
         let n = self.num_samples();
         Some(unsafe { std::slice::from_raw_parts(p, n) }.to_vec())
     }
 
     pub fn excess_error(&self) -> Option<Vec<f64>> {
         let p = unsafe { ffi::grf_predictions_excess_error(self.ptr.as_ptr()) };
-        if p.is_null() { return None; }
+        if p.is_null() {
+            return None;
+        }
         let n = self.num_samples();
         Some(unsafe { std::slice::from_raw_parts(p, n) }.to_vec())
     }

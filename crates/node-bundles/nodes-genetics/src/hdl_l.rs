@@ -397,12 +397,9 @@ impl DagNode for HdlLNode {
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
         // ---- Resolve the per-chromosome PLINK reference prefix ----
-        let ref_template = nodes_ldsc::ldsc_common::resolve_ref_prefix(
-            &node_ctx.resources,
-            REF_PREFIX_TEMPLATE,
-        );
-        let ld_ref_prefix =
-            PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
+        let ref_template =
+            nodes_ldsc::ldsc_common::resolve_ref_prefix(&node_ctx.resources, REF_PREFIX_TEMPLATE);
+        let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
 
         // ---- Filter reference SNPs to the region [start, stop] ----
         // Load the .bim to get SNP ids + positions, keep only those within the
@@ -538,7 +535,9 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
             global_sem: None,
         }
     }

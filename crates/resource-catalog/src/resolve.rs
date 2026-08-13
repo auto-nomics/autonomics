@@ -21,13 +21,20 @@ impl IcebergIdent {
     /// names are composed into SQL, so quoting and catalog-name handling live
     /// in one spot.
     pub fn sql(&self) -> String {
-        format!("\"{}\".\"{}\".\"{}\"", self.catalog, self.schema, self.table)
+        format!(
+            "\"{}\".\"{}\".\"{}\"",
+            self.catalog, self.schema, self.table
+        )
     }
 
     /// The three components as a tuple, for catalog APIs that take
     /// `(catalog, namespace, table)`.
     pub fn ident(&self) -> (String, String, String) {
-        (self.catalog.clone(), self.schema.clone(), self.table.clone())
+        (
+            self.catalog.clone(),
+            self.schema.clone(),
+            self.table.clone(),
+        )
     }
 
     /// Return a new ident with a suffix appended to the table name, useful
@@ -118,7 +125,7 @@ impl ResourceCatalog {
                     name: name.to_string(),
                     expected: "file_path",
                     found: kind_str(other),
-                })
+                });
             }
         };
         let mut out = raw.clone();

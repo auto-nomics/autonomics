@@ -383,7 +383,8 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_AUTHOR_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), "/author/search", &params).await
+        self.get_json(&graph_base(), "/author/search", &params)
+            .await
     }
 
     /// Get details about a single author.

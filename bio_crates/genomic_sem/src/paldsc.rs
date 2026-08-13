@@ -43,11 +43,7 @@ pub struct PaLdscResult {
 ///
 /// Compares eigenvalues of the observed S matrix against those from
 /// random matrices simulated under the LDSC sampling distribution.
-pub fn pa_ldsc(
-    s: &Mat<f64>,
-    v: &Mat<f64>,
-    config: &PaLdscConfig,
-) -> Result<PaLdscResult> {
+pub fn pa_ldsc(s: &Mat<f64>, v: &Mat<f64>, config: &PaLdscConfig) -> Result<PaLdscResult> {
     let k = s.nrows();
     let mut rng = ChaCha8Rng::seed_from_u64(1234);
 
@@ -111,9 +107,15 @@ mod tests {
     #[test]
     fn test_pa_ldsc_basic() {
         let mut s = Mat::zeros(3, 3);
-        s[(0, 0)] = 0.5; s[(1, 1)] = 0.3; s[(2, 2)] = 0.1;
-        s[(0, 1)] = 0.2; s[(0, 2)] = 0.05; s[(1, 2)] = 0.02;
-        s[(1, 0)] = 0.2; s[(2, 0)] = 0.05; s[(2, 1)] = 0.02;
+        s[(0, 0)] = 0.5;
+        s[(1, 1)] = 0.3;
+        s[(2, 2)] = 0.1;
+        s[(0, 1)] = 0.2;
+        s[(0, 2)] = 0.05;
+        s[(1, 2)] = 0.02;
+        s[(1, 0)] = 0.2;
+        s[(2, 0)] = 0.05;
+        s[(2, 1)] = 0.02;
 
         let z = 6;
         let v = Mat::<f64>::identity(z, z) * 0.001;

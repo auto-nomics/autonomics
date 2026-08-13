@@ -40,8 +40,11 @@ fn ks_statistic(y_treat: &[f64], y_ctrl: &[f64]) -> f64 {
     let mut ft: f64 = 0.0;
     let mut fc: f64 = 0.0;
     for (_, is_treat) in &all {
-        if *is_treat { ft += 1.0 / nt as f64; }
-        else { fc += 1.0 / nc as f64; }
+        if *is_treat {
+            ft += 1.0 / nt as f64;
+        } else {
+            fc += 1.0 / nc as f64;
+        }
         max_d = max_d.max((ft - fc).abs());
     }
     max_d
@@ -61,13 +64,22 @@ fn ranksum_statistic(y_treat: &[f64], y_ctrl: &[f64]) -> f64 {
     let mut i = 0;
     while i < n {
         let mut j = i + 1;
-        while j < n && all[j].0 == all[i].0 { j += 1; }
+        while j < n && all[j].0 == all[i].0 {
+            j += 1;
+        }
         let avg_rank = (i + j + 1) as f64 / 2.0;
-        for k in i..j { ranks[k] = avg_rank; }
+        for k in i..j {
+            ranks[k] = avg_rank;
+        }
         i = j;
     }
 
-    let rank_sum_t: f64 = all.iter().zip(&ranks).filter(|(a, _)| a.1).map(|(_, r)| *r).sum();
+    let rank_sum_t: f64 = all
+        .iter()
+        .zip(&ranks)
+        .filter(|(a, _)| a.1)
+        .map(|(_, r)| *r)
+        .sum();
     let expected = nt as f64 * (n as f64 + 1.0) / 2.0;
     let variance = nt as f64 * nc as f64 * (n as f64 + 1.0) / 12.0;
     if variance > 0.0 {
@@ -107,8 +119,11 @@ pub struct RdRandInfConfig {
 impl Default for RdRandInfConfig {
     fn default() -> Self {
         Self {
-            y: vec![], r: vec![], cutoff: 0.0,
-            wl: f64::NEG_INFINITY, wr: f64::INFINITY,
+            y: vec![],
+            r: vec![],
+            cutoff: 0.0,
+            wl: f64::NEG_INFINITY,
+            wr: f64::INFINITY,
             statistic: "diffmeans".into(),
             nulltau: 0.0,
             reps: 1000,
@@ -150,14 +165,28 @@ pub fn rdrandinf(cfg: &RdRandInfConfig) -> Result<RdRandInfResult, RdLocRandErro
 
     let nw = yw.len();
     if nw < 4 {
-        return Err(RdLocRandError::Msg("Too few observations in window.".into()));
+        return Err(RdLocRandError::Msg(
+            "Too few observations in window.".into(),
+        ));
     }
 
-    let y_treat: Vec<f64> = yw.iter().zip(&treat).filter(|(_, t)| **t).map(|(y, _)| *y).collect();
-    let y_ctrl: Vec<f64> = yw.iter().zip(&treat).filter(|(_, t)| !**t).map(|(y, _)| *y).collect();
+    let y_treat: Vec<f64> = yw
+        .iter()
+        .zip(&treat)
+        .filter(|(_, t)| **t)
+        .map(|(y, _)| *y)
+        .collect();
+    let y_ctrl: Vec<f64> = yw
+        .iter()
+        .zip(&treat)
+        .filter(|(_, t)| !**t)
+        .map(|(y, _)| *y)
+        .collect();
 
     if y_treat.is_empty() || y_ctrl.is_empty() {
-        return Err(RdLocRandError::Msg("No observations on one side of cutoff.".into()));
+        return Err(RdLocRandError::Msg(
+            "No observations on one side of cutoff.".into(),
+        ));
     }
 
     // Observed statistic
@@ -245,11 +274,16 @@ pub struct RdWinSelectConfig {
 impl Default for RdWinSelectConfig {
     fn default() -> Self {
         Self {
-            r: vec![], x: vec![],
+            r: vec![],
+            x: vec![],
             cutoff: 0.0,
-            obsmin: 10, wobs: 5, nwindows: 10,
+            obsmin: 10,
+            wobs: 5,
+            nwindows: 10,
             statistic: "diffmeans".into(),
-            reps: 1000, seed: 42, level: 0.15,
+            reps: 1000,
+            seed: 42,
+            level: 0.15,
         }
     }
 }
@@ -318,8 +352,12 @@ pub fn rdwinselect(cfg: &RdWinSelectConfig) -> Result<RdWinSelectResult, RdLocRa
     for (idx, &(wl, wr)) in windows.iter().enumerate() {
         // Select observations in window
         let mask: Vec<bool> = cfg.r.iter().map(|r| *r >= wl && *r <= wr).collect();
-        let nl: Vec<usize> = (0..cfg.r.len()).filter(|&i| mask[i] && cfg.r[i] < cutoff).collect();
-        let nr: Vec<usize> = (0..cfg.r.len()).filter(|&i| mask[i] && cfg.r[i] >= cutoff).collect();
+        let nl: Vec<usize> = (0..cfg.r.len())
+            .filter(|&i| mask[i] && cfg.r[i] < cutoff)
+            .collect();
+        let nr: Vec<usize> = (0..cfg.r.len())
+            .filter(|&i| mask[i] && cfg.r[i] >= cutoff)
+            .collect();
 
         let n_left = nl.len();
         let n_right = nr.len();
@@ -353,7 +391,9 @@ pub fn rdwinselect(cfg: &RdWinSelectConfig) -> Result<RdWinSelectResult, RdLocRa
                     let yt_p: Vec<f64> = (0..n_right).map(|k| all[perm[k]]).collect();
                     let yc_p: Vec<f64> = (n_right..n).map(|k| all[perm[k]]).collect();
                     let s = compute_statistic(&yt_p, &yc_p, &cfg.statistic);
-                    if s.abs() >= stat.abs() - 1e-15 { count += 1; }
+                    if s.abs() >= stat.abs() - 1e-15 {
+                        count += 1;
+                    }
                 }
                 let p = (count + 1) as f64 / (cfg.reps + 1) as f64;
                 min_pval = min_pval.min(p);
@@ -391,7 +431,9 @@ pub fn rdwinselect(cfg: &RdWinSelectConfig) -> Result<RdWinSelectResult, RdLocRa
         });
     }
 
-    let (rec_wl, rec_wr) = windows.get(recommended_idx).copied()
+    let (rec_wl, rec_wr) = windows
+        .get(recommended_idx)
+        .copied()
         .unwrap_or((cutoff - 1.0, cutoff + 1.0));
 
     Ok(RdWinSelectResult {
@@ -419,7 +461,14 @@ fn binom_test(n_l: usize, n_r: usize, p_null: f64) -> f64 {
 /// Given a sensitivity parameter Gamma, computes upper and lower bounds
 /// on the p-value under unknown treatment assignment probabilities
 /// bounded by Gamma.
-pub fn rdrbounds(obs_stat: f64, n_treat: usize, n_ctrl: usize, gamma: f64, reps: usize, seed: u64) -> (f64, f64) {
+pub fn rdrbounds(
+    obs_stat: f64,
+    n_treat: usize,
+    n_ctrl: usize,
+    gamma: f64,
+    reps: usize,
+    seed: u64,
+) -> (f64, f64) {
     let n = n_treat + n_ctrl;
     let normal = Normal::new(0.0, 1.0).unwrap();
 

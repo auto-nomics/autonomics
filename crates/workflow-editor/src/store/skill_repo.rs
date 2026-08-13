@@ -7,7 +7,7 @@ use crate::error::{Result, StorageError};
 use crate::model::{PortSpec, Skill, SkillInfo};
 use crate::store::pool::DbPool;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 /// Skill repository.
@@ -221,7 +221,16 @@ fn row_to_skill(
     id: Uuid,
     row: &(String, String, String, String, String, String, String, i64),
 ) -> Result<Skill> {
-    let (description, sop_text, tool_refs_json, manifest_json, inputs_json, outputs_json, name, version) = row;
+    let (
+        description,
+        sop_text,
+        tool_refs_json,
+        manifest_json,
+        inputs_json,
+        outputs_json,
+        name,
+        version,
+    ) = row;
 
     let tool_refs: Vec<String> = serde_json::from_str(tool_refs_json)?;
     let manifest: crate::model::WorkflowManifest = serde_json::from_str(manifest_json)?;

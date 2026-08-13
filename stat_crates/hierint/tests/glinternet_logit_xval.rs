@@ -65,7 +65,10 @@ fn logit_finds_active_variables() {
     // At smallest lambda, model should have some active groups
     // (main effects, interactions, or both — hierarchy is approximate)
     let total = last.num_groups();
-    assert!(total > 0, "expected active groups at smallest lambda, got {total}");
+    assert!(
+        total > 0,
+        "expected active groups at smallest lambda, got {total}"
+    );
 }
 
 #[test]
@@ -73,10 +76,13 @@ fn logit_objective_values() {
     let fx = load();
     let fit = run_fit(&fx);
     for i in 0..fit.lambda.len() {
-        let re = (fit.obj_value[i] - fx.obj_value[i]).abs()
-            / fx.obj_value[i].abs().max(1e-10);
-        assert!(re < 0.1, "obj[{i}]: Rust={:.6}, R={:.6}, re={re:.4}",
-            fit.obj_value[i], fx.obj_value[i]);
+        let re = (fit.obj_value[i] - fx.obj_value[i]).abs() / fx.obj_value[i].abs().max(1e-10);
+        assert!(
+            re < 0.1,
+            "obj[{i}]: Rust={:.6}, R={:.6}, re={re:.4}",
+            fit.obj_value[i],
+            fx.obj_value[i]
+        );
     }
 }
 
@@ -95,7 +101,10 @@ fn logit_predictions_in_range() {
 
     for (li, pred_lam) in preds.iter().enumerate() {
         for (i, &p) in pred_lam.iter().enumerate() {
-            assert!(p.is_finite(), "prediction not finite at lambda[{li}], obs[{i}]");
+            assert!(
+                p.is_finite(),
+                "prediction not finite at lambda[{li}], obs[{i}]"
+            );
         }
     }
 }
@@ -112,5 +121,8 @@ fn logit_path_structure() {
     }
     // At least some non-empty models in the path
     let nonempty: usize = fit.active_set.iter().filter(|a| !a.is_empty()).count();
-    assert!(nonempty >= 3, "expected at least 3 non-empty models, got {nonempty}");
+    assert!(
+        nonempty >= 3,
+        "expected at least 3 non-empty models, got {nonempty}"
+    );
 }

@@ -111,7 +111,10 @@ impl ResourceCatalog {
     }
 
     /// Register a provider's resources, surfacing validation/duplicate errors.
-    pub fn register_provider(&self, provider: &dyn crate::provider::ResourceProvider) -> Result<()> {
+    pub fn register_provider(
+        &self,
+        provider: &dyn crate::provider::ResourceProvider,
+    ) -> Result<()> {
         for entry in provider.resources() {
             self.register(entry)?;
         }
@@ -176,7 +179,8 @@ mod tests {
 
     #[tokio::test]
     async fn persist_and_reload_survives_round_trip() {
-        let store: Arc<dyn ManifestStore> = Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
+        let store: Arc<dyn ManifestStore> =
+            Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
         let cat = ResourceCatalog::with_persist("/tmp", store.clone());
         cat.register(sample()).unwrap();
         cat.persist().await;
@@ -195,7 +199,8 @@ mod tests {
     async fn archive_fields_survive_persist_round_trip() {
         use crate::archive::{ArchiveSpec, ArchiveStatus};
 
-        let store: Arc<dyn ManifestStore> = Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
+        let store: Arc<dyn ManifestStore> =
+            Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
         let cat = ResourceCatalog::with_persist("/tmp", store.clone());
 
         // Register a resource WITH archive spec + status.
@@ -236,13 +241,19 @@ mod tests {
         assert_eq!(entry.name, "test-data.mixer");
 
         // Archive spec survived.
-        let spec = entry.archive_spec.as_ref().expect("archive_spec should persist");
+        let spec = entry
+            .archive_spec
+            .as_ref()
+            .expect("archive_spec should persist");
         assert_eq!(spec.remote, "aliyun");
         assert_eq!(spec.remote_path, "autonomics-data/mixer/test-data/");
         assert!(spec.checksum);
 
         // Archive status survived.
-        let status = entry.archive_status.as_ref().expect("archive_status should persist");
+        let status = entry
+            .archive_status
+            .as_ref()
+            .expect("archive_status should persist");
         assert_eq!(status.archived_at.as_deref(), Some("2026-08-10T12:00:00Z"));
         assert_eq!(status.file_count, Some(42));
         assert_eq!(status.size_bytes, Some(1073741824));
@@ -253,7 +264,11 @@ mod tests {
 impl ResourceCatalog {
     /// Test-only helper to set archive_status directly.
     #[cfg(test)]
-    fn update_archive_status_for_test(&self, name: &str, status: crate::archive::ArchiveStatus) -> crate::error::Result<()> {
+    fn update_archive_status_for_test(
+        &self,
+        name: &str,
+        status: crate::archive::ArchiveStatus,
+    ) -> crate::error::Result<()> {
         let mut reg = self.inner.write().expect("catalog lock");
         let entry = reg
             .get_mut(name)

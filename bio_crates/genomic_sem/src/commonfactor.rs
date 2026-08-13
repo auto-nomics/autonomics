@@ -6,8 +6,8 @@ use faer::Mat;
 
 use crate::error::{GenomicSemError, Result};
 use crate::sem::{self, EstimationMethod, SemConfig, parse_model};
-use crate::utils::{Covstruc, compute_v_stand, build_w_from_v_stand, smooth_if_needed};
 use crate::usermodel::{ModelFit, ParamResult, UserModelResult};
+use crate::utils::{Covstruc, build_w_from_v_stand, compute_v_stand, smooth_if_needed};
 
 /// Configuration for `commonfactor`.
 #[derive(Clone, Debug)]
@@ -17,7 +17,9 @@ pub struct CommonFactorConfig {
 
 impl Default for CommonFactorConfig {
     fn default() -> Self {
-        Self { estimation: EstimationMethod::DWLS }
+        Self {
+            estimation: EstimationMethod::DWLS,
+        }
     }
 }
 
@@ -25,10 +27,7 @@ impl Default for CommonFactorConfig {
 ///
 /// Generates the lavaan syntax for a one-factor model, then delegates to
 /// `usermodel`.
-pub fn commonfactor(
-    covstruc: &Covstruc,
-    config: &CommonFactorConfig,
-) -> Result<UserModelResult> {
+pub fn commonfactor(covstruc: &Covstruc, config: &CommonFactorConfig) -> Result<UserModelResult> {
     let k = covstruc.s.nrows();
     if k <= 2 {
         return Err(GenomicSemError::InvalidInput(

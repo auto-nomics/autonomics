@@ -22,13 +22,16 @@ use datalake::Datalake;
 use futures::StreamExt;
 use iceberg::arrow::arrow_schema_to_schema_auto_assign_ids;
 use iceberg::spec::{
-    DataFileFormat, Literal, PartitionKey, PartitionSpecBuilder, Struct,
-    TableProperties, Transform,
+    DataFileFormat, Literal, PartitionKey, PartitionSpecBuilder, Struct, TableProperties, Transform,
 };
-use iceberg::transaction::{Transaction, ApplyTransactionAction};
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
-use iceberg::writer::file_writer::{ParquetWriterBuilder, rolling_writer::RollingFileWriterBuilder};
-use iceberg::writer::file_writer::location_generator::{DefaultLocationGenerator, DefaultFileNameGenerator};
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::file_writer::{
+    ParquetWriterBuilder, rolling_writer::RollingFileWriterBuilder,
+};
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 
@@ -58,14 +61,21 @@ impl IngestionExecutor {
     /// 512 MB data files before flushing to S3.  This avoids the OOM caused by
     /// iceberg-datafusion's TableSink buffering all data in memory.
     pub async fn ingest(&self, resource_name: &str) -> anyhow::Result<IngestionOutcome> {
-        let entry = self.catalog.get(resource_name)
+        let entry = self
+            .catalog
+            .get(resource_name)
             .ok_or_else(|| anyhow::anyhow!("unknown resource '{resource_name}'"))?;
 
         if entry.kind != ResourceKind::IcebergTable {
-            anyhow::bail!("resource '{resource_name}' is {:?}, not IcebergTable", entry.kind);
+            anyhow::bail!(
+                "resource '{resource_name}' is {:?}, not IcebergTable",
+                entry.kind
+            );
         }
 
-        let spec = entry.ingestion_spec.as_ref()
+        let spec = entry
+            .ingestion_spec
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("resource '{resource_name}' has no ingestion_spec"))?;
 
         let start = std::time::Instant::now();
@@ -75,12 +85,16 @@ impl IngestionExecutor {
             && let Some(src_name) = &spec.source_resource
         {
             tracing::info!("restoring source '{src_name}' from archive before ingest");
-            self.catalog.restore(src_name).await
+            self.catalog
+                .restore(src_name)
+                .await
                 .map_err(|e| anyhow::anyhow!("restore failed: {e}"))?;
         }
 
         // ── Resolve target table ident ────────────────────────────────
-        let ident = self.catalog.resolve_iceberg(resource_name)
+        let ident = self
+            .catalog
+            .resolve_iceberg(resource_name)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let (_catalog_name, schema_name, table_name) = ident.ident();
         let namespace = NamespaceIdent::from_vec(vec![schema_name])?;
@@ -120,10 +134,12 @@ impl IngestionExecutor {
                     ice(rest_catalog.drop_table(&table_ident).await)?;
                     tracing::info!("dropped existing table for replacement");
                 }
-                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by).await?;
+                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by)
+                    .await?;
             }
             WriteMode::CreateIfNotExists => {
-                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by).await?;
+                self.create_table(&namespace, &table_name, &arrow_schema, &spec.partition_by)
+                    .await?;
             }
             WriteMode::Append => {
                 if !ice(rest_catalog.table_exists(&table_ident).await)? {
@@ -138,16 +154,22 @@ impl IngestionExecutor {
             let ctx = ice(self.datalake.get_ctx_with_partitions(1).await)?;
             if let Ok(df) = ctx.sql(&format!("SELECT COUNT(*) AS n FROM {fqn}")).await {
                 if let Ok(batches) = df.collect().await {
-                    if let Some(count) = batches.first()
+                    if let Some(count) = batches
+                        .first()
                         .and_then(|b| b.column_by_name("n"))
-                        .and_then(|c| c.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>())
+                        .and_then(|c| {
+                            c.as_any()
+                                .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                        })
                         .map(|a| a.value(0))
                         .filter(|&n| n > 0)
                     {
                         tracing::info!("table {fqn} already has {count} rows — skipping");
                         return Ok(IngestionOutcome {
-                            rows_written: 0, files_processed: 0,
-                            duration_ms: start.elapsed().as_millis(), skipped: true,
+                            rows_written: 0,
+                            files_processed: 0,
+                            duration_ms: start.elapsed().as_millis(),
+                            skipped: true,
                         });
                     }
                 }
@@ -172,11 +194,9 @@ impl IngestionExecutor {
             let file_start = std::time::Instant::now();
 
             // ── Build writer chain ────────────────────────────────────
-            let parquet_builder = ParquetWriterBuilder::from_table_properties(
-                &table_props,
-                iceberg_schema.clone(),
-            )
-            .with_match_mode(iceberg::arrow::FieldMatchMode::Name);
+            let parquet_builder =
+                ParquetWriterBuilder::from_table_properties(&table_props, iceberg_schema.clone())
+                    .with_match_mode(iceberg::arrow::FieldMatchMode::Name);
             let location_gen = ice(DefaultLocationGenerator::new(table.metadata()))?;
             let file_name_gen = DefaultFileNameGenerator::new(
                 uuid::Uuid::new_v4().to_string(),
@@ -201,7 +221,9 @@ impl IngestionExecutor {
             let (df, _) = self.read_source(&ctx, &file_spec).await?;
             let mut stream = df.execute_stream().await?;
 
-            let first_batch = stream.next().await
+            let first_batch = stream
+                .next()
+                .await
                 .ok_or_else(|| anyhow::anyhow!("empty source: {file_path}"))??;
 
             // Extract partition key from first batch
@@ -213,20 +235,28 @@ impl IngestionExecutor {
                 for pf in p_spec.fields() {
                     // Look up field name by source_id from iceberg schema
                     let pf_schema = iceberg_schema.as_ref();
-                    let src_field = pf_schema.field_by_id(pf.source_id)
-                        .ok_or_else(|| anyhow::anyhow!("partition source_id {} not in schema", pf.source_id))?;
-                    let idx = arrow_schema.fields().iter()
+                    let src_field = pf_schema.field_by_id(pf.source_id).ok_or_else(|| {
+                        anyhow::anyhow!("partition source_id {} not in schema", pf.source_id)
+                    })?;
+                    let idx = arrow_schema
+                        .fields()
+                        .iter()
                         .position(|f| f.name() == &src_field.name)
-                        .ok_or_else(|| anyhow::anyhow!("partition col '{}' missing in arrow", src_field.name))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("partition col '{}' missing in arrow", src_field.name)
+                        })?;
                     let col = first_batch.column(idx);
                     use datafusion::arrow::array::*;
                     let lit = match col.data_type() {
-                        datafusion::arrow::datatypes::DataType::Int64 =>
-                            Literal::long(col.as_any().downcast_ref::<Int64Array>().unwrap().value(0)),
-                        datafusion::arrow::datatypes::DataType::Int32 =>
-                            Literal::int(col.as_any().downcast_ref::<Int32Array>().unwrap().value(0)),
-                        datafusion::arrow::datatypes::DataType::Utf8 =>
-                            Literal::string(col.as_any().downcast_ref::<StringArray>().unwrap().value(0)),
+                        datafusion::arrow::datatypes::DataType::Int64 => Literal::long(
+                            col.as_any().downcast_ref::<Int64Array>().unwrap().value(0),
+                        ),
+                        datafusion::arrow::datatypes::DataType::Int32 => Literal::int(
+                            col.as_any().downcast_ref::<Int32Array>().unwrap().value(0),
+                        ),
+                        datafusion::arrow::datatypes::DataType::Utf8 => Literal::string(
+                            col.as_any().downcast_ref::<StringArray>().unwrap().value(0),
+                        ),
                         dt => anyhow::bail!("unsupported partition type: {dt:?}"),
                     };
                     vals.push(Some(lit));
@@ -243,30 +273,39 @@ impl IngestionExecutor {
 
             // Write first batch + remaining
             let mut file_rows: u64 = first_batch.num_rows() as u64;
-            writer.write(first_batch).await
+            writer
+                .write(first_batch)
+                .await
                 .map_err(|e| anyhow::anyhow!("writer error: {e}"))?;
             let mut batch_count = 1u32;
             while let Some(result) = stream.next().await {
                 let batch = result?;
                 file_rows += batch.num_rows() as u64;
-                writer.write(batch).await
+                writer
+                    .write(batch)
+                    .await
                     .map_err(|e| anyhow::anyhow!("writer error: {e}"))?;
                 batch_count += 1;
             }
             drop(stream);
             drop(ctx);
 
-
             // ── Close writer → collect data files ─────────────────────
-            let data_files = writer.close().await
+            let data_files = writer
+                .close()
+                .await
                 .map_err(|e| anyhow::anyhow!("writer close error: {e}"))?;
 
             total_rows += file_rows;
 
             tracing::info!(
                 "[{}/{}] {} — {file_rows} rows, {} data files, {} batches ({}ms, total {total_rows})",
-                i + 1, source_files.len(),
-                std::path::Path::new(file_path).file_name().unwrap_or_default().to_string_lossy(),
+                i + 1,
+                source_files.len(),
+                std::path::Path::new(file_path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
                 data_files.len(),
                 batch_count,
                 file_start.elapsed().as_millis(),
@@ -286,7 +325,8 @@ impl IngestionExecutor {
         let fqn = ident.sql();
         tracing::info!(
             "ingested {total_rows} rows into {fqn} from {} ({files_processed} files, {}ms)",
-            spec.source_path, start.elapsed().as_millis()
+            spec.source_path,
+            start.elapsed().as_millis()
         );
 
         // ── Optional post-ingest archive ──────────────────────────────
@@ -294,7 +334,9 @@ impl IngestionExecutor {
             && let Some(src_name) = &spec.source_resource
         {
             tracing::info!("archiving source '{src_name}' after successful ingest");
-            self.catalog.archive(src_name).await
+            self.catalog
+                .archive(src_name)
+                .await
                 .map_err(|e| anyhow::anyhow!("archive failed: {e}"))?;
         }
 
@@ -399,7 +441,10 @@ impl IngestionExecutor {
             .partition_spec(partition_spec)
             .build();
 
-        ice(self.datalake.create_table_if_not_exist(namespace, creation).await)?;
+        ice(self
+            .datalake
+            .create_table_if_not_exist(namespace, creation)
+            .await)?;
         Ok(())
     }
 }
@@ -469,7 +514,9 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
         (Some('*'), _) => {
             // Try matching zero or more characters
             glob_match_inner(&pattern[1..], text)
-                || text.first().map_or(false, |_| glob_match_inner(pattern, &text[1..]))
+                || text
+                    .first()
+                    .map_or(false, |_| glob_match_inner(pattern, &text[1..]))
         }
         (Some(&pc), Some(&tc)) if pc == tc => glob_match_inner(&pattern[1..], &text[1..]),
         _ => false,

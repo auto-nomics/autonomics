@@ -60,8 +60,14 @@ fn cv_completes_and_returns_valid_result() {
     // lambdaHat should be within the lambda range
     let lam_min = cv.lambda.iter().fold(f64::INFINITY, |a, &b| a.min(b));
     let lam_max = cv.lambda.iter().fold(0.0f64, |a, &b| a.max(b));
-    assert!(cv.lambda_hat >= lam_min - 1e-10, "lambdaHat below lambda_min");
-    assert!(cv.lambda_hat <= lam_max + 1e-10, "lambdaHat above lambda_max");
+    assert!(
+        cv.lambda_hat >= lam_min - 1e-10,
+        "lambdaHat below lambda_min"
+    );
+    assert!(
+        cv.lambda_hat <= lam_max + 1e-10,
+        "lambdaHat above lambda_max"
+    );
 
     // lambdaHat1Std >= lambdaHat
     assert!(
@@ -85,11 +91,16 @@ fn cv_errors_decrease_then_increase() {
 
     // CV error should generally decrease then increase (U-shape)
     // At minimum, the minimum should not be at the very first or very last lambda
-    let min_idx = cv.cv_err.iter()
+    let min_idx = cv
+        .cv_err
+        .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(i, _)| i)
         .unwrap();
 
-    assert!(min_idx > 0, "CV minimum should not be at lambda_max (empty model)");
+    assert!(
+        min_idx > 0,
+        "CV minimum should not be at lambda_max (empty model)"
+    );
 }

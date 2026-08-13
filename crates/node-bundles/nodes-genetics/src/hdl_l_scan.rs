@@ -434,12 +434,9 @@ impl DagNode for HdlLScanNode {
         ));
 
         // ---- Load PLINK reference ONCE ----
-        let ref_template = nodes_ldsc::ldsc_common::resolve_ref_prefix(
-            &node_ctx.resources,
-            REF_PREFIX_TEMPLATE,
-        );
-        let ld_ref_prefix =
-            PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
+        let ref_template =
+            nodes_ldsc::ldsc_common::resolve_ref_prefix(&node_ctx.resources, REF_PREFIX_TEMPLATE);
+        let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
         let plink_ref = lava::plink::load_reference(&ld_ref_prefix)
             .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;
         let plink_ref = Arc::new(plink_ref);

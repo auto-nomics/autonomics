@@ -67,7 +67,11 @@ pub fn sim_ldsc(config: &SimLdscConfig) -> Result<Vec<SimSumstats>> {
                 snp_list.push(format!("rs{}", i + 1));
                 n_list.push(n_val);
                 z_list.push(z);
-                a1_list.push(if rng.random_bool(0.5) { "A".into() } else { "G".into() });
+                a1_list.push(if rng.random_bool(0.5) {
+                    "A".into()
+                } else {
+                    "G".into()
+                });
             }
 
             trait_sumstats.push(SimSumstats {

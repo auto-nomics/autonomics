@@ -81,24 +81,53 @@ pub fn summary_gls(
         names.push(format!("b{}", i + 1));
     }
 
-    Ok(GlsResult { betas, pvals, se, z, names })
+    Ok(GlsResult {
+        betas,
+        pvals,
+        se,
+        z,
+        names,
+    })
 }
 
 fn invert_small(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = a.len();
     let mut aug = vec![vec![0.0f64; 2 * n]; n];
-    for i in 0..n { for j in 0..n { aug[i][j] = a[i][j]; } aug[i][n + i] = 1.0; }
+    for i in 0..n {
+        for j in 0..n {
+            aug[i][j] = a[i][j];
+        }
+        aug[i][n + i] = 1.0;
+    }
     for col in 0..n {
         let mut max_row = col;
         let mut max_val = aug[col][col].abs();
-        for row in (col + 1)..n { if aug[row][col].abs() > max_val { max_val = aug[row][col].abs(); max_row = row; } }
-        if max_val < 1e-15 { continue; }
+        for row in (col + 1)..n {
+            if aug[row][col].abs() > max_val {
+                max_val = aug[row][col].abs();
+                max_row = row;
+            }
+        }
+        if max_val < 1e-15 {
+            continue;
+        }
         aug.swap(col, max_row);
         let pivot = aug[col][col];
-        for j in col..(2 * n) { aug[col][j] /= pivot; }
-        for row in 0..n { if row != col { let f = aug[row][col]; for j in col..(2 * n) { aug[row][j] -= f * aug[col][j]; } } }
+        for j in col..(2 * n) {
+            aug[col][j] /= pivot;
+        }
+        for row in 0..n {
+            if row != col {
+                let f = aug[row][col];
+                for j in col..(2 * n) {
+                    aug[row][j] -= f * aug[col][j];
+                }
+            }
+        }
     }
-    (0..n).map(|i| (0..n).map(|j| aug[i][n + j]).collect()).collect()
+    (0..n)
+        .map(|i| (0..n).map(|j| aug[i][n + j]).collect())
+        .collect()
 }
 
 #[cfg(test)]

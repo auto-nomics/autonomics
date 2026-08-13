@@ -12,10 +12,7 @@ use rusqlite::params;
 /// Embedded migration files in lexicographic order. The numeric prefix is
 /// parsed as the version id.
 const EMBEDDED: &[(&str, &str)] = &[
-    (
-        "0001_init",
-        include_str!("../../migrations/0001_init.sql"),
-    ),
+    ("0001_init", include_str!("../../migrations/0001_init.sql")),
     (
         "0002_skills",
         include_str!("../../migrations/0002_skills.sql"),
@@ -66,10 +63,7 @@ pub fn run(pool: &DbPool) -> Result<(), StorageError> {
         }
         let tx = conn.transaction()?;
         tx.execute_batch(sql).map_err(|e| {
-            StorageError::Migration(format!(
-                "migration {name} failed: {e}\n---\n{}\n---",
-                sql
-            ))
+            StorageError::Migration(format!("migration {name} failed: {e}\n---\n{}\n---", sql))
         })?;
         tx.execute(
             "INSERT INTO _workflow_editor_migrations (version, name, applied_at)

@@ -1,7 +1,7 @@
 //! Statistical distribution functions reproducing R's `pnorm`, `qnorm`,
 //! `dnorm`, `qchisq`, `pchisq`.
 
-use statrs::distribution::{ContinuousCDF, ChiSquared, Normal, Continuous};
+use statrs::distribution::{ChiSquared, Continuous, ContinuousCDF, Normal};
 
 /// Standard normal CDF: R's `pnorm(q)`.
 pub fn pnorm(q: f64) -> f64 {

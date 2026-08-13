@@ -154,7 +154,8 @@ impl ActiveSet {
             for _ in 0..n_type {
                 let size = sizes.get(offset).copied().unwrap_or(0);
                 // In the C code, eps=0.0 — a group is active if any coefficient is nonzero
-                let is_active = (0..size).any(|i| beta.get(offset + i).copied().unwrap_or(0.0) != 0.0);
+                let is_active =
+                    (0..size).any(|i| beta.get(offset + i).copied().unwrap_or(0.0) != 0.0);
                 active.push(is_active);
                 offset += 1; // we advance through groups, but sizes are indexed differently
             }
@@ -258,10 +259,10 @@ impl Norms {
 
 #[derive(Debug, Clone)]
 pub struct GlinternetFit {
-    pub intercept: Vec<f64>,      // per-lambda intercept (rescaled)
+    pub intercept: Vec<f64>, // per-lambda intercept (rescaled)
     pub lambda: Vec<f64>,
     pub active_set: Vec<ActiveSet>,
-    pub betahat: Vec<Vec<f64>>,   // per-lambda rescaled coefficients
+    pub betahat: Vec<Vec<f64>>, // per-lambda rescaled coefficients
     pub obj_value: Vec<f64>,
     pub num_levels: Vec<usize>,
     pub family: Family,
@@ -295,14 +296,13 @@ impl GlinternetData {
     /// - `x_cat`: n × pCat, integer levels coded as {0, 1, ..., L-1}
     /// - `z_raw`: n × pCont, raw continuous values (will be standardized)
     /// - `num_levels`: per-variable level count (1 for continuous)
-    pub fn new(
-        x_cat_raw: &[usize],
-        z_raw: &[f64],
-        num_levels: &[usize],
-        n: usize,
-    ) -> Self {
-        let cat_indices: Vec<usize> = (0..num_levels.len()).filter(|&i| num_levels[i] > 1).collect();
-        let cont_indices: Vec<usize> = (0..num_levels.len()).filter(|&i| num_levels[i] == 1).collect();
+    pub fn new(x_cat_raw: &[usize], z_raw: &[f64], num_levels: &[usize], n: usize) -> Self {
+        let cat_indices: Vec<usize> = (0..num_levels.len())
+            .filter(|&i| num_levels[i] > 1)
+            .collect();
+        let cont_indices: Vec<usize> = (0..num_levels.len())
+            .filter(|&i| num_levels[i] == 1)
+            .collect();
         let p_cat = cat_indices.len();
         let p_cont = cont_indices.len();
         let levels: Vec<usize> = cat_indices.iter().map(|&i| num_levels[i]).collect();
@@ -554,11 +554,7 @@ pub fn fit(
     let mut rescaled_betas = Vec::with_capacity(actual_n);
 
     for j in 0..actual_n {
-        let (mu, beta_rescaled) = rescale::rescale_betahat(
-            &active_sets[j],
-            &betahats[j],
-            &data,
-        );
+        let (mu, beta_rescaled) = rescale::rescale_betahat(&active_sets[j], &betahats[j], &data);
         rescaled_intercepts.push(mu);
         rescaled_betas.push(beta_rescaled);
     }
@@ -591,11 +587,7 @@ pub fn predict(
 
     let mut predictions = Vec::with_capacity(n_lambda);
     for j in 0..n_lambda {
-        let pred = rescale::predict_one(
-            &fit.active_set[j],
-            &fit.betahat[j],
-            &data,
-        );
+        let pred = rescale::predict_one(&fit.active_set[j], &fit.betahat[j], &data);
         predictions.push(pred);
     }
     predictions

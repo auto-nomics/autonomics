@@ -34,8 +34,15 @@ use crate::query::LiteratureGateway;
         \"openalex\" (270M+ works, all disciplines), \"crossref\" (DOI-registered works), \
         \"semantic_scholar\" (AI-powered academic search). \
         \
-        **Keywords**: searched against title + abstract. Use `keywords_op` to control \
-        whether ALL keywords must match (AND) or ANY (OR, default). \
+        **Keywords** (CRITICAL — read carefully): each array element is ONE \
+        distinct search term or phrase — NOT a full sentence. Split your query \
+        into separate elements so the search engine can apply `keywords_op` \
+        (AND/OR) between them. \
+        \
+        ✅ Correct: keywords=[\"gut microbiome\", \"cardiovascular disease\"] \
+        ✅ Correct: keywords=[\"CRISPR\", \"off-target\"] \
+        ❌ WRONG:  keywords=[\"gut microbiome cardiovascular disease prediction\"]  \
+                     (entire sentence as one element — search will miss everything) \
         \
         **Examples**: \
         • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\" — search all sources \
@@ -43,7 +50,9 @@ use crate::query::LiteratureGateway;
         • keywords=[\"GWAS\"], sources=[\"pubmed\", \"openalex\"] — PubMed + OpenAlex concurrently"
 )]
 pub struct LitSearchInput {
-    #[desc = "Topic keywords to search in title/abstract, e.g. [\"CRISPR\", \"gene editing\"]"]
+    #[desc = "Search terms — each element is ONE distinct term/phrase. Split your \
+             query into separate elements. \
+             ✅ [\"gut microbiome\", \"cardiovascular\"] ❌ [\"gut microbiome cardiovascular\"]"]
     pub keywords: Option<Vec<String>>,
 
     #[desc = "Join operator for keywords: \"AND\" (all must match) or \"OR\" (any matches). Default: OR"]
@@ -285,8 +294,18 @@ pub fn bib_query_registrations(gateway: Arc<LiteratureGateway>) -> Vec<ToolRegis
 
 /// Convert [`LitSearchInput`] fields into a [`StructuredSearch`].
 fn build_structured_search(input: &LitSearchInput) -> StructuredSearch {
+    // Defensive: if the agent passed a single element containing spaces, split it
+    // into separate keywords so AND/OR actually applies between concepts.
+    let keywords = input.keywords.as_ref().map(|kw| {
+        if kw.len() == 1 && kw[0].split_whitespace().count() > 1 {
+            kw[0].split_whitespace().map(|s| s.to_owned()).collect()
+        } else {
+            kw.clone()
+        }
+    });
+
     StructuredSearch {
-        keywords: input.keywords.clone(),
+        keywords,
         keywords_op: input
             .keywords_op
             .as_deref()

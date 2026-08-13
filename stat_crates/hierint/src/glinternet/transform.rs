@@ -11,12 +11,7 @@ use super::{ActiveSet, GlinternetData};
 /// Port of `x_times_beta()` in `fista.c`. `beta` is a flat vector of coefficients
 /// laid out as [cat_groups... | cont_groups... | catcat... | contcont... | catcont...].
 /// `linear` is added to in-place.
-pub fn x_times_beta(
-    data: &GlinternetData,
-    active: &ActiveSet,
-    beta: &[f64],
-    linear: &mut [f64],
-) {
+pub fn x_times_beta(data: &GlinternetData, active: &ActiveSet, beta: &[f64], linear: &mut [f64]) {
     let n = data.n;
     let eps = 1e-12;
     let mut offset = 0usize;
@@ -129,11 +124,7 @@ pub fn x_times_beta(
 /// The gradient is `X^T(Y - Xβ)` for the *residual* `r = Y - Xβ`.
 /// The result is divided by `-n` at the end (matching C: gradient = X^T·r / -n
 /// with per-type Frobenius normalization).
-pub fn compute_gradient(
-    data: &GlinternetData,
-    active: &ActiveSet,
-    residual: &[f64],
-) -> Vec<f64> {
+pub fn compute_gradient(data: &GlinternetData, active: &ActiveSet, residual: &[f64]) -> Vec<f64> {
     let n = data.n;
     let beta_len = active.beta_len(&data.levels);
     let mut grad = vec![0.0f64; beta_len];

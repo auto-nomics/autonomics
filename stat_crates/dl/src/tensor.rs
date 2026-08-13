@@ -19,12 +19,20 @@ impl Tensor {
     /// Create from row-major flat data.
     pub fn from_rows(nrows: usize, ncols: usize, data: &[f64]) -> Self {
         assert_eq!(data.len(), nrows * ncols, "data length mismatch");
-        Self { data: data.to_vec(), nrows, ncols }
+        Self {
+            data: data.to_vec(),
+            nrows,
+            ncols,
+        }
     }
 
     /// All-zeros tensor.
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
-        Self { data: vec![0.0; nrows * ncols], nrows, ncols }
+        Self {
+            data: vec![0.0; nrows * ncols],
+            nrows,
+            ncols,
+        }
     }
 
     /// Shape `(nrows, ncols)`.
@@ -33,10 +41,14 @@ impl Tensor {
     }
 
     /// Number of rows.
-    pub fn nrows(&self) -> usize { self.nrows }
+    pub fn nrows(&self) -> usize {
+        self.nrows
+    }
 
     /// Number of columns.
-    pub fn ncols(&self) -> usize { self.ncols }
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
 
     /// Element access.
     pub fn at(&self, row: usize, col: usize) -> f64 {

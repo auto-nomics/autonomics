@@ -5,7 +5,7 @@
 //! Pattern follows `data-engine/src/runtime/types.rs::DataEngineCmd`.
 
 use crate::error::Result;
-use crate::model::{NodeEntry, EdgeEntry, WorkflowManifest, Skill, SnapshotInfo};
+use crate::model::{EdgeEntry, NodeEntry, Skill, SnapshotInfo, WorkflowManifest};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;

@@ -197,8 +197,7 @@ pub fn knn_classify(
         // Compute distances to all training points
         let mut dists: Vec<(f64, usize)> = (0..n_train)
             .map(|t| {
-                let train_point: Vec<f64> =
-                    (0..n_features).map(|j| train_data[(t, j)]).collect();
+                let train_point: Vec<f64> = (0..n_features).map(|j| train_data[(t, j)]).collect();
                 let d: f64 = test_point
                     .iter()
                     .zip(&train_point)
@@ -270,7 +269,14 @@ pub fn decision_tree(
     min_samples_split: usize,
     min_samples_leaf: usize,
 ) -> Result<DecisionTreeResult> {
-    decision_tree_fit_predict(data, labels, data, max_depth, min_samples_split, min_samples_leaf)
+    decision_tree_fit_predict(
+        data,
+        labels,
+        data,
+        max_depth,
+        min_samples_split,
+        min_samples_leaf,
+    )
 }
 
 /// Train a decision tree on `train_data`/`train_labels` and predict on
@@ -364,7 +370,9 @@ mod tests {
         let train = mat_from_row_major(
             8,
             2,
-            &[0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1],
+            &[
+                0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, 5.0, 5.0, 5.5, 5.5, 5.1, 5.2, 5.3, 5.1,
+            ],
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
 
@@ -424,13 +432,19 @@ mod tests {
         let result = gaussian_nb(&data, &labels).unwrap();
         assert_eq!(result.predictions, labels);
         assert_eq!(result.probabilities.len(), labels.len());
-        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(
+            result
+                .probabilities
+                .iter()
+                .all(|&p| (0.0..=1.0).contains(&p))
+        );
         // Verify probability direction: class-1 samples should have higher P
-        let mean_pos: f64 =
-            result.probabilities[4..].iter().sum::<f64>() / 4.0;
-        let mean_neg: f64 =
-            result.probabilities[..4].iter().sum::<f64>() / 4.0;
-        assert!(mean_pos > mean_neg, "P(class=1) should be higher for class-1 samples");
+        let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
+        let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;
+        assert!(
+            mean_pos > mean_neg,
+            "P(class=1) should be higher for class-1 samples"
+        );
     }
 
     #[test]
@@ -446,10 +460,8 @@ mod tests {
                 .all(|&p| (0.0..=1.0).contains(&p))
         );
         // Verify probability direction: class-1 samples should have higher P
-        let mean_pos: f64 =
-            result.probabilities[4..].iter().sum::<f64>() / 4.0;
-        let mean_neg: f64 =
-            result.probabilities[..4].iter().sum::<f64>() / 4.0;
+        let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
+        let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;
         assert!(
             mean_pos > mean_neg,
             "P(class=1) should be higher for class-1 samples, got pos={mean_pos} neg={mean_neg}"
@@ -469,7 +481,7 @@ mod tests {
             &[
                 0.0, 0.0, 0.5, 0.5, 0.1, 0.2, 0.3, 0.1, // 4 × class 0
                 1.0, 1.0, 1.5, 1.5, 1.1, 1.2, 1.3, 1.1, // 3 × class 0
-                8.0, 8.0, 9.0, 9.0, 8.5, 8.5,           // 3 × class 1 (far)
+                8.0, 8.0, 9.0, 9.0, 8.5, 8.5, // 3 × class 1 (far)
             ],
         );
         let labels = vec![0, 0, 0, 0, 0, 0, 0, 1, 1, 1];
@@ -483,7 +495,10 @@ mod tests {
             "P(class=1) should be higher for class-1 samples, got pos={mean_pos} neg={mean_neg}"
         );
         // With the fix, at least the highest-P class-1 sample should be predicted 1
-        let max_pos_prob = result.probabilities[7..].iter().cloned().fold(0.0f64, f64::max);
+        let max_pos_prob = result.probabilities[7..]
+            .iter()
+            .cloned()
+            .fold(0.0f64, f64::max);
         assert!(
             max_pos_prob > 0.5,
             "at least one class-1 sample should have P > 0.5, got max={max_pos_prob}"

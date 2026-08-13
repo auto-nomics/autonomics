@@ -14,7 +14,7 @@ pub mod univariate_mixer;
 use std::collections::BTreeMap;
 
 use dag_core::resource_catalog::{
-    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider, CATALOG_NAME,
+    CATALOG_NAME, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -53,9 +53,18 @@ impl NodePlugin for Plugin {
 /// Build the common metadata map for the LD-matrix entry.
 fn ld_matrix_metadata() -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
-    m.insert("source_pipeline".into(), "PLINK2 --r2 from 1000G Phase 3 EUR VCF".into());
-    m.insert("source_script".into(), "infra/thousand_genomes/ld_matrix.sh".into());
-    m.insert("ingest_tool".into(), "infra/sink_ld_matrix (Rust binary)".into());
+    m.insert(
+        "source_pipeline".into(),
+        "PLINK2 --r2 from 1000G Phase 3 EUR VCF".into(),
+    );
+    m.insert(
+        "source_script".into(),
+        "infra/thousand_genomes/ld_matrix.sh".into(),
+    );
+    m.insert(
+        "ingest_tool".into(),
+        "infra/sink_ld_matrix (Rust binary)".into(),
+    );
     m.insert("population".into(), "EUR".into());
     m.insert("reference_panel".into(), "1000G Phase 3".into());
     m.insert("maf_min".into(), "0.01".into());
@@ -69,7 +78,10 @@ fn ld_matrix_metadata() -> BTreeMap<String, String> {
         "susie_rss (LD correlation), univariate_mixer (tag selection + sufficient stats), \
          bivariate_mixer (tag selection), hdl_l_scan (local rg), two_sample_mr (IcebergLd clumping), \
          precompute_tags (tag panel + subgraph)".into());
-    m.insert("table_pattern".into(), "iceberg.ld_matrix.eur_chr{1-22}".into());
+    m.insert(
+        "table_pattern".into(),
+        "iceberg.ld_matrix.eur_chr{1-22}".into(),
+    );
     m.insert("docs".into(), "docs/data_infra/ld_matrix.md".into());
     m
 }

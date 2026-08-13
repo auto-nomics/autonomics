@@ -117,7 +117,9 @@ async fn write_to_iceberg(
         iceberg_catalog: Some(Arc::new(provider)),
         datalake: datalake.clone(),
         opendal: None,
-        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+            std::path::PathBuf::from("."),
+        )),
         global_sem: None,
     };
     let mut sink_node =
@@ -132,7 +134,10 @@ async fn write_to_iceberg(
         .unwrap();
 
     let fresh_provider = datalake.get_provider().await.unwrap();
-    ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(fresh_provider));
+    ctx.register_catalog(
+        dag_core::resource_catalog::CATALOG_NAME,
+        Arc::new(fresh_provider),
+    );
 }
 
 /// `SELECT col FROM iceberg.<ident> LIMIT 3` succeeds iff it collects rows.

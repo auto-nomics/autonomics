@@ -11,7 +11,7 @@ pub mod vce;
 pub use helpers::Kernel;
 
 use faer::Mat;
-use statrs::distribution::{Normal, ContinuousCDF};
+use statrs::distribution::{ContinuousCDF, Normal};
 use thiserror::Error;
 
 use helpers::*;
@@ -178,22 +178,26 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
             cfg.x[i].is_finite()
                 && cfg.y[i].is_finite()
                 && cfg.cluster.as_ref().map_or(true, |c| c[i].is_finite())
-                && cfg
-                    .fuzzy
-                    .as_ref()
-                    .map_or(true, |f| f[i].is_finite())
+                && cfg.fuzzy.as_ref().map_or(true, |f| f[i].is_finite())
                 && cfg
                     .weights
                     .as_ref()
                     .map_or(true, |w| w[i].is_finite() && w[i] >= 0.0)
-                && cfg.covs.as_ref().map_or(true, |cv| {
-                    (0..cv.ncols()).all(|j| cv[(i, j)].is_finite())
-                })
+                && cfg
+                    .covs
+                    .as_ref()
+                    .map_or(true, |cv| (0..cv.ncols()).all(|j| cv[(i, j)].is_finite()))
         })
         .collect();
 
-    let mut x: Vec<f64> = (0..n_orig).filter(|&i| na_ok[i]).map(|i| cfg.x[i]).collect();
-    let mut y: Vec<f64> = (0..n_orig).filter(|&i| na_ok[i]).map(|i| cfg.y[i]).collect();
+    let mut x: Vec<f64> = (0..n_orig)
+        .filter(|&i| na_ok[i])
+        .map(|i| cfg.x[i])
+        .collect();
+    let mut y: Vec<f64> = (0..n_orig)
+        .filter(|&i| na_ok[i])
+        .map(|i| cfg.y[i])
+        .collect();
     let cluster: Option<Vec<f64>> = cfg
         .cluster
         .as_ref()
@@ -224,11 +228,7 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     let cluster = cluster.map(|c| order.iter().map(|&i| c[i]).collect::<Vec<_>>());
     let fuzzy = fuzzy.map(|f| order.iter().map(|&i| f[i]).collect::<Vec<_>>());
     let weights = weights.map(|w| order.iter().map(|&i| w[i]).collect::<Vec<_>>());
-    let covs = covs.map(|cv| {
-        Mat::from_fn(cv.nrows(), cv.ncols(), |i, j| {
-            cv[(order[i], j)]
-        })
-    });
+    let covs = covs.map(|cv| Mat::from_fn(cv.nrows(), cv.ncols(), |i, j| cv[(order[i], j)]));
 
     let c = cfg.c;
 
@@ -253,9 +253,19 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
 
     // ----- 4. Split at cutoff -----
     let x_l: Vec<f64> = x.iter().filter(|v| **v < c_std).copied().collect();
-    let y_l: Vec<f64> = y.iter().zip(&x).filter(|(_, xi)| **xi < c_std).map(|(yi, _)| *yi).collect();
+    let y_l: Vec<f64> = y
+        .iter()
+        .zip(&x)
+        .filter(|(_, xi)| **xi < c_std)
+        .map(|(yi, _)| *yi)
+        .collect();
     let x_r: Vec<f64> = x.iter().filter(|v| **v >= c_std).copied().collect();
-    let y_r: Vec<f64> = y.iter().zip(&x).filter(|(_, xi)| **xi >= c_std).map(|(yi, _)| *yi).collect();
+    let y_r: Vec<f64> = y
+        .iter()
+        .zip(&x)
+        .filter(|(_, xi)| **xi >= c_std)
+        .map(|(yi, _)| *yi)
+        .collect();
 
     let n_l = x_l.len();
     let n_r = x_r.len();
@@ -298,8 +308,18 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
 
     // Cluster split
     let (c_l, c_r): (Option<Vec<f64>>, Option<Vec<f64>>) = if let Some(cl) = &cluster {
-        let cl_l: Vec<f64> = x.iter().zip(cl).filter(|(xi, _)| **xi < c_std).map(|(_, &ci)| ci).collect();
-        let cl_r: Vec<f64> = x.iter().zip(cl).filter(|(xi, _)| **xi >= c_std).map(|(_, &ci)| ci).collect();
+        let cl_l: Vec<f64> = x
+            .iter()
+            .zip(cl)
+            .filter(|(xi, _)| **xi < c_std)
+            .map(|(_, &ci)| ci)
+            .collect();
+        let cl_r: Vec<f64> = x
+            .iter()
+            .zip(cl)
+            .filter(|(xi, _)| **xi >= c_std)
+            .map(|(_, &ci)| ci)
+            .collect();
         (Some(cl_l), Some(cl_r))
     } else {
         (None, None)
@@ -307,8 +327,18 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
 
     // Weights split
     let (fw_l, fw_r): (Option<Vec<f64>>, Option<Vec<f64>>) = if let Some(w) = &weights {
-        let wl: Vec<f64> = x.iter().zip(w).filter(|(xi, _)| **xi < c_std).map(|(_, &wi)| wi).collect();
-        let wr: Vec<f64> = x.iter().zip(w).filter(|(xi, _)| **xi >= c_std).map(|(_, &wi)| wi).collect();
+        let wl: Vec<f64> = x
+            .iter()
+            .zip(w)
+            .filter(|(xi, _)| **xi < c_std)
+            .map(|(_, &wi)| wi)
+            .collect();
+        let wr: Vec<f64> = x
+            .iter()
+            .zip(w)
+            .filter(|(xi, _)| **xi >= c_std)
+            .map(|(_, &wi)| wi)
+            .collect();
         (Some(wl), Some(wr))
     } else {
         (None, None)
@@ -430,12 +460,38 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         // Pilot bandwidth calculations
         // Step 1: d_bw (preliminary)
         let c_d_l = bw::rdrobust_bw(
-            &y_l, &x_l, c_std, q + 1, q + 1, q + 2, c_bw, range_l, 0.0, vce,
-            cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref(),
+            &y_l,
+            &x_l,
+            c_std,
+            q + 1,
+            q + 1,
+            q + 2,
+            c_bw,
+            range_l,
+            0.0,
+            vce,
+            cfg.nnmatch,
+            kernel,
+            &dups_l,
+            &dupsid_l,
+            c_l.as_deref(),
         );
         let c_d_r = bw::rdrobust_bw(
-            &y_r, &x_r, c_std, q + 1, q + 1, q + 2, c_bw, range_r, 0.0, vce,
-            cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref(),
+            &y_r,
+            &x_r,
+            c_std,
+            q + 1,
+            q + 1,
+            q + 2,
+            c_bw,
+            range_r,
+            0.0,
+            vce,
+            cfg.nnmatch,
+            kernel,
+            &dups_r,
+            &dupsid_r,
+            c_r.as_deref(),
         );
 
         // MSE-RD (default)
@@ -464,56 +520,305 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         if need_two {
             let d_bw_l = (c_d_l.v / c_d_l.b.powi(2)).powf(c_d_l.rate);
             let d_bw_r = (c_d_r.v / c_d_r.b.powi(2)).powf(c_d_r.rate);
-            let d_bw_l = if cfg.bwrestrict { d_bw_l.min(bw_max_l) } else { d_bw_l };
-            let d_bw_r = if cfg.bwrestrict { d_bw_r.min(bw_max_r) } else { d_bw_r };
+            let d_bw_l = if cfg.bwrestrict {
+                d_bw_l.min(bw_max_l)
+            } else {
+                d_bw_l
+            };
+            let d_bw_r = if cfg.bwrestrict {
+                d_bw_r.min(bw_max_r)
+            } else {
+                d_bw_r
+            };
 
-            let c_b_l = bw::rdrobust_bw(&y_l, &x_l, c_std, q, p + 1, q + 1, c_bw, d_bw_l, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_b_r = bw::rdrobust_bw(&y_r, &x_r, c_std, q, p + 1, q + 1, c_bw, d_bw_r, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
+            let c_b_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_l,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_b_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_r,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
             b_bw_l = (c_b_l.v / (c_b_l.b.powi(2) + scaleregul * c_b_l.r)).powf(c_b_l.rate);
             b_bw_r_val = (c_b_r.v / (c_b_r.b.powi(2) + scaleregul * c_b_r.r)).powf(c_b_r.rate);
-            let b_bw_l = if cfg.bwrestrict { b_bw_l.min(bw_max_l) } else { b_bw_l };
-            let b_bw_r_val = if cfg.bwrestrict { b_bw_r_val.min(bw_max_r) } else { b_bw_r_val };
+            let b_bw_l = if cfg.bwrestrict {
+                b_bw_l.min(bw_max_l)
+            } else {
+                b_bw_l
+            };
+            let b_bw_r_val = if cfg.bwrestrict {
+                b_bw_r_val.min(bw_max_r)
+            } else {
+                b_bw_r_val
+            };
 
-            let c_h_l = bw::rdrobust_bw(&y_l, &x_l, c_std, p, deriv, q, c_bw, b_bw_l, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_h_r = bw::rdrobust_bw(&y_r, &x_r, c_std, p, deriv, q, c_bw, b_bw_r_val, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
+            let c_h_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_l,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_h_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_r_val,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
             h_bw_l = (c_h_l.v / (c_h_l.b.powi(2) + scaleregul * c_h_l.r)).powf(c_h_l.rate);
             h_bw_r_val = (c_h_r.v / (c_h_r.b.powi(2) + scaleregul * c_h_r.r)).powf(c_h_r.rate);
-            let h_bw_l = if cfg.bwrestrict { h_bw_l.min(bw_max_l) } else { h_bw_l };
-            let h_bw_r_val = if cfg.bwrestrict { h_bw_r_val.min(bw_max_r) } else { h_bw_r_val };
+            let h_bw_l = if cfg.bwrestrict {
+                h_bw_l.min(bw_max_l)
+            } else {
+                h_bw_l
+            };
+            let h_bw_r_val = if cfg.bwrestrict {
+                h_bw_r_val.min(bw_max_r)
+            } else {
+                h_bw_r_val
+            };
         }
 
         if need_sum {
             let d_bw_s = ((c_d_l.v + c_d_r.v) / (c_d_r.b + c_d_l.b).powi(2)).powf(c_d_l.rate);
-            let d_bw_s = if cfg.bwrestrict { d_bw_s.min(bw_max) } else { d_bw_s };
+            let d_bw_s = if cfg.bwrestrict {
+                d_bw_s.min(bw_max)
+            } else {
+                d_bw_s
+            };
 
-            let c_b_l = bw::rdrobust_bw(&y_l, &x_l, c_std, q, p + 1, q + 1, c_bw, d_bw_s, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_b_r = bw::rdrobust_bw(&y_r, &x_r, c_std, q, p + 1, q + 1, c_bw, d_bw_s, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
-            b_bw_s = ((c_b_l.v + c_b_r.v) / ((c_b_r.b + c_b_l.b).powi(2) + scaleregul * (c_b_r.r + c_b_l.r))).powf(c_b_l.rate);
-            let b_bw_s = if cfg.bwrestrict { b_bw_s.min(bw_max) } else { b_bw_s };
+            let c_b_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_s,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_b_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_s,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
+            b_bw_s = ((c_b_l.v + c_b_r.v)
+                / ((c_b_r.b + c_b_l.b).powi(2) + scaleregul * (c_b_r.r + c_b_l.r)))
+                .powf(c_b_l.rate);
+            let b_bw_s = if cfg.bwrestrict {
+                b_bw_s.min(bw_max)
+            } else {
+                b_bw_s
+            };
 
-            let c_h_l = bw::rdrobust_bw(&y_l, &x_l, c_std, p, deriv, q, c_bw, b_bw_s, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_h_r = bw::rdrobust_bw(&y_r, &x_r, c_std, p, deriv, q, c_bw, b_bw_s, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
-            h_bw_s = ((c_h_l.v + c_h_r.v) / ((c_h_r.b + c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r))).powf(c_h_l.rate);
-            let h_bw_s = if cfg.bwrestrict { h_bw_s.min(bw_max) } else { h_bw_s };
+            let c_h_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_s,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_h_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_s,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
+            h_bw_s = ((c_h_l.v + c_h_r.v)
+                / ((c_h_r.b + c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r)))
+                .powf(c_h_l.rate);
+            let h_bw_s = if cfg.bwrestrict {
+                h_bw_s.min(bw_max)
+            } else {
+                h_bw_s
+            };
         }
 
         if need_rd {
             let d_bw_d = ((c_d_l.v + c_d_r.v) / (c_d_r.b - c_d_l.b).powi(2)).powf(c_d_l.rate);
-            let d_bw_d = if cfg.bwrestrict { d_bw_d.min(bw_max) } else { d_bw_d };
+            let d_bw_d = if cfg.bwrestrict {
+                d_bw_d.min(bw_max)
+            } else {
+                d_bw_d
+            };
 
-            let c_b_l = bw::rdrobust_bw(&y_l, &x_l, c_std, q, p + 1, q + 1, c_bw, d_bw_d, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_b_r = bw::rdrobust_bw(&y_r, &x_r, c_std, q, p + 1, q + 1, c_bw, d_bw_d, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
-            b_bw_d = ((c_b_l.v + c_b_r.v) / ((c_b_r.b - c_b_l.b).powi(2) + scaleregul * (c_b_r.r + c_b_l.r))).powf(c_b_l.rate);
-            let b_bw_d = if cfg.bwrestrict { b_bw_d.min(bw_max) } else { b_bw_d };
+            let c_b_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_d,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_b_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                q,
+                p + 1,
+                q + 1,
+                c_bw,
+                d_bw_d,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
+            b_bw_d = ((c_b_l.v + c_b_r.v)
+                / ((c_b_r.b - c_b_l.b).powi(2) + scaleregul * (c_b_r.r + c_b_l.r)))
+                .powf(c_b_l.rate);
+            let b_bw_d = if cfg.bwrestrict {
+                b_bw_d.min(bw_max)
+            } else {
+                b_bw_d
+            };
 
-            let c_h_l = bw::rdrobust_bw(&y_l, &x_l, c_std, p, deriv, q, c_bw, b_bw_d, scaleregul, vce, cfg.nnmatch, kernel, &dups_l, &dupsid_l, c_l.as_deref());
-            let c_h_r = bw::rdrobust_bw(&y_r, &x_r, c_std, p, deriv, q, c_bw, b_bw_d, scaleregul, vce, cfg.nnmatch, kernel, &dups_r, &dupsid_r, c_r.as_deref());
-            h_bw_d = ((c_h_l.v + c_h_r.v) / ((c_h_r.b - c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r))).powf(c_h_l.rate);
-            let h_bw_d = if cfg.bwrestrict { h_bw_d.min(bw_max) } else { h_bw_d };
+            let c_h_l = bw::rdrobust_bw(
+                &y_l,
+                &x_l,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_d,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_l,
+                &dupsid_l,
+                c_l.as_deref(),
+            );
+            let c_h_r = bw::rdrobust_bw(
+                &y_r,
+                &x_r,
+                c_std,
+                p,
+                deriv,
+                q,
+                c_bw,
+                b_bw_d,
+                scaleregul,
+                vce,
+                cfg.nnmatch,
+                kernel,
+                &dups_r,
+                &dupsid_r,
+                c_r.as_deref(),
+            );
+            h_bw_d = ((c_h_l.v + c_h_r.v)
+                / ((c_h_r.b - c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r)))
+                .powf(c_h_l.rate);
+            let h_bw_d = if cfg.bwrestrict {
+                h_bw_d.min(bw_max)
+            } else {
+                h_bw_d
+            };
         }
 
         // Select final bandwidths based on bwselect
-        let (h_bw_final_l, h_bw_final_r, b_bw_final_l, b_bw_final_r) = match bwselect_lower.as_str() {
+        let (h_bw_final_l, h_bw_final_r, b_bw_final_l, b_bw_final_r) = match bwselect_lower.as_str()
+        {
             "mserd" | "" => {
                 let h = x_sd * h_bw_d;
                 let b = x_sd * b_bw_d;
@@ -524,9 +829,12 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
                 let b = x_sd * b_bw_s;
                 (h, h, b, b)
             }
-            "msetwo" => {
-                (x_sd * h_bw_l, x_sd * h_bw_r_val, x_sd * b_bw_l, x_sd * b_bw_r_val)
-            }
+            "msetwo" => (
+                x_sd * h_bw_l,
+                x_sd * h_bw_r_val,
+                x_sd * b_bw_l,
+                x_sd * b_bw_r_val,
+            ),
             "msecomb1" => {
                 let h_rd = x_sd * h_bw_d;
                 let h_sum = x_sd * h_bw_s;
@@ -552,23 +860,32 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
                 (hl, hr, bl, br)
             }
             "cerrd" => {
-                let cer_h = (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
+                let cer_h =
+                    (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
                 let h = x_sd * h_bw_d * cer_h;
                 let b = x_sd * b_bw_d;
                 (h, h, b, b)
             }
             "cersum" => {
-                let cer_h = (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
+                let cer_h =
+                    (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
                 let h = x_sd * h_bw_s * cer_h;
                 let b = x_sd * b_bw_s;
                 (h, h, b, b)
             }
             "certwo" => {
-                let cer_h = (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
-                (x_sd * h_bw_l * cer_h, x_sd * h_bw_r_val * cer_h, x_sd * b_bw_l, x_sd * b_bw_r_val)
+                let cer_h =
+                    (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
+                (
+                    x_sd * h_bw_l * cer_h,
+                    x_sd * h_bw_r_val * cer_h,
+                    x_sd * b_bw_l,
+                    x_sd * b_bw_r_val,
+                )
             }
             "cercomb1" => {
-                let cer_h = (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
+                let cer_h =
+                    (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
                 let h_rd = x_sd * h_bw_d;
                 let h_sum = x_sd * h_bw_s;
                 let b_rd = x_sd * b_bw_d;
@@ -578,7 +895,8 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
                 (h, h, b, b)
             }
             "cercomb2" => {
-                let cer_h = (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
+                let cer_h =
+                    (n as f64).powf(-(p as f64 / ((3.0 + p as f64) * (3.0 + 2.0 * p as f64))));
                 let h_rd = x_sd * h_bw_d;
                 let h_sum = x_sd * h_bw_s;
                 let h_two_l = x_sd * h_bw_l;
@@ -743,8 +1061,16 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     let u_l_pp1: Vec<f64> = u_l.iter().map(|v| v.powi((p + 1) as i32)).collect();
     let u_r_pp1: Vec<f64> = u_r.iter().map(|v| v.powi((p + 1) as i32)).collect();
 
-    let l_l = weighted_crossprod(&r_p_l, &w_h_l_eff, &Mat::from_fn(en_l, 1, |i, _| u_l_pp1[i]));
-    let l_r = weighted_crossprod(&r_p_r, &w_h_r_eff, &Mat::from_fn(en_r, 1, |i, _| u_r_pp1[i]));
+    let l_l = weighted_crossprod(
+        &r_p_l,
+        &w_h_l_eff,
+        &Mat::from_fn(en_l, 1, |i, _| u_l_pp1[i]),
+    );
+    let l_r = weighted_crossprod(
+        &r_p_r,
+        &w_h_r_eff,
+        &Mat::from_fn(en_r, 1, |i, _| u_r_pp1[i]),
+    );
 
     // e_p1: zero vector of length q+1, with 1 at position p+1 (0-based)
     // Q_q = R_p*W_h - h^(p+1) * (L %*% t(e_p1)) %*% (t(invG_q %*% t(R_q)) * W_b)
@@ -769,8 +1095,12 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
 
     // Q_q[i,j] = R_p[i,j]*W_h[i] - h_l^(p+1) * L[j] * sum_k(R_q[i,k]*invG_q_l[k,p+1]) * W_b[i]
 
-    let q_q_l = build_qq(&r_p_l, &w_h_l_eff, &r_q_l, &w_b_l_eff, &inv_g_q_l, &l_l, h_l, p, q);
-    let q_q_r = build_qq(&r_p_r, &w_h_r_eff, &r_q_r, &w_b_r_eff, &inv_g_q_r, &l_r, h_r, p, q);
+    let q_q_l = build_qq(
+        &r_p_l, &w_h_l_eff, &r_q_l, &w_b_l_eff, &inv_g_q_l, &l_l, h_l, p, q,
+    );
+    let q_q_r = build_qq(
+        &r_p_r, &w_h_r_eff, &r_q_r, &w_b_r_eff, &inv_g_q_r, &l_r, h_r, p, q,
+    );
 
     // D matrices (just Y for sharp RD)
     let d_l = Mat::from_fn(en_l, 1, |i, _| e_y_l[i]);
@@ -824,20 +1154,44 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     let m_p_l = Mat::from_fn(en_l, 1, |i, _| predicts_p_l_col[i]);
     let m_p_r = Mat::from_fn(en_r, 1, |i, _| predicts_p_r_col[i]);
 
-    let ec_l: Option<Vec<f64>> = c_l.as_ref().map(|cl| {
-        e_idx_l.iter().map(|&i| cl[i]).collect()
-    });
-    let ec_r: Option<Vec<f64>> = c_r.as_ref().map(|cl| {
-        e_idx_r.iter().map(|&i| cl[i]).collect()
-    });
+    let ec_l: Option<Vec<f64>> = c_l
+        .as_ref()
+        .map(|cl| e_idx_l.iter().map(|&i| cl[i]).collect());
+    let ec_r: Option<Vec<f64>> = c_r
+        .as_ref()
+        .map(|cl| e_idx_r.iter().map(|&i| cl[i]).collect());
 
     let res_h_l = rdrobust_res(
-        &e_x_l, &e_y_l, None, None, &m_p_l, &hii_p_l, vce, cfg.nnmatch,
-        &edups_l, &edupsid_l, p + 1, crv3, crv2, ec_l.is_some(),
+        &e_x_l,
+        &e_y_l,
+        None,
+        None,
+        &m_p_l,
+        &hii_p_l,
+        vce,
+        cfg.nnmatch,
+        &edups_l,
+        &edupsid_l,
+        p + 1,
+        crv3,
+        crv2,
+        ec_l.is_some(),
     );
     let res_h_r = rdrobust_res(
-        &e_x_r, &e_y_r, None, None, &m_p_r, &hii_p_r, vce, cfg.nnmatch,
-        &edups_r, &edupsid_r, p + 1, crv3, crv2, ec_r.is_some(),
+        &e_x_r,
+        &e_y_r,
+        None,
+        None,
+        &m_p_r,
+        &hii_p_r,
+        vce,
+        cfg.nnmatch,
+        &edups_r,
+        &edupsid_r,
+        p + 1,
+        crv3,
+        crv2,
+        ec_r.is_some(),
     );
 
     let res_b_l = if vce == "nn" {
@@ -851,8 +1205,20 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         let predicts_q_l_col: Vec<f64> = (0..en_l).map(|i| predicts_q_l[(i, 0)]).collect();
         let m_q_l = Mat::from_fn(en_l, 1, |i, _| predicts_q_l_col[i]);
         rdrobust_res(
-            &e_x_l, &e_y_l, None, None, &m_q_l, &hii_q_l, vce, cfg.nnmatch,
-            &edups_l, &edupsid_l, q + 1, crv3, crv2, ec_l.is_some(),
+            &e_x_l,
+            &e_y_l,
+            None,
+            None,
+            &m_q_l,
+            &hii_q_l,
+            vce,
+            cfg.nnmatch,
+            &edups_l,
+            &edupsid_l,
+            q + 1,
+            crv3,
+            crv2,
+            ec_l.is_some(),
         )
     };
     let res_b_r = if vce == "nn" {
@@ -866,8 +1232,20 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         let predicts_q_r_col: Vec<f64> = (0..en_r).map(|i| predicts_q_r[(i, 0)]).collect();
         let m_q_r = Mat::from_fn(en_r, 1, |i, _| predicts_q_r_col[i]);
         rdrobust_res(
-            &e_x_r, &e_y_r, None, None, &m_q_r, &hii_q_r, vce, cfg.nnmatch,
-            &edups_r, &edupsid_r, q + 1, crv3, crv2, ec_r.is_some(),
+            &e_x_r,
+            &e_y_r,
+            None,
+            None,
+            &m_q_r,
+            &hii_q_r,
+            vce,
+            cfg.nnmatch,
+            &edups_r,
+            &edupsid_r,
+            q + 1,
+            crv3,
+            crv2,
+            ec_r.is_some(),
         )
     };
 
@@ -897,15 +1275,31 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
 
     let v_cl_l = {
         let meat = rdrobust_vce(
-            0, &s_y, &r_p_wh_l, &res_h_l, ec_l.as_deref(),
-            cidx_l.as_deref(), crv_inv_g_l, sqrt_rx_p_l.as_ref(), crv2, None,
+            0,
+            &s_y,
+            &r_p_wh_l,
+            &res_h_l,
+            ec_l.as_deref(),
+            cidx_l.as_deref(),
+            crv_inv_g_l,
+            sqrt_rx_p_l.as_ref(),
+            crv2,
+            None,
         );
         &inv_g_p_l * &meat * &inv_g_p_l
     };
     let v_cl_r = {
         let meat = rdrobust_vce(
-            0, &s_y, &r_p_wh_r, &res_h_r, ec_r.as_deref(),
-            cidx_r.as_deref(), crv_inv_g_r, sqrt_rx_p_r.as_ref(), crv2, None,
+            0,
+            &s_y,
+            &r_p_wh_r,
+            &res_h_r,
+            ec_r.as_deref(),
+            cidx_r.as_deref(),
+            crv_inv_g_r,
+            sqrt_rx_p_r.as_ref(),
+            crv2,
+            None,
         );
         &inv_g_p_r * &meat * &inv_g_p_r
     };
@@ -917,21 +1311,45 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         let r_q_wh_l = scale_rows(&r_q_l, &w_h_l_eff);
         let sqrt_rx_q_l = scale_rows(&r_q_l, &sqrt_wh_l);
         let meat = rdrobust_vce(
-            0, &s_y, &r_q_wh_l, &res_b_l, ec_l.as_deref(),
-            cidx_l.as_deref(), Some(&inv_g_q_l), Some(&sqrt_rx_q_l), crv2, None,
+            0,
+            &s_y,
+            &r_q_wh_l,
+            &res_b_l,
+            ec_l.as_deref(),
+            cidx_l.as_deref(),
+            Some(&inv_g_q_l),
+            Some(&sqrt_rx_q_l),
+            crv2,
+            None,
         );
         &inv_g_q_l * &meat * &inv_g_q_l
     } else if hb_match && cluster.is_some() {
         let r_q_wh_l = scale_rows(&r_q_l, &w_h_l_eff);
         let meat = rdrobust_vce(
-            0, &s_y, &r_q_wh_l, &res_b_l, ec_l.as_deref(),
-            cidx_l.as_deref(), None, None, false, None,
+            0,
+            &s_y,
+            &r_q_wh_l,
+            &res_b_l,
+            ec_l.as_deref(),
+            cidx_l.as_deref(),
+            None,
+            None,
+            false,
+            None,
         );
         &inv_g_q_l * &meat * &inv_g_q_l
     } else {
         let meat = rdrobust_vce(
-            0, &s_y, &q_q_l, &res_b_l, ec_l.as_deref(),
-            cidx_l.as_deref(), None, None, false, Some(q + 1),
+            0,
+            &s_y,
+            &q_q_l,
+            &res_b_l,
+            ec_l.as_deref(),
+            cidx_l.as_deref(),
+            None,
+            None,
+            false,
+            Some(q + 1),
         );
         &inv_g_p_l * &meat * &inv_g_p_l
     };
@@ -940,30 +1358,60 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         let r_q_wh_r = scale_rows(&r_q_r, &w_h_r_eff);
         let sqrt_rx_q_r = scale_rows(&r_q_r, &sqrt_wh_r);
         let meat = rdrobust_vce(
-            0, &s_y, &r_q_wh_r, &res_b_r, ec_r.as_deref(),
-            cidx_r.as_deref(), Some(&inv_g_q_r), Some(&sqrt_rx_q_r), crv2, None,
+            0,
+            &s_y,
+            &r_q_wh_r,
+            &res_b_r,
+            ec_r.as_deref(),
+            cidx_r.as_deref(),
+            Some(&inv_g_q_r),
+            Some(&sqrt_rx_q_r),
+            crv2,
+            None,
         );
         &inv_g_q_r * &meat * &inv_g_q_r
     } else if hb_match && cluster.is_some() {
         let r_q_wh_r = scale_rows(&r_q_r, &w_h_r_eff);
         let meat = rdrobust_vce(
-            0, &s_y, &r_q_wh_r, &res_b_r, ec_r.as_deref(),
-            cidx_r.as_deref(), None, None, false, None,
+            0,
+            &s_y,
+            &r_q_wh_r,
+            &res_b_r,
+            ec_r.as_deref(),
+            cidx_r.as_deref(),
+            None,
+            None,
+            false,
+            None,
         );
         &inv_g_q_r * &meat * &inv_g_q_r
     } else {
         let meat = rdrobust_vce(
-            0, &s_y, &q_q_r, &res_b_r, ec_r.as_deref(),
-            cidx_r.as_deref(), None, None, false, Some(q + 1),
+            0,
+            &s_y,
+            &q_q_r,
+            &res_b_r,
+            ec_r.as_deref(),
+            cidx_r.as_deref(),
+            None,
+            None,
+            false,
+            Some(q + 1),
         );
         &inv_g_p_r * &meat * &inv_g_p_r
     };
 
     // se_tau
-    let se_cl = (scalepar * scalepar * fact_deriv * fact_deriv
+    let se_cl = (scalepar
+        * scalepar
+        * fact_deriv
+        * fact_deriv
         * (v_cl_l[(deriv, deriv)] + v_cl_r[(deriv, deriv)]))
         .sqrt();
-    let se_rb = (scalepar * scalepar * fact_deriv * fact_deriv
+    let se_rb = (scalepar
+        * scalepar
+        * fact_deriv
+        * fact_deriv
         * (v_rb_l[(deriv, deriv)] + v_rb_r[(deriv, deriv)]))
         .sqrt();
 
@@ -971,12 +1419,25 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     let normal = Normal::new(0.0, 1.0).unwrap();
     let tau_arr = [tau_cl, tau_bc, tau_bc];
     let se_arr = [se_cl, se_cl, se_rb];
-    let z_arr = [tau_arr[0] / se_arr[0], tau_arr[1] / se_arr[1], tau_arr[2] / se_arr[2]];
+    let z_arr = [
+        tau_arr[0] / se_arr[0],
+        tau_arr[1] / se_arr[1],
+        tau_arr[2] / se_arr[2],
+    ];
     let pv_arr = z_arr.map(|z| 2.0 * normal.cdf(-z.abs()));
     let ci_arr = [
-        [tau_arr[0] - quant * se_arr[0], tau_arr[0] + quant * se_arr[0]],
-        [tau_arr[1] - quant * se_arr[1], tau_arr[1] + quant * se_arr[1]],
-        [tau_arr[2] - quant * se_arr[2], tau_arr[2] + quant * se_arr[2]],
+        [
+            tau_arr[0] - quant * se_arr[0],
+            tau_arr[0] + quant * se_arr[0],
+        ],
+        [
+            tau_arr[1] - quant * se_arr[1],
+            tau_arr[1] + quant * se_arr[1],
+        ],
+        [
+            tau_arr[2] - quant * se_arr[2],
+            tau_arr[2] + quant * se_arr[2],
+        ],
     ];
 
     // Beta coefficients for output (per-side, scalepar * factorial(deriv))
@@ -1094,8 +1555,7 @@ fn build_qq(
     let mut out = Mat::zeros(n, ncols);
     for i in 0..n {
         for j in 0..ncols {
-            out[(i, j)] = r_p[(i, j)] * w_h[i]
-                - h_pp1 * l[(j, 0)] * rq_invg_col[i] * w_b[i];
+            out[(i, j)] = r_p[(i, j)] * w_h[i] - h_pp1 * l[(j, 0)] * rq_invg_col[i] * w_b[i];
         }
     }
     out

@@ -17,10 +17,7 @@ use crate::storage::OpendalFileStorage;
 /// root `/` by [`OpendalFileStorage::normalize_path`], which is never a
 /// valid target for per-file operations — attempting a write or delete on
 /// it can destroy or corrupt the root directory.
-fn require_path<'a>(
-    path: Option<&'a str>,
-    op_name: &str,
-) -> Result<&'a str, ToolError> {
+fn require_path<'a>(path: Option<&'a str>, op_name: &str) -> Result<&'a str, ToolError> {
     path.filter(|p| !p.trim().is_empty())
         .ok_or_else(|| ToolError::ValidationFailed {
             message: format!("missing or empty 'path' for {op_name}"),
@@ -318,11 +315,7 @@ pub async fn op_edit(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = match path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => {
-            return Ok(AgentToolResult::error(
-                "missing or empty 'path' for edit",
-            ))
-        }
+        _ => return Ok(AgentToolResult::error("missing or empty 'path' for edit")),
     };
     let old = match old_string {
         Some(s) => s,
@@ -363,17 +356,17 @@ pub async fn op_edit(
     let outcome = apply_patch::fuzzy_edit(&text, old, new, replace_all);
 
     match outcome {
-        apply_patch::FuzzyEditOutcome::NotFound => {
-            Ok(AgentToolResult::error(
-                "old_string not found in file (tried exact, rstrip, trim, and Unicode-normalised matching)",
-            ))
-        }
-        apply_patch::FuzzyEditOutcome::Ambiguous { count } => {
-            Ok(AgentToolResult::error(format!(
-                "old_string matches {count} locations; set replace_all=true or make old_string unique"
-            )))
-        }
-        apply_patch::FuzzyEditOutcome::Replaced { new_content, count, fuzzy } => {
+        apply_patch::FuzzyEditOutcome::NotFound => Ok(AgentToolResult::error(
+            "old_string not found in file (tried exact, rstrip, trim, and Unicode-normalised matching)",
+        )),
+        apply_patch::FuzzyEditOutcome::Ambiguous { count } => Ok(AgentToolResult::error(format!(
+            "old_string matches {count} locations; set replace_all=true or make old_string unique"
+        ))),
+        apply_patch::FuzzyEditOutcome::Replaced {
+            new_content,
+            count,
+            fuzzy,
+        } => {
             if let Err(e) = op.write(&vpath, new_content.into_bytes()).await {
                 return Ok(AgentToolResult::error(format!(
                     "Failed to write {raw_path}: {e}"
@@ -464,8 +457,7 @@ pub async fn op_patch(
                 move_path,
                 chunks,
             } => {
-                let src_vpath =
-                    OpendalFileStorage::normalize_path(&path.display().to_string());
+                let src_vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
 
                 // Read original content.
                 let buf = match op.read(&src_vpath).await {
@@ -503,8 +495,7 @@ pub async fn op_patch(
                     .map(|d| d.display().to_string())
                     .unwrap_or_else(|| path.display().to_string());
 
-                let dest_vpath =
-                    OpendalFileStorage::normalize_path(&dest_display);
+                let dest_vpath = OpendalFileStorage::normalize_path(&dest_display);
 
                 // Write result.
                 if let Err(e) = op.write(&dest_vpath, new_content.into_bytes()).await {

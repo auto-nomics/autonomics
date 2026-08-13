@@ -16,13 +16,13 @@ use schemars::Schema;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use workflow_editor::WorkflowManager;
 use workflow_editor::error::Result;
 use workflow_editor::executor::{
     NodeCtx, NodeExecutor, NodeReporter, PortInputs, PortOutputs, Scheduler,
 };
 use workflow_editor::model::{NodeEntry, PortSpec, Skill, WorkflowManifest};
 use workflow_editor::registry::{NodeFactory, NodeRegistry};
-use workflow_editor::WorkflowManager;
 
 /// Capturing node — records the SOP context seen at execute time, returns
 /// the input value under `out`.
@@ -158,7 +158,9 @@ async fn sop_is_injected_into_inner_run() {
         .outputs
         .get(&(outer_node.id, "out".into()))
         .expect("outer node out port must exist");
-    let sop = payload["sop"].as_str().expect("payload.sop must be a string");
+    let sop = payload["sop"]
+        .as_str()
+        .expect("payload.sop must be a string");
     assert!(
         sop.contains("OUTER_SOP_MARKER"),
         "outer workflow SOP missing from inner prompt: {sop}"
@@ -204,10 +206,7 @@ async fn inner_node_receives_surface_input() {
 
     // Surface input "in" maps to inner node "c" (id) port "in" -> echoed
     // under inner port "out" -> projected to outer "out" via surface_outputs.
-    let payload = result
-        .outputs
-        .get(&(outer_node.id, "out".into()))
-        .unwrap();
+    let payload = result.outputs.get(&(outer_node.id, "out".into())).unwrap();
     assert_eq!(payload["echo"], serde_json::json!("hello-from-outer"));
 }
 
@@ -240,7 +239,10 @@ async fn sop_popped_after_subgraph_returns() {
     let mut inputs = serde_json::Map::new();
     inputs.insert("in".into(), serde_json::json!("x"));
 
-    let result = scheduler.run(&outer, inputs, CancellationToken::new()).await.unwrap();
+    let result = scheduler
+        .run(&outer, inputs, CancellationToken::new())
+        .await
+        .unwrap();
 
     // Both runs succeeded (no SOP imbalance panic).
     // Each outer skill node contributes 1 `(node_id, "out")` entry; seed is

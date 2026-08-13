@@ -11,15 +11,15 @@ use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend as BurnBackend, B};
+use crate::backend::{self, B, Backend as BurnBackend};
+use crate::configs::EarlyStoppingConfig;
 use crate::configs::{
     Activation, AeKind, AeLoss, EpochLog, LayerWeights, SchedulerConfig, TrainConfig,
 };
 use crate::data;
 use crate::models::burn_net::{self, BurnMlp};
-use crate::configs::EarlyStoppingConfig;
-use crate::scheduler::Scheduler;
 use crate::scaler::StandardScaler;
+use crate::scheduler::Scheduler;
 use crate::tensor::Tensor;
 
 /// Combined encoder-decoder module so Burn autodiff sees one graph.
@@ -75,8 +75,15 @@ pub struct AutoEncoderModel {
 
 impl AutoEncoderModel {
     pub fn n_params(&self) -> usize {
-        self.encoder_layers.iter().map(|l| l.n_params()).sum::<usize>()
-            + self.decoder_layers.iter().map(|l| l.n_params()).sum::<usize>()
+        self.encoder_layers
+            .iter()
+            .map(|l| l.n_params())
+            .sum::<usize>()
+            + self
+                .decoder_layers
+                .iter()
+                .map(|l| l.n_params())
+                .sum::<usize>()
     }
 }
 

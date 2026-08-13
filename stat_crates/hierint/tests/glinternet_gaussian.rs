@@ -49,7 +49,11 @@ fn test_glinternet_gaussian_lambda_path() {
     let fit = glinternet::fit(&x_cat, &z, y, &num_levels, &config).expect("fit failed");
 
     // Verify lambda path matches
-    assert_eq!(fit.lambda.len(), fx.lambda.len(), "lambda path length mismatch");
+    assert_eq!(
+        fit.lambda.len(),
+        fx.lambda.len(),
+        "lambda path length mismatch"
+    );
 
     // Check each lambda value (they should be identical since we used the same grid)
     for (i, (got, expected)) in fit.lambda.iter().zip(fx.lambda.iter()).enumerate() {
@@ -57,7 +61,10 @@ fn test_glinternet_gaussian_lambda_path() {
         if re > 1e-6 {
             eprintln!("lambda[{i}]: got {got}, expected {expected}, re={re}");
         }
-        assert!(re < 1e-3, "lambda[{i}] mismatch: got {got}, expected {expected}");
+        assert!(
+            re < 1e-3,
+            "lambda[{i}] mismatch: got {got}, expected {expected}"
+        );
     }
 }
 
@@ -102,8 +109,7 @@ fn test_glinternet_gaussian_obj_value() {
     for i in 1..fit.obj_value.len() {
         // The objective should be non-increasing in theory, but due to
         // FISTA convergence tolerance it might fluctuate slightly
-        let re = (fit.obj_value[i] - fx.obj_value[i]).abs()
-            / fx.obj_value[i].abs().max(1e-10);
+        let re = (fit.obj_value[i] - fx.obj_value[i]).abs() / fx.obj_value[i].abs().max(1e-10);
         if re > 0.1 {
             eprintln!(
                 "obj[{i}]: got {}, expected {}, re={re}",
@@ -114,5 +120,10 @@ fn test_glinternet_gaussian_obj_value() {
 
     // First objective should match closely (both are just SSE of Y - mean(Y))
     let re0 = (fit.obj_value[0] - fx.obj_value[0]).abs() / fx.obj_value[0].abs();
-    assert!(re0 < 1e-6, "obj[0] mismatch: got {}, expected {}", fit.obj_value[0], fx.obj_value[0]);
+    assert!(
+        re0 < 1e-6,
+        "obj[0] mismatch: got {}, expected {}",
+        fit.obj_value[0],
+        fx.obj_value[0]
+    );
 }

@@ -124,12 +124,15 @@ impl ToolFunction for SpawnAgentTool {
         &self,
         input: SpawnAgentInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self.control.spawn_agent(
-            &input.agent_name,
-            &self.caller_path,
-            &self.caller_profile_path,
-            input.profile_segment.as_deref(),
-        ).await
+        match self
+            .control
+            .spawn_agent(
+                &input.agent_name,
+                &self.caller_path,
+                &self.caller_profile_path,
+                input.profile_segment.as_deref(),
+            )
+            .await
         {
             Ok(path) => Ok(ToolResult::success(format!(
                 "Agent at path `{path}` spawned and registered."
@@ -204,9 +207,7 @@ impl ToolFunction for DeriveProfileTool {
                  profile_segment=\"{}\" to instantiate.",
                 input.segment
             ))),
-            Err(e) => Ok(ToolResult::success(format!(
-                "Derive failed: {e}"
-            ))),
+            Err(e) => Ok(ToolResult::success(format!("Derive failed: {e}"))),
         }
     }
 }
@@ -317,9 +318,7 @@ impl ToolFunction for SendMessageTool {
                 "Message delivered to '{}'.",
                 input.agent_name
             ))),
-            Some(Err(e)) => Ok(ToolResult::success(format!(
-                "send_message failed: {e}"
-            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!("send_message failed: {e}"))),
             None => Ok(ToolResult::success(
                 "send_message: host command channel closed (runtime shut down)",
             )),
@@ -725,7 +724,10 @@ impl ToolFunction for InterruptAgentTool {
         &self,
         input: InterruptAgentInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        let reason = input.reason.as_deref().unwrap_or("user-requested interrupt");
+        let reason = input
+            .reason
+            .as_deref()
+            .unwrap_or("user-requested interrupt");
         tracing::info!(
             agent = %input.agent_name,
             reason = %reason,

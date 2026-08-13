@@ -26,7 +26,10 @@ impl SkillRegistry {
 
     /// Insert or replace a skill in the cache.
     pub fn insert(&self, skill: Skill) {
-        self.by_name.write().unwrap().insert(skill.name.clone(), skill);
+        self.by_name
+            .write()
+            .unwrap()
+            .insert(skill.name.clone(), skill);
     }
 
     /// Remove a skill by name.

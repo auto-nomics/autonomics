@@ -34,10 +34,16 @@ impl Kernel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Vce { Jackknife, Plugin }
+pub enum Vce {
+    Jackknife,
+    Plugin,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FitSelect { Unrestricted, Restricted }
+pub enum FitSelect {
+    Unrestricted,
+    Restricted,
+}
 
 // =====================================================================
 // Numerical integration for kernel moment matrices
@@ -47,14 +53,24 @@ pub enum FitSelect { Unrestricted, Restricted }
 fn integrate<F: Fn(f64) -> f64>(low: f64, up: f64, f: F) -> f64 {
     // Gauss-Legendre nodes and weights for n=8 on [-1,1]
     const N8_X: [f64; 8] = [
-        -0.9602898564975363, -0.7966664774136267, -0.5255324099163290,
-        -0.1834346424956498, 0.1834346424956498, 0.5255324099163290,
-        0.7966664774136267, 0.9602898564975363,
+        -0.9602898564975363,
+        -0.7966664774136267,
+        -0.5255324099163290,
+        -0.1834346424956498,
+        0.1834346424956498,
+        0.5255324099163290,
+        0.7966664774136267,
+        0.9602898564975363,
     ];
     const N8_W: [f64; 8] = [
-        0.1012285362903763, 0.2223810344533745, 0.3137066458778873,
-        0.3626837833783620, 0.3626837833783620, 0.3137066458778873,
-        0.2223810344533745, 0.1012285362903763,
+        0.1012285362903763,
+        0.2223810344533745,
+        0.3137066458778873,
+        0.3626837833783620,
+        0.3626837833783620,
+        0.3137066458778873,
+        0.2223810344533745,
+        0.1012285362903763,
     ];
 
     let mid = 0.5 * (up + low);
@@ -90,8 +106,15 @@ fn g_matrix(p: usize, low: f64, up: f64, kernel: Kernel) -> Mat<f64> {
             // G[i,j] = double integral of x^i * y^j * K(x) * K(y) * sign indicators
             // Using the formula from Cattaneo, Jansson & Ma (2020)
             let val = integrate(low, up, |y| {
-                let inner1 = integrate(low, y, |x| x.powi(i as i32) * y.powi(j as i32) * kernel.value(x) * kernel.value(y));
-                let inner2 = integrate(y, up, |x| x.powi((i.saturating_sub(1)) as i32) * y.powi(j as i32) * kernel.value(x) * kernel.value(y));
+                let inner1 = integrate(low, y, |x| {
+                    x.powi(i as i32) * y.powi(j as i32) * kernel.value(x) * kernel.value(y)
+                });
+                let inner2 = integrate(y, up, |x| {
+                    x.powi((i.saturating_sub(1)) as i32)
+                        * y.powi(j as i32)
+                        * kernel.value(x)
+                        * kernel.value(y)
+                });
                 inner1 + inner2
             });
             g[(i, j)] = val;
@@ -132,12 +155,12 @@ pub struct DensityEst {
 /// cutoff using local polynomial density estimation.
 #[allow(clippy::too_many_arguments)]
 fn rddensity_fv(
-    y: &[f64],   // estimated CDF
-    x: &[f64],   // centered running variable (sorted ascending)
-    nl: usize,   // total left sample size
-    nr: usize,   // total right sample size
-    nlh: usize,  // left sample size within bandwidth
-    nrh: usize,  // right sample size within bandwidth
+    y: &[f64],  // estimated CDF
+    x: &[f64],  // centered running variable (sorted ascending)
+    nl: usize,  // total left sample size
+    nr: usize,  // total right sample size
+    nlh: usize, // left sample size within bandwidth
+    nrh: usize, // right sample size within bandwidth
     hl: f64,
     hr: f64,
     p: usize,
@@ -165,17 +188,27 @@ fn rddensity_fv(
         let mut xp = Mat::zeros(nh, ncols);
         let mut hp = vec![1.0; ncols];
         // Column 0: intercept
-        for i in 0..nh { xp[(i, 0)] = 1.0; }
+        for i in 0..nh {
+            xp[(i, 0)] = 1.0;
+        }
         // Column 1: left slope
-        for i in 0..nlh { xp[(i, 1)] = x[i] / hl; }
+        for i in 0..nlh {
+            xp[(i, 1)] = x[i] / hl;
+        }
         // Column 2: right slope
-        for i in nlh..nh { xp[(i, 2)] = x[i] / hr; }
+        for i in nlh..nh {
+            xp[(i, 2)] = x[i] / hr;
+        }
         if p > 1 {
-            for j in 3..=p+1 {
+            for j in 3..=p + 1 {
                 let pow = j - 1;
                 hp[j] = hl.powi(pow as i32);
-                for i in 0..nlh { xp[(i, j)] = (x[i] / hl).powi(pow as i32); }
-                for i in nlh..nh { xp[(i, j)] = (x[i] / hr).powi(pow as i32); }
+                for i in 0..nlh {
+                    xp[(i, j)] = (x[i] / hl).powi(pow as i32);
+                }
+                for i in nlh..nh {
+                    xp[(i, j)] = (x[i] / hr).powi(pow as i32);
+                }
             }
         }
         hp[1] = hl;
@@ -191,12 +224,16 @@ fn rddensity_fv(
                 // Left column
                 let pow = j / 2;
                 hp[j] = hl.powi(pow as i32);
-                for i in 0..nlh { xp[(i, j)] = (x[i] / hl).powi(pow as i32); }
+                for i in 0..nlh {
+                    xp[(i, j)] = (x[i] / hl).powi(pow as i32);
+                }
             } else {
                 // Right column
                 let pow = (j - 1) / 2;
                 hp[j] = hr.powi(pow as i32);
-                for i in nlh..nh { xp[(i, j)] = (x[i] / hr).powi(pow as i32); }
+                for i in nlh..nh {
+                    xp[(i, j)] = (x[i] / hr).powi(pow as i32);
+                }
             }
         }
         (xp, hp)
@@ -270,7 +307,9 @@ fn rddensity_fv(
             sd[0] = v[(idx_l, idx_l)].max(0.0_f64).sqrt();
             sd[1] = v[(idx_r, idx_r)].max(0.0_f64).sqrt();
             let cov = v[(idx_l, idx_r)];
-            sd[2] = (v[(idx_l, idx_l)] + v[(idx_r, idx_r)] - 2.0 * cov).max(0.0_f64).sqrt();
+            sd[2] = (v[(idx_l, idx_l)] + v[(idx_r, idx_r)] - 2.0 * cov)
+                .max(0.0_f64)
+                .sqrt();
         }
         Vce::Plugin => {
             // Use S and G matrices for asymptotic variance
@@ -325,13 +364,7 @@ pub fn binomial_test(n_l: usize, n_r: usize, p_null: f64) -> f64 {
 /// Compute MSE-optimal bandwidth for density test.
 ///
 /// Uses pilot density estimates and the formula from Cattaneo, Jansson & Ma (2020).
-pub fn rdbwdensity(
-    x_raw: &[f64],
-    c: f64,
-    p: usize,
-    kernel: Kernel,
-    vce: Vce,
-) -> (f64, f64) {
+pub fn rdbwdensity(x_raw: &[f64], c: f64, p: usize, kernel: Kernel, vce: Vce) -> (f64, f64) {
     let mut x: Vec<f64> = x_raw.iter().filter(|v| v.is_finite()).copied().collect();
     x.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = x.len();
@@ -358,12 +391,19 @@ pub fn rdbwdensity(
         Kernel::Triangular => 2.576,
         Kernel::Epanechnikov => 2.34,
         Kernel::Uniform => 1.843,
-    } * scale * (n as f64).powf(-1.0 / 5.0);
+    } * scale
+        * (n as f64).powf(-1.0 / 5.0);
 
     // Pilot density estimates
     let x_centered: Vec<f64> = x.iter().map(|xi| xi - c).collect();
-    let nl_pilot = x_centered.iter().filter(|xi| **xi >= -c_bw && **xi < 0.0).count();
-    let nr_pilot = x_centered.iter().filter(|xi| **xi >= 0.0 && **xi <= c_bw).count();
+    let nl_pilot = x_centered
+        .iter()
+        .filter(|xi| **xi >= -c_bw && **xi < 0.0)
+        .count();
+    let nr_pilot = x_centered
+        .iter()
+        .filter(|xi| **xi >= 0.0 && **xi <= c_bw)
+        .count();
     let f_l = nl_pilot as f64 / (n as f64 * c_bw);
     let f_r = nr_pilot as f64 / (n as f64 * c_bw);
 
@@ -427,7 +467,10 @@ pub struct RdDensityConfig {
 impl Default for RdDensityConfig {
     fn default() -> Self {
         Self {
-            x: vec![], c: 0.0, p: 2, q: 3,
+            x: vec![],
+            c: 0.0,
+            p: 2,
+            q: 3,
             kernel: Kernel::Triangular,
             vce: Vce::Jackknife,
             fitselect: FitSelect::Unrestricted,
@@ -440,7 +483,7 @@ impl Default for RdDensityConfig {
 /// Output of `rddensity()`.
 #[derive(Clone, Debug)]
 pub struct RdDensityResult {
-    pub hat: [f64; 3],       // left, right, diff
+    pub hat: [f64; 3], // left, right, diff
     pub sd: [f64; 3],
     pub t_stat: f64,
     pub p_value: f64,
@@ -471,7 +514,9 @@ pub fn rddensity(cfg: &RdDensityConfig) -> Result<RdDensityResult, RdDensityErro
     let nr = n - nl;
 
     if nl < 10 || nr < 10 {
-        return Err(RdDensityError::Msg("Not enough observations on each side.".into()));
+        return Err(RdDensityError::Msg(
+            "Not enough observations on each side.".into(),
+        ));
     }
 
     // Bandwidth
@@ -498,8 +543,12 @@ pub fn rddensity(cfg: &RdDensityConfig) -> Result<RdDensityResult, RdDensityErro
     };
     let scale_bw = sd_val.min(iqr_val / 1.349);
     let fallback_bw = scale_bw * 2.0; // reasonable default bandwidth
-    if !hl.is_finite() || hl <= 0.0 { hl = fallback_bw; }
-    if !hr.is_finite() || hr <= 0.0 { hr = fallback_bw; }
+    if !hl.is_finite() || hl <= 0.0 {
+        hl = fallback_bw;
+    }
+    if !hr.is_finite() || hr <= 0.0 {
+        hr = fallback_bw;
+    }
 
     // Center at cutoff
     let xc: Vec<f64> = x.iter().map(|xi| xi - c).collect();
@@ -515,21 +564,40 @@ pub fn rddensity(cfg: &RdDensityConfig) -> Result<RdDensityResult, RdDensityErro
         if xc[i] >= -hl && xc[i] <= hr {
             xh.push(xc[i]);
             yh.push(y[i]);
-            if xc[i] < 0.0 { nlh += 1; }
+            if xc[i] < 0.0 {
+                nlh += 1;
+            }
         }
     }
     let nrh = xh.len() - nlh;
 
     // Estimate using q-th order polynomial (bias-corrected)
     let est = rddensity_fv(
-        &yh, &xh, nl, nr, nlh, nrh, hl, hr,
-        q, cfg.kernel, cfg.fitselect, cfg.vce,
-    ).ok_or_else(|| RdDensityError::Msg("Density estimation failed (singular matrix).".into()))?;
+        &yh,
+        &xh,
+        nl,
+        nr,
+        nlh,
+        nrh,
+        hl,
+        hr,
+        q,
+        cfg.kernel,
+        cfg.fitselect,
+        cfg.vce,
+    )
+    .ok_or_else(|| RdDensityError::Msg("Density estimation failed (singular matrix).".into()))?;
 
     // Binomial test
     let bino_pval = {
-        let xl_count = xc.iter().filter(|xi| **xi < 0.0 && xi.abs() <= hl.max(hr)).count();
-        let xr_count = xc.iter().filter(|xi| **xi >= 0.0 && **xi <= hl.max(hr)).count();
+        let xl_count = xc
+            .iter()
+            .filter(|xi| **xi < 0.0 && xi.abs() <= hl.max(hr))
+            .count();
+        let xr_count = xc
+            .iter()
+            .filter(|xi| **xi >= 0.0 && **xi <= hl.max(hr))
+            .count();
         if xl_count + xr_count > 0 {
             Some(binomial_test(xl_count, xr_count, 0.5))
         } else {

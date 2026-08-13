@@ -6,12 +6,12 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
+use crate::forest::ForestKind;
 use crate::nodes::causal_forest::CausalForestOutput;
 use crate::nodes::dr_scores::dr_scores_binary;
-use crate::forest::ForestKind;
 use crate::{GrfError, Result};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -27,7 +27,9 @@ pub struct GetScoresSpec {
     pub num_trees_for_weights: u32,
 }
 
-fn default_num_trees() -> u32 { 500 }
+fn default_num_trees() -> u32 {
+    500
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GetScoresOutput {
@@ -38,7 +40,9 @@ pub struct GetScoresOutput {
 pub struct GetScoresFactory;
 
 impl GetScoresFactory {
-    pub fn kind() -> &'static str { "grf_get_scores" }
+    pub fn kind() -> &'static str {
+        "grf_get_scores"
+    }
 }
 
 impl GetScoresSpec {
@@ -49,11 +53,14 @@ impl GetScoresSpec {
                 requested: ForestKind::Causal,
             });
         }
-        let (y_orig, w_orig) = causal.original_outcomes()
+        let (y_orig, w_orig) = causal
+            .original_outcomes()
             .ok_or_else(|| GrfError::Missing("missing Y/W on causal forest".into()))?;
         let y_hat = &causal.y_hat;
         let w_hat = &causal.w_hat;
-        let tau_hat = causal.oob_predictions.as_ref()
+        let tau_hat = causal
+            .oob_predictions
+            .as_ref()
             .ok_or_else(|| GrfError::Missing("missing OOB tau".into()))?
             .values
             .clone();
@@ -66,7 +73,9 @@ impl GetScoresSpec {
         if !binary_w {
             return Err(GrfError::Missing(
                 "continuous treatment DR scores require Var[W|X] estimation; \
-                 not implemented in this version".into()));
+                 not implemented in this version"
+                    .into(),
+            ));
         }
         let dr = dr_scores_binary(y_orig, w_orig, y_hat, w_hat, &tau_hat);
         Ok(GetScoresOutput { dr_scores: dr, n })
@@ -75,8 +84,14 @@ impl GetScoresSpec {
 
 #[allow(dead_code)]
 fn _schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new("dr_score", DataType::Float64, false)]))
+    Arc::new(Schema::new(vec![Field::new(
+        "dr_score",
+        DataType::Float64,
+        false,
+    )]))
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(GetScoresSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(GetScoresSpec)
+}

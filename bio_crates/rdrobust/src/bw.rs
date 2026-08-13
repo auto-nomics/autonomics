@@ -111,12 +111,11 @@ pub fn rdrobust_bw(
 
     // VCE: aux = rdrobust_vce(0, s, R_V*eW, res_V, eC, ...)
     let r_v_ew = scale_rows(&r_v, &e_w); // R_V * eW
-    let cidx_v: Option<Vec<Vec<usize>>> =
-        if let Some(ec) = e_cluster_ref {
-            Some(cluster_idx(ec))
-        } else {
-            None
-        };
+    let cidx_v: Option<Vec<Vec<usize>>> = if let Some(ec) = e_cluster_ref {
+        Some(cluster_idx(ec))
+    } else {
+        None
+    };
 
     // For CRV2/CRV3: need sqrtRX and invG
     let sqrt_rx_v: Option<Mat<f64>> = if crv3 || crv2 {
@@ -132,11 +131,7 @@ pub fn rdrobust_bw(
         &res_v,
         e_cluster_ref,
         cidx_v.as_deref(),
-        if crv3 || crv2 {
-            Some(&inv_g_v)
-        } else {
-            None
-        },
+        if crv3 || crv2 { Some(&inv_g_v) } else { None },
         sqrt_rx_v.as_ref(),
         crv2,
         None,
@@ -147,7 +142,10 @@ pub fn rdrobust_bw(
     let v_v = v_full[(nu, nu)];
 
     // v = crossprod(R_V*eW, ((eX-c)/h_V)^(o+1))  [(o+1) × 1]
-    let u_powers: Vec<f64> = e_xmc.iter().map(|&u| (u / h_v).powi((o + 1) as i32)).collect();
+    let u_powers: Vec<f64> = e_xmc
+        .iter()
+        .map(|&u| (u / h_v).powi((o + 1) as i32))
+        .collect();
     let mut v_vec = vec![0.0; o + 1];
     for k in 0..n_v {
         for j in 0..=o {
@@ -215,8 +213,7 @@ pub fn rdrobust_bw(
             vec![0; n_b]
         };
 
-        let eb_cluster: Option<Vec<f64>> =
-            cluster.map(|cl| ind_b.iter().map(|&i| cl[i]).collect());
+        let eb_cluster: Option<Vec<f64>> = cluster.map(|cl| ind_b.iter().map(|&i| cl[i]).collect());
         let eb_cluster_ref = eb_cluster.as_deref();
 
         let res_b = rdrobust_res(
@@ -256,11 +253,7 @@ pub fn rdrobust_bw(
             &res_b,
             eb_cluster_ref,
             cidx_b.as_deref(),
-            if crv3 || crv2 {
-                Some(&inv_g_b)
-            } else {
-                None
-            },
+            if crv3 || crv2 { Some(&inv_g_b) } else { None },
             sqrt_rx_b.as_ref(),
             crv2,
             None,
@@ -274,8 +267,7 @@ pub fn rdrobust_bw(
 
     // B = sqrt(2*(o+1-nu)) * BConst * (s' * beta_B[o+2,])
     // For s=1: s' * beta_B[o+2,1] = beta_B[o+1, 0] (0-based)
-    let b_val =
-        (2.0 * (o + 1 - nu) as f64).sqrt() * b_const * beta_b[(o + 1, 0)];
+    let b_val = (2.0 * (o + 1 - nu) as f64).sqrt() * b_const * beta_b[(o + 1, 0)];
 
     // V = (2*nu+1) * h_V^(2*nu+1) * V_V
     let v_val = (2.0 * nu as f64 + 1.0) * h_v.powi((2 * nu + 1) as i32) * v_v;

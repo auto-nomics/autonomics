@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::executor::Scheduler;
 use crate::model::{NodeKindInfo, Skill, SkillInfo};
 use crate::registry::{NodeRegistry, SkillRegistry};
-use crate::store::{migrations, DbPool, NodeKindRepo, SkillRepo, WorkflowRepo};
+use crate::store::{DbPool, NodeKindRepo, SkillRepo, WorkflowRepo, migrations};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -48,10 +48,7 @@ impl WorkflowManager {
     pub fn from_pool(pool: DbPool) -> Self {
         let node_registry = Arc::new(NodeRegistry::new());
         let skill_registry = Arc::new(SkillRegistry::new());
-        let scheduler = Scheduler::new(
-            Arc::clone(&node_registry),
-            Arc::clone(&skill_registry),
-        );
+        let scheduler = Scheduler::new(Arc::clone(&node_registry), Arc::clone(&skill_registry));
         Self {
             pool,
             node_registry,

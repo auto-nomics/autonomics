@@ -312,9 +312,7 @@ impl AgentPickerState {
                 self.items
                     .iter()
                     .enumerate()
-                    .filter(|(_, item)| {
-                        item.path.as_str().to_lowercase().contains(&needle)
-                    })
+                    .filter(|(_, item)| item.path.as_str().to_lowercase().contains(&needle))
                     .map(|(i, _)| i)
                     .collect(),
             )

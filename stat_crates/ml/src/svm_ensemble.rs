@@ -318,7 +318,12 @@ mod tests {
         let result = svm_classify(&data, &labels, "linear", 1.0).unwrap();
         assert_eq!(result.predictions.len(), 8);
         assert_eq!(result.probabilities.len(), 8);
-        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(
+            result
+                .probabilities
+                .iter()
+                .all(|&p| (0.0..=1.0).contains(&p))
+        );
         // Verify probability direction: class-1 samples should have higher P
         let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
         let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;
@@ -341,7 +346,12 @@ mod tests {
         let result = adaboost(&data, &labels, 10, 1.0).unwrap();
         assert_eq!(result.predictions.len(), 8);
         assert_eq!(result.probabilities.len(), 8);
-        assert!(result.probabilities.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(
+            result
+                .probabilities
+                .iter()
+                .all(|&p| (0.0..=1.0).contains(&p))
+        );
         // Verify probability direction: class-1 samples should have higher P
         let mean_pos: f64 = result.probabilities[4..].iter().sum::<f64>() / 4.0;
         let mean_neg: f64 = result.probabilities[..4].iter().sum::<f64>() / 4.0;

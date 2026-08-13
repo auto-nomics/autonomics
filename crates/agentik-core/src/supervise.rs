@@ -6,8 +6,8 @@
 //! logged with a backtrace, so a bug in one task can never silently kill a
 //! background worker without leaving a trace.
 
-use std::panic::AssertUnwindSafe;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 
 use futures::FutureExt;
 use tokio::task::JoinHandle;
@@ -58,7 +58,10 @@ where
                     backtrace = %bt,
                     "spawned task panicked"
                 );
-                Err(TaskPanic { task: task_name, msg })
+                Err(TaskPanic {
+                    task: task_name,
+                    msg,
+                })
             }
         }
     })
@@ -104,7 +107,10 @@ where
                     backtrace = %bt,
                     "spawned task panicked"
                 );
-                Err(TaskPanic { task: task_name, msg })
+                Err(TaskPanic {
+                    task: task_name,
+                    msg,
+                })
             }
         }
     })

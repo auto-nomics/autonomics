@@ -79,7 +79,10 @@ fn test_near_pd_recovers_pd() {
             }
         }
     }
-    assert!(max_diff < 0.3, "nearPD should be close to original, max_diff={max_diff}");
+    assert!(
+        max_diff < 0.3,
+        "nearPD should be close to original, max_diff={max_diff}"
+    );
 }
 
 #[test]
@@ -114,17 +117,23 @@ fn test_sem_recovers_known_loadings_3trait() {
 
     // Check that the model fit produces reasonable results
     // For k=3 one-factor model: df = k(k-3)/2 = 0 (saturated)
-    assert_eq!(result.modelfit.df, 0, "3 indicators with 1 factor = saturated model (df=0)");
+    assert_eq!(
+        result.modelfit.df, 0,
+        "3 indicators with 1 factor = saturated model (df=0)"
+    );
 
     // Check loadings are recovered (approximately)
-    let loading_results: Vec<&usermodel::ParamResult> = result.results.iter()
-        .filter(|r| r.op == "=~")
-        .collect();
+    let loading_results: Vec<&usermodel::ParamResult> =
+        result.results.iter().filter(|r| r.op == "=~").collect();
     assert_eq!(loading_results.len(), 3);
 
     // Loadings should be positive and in the right ballpark
     for r in &loading_results {
-        assert!(r.unstand_est.abs() > 0.1, "Loading estimate should be meaningful: {}", r.unstand_est);
+        assert!(
+            r.unstand_est.abs() > 0.1,
+            "Loading estimate should be meaningful: {}",
+            r.unstand_est
+        );
     }
 }
 
@@ -141,8 +150,7 @@ fn test_sem_two_factor_recovery() {
     let mut s = Mat::zeros(k, k);
     for i in 0..k {
         for j in 0..k {
-            s[(i, j)] = loadings1[i] * loadings1[j] * f1_var
-                      + loadings2[i] * loadings2[j] * f2_var;
+            s[(i, j)] = loadings1[i] * loadings1[j] * f1_var + loadings2[i] * loadings2[j] * f2_var;
             if i == j {
                 s[(i, i)] += resid[i];
             }
@@ -167,10 +175,14 @@ fn test_sem_two_factor_recovery() {
     let result = usermodel::usermodel(&covstruc, &config).unwrap();
 
     // Should have loadings for both factors
-    let f1_loadings: Vec<_> = result.results.iter()
+    let f1_loadings: Vec<_> = result
+        .results
+        .iter()
         .filter(|r| r.op == "=~" && r.lhs == "F1")
         .collect();
-    let f2_loadings: Vec<_> = result.results.iter()
+    let f2_loadings: Vec<_> = result
+        .results
+        .iter()
         .filter(|r| r.op == "=~" && r.lhs == "F2")
         .collect();
     assert_eq!(f1_loadings.len(), 2);
@@ -191,7 +203,11 @@ fn test_commonfactor_fit_quality() {
     assert_eq!(result.modelfit.df, 5);
 
     // SRMR should be small for a well-fitting model
-    assert!(result.modelfit.srmr < 0.5, "SRMR should be reasonable: {}", result.modelfit.srmr);
+    assert!(
+        result.modelfit.srmr < 0.5,
+        "SRMR should be reasonable: {}",
+        result.modelfit.srmr
+    );
 }
 
 // =====================================================================
@@ -228,12 +244,18 @@ fn test_rgmodel_correlation_matrix() {
 
     // R should be a correlation matrix (diagonal = 1)
     for i in 0..k {
-        assert!((result.r[(i, i)] - 1.0).abs() < 1e-10, "R diagonal should be 1");
+        assert!(
+            (result.r[(i, i)] - 1.0).abs() < 1e-10,
+            "R diagonal should be 1"
+        );
     }
 
     // V_R should be positive semi-definite (non-negative diagonal)
     for i in 0..z {
-        assert!(result.v_r[(i, i)] >= 0.0, "V_R diagonal should be non-negative");
+        assert!(
+            result.v_r[(i, i)] >= 0.0,
+            "V_R diagonal should be non-negative"
+        );
     }
 
     // Check that rg is consistent: r_ij = s_ij / (sd_i * sd_j)
@@ -245,7 +267,10 @@ fn test_rgmodel_correlation_matrix() {
             assert!(
                 (result.r[(i, j)] - expected_r).abs() < 1e-8,
                 "r[{},{}] = {} but expected {}",
-                i, j, result.r[(i, j)], expected_r
+                i,
+                j,
+                result.r[(i, j)],
+                expected_r
             );
         }
     }
@@ -262,9 +287,15 @@ fn test_user_gwas_parallel() {
         v: Mat::<f64>::identity(6, 6) * 0.001,
         s: {
             let mut m = Mat::zeros(k, k);
-            m[(0, 0)] = 0.3; m[(1, 1)] = 0.3; m[(2, 2)] = 0.3;
-            m[(0, 1)] = 0.15; m[(0, 2)] = 0.15; m[(1, 2)] = 0.15;
-            m[(1, 0)] = 0.15; m[(2, 0)] = 0.15; m[(2, 1)] = 0.15;
+            m[(0, 0)] = 0.3;
+            m[(1, 1)] = 0.3;
+            m[(2, 2)] = 0.3;
+            m[(0, 1)] = 0.15;
+            m[(0, 2)] = 0.15;
+            m[(1, 2)] = 0.15;
+            m[(1, 0)] = 0.15;
+            m[(2, 0)] = 0.15;
+            m[(2, 1)] = 0.15;
             m
         },
         i_mat: Mat::<f64>::identity(k, k),
@@ -308,16 +339,24 @@ fn test_liability_conversion_known_values() {
     let cf = utils::liability_conversion_factor(0.01, 0.5);
     assert!(cf > 0.0);
     // Should be less than 1 for rare diseases
-    assert!(cf < 1.0, "liability conversion for 1% prevalence should be < 1, got {cf}");
+    assert!(
+        cf < 1.0,
+        "liability conversion for 1% prevalence should be < 1, got {cf}"
+    );
 }
 
 #[test]
 fn test_standardization() {
     let mut s = Mat::zeros(3, 3);
-    s[(0, 0)] = 4.0; s[(1, 1)] = 9.0; s[(2, 2)] = 16.0;
-    s[(0, 1)] = 6.0; s[(1, 0)] = 6.0;
-    s[(0, 2)] = 4.0; s[(2, 0)] = 4.0;
-    s[(1, 2)] = 6.0; s[(2, 1)] = 6.0;
+    s[(0, 0)] = 4.0;
+    s[(1, 1)] = 9.0;
+    s[(2, 2)] = 16.0;
+    s[(0, 1)] = 6.0;
+    s[(1, 0)] = 6.0;
+    s[(0, 2)] = 4.0;
+    s[(2, 0)] = 4.0;
+    s[(1, 2)] = 6.0;
+    s[(2, 1)] = 6.0;
 
     let cor = utils::standardize(&s);
     for i in 0..3 {
@@ -340,7 +379,8 @@ fn test_paldsc_returns_valid_eigenvalues() {
     for i in 0..k {
         s[(i, i)] = 0.3;
     }
-    s[(0, 1)] = 0.2; s[(1, 0)] = 0.2;
+    s[(0, 1)] = 0.2;
+    s[(1, 0)] = 0.2;
 
     let z = k * (k + 1) / 2;
     let v = Mat::<f64>::identity(z, z) * 0.001;
@@ -391,7 +431,11 @@ fn test_gls_with_identity_weight() {
     let result = summary_gls::summary_gls(&y, &omega, &x, true).unwrap();
 
     // OLS slope should be 2.0 (y = 2x - 1)
-    assert!((result.betas[1] - 2.0).abs() < 0.01, "GLS slope should be ~2.0, got {}", result.betas[1]);
+    assert!(
+        (result.betas[1] - 2.0).abs() < 0.01,
+        "GLS slope should be ~2.0, got {}",
+        result.betas[1]
+    );
 }
 
 // =====================================================================
@@ -486,12 +530,17 @@ fn test_full_pipeline_ldsc_to_sem() {
     let covstruc = make_one_factor_covstruc(&loadings, &resid, factor_var, 0.0005);
 
     // Step 1: Fit common factor
-    let cf_result = commonfactor::commonfactor(&covstruc, &commonfactor::CommonFactorConfig::default()).unwrap();
+    let cf_result =
+        commonfactor::commonfactor(&covstruc, &commonfactor::CommonFactorConfig::default())
+            .unwrap();
     assert!(cf_result.modelfit.df > 0);
 
     // Step 2: Fit user model
     let names: Vec<String> = (0..4).map(|i| format!("V{}", i + 1)).collect();
-    let model_str = format!("F1 =~ NA*{} + {} + {} + {}\nF1 ~~ 1*F1", names[0], names[1], names[2], names[3]);
+    let model_str = format!(
+        "F1 =~ NA*{} + {} + {} + {}\nF1 ~~ 1*F1",
+        names[0], names[1], names[2], names[3]
+    );
     let um_config = usermodel::UserModelConfig {
         model: model_str,
         ..Default::default()

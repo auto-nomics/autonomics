@@ -18,9 +18,9 @@ fn node_e2e_glinternet_gaussian() {
     let n = 100;
     let p = 5;
     let z: Vec<f64> = (0..n * p).map(|i| (i as f64).sin() * 2.0).collect();
-    let y: Vec<f64> = (0..n).map(|i| {
-        z[i] + z[n + i] * 2.0 + z[2 * n + i] * z[3 * n + i] + 0.1 * (i as f64).cos()
-    }).collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| z[i] + z[n + i] * 2.0 + z[2 * n + i] * z[3 * n + i] + 0.1 * (i as f64).cos())
+        .collect();
     let num_levels = vec![1; p];
 
     // Fit (simulating what the DAG node does)
@@ -34,11 +34,17 @@ fn node_e2e_glinternet_gaussian() {
 
     // Build results (simulating build_results_batch)
     let total_active: usize = fit.active_set.iter().map(|a| a.num_groups()).sum();
-    assert!(total_active > 0, "expected some active groups across the path");
+    assert!(
+        total_active > 0,
+        "expected some active groups across the path"
+    );
 
     // Verify lambda path
     assert!(fit.lambda.len() > 1);
-    assert!(fit.lambda[0] > fit.lambda[fit.lambda.len() - 1], "lambda should be decreasing");
+    assert!(
+        fit.lambda[0] > fit.lambda[fit.lambda.len() - 1],
+        "lambda should be decreasing"
+    );
 
     // Verify predictions can be computed (simulating predict path)
     let preds = glinternet::predict(&fit, &[], &z, &num_levels, n);
@@ -75,8 +81,14 @@ fn node_e2e_glinternet_logistic_cat() {
     for active in &fit.active_set {
         if let Some(ref cc) = active.catcat {
             for &[a, b] in cc {
-                let has_a = active.cat.as_ref().map_or(false, |v| v.iter().any(|&[i]| i == a));
-                let has_b = active.cat.as_ref().map_or(false, |v| v.iter().any(|&[i]| i == b));
+                let has_a = active
+                    .cat
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[i]| i == a));
+                let has_b = active
+                    .cat
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[i]| i == b));
                 assert!(has_a && has_b, "catcat hierarchy violated");
             }
         }
@@ -105,9 +117,9 @@ fn node_e2e_glinternet_mixed() {
         }
     }
 
-    let y: Vec<f64> = (0..n).map(|i| {
-        z[i] + z[n + i] + 0.5 * (i as f64).cos()
-    }).collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| z[i] + z[n + i] + 0.5 * (i as f64).cos())
+        .collect();
 
     let config = glinternet::GlinternetConfig {
         family: glinternet::Family::Gaussian,
@@ -124,8 +136,14 @@ fn node_e2e_glinternet_mixed() {
     for active in &fit.active_set {
         if let Some(ref cct) = active.catcont {
             for &[ci, cj] in cct {
-                let has_cat = active.cat.as_ref().map_or(false, |v| v.iter().any(|&[i]| i == ci));
-                let has_cont = active.cont.as_ref().map_or(false, |v| v.iter().any(|&[j]| j == cj));
+                let has_cat = active
+                    .cat
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[i]| i == ci));
+                let has_cont = active
+                    .cont
+                    .as_ref()
+                    .map_or(false, |v| v.iter().any(|&[j]| j == cj));
                 assert!(has_cat && has_cont, "catcont hierarchy violated");
             }
         }
@@ -141,9 +159,9 @@ fn node_e2e_hiernet_weak() {
     let n = 80;
     let p = 6;
     let x: Vec<f64> = (0..n * p).map(|i| (i as f64 * 0.1).sin()).collect();
-    let y: Vec<f64> = (0..n).map(|i| {
-        x[i] + x[n + i] + x[i] * x[2 * n + i] + 0.1 * (i as f64).cos()
-    }).collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| x[i] + x[n + i] + x[i] * x[2 * n + i] + 0.1 * (i as f64).cos())
+        .collect();
 
     let config = hiernet::HierNetConfig {
         family: hiernet::HierNetFamily::Gaussian,
@@ -186,9 +204,9 @@ fn node_e2e_hiernet_strong() {
     let n = 60;
     let p = 5;
     let x: Vec<f64> = (0..n * p).map(|i| (i as f64 * 0.05).cos()).collect();
-    let y: Vec<f64> = (0..n).map(|i| {
-        x[i] * 2.0 + x[n + i] + x[i] * x[2 * n + i] + 0.05 * (i as f64)
-    }).collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| x[i] * 2.0 + x[n + i] + x[i] * x[2 * n + i] + 0.05 * (i as f64))
+        .collect();
 
     let config = hiernet::HierNetConfig {
         family: hiernet::HierNetFamily::Gaussian,
@@ -209,13 +227,17 @@ fn node_e2e_hiernet_strong() {
     for fit in &path.fits {
         for j in 0..p {
             for k in 0..p {
-                if j == k { continue; }
+                if j == k {
+                    continue;
+                }
                 let th_val = fit.coefs.th[j + p * k] + fit.coefs.th[k + p * j];
                 if th_val.abs() > 1e-5 {
                     let main_j = (fit.coefs.bp[j] - fit.coefs.bn[j]).abs();
                     let main_k = (fit.coefs.bp[k] - fit.coefs.bn[k]).abs();
-                    assert!(main_j > 1e-5 && main_k > 1e-5,
-                        "strong hierarchy violated: th[{j},{k}] nonzero");
+                    assert!(
+                        main_j > 1e-5 && main_k > 1e-5,
+                        "strong hierarchy violated: th[{j},{k}] nonzero"
+                    );
                 }
             }
         }
@@ -242,7 +264,10 @@ fn determinism_glinternet() {
     let fit2 = glinternet::fit(&[], &z, &y, &[1, 1, 1], &config).unwrap();
 
     assert_eq!(fit1.lambda, fit2.lambda, "lambda paths should be identical");
-    assert_eq!(fit1.obj_value, fit2.obj_value, "objectives should be identical");
+    assert_eq!(
+        fit1.obj_value, fit2.obj_value,
+        "objectives should be identical"
+    );
 }
 
 #[test]
@@ -293,7 +318,10 @@ fn stability_large_values() {
 
     let fit = fit.unwrap();
     for &obj in &fit.obj_value {
-        assert!(obj.is_finite(), "objective should be finite with large values");
+        assert!(
+            obj.is_finite(),
+            "objective should be finite with large values"
+        );
     }
 }
 

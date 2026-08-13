@@ -10,11 +10,11 @@ use async_trait::async_trait;
 use schemars::Schema;
 use std::sync::Arc;
 use uuid::Uuid;
+use workflow_editor::WorkflowManager;
 use workflow_editor::error::Result;
 use workflow_editor::executor::{NodeCtx, NodeExecutor, NodeReporter, PortInputs, PortOutputs};
 use workflow_editor::model::{NodeEntry, PortSpec, Skill, WorkflowManifest};
 use workflow_editor::registry::{NodeFactory, NodeRegistry};
-use workflow_editor::WorkflowManager;
 
 struct StubNode;
 

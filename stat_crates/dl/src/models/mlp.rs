@@ -4,23 +4,23 @@
 //! hidden layers, activation, dropout, mini-batch training, multiple
 //! optimisers, early stopping.
 
-use burn::optim::{Adam, GradientsParams, Optimizer};
 use burn::module::AutodiffModule;
+use burn::optim::{Adam, GradientsParams, Optimizer};
 use burn::tensor::Tensor as BurnTensor;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend, B};
+use crate::backend::{self, B, Backend};
 // Internal use.
 use crate::configs::{Activation, LayerWeights, SchedulerConfig, TaskType, TrainConfig};
 // Re-exported for nodes-dl: dl::mlp::EarlyStoppingConfig, dl::mlp::EpochLog.
 pub use crate::configs::{EarlyStoppingConfig, EpochLog};
 use crate::data;
 use crate::models::burn_net::{self, BurnMlp};
-use crate::scheduler::{Scheduler, SchedulerMode};
 use crate::scaler::StandardScaler;
+use crate::scheduler::{Scheduler, SchedulerMode};
 use crate::tensor::Tensor;
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -180,11 +180,7 @@ pub fn train_mlp(
             let infer_model = model.valid();
             let x_burn = data::f64_to_burn_infer(&xv_s, &device);
             let preds = infer_model.forward(x_burn, config.activation);
-            let (vl, vm) = compute_val_metrics_burn(
-                &preds,
-                yv,
-                config.task_type,
-            );
+            let (vl, vm) = compute_val_metrics_burn(&preds, yv, config.task_type);
             (Some(vl), Some(vm))
         } else {
             (None, None)
@@ -373,7 +369,10 @@ mod tests {
                 x_data.extend_from_slice(&[i as f64 * 0.01, i as f64 * 0.01]);
                 y_data.push(0.0);
             } else {
-                x_data.extend_from_slice(&[5.0 + (i - 20) as f64 * 0.01, 5.0 + (i - 20) as f64 * 0.01]);
+                x_data.extend_from_slice(&[
+                    5.0 + (i - 20) as f64 * 0.01,
+                    5.0 + (i - 20) as f64 * 0.01,
+                ]);
                 y_data.push(1.0);
             }
         }
@@ -451,16 +450,8 @@ mod tests {
 
     #[test]
     fn test_mlp_model_serialization() {
-        let x = Tensor::from_rows(
-            10,
-            2,
-            &(0..20).map(|x| x as f64).collect::<Vec<_>>(),
-        );
-        let y = Tensor::from_rows(
-            10,
-            1,
-            &(0..10).map(|i| (i % 2) as f64).collect::<Vec<_>>(),
-        );
+        let x = Tensor::from_rows(10, 2, &(0..20).map(|x| x as f64).collect::<Vec<_>>());
+        let y = Tensor::from_rows(10, 1, &(0..10).map(|i| (i % 2) as f64).collect::<Vec<_>>());
 
         let config = make_config(TaskType::Classification, 10, 0.01);
         let result = train_mlp(&x, &y, None, &config).unwrap();

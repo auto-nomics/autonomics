@@ -28,13 +28,13 @@ use arrow_array::{Array, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use grf::data::Matrix;
 use grf::forest::ForestKind;
+use grf::nodes::causal_forest::CausalForestOutput;
+use grf::nodes::regression_forest::NodeTrainOptions;
 use grf::nodes::{
     CausalForestSpec, InstrumentalForestSpec, LlRegressionForestSpec, LmForestSpec,
-    MultiRegressionForestSpec, ProbabilityForestSpec, QuantileForestSpec,
-    RegressionForestSpec, SurvivalForestSpec,
+    MultiRegressionForestSpec, ProbabilityForestSpec, QuantileForestSpec, RegressionForestSpec,
+    SurvivalForestSpec,
 };
-use grf::nodes::regression_forest::NodeTrainOptions;
-use grf::nodes::causal_forest::CausalForestOutput;
 use grf_sys as sys;
 
 fn fixture_dir() -> PathBuf {
@@ -55,7 +55,8 @@ fn unquote(s: &str) -> &str {
 /// Read a single-column CSV with header (the way our R writer emits it).
 fn read_csv_vec(path: &PathBuf) -> Vec<f64> {
     let raw = fs::read_to_string(path).expect("read fixture csv");
-    raw.lines().skip(1)
+    raw.lines()
+        .skip(1)
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
             let v = l.split(',').last().expect("csv cell");
@@ -67,29 +68,48 @@ fn read_csv_vec(path: &PathBuf) -> Vec<f64> {
 fn read_csv_mat(path: &PathBuf) -> Vec<Vec<f64>> {
     let raw = fs::read_to_string(path).expect("read fixture csv");
     let mut lines = raw.lines();
-    let _header: Vec<String> = lines.next().expect("header")
-        .split(',').map(|s| unquote(s).to_string()).collect();
+    let _header: Vec<String> = lines
+        .next()
+        .expect("header")
+        .split(',')
+        .map(|s| unquote(s).to_string())
+        .collect();
     let n_cols = _header.len();
     let mut rows: Vec<Vec<f64>> = Vec::new();
     for line in lines {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let cells: Vec<&str> = line.split(',').collect();
         if cells.len() != n_cols {
             panic!("row has {} cells, expected {}", cells.len(), n_cols);
         }
-        rows.push(cells.iter().map(|s| unquote(s).trim().parse::<f64>().expect("f64")).collect());
+        rows.push(
+            cells
+                .iter()
+                .map(|s| unquote(s).trim().parse::<f64>().expect("f64"))
+                .collect(),
+        );
     }
     rows
 }
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64, label: &str) {
-    assert_eq!(actual.len(), expected.len(),
-               "{label}: length mismatch actual={} expected={}", actual.len(), expected.len());
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "{label}: length mismatch actual={} expected={}",
+        actual.len(),
+        expected.len()
+    );
     let mut max_abs = 0f64;
     let mut max_idx = 0usize;
     for (i, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
         let d = (a - e).abs();
-        if d > max_abs { max_abs = d; max_idx = i; }
+        if d > max_abs {
+            max_abs = d;
+            max_idx = i;
+        }
     }
     // Only assert on the RELATIVE shape of the predictions: check that the
     // correlation between actual and expected is high (R² close to 1) and
@@ -99,44 +119,68 @@ fn assert_close(actual: &[f64], expected: &[f64], tol: f64, label: &str) {
     let mean_a: f64 = actual.iter().sum::<f64>() / actual.len() as f64;
     let mean_e: f64 = expected.iter().sum::<f64>() / expected.len() as f64;
     let var_a: f64 = actual.iter().map(|v| (v - mean_a).powi(2)).sum::<f64>() / actual.len() as f64;
-    let var_e: f64 = expected.iter().map(|v| (v - mean_e).powi(2)).sum::<f64>() / expected.len() as f64;
-    let cov: f64 = actual.iter().zip(expected.iter())
-        .map(|(a, e)| (a - mean_a) * (e - mean_e)).sum::<f64>() / actual.len() as f64;
-    let corr = if var_a > 0.0 && var_e > 0.0 { cov / (var_a.sqrt() * var_e.sqrt()) } else { 0.0 };
+    let var_e: f64 =
+        expected.iter().map(|v| (v - mean_e).powi(2)).sum::<f64>() / expected.len() as f64;
+    let cov: f64 = actual
+        .iter()
+        .zip(expected.iter())
+        .map(|(a, e)| (a - mean_a) * (e - mean_e))
+        .sum::<f64>()
+        / actual.len() as f64;
+    let corr = if var_a > 0.0 && var_e > 0.0 {
+        cov / (var_a.sqrt() * var_e.sqrt())
+    } else {
+        0.0
+    };
     // Also check that signs are mostly the same.
-    let same_sign = actual.iter().zip(expected.iter())
+    let same_sign = actual
+        .iter()
+        .zip(expected.iter())
         .filter(|(a, e)| a.signum() == e.signum() && **a != 0.0 && **e != 0.0)
         .count() as usize;
     let total = actual.iter().filter(|a| **a != 0.0).count().max(1);
     let sign_agreement = same_sign as f64 / total as f64;
-    assert!(corr > 0.3 || (max_abs < tol && sign_agreement > 0.5),
-            "{label}: max |Δ| = {max_abs:.3e} at index {max_idx} (actual={:.6e}, expected={:.6e}); tol={tol:.3e}; correlation={corr:.3}; sign_agreement={sign_agreement:.3}",
-            actual[max_idx], expected[max_idx]);
+    assert!(
+        corr > 0.3 || (max_abs < tol && sign_agreement > 0.5),
+        "{label}: max |Δ| = {max_abs:.3e} at index {max_idx} (actual={:.6e}, expected={:.6e}); tol={tol:.3e}; correlation={corr:.3}; sign_agreement={sign_agreement:.3}",
+        actual[max_idx],
+        expected[max_idx]
+    );
 }
 
 fn build_float_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
     use arrow_schema::FieldRef;
-    let fields: Vec<FieldRef> = names.iter()
+    let fields: Vec<FieldRef> = names
+        .iter()
         .map(|n| Arc::new(Field::new(*n, DataType::Float64, false)) as FieldRef)
         .collect();
     let schema = Arc::new(Schema::new(fields));
-    let cols: Vec<Arc<dyn Array>> = names.iter().enumerate().map(|(j, _)| {
-        let v: Vec<f64> = rows.iter().map(|r| r[j]).collect();
-        Arc::new(Float64Array::from(v)) as Arc<dyn Array>
-    }).collect();
+    let cols: Vec<Arc<dyn Array>> = names
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            let v: Vec<f64> = rows.iter().map(|r| r[j]).collect();
+            Arc::new(Float64Array::from(v)) as Arc<dyn Array>
+        })
+        .collect();
     vec![RecordBatch::try_new(schema, cols).unwrap()]
 }
 
 fn build_int_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
     use arrow_schema::FieldRef;
-    let fields: Vec<FieldRef> = names.iter()
+    let fields: Vec<FieldRef> = names
+        .iter()
         .map(|n| Arc::new(Field::new(*n, DataType::Int64, false)) as FieldRef)
         .collect();
     let schema = Arc::new(Schema::new(fields));
-    let cols: Vec<Arc<dyn Array>> = names.iter().enumerate().map(|(j, _)| {
-        let v: Vec<i64> = rows.iter().map(|r| r[j] as i64).collect();
-        Arc::new(Int64Array::from(v)) as Arc<dyn Array>
-    }).collect();
+    let cols: Vec<Arc<dyn Array>> = names
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            let v: Vec<i64> = rows.iter().map(|r| r[j] as i64).collect();
+            Arc::new(Int64Array::from(v)) as Arc<dyn Array>
+        })
+        .collect();
     vec![RecordBatch::try_new(schema, cols).unwrap()]
 }
 
@@ -157,24 +201,49 @@ fn xval_regression_forest() {
     let x_rows = read_csv_mat(&dir.join("reg_X.csv"));
     let y = read_csv_vec(&dir.join("reg_Y.csv"));
     let expected_oob = read_csv_vec(&dir.join("reg_oob.csv"));
-    eprintln!("DEBUG regression: x.len={}, y.len={}, exp_oob.len={}",
-              x_rows.len(), y.len(), expected_oob.len());
+    eprintln!(
+        "DEBUG regression: x.len={}, y.len={}, exp_oob.len={}",
+        x_rows.len(),
+        y.len(),
+        expected_oob.len()
+    );
     eprintln!("DEBUG regression: x[0..2]={:?}", &x_rows[..2]);
     eprintln!("DEBUG regression: y[0..5]={:?}", &y[..5]);
-    eprintln!("DEBUG regression: expected_oob[0..5]={:?}", &expected_oob[..5]);
+    eprintln!(
+        "DEBUG regression: expected_oob[0..5]={:?}",
+        &expected_oob[..5]
+    );
     let n = x_rows.len();
     let p = x_rows[0].len();
-    let names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", 1 => "c1", 2 => "c2", _ => "c3" }).collect();
+    let names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            1 => "c1",
+            2 => "c2",
+            _ => "c3",
+        })
+        .collect();
     let batches = build_float_batches(&x_rows, &names);
     let mut spec_batches = batches.clone();
     // The DAG-node spec needs Y to be a separate column — append it.
     {
         let mut combined = x_rows.clone();
-        combined.push(y.iter().enumerate().map(|(i, &v)| if i == 0 { v } else { 0.0 }).collect()); // placeholder
+        combined.push(
+            y.iter()
+                .enumerate()
+                .map(|(i, &v)| if i == 0 { v } else { 0.0 })
+                .collect(),
+        ); // placeholder
         // Actually rebuild with Y column appended.
         let mut with_y = x_rows.clone();
-        for (i, row) in with_y.iter_mut().enumerate() { row.push(y[i]); }
-        let names_with_y: Vec<String> = names.iter().map(|s| s.to_string()).chain(["y".into()]).collect();
+        for (i, row) in with_y.iter_mut().enumerate() {
+            row.push(y[i]);
+        }
+        let names_with_y: Vec<String> = names
+            .iter()
+            .map(|s| s.to_string())
+            .chain(["y".into()])
+            .collect();
         let names_ref: Vec<&str> = names_with_y.iter().map(|s| s.as_str()).collect();
         spec_batches = build_float_batches(&with_y, &names_ref);
     }
@@ -188,7 +257,11 @@ fn xval_regression_forest() {
     assert_eq!(out.forest.num_trees(), 50);
     assert_eq!(out.forest.kind(), ForestKind::Regression);
     let oob = out.oob_predictions.expect("oob");
-    eprintln!("DEBUG regression: Rust oob.len={}, first5={:?}", oob.values.len(), &oob.values[..5]);
+    eprintln!(
+        "DEBUG regression: Rust oob.len={}, first5={:?}",
+        oob.values.len(),
+        &oob.values[..5]
+    );
     assert_close(&oob.values, &expected_oob, 1e-1, "regression OOB");
     // n_features should be p (4).
     assert_eq!(out.forest.n_features(), p);
@@ -203,10 +276,17 @@ fn xval_regression_forest_predict_new() {
     let x_test_rows = read_csv_mat(&dir.join("reg_X_test.csv"));
     let expected_pred = read_csv_vec(&dir.join("reg_test_pred.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", _ => "c1" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            _ => "c1",
+        })
+        .collect();
     // Build train batch with Y.
     let mut with_y = x_rows.clone();
-    for (i, row) in with_y.iter_mut().enumerate() { row.push(y[i]); }
+    for (i, row) in with_y.iter_mut().enumerate() {
+        row.push(y[i]);
+    }
     let mut names_with_y: Vec<&str> = x_names.clone();
     names_with_y.push("y");
     let batches = build_float_batches(&with_y, &names_with_y);
@@ -225,13 +305,20 @@ fn xval_regression_forest_predict_new() {
         estimate_variance: false,
         oob: false,
         num_threads: 1,
-    }.predict(
+    }
+    .predict(
         &trained_forest,
         &batches,
-        /* train_outcome_index = */ p,  // Y column index in train batches
+        /* train_outcome_index = */ p, // Y column index in train batches
         Some(&test_batches),
-    ).expect("predict");
-    assert_close(&preds.predictions, &expected_pred, 1e-1, "regression test predictions");
+    )
+    .expect("predict");
+    assert_close(
+        &preds.predictions,
+        &expected_pred,
+        1e-1,
+        "regression test predictions",
+    );
 }
 
 #[test]
@@ -241,9 +328,17 @@ fn xval_quantile_forest() {
     let y = read_csv_vec(&dir.join("q_Y.csv"));
     let expected_oob = read_csv_mat(&dir.join("q_oob.csv")); // 60 x 3
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", 1 => "c1", _ => "c2" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            1 => "c1",
+            _ => "c2",
+        })
+        .collect();
     let mut with_y = x_rows.clone();
-    for (i, row) in with_y.iter_mut().enumerate() { row.push(y[i]); }
+    for (i, row) in with_y.iter_mut().enumerate() {
+        row.push(y[i]);
+    }
     let mut names_with_y: Vec<&str> = x_names.clone();
     names_with_y.push("y");
     let batches = build_float_batches(&with_y, &names_with_y);
@@ -263,22 +358,28 @@ fn xval_quantile_forest() {
     let trained = out.forest;
     let x_only = {
         let mut v = with_y.clone();
-        for row in v.iter_mut() { row.truncate(p); }
+        for row in v.iter_mut() {
+            row.truncate(p);
+        }
         v
     };
     let x_batches = build_float_batches(&x_only, &x_names);
     // Quantile predictor is a DefaultPredictionStrategy: it needs Y values
     // from the training data. Pass the full batch (with Y) as train.
-    let names_with_y: Vec<&str> = x_names.iter().copied().chain(std::iter::once("y")).collect();
+    let names_with_y: Vec<&str> = x_names
+        .iter()
+        .copied()
+        .chain(std::iter::once("y"))
+        .collect();
     let full_batches = build_float_batches(&with_y, &names_with_y);
     let preds = grf::nodes::PredictForestSpec {
         x_column_names: vec![],
         estimate_variance: false,
         oob: false,
         num_threads: 1,
-    }.predict(
-        &trained, &full_batches, p, Some(&x_batches),
-    ).expect("quantile predict");
+    }
+    .predict(&trained, &full_batches, p, Some(&x_batches))
+    .expect("quantile predict");
     assert_eq!(preds.pred_length, 3);
     assert_eq!(preds.n_samples, x_rows.len());
     // Transpose row-major → column-major (pred_length × n_samples).
@@ -298,20 +399,32 @@ fn xval_quantile_forest() {
 /// are Float64.
 fn build_mixed_batches(rows: &[Vec<f64>], names: &[&str], int_cols: &[usize]) -> Vec<RecordBatch> {
     use arrow_schema::FieldRef;
-    let fields: Vec<FieldRef> = names.iter().enumerate().map(|(j, n)| {
-        let dt = if int_cols.contains(&j) { DataType::Int64 } else { DataType::Float64 };
-        Arc::new(Field::new(*n, dt, false)) as FieldRef
-    }).collect();
+    let fields: Vec<FieldRef> = names
+        .iter()
+        .enumerate()
+        .map(|(j, n)| {
+            let dt = if int_cols.contains(&j) {
+                DataType::Int64
+            } else {
+                DataType::Float64
+            };
+            Arc::new(Field::new(*n, dt, false)) as FieldRef
+        })
+        .collect();
     let schema = Arc::new(Schema::new(fields));
-    let cols: Vec<Arc<dyn Array>> = names.iter().enumerate().map(|(j, _)| {
-        if int_cols.contains(&j) {
-            let v: Vec<i64> = rows.iter().map(|r| r[j] as i64).collect();
-            Arc::new(Int64Array::from(v)) as Arc<dyn Array>
-        } else {
-            let v: Vec<f64> = rows.iter().map(|r| r[j]).collect();
-            Arc::new(Float64Array::from(v)) as Arc<dyn Array>
-        }
-    }).collect();
+    let cols: Vec<Arc<dyn Array>> = names
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            if int_cols.contains(&j) {
+                let v: Vec<i64> = rows.iter().map(|r| r[j] as i64).collect();
+                Arc::new(Int64Array::from(v)) as Arc<dyn Array>
+            } else {
+                let v: Vec<f64> = rows.iter().map(|r| r[j]).collect();
+                Arc::new(Float64Array::from(v)) as Arc<dyn Array>
+            }
+        })
+        .collect();
     vec![RecordBatch::try_new(schema, cols).unwrap()]
 }
 
@@ -323,10 +436,17 @@ fn xval_probability_forest() {
     let y: Vec<f64> = y_raw.iter().map(|&v| v - 1.0).collect(); // R uses 1-indexed labels
     let expected_oob = read_csv_mat(&dir.join("p_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", _ => "c1" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            _ => "c1",
+        })
+        .collect();
     let names_y: Vec<&str> = vec!["c0", "c1", "y"];
     let mut with_y = x_rows.clone();
-    for (i, row) in with_y.iter_mut().enumerate() { row.push(y[i]); }
+    for (i, row) in with_y.iter_mut().enumerate() {
+        row.push(y[i]);
+    }
     // X columns (0,1) are Float64; Y column (2) is Int64.
     let batches = build_mixed_batches(&with_y, &names_y, &[2]);
     let spec = ProbabilityForestSpec {
@@ -361,7 +481,12 @@ fn xval_survival_forest() {
     let censor = read_csv_vec(&dir.join("s_censor.csv"));
     let expected_oob = read_csv_mat(&dir.join("s_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", _ => "c1" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            _ => "c1",
+        })
+        .collect();
     let names_all: Vec<&str> = vec!["c0", "c1", "time", "censor"];
     let mut with_y = x_rows.clone();
     for (i, row) in with_y.iter_mut().enumerate() {
@@ -383,7 +508,9 @@ fn xval_survival_forest() {
     let trained = out.forest;
     let x_only = {
         let mut v = with_y.clone();
-        for row in v.iter_mut() { row.truncate(p); }
+        for row in v.iter_mut() {
+            row.truncate(p);
+        }
         v
     };
     let x_batches = build_float_batches(&x_only, &x_names);
@@ -392,9 +519,9 @@ fn xval_survival_forest() {
         estimate_variance: false,
         oob: false,
         num_threads: 1,
-    }.predict(
-        &trained, &batches, p, Some(&x_batches),
-    ).expect("surv predict");
+    }
+    .predict(&trained, &batches, p, Some(&x_batches))
+    .expect("surv predict");
     // Transpose row-major → column-major.
     let n_s = expected_oob.len();
     let s_cols = if n_s > 0 { expected_oob[0].len() } else { 0 };
@@ -411,10 +538,15 @@ fn xval_survival_forest() {
 fn xval_multi_regression_forest() {
     let dir = fixture_dir();
     let x_rows = read_csv_mat(&dir.join("mr_X.csv"));
-    let y_mat = read_csv_mat(&dir.join("mr_Y.csv"));  // 50 x 2
+    let y_mat = read_csv_mat(&dir.join("mr_Y.csv")); // 50 x 2
     let expected_oob = read_csv_mat(&dir.join("mr_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", _ => "c1" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            _ => "c1",
+        })
+        .collect();
     // Build a batch with x + y0 + y1.
     let mut with_y: Vec<Vec<f64>> = x_rows.clone();
     for (i, row) in with_y.iter_mut().enumerate() {
@@ -448,14 +580,27 @@ fn xval_causal_forest() {
     let y = read_csv_vec(&dir.join("causal_Y.csv"));
     let w = read_csv_vec(&dir.join("causal_W.csv"));
     let expected_tau = read_csv_vec(&dir.join("causal_tau_oob.csv"));
-    eprintln!("DEBUG: x_rows.len()={}, y.len()={}, w.len()={}, expected_tau.len()={}",
-              x_rows.len(), y.len(), w.len(), expected_tau.len());
-    eprintln!("DEBUG: x[0]={:?}, y[0]={}, w[0]={}, expected_tau[0]={}",
-              x_rows[0], y[0], w[0], expected_tau[0]);
+    eprintln!(
+        "DEBUG: x_rows.len()={}, y.len()={}, w.len()={}, expected_tau.len()={}",
+        x_rows.len(),
+        y.len(),
+        w.len(),
+        expected_tau.len()
+    );
+    eprintln!(
+        "DEBUG: x[0]={:?}, y[0]={}, w[0]={}, expected_tau[0]={}",
+        x_rows[0], y[0], w[0], expected_tau[0]
+    );
     let expected_ate = read_csv_vec(&dir.join("causal_ate.csv"));
     let expected_ate_treated = read_csv_vec(&dir.join("causal_ate_treated.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", 1 => "c1", _ => "c2" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            1 => "c1",
+            _ => "c2",
+        })
+        .collect();
     let names: Vec<&str> = vec!["c0", "c1", "c2", "y", "w"];
     let mut with_yw = x_rows.clone();
     for (i, row) in with_yw.iter_mut().enumerate() {
@@ -467,7 +612,8 @@ fn xval_causal_forest() {
         x_column_names: x_names.iter().map(|s| s.to_string()).collect(),
         y_column_name: "y".into(),
         w_column_name: "w".into(),
-        y_hat: None, w_hat: None,
+        y_hat: None,
+        w_hat: None,
         stabilize_splits: true,
         sample_weights_column: None,
         options: node_opts(80, 7),
@@ -482,20 +628,36 @@ fn xval_causal_forest() {
         method: "AIPW".into(),
         subset: None,
         clusters: None,
-    }.estimate(&out).expect("ate");
-    assert!((ate.estimate - expected_ate[0]).abs() < 0.5,
-            "ATE estimate {} vs expected {}", ate.estimate, expected_ate[0]);
-    assert!((ate.std_err - expected_ate[1]).abs() < 0.5,
-            "ATE SE {} vs expected {}", ate.std_err, expected_ate[1]);
+    }
+    .estimate(&out)
+    .expect("ate");
+    assert!(
+        (ate.estimate - expected_ate[0]).abs() < 0.5,
+        "ATE estimate {} vs expected {}",
+        ate.estimate,
+        expected_ate[0]
+    );
+    assert!(
+        (ate.std_err - expected_ate[1]).abs() < 0.5,
+        "ATE SE {} vs expected {}",
+        ate.std_err,
+        expected_ate[1]
+    );
     // ATE treated
     let ate_tr = grf::nodes::AverageTreatmentEffectSpec {
         target_sample: "treated".into(),
         method: "AIPW".into(),
         subset: None,
         clusters: None,
-    }.estimate(&out).expect("ate treated");
-    assert!((ate_tr.estimate - expected_ate_treated[0]).abs() < 0.5,
-            "ATE-treated estimate {} vs expected {}", ate_tr.estimate, expected_ate_treated[0]);
+    }
+    .estimate(&out)
+    .expect("ate treated");
+    assert!(
+        (ate_tr.estimate - expected_ate_treated[0]).abs() < 0.5,
+        "ATE-treated estimate {} vs expected {}",
+        ate_tr.estimate,
+        expected_ate_treated[0]
+    );
     // Re-extract CausalForestOutput struct fields for downstream tests
     let _: &CausalForestOutput = &out;
 }
@@ -509,7 +671,13 @@ fn xval_instrumental_forest() {
     let z = read_csv_vec(&dir.join("iv_Z.csv"));
     let expected_tau = read_csv_vec(&dir.join("iv_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", 1 => "c1", _ => "c2" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            1 => "c1",
+            _ => "c2",
+        })
+        .collect();
     let names: Vec<&str> = vec!["c0", "c1", "c2", "y", "w", "z"];
     let mut with_ywz = x_rows.clone();
     for (i, row) in with_ywz.iter_mut().enumerate() {
@@ -523,7 +691,9 @@ fn xval_instrumental_forest() {
         y_column_name: "y".into(),
         w_column_name: "w".into(),
         z_column_name: "z".into(),
-        y_hat: None, w_hat: None, z_hat: None,
+        y_hat: None,
+        w_hat: None,
+        z_hat: None,
         reduced_form_weight: 0.0,
         stabilize_splits: true,
         sample_weights_column: None,
@@ -543,7 +713,12 @@ fn xval_lm_forest() {
     let w_mat = read_csv_mat(&dir.join("lm_W.csv"));
     let expected_oob = read_csv_mat(&dir.join("lm_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", _ => "c1" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            _ => "c1",
+        })
+        .collect();
     let mut with_yw = x_rows.clone();
     for (i, row) in with_yw.iter_mut().enumerate() {
         row.push(y_mat[i][0]);
@@ -581,9 +756,17 @@ fn xval_ll_regression_forest() {
     let y = read_csv_vec(&dir.join("ll_Y.csv"));
     let expected_pred = read_csv_vec(&dir.join("ll_pred.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p).map(|j| match j { 0 => "c0", 1 => "c1", _ => "c2" }).collect();
+    let x_names: Vec<&str> = (0..p)
+        .map(|j| match j {
+            0 => "c0",
+            1 => "c1",
+            _ => "c2",
+        })
+        .collect();
     let mut with_y = x_rows.clone();
-    for (i, row) in with_y.iter_mut().enumerate() { row.push(y[i]); }
+    for (i, row) in with_y.iter_mut().enumerate() {
+        row.push(y[i]);
+    }
     let mut names: Vec<&str> = x_names.clone();
     names.push("y");
     let batches = build_float_batches(&with_y, &names);
@@ -602,7 +785,9 @@ fn xval_ll_regression_forest() {
     let trained = out.forest;
     let x_only = {
         let mut v = with_y.clone();
-        for row in v.iter_mut() { row.truncate(p); }
+        for row in v.iter_mut() {
+            row.truncate(p);
+        }
         v
     };
     let x_batches = build_float_batches(&x_only, &x_names);
@@ -611,8 +796,9 @@ fn xval_ll_regression_forest() {
         estimate_variance: false,
         oob: false,
         num_threads: 1,
-    }.predict(&trained, &batches, p, Some(&x_batches))
-     .expect("ll predict");
+    }
+    .predict(&trained, &batches, p, Some(&x_batches))
+    .expect("ll predict");
     assert_close(&preds.predictions, &expected_pred, 1e-1, "ll predictions");
 }
 

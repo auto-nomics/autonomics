@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
@@ -21,7 +21,7 @@ use crate::forest::{
     ForestBlob, ForestStats, InstrumentalSpec, InstrumentalTrainer, OobPredictions,
 };
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -62,7 +62,9 @@ pub struct InstrumentalForestSpec {
     pub options: NodeTrainOptions,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone)]
 pub struct InstrumentalForestOutput {
@@ -80,7 +82,9 @@ pub struct InstrumentalForestOutput {
 pub struct InstrumentalForestFactory;
 
 impl InstrumentalForestFactory {
-    pub fn kind() -> &'static str { "grf_instrumental_forest" }
+    pub fn kind() -> &'static str {
+        "grf_instrumental_forest"
+    }
 }
 
 impl InstrumentalForestSpec {
@@ -90,12 +94,20 @@ impl InstrumentalForestSpec {
             return Err(GrfError::Missing("no rows in input batches".into()));
         }
         let schema = batches[0].schema();
-        let reserved = [&self.y_column_name, &self.w_column_name, &self.z_column_name];
+        let reserved = [
+            &self.y_column_name,
+            &self.w_column_name,
+            &self.z_column_name,
+        ];
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !reserved.contains(&f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !reserved.contains(&f.name()) && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
@@ -103,7 +115,9 @@ impl InstrumentalForestSpec {
         let y = arrow_batches_to_f64(batches, &self.y_column_name, n_rows)?;
         let w = arrow_batches_to_f64(batches, &self.w_column_name, n_rows)?;
         let z = arrow_batches_to_f64(batches, &self.z_column_name, n_rows)?;
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
@@ -114,20 +128,26 @@ impl InstrumentalForestSpec {
                 let mut opts = self.options.to_sys();
                 opts.num_trees = std::cmp::max(50, self.options.num_trees / 4);
                 opts.ci_group_size = 1;
-                let y_forest = crate::forest::RegressionTrainer::fit(
-                    crate::forest::RegressionSpec {
-                        x: x_matrix.clone(), y: y.clone(),
-                        sample_weights: weights.clone(), options: opts.clone(),
+                let y_forest =
+                    crate::forest::RegressionTrainer::fit(crate::forest::RegressionSpec {
+                        x: x_matrix.clone(),
+                        y: y.clone(),
+                        sample_weights: weights.clone(),
+                        options: opts.clone(),
                     })?;
-                let w_forest = crate::forest::RegressionTrainer::fit(
-                    crate::forest::RegressionSpec {
-                        x: x_matrix.clone(), y: w.clone(),
-                        sample_weights: weights.clone(), options: opts.clone(),
+                let w_forest =
+                    crate::forest::RegressionTrainer::fit(crate::forest::RegressionSpec {
+                        x: x_matrix.clone(),
+                        y: w.clone(),
+                        sample_weights: weights.clone(),
+                        options: opts.clone(),
                     })?;
-                let z_forest = crate::forest::RegressionTrainer::fit(
-                    crate::forest::RegressionSpec {
-                        x: x_matrix.clone(), y: z.clone(),
-                        sample_weights: weights.clone(), options: opts,
+                let z_forest =
+                    crate::forest::RegressionTrainer::fit(crate::forest::RegressionSpec {
+                        x: x_matrix.clone(),
+                        y: z.clone(),
+                        sample_weights: weights.clone(),
+                        options: opts,
                     })?;
                 let yh = regression_oob(&y_forest, &x_matrix, x_cols.len())?;
                 let wh = regression_oob(&w_forest, &x_matrix, x_cols.len())?;
@@ -155,7 +175,9 @@ impl InstrumentalForestSpec {
         let stats = ForestStats::from(&trained);
         Ok(InstrumentalForestOutput {
             forest: trained,
-            y_hat, w_hat, z_hat,
+            y_hat,
+            w_hat,
+            z_hat,
             oob_predictions: oob,
             stats,
         })
@@ -175,7 +197,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(InstrumentalForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(InstrumentalForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

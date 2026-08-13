@@ -3,8 +3,8 @@
 //! All functions operate on `faer::Mat<f64>` (column-major). Conventions
 //! mirror R's matrix operations as closely as possible.
 
-use faer::{Mat, MatRef, Side};
 use faer::linalg::solvers::{Llt, Solve};
+use faer::{Mat, MatRef, Side};
 
 use crate::error::{GenomicSemError, Result};
 

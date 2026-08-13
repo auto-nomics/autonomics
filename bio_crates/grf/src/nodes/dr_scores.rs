@@ -22,19 +22,22 @@ pub fn dr_scores_binary(
     w_hat: &[f64],
     tau_hat: &[f64],
 ) -> Vec<f64> {
-    let n = y_orig.len()
+    let n = y_orig
+        .len()
         .min(w_orig.len())
         .min(y_hat.len())
         .min(w_hat.len())
         .min(tau_hat.len());
 
-    (0..n).map(|i| {
-        let gamma = if w_hat[i] <= 0.0 || w_hat[i] >= 1.0 {
-            f64::NAN
-        } else {
-            (w_orig[i] - w_hat[i]) / (w_hat[i] * (1.0 - w_hat[i]))
-        };
-        let y_resid = y_orig[i] - (y_hat[i] + tau_hat[i] * (w_orig[i] - w_hat[i]));
-        tau_hat[i] + gamma * y_resid
-    }).collect()
+    (0..n)
+        .map(|i| {
+            let gamma = if w_hat[i] <= 0.0 || w_hat[i] >= 1.0 {
+                f64::NAN
+            } else {
+                (w_orig[i] - w_hat[i]) / (w_hat[i] * (1.0 - w_hat[i]))
+            };
+            let y_resid = y_orig[i] - (y_hat[i] + tau_hat[i] * (w_orig[i] - w_hat[i]));
+            tau_hat[i] + gamma * y_resid
+        })
+        .collect()
 }

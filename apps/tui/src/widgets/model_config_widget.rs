@@ -548,10 +548,7 @@ fn render_search_bar(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
         let filtered_count = state.flat_items().len();
         Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Magenta)),
-            Span::styled(
-                state.query.clone(),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(state.query.clone(), Style::default().fg(Color::White)),
             Span::styled("▏", Style::default().fg(Color::Magenta)),
             Span::styled(
                 format!("  {} items", filtered_count),

@@ -27,8 +27,7 @@ const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/go
 
 fn load_json(name: &str) -> Value {
     let path = format!("{GOLDEN_DIR}/{name}");
-    let s = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path));
+    let s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path));
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse JSON {}: {e}", path))
 }
 
@@ -134,10 +133,17 @@ fn golden_params(scen: &Value) -> GoldenParams {
         op: indices.iter().map(|&i| op[i].clone()).collect(),
         rhs: indices.iter().map(|&i| rhs[i].clone()).collect(),
         est: indices.iter().map(|&i| est_all[i]).collect(),
-        se: indices.iter().map(|&i| {
-            let se_idx = (free[i] - 1) as usize;
-            if se_idx < se_all.len() { se_all[se_idx] } else { f64::NAN }
-        }).collect(),
+        se: indices
+            .iter()
+            .map(|&i| {
+                let se_idx = (free[i] - 1) as usize;
+                if se_idx < se_all.len() {
+                    se_all[se_idx]
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect(),
     }
 }
 
@@ -159,9 +165,8 @@ fn xval_scenario1_parameter_recovery() {
 
     // The model is saturated (df=0), so loadings should be recovered exactly.
     // Compare each loading against the known true values.
-    let loading_results: Vec<&usermodel::ParamResult> = result.results.iter()
-        .filter(|r| r.op == "=~")
-        .collect();
+    let loading_results: Vec<&usermodel::ParamResult> =
+        result.results.iter().filter(|r| r.op == "=~").collect();
     assert_eq!(loading_results.len(), 3, "Expected 3 factor loadings");
 
     let true_loadings = json_to_vec(&scen["true_loadings"]);
@@ -170,7 +175,9 @@ fn xval_scenario1_parameter_recovery() {
         assert!(
             close(r.unstand_est, true_loadings[i], 1e-6, 1e-8),
             "Loading {}: Rust={:.10} vs true={:.10}",
-            i, r.unstand_est, true_loadings[i]
+            i,
+            r.unstand_est,
+            true_loadings[i]
         );
     }
 
@@ -179,9 +186,17 @@ fn xval_scenario1_parameter_recovery() {
     for i in 0..3 {
         for j in 0..3 {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                close(
+                    result.sem_implied[(i, j)],
+                    golden_implied[(i, j)],
+                    1e-6,
+                    1e-9
+                ),
                 "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
-                i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
+                i,
+                j,
+                result.sem_implied[(i, j)],
+                golden_implied[(i, j)]
             );
         }
     }
@@ -193,7 +208,11 @@ fn xval_scenario1_chisq() {
     let golden_chisq = scen["chisq"].as_f64().unwrap();
 
     // For a saturated model, chi-square should be ~0
-    assert!(golden_chisq.abs() < 1e-10, "Golden chi-sq: {}", golden_chisq);
+    assert!(
+        golden_chisq.abs() < 1e-10,
+        "Golden chi-sq: {}",
+        golden_chisq
+    );
 }
 
 #[test]
@@ -223,9 +242,17 @@ fn xval_scenario2_implied_covariance() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                close(
+                    result.sem_implied[(i, j)],
+                    golden_implied[(i, j)],
+                    1e-6,
+                    1e-9
+                ),
                 "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
-                i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
+                i,
+                j,
+                result.sem_implied[(i, j)],
+                golden_implied[(i, j)]
             );
         }
     }
@@ -258,7 +285,9 @@ fn xval_scenario2_loading_estimates() {
     for t in 1..=n_traits {
         let varname = format!("V{}", t);
         let golden_est = find_golden(&golden, "F1", "=~", &varname);
-        let rust_est = result.results.iter()
+        let rust_est = result
+            .results
+            .iter()
             .find(|r| r.lhs == "F1" && r.op == "=~" && r.rhs == varname);
 
         match (golden_est, rust_est) {
@@ -267,7 +296,9 @@ fn xval_scenario2_loading_estimates() {
                 assert!(
                     close(re.unstand_est, ge, 1e-5, 1e-8),
                     "Loading F1=~{}: Rust={:.10} vs lavaan={:.10}",
-                    varname, re.unstand_est, ge
+                    varname,
+                    re.unstand_est,
+                    ge
                 );
             }
             _ => { /* skip if not found in both */ }
@@ -291,7 +322,9 @@ fn xval_scenario2_residual_variances() {
     for t in 1..=n_traits {
         let varname = format!("V{}", t);
         let golden_est = find_golden(&golden, &varname, "~~", &varname);
-        let rust_est = result.results.iter()
+        let rust_est = result
+            .results
+            .iter()
             .find(|r| r.lhs == varname && r.op == "~~" && r.rhs == varname);
 
         match (golden_est, rust_est) {
@@ -300,7 +333,10 @@ fn xval_scenario2_residual_variances() {
                 assert!(
                     close(re.unstand_est, ge, 1e-5, 1e-8),
                     "Resid var {}~~{}: Rust={:.10} vs lavaan={:.10}",
-                    varname, varname, re.unstand_est, ge
+                    varname,
+                    varname,
+                    re.unstand_est,
+                    ge
                 );
             }
             _ => { /* skip if not found in both */ }
@@ -341,9 +377,17 @@ fn xval_scenario3_implied_covariance() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                close(
+                    result.sem_implied[(i, j)],
+                    golden_implied[(i, j)],
+                    1e-6,
+                    1e-9
+                ),
                 "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
-                i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
+                i,
+                j,
+                result.sem_implied[(i, j)],
+                golden_implied[(i, j)]
             );
         }
     }
@@ -374,9 +418,17 @@ fn xval_scenario3_factor_loadings() {
     for i in 0..k {
         for j in 0..k {
             assert!(
-                close(result.sem_implied[(i, j)], golden_implied[(i, j)], 1e-6, 1e-9),
+                close(
+                    result.sem_implied[(i, j)],
+                    golden_implied[(i, j)],
+                    1e-6,
+                    1e-9
+                ),
                 "Implied[{},{}]: Rust={:.10} vs lavaan={:.10}",
-                i, j, result.sem_implied[(i, j)], golden_implied[(i, j)]
+                i,
+                j,
+                result.sem_implied[(i, j)],
+                golden_implied[(i, j)]
             );
         }
     }
@@ -386,7 +438,9 @@ fn xval_scenario3_factor_loadings() {
     let golden = golden_params(&scen);
     for var in &["V1", "V2", "V3", "V4"] {
         let golden_est = find_golden(&golden, var, "~~", var);
-        let rust_est = result.results.iter()
+        let rust_est = result
+            .results
+            .iter()
             .find(|r| r.lhs == *var && r.op == "~~" && r.rhs == *var);
         match (golden_est, rust_est) {
             (Some((ge, _)), Some(re)) => {
@@ -395,7 +449,10 @@ fn xval_scenario3_factor_loadings() {
                 assert!(
                     close(re.unstand_est, ge, 1e-6, 1e-8),
                     "Resid {}~~{}: Rust={:.10} vs lavaan={:.10}",
-                    var, var, re.unstand_est, ge
+                    var,
+                    var,
+                    re.unstand_est,
+                    ge
                 );
             }
             _ => {}
@@ -418,15 +475,26 @@ fn xval_scenario4_near_pd() {
     let rust_output = near_pd::near_pd(&input);
 
     // Check that Rust output is SPD
-    assert!(near_pd::is_spd(&rust_output), "Rust nearPD output should be SPD");
+    assert!(
+        near_pd::is_spd(&rust_output),
+        "Rust nearPD output should be SPD"
+    );
 
     // Compare eigenvalues (both should have all-positive eigenvalues)
     let (rust_eigvals, _) = linalg::eigen_sym(&rust_output);
     for &ge in &golden_eigenvalues {
-        assert!(ge >= -1e-10, "Golden eigenvalue should be non-negative: {}", ge);
+        assert!(
+            ge >= -1e-10,
+            "Golden eigenvalue should be non-negative: {}",
+            ge
+        );
     }
     for &re in &rust_eigvals {
-        assert!(re >= -1e-10, "Rust eigenvalue should be non-negative: {}", re);
+        assert!(
+            re >= -1e-10,
+            "Rust eigenvalue should be non-negative: {}",
+            re
+        );
     }
 
     // Check that the output is close to the R Matrix::nearPD output
@@ -440,7 +508,11 @@ fn xval_scenario4_near_pd() {
         }
     }
     frob_diff = frob_diff.sqrt();
-    assert!(frob_diff < 0.2, "nearPD Frobenius diff: {} (Rust vs Matrix::nearPD)", frob_diff);
+    assert!(
+        frob_diff < 0.2,
+        "nearPD Frobenius diff: {} (Rust vs Matrix::nearPD)",
+        frob_diff
+    );
 }
 
 // =====================================================================
@@ -459,7 +531,9 @@ fn xval_scenario5_liability_conversion() {
         assert!(
             close(rust_cf, golden_factors[i], 1e-4, 1e-6),
             "Liability conversion for prev={}: Rust={} vs R={}",
-            pop_prev, rust_cf, golden_factors[i]
+            pop_prev,
+            rust_cf,
+            golden_factors[i]
         );
     }
 }

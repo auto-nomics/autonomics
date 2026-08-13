@@ -5,23 +5,23 @@
 //! Full multi-head attention can be layered on top later — the Burn autodiff
 //! infrastructure handles all backward passes.
 
-use burn::optim::{Adam, GradientsParams, Optimizer};
 use burn::module::AutodiffModule;
+use burn::optim::{Adam, GradientsParams, Optimizer};
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend, B};
+use crate::backend::{self, B, Backend};
+use crate::configs::EarlyStoppingConfig;
 use crate::configs::{
     Activation, EpochLog, LayerWeights, OptimizerConfig, Pooling, PositionalEncoding,
     SchedulerConfig, TaskType, TrainConfig,
 };
 use crate::data;
 use crate::models::burn_net::{self, BurnMlp};
-use crate::configs::EarlyStoppingConfig;
-use crate::scheduler::Scheduler;
 use crate::scaler::StandardScaler;
+use crate::scheduler::Scheduler;
 use crate::tensor::Tensor;
 
 /// Configuration for a Transformer encoder model.

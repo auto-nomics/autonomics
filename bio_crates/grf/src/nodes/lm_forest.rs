@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
 use crate::forest::{ForestBlob, ForestStats, LmSpec, LmTrainer, OobPredictions};
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -55,7 +55,9 @@ pub struct LmForestOutput {
 pub struct LmForestFactory;
 
 impl LmForestFactory {
-    pub fn kind() -> &'static str { "grf_lm_forest" }
+    pub fn kind() -> &'static str {
+        "grf_lm_forest"
+    }
 }
 
 impl LmForestSpec {
@@ -68,17 +70,24 @@ impl LmForestSpec {
         let mut reserved: Vec<&String> = self.y_column_names.iter().collect();
         reserved.extend(self.w_column_names.iter());
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !reserved.iter().any(|r| *r == f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !reserved.iter().any(|r| *r == f.name())
+                        && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
         let x_matrix = arrow_batches_to_matrix(batches, &x_cols, n_rows)?;
         let y_columns = collect_y_columns(batches, &self.y_column_names, n_rows)?;
         let w_columns = collect_y_columns(batches, &self.w_column_names, n_rows)?;
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
@@ -91,14 +100,22 @@ impl LmForestSpec {
         })?;
         let oob = trained.oob_predictions();
         let stats = ForestStats::from(&trained);
-        Ok(LmForestOutput { forest: trained, oob_predictions: oob, stats })
+        Ok(LmForestOutput {
+            forest: trained,
+            oob_predictions: oob,
+            stats,
+        })
     }
 }
 
 fn collect_y_columns(
-    batches: &[RecordBatch], cols: &[String], n_rows: usize,
+    batches: &[RecordBatch],
+    cols: &[String],
+    n_rows: usize,
 ) -> Result<Vec<Vec<f64>>> {
-    cols.iter().map(|name| arrow_batches_to_f64(batches, name, n_rows)).collect()
+    cols.iter()
+        .map(|name| arrow_batches_to_f64(batches, name, n_rows))
+        .collect()
 }
 
 #[allow(dead_code)]
@@ -107,7 +124,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(LmForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(LmForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

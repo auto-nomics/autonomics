@@ -14,7 +14,7 @@ fn main() -> ldsc::Result<()> {
     let munge_cfg = MungeConfig {
         sumstats: "/mnt/disk3/test/bmi_sumstats.tsv".into(),
         signed_sumstats: Some(("Z".into(), 0.0)), // Z computed directly from ES/SE
-        n: None,                                   // per-SNP SS column present
+        n: None,                                  // per-SNP SS column present
         n_col: Some("N".into()),
         a1: Some("A1".into()),
         a2: Some("A2".into()),
@@ -43,7 +43,9 @@ fn main() -> ldsc::Result<()> {
     };
 
     eprintln!("\nRunning LD Score Regression h² …");
-    let mut log = WriteLogger { w: std::io::stderr() };
+    let mut log = WriteLogger {
+        w: std::io::stderr(),
+    };
     let hsq = estimate_h2_from_files(&h2_cfg, &mut log)?;
 
     // ── Print results ─────────────────────────────────────────────────────

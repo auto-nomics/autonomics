@@ -17,8 +17,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
 
-use bib_types::{Article, IdKind, Identifier};
 use bib_types::query::StructuredSearch;
+use bib_types::{Article, IdKind, Identifier};
 
 use crate::error::{Error, Result};
 
@@ -845,7 +845,6 @@ impl LiteratureGateway {
             .with_source(Arc::new(S2Source::new(s2_client)))
     }
 
-
     /// Register a source.
     pub fn with_source(mut self, source: Arc<dyn LiteratureSource>) -> Self {
         self.sources.push(source);
@@ -966,11 +965,7 @@ impl LiteratureGateway {
     }
 
     /// Fetch from a specific source by name.
-    pub async fn fetch_from(
-        &self,
-        source_name: &str,
-        id: &Identifier,
-    ) -> Result<Option<Article>> {
+    pub async fn fetch_from(&self, source_name: &str, id: &Identifier) -> Result<Option<Article>> {
         let source = self
             .sources
             .iter()

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
@@ -73,14 +73,30 @@ pub struct NodeTrainOptions {
     pub compute_oob_predictions: bool,
 }
 
-fn default_num_trees() -> u32 { 2000 }
-fn default_ci_group_size() -> u32 { 2 }
-fn default_sample_fraction() -> f64 { 0.5 }
-fn default_min_node_size() -> u32 { 5 }
-fn default_true() -> bool { true }
-fn default_honesty_fraction() -> f64 { 0.5 }
-fn default_alpha() -> f64 { 0.05 }
-fn default_seed() -> u32 { 42 }
+fn default_num_trees() -> u32 {
+    2000
+}
+fn default_ci_group_size() -> u32 {
+    2
+}
+fn default_sample_fraction() -> f64 {
+    0.5
+}
+fn default_min_node_size() -> u32 {
+    5
+}
+fn default_true() -> bool {
+    true
+}
+fn default_honesty_fraction() -> f64 {
+    0.5
+}
+fn default_alpha() -> f64 {
+    0.05
+}
+fn default_seed() -> u32 {
+    42
+}
 
 impl Default for NodeTrainOptions {
     fn default() -> Self {
@@ -136,7 +152,9 @@ pub struct RegressionForestOutput {
 pub struct RegressionForestFactory;
 
 impl RegressionForestFactory {
-    pub fn kind() -> &'static str { "grf_regression_forest" }
+    pub fn kind() -> &'static str {
+        "grf_regression_forest"
+    }
 }
 
 impl RegressionForestSpec {
@@ -149,26 +167,38 @@ impl RegressionForestSpec {
         }
         let schema = batches[0].schema();
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| f.name() != &self.y_column_name
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    f.name() != &self.y_column_name && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
         let x_matrix = arrow_batches_to_matrix(batches, &x_cols, n_rows)?;
         let y_vec = arrow_batches_to_f64(batches, &self.y_column_name, n_rows)?;
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
         let trained = RegressionTrainer::fit(RegressionSpec {
-            x: x_matrix, y: y_vec, sample_weights: weights,
+            x: x_matrix,
+            y: y_vec,
+            sample_weights: weights,
             options: self.options.to_sys(),
         })?;
         let oob = trained.oob_predictions();
         let stats = ForestStats::from(&trained);
-        Ok(RegressionForestOutput { forest: trained, oob_predictions: oob, stats })
+        Ok(RegressionForestOutput {
+            forest: trained,
+            oob_predictions: oob,
+            stats,
+        })
     }
 }
 
@@ -177,7 +207,9 @@ impl RegressionForestSpec {
 /// Pull `n_rows` values from each named column of `batches` into a
 /// column-major `Matrix`. Assumes columns are Float64.
 pub(crate) fn arrow_batches_to_matrix(
-    batches: &[RecordBatch], cols: &[String], n_rows: usize,
+    batches: &[RecordBatch],
+    cols: &[String],
+    n_rows: usize,
 ) -> Result<Matrix> {
     use arrow_array::Int64Array;
     let mut buf = vec![0f64; n_rows * cols.len()];
@@ -185,7 +217,8 @@ pub(crate) fn arrow_batches_to_matrix(
     for batch in batches {
         let r = batch.num_rows();
         for (j, name) in cols.iter().enumerate() {
-            let arr = batch.column_by_name(name)
+            let arr = batch
+                .column_by_name(name)
                 .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", name)))?;
             // Accept Float64 or Int64 (convert to f64).
             if let Some(f) = arr.as_any().downcast_ref::<Float64Array>() {
@@ -194,35 +227,56 @@ pub(crate) fn arrow_batches_to_matrix(
                 }
             } else if let Some(i64arr) = arr.as_any().downcast_ref::<Int64Array>() {
                 for i in 0..r {
-                    buf[j * n_rows + offset + i] = if i64arr.is_null(i) { f64::NAN } else { i64arr.value(i) as f64 };
+                    buf[j * n_rows + offset + i] = if i64arr.is_null(i) {
+                        f64::NAN
+                    } else {
+                        i64arr.value(i) as f64
+                    };
                 }
             } else {
                 return Err(GrfError::Shape(format!(
-                    "column '{}' is neither Float64 nor Int64", name
+                    "column '{}' is neither Float64 nor Int64",
+                    name
                 )));
             }
         }
         offset += r;
     }
-    Ok(Matrix { data: buf, n_rows, n_cols: cols.len() })
+    Ok(Matrix {
+        data: buf,
+        n_rows,
+        n_cols: cols.len(),
+    })
 }
 
 pub(crate) fn arrow_batches_to_f64(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
+    batches: &[RecordBatch],
+    col: &str,
+    n_rows: usize,
 ) -> Result<Vec<f64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Float64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Float64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Float64", col)))?;
         for i in 0..batch.num_rows() {
-            out.push(if arr.is_null(i) { f64::NAN } else { arr.value(i) });
+            out.push(if arr.is_null(i) {
+                f64::NAN
+            } else {
+                arr.value(i)
+            });
         }
     }
     if out.len() != n_rows {
         return Err(GrfError::Shape(format!(
-            "column '{}' has {} rows, expected {}", col, out.len(), n_rows
+            "column '{}' has {} rows, expected {}",
+            col,
+            out.len(),
+            n_rows
         )));
     }
     Ok(out)
@@ -234,4 +288,6 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(RegressionForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(RegressionForestSpec)
+}

@@ -106,7 +106,10 @@ fn validation_rejects_bad_endpoint_and_empty_table() {
         "bad",
         ResourceAddress::endpoint("ftp://nope"),
     );
-    assert!(matches!(reg.register(bad_url), Err(ResourceError::Validation(_))));
+    assert!(matches!(
+        reg.register(bad_url),
+        Err(ResourceError::Validation(_))
+    ));
 
     let empty_table = ResourceEntry::new(
         "t.empty",
@@ -132,7 +135,10 @@ fn sql_identifier_quoting() {
         table: "1000g_eur".into(),
     };
     assert_eq!(id.sql(), "\"iceberg\".\"ld_score\".\"1000g_eur\"");
-    assert_eq!(id.ident(), ("iceberg".into(), "ld_score".into(), "1000g_eur".into()));
+    assert_eq!(
+        id.ident(),
+        ("iceberg".into(), "ld_score".into(), "1000g_eur".into())
+    );
 }
 
 #[test]

@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
 use crate::forest::{ForestBlob, ForestStats, QuantileSpec, QuantileTrainer};
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -39,7 +39,9 @@ pub struct QuantileForestSpec {
     pub options: NodeTrainOptions,
 }
 
-fn default_quantiles() -> Vec<f64> { vec![0.1, 0.5, 0.9] }
+fn default_quantiles() -> Vec<f64> {
+    vec![0.1, 0.5, 0.9]
+}
 
 #[derive(Debug, Clone)]
 pub struct QuantileForestOutput {
@@ -53,7 +55,9 @@ pub struct QuantileForestOutput {
 pub struct QuantileForestFactory;
 
 impl QuantileForestFactory {
-    pub fn kind() -> &'static str { "grf_quantile_forest" }
+    pub fn kind() -> &'static str {
+        "grf_quantile_forest"
+    }
 }
 
 impl QuantileForestSpec {
@@ -64,10 +68,14 @@ impl QuantileForestSpec {
         }
         let schema = batches[0].schema();
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| f.name() != &self.y_column_name
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    f.name() != &self.y_column_name && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
@@ -90,7 +98,7 @@ impl QuantileForestSpec {
         let stats = ForestStats::from(&trained);
         Ok(QuantileForestOutput {
             forest: trained,
-            oob_predictions: None,  // grf core: quantile_trainer has no predict strategy
+            oob_predictions: None, // grf core: quantile_trainer has no predict strategy
             stats,
         })
     }
@@ -102,7 +110,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(QuantileForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(QuantileForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

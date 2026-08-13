@@ -175,7 +175,11 @@ pub fn usermodel(covstruc: &Covstruc, config: &UserModelConfig) -> Result<UserMo
         srmr: sem_result.srmr,
     };
 
-    Ok(UserModelResult { modelfit, results, sem_implied: sem_result.implied })
+    Ok(UserModelResult {
+        modelfit,
+        results,
+        sem_implied: sem_result.implied,
+    })
 }
 
 /// Find which trait indices are used in the model.
@@ -183,9 +187,10 @@ fn find_used_traits(model: &SemModel, all_names: &[String]) -> Vec<usize> {
     let mut used = Vec::new();
     for name in all_names {
         let pattern = format!("\\b{}\\b", name);
-        let used_in_model = model.lines.iter().any(|line| {
-            line.lhs.contains(name) || line.rhs.contains(name)
-        });
+        let used_in_model = model
+            .lines
+            .iter()
+            .any(|line| line.lhs.contains(name) || line.rhs.contains(name));
         if used_in_model {
             if let Some(idx) = all_names.iter().position(|n| n == name) {
                 used.push(idx);
@@ -263,11 +268,9 @@ fn compute_independence_chisq(s: &Mat<f64>, v: &Mat<f64>) -> f64 {
 }
 
 /// Build parameter results from unstandardized and standardized fits.
-fn build_param_results(
-    unstand: &SemResult,
-    stand: Option<&SemResult>,
-) -> Vec<ParamResult> {
-    unstand.params
+fn build_param_results(unstand: &SemResult, stand: Option<&SemResult>) -> Vec<ParamResult> {
+    unstand
+        .params
         .iter()
         .enumerate()
         .filter(|(_, p)| p.free > 0 || p.op == ":=")
@@ -275,7 +278,10 @@ fn build_param_results(
             let se = unstand.se.get(i).copied().unwrap_or(f64::NAN);
             let (std_est, std_se) = if let Some(sr) = stand {
                 let s = sr.params.get(i);
-                (s.map(|x| x.est).unwrap_or(f64::NAN), sr.se.get(i).copied().unwrap_or(f64::NAN))
+                (
+                    s.map(|x| x.est).unwrap_or(f64::NAN),
+                    sr.se.get(i).copied().unwrap_or(f64::NAN),
+                )
             } else {
                 (f64::NAN, f64::NAN)
             };

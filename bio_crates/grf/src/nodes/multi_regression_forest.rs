@@ -7,13 +7,15 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
-use crate::forest::{ForestBlob, ForestStats, MultiRegressionSpec, MultiRegressionTrainer, OobPredictions};
+use crate::forest::{
+    ForestBlob, ForestStats, MultiRegressionSpec, MultiRegressionTrainer, OobPredictions,
+};
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -45,7 +47,9 @@ pub struct MultiRegressionForestOutput {
 pub struct MultiRegressionForestFactory;
 
 impl MultiRegressionForestFactory {
-    pub fn kind() -> &'static str { "grf_multi_regression_forest" }
+    pub fn kind() -> &'static str {
+        "grf_multi_regression_forest"
+    }
 }
 
 impl MultiRegressionForestSpec {
@@ -56,23 +60,33 @@ impl MultiRegressionForestSpec {
         }
         if self.y_column_names.len() < 2 {
             return Err(GrfError::Shape(format!(
-                "multi_regression needs >= 2 outcome columns, got {}", self.y_column_names.len()
+                "multi_regression needs >= 2 outcome columns, got {}",
+                self.y_column_names.len()
             )));
         }
         let schema = batches[0].schema();
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !self.y_column_names.contains(f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !self.y_column_names.contains(f.name())
+                        && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
         let x_matrix = arrow_batches_to_matrix(batches, &x_cols, n_rows)?;
-        let y_columns: Vec<Vec<f64>> = self.y_column_names.iter()
+        let y_columns: Vec<Vec<f64>> = self
+            .y_column_names
+            .iter()
             .map(|name| arrow_batches_to_f64(batches, name, n_rows))
             .collect::<Result<Vec<_>>>()?;
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
@@ -99,7 +113,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(MultiRegressionForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(MultiRegressionForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

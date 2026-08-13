@@ -17,7 +17,9 @@ use ratatui::{
     prelude::Buffer,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, StatefulWidget, StatefulWidgetRef, Widget},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, StatefulWidget, StatefulWidgetRef, Widget,
+    },
 };
 
 use crate::state::ChatLine;
@@ -336,19 +338,17 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
 
     // Wide popup: 80% of frame width, auto height.
     let popup_w = (frame_area.width * 8 / 10).max(60);
-    let popup = Popup::new(" Copy Message ")
-        .accent(ACCENT)
-        .width(popup_w);
+    let popup = Popup::new(" Copy Message ").accent(ACCENT).width(popup_w);
     let inner = popup.render(frame_area, buf);
 
     // Vertical: search input (1) + separator (1) + content (rest) + footer (1).
     let v_regions = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Search input (textarea)
-            Constraint::Length(1),  // Separator line
+            Constraint::Length(1), // Search input (textarea)
+            Constraint::Length(1), // Separator line
             Constraint::Min(5),    // Two-column content
-            Constraint::Length(1),  // Footer
+            Constraint::Length(1), // Footer
         ])
         .split(inner);
 
@@ -403,9 +403,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
     let prompt_style = if state.textarea.is_empty() {
         Style::default().fg(Color::DarkGray)
     } else {
-        Style::default()
-            .fg(ACCENT)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, "❯", prompt_style);
 
@@ -435,7 +433,9 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
         let textarea: &TextArea = &state.textarea;
         let ta_state: &mut TextAreaState = &mut state.textarea_state;
         textarea.render_ref(ta_area, buf, ta_state);
-        state.cursor_pos = state.textarea.cursor_pos_with_state(ta_area, state.textarea_state);
+        state.cursor_pos = state
+            .textarea
+            .cursor_pos_with_state(ta_area, state.textarea_state);
     }
 }
 
@@ -448,9 +448,7 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             format!(" Messages ({}) ", state.picker.filtered.len()),
-            Style::default()
-                .fg(ACCENT)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -534,14 +532,10 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 /// showing metadata (role, index, character count) followed by the full
 /// text wrapped to the available width.
 fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState) {
-    let block = Block::default()
-        .borders(Borders::NONE)
-        .title(Span::styled(
-            " Preview ",
-            Style::default()
-                .fg(ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::NONE).title(Span::styled(
+        " Preview ",
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ));
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -769,7 +763,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
 /// in a DCS passthrough envelope so tmux forwards it to the outer
 /// terminal.
 fn osc52_copy(text: &str) -> Result<(), String> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use std::io::Write;
 
     const OSC52_MAX_BYTES: usize = 100_000;
@@ -959,22 +953,26 @@ mod tests {
     #[test]
     fn from_chat_line_rejects_non_text_variants() {
         assert!(MessageItem::from_chat_line(&ChatLine::Thinking("hmm".into()), 1).is_none());
-        assert!(MessageItem::from_chat_line(
-            &ChatLine::ToolCall {
-                name: "x".into(),
-                input: "{}".into()
-            },
-            1
-        )
-        .is_none());
-        assert!(MessageItem::from_chat_line(
-            &ChatLine::ToolResult {
-                ok: true,
-                content: "x".into()
-            },
-            1
-        )
-        .is_none());
+        assert!(
+            MessageItem::from_chat_line(
+                &ChatLine::ToolCall {
+                    name: "x".into(),
+                    input: "{}".into()
+                },
+                1
+            )
+            .is_none()
+        );
+        assert!(
+            MessageItem::from_chat_line(
+                &ChatLine::ToolResult {
+                    ok: true,
+                    content: "x".into()
+                },
+                1
+            )
+            .is_none()
+        );
         assert!(MessageItem::from_chat_line(&ChatLine::Error("x".into()), 1).is_none());
         assert!(MessageItem::from_chat_line(&ChatLine::Separator, 1).is_none());
     }

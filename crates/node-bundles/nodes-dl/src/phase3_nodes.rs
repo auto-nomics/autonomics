@@ -13,8 +13,10 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 use super::common;
-use super::train_nodes::{build_training_log_batch, EarlyStoppingSpec, TaskTypeSpec,
-    d_act, d_opt, d_lr, d_epochs, d_batch, d_seed, d_std};
+use super::train_nodes::{
+    EarlyStoppingSpec, TaskTypeSpec, build_training_log_batch, d_act, d_batch, d_epochs, d_lr,
+    d_opt, d_seed, d_std,
+};
 use dl::*;
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -56,13 +58,27 @@ pub struct AutoEncoderTrainSpec {
     pub standardize_features: bool,
 }
 
-fn d_ae_kind() -> String { "autoencoder".into() }
-fn d_enc_sizes() -> Vec<usize> { vec![128, 64] }
-fn d_dec_sizes() -> Vec<usize> { vec![64, 128] }
-fn d_latent() -> usize { 16 }
-fn d_loss() -> String { "mse".into() }
-fn d_beta() -> f64 { 1.0 }
-fn d_kl_warmup() -> usize { 10 }
+fn d_ae_kind() -> String {
+    "autoencoder".into()
+}
+fn d_enc_sizes() -> Vec<usize> {
+    vec![128, 64]
+}
+fn d_dec_sizes() -> Vec<usize> {
+    vec![64, 128]
+}
+fn d_latent() -> usize {
+    16
+}
+fn d_loss() -> String {
+    "mse".into()
+}
+fn d_beta() -> f64 {
+    1.0
+}
+fn d_kl_warmup() -> usize {
+    10
+}
 
 impl AutoEncoderTrainSpec {
     fn to_config(&self) -> Result<AutoEncoderConfig, DagError> {
@@ -71,7 +87,10 @@ impl AutoEncoderTrainSpec {
             _ => AeKind::Autoencoder,
         };
         let activation = Activation::from_str(&self.activation).ok_or_else(|| {
-            common::err("dl_autoencoder_train", format!("unknown activation: {}", self.activation))
+            common::err(
+                "dl_autoencoder_train",
+                format!("unknown activation: {}", self.activation),
+            )
         })?;
         let loss = match self.loss.as_str() {
             "bce" => AeLoss::Bce,
@@ -79,7 +98,10 @@ impl AutoEncoderTrainSpec {
             _ => AeLoss::Mse,
         };
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_autoencoder_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_autoencoder_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         Ok(AutoEncoderConfig {
             kind,
@@ -92,7 +114,11 @@ impl AutoEncoderTrainSpec {
             beta: self.beta,
             kl_warmup_epochs: self.kl_warmup_epochs,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: opt_kind, lr: self.learning_rate, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: opt_kind,
+                    lr: self.learning_rate,
+                    ..Default::default()
+                },
                 n_epochs: self.n_epochs,
                 batch_size: self.batch_size,
                 standardize: self.standardize_features,
@@ -105,22 +131,38 @@ impl AutoEncoderTrainSpec {
 
 pub struct AutoEncoderTrainFactory;
 impl NodeFactory for AutoEncoderTrainFactory {
-    fn kind(&self) -> &'static str { "dl_autoencoder_train" }
-    fn desc(&self) -> &'static str { "Deep autoencoder / VAE for dimensionality reduction." }
+    fn kind(&self) -> &'static str {
+        "dl_autoencoder_train"
+    }
+    fn desc(&self) -> &'static str {
+        "Deep autoencoder / VAE for dimensionality reduction."
+    }
     fn doc(&self) -> &'static str {
         "dl_autoencoder_train: trains an autoencoder or variational autoencoder for unsupervised \
         feature learning. Outputs latent representations (port 0), DLModelArtifact (port 1), \
         and training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(AutoEncoderTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(AutoEncoderTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None).add_input_port(None)
-            .add_output_port(None).add_output_port(None).add_output_port(None)
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
     }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _ctx: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: AutoEncoderTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(AutoEncoderTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(AutoEncoderTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -132,46 +174,78 @@ struct AutoEncoderTrainNode {
 
 #[async_trait]
 impl DagNode for AutoEncoderTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_autoencoder_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_autoencoder_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let train_batches = common::collect_port(inputs, 0, "dl_autoencoder_train").await?;
         let x = common::extract_tensor(&train_batches, &self.spec.features)?;
         let config = self.spec.to_config()?;
-        let result = train_autoencoder(&x, None, &config).map_err(|e| common::err("dl_autoencoder_train", e))?;
+        let result = train_autoencoder(&x, None, &config)
+            .map_err(|e| common::err("dl_autoencoder_train", e))?;
 
         // Port 0: latent + reconstruction.
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
         let n = result.latent.nrows();
         for d in 0..result.latent.ncols() {
             let col: Vec<f64> = (0..n).map(|i| result.latent.at(i, d)).collect();
-            fields.push(Arc::new(Field::new(format!("latent_{d}"), DataType::Float64, false)));
+            fields.push(Arc::new(Field::new(
+                format!("latent_{d}"),
+                DataType::Float64,
+                false,
+            )));
             arrays.push(Arc::new(Float64Array::from(col)));
         }
         let pred_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
             .map_err(|e| common::err("dl_autoencoder_train", format!("build batch: {e}")))?;
 
         // Port 1: artifact.
-        let checkpoint = serde_json::to_string(&result.model).map_err(|e| common::err("dl_autoencoder_train", e.to_string()))?;
+        let checkpoint = serde_json::to_string(&result.model)
+            .map_err(|e| common::err("dl_autoencoder_train", e.to_string()))?;
         let artifact = DLModelArtifact {
-            backend: "faer".into(), architecture: Architecture::Autoencoder,
+            backend: "faer".into(),
+            architecture: Architecture::Autoencoder,
             task_type: ArtifactTaskType::Reconstruction,
             checkpoint_json: checkpoint,
             feature_names: self.spec.features.clone(),
-            label_column: None, time_column: None, event_column: None, scaler_json: None,
+            label_column: None,
+            time_column: None,
+            event_column: None,
+            scaler_json: None,
             training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(), best_epoch: None,
-                best_val_metric: None, total_params: result.model.n_params(),
+                n_epochs_run: result.training_log.len(),
+                best_epoch: None,
+                best_val_metric: None,
+                total_params: result.model.n_params(),
             },
         };
-        let artifact_bytes = serde_json::to_vec(&artifact).map_err(|e| common::err("dl_autoencoder_train", e.to_string()))?;
+        let artifact_bytes = serde_json::to_vec(&artifact)
+            .map_err(|e| common::err("dl_autoencoder_train", e.to_string()))?;
         let artifact_batch = make_artifact_batch(&artifact_bytes, "autoencoder")?;
         let log_batch = build_training_log_batch(&result.training_log)?;
 
-        emit_three(ctx, pred_batch, artifact_batch, log_batch, "dl_autoencoder_train")
+        emit_three(
+            ctx,
+            pred_batch,
+            artifact_batch,
+            log_batch,
+            "dl_autoencoder_train",
+        )
     }
 }
 
@@ -216,34 +290,65 @@ pub struct DeepHitTrainSpec {
     pub standardize_features: bool,
 }
 
-fn d_dh_hidden() -> Vec<usize> { vec![128, 64] }
-fn d_dh_dropout() -> f64 { 0.2 }
-fn d_n_bins() -> usize { 10 }
-fn d_bins_method() -> String { "quantile".into() }
-fn d_n_causes() -> usize { 1 }
-fn d_alpha() -> f64 { 1.0 }
-fn d_dh_beta() -> f64 { 0.5 }
-fn d_gamma() -> f64 { 1.0 }
+fn d_dh_hidden() -> Vec<usize> {
+    vec![128, 64]
+}
+fn d_dh_dropout() -> f64 {
+    0.2
+}
+fn d_n_bins() -> usize {
+    10
+}
+fn d_bins_method() -> String {
+    "quantile".into()
+}
+fn d_n_causes() -> usize {
+    1
+}
+fn d_alpha() -> f64 {
+    1.0
+}
+fn d_dh_beta() -> f64 {
+    0.5
+}
+fn d_gamma() -> f64 {
+    1.0
+}
 
 impl DeepHitTrainSpec {
     fn to_config(&self) -> Result<DeepHitConfig, DagError> {
         let activation = Activation::from_str(&self.activation).ok_or_else(|| {
-            common::err("dl_deephit_train", format!("unknown activation: {}", self.activation))
+            common::err(
+                "dl_deephit_train",
+                format!("unknown activation: {}", self.activation),
+            )
         })?;
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_deephit_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_deephit_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         Ok(DeepHitConfig {
             hidden_sizes: self.hidden_sizes.clone(),
-            activation, dropout: self.dropout,
+            activation,
+            dropout: self.dropout,
             n_time_bins: self.n_time_bins,
             time_bins_method: self.time_bins_method.clone(),
             n_causes: self.n_causes,
-            loss_alpha: self.loss_alpha, loss_beta: self.loss_beta, loss_gamma: self.loss_gamma,
+            loss_alpha: self.loss_alpha,
+            loss_beta: self.loss_beta,
+            loss_gamma: self.loss_gamma,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: opt_kind, lr: self.learning_rate, ..Default::default() },
-                n_epochs: self.n_epochs, batch_size: self.batch_size,
-                standardize: self.standardize_features, seed: self.seed,
+                optimizer: OptimizerConfig {
+                    kind: opt_kind,
+                    lr: self.learning_rate,
+                    ..Default::default()
+                },
+                n_epochs: self.n_epochs,
+                batch_size: self.batch_size,
+                standardize: self.standardize_features,
+                seed: self.seed,
                 ..Default::default()
             },
         })
@@ -252,22 +357,38 @@ impl DeepHitTrainSpec {
 
 pub struct DeepHitTrainFactory;
 impl NodeFactory for DeepHitTrainFactory {
-    fn kind(&self) -> &'static str { "dl_deephit_train" }
-    fn desc(&self) -> &'static str { "DeepHit: discrete-time neural survival with competing risks." }
+    fn kind(&self) -> &'static str {
+        "dl_deephit_train"
+    }
+    fn desc(&self) -> &'static str {
+        "DeepHit: discrete-time neural survival with competing risks."
+    }
     fn doc(&self) -> &'static str {
         "dl_deephit_train: trains a DeepHit model for survival analysis with competing risks. \
         Directly estimates cause-specific cumulative incidence functions without the PH assumption. \
         Outputs risk scores (port 0), DLModelArtifact (port 1), training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(DeepHitTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(DeepHitTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None).add_input_port(None)
-            .add_output_port(None).add_output_port(None).add_output_port(None)
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
     }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _ctx: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: DeepHitTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(DeepHitTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(DeepHitTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -279,12 +400,25 @@ struct DeepHitTrainNode {
 
 #[async_trait]
 impl DagNode for DeepHitTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_deephit_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_deephit_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let train_batches = common::collect_port(inputs, 0, "dl_deephit_train").await?;
         let x = common::extract_tensor(&train_batches, &self.spec.features)?;
         let times = common::extract_numeric_column(&train_batches, &self.spec.time_column)?;
@@ -299,15 +433,21 @@ impl DagNode for DeepHitTrainNode {
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
         let n = result.risk_scores.nrows();
         let risks: Vec<f64> = (0..n).map(|i| result.risk_scores.at(i, 0)).collect();
-        fields.push(Arc::new(Field::new("pred_risk_score", DataType::Float64, false)));
+        fields.push(Arc::new(Field::new(
+            "pred_risk_score",
+            DataType::Float64,
+            false,
+        )));
         arrays.push(Arc::new(Float64Array::from(risks)));
         let pred_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
             .map_err(|e| common::err("dl_deephit_train", format!("build batch: {e}")))?;
 
         // Port 1: artifact.
-        let checkpoint = serde_json::to_string(&result.model).map_err(|e| common::err("dl_deephit_train", e.to_string()))?;
+        let checkpoint = serde_json::to_string(&result.model)
+            .map_err(|e| common::err("dl_deephit_train", e.to_string()))?;
         let artifact = DLModelArtifact {
-            backend: "faer".into(), architecture: Architecture::Deephit,
+            backend: "faer".into(),
+            architecture: Architecture::Deephit,
             task_type: ArtifactTaskType::Survival,
             checkpoint_json: checkpoint,
             feature_names: self.spec.features.clone(),
@@ -316,15 +456,24 @@ impl DagNode for DeepHitTrainNode {
             event_column: Some(self.spec.event_column.clone()),
             scaler_json: None,
             training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(), best_epoch: None,
-                best_val_metric: None, total_params: result.model.n_params(),
+                n_epochs_run: result.training_log.len(),
+                best_epoch: None,
+                best_val_metric: None,
+                total_params: result.model.n_params(),
             },
         };
-        let artifact_bytes = serde_json::to_vec(&artifact).map_err(|e| common::err("dl_deephit_train", e.to_string()))?;
+        let artifact_bytes = serde_json::to_vec(&artifact)
+            .map_err(|e| common::err("dl_deephit_train", e.to_string()))?;
         let artifact_batch = make_artifact_batch(&artifact_bytes, "deephit")?;
         let log_batch = build_training_log_batch(&result.training_log)?;
 
-        emit_three(ctx, pred_batch, artifact_batch, log_batch, "dl_deephit_train")
+        emit_three(
+            ctx,
+            pred_batch,
+            artifact_batch,
+            log_batch,
+            "dl_deephit_train",
+        )
     }
 }
 
@@ -364,10 +513,18 @@ pub struct RnnTrainSpec {
     pub seed: u64,
 }
 
-fn d_cell() -> String { "lstm".into() }
-fn d_rnn_hidden() -> usize { 64 }
-fn d_rnn_layers() -> usize { 1 }
-fn d_rnn_pooling() -> String { "last".into() }
+fn d_cell() -> String {
+    "lstm".into()
+}
+fn d_rnn_hidden() -> usize {
+    64
+}
+fn d_rnn_layers() -> usize {
+    1
+}
+fn d_rnn_pooling() -> String {
+    "last".into()
+}
 
 impl RnnTrainSpec {
     fn to_config(&self) -> Result<RnnConfig, DagError> {
@@ -386,15 +543,28 @@ impl RnnTrainSpec {
             TaskTypeSpec::Regression => dl::TaskType::Regression,
         };
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_rnn_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_rnn_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         Ok(RnnConfig {
-            cell_type: cell, hidden_size: self.hidden_size, n_layers: self.n_layers,
-            bidirectional: self.bidirectional, dropout: self.dropout, pooling,
+            cell_type: cell,
+            hidden_size: self.hidden_size,
+            n_layers: self.n_layers,
+            bidirectional: self.bidirectional,
+            dropout: self.dropout,
+            pooling,
             task_type: task,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: opt_kind, lr: self.learning_rate, ..Default::default() },
-                n_epochs: self.n_epochs, batch_size: self.batch_size, seed: self.seed,
+                optimizer: OptimizerConfig {
+                    kind: opt_kind,
+                    lr: self.learning_rate,
+                    ..Default::default()
+                },
+                n_epochs: self.n_epochs,
+                batch_size: self.batch_size,
+                seed: self.seed,
                 ..Default::default()
             },
         })
@@ -403,22 +573,38 @@ impl RnnTrainSpec {
 
 pub struct RnnTrainFactory;
 impl NodeFactory for RnnTrainFactory {
-    fn kind(&self) -> &'static str { "dl_rnn_train" }
-    fn desc(&self) -> &'static str { "RNN/LSTM/GRU for longitudinal/sequence data." }
+    fn kind(&self) -> &'static str {
+        "dl_rnn_train"
+    }
+    fn desc(&self) -> &'static str {
+        "RNN/LSTM/GRU for longitudinal/sequence data."
+    }
     fn doc(&self) -> &'static str {
         "dl_rnn_train: trains a recurrent neural network (LSTM/GRU/RNN) for longitudinal or \
         sequence data. Supports bidirectional processing and multiple pooling strategies. \
         Outputs predictions (port 0), DLModelArtifact (port 1), training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(RnnTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(RnnTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None).add_input_port(None)
-            .add_output_port(None).add_output_port(None).add_output_port(None)
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
+            .add_output_port(None)
     }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _ctx: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: RnnTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(RnnTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(RnnTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -430,12 +616,25 @@ struct RnnTrainNode {
 
 #[async_trait]
 impl DagNode for RnnTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_rnn_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_rnn_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let train_batches = common::collect_port(inputs, 0, "dl_rnn_train").await?;
 
         // Collect all column names: sequence features first (flattened), then static.
@@ -451,11 +650,24 @@ impl DagNode for RnnTrainNode {
 
         let n_seq_features = self.spec.sequence_features.len();
         let n_static = self.spec.static_features.len();
-        let seq_len = self.spec.sequence_features.first().map(|v| v.len()).unwrap_or(1);
+        let seq_len = self
+            .spec
+            .sequence_features
+            .first()
+            .map(|v| v.len())
+            .unwrap_or(1);
 
         let config = self.spec.to_config()?;
-        let result = train_rnn(&x, &y_tensor, None, &config, n_seq_features, n_static, seq_len)
-            .map_err(|e| common::err("dl_rnn_train", e))?;
+        let result = train_rnn(
+            &x,
+            &y_tensor,
+            None,
+            &config,
+            n_seq_features,
+            n_static,
+            seq_len,
+        )
+        .map_err(|e| common::err("dl_rnn_train", e))?;
 
         // Port 0: predictions.
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
@@ -463,7 +675,11 @@ impl DagNode for RnnTrainNode {
         match config.task_type {
             dl::TaskType::Classification => {
                 let probs: Vec<f64> = (0..n).map(|i| result.predictions.at(i, 0)).collect();
-                fields.push(Arc::new(Field::new("pred_probability", DataType::Float64, false)));
+                fields.push(Arc::new(Field::new(
+                    "pred_probability",
+                    DataType::Float64,
+                    false,
+                )));
                 arrays.push(Arc::new(Float64Array::from(probs)));
             }
             dl::TaskType::Regression => {
@@ -476,9 +692,11 @@ impl DagNode for RnnTrainNode {
             .map_err(|e| common::err("dl_rnn_train", format!("build batch: {e}")))?;
 
         // Port 1: artifact.
-        let checkpoint = serde_json::to_string(&result.model).map_err(|e| common::err("dl_rnn_train", e.to_string()))?;
+        let checkpoint = serde_json::to_string(&result.model)
+            .map_err(|e| common::err("dl_rnn_train", e.to_string()))?;
         let artifact = DLModelArtifact {
-            backend: "faer".into(), architecture: Architecture::Rnn,
+            backend: "faer".into(),
+            architecture: Architecture::Rnn,
             task_type: match config.task_type {
                 dl::TaskType::Classification => ArtifactTaskType::Classification,
                 dl::TaskType::Regression => ArtifactTaskType::Regression,
@@ -486,13 +704,18 @@ impl DagNode for RnnTrainNode {
             checkpoint_json: checkpoint,
             feature_names: all_cols,
             label_column: Some(self.spec.label_column.clone()),
-            time_column: None, event_column: None, scaler_json: None,
+            time_column: None,
+            event_column: None,
+            scaler_json: None,
             training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(), best_epoch: None,
-                best_val_metric: None, total_params: result.model.n_params(),
+                n_epochs_run: result.training_log.len(),
+                best_epoch: None,
+                best_val_metric: None,
+                total_params: result.model.n_params(),
             },
         };
-        let artifact_bytes = serde_json::to_vec(&artifact).map_err(|e| common::err("dl_rnn_train", e.to_string()))?;
+        let artifact_bytes = serde_json::to_vec(&artifact)
+            .map_err(|e| common::err("dl_rnn_train", e.to_string()))?;
         let artifact_batch = make_artifact_batch(&artifact_bytes, "rnn")?;
         let log_batch = build_training_log_batch(&result.training_log)?;
 
@@ -513,26 +736,41 @@ pub struct EmbedSpec {
     pub batch_size: usize,
 }
 
-fn d_embed_layer() -> String { "latent".into() }
+fn d_embed_layer() -> String {
+    "latent".into()
+}
 
 pub struct EmbedFactory;
 impl NodeFactory for EmbedFactory {
-    fn kind(&self) -> &'static str { "dl_embed" }
-    fn desc(&self) -> &'static str { "Extract intermediate representations from a DL model." }
+    fn kind(&self) -> &'static str {
+        "dl_embed"
+    }
+    fn desc(&self) -> &'static str {
+        "Extract intermediate representations from a DL model."
+    }
     fn doc(&self) -> &'static str {
         "dl_embed: extracts latent representations or intermediate layer outputs from a trained \
         DL model. Useful for visualization, clustering, or downstream analysis."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(EmbedSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(EmbedSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None)  // 0: model artifact
-            .add_input_port(None)  // 1: data
+            .add_input_port(None) // 0: model artifact
+            .add_input_port(None) // 1: data
             .add_output_port(None) // 0: embeddings
     }
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _ctx: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: EmbedSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(EmbedNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(EmbedNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -544,19 +782,40 @@ struct EmbedNode {
 
 #[async_trait]
 impl DagNode for EmbedNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_embed" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_embed"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let artifact_batches = common::collect_port(inputs, 0, "dl_embed").await?;
         let data_batches = common::collect_port(inputs, 1, "dl_embed").await?;
 
         // Extract artifact.
-        let batch = artifact_batches.first().ok_or(common::err("dl_embed", "no artifact"))?;
-        let idx = batch.schema().index_of("artifact_bytes").map_err(|_| common::err("dl_embed", "no artifact_bytes"))?;
-        let binary_col = batch.column(idx).as_any().downcast_ref::<arrow_array::BinaryArray>()
+        let batch = artifact_batches
+            .first()
+            .ok_or(common::err("dl_embed", "no artifact"))?;
+        let idx = batch
+            .schema()
+            .index_of("artifact_bytes")
+            .map_err(|_| common::err("dl_embed", "no artifact_bytes"))?;
+        let binary_col = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<arrow_array::BinaryArray>()
             .ok_or_else(|| common::err("dl_embed", "artifact_bytes not Binary"))?;
         let bytes = binary_col.value(0);
         let artifact: DLModelArtifact = serde_json::from_slice(bytes)
@@ -568,13 +827,18 @@ impl DagNode for EmbedNode {
 
         match artifact.architecture {
             Architecture::Autoencoder => {
-                let mut model: AutoEncoderModel = serde_json::from_str(&artifact.checkpoint_json)
-                    .map_err(|e| common::err("dl_embed", format!("deserialize AE: {e}")))?;
+                let mut model: AutoEncoderModel =
+                    serde_json::from_str(&artifact.checkpoint_json)
+                        .map_err(|e| common::err("dl_embed", format!("deserialize AE: {e}")))?;
                 let latent = predict_autoencoder_latent(&mut model, &x);
                 let n = latent.nrows();
                 for d in 0..latent.ncols() {
                     let col: Vec<f64> = (0..n).map(|i| latent.at(i, d)).collect();
-                    fields.push(Arc::new(Field::new(format!("embed_{d}"), DataType::Float64, false)));
+                    fields.push(Arc::new(Field::new(
+                        format!("embed_{d}"),
+                        DataType::Float64,
+                        false,
+                    )));
                     arrays.push(Arc::new(Float64Array::from(col)));
                 }
             }
@@ -584,13 +848,20 @@ impl DagNode for EmbedNode {
                 let h = dl::embed_mlp(&mut model, &x);
                 for d in 0..h.ncols() {
                     let col: Vec<f64> = (0..h.nrows()).map(|i| h.at(i, d)).collect();
-                    fields.push(Arc::new(Field::new(format!("embed_{d}"), DataType::Float64, false)));
+                    fields.push(Arc::new(Field::new(
+                        format!("embed_{d}"),
+                        DataType::Float64,
+                        false,
+                    )));
                     arrays.push(Arc::new(Float64Array::from(col)));
                 }
             }
             _ => {
                 // For other architectures, fall back to predict output.
-                return Err(common::err("dl_embed", format!("embed not yet supported for {:?}", artifact.architecture)));
+                return Err(common::err(
+                    "dl_embed",
+                    format!("embed not yet supported for {:?}", artifact.architecture),
+                ));
             }
         }
 
@@ -614,17 +885,32 @@ fn make_artifact_batch(bytes: &[u8], arch: &str) -> Result<RecordBatch, DagError
             Arc::new(arrow_array::BinaryArray::from(vec![bytes])),
             Arc::new(arrow_array::StringArray::from(vec![arch])),
         ],
-    ).map_err(|e| DagError::NodeError { node_type: "dl".into(), msg: format!("build artifact batch: {e}") })
+    )
+    .map_err(|e| DagError::NodeError {
+        node_type: "dl".into(),
+        msg: format!("build artifact batch: {e}"),
+    })
 }
 
 fn emit_three(
     ctx: &NodeCtx,
-    b0: RecordBatch, b1: RecordBatch, b2: RecordBatch,
+    b0: RecordBatch,
+    b1: RecordBatch,
+    b2: RecordBatch,
     node_type: &str,
 ) -> Result<PortOutputs, DagError> {
-    let df0 = ctx.session().read_batch(b0).map_err(|e| common::err(node_type, format!("read_batch(0): {e}")))?;
-    let df1 = ctx.session().read_batch(b1).map_err(|e| common::err(node_type, format!("read_batch(1): {e}")))?;
-    let df2 = ctx.session().read_batch(b2).map_err(|e| common::err(node_type, format!("read_batch(2): {e}")))?;
+    let df0 = ctx
+        .session()
+        .read_batch(b0)
+        .map_err(|e| common::err(node_type, format!("read_batch(0): {e}")))?;
+    let df1 = ctx
+        .session()
+        .read_batch(b1)
+        .map_err(|e| common::err(node_type, format!("read_batch(1): {e}")))?;
+    let df2 = ctx
+        .session()
+        .read_batch(b2)
+        .map_err(|e| common::err(node_type, format!("read_batch(2): {e}")))?;
     let mut res = PortOutputs::new();
     res.insert(0, df0);
     res.insert(1, df1);

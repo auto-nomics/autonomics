@@ -11,11 +11,10 @@ use arrow_schema::{DataType, Field, Schema};
 
 use grf::data::Matrix;
 use grf::forest::{PredictRequest, RegressionSpec, RegressionTrainer};
-use grf::nodes::{
-    MultiRegressionForestSpec, ProbabilityForestSpec, QuantileForestSpec,
-    SurvivalForestSpec,
-};
 use grf::nodes::regression_forest::NodeTrainOptions;
+use grf::nodes::{
+    MultiRegressionForestSpec, ProbabilityForestSpec, QuantileForestSpec, SurvivalForestSpec,
+};
 use grf_sys as sys;
 
 /// Small deterministic regression dataset:
@@ -58,7 +57,8 @@ fn regression_train_predict_smoke() {
         y: y.clone(),
         sample_weights: None,
         options: opts.clone(),
-    }).expect("fit succeeds");
+    })
+    .expect("fit succeeds");
 
     assert_eq!(forest.kind(), grf::forest::ForestKind::Regression);
     assert_eq!(forest.n_features(), 4);
@@ -69,8 +69,11 @@ fn regression_train_predict_smoke() {
     let preds = forest.predict(req).expect("predict_oob succeeds");
     assert_eq!(preds.n_samples(), 80);
     assert_eq!(preds.pred_length, 1);
-    assert!(preds.values.iter().all(|v| v.is_finite()),
-            "all predictions finite, got first 5: {:?}", &preds.values[..5.min(preds.values.len())]);
+    assert!(
+        preds.values.iter().all(|v| v.is_finite()),
+        "all predictions finite, got first 5: {:?}",
+        &preds.values[..5.min(preds.values.len())]
+    );
     // OOB error metrics should be present.
     let debiased = preds.debiased_error.expect("OOB error captured");
     assert_eq!(debiased.len(), 80);
@@ -97,16 +100,18 @@ fn regression_serialize_roundtrip() {
     opts.num_threads = 1;
 
     let forest = RegressionTrainer::fit(RegressionSpec {
-        x: xm, y, sample_weights: None, options: opts,
-    }).expect("fit");
+        x: xm,
+        y,
+        sample_weights: None,
+        options: opts,
+    })
+    .expect("fit");
     let blob = forest.serialize().expect("serialize");
     assert!(!blob.is_empty());
 
-    let restored = grf::forest::ForestBlob::deserialize(
-        &blob,
-        grf::forest::ForestKind::Regression,
-        3,
-    ).expect("deserialize");
+    let restored =
+        grf::forest::ForestBlob::deserialize(&blob, grf::forest::ForestKind::Regression, 3)
+            .expect("deserialize");
     assert_eq!(restored.kind(), grf::forest::ForestKind::Regression);
     assert_eq!(restored.num_trees(), 50);
 }
@@ -120,8 +125,12 @@ fn oob_predictions_present() {
     opts.compute_oob_predictions = true;
     opts.num_threads = 1;
     let forest = RegressionTrainer::fit(RegressionSpec {
-        x: xm, y, sample_weights: None, options: opts,
-    }).expect("fit");
+        x: xm,
+        y,
+        sample_weights: None,
+        options: opts,
+    })
+    .expect("fit");
     let oob = forest.oob_predictions().expect("oob");
     assert_eq!(oob.pred_length, 1);
     assert_eq!(oob.values.len(), 40);
@@ -137,20 +146,26 @@ fn arrow_round_trip_through_dag_node() {
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
         Field::new("x2", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
     ]));
 
     let mut cols: Vec<Vec<f64>> = vec![Vec::new(); 4];
     for (i, row) in x_rows.iter().enumerate() {
-        cols[0].push(row[0]); cols[1].push(row[1]); cols[2].push(row[2]);
+        cols[0].push(row[0]);
+        cols[1].push(row[1]);
+        cols[2].push(row[2]);
         cols[3].push(y[i]);
     }
-    let batch = RecordBatch::try_new(schema.clone(), vec![
-        Arc::new(Float64Array::from(cols[0].clone())),
-        Arc::new(Float64Array::from(cols[1].clone())),
-        Arc::new(Float64Array::from(cols[2].clone())),
-        Arc::new(Float64Array::from(cols[3].clone())),
-    ]).unwrap();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Float64Array::from(cols[0].clone())),
+            Arc::new(Float64Array::from(cols[1].clone())),
+            Arc::new(Float64Array::from(cols[2].clone())),
+            Arc::new(Float64Array::from(cols[3].clone())),
+        ],
+    )
+    .unwrap();
 
     let spec = grf::nodes::RegressionForestSpec {
         x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
@@ -177,12 +192,18 @@ fn quantile_forest_smoke() {
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
         Field::new("x2", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
     ]));
     let mut cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[2]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y)),
     ];
     let batch = RecordBatch::try_new(schema.clone(), cols.clone()).unwrap();
@@ -191,7 +212,12 @@ fn quantile_forest_smoke() {
         y_column_name: "y".into(),
         quantiles: vec![0.25, 0.5, 0.75],
         regression_splitting: false,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 7, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 7,
+            ..Default::default()
+        },
     };
     let _ = cols.pop();
     let out = spec.fit(&[batch]).expect("quantile fit");
@@ -208,11 +234,15 @@ fn probability_forest_smoke() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
-        Field::new("y",  DataType::Int64,   false),
+        Field::new("y", DataType::Int64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Int64Array::from(y)),
     ];
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
@@ -221,7 +251,12 @@ fn probability_forest_smoke() {
         y_column_name: "y".into(),
         num_classes: 3,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 1,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("probability fit");
     assert_eq!(out.forest.num_trees(), 50);
@@ -248,8 +283,12 @@ fn survival_forest_smoke() {
         Field::new("censor", DataType::Int64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(time)),
         Arc::new(Int64Array::from(censor)),
     ];
@@ -260,7 +299,12 @@ fn survival_forest_smoke() {
         censor_column_name: "censor".into(),
         failure_times: None,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 5, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 5,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("survival fit");
     assert_eq!(out.forest.num_trees(), 50);
@@ -278,8 +322,12 @@ fn multi_regression_forest_smoke() {
         Field::new("y1", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y0)),
         Arc::new(Float64Array::from(y1)),
     ];
@@ -288,7 +336,12 @@ fn multi_regression_forest_smoke() {
         x_column_names: vec!["x0".into(), "x1".into()],
         y_column_names: vec!["y0".into(), "y1".into()],
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 11, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 11,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("multi regression fit");
     assert_eq!(out.forest.num_trees(), 50);
@@ -305,9 +358,7 @@ fn multi_regression_forest_smoke() {
 ///   τ(x) = 1 + x₀, so true ATE = 1 + E[x₀] = 1 (when x₀ is centered).
 ///   Y = τ(x) · W + ε,  ε ~ N(0, 0.5).
 ///   W ~ Bernoulli(0.5).
-fn make_synth_treatment(n: usize, p: usize, seed: u64) -> (
-    Vec<Vec<f64>>, Vec<f64>, Vec<f64>,
-) {
+fn make_synth_treatment(n: usize, p: usize, seed: u64) -> (Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
     use rand::SeedableRng;
     use rand_distr::{Distribution, Normal};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -337,13 +388,19 @@ fn causal_forest_smoke() {
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
         Field::new("x2", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
-        Field::new("w",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
+        Field::new("w", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[2]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
         Arc::new(Float64Array::from(w.clone())),
     ];
@@ -352,17 +409,25 @@ fn causal_forest_smoke() {
         x_column_names: vec!["x0".into(), "x1".into(), "x2".into()],
         y_column_name: "y".into(),
         w_column_name: "w".into(),
-        y_hat: None, w_hat: None,
+        y_hat: None,
+        w_hat: None,
         stabilize_splits: true,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 100, num_threads: 1, seed: 7, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 100,
+            num_threads: 1,
+            seed: 7,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("causal fit");
     assert_eq!(out.forest.num_trees(), 100);
     // y_hat and w_hat should have been learned internally.
     assert_eq!(out.y_hat.len(), 150);
     assert_eq!(out.w_hat.len(), 150);
-    let oob_len = out.oob_predictions.as_ref()
+    let oob_len = out
+        .oob_predictions
+        .as_ref()
         .map(|o| o.values.len())
         .unwrap_or(0);
     assert_eq!(oob_len, 150);
@@ -376,14 +441,22 @@ fn causal_forest_smoke() {
         clusters: None,
     };
     let ate_out = ate.estimate(&out).expect("ate");
-    assert!(ate_out.estimate.abs() < 3.0, "ATE={} too far from truth", ate_out.estimate);
+    assert!(
+        ate_out.estimate.abs() < 3.0,
+        "ATE={} too far from truth",
+        ate_out.estimate
+    );
     assert!(ate_out.std_err > 0.0);
 
     // BLP on a single feature (x₀) — should pick up heterogeneity.
-    let blp_schema = Arc::new(Schema::new(vec![Field::new("x0", DataType::Float64, false)]));
-    let blp_cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-    ];
+    let blp_schema = Arc::new(Schema::new(vec![Field::new(
+        "x0",
+        DataType::Float64,
+        false,
+    )]));
+    let blp_cols: Vec<Arc<dyn Array>> = vec![Arc::new(Float64Array::from(
+        x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+    ))];
     let blp_batch = RecordBatch::try_new(blp_schema, blp_cols).unwrap();
     let blp_spec = grf::nodes::BestLinearProjectionSpec {
         a_column_names: vec!["x0".into()],
@@ -409,12 +482,16 @@ fn average_treatment_effect_overlap_target() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
-        Field::new("w",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
+        Field::new("w", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
         Arc::new(Float64Array::from(w.clone())),
     ];
@@ -423,10 +500,16 @@ fn average_treatment_effect_overlap_target() {
         x_column_names: vec!["x0".into(), "x1".into()],
         y_column_name: "y".into(),
         w_column_name: "w".into(),
-        y_hat: None, w_hat: None,
+        y_hat: None,
+        w_hat: None,
         stabilize_splits: true,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 60, num_threads: 1, seed: 3, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 60,
+            num_threads: 1,
+            seed: 3,
+            ..Default::default()
+        },
     };
     let cf = cf_spec.fit(&[batch]).expect("causal fit");
     // overlap target.sample should produce a non-empty estimate.
@@ -450,19 +533,28 @@ fn instrumental_forest_smoke() {
     // Construct a synthetic instrument Z correlated with W:
     //   Z = sign(X[:,0]) + noise;  W = Z > 0.3 + small noise.
     let z: Vec<f64> = x_rows.iter().map(|r| r[0].signum()).collect();
-    let w: Vec<f64> = z.iter().map(|&zi| if zi > 0.3 { 1.0 } else { 0.0 }).collect();
+    let w: Vec<f64> = z
+        .iter()
+        .map(|&zi| if zi > 0.3 { 1.0 } else { 0.0 })
+        .collect();
     let schema = Arc::new(Schema::new(vec![
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
         Field::new("x2", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
-        Field::new("w",  DataType::Float64, false),
-        Field::new("z",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
+        Field::new("w", DataType::Float64, false),
+        Field::new("z", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[2]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
         Arc::new(Float64Array::from(w.clone())),
         Arc::new(Float64Array::from(z.clone())),
@@ -473,11 +565,18 @@ fn instrumental_forest_smoke() {
         y_column_name: "y".into(),
         w_column_name: "w".into(),
         z_column_name: "z".into(),
-        y_hat: None, w_hat: None, z_hat: None,
+        y_hat: None,
+        w_hat: None,
+        z_hat: None,
         reduced_form_weight: 0.0,
         stabilize_splits: true,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 80, num_threads: 1, seed: 13, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 80,
+            num_threads: 1,
+            seed: 13,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("iv fit");
     assert_eq!(out.forest.num_trees(), 80);
@@ -495,13 +594,17 @@ fn lm_forest_smoke() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
         Field::new("w0", DataType::Float64, false),
         Field::new("w1", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
         Arc::new(Float64Array::from(w0.clone())),
         Arc::new(Float64Array::from(w1.clone())),
@@ -513,7 +616,12 @@ fn lm_forest_smoke() {
         w_column_names: vec!["w0".into(), "w1".into()],
         gradient_weights: None,
         sample_weights_column: None,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 1,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("lm fit");
     assert_eq!(out.forest.num_trees(), 50);
@@ -530,12 +638,18 @@ fn ll_regression_forest_smoke() {
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
         Field::new("x2", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[2]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[2]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
     ];
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
@@ -547,7 +661,12 @@ fn ll_regression_forest_smoke() {
         ll_split_weight_penalty: false,
         ll_split_variables: vec![],
         ll_split_cutoff: 0,
-        options: NodeTrainOptions { num_trees: 50, num_threads: 1, seed: 1, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 50,
+            num_threads: 1,
+            seed: 1,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("ll fit");
     assert_eq!(out.forest.num_trees(), 50);
@@ -559,11 +678,15 @@ fn boosted_regression_forest_smoke() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("x0", DataType::Float64, false),
         Field::new("x1", DataType::Float64, false),
-        Field::new("y",  DataType::Float64, false),
+        Field::new("y", DataType::Float64, false),
     ]));
     let cols: Vec<Arc<dyn Array>> = vec![
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[0]).collect::<Vec<_>>())),
-        Arc::new(Float64Array::from(x_rows.iter().map(|r| r[1]).collect::<Vec<_>>())),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            x_rows.iter().map(|r| r[1]).collect::<Vec<_>>(),
+        )),
         Arc::new(Float64Array::from(y.clone())),
     ];
     let batch = RecordBatch::try_new(schema.clone(), cols).unwrap();
@@ -574,7 +697,12 @@ fn boosted_regression_forest_smoke() {
         boost_max_steps: Some(3),
         boost_trees_tune: 30,
         boost_error_reduction: 0.0005,
-        options: NodeTrainOptions { num_trees: 30, num_threads: 1, seed: 1, ..Default::default() },
+        options: NodeTrainOptions {
+            num_trees: 30,
+            num_threads: 1,
+            seed: 1,
+            ..Default::default()
+        },
     };
     let out = spec.fit(&[batch]).expect("boosted fit");
     // At least one step should be taken.
@@ -593,26 +721,44 @@ fn boosted_regression_forest_smoke() {
 
 #[test]
 fn causal_forest_ate_correctness() {
-    use grf::nodes::{CausalForestSpec, AverageTreatmentEffectSpec, GenerateCausalDataSpec};
     use arrow_array::Array;
+    use grf::nodes::{AverageTreatmentEffectSpec, CausalForestSpec, GenerateCausalDataSpec};
 
-    let batch = GenerateCausalDataSpec { n: 2000, p: 5, seed: 42 }
-        .generate().expect("gen");
+    let batch = GenerateCausalDataSpec {
+        n: 2000,
+        p: 5,
+        seed: 42,
+    }
+    .generate()
+    .expect("gen");
 
     let y_col = batch.column_by_name("y").unwrap();
     let w_col = batch.column_by_name("w").unwrap();
     let tau_col = batch.column_by_name("true_tau").unwrap();
     let n = batch.num_rows();
     let true_tau: Vec<f64> = (0..n)
-        .map(|i| tau_col.as_any().downcast_ref::<Float64Array>().unwrap().value(i))
+        .map(|i| {
+            tau_col
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(i)
+        })
         .collect();
     let true_ate: f64 = true_tau.iter().sum::<f64>() / n as f64;
 
     let spec = CausalForestSpec {
-        x_column_names: vec!["x0".into(),"x1".into(),"x2".into(),"x3".into(),"x4".into()],
+        x_column_names: vec![
+            "x0".into(),
+            "x1".into(),
+            "x2".into(),
+            "x3".into(),
+            "x4".into(),
+        ],
         y_column_name: "y".into(),
         w_column_name: "w".into(),
-        y_hat: None, w_hat: None,
+        y_hat: None,
+        w_hat: None,
         stabilize_splits: true,
         sample_weights_column: None,
         options: NodeTrainOptions::default(),
@@ -631,10 +777,16 @@ fn causal_forest_ate_correctness() {
         method: "AIPW".into(),
         subset: None,
         clusters: None,
-    }.estimate(&out).expect("ate");
-    eprintln!("AIPW ATE={:.4} ± {:.4} (true={true_ate:.4})", ate.estimate, ate.std_err);
+    }
+    .estimate(&out)
+    .expect("ate");
+    eprintln!(
+        "AIPW ATE={:.4} ± {:.4} (true={true_ate:.4})",
+        ate.estimate, ate.std_err
+    );
     assert!(
         (ate.estimate - true_ate).abs() < 0.3,
-        "AIPW ATE {} too far from true ATE {true_ate}", ate.estimate
+        "AIPW ATE {} too far from true ATE {true_ate}",
+        ate.estimate
     );
 }

@@ -49,7 +49,10 @@ fn test_hiernet_weak_lambda_path() {
     assert_eq!(path.lamlist.len(), fx.lamlist.len());
     for (i, (got, expected)) in path.lamlist.iter().zip(fx.lamlist.iter()).enumerate() {
         let re = (got - expected).abs() / expected.abs().max(1e-10);
-        assert!(re < 1e-4, "lamlist[{i}] mismatch: got {got}, expected {expected}");
+        assert!(
+            re < 1e-4,
+            "lamlist[{i}] mismatch: got {got}, expected {expected}"
+        );
     }
 }
 
@@ -95,10 +98,16 @@ fn test_hiernet_weak_coefficients_nonzero_at_small_lambda() {
 
     // At the smallest lambda, we should find some nonzero main effects
     let last = &path.fits.last().unwrap().coefs;
-    let n_main = last.bp.iter().zip(&last.bn)
+    let n_main = last
+        .bp
+        .iter()
+        .zip(&last.bn)
         .filter(|(bp, bn)| (*bp - *bn).abs() > 1e-6)
         .count();
-    assert!(n_main > 0, "expected nonzero main effects at smallest lambda");
+    assert!(
+        n_main > 0,
+        "expected nonzero main effects at smallest lambda"
+    );
 }
 
 #[test]
@@ -123,7 +132,7 @@ fn test_hiernet_strong_fit() {
 
     // First lambda: all zeros
     let coefs = &path.fits[0].coefs;
-    let all_zero = coefs.bp.iter().all(|&v| v.abs() < 1e-10)
-        && coefs.bn.iter().all(|&v| v.abs() < 1e-10);
+    let all_zero =
+        coefs.bp.iter().all(|&v| v.abs() < 1e-10) && coefs.bn.iter().all(|&v| v.abs() < 1e-10);
     assert!(all_zero, "first lambda should be empty");
 }

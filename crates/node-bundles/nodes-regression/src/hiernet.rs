@@ -38,10 +38,18 @@ pub struct HierNetNodeSpec {
     pub flmin: f64,
 }
 
-fn default_family() -> String { "gaussian".into() }
-fn default_true() -> bool { true }
-fn default_n_lam() -> usize { 20 }
-fn default_flmin() -> f64 { 0.01 }
+fn default_family() -> String {
+    "gaussian".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_n_lam() -> usize {
+    20
+}
+fn default_flmin() -> f64 {
+    0.01
+}
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
@@ -52,7 +60,9 @@ fn port_layout() -> NodePorts {
 
 pub struct HierNetNodeFactory;
 impl NodeFactory for HierNetNodeFactory {
-    fn kind(&self) -> &'static str { "hiernet" }
+    fn kind(&self) -> &'static str {
+        "hiernet"
+    }
     fn desc(&self) -> &'static str {
         "Hierarchical interaction discovery via L1-penalized regression (hierNet)."
     }
@@ -63,7 +73,9 @@ impl NodeFactory for HierNetNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(HierNetNodeSpec).into()
     }
-    fn ports(&self) -> NodePorts { port_layout() }
+    fn ports(&self) -> NodePorts {
+        port_layout()
+    }
 
     fn build(
         &self,
@@ -71,7 +83,10 @@ impl NodeFactory for HierNetNodeFactory {
         _ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: HierNetNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(HierNetNode { spec, meta: port_layout() }))
+        Ok(Box::new(HierNetNode {
+            spec,
+            meta: port_layout(),
+        }))
     }
 }
 
@@ -83,10 +98,18 @@ pub struct HierNetNode {
 
 #[async_trait]
 impl DagNode for HierNetNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "hiernet" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "hiernet"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -98,10 +121,15 @@ impl DagNode for HierNetNode {
             node_type: "hiernet".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input.data.clone().collect().await.map_err(|e| DagError::NodeError {
-            node_type: "hiernet".into(),
-            msg: format!("collect failed: {e}"),
-        })?;
+        let batches = input
+            .data
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::NodeError {
+                node_type: "hiernet".into(),
+                msg: format!("collect failed: {e}"),
+            })?;
         if batches.is_empty() {
             return Err(DagError::NodeError {
                 node_type: "hiernet".into(),
@@ -111,33 +139,37 @@ impl DagNode for HierNetNode {
         let schema = batches[0].schema().clone();
         let n = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
-        let y = dag_core::arrow_util::extract_numeric_lenient(
-            &batches, &self.spec.outcome_column,
-        ).map_err(|e| DagError::NodeError {
-            node_type: "hiernet".into(),
-            msg: e.to_string(),
-        })?;
+        let y = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.spec.outcome_column)
+            .map_err(|e| DagError::NodeError {
+                node_type: "hiernet".into(),
+                msg: e.to_string(),
+            })?;
 
         // Build column-major X matrix
         let p = self.spec.predictors.len();
         let mut x = vec![0.0; p * n];
         for (j, col_name) in self.spec.predictors.iter().enumerate() {
-            let vals = dag_core::arrow_util::extract_numeric_lenient(
-                &batches, col_name,
-            ).map_err(|e| DagError::NodeError {
-                node_type: "hiernet".into(),
-                msg: e.to_string(),
-            })?;
-            for i in 0..n { x[j * n + i] = vals[i]; }
+            let vals =
+                dag_core::arrow_util::extract_numeric_lenient(&batches, col_name).map_err(|e| {
+                    DagError::NodeError {
+                        node_type: "hiernet".into(),
+                        msg: e.to_string(),
+                    }
+                })?;
+            for i in 0..n {
+                x[j * n + i] = vals[i];
+            }
         }
 
         let family = match self.spec.family.as_str() {
             "gaussian" => hiernet::HierNetFamily::Gaussian,
             "logistic" => hiernet::HierNetFamily::Logistic,
-            other => return Err(DagError::NodeError {
-                node_type: "hiernet".into(),
-                msg: format!("unknown family: {other}"),
-            }),
+            other => {
+                return Err(DagError::NodeError {
+                    node_type: "hiernet".into(),
+                    msg: format!("unknown family: {other}"),
+                });
+            }
         };
 
         let config = hiernet::HierNetConfig {
@@ -157,17 +189,21 @@ impl DagNode for HierNetNode {
         // Build Port 0: coefficients
         let port0_batch = build_coefs_batch(&path, p);
         let ctx = node_ctx.session();
-        let df0 = ctx.read_batch(port0_batch).map_err(|e| DagError::NodeError {
-            node_type: "hiernet".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df0 = ctx
+            .read_batch(port0_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "hiernet".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
 
         // Build Port 1: lambda path
         let port1_batch = build_lambda_batch(&path, p);
-        let df1 = ctx.read_batch(port1_batch).map_err(|e| DagError::NodeError {
-            node_type: "hiernet".into(),
-            msg: format!("read_batch failed: {e}"),
-        })?;
+        let df1 = ctx
+            .read_batch(port1_batch)
+            .map_err(|e| DagError::NodeError {
+                node_type: "hiernet".into(),
+                msg: format!("read_batch failed: {e}"),
+            })?;
 
         let mut res = PortOutputs::new();
         res.insert(0, df0);
@@ -218,13 +254,17 @@ fn build_coefs_batch(path: &hiernet::HierNetPath, p: usize) -> RecordBatch {
         Field::new("lambda_idx", DataType::Int32, false),
     ]));
 
-    RecordBatch::try_new(schema, vec![
-        Arc::new(StringArray::from(types)),
-        Arc::new(Int32Array::from(var1s)),
-        Arc::new(var2_final),
-        Arc::new(Float64Array::from(coefs)),
-        Arc::new(Int32Array::from(lam_idxs)),
-    ]).unwrap()
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(types)),
+            Arc::new(Int32Array::from(var1s)),
+            Arc::new(var2_final),
+            Arc::new(Float64Array::from(coefs)),
+            Arc::new(Int32Array::from(lam_idxs)),
+        ],
+    )
+    .unwrap()
 }
 
 fn build_lambda_batch(path: &hiernet::HierNetPath, p: usize) -> RecordBatch {
@@ -236,13 +276,20 @@ fn build_lambda_batch(path: &hiernet::HierNetPath, p: usize) -> RecordBatch {
     for fit in &path.fits {
         lambdas.push(fit.lam);
         objs.push(fit.obj);
-        let main = fit.coefs.bp.iter().zip(&fit.coefs.bn)
-            .filter(|(bp, bn)| (*bp - *bn).abs() > 1e-6).count();
+        let main = fit
+            .coefs
+            .bp
+            .iter()
+            .zip(&fit.coefs.bn)
+            .filter(|(bp, bn)| (*bp - *bn).abs() > 1e-6)
+            .count();
         n_mains.push(main as i32);
         let mut inter = 0;
         for j in 0..p - 1 {
             for k in j + 1..p {
-                if (fit.coefs.th[j + p * k] + fit.coefs.th[k + p * j]).abs() > 1e-6 { inter += 1; }
+                if (fit.coefs.th[j + p * k] + fit.coefs.th[k + p * j]).abs() > 1e-6 {
+                    inter += 1;
+                }
             }
         }
         n_inters.push(inter as i32);
@@ -255,10 +302,14 @@ fn build_lambda_batch(path: &hiernet::HierNetPath, p: usize) -> RecordBatch {
         Field::new("n_interactions", DataType::Int32, false),
     ]));
 
-    RecordBatch::try_new(schema, vec![
-        Arc::new(Float64Array::from(lambdas)),
-        Arc::new(Float64Array::from(objs)),
-        Arc::new(Int32Array::from(n_mains)),
-        Arc::new(Int32Array::from(n_inters)),
-    ]).unwrap()
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Float64Array::from(lambdas)),
+            Arc::new(Float64Array::from(objs)),
+            Arc::new(Int32Array::from(n_mains)),
+            Arc::new(Int32Array::from(n_inters)),
+        ],
+    )
+    .unwrap()
 }

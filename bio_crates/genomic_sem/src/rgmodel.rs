@@ -7,8 +7,8 @@ use faer::Mat;
 
 use crate::error::Result;
 use crate::linalg;
-use crate::utils::Covstruc;
 use crate::usermodel::{ModelFit, ParamResult, UserModelResult};
+use crate::utils::Covstruc;
 
 /// Result from `rgmodel`.
 #[derive(Clone, Debug)]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
@@ -40,17 +40,30 @@ pub struct ForestWeightsOutput {
 pub struct GetForestWeightsFactory;
 
 impl GetForestWeightsFactory {
-    pub fn kind() -> &'static str { "grf_get_forest_weights" }
+    pub fn kind() -> &'static str {
+        "grf_get_forest_weights"
+    }
 }
 
 impl GetForestWeightsSpec {
-    pub fn compute(&self, forest: &ForestBlob, train_x: Matrix, test_x: Matrix) -> Result<ForestWeightsOutput> {
+    pub fn compute(
+        &self,
+        forest: &ForestBlob,
+        train_x: Matrix,
+        test_x: Matrix,
+    ) -> Result<ForestWeightsOutput> {
         let nt = self.num_threads;
-        let buf = forest.compute_weights(
-            &train_x.data, train_x.n_rows, train_x.n_cols,
-            &test_x.data, test_x.n_rows, test_x.n_cols,
-            nt,
-        ).ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+        let buf = forest
+            .compute_weights(
+                &train_x.data,
+                train_x.n_rows,
+                train_x.n_cols,
+                &test_x.data,
+                test_x.n_rows,
+                test_x.n_cols,
+                nt,
+            )
+            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
         Ok(ForestWeightsOutput {
             weights: buf,
             n_train: train_x.n_rows,
@@ -77,14 +90,19 @@ pub struct SplitFrequenciesOutput {
 pub struct SplitFrequenciesFactory;
 
 impl SplitFrequenciesFactory {
-    pub fn kind() -> &'static str { "grf_split_frequencies" }
+    pub fn kind() -> &'static str {
+        "grf_split_frequencies"
+    }
 }
 
 impl SplitFrequenciesSpec {
     pub fn compute(&self, forest: &ForestBlob) -> Result<SplitFrequenciesOutput> {
-        let raw = forest.compute_split_frequencies(self.max_depth)
+        let raw = forest
+            .compute_split_frequencies(self.max_depth)
             .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(SplitFrequenciesOutput { depths_x_features: raw })
+        Ok(SplitFrequenciesOutput {
+            depths_x_features: raw,
+        })
     }
 }
 
@@ -99,7 +117,9 @@ pub struct VariableImportanceSpec {
     pub decay_exponent: f64,
 }
 
-fn default_decay() -> f64 { 2.0 }
+fn default_decay() -> f64 {
+    2.0
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VariableImportanceOutput {
@@ -110,12 +130,15 @@ pub struct VariableImportanceOutput {
 pub struct VariableImportanceFactory;
 
 impl VariableImportanceFactory {
-    pub fn kind() -> &'static str { "grf_variable_importance" }
+    pub fn kind() -> &'static str {
+        "grf_variable_importance"
+    }
 }
 
 impl VariableImportanceSpec {
     pub fn compute(&self, forest: &ForestBlob) -> Result<VariableImportanceOutput> {
-        let raw = forest.compute_split_frequencies(self.max_depth)
+        let raw = forest
+            .compute_split_frequencies(self.max_depth)
             .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
         let n_features = raw.first().map(|r| r.len()).unwrap_or(0);
         let max_depth = raw.len();
@@ -126,7 +149,9 @@ impl VariableImportanceSpec {
             weights.push(row.iter().map(|&c| c as f64 / total).collect::<Vec<_>>());
         }
         // depth decay weights (smaller depth ⇒ larger weight).
-        let decay: Vec<f64> = (1..=max_depth).map(|d| 1.0 / (d as f64).powf(self.decay_exponent)).collect();
+        let decay: Vec<f64> = (1..=max_depth)
+            .map(|d| 1.0 / (d as f64).powf(self.decay_exponent))
+            .collect();
         let total_decay: f64 = decay.iter().sum();
         let mut importance = vec![0.0; n_features];
         for (d, row) in weights.iter().enumerate() {
@@ -164,14 +189,21 @@ pub struct GetTreeOutput {
 pub struct GetTreeFactory;
 
 impl GetTreeFactory {
-    pub fn kind() -> &'static str { "grf_get_tree" }
+    pub fn kind() -> &'static str {
+        "grf_get_tree"
+    }
 }
 
 impl GetTreeSpec {
     pub fn extract(&self, forest: &ForestBlob) -> Result<GetTreeOutput> {
-        let serialized = forest.inner().get_tree(self.index)
+        let serialized = forest
+            .inner()
+            .get_tree(self.index)
             .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(GetTreeOutput { serialized, index: self.index })
+        Ok(GetTreeOutput {
+            serialized,
+            index: self.index,
+        })
     }
 }
 
@@ -198,7 +230,9 @@ pub struct MergeForestsOutput {
 pub struct MergeForestsFactory;
 
 impl MergeForestsFactory {
-    pub fn kind() -> &'static str { "grf_merge_forests" }
+    pub fn kind() -> &'static str {
+        "grf_merge_forests"
+    }
 }
 
 impl MergeForestsSpec {
@@ -235,7 +269,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(GetForestWeightsSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(GetForestWeightsSpec)
+}
 
 #[allow(dead_code)]
 fn _batch_marker(_: &[RecordBatch]) {}

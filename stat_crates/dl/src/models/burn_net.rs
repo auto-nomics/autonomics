@@ -96,7 +96,11 @@ pub fn apply_activation<B: Backend>(x: Tensor<B, 2>, act: Activation) -> Tensor<
             let scale: f32 = 1.0507009873554805;
             let alpha: f32 = 1.6732632423543772;
             let pos = x.clone().clamp_min(0.0).mul_scalar(scale);
-            let neg = x.clamp_max(0.0).exp().sub_scalar(1.0).mul_scalar(alpha * scale);
+            let neg = x
+                .clamp_max(0.0)
+                .exp()
+                .sub_scalar(1.0)
+                .mul_scalar(alpha * scale);
             pos.add(neg)
         }
     }
@@ -172,17 +176,16 @@ pub fn cox_loss(
 
     // Sort by descending time.
     let mut order: Vec<usize> = (0..batch).collect();
-    order.sort_by(|&a, &b| times[b].partial_cmp(&times[a]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        times[b]
+            .partial_cmp(&times[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let h = risk_scores.clone().reshape([batch]);
 
     // Numerical stability: subtract max.
-    let h_max_val = h
-        .clone()
-        .max()
-        .into_data()
-        .as_slice::<f32>()
-        .unwrap()[0];
+    let h_max_val = h.clone().max().into_data().as_slice::<f32>().unwrap()[0];
     let exp_h = h.clone().sub_scalar(h_max_val).exp();
 
     let mut total_loss =
@@ -249,7 +252,9 @@ use crate::configs::OptimizerConfig;
 pub fn create_adam(config: &OptimizerConfig) -> burn::optim::AdamConfig {
     burn::optim::AdamConfig::new()
         .with_weight_decay(if config.weight_decay > 0.0 {
-            Some(burn::optim::decay::WeightDecayConfig::new(config.weight_decay))
+            Some(burn::optim::decay::WeightDecayConfig::new(
+                config.weight_decay,
+            ))
         } else {
             None
         })
@@ -271,7 +276,9 @@ pub fn create_sgd(config: &OptimizerConfig) -> burn::optim::SgdConfig {
             None
         })
         .with_weight_decay(if config.weight_decay > 0.0 {
-            Some(burn::optim::decay::WeightDecayConfig::new(config.weight_decay))
+            Some(burn::optim::decay::WeightDecayConfig::new(
+                config.weight_decay,
+            ))
         } else {
             None
         })

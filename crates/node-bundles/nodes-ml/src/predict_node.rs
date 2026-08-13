@@ -26,10 +26,7 @@ const NODE: &str = "ml_predict";
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
-async fn collect_port(
-    inputs: &[NodeInput],
-    port: u8,
-) -> Result<Vec<RecordBatch>, DagError> {
+async fn collect_port(inputs: &[NodeInput], port: u8) -> Result<Vec<RecordBatch>, DagError> {
     let input = inputs
         .iter()
         .find(|i| i.port == port)
@@ -107,16 +104,36 @@ pub enum ModelKind {
     DecisionTree,
 }
 
-fn d_alpha() -> f64 { 0.1 }
-fn d_max_iter() -> usize { 200 }
-fn d_k() -> usize { 5 }
-fn d_svm_kernel() -> String { "rbf".into() }
-fn d_svm_c() -> f64 { 1.0 }
-fn d_ab_n() -> usize { 50 }
-fn d_ab_lr() -> f64 { 1.0 }
-fn d_dt_depth() -> usize { 10 }
-fn d_dt_split() -> usize { 2 }
-fn d_dt_leaf() -> usize { 1 }
+fn d_alpha() -> f64 {
+    0.1
+}
+fn d_max_iter() -> usize {
+    200
+}
+fn d_k() -> usize {
+    5
+}
+fn d_svm_kernel() -> String {
+    "rbf".into()
+}
+fn d_svm_c() -> f64 {
+    1.0
+}
+fn d_ab_n() -> usize {
+    50
+}
+fn d_ab_lr() -> f64 {
+    1.0
+}
+fn d_dt_depth() -> usize {
+    10
+}
+fn d_dt_split() -> usize {
+    2
+}
+fn d_dt_leaf() -> usize {
+    1
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Factory
@@ -199,8 +216,7 @@ impl DagNode for PredictNode {
         let train_labels_f =
             common::extract_numeric_column(&train_batches, &self.spec.label_column)
                 .map_err(|e| err(e.to_string()))?;
-        let train_labels: Vec<usize> =
-            train_labels_f.into_iter().map(|v| v as usize).collect();
+        let train_labels: Vec<usize> = train_labels_f.into_iter().map(|v| v as usize).collect();
 
         let test_x = common::extract_matrix(&test_batches, &self.spec.features)
             .map_err(|e| err(e.to_string()))?;
@@ -222,25 +238,16 @@ impl DagNode for PredictNode {
                 }
             }
             ModelKind::GaussianNb => {
-                let r = ml::classify::gaussian_nb_fit_predict(
-                    &train_x,
-                    &train_labels,
-                    &test_x,
-                )
-                .map_err(|e| err(e.to_string()))?;
+                let r = ml::classify::gaussian_nb_fit_predict(&train_x, &train_labels, &test_x)
+                    .map_err(|e| err(e.to_string()))?;
                 PredictResult {
                     predictions: r.predictions,
                     probabilities: r.probabilities,
                 }
             }
             ModelKind::Knn => {
-                let r = ml::classify::knn_classify(
-                    &train_x,
-                    &train_labels,
-                    &test_x,
-                    self.spec.k,
-                )
-                .map_err(|e| err(e.to_string()))?;
+                let r = ml::classify::knn_classify(&train_x, &train_labels, &test_x, self.spec.k)
+                    .map_err(|e| err(e.to_string()))?;
                 PredictResult {
                     predictions: r.predictions,
                     probabilities: r.probabilities,

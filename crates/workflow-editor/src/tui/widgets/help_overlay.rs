@@ -21,7 +21,9 @@ impl Widget for HelpOverlayWidget {
         let mut lines = vec![
             Line::from(Span::styled(
                 "Navigation",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(" hjkl / arrows  pan canvas"),
             Line::from(" +/-           zoom"),
@@ -30,7 +32,9 @@ impl Widget for HelpOverlayWidget {
             Line::from(""),
             Line::from(Span::styled(
                 "Editing",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(" n             open node picker"),
             Line::from(" e             edit selected node (spec or SOP)"),
@@ -40,7 +44,9 @@ impl Widget for HelpOverlayWidget {
             Line::from(""),
             Line::from(Span::styled(
                 "System",
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(" :             open command palette"),
             Line::from(" Ctrl+S        save"),

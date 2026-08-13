@@ -165,9 +165,7 @@ fn has_orphan_tool_use(messages: &[Message]) -> bool {
                 .content
                 .iter()
                 .filter_map(|c| match c {
-                    ContentBlock::ToolResult { tool_use_id, .. } => {
-                        Some(tool_use_id.as_str())
-                    }
+                    ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
                     _ => None,
                 })
                 .collect(),
@@ -285,7 +283,8 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
             }
             Role::User => {
                 if !prev_had_tool_use {
-                    m.content.retain(|c| !matches!(c, ContentBlock::ToolResult { .. }));
+                    m.content
+                        .retain(|c| !matches!(c, ContentBlock::ToolResult { .. }));
                 }
                 prev_had_tool_use = false;
             }
@@ -540,7 +539,12 @@ mod tests {
         let out = sanitize_messages(msgs);
         // No allocation: same Vec identity (preserved by `return messages`).
         assert_eq!(out.len(), 4);
-        assert!(out[0].content.iter().any(|c| matches!(c, ContentBlock::Text { .. })));
+        assert!(
+            out[0]
+                .content
+                .iter()
+                .any(|c| matches!(c, ContentBlock::Text { .. }))
+        );
         // Best-effort identity check — pointer comparison is valid since we
         // returned the original Vec untouched.
         assert_eq!(out.as_ptr(), before_ptr as *const Message);
@@ -568,11 +572,7 @@ mod tests {
 
     #[test]
     fn consecutive_user_messages_coalesced() {
-        let msgs = vec![
-            text_user("hello"),
-            text_user("world"),
-            text_assistant("ok"),
-        ];
+        let msgs = vec![text_user("hello"), text_user("world"), text_assistant("ok")];
         let out = sanitize_messages(msgs);
         assert_eq!(out.len(), 2);
         // Coalesced content carries both texts.
@@ -751,7 +751,10 @@ mod tests {
             .flat_map(|m| m.content.iter())
             .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X"))
             .count();
-        assert_eq!(total_dupes, 1, "exactly one tool_result for call_X must remain");
+        assert_eq!(
+            total_dupes, 1,
+            "exactly one tool_result for call_X must remain"
+        );
     }
 
     #[test]

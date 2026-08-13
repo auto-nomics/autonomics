@@ -249,10 +249,7 @@ impl Session {
     /// only by unit tests that exercise `remember` / `add_message` without a
     /// full agent bootstrap.
     #[cfg(test)]
-    pub(crate) fn new_for_tests(
-        shared: Arc<AgentShared>,
-        _path: agentik_types::AgentPath,
-    ) -> Self {
+    pub(crate) fn new_for_tests(shared: Arc<AgentShared>, _path: agentik_types::AgentPath) -> Self {
         Self::new(Uuid::new_v4(), shared)
     }
 
@@ -473,11 +470,11 @@ impl Session {
                 continue;
             }
 
-            let tc_msg_index = self.get_tooluse_msg_index(&tool_use_id).ok_or(
-                error::Error::OrphanToolResult {
-                    tool_use_id: tool_use_id.clone(),
-                },
-            )?;
+            let tc_msg_index =
+                self.get_tooluse_msg_index(&tool_use_id)
+                    .ok_or(error::Error::OrphanToolResult {
+                        tool_use_id: tool_use_id.clone(),
+                    })?;
 
             if tc_msg_index + 1 < self.messages.len() {
                 // Need to move tool_result to the next message of tool_use
@@ -607,7 +604,8 @@ impl Session {
         // the model retains direct access to original user intent without
         // relying solely on the summary.
         let head_messages = &self.messages[..selection.tail_message_start];
-        let preserved_user_msgs = collect_recent_user_messages(head_messages, COMPACT_USER_MESSAGE_MAX_TOKENS);
+        let preserved_user_msgs =
+            collect_recent_user_messages(head_messages, COMPACT_USER_MESSAGE_MAX_TOKENS);
 
         // Retain the tail (recent messages from the split point onward)
         let tail = self.messages[selection.tail_message_start..].to_vec();
@@ -703,9 +701,7 @@ impl Session {
                 // transition to Cancelled so the agent is ready for new work.
                 // Background watchers have a child token tied to the old
                 // (now-cancelled) token, so they exit silently.
-                if *self.lifecycle.status()
-                    == agentik_types::AgentLifecycleStatus::Waiting
-                {
+                if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Waiting {
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
                     self.shared.send_event(AgentEvent::TurnAborted);
                 }
@@ -787,8 +783,7 @@ impl Session {
                         // Don't emit `Done` when waiting for background
                         // tasks — the turn isn't complete, just paused.
                         // The watcher will inject a message to resume.
-                        if *self.lifecycle.status()
-                            != agentik_types::AgentLifecycleStatus::Waiting
+                        if *self.lifecycle.status() != agentik_types::AgentLifecycleStatus::Waiting
                         {
                             self.shared.send_event(AgentEvent::Done);
                         }
@@ -1005,11 +1000,7 @@ impl Session {
                     .iter()
                     .find(|tc| tc.id == tr.tool_use_id)
                     .expect("matched above");
-                let task_seq = tc
-                    .input
-                    .get("task")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+                let task_seq = tc.input.get("task").and_then(|v| v.as_u64()).unwrap_or(0);
                 let timeout_secs = tc
                     .input
                     .get("timeout_seconds")
@@ -1084,9 +1075,18 @@ impl Session {
         // process the results. If the context has grown past the auto-compact
         // threshold, compact *now* to prevent an overflow on the next request.
         if !toolcalls.is_empty() {
-            let context_length = self.shared.model.load().as_ref().map(|m| m.model_info.context_length).unwrap_or(0);
+            let context_length = self
+                .shared
+                .model
+                .load()
+                .as_ref()
+                .map(|m| m.model_info.context_length)
+                .unwrap_or(0);
             let conversation_msgs = self.render_context()?;
-            if self.token_budget.should_compact(&conversation_msgs, context_length) {
+            if self
+                .token_budget
+                .should_compact(&conversation_msgs, context_length)
+            {
                 let model = self.shared.model.load_full().ok_or_else(|| {
                     AgentError::MissingConfig("no active model configured".into())
                 })?;
@@ -1133,9 +1133,7 @@ impl Session {
         let status_rx = {
             let tasks = tasks.read().await;
             match tasks.find_by_seq(task_seq) {
-                Some(task)
-                    if matches!(task.status(), TaskStatus::Running) =>
-                {
+                Some(task) if matches!(task.status(), TaskStatus::Running) => {
                     Some(task.status_receiver_clone())
                 }
                 _ => None, // Already completed or not found — handle below.
@@ -1166,9 +1164,9 @@ impl Session {
                     None => format!("Background task #{task_seq} no longer exists."),
                 }
             };
-            let _ = tx.send(InternalEvent::MessageInject(vec![
-                ContentBlock::Text { text: message },
-            ]));
+            let _ = tx.send(InternalEvent::MessageInject(vec![ContentBlock::Text {
+                text: message,
+            }]));
             return;
         };
 
@@ -1225,9 +1223,9 @@ impl Session {
             )
         };
 
-        let _ = tx.send(InternalEvent::MessageInject(vec![
-            ContentBlock::Text { text: message },
-        ]));
+        let _ = tx.send(InternalEvent::MessageInject(vec![ContentBlock::Text {
+            text: message,
+        }]));
     }
 
     pub(crate) fn stop(&mut self) {
@@ -1592,11 +1590,7 @@ fn truncate_for_compact(text: &str) -> String {
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}\n[truncated {} chars]",
-        &text[..end],
-        text.len() - end
-    )
+    format!("{}\n[truncated {} chars]", &text[..end], text.len() - end)
 }
 
 /// Select a split point in the conversation for compaction.
@@ -1660,9 +1654,10 @@ fn collect_recent_user_messages(messages: &[Message], max_tokens: u64) -> Vec<Me
             continue;
         }
         // Skip tool-result-only user messages (they're not real user intent)
-        let has_text = msg.content.iter().any(|b| {
-            matches!(b, ContentBlock::Text { text } if !text.is_empty())
-        });
+        let has_text = msg
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if !text.is_empty()));
         if !has_text {
             continue;
         }
@@ -1749,7 +1744,8 @@ fn build_compaction_prompt(head: &str, previous_summary: Option<&str>) -> String
         )
     } else {
         "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary \
-         for another LLM that will resume the task.".to_string()
+         for another LLM that will resume the task."
+            .to_string()
     };
 
     format!(
@@ -1802,7 +1798,11 @@ mod tests {
 
         // Second remember with the same tool_use_id — must be dropped.
         session
-            .remember(Message::tool_result("call_001", "second (duplicate)", false))
+            .remember(Message::tool_result(
+                "call_001",
+                "second (duplicate)",
+                false,
+            ))
             .expect("duplicate tool_result should not error");
 
         let count_after = count_tool_results(&session.messages, "call_001");

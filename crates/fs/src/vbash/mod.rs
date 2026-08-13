@@ -872,10 +872,7 @@ mod tests {
         w.path = Some("   ".into());
         w.content = Some("data".into());
         let result = tool.run(w).await;
-        assert!(
-            result.is_err(),
-            "expected error for whitespace-only path"
-        );
+        assert!(result.is_err(), "expected error for whitespace-only path");
     }
 
     #[tokio::test]

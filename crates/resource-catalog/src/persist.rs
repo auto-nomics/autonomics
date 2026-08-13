@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use turso::{params_from_iter, Connection, Value};
+use turso::{Connection, Value, params_from_iter};
 
 use crate::archive::{ArchiveSpec, ArchiveStatus};
 use crate::entry::ResourceEntry;
@@ -212,7 +212,7 @@ impl ManifestStore for TursoManifestStore {
                 Err(e) => {
                     return Err(ResourceError::Persistence(format!(
                         "manifest load row: {e}"
-                    )))
+                    )));
                 }
             }
         }
@@ -222,9 +222,10 @@ impl ManifestStore for TursoManifestStore {
 
 /// Extract a TEXT column as `String`.
 fn text_value(row: &turso::Row, idx: usize) -> Result<String> {
-    match row.get_value(idx).map_err(|e| {
-        ResourceError::Persistence(format!("manifest column read: {e}"))
-    })? {
+    match row
+        .get_value(idx)
+        .map_err(|e| ResourceError::Persistence(format!("manifest column read: {e}")))?
+    {
         Value::Text(s) => Ok(s),
         Value::Null => Ok(String::new()),
         other => Err(ResourceError::Persistence(format!(

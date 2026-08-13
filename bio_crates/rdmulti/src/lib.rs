@@ -10,7 +10,7 @@
 use statrs::distribution::{ContinuousCDF, Normal};
 use thiserror::Error;
 
-pub use rdrobust::{rdrobust, Kernel, RdRobustConfig, RdRobustOutput};
+pub use rdrobust::{Kernel, RdRobustConfig, RdRobustOutput, rdrobust};
 
 #[derive(Debug, Error)]
 pub enum RdMultiError {
@@ -86,7 +86,9 @@ pub struct RdMcConfig {
 impl Default for RdMcConfig {
     fn default() -> Self {
         Self {
-            y: vec![], x: vec![], c: vec![],
+            y: vec![],
+            x: vec![],
+            c: vec![],
             p: 1,
             kernel: Kernel::Triangular,
             bwselect: "mserd".into(),
@@ -132,9 +134,24 @@ pub fn rdmc(cfg: &RdMcConfig) -> Result<RdMcResult, RdMultiError> {
 
     for &cv in &clist {
         // Select observations at this cutoff
-        let mask: Vec<bool> = cfg.c.iter().map(|ci| (ci - cv).abs() <= f64::EPSILON).collect();
-        let yc: Vec<f64> = cfg.y.iter().zip(&mask).filter(|(_, m)| **m).map(|(y, _)| *y).collect();
-        let xc_sub: Vec<f64> = xc.iter().zip(&mask).filter(|(_, m)| **m).map(|(x, _)| *x).collect();
+        let mask: Vec<bool> = cfg
+            .c
+            .iter()
+            .map(|ci| (ci - cv).abs() <= f64::EPSILON)
+            .collect();
+        let yc: Vec<f64> = cfg
+            .y
+            .iter()
+            .zip(&mask)
+            .filter(|(_, m)| **m)
+            .map(|(y, _)| *y)
+            .collect();
+        let xc_sub: Vec<f64> = xc
+            .iter()
+            .zip(&mask)
+            .filter(|(_, m)| **m)
+            .map(|(x, _)| *x)
+            .collect();
 
         if yc.len() < 20 {
             cfail.push(cv);
@@ -178,13 +195,19 @@ pub fn rdmc(cfg: &RdMcConfig) -> Result<RdMcResult, RdMultiError> {
     let quant = normal.inverse_cdf(1.0 - (1.0 - cfg.level / 100.0) / 2.0);
 
     let w_tau_bc: f64 = cutoffs.iter().map(|c| c.tau_bc * c.weight).sum();
-    let w_var_rb: f64 = cutoffs.iter().map(|c| c.se_rb.powi(2) * c.weight.powi(2)).sum();
+    let w_var_rb: f64 = cutoffs
+        .iter()
+        .map(|c| c.se_rb.powi(2) * c.weight.powi(2))
+        .sum();
     let w_se_rb = w_var_rb.sqrt();
     let w_pv_rb = 2.0 * normal.cdf(-(w_tau_bc / w_se_rb).abs());
     let w_ci_rb = [w_tau_bc - quant * w_se_rb, w_tau_bc + quant * w_se_rb];
 
     let w_tau_cl: f64 = cutoffs.iter().map(|c| c.tau_cl * c.weight).sum();
-    let w_var_cl: f64 = cutoffs.iter().map(|c| c.se_cl.powi(2) * c.weight.powi(2)).sum();
+    let w_var_cl: f64 = cutoffs
+        .iter()
+        .map(|c| c.se_cl.powi(2) * c.weight.powi(2))
+        .sum();
     let w_se_cl = w_var_cl.sqrt();
     let w_pv_cl = 2.0 * normal.cdf(-(w_tau_cl / w_se_cl).abs());
     let w_ci_cl = [w_tau_cl - quant * w_se_cl, w_tau_cl + quant * w_se_cl];
@@ -200,7 +223,12 @@ pub fn rdmc(cfg: &RdMcConfig) -> Result<RdMcResult, RdMultiError> {
         ci_cl: w_ci_cl,
     };
 
-    Ok(RdMcResult { pooled, weighted, cutoffs, cfail })
+    Ok(RdMcResult {
+        pooled,
+        weighted,
+        cutoffs,
+        cfail,
+    })
 }
 
 fn cutoff_from_rd(rd: &RdRobustOutput, cutoff: f64, weight: f64) -> CutoffResult {
@@ -233,10 +261,10 @@ fn cutoff_from_rd(rd: &RdRobustOutput, cutoff: f64, weight: f64) -> CutoffResult
 pub struct RdMsConfig {
     pub y: Vec<f64>,
     pub x: Vec<f64>,
-    pub c: Vec<f64>,  // cutoffs (one per cutoff, not per observation)
-    pub x2: Option<Vec<f64>>,  // second running variable
-    pub zvar: Option<Vec<f64>>, // treatment indicator (for X2)
-    pub c2: Option<Vec<f64>>,  // second cutoffs
+    pub c: Vec<f64>,             // cutoffs (one per cutoff, not per observation)
+    pub x2: Option<Vec<f64>>,    // second running variable
+    pub zvar: Option<Vec<f64>>,  // treatment indicator (for X2)
+    pub c2: Option<Vec<f64>>,    // second cutoffs
     pub xnorm: Option<Vec<f64>>, // normalized running variable for pooled
     pub p: usize,
     pub kernel: Kernel,
@@ -248,8 +276,13 @@ pub struct RdMsConfig {
 impl Default for RdMsConfig {
     fn default() -> Self {
         Self {
-            y: vec![], x: vec![], c: vec![],
-            x2: None, zvar: None, c2: None, xnorm: None,
+            y: vec![],
+            x: vec![],
+            c: vec![],
+            x2: None,
+            zvar: None,
+            c2: None,
+            xnorm: None,
             p: 1,
             kernel: Kernel::Triangular,
             bwselect: "mserd".into(),
@@ -279,12 +312,16 @@ pub fn rdms(cfg: &RdMsConfig) -> Result<RdMsResult, RdMultiError> {
     for i in 0..cnum {
         let cv = cfg.c[i];
 
-        let xc_full: Vec<f64> = if let (Some(x2), Some(zvar), Some(c2)) = (&cfg.x2, &cfg.zvar, &cfg.c2) {
+        let xc_full: Vec<f64> = if let (Some(x2), Some(zvar), Some(c2)) =
+            (&cfg.x2, &cfg.zvar, &cfg.c2)
+        {
             // 2D: Euclidean distance * sign(zvar)
             let c2v = c2[i];
-            (0..cfg.x.len()).map(|j| {
-                ((cfg.x[j] - cv).powi(2) + (x2[j] - c2v).powi(2)).sqrt() * (2.0 * zvar[j] - 1.0)
-            }).collect()
+            (0..cfg.x.len())
+                .map(|j| {
+                    ((cfg.x[j] - cv).powi(2) + (x2[j] - c2v).powi(2)).sqrt() * (2.0 * zvar[j] - 1.0)
+                })
+                .collect()
         } else {
             // 1D: X - C[i]
             cfg.x.iter().map(|xi| xi - cv).collect()

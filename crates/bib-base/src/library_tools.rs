@@ -39,9 +39,13 @@ use crate::tools::parse_id_kind;
 /// A single typed article identifier for `bib_save`'s `ids` mode.
 #[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
 pub struct ArticleIdInput {
-    #[schemars(description = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\"")]
+    #[schemars(
+        description = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\""
+    )]
     pub id_type: String,
-    #[schemars(description = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"W2741809807\")")]
+    #[schemars(
+        description = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"W2741809807\")"
+    )]
     pub id: String,
 }
 
@@ -63,13 +67,17 @@ pub struct ArticleInput {
     #[serde(default)]
     pub pmid: Option<String>,
 
-    #[schemars(description = "Structured identifiers: [{\"kind\":\"doi\",\"value\":\"...\"}]. \
-                              Optional when `doi` or `pmid` top-level fields are provided.")]
+    #[schemars(
+        description = "Structured identifiers: [{\"kind\":\"doi\",\"value\":\"...\"}]. \
+                              Optional when `doi` or `pmid` top-level fields are provided."
+    )]
     #[serde(default)]
     pub identifiers: Vec<IdentifierInput>,
 
-    #[schemars(description = "Authors as display-name strings, e.g. [\"Smith J\", \"Doe K\"]. \
-                              Matches the format returned by lit_search.")]
+    #[schemars(
+        description = "Authors as display-name strings, e.g. [\"Smith J\", \"Doe K\"]. \
+                              Matches the format returned by lit_search."
+    )]
     #[serde(default)]
     pub authors: Vec<String>,
 
@@ -105,8 +113,10 @@ pub struct ArticleInput {
     #[serde(default)]
     pub pub_types: Vec<String>,
 
-    #[schemars(description = "Source this article came from (e.g. \"pubmed\", \"arxiv\", \
-                              \"openalex\"). Used for provenance.")]
+    #[schemars(
+        description = "Source this article came from (e.g. \"pubmed\", \"arxiv\", \
+                              \"openalex\"). Used for provenance."
+    )]
     #[serde(default)]
     pub source: Option<String>,
 }
@@ -114,7 +124,9 @@ pub struct ArticleInput {
 /// A structured identifier inside [`ArticleInput`].
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
 pub struct IdentifierInput {
-    #[schemars(description = "Kind: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", \"biorxiv\"")]
+    #[schemars(
+        description = "Kind: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", \"biorxiv\""
+    )]
     pub kind: String,
     #[schemars(description = "Identifier value")]
     pub value: String,
@@ -303,11 +315,7 @@ impl BibSaveTool {
         // Check if already in local library (dedup by any identifier).
         let existing_identifier = article.identifiers.first();
         if let Some(id) = existing_identifier {
-            if let Ok(Some(existing)) = self
-                .bib
-                .find_by_identifier(id.kind, &id.value)
-                .await
-            {
+            if let Ok(Some(existing)) = self.bib.find_by_identifier(id.kind, &id.value).await {
                 let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
                 let cached_doi = existing.doi().map(str::to_owned);
                 let cached_pmid = existing.pmid().map(str::to_owned);
@@ -550,9 +558,7 @@ fn article_input_to_article(input: &ArticleInput) -> Result<bib_types::Article, 
     }
 
     if identifiers.is_empty() {
-        return Err(
-            "at least one identifier is required (doi, pmid, or identifiers array)".into(),
-        );
+        return Err("at least one identifier is required (doi, pmid, or identifiers array)".into());
     }
 
     // Parse authors: "Family Given" or "Family" from display-name strings.
@@ -1330,9 +1336,7 @@ impl BibGetArticleTool {
             keywords: article.keywords.clone(),
             pub_types: article.pub_types.clone(),
             has_fulltext,
-            fulltext_source: fulltext
-                .as_ref()
-                .map(|ft| ft.source.as_str().to_owned()),
+            fulltext_source: fulltext.as_ref().map(|ft| ft.source.as_str().to_owned()),
             fulltext: text_content,
             annotations: annotations
                 .iter()
@@ -1766,10 +1770,7 @@ mod tests {
 
         let article = article_input_to_article(&input).unwrap();
         assert_eq!(article.identifiers.len(), 2);
-        assert_eq!(
-            article.identifier(IdKind::Arxiv),
-            Some("2401.00001")
-        );
+        assert_eq!(article.identifier(IdKind::Arxiv), Some("2401.00001"));
         assert_eq!(article.source, bib_types::ArticleSource::Arxiv);
     }
 

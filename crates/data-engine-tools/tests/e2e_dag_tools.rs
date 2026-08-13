@@ -579,11 +579,7 @@ async fn test_inspect_node_returns_live_spec() {
     // 2. inspect_node must return the exact kind + spec.
     let results = toolset
         .execute(
-            &[build_tooluse(
-                "tc2",
-                "inspect_node",
-                json!({"id": "sql"}),
-            )],
+            &[build_tooluse("tc2", "inspect_node", json!({"id": "sql"}))],
             None,
         )
         .await
@@ -594,8 +590,7 @@ async fn test_inspect_node_returns_live_spec() {
     assert_eq!(body["id"], "sql", "inspect_node echoed the queried id");
     assert_eq!(body["kind"], "sql", "inspect_node returned the node kind");
     assert_eq!(
-        body["spec"]["sql_query"],
-        original_query,
+        body["spec"]["sql_query"], original_query,
         "inspect_node returned the original spec before update"
     );
 
@@ -616,11 +611,7 @@ async fn test_inspect_node_returns_live_spec() {
 
     let results = toolset
         .execute(
-            &[build_tooluse(
-                "tc4",
-                "inspect_node",
-                json!({"id": "sql"}),
-            )],
+            &[build_tooluse("tc4", "inspect_node", json!({"id": "sql"}))],
             None,
         )
         .await
@@ -628,8 +619,7 @@ async fn test_inspect_node_returns_live_spec() {
     check_ok(&results[0], "inspect_node sql after update");
     let body = parse_tool_json(&results[0].content);
     assert_eq!(
-        body["spec"]["sql_query"],
-        updated_query,
+        body["spec"]["sql_query"], updated_query,
         "inspect_node reflects the updated spec, not the original"
     );
     assert_eq!(

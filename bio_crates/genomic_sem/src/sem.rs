@@ -28,8 +28,8 @@ use crate::near_pd;
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelLine {
     pub lhs: String,
-    pub op: String,   // "=~", "~~", "~", ":="
-    pub rhs: String,  // unparsed RHS
+    pub op: String,  // "=~", "~~", "~", ":="
+    pub rhs: String, // unparsed RHS
 }
 
 /// A parsed lavaan model.
@@ -54,19 +54,39 @@ pub fn parse_model(model_str: &str) -> Result<SemModel> {
 
         let (lhs, op, rhs) = if line.contains("=~") {
             let parts: Vec<&str> = line.splitn(2, "=~").collect();
-            (parts[0].trim().to_string(), "=~".to_string(), parts[1].trim().to_string())
+            (
+                parts[0].trim().to_string(),
+                "=~".to_string(),
+                parts[1].trim().to_string(),
+            )
         } else if line.contains("~~") {
             let parts: Vec<&str> = line.splitn(2, "~~").collect();
-            (parts[0].trim().to_string(), "~~".to_string(), parts[1].trim().to_string())
+            (
+                parts[0].trim().to_string(),
+                "~~".to_string(),
+                parts[1].trim().to_string(),
+            )
         } else if line.contains(":=") {
             let parts: Vec<&str> = line.splitn(2, ":=").collect();
-            (parts[0].trim().to_string(), ":=".to_string(), parts[1].trim().to_string())
+            (
+                parts[0].trim().to_string(),
+                ":=".to_string(),
+                parts[1].trim().to_string(),
+            )
         } else if line.contains("==") {
             let parts: Vec<&str> = line.splitn(2, "==").collect();
-            (parts[0].trim().to_string(), "==".to_string(), parts[1].trim().to_string())
+            (
+                parts[0].trim().to_string(),
+                "==".to_string(),
+                parts[1].trim().to_string(),
+            )
         } else if line.contains("~") {
             let parts: Vec<&str> = line.splitn(2, "~").collect();
-            (parts[0].trim().to_string(), "~".to_string(), parts[1].trim().to_string())
+            (
+                parts[0].trim().to_string(),
+                "~".to_string(),
+                parts[1].trim().to_string(),
+            )
         } else {
             return Err(GenomicSemError::Syntax(format!(
                 "Cannot parse line: '{line}'"
@@ -102,7 +122,11 @@ pub fn parse_model(model_str: &str) -> Result<SemModel> {
         lines.push(ModelLine { lhs, op, rhs });
     }
 
-    Ok(SemModel { lines, observed_vars, latent_vars })
+    Ok(SemModel {
+        lines,
+        observed_vars,
+        latent_vars,
+    })
 }
 
 /// Extract variable names from RHS, stripping coefficients and labels.
@@ -154,7 +178,13 @@ pub fn build_param_table(model: &SemModel, s_names: &[String]) -> Vec<Param> {
                         lhs: line.lhs.clone(),
                         op: line.op.clone(),
                         rhs: varname,
-                        free: if is_fixed { 0 } else { let i = free_idx; free_idx += 1; i },
+                        free: if is_fixed {
+                            0
+                        } else {
+                            let i = free_idx;
+                            free_idx += 1;
+                            i
+                        },
                         ustart: fixed_val.unwrap_or(f64::NAN),
                         label: String::new(),
                         est: 0.0,
@@ -164,8 +194,13 @@ pub fn build_param_table(model: &SemModel, s_names: &[String]) -> Vec<Param> {
             }
             ":=" => {
                 params.push(Param {
-                    lhs: line.lhs.clone(), op: ":=".into(), rhs: line.rhs.clone(),
-                    free: 0, ustart: f64::NAN, label: String::new(), est: 0.0,
+                    lhs: line.lhs.clone(),
+                    op: ":=".into(),
+                    rhs: line.rhs.clone(),
+                    free: 0,
+                    ustart: f64::NAN,
+                    label: String::new(),
+                    est: 0.0,
                 });
             }
             _ => {}
@@ -174,21 +209,41 @@ pub fn build_param_table(model: &SemModel, s_names: &[String]) -> Vec<Param> {
 
     // Default residual variances for observed vars
     for name in s_names {
-        let has_var = params.iter().any(|p| p.op == "~~" && p.lhs == *name && p.rhs == *name);
+        let has_var = params
+            .iter()
+            .any(|p| p.op == "~~" && p.lhs == *name && p.rhs == *name);
         if !has_var {
-            let i = free_idx; free_idx += 1;
-            params.push(Param { lhs: name.clone(), op: "~~".into(), rhs: name.clone(),
-                free: i, ustart: f64::NAN, label: String::new(), est: 0.0 });
+            let i = free_idx;
+            free_idx += 1;
+            params.push(Param {
+                lhs: name.clone(),
+                op: "~~".into(),
+                rhs: name.clone(),
+                free: i,
+                ustart: f64::NAN,
+                label: String::new(),
+                est: 0.0,
+            });
         }
     }
 
     // Default latent variances
     for lv in &model.latent_vars {
-        let has_var = params.iter().any(|p| p.op == "~~" && p.lhs == *lv && p.rhs == *lv);
+        let has_var = params
+            .iter()
+            .any(|p| p.op == "~~" && p.lhs == *lv && p.rhs == *lv);
         if !has_var {
-            let i = free_idx; free_idx += 1;
-            params.push(Param { lhs: lv.clone(), op: "~~".into(), rhs: lv.clone(),
-                free: i, ustart: f64::NAN, label: String::new(), est: 0.0 });
+            let i = free_idx;
+            free_idx += 1;
+            params.push(Param {
+                lhs: lv.clone(),
+                op: "~~".into(),
+                rhs: lv.clone(),
+                free: i,
+                ustart: f64::NAN,
+                label: String::new(),
+                est: 0.0,
+            });
         }
     }
 
@@ -217,7 +272,11 @@ fn parse_term(term: &str) -> (String, Option<f64>, bool) {
 
 /// Compute the model-implied covariance matrix Σ.
 /// Σ = Λ(I-Β)⁻¹ Ψ(I-Β)⁻ᵀ Λᵀ + Θ
-pub fn compute_implied_cov(params: &[Param], observed_vars: &[String], latent_vars: &[String]) -> Mat<f64> {
+pub fn compute_implied_cov(
+    params: &[Param],
+    observed_vars: &[String],
+    latent_vars: &[String],
+) -> Mat<f64> {
     let n_obs = observed_vars.len();
     let n_lat = latent_vars.len();
 
@@ -232,23 +291,32 @@ pub fn compute_implied_cov(params: &[Param], observed_vars: &[String], latent_va
                 if let (Some(row), Some(col)) = (
                     observed_vars.iter().position(|v| v == &p.rhs),
                     latent_vars.iter().position(|v| v == &p.lhs),
-                ) { lambda[(row, col)] = p.est; }
+                ) {
+                    lambda[(row, col)] = p.est;
+                }
             }
             "~~" => {
                 if let (Some(r), Some(c)) = (
                     latent_vars.iter().position(|v| v == &p.lhs),
                     latent_vars.iter().position(|v| v == &p.rhs),
-                ) { psi[(r, c)] = p.est; psi[(c, r)] = p.est; }
-                else if let (Some(r), Some(c)) = (
+                ) {
+                    psi[(r, c)] = p.est;
+                    psi[(c, r)] = p.est;
+                } else if let (Some(r), Some(c)) = (
                     observed_vars.iter().position(|v| v == &p.lhs),
                     observed_vars.iter().position(|v| v == &p.rhs),
-                ) { theta[(r, c)] = p.est; theta[(c, r)] = p.est; }
+                ) {
+                    theta[(r, c)] = p.est;
+                    theta[(c, r)] = p.est;
+                }
             }
             "~" => {
                 if let (Some(r), Some(c)) = (
                     latent_vars.iter().position(|v| v == &p.lhs),
                     latent_vars.iter().position(|v| v == &p.rhs),
-                ) { beta[(r, c)] = p.est; }
+                ) {
+                    beta[(r, c)] = p.est;
+                }
             }
             _ => {}
         }
@@ -256,7 +324,11 @@ pub fn compute_implied_cov(params: &[Param], observed_vars: &[String], latent_va
 
     if n_lat > 0 {
         let mut i_minus_b = Mat::identity(n_lat, n_lat);
-        for i in 0..n_lat { for j in 0..n_lat { i_minus_b[(i, j)] -= beta[(i, j)]; } }
+        for i in 0..n_lat {
+            for j in 0..n_lat {
+                i_minus_b[(i, j)] -= beta[(i, j)];
+            }
+        }
         let inv = linalg::inverse(&i_minus_b);
         let inner = &(&inv * &psi) * inv.transpose();
         &(&lambda * &inner) * lambda.transpose() + &theta
@@ -271,7 +343,10 @@ pub fn compute_implied_cov(params: &[Param], observed_vars: &[String], latent_va
 
 /// Estimation method.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EstimationMethod { DWLS, ML }
+pub enum EstimationMethod {
+    DWLS,
+    ML,
+}
 
 /// Configuration for SEM fitting.
 #[derive(Clone, Debug)]
@@ -285,8 +360,13 @@ pub struct SemConfig {
 
 impl Default for SemConfig {
     fn default() -> Self {
-        Self { estimation: EstimationMethod::DWLS, std_lv: false, fix_resid: true,
-               toler: f64::EPSILON, max_iter: 500 }
+        Self {
+            estimation: EstimationMethod::DWLS,
+            std_lv: false,
+            fix_resid: true,
+            toler: f64::EPSILON,
+            max_iter: 500,
+        }
     }
 }
 
@@ -324,7 +404,15 @@ pub fn fit_sem(
     let mut theta = init_params(&mut params, s, observed_vars);
 
     // Optimize
-    let converged = optimize_dwls(&mut theta, &params, s, w, observed_vars, &model.latent_vars, config);
+    let converged = optimize_dwls(
+        &mut theta,
+        &params,
+        s,
+        w,
+        observed_vars,
+        &model.latent_vars,
+        config,
+    );
 
     // Update estimates
     update_params(&mut params, &theta);
@@ -338,9 +426,27 @@ pub fn fit_sem(
     let aic = chisq + 2.0 * npar as f64;
 
     // Sandwich SEs
-    let se = compute_sandwich_se(&params, s, w, observed_vars, &model.latent_vars, config.toler);
+    let se = compute_sandwich_se(
+        &params,
+        s,
+        w,
+        observed_vars,
+        &model.latent_vars,
+        config.toler,
+    );
 
-    Ok(SemResult { params, implied, se, chisq, df, aic, srmr, cfi: None, converged, npar })
+    Ok(SemResult {
+        params,
+        implied,
+        se,
+        chisq,
+        df,
+        aic,
+        srmr,
+        cfi: None,
+        converged,
+        npar,
+    })
 }
 
 fn init_params(params: &mut [Param], s: &Mat<f64>, observed_vars: &[String]) -> Vec<f64> {
@@ -361,7 +467,9 @@ fn init_params(params: &mut [Param], s: &Mat<f64>, observed_vars: &[String]) -> 
             } else if p.op == "~" {
                 theta[idx] = 0.3;
             }
-            if !p.ustart.is_nan() { theta[idx] = p.ustart; }
+            if !p.ustart.is_nan() {
+                theta[idx] = p.ustart;
+            }
             p.est = theta[idx];
         } else {
             p.est = p.ustart;
@@ -371,8 +479,13 @@ fn init_params(params: &mut [Param], s: &Mat<f64>, observed_vars: &[String]) -> 
 }
 
 fn optimize_dwls(
-    theta: &mut [f64], params: &[Param], s: &Mat<f64>, w: &Mat<f64>,
-    observed_vars: &[String], latent_vars: &[String], config: &SemConfig,
+    theta: &mut [f64],
+    params: &[Param],
+    s: &Mat<f64>,
+    w: &Mat<f64>,
+    observed_vars: &[String],
+    latent_vars: &[String],
+    config: &SemConfig,
 ) -> bool {
     let s_vec = linalg::vech(s);
     let npar = theta.len();
@@ -386,7 +499,9 @@ fn optimize_dwls(
         let residual: Vec<f64> = (0..s_vec.len()).map(|i| s_vec[i] - sigma_vec[i]).collect();
 
         let mut obj = 0.0;
-        for i in 0..residual.len() { obj += residual[i] * residual[i] * w[(i, i)]; }
+        for i in 0..residual.len() {
+            obj += residual[i] * residual[i] * w[(i, i)];
+        }
 
         // Numerical Jacobian
         let eps = 1e-7;
@@ -400,7 +515,9 @@ fn optimize_dwls(
             update_params(&mut pp, &theta_p);
             let imp_p = compute_implied_cov(&pp, observed_vars, latent_vars);
             let sig_p = linalg::vech(&imp_p);
-            for i in 0..z { jac[i][j] = (sig_p[i] - sigma_vec[i]) / eps; }
+            for i in 0..z {
+                jac[i][j] = (sig_p[i] - sigma_vec[i]) / eps;
+            }
         }
 
         // Gauss-Newton: Δ = (J'WJ)⁻¹ J'W r
@@ -410,10 +527,14 @@ fn optimize_dwls(
             let wi = w[(i, i)];
             for j in 0..npar {
                 jtwr[j] += jac[i][j] * wi * residual[i];
-                for k in 0..npar { jtwd[j][k] += jac[i][j] * wi * jac[i][k]; }
+                for k in 0..npar {
+                    jtwd[j][k] += jac[i][j] * wi * jac[i][k];
+                }
             }
         }
-        for j in 0..npar { jtwd[j][j] += 1e-8 * obj.max(1e-10); }
+        for j in 0..npar {
+            jtwd[j][j] += 1e-8 * obj.max(1e-10);
+        }
         let delta = crate::ldsc::solve_small_pub(&jtwd, &jtwr);
 
         // Line search
@@ -427,14 +548,26 @@ fn optimize_dwls(
             let imp_t = compute_implied_cov(&pt, observed_vars, latent_vars);
             let sig_t = linalg::vech(&imp_t);
             let mut to = 0.0;
-            for i in 0..s_vec.len() { let r = s_vec[i] - sig_t[i]; to += r * r * w[(i, i)]; }
-            if to < best_obj { best_obj = to; best_theta = trial; improved = true; break; }
+            for i in 0..s_vec.len() {
+                let r = s_vec[i] - sig_t[i];
+                to += r * r * w[(i, i)];
+            }
+            if to < best_obj {
+                best_obj = to;
+                best_theta = trial;
+                improved = true;
+                break;
+            }
         }
 
         let prev = obj;
         theta.copy_from_slice(&best_theta);
-        if !improved || (prev - best_obj).abs() < 1e-10 * prev.max(1e-10) { return true; }
-        if iteration == config.max_iter - 1 { return false; }
+        if !improved || (prev - best_obj).abs() < 1e-10 * prev.max(1e-10) {
+            return true;
+        }
+        if iteration == config.max_iter - 1 {
+            return false;
+        }
     }
     true
 }
@@ -443,7 +576,9 @@ fn update_params(params: &mut [Param], theta: &[f64]) {
     for p in params.iter_mut() {
         if p.free > 0 {
             let idx = (p.free - 1) as usize;
-            if idx < theta.len() { p.est = theta[idx]; }
+            if idx < theta.len() {
+                p.est = theta[idx];
+            }
         }
     }
 }
@@ -452,7 +587,9 @@ fn compute_chisq_simple(s: &Mat<f64>, implied: &Mat<f64>, w: &Mat<f64>) -> f64 {
     let residual = s - implied;
     let eta = linalg::vech(&residual);
     let mut q = 0.0;
-    for i in 0..eta.len() { q += eta[i] * eta[i] * w[(i, i)]; }
+    for i in 0..eta.len() {
+        q += eta[i] * eta[i] * w[(i, i)];
+    }
     q
 }
 
@@ -472,13 +609,19 @@ fn compute_srmr(s: &Mat<f64>, implied: &Mat<f64>, n: usize) -> f64 {
 }
 
 fn compute_sandwich_se(
-    params: &[Param], s: &Mat<f64>, w: &Mat<f64>,
-    observed_vars: &[String], latent_vars: &[String], toler: f64,
+    params: &[Param],
+    s: &Mat<f64>,
+    w: &Mat<f64>,
+    observed_vars: &[String],
+    latent_vars: &[String],
+    toler: f64,
 ) -> Vec<f64> {
     let n = s.nrows();
     let z = n * (n + 1) / 2;
     let npar = params.iter().filter(|p| p.free > 0).count();
-    if npar == 0 { return params.iter().map(|_| f64::NAN).collect(); }
+    if npar == 0 {
+        return params.iter().map(|_| f64::NAN).collect();
+    }
 
     let sigma_curr = linalg::vech(&compute_implied_cov(params, observed_vars, latent_vars));
     let eps = 1e-7;
@@ -486,45 +629,82 @@ fn compute_sandwich_se(
     for j in 0..npar {
         let mut pp: Vec<Param> = params.to_vec();
         for p in &mut pp {
-            if p.free == (j as i32 + 1) { p.est += eps; break; }
+            if p.free == (j as i32 + 1) {
+                p.est += eps;
+                break;
+            }
         }
         let imp_p = compute_implied_cov(&pp, observed_vars, latent_vars);
         let sig_p = linalg::vech(&imp_p);
-        for i in 0..z { delta[i][j] = (sig_p[i] - sigma_curr[i]) / eps; }
+        for i in 0..z {
+            delta[i][j] = (sig_p[i] - sigma_curr[i]) / eps;
+        }
     }
 
     let mut dtwd = vec![vec![0.0f64; npar]; npar];
     for i in 0..z {
         for j in 0..npar {
-            for k in 0..npar { dtwd[j][k] += delta[i][j] * w[(i, i)] * delta[i][k]; }
+            for k in 0..npar {
+                dtwd[j][k] += delta[i][j] * w[(i, i)] * delta[i][k];
+            }
         }
     }
-    for j in 0..npar { dtwd[j][j] += toler.max(1e-10); }
+    for j in 0..npar {
+        dtwd[j][j] += toler.max(1e-10);
+    }
     let bread_inv = invert_small(&dtwd);
 
-    params.iter().map(|p| {
-        if p.free > 0 {
-            let idx = (p.free - 1) as usize;
-            bread_inv[idx][idx].max(0.0).sqrt()
-        } else { f64::NAN }
-    }).collect()
+    params
+        .iter()
+        .map(|p| {
+            if p.free > 0 {
+                let idx = (p.free - 1) as usize;
+                bread_inv[idx][idx].max(0.0).sqrt()
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
 }
 
 fn invert_small(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = a.len();
     let mut aug = vec![vec![0.0f64; 2 * n]; n];
-    for i in 0..n { for j in 0..n { aug[i][j] = a[i][j]; } aug[i][n + i] = 1.0; }
+    for i in 0..n {
+        for j in 0..n {
+            aug[i][j] = a[i][j];
+        }
+        aug[i][n + i] = 1.0;
+    }
     for col in 0..n {
         let mut max_row = col;
         let mut max_val = aug[col][col].abs();
-        for row in (col + 1)..n { if aug[row][col].abs() > max_val { max_val = aug[row][col].abs(); max_row = row; } }
-        if max_val < 1e-15 { continue; }
+        for row in (col + 1)..n {
+            if aug[row][col].abs() > max_val {
+                max_val = aug[row][col].abs();
+                max_row = row;
+            }
+        }
+        if max_val < 1e-15 {
+            continue;
+        }
         aug.swap(col, max_row);
         let pivot = aug[col][col];
-        for j in col..(2 * n) { aug[col][j] /= pivot; }
-        for row in 0..n { if row != col { let f = aug[row][col]; for j in col..(2 * n) { aug[row][j] -= f * aug[col][j]; } } }
+        for j in col..(2 * n) {
+            aug[col][j] /= pivot;
+        }
+        for row in 0..n {
+            if row != col {
+                let f = aug[row][col];
+                for j in col..(2 * n) {
+                    aug[row][j] -= f * aug[col][j];
+                }
+            }
+        }
     }
-    (0..n).map(|i| (0..n).map(|j| aug[i][n + j]).collect()).collect()
+    (0..n)
+        .map(|i| (0..n).map(|j| aug[i][n + j]).collect())
+        .collect()
 }
 
 /// Compute model chi-square using V matrix eigenstructure (GenomicSEM style).
@@ -532,10 +712,13 @@ pub fn compute_chisq(s: &Mat<f64>, implied: &Mat<f64>, v: &Mat<f64>) -> f64 {
     let eta = linalg::vech(&(s - implied));
     let (eigvals, eigvecs) = linalg::eigen_sym(v);
     let p1_t_eta: Vec<f64> = (0..eigvecs.ncols())
-        .map(|k| (0..eta.len()).map(|i| eigvecs[(i, k)] * eta[i]).sum()).collect();
+        .map(|k| (0..eta.len()).map(|i| eigvecs[(i, k)] * eta[i]).sum())
+        .collect();
     let mut q = 0.0;
     for k in 0..eigvals.len() {
-        if eigvals[k].abs() > 1e-15 { q += p1_t_eta[k] * p1_t_eta[k] / eigvals[k]; }
+        if eigvals[k].abs() > 1e-15 {
+            q += p1_t_eta[k] * p1_t_eta[k] / eigvals[k];
+        }
     }
     q
 }
@@ -564,11 +747,51 @@ mod tests {
         let observed = vec!["V1".to_string(), "V2".to_string()];
         let latent = vec!["F1".to_string()];
         let params = vec![
-            Param { lhs: "F1".into(), op: "=~".into(), rhs: "V1".into(), free: 0, ustart: 1.0, label: String::new(), est: 1.0 },
-            Param { lhs: "F1".into(), op: "=~".into(), rhs: "V2".into(), free: 0, ustart: 0.0, label: String::new(), est: 0.5 },
-            Param { lhs: "F1".into(), op: "~~".into(), rhs: "F1".into(), free: 0, ustart: 1.0, label: String::new(), est: 1.0 },
-            Param { lhs: "V1".into(), op: "~~".into(), rhs: "V1".into(), free: 0, ustart: 0.0, label: String::new(), est: 0.5 },
-            Param { lhs: "V2".into(), op: "~~".into(), rhs: "V2".into(), free: 0, ustart: 0.0, label: String::new(), est: 0.3 },
+            Param {
+                lhs: "F1".into(),
+                op: "=~".into(),
+                rhs: "V1".into(),
+                free: 0,
+                ustart: 1.0,
+                label: String::new(),
+                est: 1.0,
+            },
+            Param {
+                lhs: "F1".into(),
+                op: "=~".into(),
+                rhs: "V2".into(),
+                free: 0,
+                ustart: 0.0,
+                label: String::new(),
+                est: 0.5,
+            },
+            Param {
+                lhs: "F1".into(),
+                op: "~~".into(),
+                rhs: "F1".into(),
+                free: 0,
+                ustart: 1.0,
+                label: String::new(),
+                est: 1.0,
+            },
+            Param {
+                lhs: "V1".into(),
+                op: "~~".into(),
+                rhs: "V1".into(),
+                free: 0,
+                ustart: 0.0,
+                label: String::new(),
+                est: 0.5,
+            },
+            Param {
+                lhs: "V2".into(),
+                op: "~~".into(),
+                rhs: "V2".into(),
+                free: 0,
+                ustart: 0.0,
+                label: String::new(),
+                est: 0.3,
+            },
         ];
         let implied = compute_implied_cov(&params, &observed, &latent);
         assert!((implied[(0, 0)] - 1.5).abs() < 1e-8);
@@ -579,10 +802,15 @@ mod tests {
     #[test]
     fn test_fit_sem_simple_cfa() {
         let mut s = Mat::zeros(3, 3);
-        s[(0, 0)] = 1.0; s[(1, 1)] = 1.0; s[(2, 2)] = 1.0;
-        s[(0, 1)] = 0.5; s[(0, 2)] = 0.4;
-        s[(1, 0)] = 0.5; s[(1, 2)] = 0.3;
-        s[(2, 0)] = 0.4; s[(2, 1)] = 0.3;
+        s[(0, 0)] = 1.0;
+        s[(1, 1)] = 1.0;
+        s[(2, 2)] = 1.0;
+        s[(0, 1)] = 0.5;
+        s[(0, 2)] = 0.4;
+        s[(1, 0)] = 0.5;
+        s[(1, 2)] = 0.3;
+        s[(2, 0)] = 0.4;
+        s[(2, 1)] = 0.3;
 
         let n = 3;
         let z = n * (n + 1) / 2;
@@ -593,7 +821,12 @@ mod tests {
         let config = SemConfig::default();
         let result = fit_sem(&s, &w, &model, &obs, &config).unwrap();
         assert!(result.converged);
-        let loadings: Vec<f64> = result.params.iter().filter(|p| p.op == "=~").map(|p| p.est).collect();
+        let loadings: Vec<f64> = result
+            .params
+            .iter()
+            .filter(|p| p.op == "=~")
+            .map(|p| p.est)
+            .collect();
         assert!(loadings.iter().all(|l| l.abs() > 0.0));
     }
 }

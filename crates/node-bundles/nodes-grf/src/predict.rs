@@ -37,19 +37,34 @@ pub struct PredictNodeSpec {
 
 pub struct PredictNodeFactory;
 impl NodeFactory for PredictNodeFactory {
-    fn kind(&self) -> &'static str { "grf_predict_forest" }
-    fn desc(&self) -> &'static str { "Predict with a trained forest on new data." }
-    fn doc(&self) -> &'static str { "grf_predict_forest: takes a forest-exchange batch (port 0), the training data (port 1), and optional test data (port 2); emits predictions (port 0). When oob=true, runs OOB prediction and ignores port 2." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(PredictNodeSpec) }
+    fn kind(&self) -> &'static str {
+        "grf_predict_forest"
+    }
+    fn desc(&self) -> &'static str {
+        "Predict with a trained forest on new data."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_predict_forest: takes a forest-exchange batch (port 0), the training data (port 1), and optional test data (port 2); emits predictions (port 0). When oob=true, runs OOB prediction and ignores port 2."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(PredictNodeSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None)   // forest
-            .add_input_port(None)   // train X
-            .add_input_port(None)   // test X
-            .add_output_port(None)  // predictions
+            .add_input_port(None) // forest
+            .add_input_port(None) // train X
+            .add_input_port(None) // test X
+            .add_output_port(None) // predictions
     }
-    fn build(&self, spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
-        Ok(Box::new(PredictNode { spec: serde_json::from_value(spec)?, meta: self.ports() }))
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+        Ok(Box::new(PredictNode {
+            spec: serde_json::from_value(spec)?,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -58,16 +73,34 @@ pub struct PredictNode {
     meta: NodePorts,
 }
 impl Clone for PredictNode {
-    fn clone(&self) -> Self { Self { spec: self.spec.clone(), meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 
 #[async_trait]
 impl DagNode for PredictNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_predict_forest" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_predict_forest"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
         // Do all `.await`s up front (all values Send). The forest blob is
         // `!Send`, so it is deserialized only in the synchronous tail below —
@@ -96,7 +129,12 @@ impl DagNode for PredictNode {
             num_threads: self.spec.num_threads,
         };
         let out = pred_spec
-            .predict(&forest, &train_batches, self.spec.train_outcome_index, test_batches.as_deref())
+            .predict(
+                &forest,
+                &train_batches,
+                self.spec.train_outcome_index,
+                test_batches.as_deref(),
+            )
             .map_err(|e| dag_err(node, &e.to_string()))?;
 
         let batch = predictions_to_batch(node, &out)?;
@@ -124,20 +162,29 @@ fn predictions_to_batch(node: &str, out: &PredictForestOutput) -> Result<RecordB
     }
     if let Some(v) = &out.variance {
         fields.push(Field::new("variance", DataType::Float64, true));
-        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(v.clone())));
+        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(
+            v.clone(),
+        )));
     }
     if let Some(v) = &out.debiased_error {
         fields.push(Field::new("debiased_error", DataType::Float64, true));
-        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(v.clone())));
+        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(
+            v.clone(),
+        )));
     }
     if let Some(v) = &out.excess_error {
         fields.push(Field::new("excess_error", DataType::Float64, true));
-        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(v.clone())));
+        cols.push(std::sync::Arc::new(arrow_array::Float64Array::from(
+            v.clone(),
+        )));
     }
     RecordBatch::try_new(std::sync::Arc::new(Schema::new(fields)), cols)
         .map_err(|e| dag_err(node, &format!("predict batch: {e}")))
 }
 
 fn dag_err(node: &str, msg: &str) -> DagError {
-    DagError::NodeError { node_type: node.into(), msg: msg.to_string() }
+    DagError::NodeError {
+        node_type: node.into(),
+        msg: msg.to_string(),
+    }
 }

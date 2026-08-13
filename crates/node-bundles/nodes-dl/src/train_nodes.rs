@@ -14,11 +14,9 @@ use dag_core::registry::{NodeCtx, NodeFactory};
 
 use super::common;
 use dl::{
-    Activation, Architecture, ArtifactTaskType, DLModelArtifact, MlpConfig, TaskType, TrainConfig,
-    DeepSurvConfig, TrainingMeta,
-    OptimizerConfig, OptimizerKind, SchedulerConfig,
-    train_mlp, predict_mlp, train_deepsurv, predict_deepsurv,
-    Tensor,
+    Activation, Architecture, ArtifactTaskType, DLModelArtifact, DeepSurvConfig, MlpConfig,
+    OptimizerConfig, OptimizerKind, SchedulerConfig, TaskType, Tensor, TrainConfig, TrainingMeta,
+    predict_deepsurv, predict_mlp, train_deepsurv, train_mlp,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -74,29 +72,65 @@ pub struct EarlyStoppingSpec {
     pub mode: String,
 }
 
-pub fn d_hidden() -> Vec<usize> { vec![128, 64] }
-pub fn d_act() -> String { "relu".into() }
-pub fn d_opt() -> String { "adam".into() }
-pub fn d_lr() -> f64 { 0.001 }
-pub fn d_epochs() -> usize { 100 }
-pub fn d_batch() -> usize { 32 }
-pub fn d_seed() -> u64 { 42 }
-pub fn d_std() -> bool { true }
-pub fn d_d_model() -> usize { 64 }
-pub fn d_n_heads() -> usize { 4 }
-pub fn d_n_layers() -> usize { 2 }
-pub fn d_d_ff() -> usize { 256 }
-pub fn d_dropout() -> f64 { 0.1 }
-pub fn d_pooling() -> String { "mean".into() }
-pub fn d_pos_enc() -> String { "sinusoidal".into() }
+pub fn d_hidden() -> Vec<usize> {
+    vec![128, 64]
+}
+pub fn d_act() -> String {
+    "relu".into()
+}
+pub fn d_opt() -> String {
+    "adam".into()
+}
+pub fn d_lr() -> f64 {
+    0.001
+}
+pub fn d_epochs() -> usize {
+    100
+}
+pub fn d_batch() -> usize {
+    32
+}
+pub fn d_seed() -> u64 {
+    42
+}
+pub fn d_std() -> bool {
+    true
+}
+pub fn d_d_model() -> usize {
+    64
+}
+pub fn d_n_heads() -> usize {
+    4
+}
+pub fn d_n_layers() -> usize {
+    2
+}
+pub fn d_d_ff() -> usize {
+    256
+}
+pub fn d_dropout() -> f64 {
+    0.1
+}
+pub fn d_pooling() -> String {
+    "mean".into()
+}
+pub fn d_pos_enc() -> String {
+    "sinusoidal".into()
+}
 
 impl MlpTrainSpec {
     fn to_config(&self) -> Result<MlpConfig, DagError> {
         let activation = Activation::from_str(&self.activation).ok_or_else(|| {
-            common::err("dl_mlp_train", format!("unknown activation: {}", self.activation))
+            common::err(
+                "dl_mlp_train",
+                format!("unknown activation: {}", self.activation),
+            )
         })?;
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_mlp_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_mlp_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         let task = match self.task_type {
             TaskTypeSpec::Classification => TaskType::Classification,
@@ -104,8 +138,13 @@ impl MlpTrainSpec {
         };
         let scheduler = match &self.lr_scheduler {
             None => SchedulerConfig::None,
-            Some(s) if s == "cosine" => SchedulerConfig::Cosine { max_epochs: self.n_epochs },
-            Some(s) if s == "step" => SchedulerConfig::Step { step_size: 30, gamma: 0.5 },
+            Some(s) if s == "cosine" => SchedulerConfig::Cosine {
+                max_epochs: self.n_epochs,
+            },
+            Some(s) if s == "step" => SchedulerConfig::Step {
+                step_size: 30,
+                gamma: 0.5,
+            },
             _ => SchedulerConfig::None,
         };
 
@@ -126,10 +165,12 @@ impl MlpTrainSpec {
                 n_epochs: self.n_epochs,
                 batch_size: self.batch_size,
                 gradient_clip_norm: self.gradient_clip_norm,
-                early_stopping: self.early_stopping.as_ref().map(|es| dl::mlp::EarlyStoppingConfig {
-                    metric: es.metric.clone(),
-                    patience: es.patience,
-                    mode: es.mode.clone(),
+                early_stopping: self.early_stopping.as_ref().map(|es| {
+                    dl::mlp::EarlyStoppingConfig {
+                        metric: es.metric.clone(),
+                        patience: es.patience,
+                        mode: es.mode.clone(),
+                    }
                 }),
                 standardize: self.standardize_features,
                 seed: self.seed,
@@ -140,22 +181,28 @@ impl MlpTrainSpec {
 
 pub struct MlpTrainFactory;
 impl NodeFactory for MlpTrainFactory {
-    fn kind(&self) -> &'static str { "dl_mlp_train" }
-    fn desc(&self) -> &'static str { "Enhanced MLP for tabular classification/regression." }
+    fn kind(&self) -> &'static str {
+        "dl_mlp_train"
+    }
+    fn desc(&self) -> &'static str {
+        "Enhanced MLP for tabular classification/regression."
+    }
     fn doc(&self) -> &'static str {
         "dl_mlp_train: trains a multilayer perceptron with configurable hidden layers, \
         activation, dropout, batch normalization, learning-rate scheduling, gradient clipping, \
         and early stopping on a validation set. Outputs training predictions (port 0), a \
         DLModelArtifact (port 1), and a per-epoch training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(MlpTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(MlpTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None)   // 0: training data
-            .add_input_port(None)   // 1: validation data (optional)
-            .add_output_port(None)  // 0: training predictions
-            .add_output_port(None)  // 1: model artifact
-            .add_output_port(None)  // 2: training log
+            .add_input_port(None) // 0: training data
+            .add_input_port(None) // 1: validation data (optional)
+            .add_output_port(None) // 0: training predictions
+            .add_output_port(None) // 1: model artifact
+            .add_output_port(None) // 2: training log
     }
     fn build(
         &self,
@@ -163,7 +210,10 @@ impl NodeFactory for MlpTrainFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: MlpTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(MlpTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(MlpTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -175,10 +225,18 @@ struct MlpTrainNode {
 
 #[async_trait]
 impl DagNode for MlpTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_mlp_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_mlp_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -206,15 +264,24 @@ impl DagNode for MlpTrainNode {
         };
 
         let config = self.spec.to_config()?;
-        let result = train_mlp(&x, &y_tensor, val.as_ref().map(|(xv, yv)| (xv, yv)), &config)
-            .map_err(|e| common::err("dl_mlp_train", e))?;
+        let result = train_mlp(
+            &x,
+            &y_tensor,
+            val.as_ref().map(|(xv, yv)| (xv, yv)),
+            &config,
+        )
+        .map_err(|e| common::err("dl_mlp_train", e))?;
 
         // Port 0: training predictions.
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
         let n_preds = result.predictions.nrows();
         match config.task_type {
             TaskType::Classification => {
-                fields.push(Arc::new(Field::new("pred_probability", DataType::Float64, false)));
+                fields.push(Arc::new(Field::new(
+                    "pred_probability",
+                    DataType::Float64,
+                    false,
+                )));
                 let probs: Vec<f64> = (0..n_preds).map(|i| result.predictions.at(i, 0)).collect();
                 arrays.push(Arc::new(Float64Array::from(probs.clone())));
                 let preds: Vec<u32> = probs.iter().map(|&p| if p > 0.5 { 1 } else { 0 }).collect();
@@ -248,11 +315,15 @@ impl DagNode for MlpTrainNode {
             scaler_json: None,
             training_meta: TrainingMeta {
                 n_epochs_run: result.training_log.len(),
-                best_epoch: result.training_log.iter()
+                best_epoch: result
+                    .training_log
+                    .iter()
                     .filter(|l| l.val_metric.is_some())
                     .last()
                     .map(|l| l.epoch),
-                best_val_metric: result.training_log.iter()
+                best_val_metric: result
+                    .training_log
+                    .iter()
                     .filter(|l| l.val_metric.is_some())
                     .last()
                     .and_then(|l| l.val_metric),
@@ -268,19 +339,28 @@ impl DagNode for MlpTrainNode {
                 Field::new("architecture", DataType::Utf8, false),
             ])),
             vec![
-                Arc::new(arrow_array::BinaryArray::from(vec![artifact_bytes.as_slice()])),
+                Arc::new(arrow_array::BinaryArray::from(vec![
+                    artifact_bytes.as_slice(),
+                ])),
                 Arc::new(arrow_array::StringArray::from(vec!["mlp"])),
             ],
-        ).map_err(|e| common::err("dl_mlp_train", format!("build artifact batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_mlp_train", format!("build artifact batch: {e}")))?;
 
         // Port 2: training log.
         let log_batch = build_training_log_batch(&result.training_log)?;
 
-        let df0 = ctx.session().read_batch(pred_batch)
+        let df0 = ctx
+            .session()
+            .read_batch(pred_batch)
             .map_err(|e| common::err("dl_mlp_train", format!("read_batch(0): {e}")))?;
-        let df1 = ctx.session().read_batch(artifact_batch)
+        let df1 = ctx
+            .session()
+            .read_batch(artifact_batch)
             .map_err(|e| common::err("dl_mlp_train", format!("read_batch(1): {e}")))?;
-        let df2 = ctx.session().read_batch(log_batch)
+        let df2 = ctx
+            .session()
+            .read_batch(log_batch)
             .map_err(|e| common::err("dl_mlp_train", format!("read_batch(2): {e}")))?;
 
         let mut res = PortOutputs::new();
@@ -328,20 +408,32 @@ pub struct DeepSurvTrainSpec {
     pub standardize_features: bool,
 }
 
-fn d_ds_hidden() -> Vec<usize> { vec![64, 32] }
-fn d_ds_dropout() -> f64 { 0.1 }
+fn d_ds_hidden() -> Vec<usize> {
+    vec![64, 32]
+}
+fn d_ds_dropout() -> f64 {
+    0.1
+}
 
 impl DeepSurvTrainSpec {
     fn to_config(&self) -> Result<DeepSurvConfig, DagError> {
         let activation = Activation::from_str(&self.activation).ok_or_else(|| {
-            common::err("dl_deepsurv_train", format!("unknown activation: {}", self.activation))
+            common::err(
+                "dl_deepsurv_train",
+                format!("unknown activation: {}", self.activation),
+            )
         })?;
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_deepsurv_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_deepsurv_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         let scheduler = match &self.lr_scheduler {
             None => SchedulerConfig::None,
-            Some(s) if s == "cosine" => SchedulerConfig::Cosine { max_epochs: self.n_epochs },
+            Some(s) if s == "cosine" => SchedulerConfig::Cosine {
+                max_epochs: self.n_epochs,
+            },
             _ => SchedulerConfig::None,
         };
 
@@ -360,10 +452,12 @@ impl DeepSurvTrainSpec {
                 n_epochs: self.n_epochs,
                 batch_size: self.batch_size,
                 gradient_clip_norm: self.gradient_clip_norm,
-                early_stopping: self.early_stopping.as_ref().map(|es| dl::mlp::EarlyStoppingConfig {
-                    metric: es.metric.clone(),
-                    patience: es.patience,
-                    mode: es.mode.clone(),
+                early_stopping: self.early_stopping.as_ref().map(|es| {
+                    dl::mlp::EarlyStoppingConfig {
+                        metric: es.metric.clone(),
+                        patience: es.patience,
+                        mode: es.mode.clone(),
+                    }
                 }),
                 standardize: self.standardize_features,
                 seed: self.seed,
@@ -374,15 +468,21 @@ impl DeepSurvTrainSpec {
 
 pub struct DeepSurvTrainFactory;
 impl NodeFactory for DeepSurvTrainFactory {
-    fn kind(&self) -> &'static str { "dl_deepsurv_train" }
-    fn desc(&self) -> &'static str { "DeepSurv: neural network Cox model." }
+    fn kind(&self) -> &'static str {
+        "dl_deepsurv_train"
+    }
+    fn desc(&self) -> &'static str {
+        "DeepSurv: neural network Cox model."
+    }
     fn doc(&self) -> &'static str {
         "dl_deepsurv_train: trains a neural network with Cox proportional hazards partial \
         likelihood loss. Maintains the proportional hazards assumption while relaxing the \
         linearity constraint of standard Cox regression. Outputs risk scores (port 0), \
         DLModelArtifact (port 1), and training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(DeepSurvTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(DeepSurvTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -397,7 +497,10 @@ impl NodeFactory for DeepSurvTrainFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: DeepSurvTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(DeepSurvTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(DeepSurvTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -409,10 +512,18 @@ struct DeepSurvTrainNode {
 
 #[async_trait]
 impl DagNode for DeepSurvTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_deepsurv_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_deepsurv_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -436,23 +547,35 @@ impl DagNode for DeepSurvTrainNode {
             let xv = common::extract_tensor(vb, &self.spec.features)?;
             let tv = common::extract_numeric_column(vb, &self.spec.time_column)?;
             let ev = common::extract_numeric_column(vb, &self.spec.event_column)?;
-            Some((xv, tv, ev.into_iter().map(|v| v as usize).collect::<Vec<_>>()))
+            Some((
+                xv,
+                tv,
+                ev.into_iter().map(|v| v as usize).collect::<Vec<_>>(),
+            ))
         } else {
             None
         };
 
         let config = self.spec.to_config()?;
         let result = train_deepsurv(
-            &x, &times, &events,
-            val.as_ref().map(|(xv, tv, ev)| (xv, tv.as_slice(), ev.as_slice())),
+            &x,
+            &times,
+            &events,
+            val.as_ref()
+                .map(|(xv, tv, ev)| (xv, tv.as_slice(), ev.as_slice())),
             &config,
-        ).map_err(|e| common::err("dl_deepsurv_train", e))?;
+        )
+        .map_err(|e| common::err("dl_deepsurv_train", e))?;
 
         // Port 0: risk scores.
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
         let n = result.risk_scores.nrows();
         let risks: Vec<f64> = (0..n).map(|i| result.risk_scores.at(i, 0)).collect();
-        fields.push(Arc::new(Field::new("pred_risk_score", DataType::Float64, false)));
+        fields.push(Arc::new(Field::new(
+            "pred_risk_score",
+            DataType::Float64,
+            false,
+        )));
         arrays.push(Arc::new(Float64Array::from(risks)));
         let pred_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
             .map_err(|e| common::err("dl_deepsurv_train", format!("build pred batch: {e}")))?;
@@ -472,11 +595,15 @@ impl DagNode for DeepSurvTrainNode {
             scaler_json: None,
             training_meta: TrainingMeta {
                 n_epochs_run: result.training_log.len(),
-                best_epoch: result.training_log.iter()
+                best_epoch: result
+                    .training_log
+                    .iter()
                     .filter(|l| l.val_metric.is_some())
                     .last()
                     .map(|l| l.epoch),
-                best_val_metric: result.training_log.iter()
+                best_val_metric: result
+                    .training_log
+                    .iter()
                     .filter(|l| l.val_metric.is_some())
                     .last()
                     .and_then(|l| l.val_metric),
@@ -492,19 +619,28 @@ impl DagNode for DeepSurvTrainNode {
                 Field::new("architecture", DataType::Utf8, false),
             ])),
             vec![
-                Arc::new(arrow_array::BinaryArray::from(vec![artifact_bytes.as_slice()])),
+                Arc::new(arrow_array::BinaryArray::from(vec![
+                    artifact_bytes.as_slice(),
+                ])),
                 Arc::new(arrow_array::StringArray::from(vec!["deepsurv"])),
             ],
-        ).map_err(|e| common::err("dl_deepsurv_train", format!("build artifact batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_deepsurv_train", format!("build artifact batch: {e}")))?;
 
         // Port 2: training log.
         let log_batch = build_training_log_batch(&result.training_log)?;
 
-        let df0 = ctx.session().read_batch(pred_batch)
+        let df0 = ctx
+            .session()
+            .read_batch(pred_batch)
             .map_err(|e| common::err("dl_deepsurv_train", format!("read_batch(0): {e}")))?;
-        let df1 = ctx.session().read_batch(artifact_batch)
+        let df1 = ctx
+            .session()
+            .read_batch(artifact_batch)
             .map_err(|e| common::err("dl_deepsurv_train", format!("read_batch(1): {e}")))?;
-        let df2 = ctx.session().read_batch(log_batch)
+        let df2 = ctx
+            .session()
+            .read_batch(log_batch)
             .map_err(|e| common::err("dl_deepsurv_train", format!("read_batch(2): {e}")))?;
 
         let mut res = PortOutputs::new();
@@ -536,13 +672,16 @@ pub fn build_training_log_batch(log: &[dl::mlp::EpochLog]) -> Result<RecordBatch
             Field::new("lr", DataType::Float64, false),
         ])),
         vec![
-            Arc::new(arrow_array::Int64Array::from(epochs.iter().map(|&v| v).collect::<Vec<_>>())),
+            Arc::new(arrow_array::Int64Array::from(
+                epochs.iter().map(|&v| v).collect::<Vec<_>>(),
+            )),
             Arc::new(Float64Array::from(train_loss)),
             Arc::new(Float64Array::from(val_loss)),
             Arc::new(Float64Array::from(val_metric)),
             Arc::new(Float64Array::from(lr)),
         ],
-    ).map_err(|e| common::err("dl_train", format!("build log batch: {e}")))?;
+    )
+    .map_err(|e| common::err("dl_train", format!("build log batch: {e}")))?;
     let _ = n; // suppress unused warning
     Ok(batch)
 }

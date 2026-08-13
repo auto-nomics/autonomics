@@ -3,9 +3,9 @@
 //! Alternating Direction Method of Multipliers wrapper that enforces
 //! symmetry (th = th^T) and hierarchy constraint (||th_j||_1 ≤ bp[j] + bn[j]).
 
+use super::HierNetCoefs;
 use super::ggdescent;
 use super::interactions::compute_yhat;
-use super::HierNetCoefs;
 
 /// ADMM4 for Gaussian loss with strong hierarchy.
 pub fn admm4(
@@ -38,16 +38,15 @@ pub fn admm4(
 
         // Inner: generalized gradient descent
         aa = ggdescent::ggdescent(
-            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, &v,
-            step, backtrack, maxiter, tol, &aa,
+            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, &v, step, backtrack, maxiter, tol, &aa,
         )?;
 
         // Update tt: tt = (th + th^T)/2 + (u + u^T)/(2*rho)
         for j in 0..p {
             for k in 0..p {
                 let idx = j + p * k;
-                tt[idx] = (aa.th[idx] + aa.th[k + p * j]) / 2.0
-                    + (u[idx] + u[k + p * j]) / (2.0 * rho);
+                tt[idx] =
+                    (aa.th[idx] + aa.th[k + p * j]) / 2.0 + (u[idx] + u[k + p * j]) / (2.0 * rho);
             }
         }
 
@@ -114,15 +113,14 @@ pub fn admm4_logistic(
         let v: Vec<f64> = (0..p * p).map(|jj| u[jj] - rho * tt[jj]).collect();
 
         aa = ggdescent::ggdescent_logistic(
-            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, &v,
-            step, backtrack, maxiter, tol, &aa,
+            x, n, p, zz, diagonal, y, lam_l1, lam_l2, rho, &v, step, backtrack, maxiter, tol, &aa,
         )?;
 
         for j in 0..p {
             for k in 0..p {
                 let idx = j + p * k;
-                tt[idx] = (aa.th[idx] + aa.th[k + p * j]) / 2.0
-                    + (u[idx] + u[k + p * j]) / (2.0 * rho);
+                tt[idx] =
+                    (aa.th[idx] + aa.th[k + p * j]) / 2.0 + (u[idx] + u[k + p * j]) / (2.0 * rho);
             }
         }
 

@@ -133,24 +133,33 @@ impl Serialize for ForestBlob {
 
 impl ForestBlob {
     /// Take ownership of a raw `grf_sys::Forest`. Internal-use only.
-    pub(crate) fn from_sys(
-        inner: sys::Forest,
-        kind: ForestKind,
-        n_features: usize,
-    ) -> Self {
-        Self { inner: Arc::new(inner), kind, n_features }
+    pub(crate) fn from_sys(inner: sys::Forest, kind: ForestKind, n_features: usize) -> Self {
+        Self {
+            inner: Arc::new(inner),
+            kind,
+            n_features,
+        }
     }
 
-    pub fn kind(&self) -> ForestKind { self.kind }
-    pub fn n_features(&self) -> usize { self.n_features }
-    pub fn num_trees(&self) -> usize { self.inner.num_trees() }
+    pub fn kind(&self) -> ForestKind {
+        self.kind
+    }
+    pub fn n_features(&self) -> usize {
+        self.n_features
+    }
+    pub fn num_trees(&self) -> usize {
+        self.inner.num_trees()
+    }
 
     /// OOB predictions captured at training time (one column-major block).
     /// Returns `None` if the forest was trained with
     /// `compute_oob_predictions=false`.
     pub fn oob_predictions(&self) -> Option<OobPredictions> {
         let (values, pred_length) = self.inner.oob_predictions()?;
-        Some(OobPredictions { values, pred_length })
+        Some(OobPredictions {
+            values,
+            pred_length,
+        })
     }
 
     /// Number of prediction outputs per row (1 for regression/causal/etc;
@@ -158,8 +167,11 @@ impl ForestBlob {
     pub fn pred_length(&self) -> usize {
         // Sensible default; specific trainers override.
         match self.kind {
-            ForestKind::Regression | ForestKind::Causal | ForestKind::Instrumental
-            | ForestKind::Survival | ForestKind::LlRegression => 1,
+            ForestKind::Regression
+            | ForestKind::Causal
+            | ForestKind::Instrumental
+            | ForestKind::Survival
+            | ForestKind::LlRegression => 1,
             ForestKind::Quantile => 0, // depends on input quantile count
             ForestKind::Probability => 0, // depends on num_classes
             ForestKind::MultiRegression | ForestKind::MultiCausal | ForestKind::Lm => 0,
@@ -178,30 +190,44 @@ impl ForestBlob {
         let inner = sys::Forest::deserialize(bytes).map_err(GrfError::from)?;
         let blob = Self::from_sys(inner, kind, n_features);
         // Round-trip kind: the buffer's stored kind must match the caller's claim.
-        let actual = ForestKind::from_str(blob.inner.kind())
-            .ok_or_else(|| GrfError::Shape(format!("unknown kind in buffer: {}", blob.inner.kind())))?;
+        let actual = ForestKind::from_str(blob.inner.kind()).ok_or_else(|| {
+            GrfError::Shape(format!("unknown kind in buffer: {}", blob.inner.kind()))
+        })?;
         if actual != kind {
-            return Err(GrfError::KindMismatch { trained: actual, requested: kind });
+            return Err(GrfError::KindMismatch {
+                trained: actual,
+                requested: kind,
+            });
         }
         Ok(blob)
     }
 
     /// Borrow the underlying grf-sys handle. Used by the predict / analysis
     /// helpers below; not generally needed by user code.
-    pub fn inner(&self) -> &sys::Forest { &self.inner }
+    pub fn inner(&self) -> &sys::Forest {
+        &self.inner
+    }
 
     /// Forest weights α(test_row, train_row) — co-leaf occupancy counts
     /// divided by total trees. Returns a dense column-major buffer of
     /// shape `(n_train × n_test)`.
     pub fn compute_weights(
         &self,
-        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
-        test_data: &[f64], n_test_rows: usize, n_test_cols: usize,
+        train_data: &[f64],
+        n_train_rows: usize,
+        n_train_cols: usize,
+        test_data: &[f64],
+        n_test_rows: usize,
+        n_test_cols: usize,
         num_threads: u32,
     ) -> Option<Vec<f64>> {
         self.inner.compute_weights(
-            train_data, n_train_rows, n_train_cols,
-            test_data, n_test_rows, n_test_cols,
+            train_data,
+            n_train_rows,
+            n_train_cols,
+            test_data,
+            n_test_rows,
+            n_test_cols,
             num_threads,
         )
     }
@@ -209,13 +235,13 @@ impl ForestBlob {
     /// OOB forest weights over the training set.
     pub fn compute_weights_oob(
         &self,
-        train_data: &[f64], n_train_rows: usize, n_train_cols: usize,
+        train_data: &[f64],
+        n_train_rows: usize,
+        n_train_cols: usize,
         num_threads: u32,
     ) -> Option<Vec<f64>> {
-        self.inner.compute_weights_oob(
-            train_data, n_train_rows, n_train_cols,
-            num_threads,
-        )
+        self.inner
+            .compute_weights_oob(train_data, n_train_rows, n_train_cols, num_threads)
     }
 
     /// Compute split-frequency matrix (depth × n_features).
@@ -267,14 +293,25 @@ pub struct PredictRequest {
 impl PredictRequest {
     pub fn oob(train_x: Matrix, outcome_index: usize, num_threads: Option<u32>) -> Self {
         Self {
-            train_x, train_outcome_index: outcome_index,
-            test_x: None, estimate_variance: false, num_threads,
+            train_x,
+            train_outcome_index: outcome_index,
+            test_x: None,
+            estimate_variance: false,
+            num_threads,
         }
     }
-    pub fn new_data(train_x: Matrix, outcome_index: usize, test_x: Matrix, estimate_variance: bool) -> Self {
+    pub fn new_data(
+        train_x: Matrix,
+        outcome_index: usize,
+        test_x: Matrix,
+        estimate_variance: bool,
+    ) -> Self {
         Self {
-            train_x, train_outcome_index: outcome_index,
-            test_x: Some(test_x), estimate_variance, num_threads: None,
+            train_x,
+            train_outcome_index: outcome_index,
+            test_x: Some(test_x),
+            estimate_variance,
+            num_threads: None,
         }
     }
 }
@@ -292,7 +329,11 @@ pub struct Predictions {
 
 impl Predictions {
     pub fn n_samples(&self) -> usize {
-        if self.pred_length == 0 { 0 } else { self.values.len() / self.pred_length }
+        if self.pred_length == 0 {
+            0
+        } else {
+            self.values.len() / self.pred_length
+        }
     }
 }
 
@@ -315,7 +356,9 @@ impl RegressionTrainer {
     pub fn fit(spec: RegressionSpec) -> Result<ForestBlob> {
         if spec.x.n_rows != spec.y.len() {
             return Err(GrfError::Shape(format!(
-                "x.n_rows={} != y.len={}", spec.x.n_rows, spec.y.len()
+                "x.n_rows={} != y.len={}",
+                spec.x.n_rows,
+                spec.y.len()
             )));
         }
         let n_features = spec.x.n_cols;
@@ -327,7 +370,9 @@ impl RegressionTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_regression(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
                 n_features, // outcome_index = column right after X
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
@@ -335,7 +380,11 @@ impl RegressionTrainer {
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::Regression, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::Regression,
+            n_features,
+        ))
     }
 }
 
@@ -378,8 +427,11 @@ impl CausalTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_causal(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                y_idx, w_idx,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                y_idx,
+                w_idx,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 spec.stabilize_splits,
                 &opts,
@@ -421,16 +473,25 @@ impl InstrumentalTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_instrumental(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                n_features, n_features + 1, n_features + 2,
-                spec.reduced_form_weight, spec.stabilize_splits,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                n_features,
+                n_features + 1,
+                n_features + 2,
+                spec.reduced_form_weight,
+                spec.stabilize_splits,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::Instrumental, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::Instrumental,
+            n_features,
+        ))
     }
 }
 
@@ -454,16 +515,23 @@ impl QuantileTrainer {
         let opts = spec.options.to_ffi();
         let raw = unsafe {
             sys::ffi::grf_train_quantile(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
                 n_features,
-                spec.quantiles.as_ptr(), spec.quantiles.len(),
+                spec.quantiles.as_ptr(),
+                spec.quantiles.len(),
                 spec.regression_splitting,
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::Quantile, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::Quantile,
+            n_features,
+        ))
     }
 }
 
@@ -488,15 +556,22 @@ impl ProbabilityTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_probability(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                n_features, spec.num_classes,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                n_features,
+                spec.num_classes,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::Probability, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::Probability,
+            n_features,
+        ))
     }
 }
 
@@ -521,22 +596,31 @@ impl SurvivalTrainer {
         data.extend_from_slice(&spec.censor);
         let opts = spec.options.to_ffi();
         let sw = spec.sample_weights.as_deref();
-        let (ft_ptr, ft_len) = spec.failure_times
+        let (ft_ptr, ft_len) = spec
+            .failure_times
             .as_ref()
             .map(|v| (v.as_ptr(), v.len()))
             .unwrap_or((std::ptr::null(), 0));
         let raw = unsafe {
             sys::ffi::grf_train_survival(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                n_features, n_features + 1,
-                ft_ptr, ft_len,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                n_features,
+                n_features + 1,
+                ft_ptr,
+                ft_len,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::Survival, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::Survival,
+            n_features,
+        ))
     }
 }
 
@@ -564,7 +648,10 @@ impl MultiRegressionTrainer {
         for (m, col) in spec.y_columns.iter().enumerate() {
             if col.len() != n_rows {
                 return Err(GrfError::Shape(format!(
-                    "y_columns[{}].len()={} != n_rows={}", m, col.len(), n_rows
+                    "y_columns[{}].len()={} != n_rows={}",
+                    m,
+                    col.len(),
+                    n_rows
                 )));
             }
             for i in 0..n_rows {
@@ -572,22 +659,27 @@ impl MultiRegressionTrainer {
             }
         }
         // Indices of the outcome columns in the packed data.
-        let outcome_indices: Vec<usize> = (0..num_outcomes)
-            .map(|m| n_features + m)
-            .collect();
+        let outcome_indices: Vec<usize> = (0..num_outcomes).map(|m| n_features + m).collect();
         let opts = spec.options.to_ffi();
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_multi_regression(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                outcome_indices.as_ptr(), num_outcomes,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                outcome_indices.as_ptr(),
+                num_outcomes,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::MultiRegression, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::MultiRegression,
+            n_features,
+        ))
     }
 }
 
@@ -622,11 +714,10 @@ impl MultiCausalTrainer {
         for i in 0..n_rows {
             data[base + num_outcomes * n_rows + i] = spec.w[i];
         }
-        let outcome_indices: Vec<usize> = (0..num_outcomes)
-            .map(|m| n_features + m)
-            .collect();
+        let outcome_indices: Vec<usize> = (0..num_outcomes).map(|m| n_features + m).collect();
         let treatment_index = n_features + num_outcomes;
-        let (gw_ptr, gw_len) = spec.gradient_weights
+        let (gw_ptr, gw_len) = spec
+            .gradient_weights
             .as_ref()
             .map(|v| (v.as_ptr(), v.len()))
             .unwrap_or((std::ptr::null(), 0));
@@ -634,10 +725,15 @@ impl MultiCausalTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_multi_causal(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                outcome_indices.as_ptr(), num_outcomes,
-                treatment_index, spec.num_treatments,
-                gw_ptr, gw_len,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                outcome_indices.as_ptr(),
+                num_outcomes,
+                treatment_index,
+                spec.num_treatments,
+                gw_ptr,
+                gw_len,
                 spec.stabilize_splits,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
@@ -645,7 +741,11 @@ impl MultiCausalTrainer {
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::MultiCausal, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::MultiCausal,
+            n_features,
+        ))
     }
 }
 
@@ -679,23 +779,34 @@ impl CausalSurvivalTrainer {
         }
         let opts = spec.options.to_ffi();
         let sw = spec.sample_weights.as_deref();
-        let (ft_ptr, ft_len) = spec.failure_times
+        let (ft_ptr, ft_len) = spec
+            .failure_times
             .as_ref()
             .map(|v| (v.as_ptr(), v.len()))
             .unwrap_or((std::ptr::null(), 0));
         let raw = unsafe {
             sys::ffi::grf_train_causal_survival(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                n_features, n_features + 1, n_features + 2,
-                spec.target, spec.horizon,
-                ft_ptr, ft_len,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                n_features,
+                n_features + 1,
+                n_features + 2,
+                spec.target,
+                spec.horizon,
+                ft_ptr,
+                ft_len,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::CausalSurvival, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::CausalSurvival,
+            n_features,
+        ))
     }
 }
 
@@ -730,14 +841,20 @@ impl LmTrainer {
             }
         }
         let y_indices: Vec<usize> = (0..num_outcomes).map(|m| n_features + m).collect();
-        let w_indices: Vec<usize> = (0..num_regressors).map(|m| n_features + num_outcomes + m).collect();
+        let w_indices: Vec<usize> = (0..num_regressors)
+            .map(|m| n_features + num_outcomes + m)
+            .collect();
         let opts = spec.options.to_ffi();
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_lm(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
-                y_indices.as_ptr(), num_outcomes,
-                w_indices.as_ptr(), num_regressors,
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
+                y_indices.as_ptr(),
+                num_outcomes,
+                w_indices.as_ptr(),
+                num_regressors,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
             )
@@ -772,10 +889,14 @@ impl LlRegressionTrainer {
         let sw = spec.sample_weights.as_deref();
         let raw = unsafe {
             sys::ffi::grf_train_ll_regression(
-                data.as_ptr(), n_rows, n_cols(&data, n_rows),
+                data.as_ptr(),
+                n_rows,
+                n_cols(&data, n_rows),
                 n_features,
-                spec.ll_split_lambda, spec.ll_split_weight_penalty,
-                spec.ll_split_variables.as_ptr(), spec.ll_split_variables.len(),
+                spec.ll_split_lambda,
+                spec.ll_split_weight_penalty,
+                spec.ll_split_variables.as_ptr(),
+                spec.ll_split_variables.len(),
                 spec.ll_split_cutoff,
                 sw.map_or(std::ptr::null(), |s| s.as_ptr()),
                 &opts,
@@ -783,7 +904,11 @@ impl LlRegressionTrainer {
         };
         let forest = unsafe { sys::Forest::from_raw(raw) }
             .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
-        Ok(ForestBlob::from_sys(forest, ForestKind::LlRegression, n_features))
+        Ok(ForestBlob::from_sys(
+            forest,
+            ForestKind::LlRegression,
+            n_features,
+        ))
     }
 }
 
@@ -799,11 +924,14 @@ impl ForestBlob {
                 sys::ffi::grf_predict(
                     self.inner.inner_handle(),
                     request.train_x.data.as_ptr(),
-                    request.train_x.n_rows, request.train_x.n_cols,
+                    request.train_x.n_rows,
+                    request.train_x.n_cols,
                     request.train_outcome_index,
                     test.data.as_ptr(),
-                    test.n_rows, test.n_cols,
-                    request.estimate_variance, num_threads,
+                    test.n_rows,
+                    test.n_cols,
+                    request.estimate_variance,
+                    num_threads,
                 )
             }
         } else {
@@ -811,9 +939,11 @@ impl ForestBlob {
                 sys::ffi::grf_predict_oob(
                     self.inner.inner_handle(),
                     request.train_x.data.as_ptr(),
-                    request.train_x.n_rows, request.train_x.n_cols,
+                    request.train_x.n_rows,
+                    request.train_x.n_cols,
                     request.train_outcome_index,
-                    request.estimate_variance, num_threads,
+                    request.estimate_variance,
+                    num_threads,
                 )
             }
         };

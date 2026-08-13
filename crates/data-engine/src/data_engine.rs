@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use dag_core::resource_catalog::ResourceCatalog;
 use datafusion::{
     catalog::CatalogProvider,
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
 };
-use dag_core::resource_catalog::ResourceCatalog;
 use fs::OpendalFileStorage;
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
@@ -764,9 +764,9 @@ impl DataEngineBuilder {
             self.runtime_env.clone(),
             self.iceberg_catalog.clone(),
         );
-        let resources = self.resources.unwrap_or_else(|| {
-            Arc::new(ResourceCatalog::new(std::path::PathBuf::from(".")))
-        });
+        let resources = self
+            .resources
+            .unwrap_or_else(|| Arc::new(ResourceCatalog::new(std::path::PathBuf::from("."))));
         DataEngine::new_from_parts(
             ctx,
             self.runtime_env,

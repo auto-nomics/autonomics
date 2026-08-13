@@ -20,7 +20,11 @@ pub fn utd(j: usize, k: usize, p: usize) -> usize {
 /// Port of `ComputeInteractionsWithIndices()` / `ComputeInteractionsWithDiagWithIndices()`.
 /// Returns a column-major n×cp2 array.
 pub fn compute_interactions(x: &[f64], n: usize, p: usize, diagonal: bool) -> Vec<f64> {
-    let cp2 = if diagonal { p * (p - 1) / 2 + p } else { p * (p - 1) / 2 };
+    let cp2 = if diagonal {
+        p * (p - 1) / 2 + p
+    } else {
+        p * (p - 1) / 2
+    };
     let mut zz = vec![0.0; n * cp2];
 
     if diagonal {
@@ -128,7 +132,9 @@ pub fn compute_phat(
     bn: &[f64],
 ) -> Vec<f64> {
     let yhat = compute_yhat(x, n, p, zz, diagonal, th, bp, bn);
-    yhat.iter().map(|&yh| 1.0 / (1.0 + (-(b0 + yh)).exp())).collect()
+    yhat.iter()
+        .map(|&yh| 1.0 / (1.0 + (-(b0 + yh)).exp()))
+        .collect()
 }
 
 /// Compute cross product X^T * v (column-major x: n×p, v: length n).

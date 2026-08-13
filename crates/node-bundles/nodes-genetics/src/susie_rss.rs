@@ -555,7 +555,8 @@ impl DagNode for SusieRssNode {
             self.spec.r2_min
         ));
         let ld_base = node_ctx.resources.resolve_iceberg("ldmatrix.eur_chr").ok();
-        let ld_pairs = load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, ld_base.as_ref()).await?;
+        let ld_pairs =
+            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, ld_base.as_ref()).await?;
         reporter.info(format!("susie_rss: loaded {} LD pairs", ld_pairs.len()));
 
         let r = build_corr_matrix(&snps_filt, &z_filt, &ld_pairs);

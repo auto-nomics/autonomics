@@ -26,17 +26,21 @@ pub struct ModelSaveSpec {
 
 pub struct ModelSaveFactory;
 impl NodeFactory for ModelSaveFactory {
-    fn kind(&self) -> &'static str { "dl_model_save" }
-    fn desc(&self) -> &'static str { "Save a DL model artifact to storage." }
+    fn kind(&self) -> &'static str {
+        "dl_model_save"
+    }
+    fn desc(&self) -> &'static str {
+        "Save a DL model artifact to storage."
+    }
     fn doc(&self) -> &'static str {
         "dl_model_save: writes a DLModelArtifact to the specified URI (local path). \
         Passes the artifact through on port 0 for chaining."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(ModelSaveSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(ModelSaveSpec)
+    }
     fn ports(&self) -> NodePorts {
-        NodePorts::new()
-            .add_input_port(None)
-            .add_output_port(None)
+        NodePorts::new().add_input_port(None).add_output_port(None)
     }
     fn build(
         &self,
@@ -44,7 +48,10 @@ impl NodeFactory for ModelSaveFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ModelSaveSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(ModelSaveNode { uri: s.uri, meta: self.ports() }))
+        Ok(Box::new(ModelSaveNode {
+            uri: s.uri,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -56,10 +63,18 @@ struct ModelSaveNode {
 
 #[async_trait]
 impl DagNode for ModelSaveNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_model_save" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_model_save"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -83,10 +98,13 @@ impl DagNode for ModelSaveNode {
                 Field::new("architecture", DataType::Utf8, false),
             ])),
             vec![
-                Arc::new(arrow_array::BinaryArray::from(vec![artifact_bytes.as_slice()])),
+                Arc::new(arrow_array::BinaryArray::from(vec![
+                    artifact_bytes.as_slice(),
+                ])),
                 Arc::new(StringArray::from(vec![artifact.architecture.as_str()])),
             ],
-        ).map_err(|e| common::err("dl_model_save", format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_model_save", format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, "dl_model_save")
     }
@@ -103,13 +121,19 @@ pub struct ModelLoadSpec {
 
 pub struct ModelLoadFactory;
 impl NodeFactory for ModelLoadFactory {
-    fn kind(&self) -> &'static str { "dl_model_load" }
-    fn desc(&self) -> &'static str { "Load a DL model artifact from storage." }
+    fn kind(&self) -> &'static str {
+        "dl_model_load"
+    }
+    fn desc(&self) -> &'static str {
+        "Load a DL model artifact from storage."
+    }
     fn doc(&self) -> &'static str {
         "dl_model_load: reads a serialised DLModelArtifact from the specified URI. \
         The artifact can then be fed to dl_predict for inference."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(ModelLoadSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(ModelLoadSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new().add_output_port(None)
     }
@@ -119,7 +143,10 @@ impl NodeFactory for ModelLoadFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ModelLoadSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(ModelLoadNode { uri: s.uri, meta: self.ports() }))
+        Ok(Box::new(ModelLoadNode {
+            uri: s.uri,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -131,10 +158,18 @@ struct ModelLoadNode {
 
 #[async_trait]
 impl DagNode for ModelLoadNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_model_load" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_model_load"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -156,7 +191,8 @@ impl DagNode for ModelLoadNode {
                 Arc::new(arrow_array::BinaryArray::from(vec![bytes.as_slice()])),
                 Arc::new(StringArray::from(vec![artifact.architecture.as_str()])),
             ],
-        ).map_err(|e| common::err("dl_model_load", format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_model_load", format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, "dl_model_load")
     }
@@ -174,21 +210,27 @@ pub struct ModelInfoSpec {
     pub include_training_meta: bool,
 }
 
-fn d_true() -> bool { true }
+fn d_true() -> bool {
+    true
+}
 
 pub struct ModelInfoFactory;
 impl NodeFactory for ModelInfoFactory {
-    fn kind(&self) -> &'static str { "dl_model_info" }
-    fn desc(&self) -> &'static str { "Report DL model metadata." }
+    fn kind(&self) -> &'static str {
+        "dl_model_info"
+    }
+    fn desc(&self) -> &'static str {
+        "Report DL model metadata."
+    }
     fn doc(&self) -> &'static str {
         "dl_model_info: extracts and reports metadata from a DLModelArtifact: architecture type, \
         task type, feature names, total parameters, training history."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(ModelInfoSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(ModelInfoSpec)
+    }
     fn ports(&self) -> NodePorts {
-        NodePorts::new()
-            .add_input_port(None)
-            .add_output_port(None)
+        NodePorts::new().add_input_port(None).add_output_port(None)
     }
     fn build(
         &self,
@@ -196,7 +238,10 @@ impl NodeFactory for ModelInfoFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: ModelInfoSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(ModelInfoNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(ModelInfoNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -208,10 +253,18 @@ struct ModelInfoNode {
 
 #[async_trait]
 impl DagNode for ModelInfoNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_model_info" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_model_info"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -225,7 +278,11 @@ impl DagNode for ModelInfoNode {
         let feature_names = artifact.feature_names.join(", ");
         let total_params = artifact.training_meta.total_params;
         let n_epochs = artifact.training_meta.n_epochs_run;
-        let best_epoch = artifact.training_meta.best_epoch.map(|e| e as u64).unwrap_or(0);
+        let best_epoch = artifact
+            .training_meta
+            .best_epoch
+            .map(|e| e as u64)
+            .unwrap_or(0);
         let best_metric = artifact.training_meta.best_val_metric.unwrap_or(f64::NAN);
 
         let batch = RecordBatch::try_new(
@@ -241,7 +298,9 @@ impl DagNode for ModelInfoNode {
             ])),
             vec![
                 Arc::new(StringArray::from(vec![artifact.backend.clone()])),
-                Arc::new(StringArray::from(vec![artifact.architecture.as_str().to_string()])),
+                Arc::new(StringArray::from(vec![
+                    artifact.architecture.as_str().to_string(),
+                ])),
                 Arc::new(StringArray::from(vec![format!("{:?}", artifact.task_type)])),
                 Arc::new(StringArray::from(vec![feature_names])),
                 Arc::new(UInt64Array::from(vec![total_params as u64])),
@@ -249,7 +308,8 @@ impl DagNode for ModelInfoNode {
                 Arc::new(UInt64Array::from(vec![best_epoch])),
                 Arc::new(arrow_array::Float64Array::from(vec![best_metric])),
             ],
-        ).map_err(|e| common::err("dl_model_info", format!("build batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_model_info", format!("build batch: {e}")))?;
 
         common::emit_batch(ctx, batch, "dl_model_info")
     }
@@ -260,12 +320,17 @@ impl DagNode for ModelInfoNode {
 // ═══════════════════════════════════════════════════════════════════════
 
 fn extract_artifact_from_port(batches: &[RecordBatch]) -> Result<DLModelArtifact, DagError> {
-    let batch = batches.first().ok_or(common::err("dl_model", "no artifact input"))?;
-    let idx = batch.schema().index_of("artifact_bytes").map_err(|_| {
-        common::err("dl_model", "artifact_bytes column not found")
-    })?;
+    let batch = batches
+        .first()
+        .ok_or(common::err("dl_model", "no artifact input"))?;
+    let idx = batch
+        .schema()
+        .index_of("artifact_bytes")
+        .map_err(|_| common::err("dl_model", "artifact_bytes column not found"))?;
     let col = batch.column(idx);
-    let binary_col = col.as_any().downcast_ref::<arrow_array::BinaryArray>()
+    let binary_col = col
+        .as_any()
+        .downcast_ref::<arrow_array::BinaryArray>()
         .ok_or_else(|| common::err("dl_model", "artifact_bytes is not Binary"))?;
     let bytes = binary_col.value(0);
     serde_json::from_slice(bytes).map_err(|e| common::err("dl_model", format!("deserialize: {e}")))

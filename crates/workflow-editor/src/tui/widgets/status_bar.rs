@@ -32,17 +32,22 @@ impl<'a> Widget for StatusBarWidget<'a> {
             ),
             Span::styled(
                 format!(" {} ", self.status),
-                Style::default().fg(Color::White).bg(bg.bg.unwrap_or(Color::Reset)),
+                Style::default()
+                    .fg(Color::White)
+                    .bg(bg.bg.unwrap_or(Color::Reset)),
             ),
             Span::styled(
-                " ".repeat((area.width as usize).saturating_sub(
-                    self.mode.label().len() + 3 + self.status.len() + 3,
-                )),
+                " ".repeat(
+                    (area.width as usize)
+                        .saturating_sub(self.mode.label().len() + 3 + self.status.len() + 3),
+                ),
                 bg,
             ),
             Span::styled(
                 format!(" {} ", self.hint),
-                Style::default().fg(Color::DarkGray).bg(bg.bg.unwrap_or(Color::Reset)),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(bg.bg.unwrap_or(Color::Reset)),
             ),
         ]);
         line.render(area, buf);

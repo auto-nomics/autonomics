@@ -66,7 +66,6 @@ impl ToastVariant {
             Self::Warning => Color::Yellow,
         }
     }
-
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -269,7 +268,9 @@ impl ToastManager {
         block.render(area, buf);
 
         let icon_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
-        let title_style = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+        let title_style = Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD);
         let desc_style = Style::default().fg(Color::Gray);
 
         let mut lines: Vec<Line> = Vec::new();

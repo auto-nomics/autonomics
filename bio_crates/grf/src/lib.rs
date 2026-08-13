@@ -38,19 +38,16 @@ pub mod data;
 pub mod forest;
 pub mod nodes;
 
+pub use data::{Matrix, column_major, from_column_major};
 pub use forest::{
-    ForestBlob, ForestKind, ForestStats, OobPredictions, PredictRequest, Predictions,
-    RegressionTrainer, CausalTrainer, InstrumentalTrainer, QuantileTrainer,
-    ProbabilityTrainer, SurvivalTrainer, MultiRegressionTrainer, MultiCausalTrainer,
-    CausalSurvivalTrainer, LmTrainer, LlRegressionTrainer,
-    MultiCausalSpec,
-};
-pub use data::{
-    column_major, from_column_major, Matrix,
+    CausalSurvivalTrainer, CausalTrainer, ForestBlob, ForestKind, ForestStats, InstrumentalTrainer,
+    LlRegressionTrainer, LmTrainer, MultiCausalSpec, MultiCausalTrainer, MultiRegressionTrainer,
+    OobPredictions, PredictRequest, Predictions, ProbabilityTrainer, QuantileTrainer,
+    RegressionTrainer, SurvivalTrainer,
 };
 
-use thiserror::Error;
 use grf_sys as sys;
+use thiserror::Error;
 
 /// Top-level crate error type.
 #[derive(Debug, Error)]

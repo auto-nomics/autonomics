@@ -10,7 +10,7 @@
 use statrs::distribution::{Continuous, ContinuousCDF, Normal};
 use thiserror::Error;
 
-pub use rdrobust::{rdrobust, Kernel, RdRobustConfig, RdRobustOutput};
+pub use rdrobust::{Kernel, RdRobustConfig, RdRobustOutput, rdrobust};
 
 // =====================================================================
 // Error
@@ -106,7 +106,9 @@ fn power_nr(x0: f64, tau: f64, stilde: f64, z: f64, beta: f64) -> NrResult {
             dot0 = powerfun_dot_n(x0, tau, stilde, z);
             power0 = powerfun(x0, tau, stilde, z);
         }
-        if inner_count >= 100 { break; }
+        if inner_count >= 100 {
+            break;
+        }
 
         let mut x1 = x0 - (power0 - beta) / dot0;
 
@@ -154,7 +156,11 @@ fn power_nr_mde(n: f64, tau0: f64, stilde: f64, z: f64, beta: f64) -> NrMdeResul
             // For MDE, tau should be positive. If tau0 went negative,
             // take absolute value before scaling.
             tau0 = tau0.abs();
-            tau0 = if power0 <= beta { 1.5 * tau0 } else { 0.5 * tau0 };
+            tau0 = if power0 <= beta {
+                1.5 * tau0
+            } else {
+                0.5 * tau0
+            };
             inner_iter += 1;
             iter += 1;
             dot0 = powerfun_dot_tau(n, tau0, stilde, z);
@@ -344,10 +350,26 @@ pub fn rdpower(cfg: &RdPowerConfig) -> Result<RdPowerResult, RdPowerError> {
     };
 
     // Sample sizes inside bandwidth
-    let nplus: usize = cfg.r.iter().filter(|r| **r >= cutoff && r.is_finite()).count();
-    let nminus: usize = cfg.r.iter().filter(|r| **r < cutoff && r.is_finite()).count();
-    let n_hnew_r: usize = cfg.r.iter().filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite()).count();
-    let n_hnew_l: usize = cfg.r.iter().filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite()).count();
+    let nplus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && r.is_finite())
+        .count();
+    let nminus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && r.is_finite())
+        .count();
+    let n_hnew_r: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite())
+        .count();
+    let n_hnew_l: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite())
+        .count();
 
     // Default sampsi
     let (ntilde_l, ntilde_r) = match cfg.sampsi {
@@ -359,7 +381,10 @@ pub fn rdpower(cfg: &RdPowerConfig) -> Result<RdPowerResult, RdPowerError> {
     let tau = match cfg.tau {
         Some(t) => t,
         None => {
-            let left_of_cutoff: Vec<f64> = cfg.y.iter().zip(&cfg.r)
+            let left_of_cutoff: Vec<f64> = cfg
+                .y
+                .iter()
+                .zip(&cfg.r)
                 .filter(|(_, r)| **r >= cutoff - hnew_l && **r < cutoff)
                 .map(|(y, _)| *y)
                 .collect();
@@ -381,8 +406,8 @@ pub fn rdpower(cfg: &RdPowerConfig) -> Result<RdPowerResult, RdPowerError> {
     let se_conv = v_conv.sqrt();
 
     // Bias adjustment
-    let bias = bias_r * hnew_r.powi((1 + p - deriv) as i32)
-        + bias_l * hnew_l.powi((1 + p - deriv) as i32);
+    let bias =
+        bias_r * hnew_r.powi((1 + p - deriv) as i32) + bias_l * hnew_l.powi((1 + p - deriv) as i32);
 
     // Power calculation
     let power_rbc = 1.0 - pnorm(tau / se_rbc + z) + pnorm(tau / se_rbc - z);
@@ -564,20 +589,24 @@ pub fn rdsampsi(cfg: &RdSampsiConfig) -> Result<RdSampsiResult, RdPowerError> {
     };
 
     // Bias adjustment
-    let bias = bias_r * hnew_r.powi((1 + p - deriv) as i32)
-        + bias_l * hnew_l.powi((1 + p - deriv) as i32);
+    let bias =
+        bias_r * hnew_r.powi((1 + p - deriv) as i32) + bias_l * hnew_l.powi((1 + p - deriv) as i32);
 
     // Variance adjustment
     let v_rbc = vl / hnew_l.powi((1 + 2 * deriv) as i32) + vr / hnew_r.powi((1 + 2 * deriv) as i32);
     let stilde = v_rbc.sqrt();
-    let v_cl = vl_cl / hnew_l.powi((1 + 2 * deriv) as i32) + vr_cl / hnew_r.powi((1 + 2 * deriv) as i32);
+    let v_cl =
+        vl_cl / hnew_l.powi((1 + 2 * deriv) as i32) + vr_cl / hnew_r.powi((1 + 2 * deriv) as i32);
     let stilde_cl = v_cl.sqrt();
 
     // Default tau
     let tau = match cfg.tau {
         Some(t) => t,
         None => {
-            let left: Vec<f64> = cfg.y.iter().zip(&cfg.r)
+            let left: Vec<f64> = cfg
+                .y
+                .iter()
+                .zip(&cfg.r)
                 .filter(|(_, r)| **r >= cutoff - hnew_l && **r < cutoff)
                 .map(|(y, _)| *y)
                 .collect();
@@ -586,15 +615,31 @@ pub fn rdsampsi(cfg: &RdSampsiConfig) -> Result<RdSampsiResult, RdPowerError> {
     };
 
     // Sample sizes
-    let nplus: usize = cfg.r.iter().filter(|r| **r >= cutoff && r.is_finite()).count();
-    let nminus: usize = cfg.r.iter().filter(|r| **r < cutoff && r.is_finite()).count();
-    let n_hnew_r: usize = cfg.r.iter().filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite()).count();
-    let n_hnew_l: usize = cfg.r.iter().filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite()).count();
+    let nplus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && r.is_finite())
+        .count();
+    let nminus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && r.is_finite())
+        .count();
+    let n_hnew_r: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite())
+        .count();
+    let n_hnew_l: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite())
+        .count();
 
     // Initial condition
-    let init_cond = cfg.init_cond.unwrap_or_else(|| {
-        cfg.r.iter().filter(|r| r.is_finite()).count() as f64
-    });
+    let init_cond = cfg
+        .init_cond
+        .unwrap_or_else(|| cfg.r.iter().filter(|r| r.is_finite()).count() as f64);
 
     // Newton-Raphson for sample size
     let maux = power_nr(init_cond, tau, stilde, z, beta);
@@ -604,12 +649,16 @@ pub fn rdsampsi(cfg: &RdSampsiConfig) -> Result<RdSampsiResult, RdPowerError> {
     let m_cl = maux1.m;
 
     // nratio
-    let nratio = cfg.nratio.unwrap_or_else(|| vr.sqrt() / (vr.sqrt() + vl.sqrt()));
-    let nratio_cl = cfg.nratio.unwrap_or_else(|| vr_cl.sqrt() / (vr_cl.sqrt() + vl_cl.sqrt()));
+    let nratio = cfg
+        .nratio
+        .unwrap_or_else(|| vr.sqrt() / (vr.sqrt() + vl.sqrt()));
+    let nratio_cl = cfg
+        .nratio
+        .unwrap_or_else(|| vr_cl.sqrt() / (vr_cl.sqrt() + vl_cl.sqrt()));
 
     // Adjust m for sample sizes
-    let denom = nratio * nplus as f64 / n_hnew_r as f64
-        + (1.0 - nratio) * nminus as f64 / n_hnew_l as f64;
+    let denom =
+        nratio * nplus as f64 / n_hnew_r as f64 + (1.0 - nratio) * nminus as f64 / n_hnew_l as f64;
     let denom_cl = nratio_cl * nplus as f64 / n_hnew_r as f64
         + (1.0 - nratio_cl) * nminus as f64 / n_hnew_l as f64;
 
@@ -788,10 +837,26 @@ pub fn rdmde(cfg: &RdMdeConfig) -> Result<RdMdeResult, RdPowerError> {
     };
 
     // Sample sizes
-    let nplus: usize = cfg.r.iter().filter(|r| **r >= cutoff && r.is_finite()).count();
-    let nminus: usize = cfg.r.iter().filter(|r| **r < cutoff && r.is_finite()).count();
-    let n_hnew_r: usize = cfg.r.iter().filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite()).count();
-    let n_hnew_l: usize = cfg.r.iter().filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite()).count();
+    let nplus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && r.is_finite())
+        .count();
+    let nminus: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && r.is_finite())
+        .count();
+    let n_hnew_r: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r >= cutoff && **r <= cutoff + hnew_r && r.is_finite())
+        .count();
+    let n_hnew_l: usize = cfg
+        .r
+        .iter()
+        .filter(|r| **r < cutoff && **r >= cutoff - hnew_l && r.is_finite())
+        .count();
 
     // Default sampsi
     let (ntilde_l, ntilde_r) = match cfg.sampsi {
@@ -803,21 +868,26 @@ pub fn rdmde(cfg: &RdMdeConfig) -> Result<RdMdeResult, RdPowerError> {
         + nminus as f64 * (ntilde_l as f64 / n_hnew_l as f64);
 
     // Variance
-    let v_rbc = vl_rb / hnew_l.powi((1 + 2 * deriv) as i32) + vr_rb / hnew_r.powi((1 + 2 * deriv) as i32);
+    let v_rbc =
+        vl_rb / hnew_l.powi((1 + 2 * deriv) as i32) + vr_rb / hnew_r.powi((1 + 2 * deriv) as i32);
     let se_rbc = v_rbc.sqrt();
 
-    let v_conv = vl_cl / hnew_l.powi((1 + 2 * deriv) as i32) + vr_cl / hnew_r.powi((1 + 2 * deriv) as i32);
+    let v_conv =
+        vl_cl / hnew_l.powi((1 + 2 * deriv) as i32) + vr_cl / hnew_r.powi((1 + 2 * deriv) as i32);
     let se_conv = v_conv.sqrt();
 
     // Bias adjustment
-    let bias = bias_r * hnew_r.powi((1 + p - deriv) as i32)
-        + bias_l * hnew_l.powi((1 + p - deriv) as i32);
+    let bias =
+        bias_r * hnew_r.powi((1 + p - deriv) as i32) + bias_l * hnew_l.powi((1 + p - deriv) as i32);
 
     // Initial condition for Newton-Raphson
     let tau0 = match cfg.init_cond {
         Some(t) => t,
         None => {
-            let below: Vec<f64> = cfg.y.iter().zip(&cfg.r)
+            let below: Vec<f64> = cfg
+                .y
+                .iter()
+                .zip(&cfg.r)
                 .filter(|(_, r)| **r < cutoff)
                 .map(|(y, _)| *y)
                 .collect();

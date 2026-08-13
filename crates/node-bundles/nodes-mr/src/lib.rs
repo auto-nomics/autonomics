@@ -6,7 +6,7 @@ pub mod mvmr;
 pub mod two_sample_mr;
 
 use dag_core::resource_catalog::{
-    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider, CATALOG_NAME,
+    CATALOG_NAME, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 

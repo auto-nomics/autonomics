@@ -60,9 +60,11 @@ impl<'a> Widget for CanvasWidget<'a> {
             if let Some(src) = manifest.nodes.iter().find(|n| n.id == *src_id) {
                 let pos = node_anchor(area, manifest, src, true);
                 if let Some((x, y)) = pos {
-                    buf[(x, y)]
-                        .set_symbol("◉")
-                        .set_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+                    buf[(x, y)].set_symbol("◉").set_style(
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    );
                     let _ = port;
                 }
             }
@@ -70,7 +72,12 @@ impl<'a> Widget for CanvasWidget<'a> {
     }
 }
 
-fn node_anchor(area: Rect, manifest: &WorkflowManifest, n: &NodeEntry, output: bool) -> Option<(u16, u16)> {
+fn node_anchor(
+    area: Rect,
+    manifest: &WorkflowManifest,
+    n: &NodeEntry,
+    output: bool,
+) -> Option<(u16, u16)> {
     let (cx, cy) = node_origin(area, manifest, n);
     if output {
         Some((cx + NODE_WIDTH as u16, cy + 1))
@@ -85,8 +92,10 @@ fn node_origin(area: Rect, manifest: &WorkflowManifest, n: &NodeEntry) -> (u16, 
     let gs = manifest.viewport.grid_step.max(1) as i32;
     let x = area.left() as i32 + (n.position.0 - pan_x) * gs;
     let y = area.top() as i32 + (n.position.1 - pan_y) * gs;
-    (x.clamp(area.left() as i32, area.right() as i32 - NODE_WIDTH) as u16,
-     y.clamp(area.top() as i32, area.bottom() as i32 - NODE_HEIGHT) as u16)
+    (
+        x.clamp(area.left() as i32, area.right() as i32 - NODE_WIDTH) as u16,
+        y.clamp(area.top() as i32, area.bottom() as i32 - NODE_HEIGHT) as u16,
+    )
 }
 
 fn render_node(buf: &mut Buffer, area: Rect, n: &NodeEntry, selected: bool) {
@@ -96,11 +105,15 @@ fn render_node(buf: &mut Buffer, area: Rect, n: &NodeEntry, selected: bool) {
         return;
     }
     let border_style = if selected {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Cyan)
     };
-    let label_style = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+    let label_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
     let kind_style = Style::default().fg(Color::DarkGray);
 
     let h = '─';
@@ -110,10 +123,24 @@ fn render_node(buf: &mut Buffer, area: Rect, n: &NodeEntry, selected: bool) {
     let bl = '└';
     let br = '┘';
 
-    let top = format!("{tl}{}{tr}", h.to_string().repeat((NODE_WIDTH - 2) as usize));
-    let bottom = format!("{bl}{}{br}", h.to_string().repeat((NODE_WIDTH - 2) as usize));
-    let label_line = format!("{v} {:<width$} {v}", truncate(&n.label, NODE_WIDTH as usize - 4), width = NODE_WIDTH as usize - 4);
-    let kind_line = format!("{v} {:<width$} {v}", truncate(&n.kind, NODE_WIDTH as usize - 4), width = NODE_WIDTH as usize - 4);
+    let top = format!(
+        "{tl}{}{tr}",
+        h.to_string().repeat((NODE_WIDTH - 2) as usize)
+    );
+    let bottom = format!(
+        "{bl}{}{br}",
+        h.to_string().repeat((NODE_WIDTH - 2) as usize)
+    );
+    let label_line = format!(
+        "{v} {:<width$} {v}",
+        truncate(&n.label, NODE_WIDTH as usize - 4),
+        width = NODE_WIDTH as usize - 4
+    );
+    let kind_line = format!(
+        "{v} {:<width$} {v}",
+        truncate(&n.kind, NODE_WIDTH as usize - 4),
+        width = NODE_WIDTH as usize - 4
+    );
 
     if y < area.bottom() {
         buf.set_string(x, y, &top, border_style);
@@ -162,7 +189,9 @@ fn render_edge(buf: &mut Buffer, area: Rect, manifest: &WorkflowManifest, e: &Ed
     if sx <= tx {
         for x in sx..=tx {
             if x >= area.left() && x < area.right() && sy >= area.top() && sy < area.bottom() {
-                buf[(x, sy)].set_symbol(if x == sx { "▶" } else { "─" }).set_style(style);
+                buf[(x, sy)]
+                    .set_symbol(if x == sx { "▶" } else { "─" })
+                    .set_style(style);
             }
         }
     } else {

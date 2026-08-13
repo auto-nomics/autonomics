@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use crate::error::Result;
 use crate::sem::{self, EstimationMethod, SemConfig, parse_model};
 use crate::sumstats::MergedSumstats;
-use crate::utils::{Covstruc, GcMode, get_v_snp, get_v_full, get_s_full, smooth_if_needed};
+use crate::utils::{Covstruc, GcMode, get_s_full, get_v_full, get_v_snp, smooth_if_needed};
 
 /// Configuration for `userGWAS`.
 #[derive(Clone, Debug)]
@@ -136,7 +136,9 @@ pub fn user_gwas(
         let result = sem::fit_sem(&s_full_smooth, &w, &model, &obs_vars, &sem_config)?;
 
         // Extract SNP effects
-        let params: Vec<(String, String, String, f64, f64)> = result.params.iter()
+        let params: Vec<(String, String, String, f64, f64)> = result
+            .params
+            .iter()
             .enumerate()
             .filter(|(_, p)| p.rhs == "SNP" || p.lhs == "SNP")
             .map(|(idx, p)| {
@@ -162,17 +164,19 @@ pub fn user_gwas(
     if config.parallel {
         let results: Vec<SnpResult> = indices
             .par_iter()
-            .map(|&i| process_snp(i).unwrap_or(SnpResult {
-                snp: sumstats.snp[i].clone(),
-                chr: sumstats.chr[i],
-                bp: sumstats.bp[i],
-                maf: sumstats.maf[i],
-                a1: sumstats.a1[i].clone(),
-                a2: sumstats.a2[i].clone(),
-                params: Vec::new(),
-                chisq: f64::NAN,
-                df: -1,
-            }))
+            .map(|&i| {
+                process_snp(i).unwrap_or(SnpResult {
+                    snp: sumstats.snp[i].clone(),
+                    chr: sumstats.chr[i],
+                    bp: sumstats.bp[i],
+                    maf: sumstats.maf[i],
+                    a1: sumstats.a1[i].clone(),
+                    a2: sumstats.a2[i].clone(),
+                    params: Vec::new(),
+                    chisq: f64::NAN,
+                    df: -1,
+                })
+            })
             .collect();
         Ok(results)
     } else {

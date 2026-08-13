@@ -1,6 +1,6 @@
 //! Cross-validation for hierNet — port of `hierNet.cv()` in R.
 
-use super::{fit_path, predict, HierNetConfig, HierNetFamily, HierNetPath};
+use super::{HierNetConfig, HierNetFamily, HierNetPath, fit_path, predict};
 
 /// CV result.
 #[derive(Debug, Clone)]
@@ -70,7 +70,11 @@ pub fn hiernet_cv(
             for (k, &i) in test_idx.iter().enumerate() {
                 if k < yhat.len() {
                     if config.family == HierNetFamily::Logistic {
-                        err_sum += if (yhat[k] > 0.5) != (y[i] > 0.5) { 1.0 } else { 0.0 };
+                        err_sum += if (yhat[k] > 0.5) != (y[i] > 0.5) {
+                            1.0
+                        } else {
+                            0.0
+                        };
                     } else {
                         let d = y[i] - yhat[k];
                         err_sum += d * d;
@@ -85,7 +89,11 @@ pub fn hiernet_cv(
     let mut cv_err = vec![0.0; n_lam];
     let mut cv_se = vec![0.0; n_lam];
     for j in 0..n_lam {
-        let valid: Vec<f64> = err2.iter().map(|f| f[j]).filter(|&e| e < f64::MAX).collect();
+        let valid: Vec<f64> = err2
+            .iter()
+            .map(|f| f[j])
+            .filter(|&e| e < f64::MAX)
+            .collect();
         if !valid.is_empty() {
             let m = valid.iter().sum::<f64>() / valid.len() as f64;
             cv_err[j] = m;
@@ -95,21 +103,35 @@ pub fn hiernet_cv(
     }
 
     // nonzero per lambda
-    let nonzero: Vec<usize> = path.fits.iter().map(|f| {
-        let main = f.coefs.bp.iter().zip(&f.coefs.bn).filter(|(bp, bn)| (*bp - *bn).abs() > 1e-6).count();
-        let mut inter = 0usize;
-        for j in 0..p {
-            for k in (j + 1)..p {
-                if (f.coefs.th[j + p * k] + f.coefs.th[k + p * j]).abs() > 1e-6 {
-                    inter += 1;
+    let nonzero: Vec<usize> = path
+        .fits
+        .iter()
+        .map(|f| {
+            let main = f
+                .coefs
+                .bp
+                .iter()
+                .zip(&f.coefs.bn)
+                .filter(|(bp, bn)| (*bp - *bn).abs() > 1e-6)
+                .count();
+            let mut inter = 0usize;
+            for j in 0..p {
+                for k in (j + 1)..p {
+                    if (f.coefs.th[j + p * k] + f.coefs.th[k + p * j]).abs() > 1e-6 {
+                        inter += 1;
+                    }
                 }
             }
-        }
-        main + inter
-    }).collect();
+            main + inter
+        })
+        .collect();
 
     // lamHat and lamHat1se
-    let (best_idx, _) = cv_err.iter().enumerate().min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap();
+    let (best_idx, _) = cv_err
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .unwrap();
     let lam_hat = path.lamlist[best_idx];
     let threshold = cv_err[best_idx] + cv_se[best_idx];
     let mut lam_hat_1se = lam_hat;

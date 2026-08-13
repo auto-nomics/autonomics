@@ -10,10 +10,22 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SchedulerConfig {
     None,
-    Step { step_size: usize, gamma: f64 },
-    Cosine { max_epochs: usize },
-    Plateau { factor: f64, patience: usize, min_lr: f64 },
-    WarmupCosine { warmup_steps: usize, max_steps: usize },
+    Step {
+        step_size: usize,
+        gamma: f64,
+    },
+    Cosine {
+        max_epochs: usize,
+    },
+    Plateau {
+        factor: f64,
+        patience: usize,
+        min_lr: f64,
+    },
+    WarmupCosine {
+        warmup_steps: usize,
+        max_steps: usize,
+    },
 }
 
 pub struct Scheduler {
@@ -94,8 +106,8 @@ impl Scheduler {
                     self.current_lr =
                         self.base_lr * (self.step_count as f64 / *warmup_steps as f64);
                 } else {
-                    let cosine_progress =
-                        (self.step_count - warmup_steps) as f64 / (*max_steps - warmup_steps) as f64;
+                    let cosine_progress = (self.step_count - warmup_steps) as f64
+                        / (*max_steps - warmup_steps) as f64;
                     let cosine_progress = cosine_progress.min(1.0);
                     self.current_lr =
                         self.base_lr * 0.5 * (1.0 + (std::f64::consts::PI * cosine_progress).cos());

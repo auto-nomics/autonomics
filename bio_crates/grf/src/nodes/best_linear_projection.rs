@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use statkit::regression::wls;
 
@@ -54,7 +54,9 @@ pub struct BestLinearProjectionOutput {
 pub struct BestLinearProjectionFactory;
 
 impl BestLinearProjectionFactory {
-    pub fn kind() -> &'static str { "grf_best_linear_projection" }
+    pub fn kind() -> &'static str {
+        "grf_best_linear_projection"
+    }
 }
 
 impl BestLinearProjectionSpec {
@@ -72,11 +74,14 @@ impl BestLinearProjectionSpec {
                 requested: ForestKind::Causal,
             });
         }
-        let (y_orig, w_orig) = causal.original_outcomes()
+        let (y_orig, w_orig) = causal
+            .original_outcomes()
             .ok_or_else(|| GrfError::Missing("missing Y/W on causal forest output".into()))?;
         let y_hat = &causal.y_hat;
         let w_hat = &causal.w_hat;
-        let tau_hat = causal.oob_predictions.as_ref()
+        let tau_hat = causal
+            .oob_predictions
+            .as_ref()
             .ok_or_else(|| GrfError::Missing("missing OOB tau".into()))?
             .values
             .clone();
@@ -85,7 +90,11 @@ impl BestLinearProjectionSpec {
         let dr = dr_scores_binary(y_orig, w_orig, y_hat, w_hat, &tau_hat);
 
         // Subset mask.
-        let mask = self.subset.as_ref().cloned().unwrap_or_else(|| vec![true; n]);
+        let mask = self
+            .subset
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| vec![true; n]);
         if mask.len() != n {
             return Err(GrfError::Shape("subset length mismatch".into()));
         }
@@ -97,7 +106,8 @@ impl BestLinearProjectionSpec {
                 if n_a != n {
                     return Err(GrfError::Shape("A rows != n_train".into()));
                 }
-                self.a_column_names.iter()
+                self.a_column_names
+                    .iter()
                     .map(|name| arrow_batches_to_f64(batches, name, n))
                     .collect::<Result<Vec<_>>>()?
             }
@@ -113,11 +123,11 @@ impl BestLinearProjectionSpec {
             x_buf.extend_from_slice(col);
         }
         // column-major row pointers.
-        let cols: Vec<&[f64]> = (0..(1 + p))
-            .map(|j| &x_buf[j * n..(j + 1) * n])
-            .collect();
+        let cols: Vec<&[f64]> = (0..(1 + p)).map(|j| &x_buf[j * n..(j + 1) * n]).collect();
 
-        let dr_f: Vec<f64> = dr.iter().zip(mask.iter())
+        let dr_f: Vec<f64> = dr
+            .iter()
+            .zip(mask.iter())
             .filter(|x| *x.1)
             .map(|x| *x.0)
             .collect();
@@ -125,12 +135,16 @@ impl BestLinearProjectionSpec {
         if n_eff == 0 {
             return Err(GrfError::Shape("subset produced 0 rows".into()));
         }
-        let cols_f: Vec<Vec<f64>> = cols.iter().map(|c| {
-            c.iter().zip(mask.iter())
-                .filter(|x| *x.1)
-                .map(|x| *x.0)
-                .collect()
-        }).collect();
+        let cols_f: Vec<Vec<f64>> = cols
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .zip(mask.iter())
+                    .filter(|x| *x.1)
+                    .map(|x| *x.0)
+                    .collect()
+            })
+            .collect();
         let cols_f_refs: Vec<&[f64]> = cols_f.iter().map(|c| c.as_slice()).collect();
 
         // Uniform weights (grf R applies no sample weights in BLP unless given).
@@ -140,14 +154,15 @@ impl BestLinearProjectionSpec {
                 if w.len() != n {
                     return Err(GrfError::Shape("weights length mismatch".into()));
                 }
-                w.iter().zip(mask.iter())
+                w.iter()
+                    .zip(mask.iter())
                     .filter(|x| *x.1)
                     .map(|x| *x.0)
                     .collect()
             }
         };
 
-        let fit = wls(&cols_f_refs, &dr_f, &weights, /*intercept=*/false)
+        let fit = wls(&cols_f_refs, &dr_f, &weights, /*intercept=*/ false)
             .map_err(|e| GrfError::Cpp(format!("statkit::wls: {e}")))?;
         Ok(BestLinearProjectionOutput {
             coefficients: fit.coefficients,
@@ -167,7 +182,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(BestLinearProjectionSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(BestLinearProjectionSpec)
+}
 
 // Sentinel re-export to silence unused-import warnings on shared helpers.
 #[allow(dead_code)]

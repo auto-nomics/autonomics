@@ -73,8 +73,7 @@ struct FileResult {
 /// `Some(true)`  → always case-insensitive.
 /// `Some(false)` → always case-sensitive.
 fn build_regex(pattern: &str, case_insensitive: Option<bool>) -> Result<Regex, String> {
-    let ci = case_insensitive
-        .unwrap_or_else(|| !pattern.chars().any(|c| c.is_ascii_uppercase()));
+    let ci = case_insensitive.unwrap_or_else(|| !pattern.chars().any(|c| c.is_ascii_uppercase()));
     RegexBuilder::new(pattern)
         .case_insensitive(ci)
         .build()
@@ -321,9 +320,16 @@ pub async fn op_grep(
                 return Ok(format_grep_result(&[], output_mode, 0, 0, false));
             }
         }
-        let (fr, scanned, skipped) =
-            search_file(op, &vpath, &re, output_mode, before, after, GREP_MAX_SINGLE_FILE_BYTES)
-                .await;
+        let (fr, scanned, skipped) = search_file(
+            op,
+            &vpath,
+            &re,
+            output_mode,
+            before,
+            after,
+            GREP_MAX_SINGLE_FILE_BYTES,
+        )
+        .await;
         files_scanned += scanned;
         files_skipped += skipped;
         if let Some(fr) = fr {
@@ -368,9 +374,16 @@ pub async fn op_grep(
             }
         }
 
-        let (fr, scanned, skipped) =
-            search_file(op, &entry_path, &re, output_mode, before, after, GREP_MAX_FILE_BYTES)
-                .await;
+        let (fr, scanned, skipped) = search_file(
+            op,
+            &entry_path,
+            &re,
+            output_mode,
+            before,
+            after,
+            GREP_MAX_FILE_BYTES,
+        )
+        .await;
         files_scanned += scanned;
         files_skipped += skipped;
 
@@ -489,10 +502,24 @@ mod tests {
     }
 
     /// Grep with a glob filter.
-    async fn grep_glob(op: &opendal::Operator, path: &str, pattern: &str, glob: &str) -> AgentToolResult {
-        op_grep(op, Some(path), Some(pattern), Some(glob), None, None, None, None)
-            .await
-            .unwrap()
+    async fn grep_glob(
+        op: &opendal::Operator,
+        path: &str,
+        pattern: &str,
+        glob: &str,
+    ) -> AgentToolResult {
+        op_grep(
+            op,
+            Some(path),
+            Some(pattern),
+            Some(glob),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     // ═══════════ existing tests (updated signatures) ═══════════
@@ -504,7 +531,11 @@ mod tests {
             &op,
             Some("/no_such_dir_xyz"),
             Some("anything"),
-            None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -634,8 +665,14 @@ mod tests {
     async fn grep_invalid_regex() {
         let op = make_op();
         let result = op_grep(
-            &op, Some("/"), Some("[unclosed"),
-            None, None, None, None, None,
+            &op,
+            Some("/"),
+            Some("[unclosed"),
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -706,8 +743,14 @@ mod tests {
         write_file(&op, "c.txt", "nothing\n").await;
 
         let result = op_grep(
-            &op, Some("/"), Some("match"), None,
-            Some("files_with_matches"), None, None, None,
+            &op,
+            Some("/"),
+            Some("match"),
+            None,
+            Some("files_with_matches"),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -729,8 +772,14 @@ mod tests {
         write_file(&op, "c.txt", "nope\n").await;
 
         let result = op_grep(
-            &op, Some("/"), Some("target"), None,
-            Some("count"), None, None, None,
+            &op,
+            Some("/"),
+            Some("target"),
+            None,
+            Some("count"),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -762,8 +811,14 @@ mod tests {
         let op = make_op();
         write_file(&op, "a.txt", "hello\n").await;
         let result = op_grep(
-            &op, Some("/"), Some("hello"), None,
-            Some("bogus_mode"), None, None, None,
+            &op,
+            Some("/"),
+            Some("hello"),
+            None,
+            Some("bogus_mode"),
+            None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -774,16 +829,17 @@ mod tests {
     #[tokio::test]
     async fn context_after_shows_following_lines() {
         let op = make_op();
-        write_file(
-            &op,
-            "code.rs",
-            "line1\nline2\nMATCH\nline4\nline5\n",
-        )
-        .await;
+        write_file(&op, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
 
         let result = op_grep(
-            &op, Some("/code.rs"), Some("MATCH"), None,
-            None, None, Some(2), None,  // after = 2
+            &op,
+            Some("/code.rs"),
+            Some("MATCH"),
+            None,
+            None,
+            None,
+            Some(2),
+            None, // after = 2
         )
         .await
         .unwrap();
@@ -802,16 +858,17 @@ mod tests {
     #[tokio::test]
     async fn context_before_shows_preceding_lines() {
         let op = make_op();
-        write_file(
-            &op,
-            "code.rs",
-            "line1\nline2\nMATCH\nline4\nline5\n",
-        )
-        .await;
+        write_file(&op, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
 
         let result = op_grep(
-            &op, Some("/code.rs"), Some("MATCH"), None,
-            None, Some(2), None, None,  // before = 2
+            &op,
+            Some("/code.rs"),
+            Some("MATCH"),
+            None,
+            None,
+            Some(2),
+            None,
+            None, // before = 2
         )
         .await
         .unwrap();
@@ -828,16 +885,17 @@ mod tests {
     #[tokio::test]
     async fn context_both_before_and_after() {
         let op = make_op();
-        write_file(
-            &op,
-            "f.txt",
-            "a\nb\nMATCH\nc\nd\n",
-        )
-        .await;
+        write_file(&op, "f.txt", "a\nb\nMATCH\nc\nd\n").await;
 
         let result = op_grep(
-            &op, Some("/f.txt"), Some("MATCH"), None,
-            None, Some(1), Some(1), None,  // before=1, after=1
+            &op,
+            Some("/f.txt"),
+            Some("MATCH"),
+            None,
+            None,
+            Some(1),
+            Some(1),
+            None, // before=1, after=1
         )
         .await
         .unwrap();
@@ -855,16 +913,17 @@ mod tests {
     async fn context_separator_between_noncontiguous_groups() {
         let op = make_op();
         // Two matches far apart, with before=1 after=1.
-        write_file(
-            &op,
-            "f.txt",
-            "M1\nx\nx\nx\nx\nx\nM2\n",
-        )
-        .await;
+        write_file(&op, "f.txt", "M1\nx\nx\nx\nx\nx\nM2\n").await;
 
         let result = op_grep(
-            &op, Some("/f.txt"), Some("M[12]"), None,
-            None, Some(1), Some(1), None,
+            &op,
+            Some("/f.txt"),
+            Some("M[12]"),
+            None,
+            None,
+            Some(1),
+            Some(1),
+            None,
         )
         .await
         .unwrap();
@@ -885,16 +944,17 @@ mod tests {
         let op = make_op();
         // Two matches only 2 lines apart — with before=2, after=2
         // their context windows overlap and should merge into one group.
-        write_file(
-            &op,
-            "f.txt",
-            "a\nb\nM1\nc\nM2\nd\n",
-        )
-        .await;
+        write_file(&op, "f.txt", "a\nb\nM1\nc\nM2\nd\n").await;
 
         let result = op_grep(
-            &op, Some("/f.txt"), Some("M[12]"), None,
-            None, Some(2), Some(2), None,
+            &op,
+            Some("/f.txt"),
+            Some("M[12]"),
+            None,
+            None,
+            Some(2),
+            Some(2),
+            None,
         )
         .await
         .unwrap();
@@ -914,16 +974,17 @@ mod tests {
     async fn context_at_file_boundaries() {
         let op = make_op();
         // Match at first and last lines — context should clamp.
-        write_file(
-            &op,
-            "f.txt",
-            "M1\nb\nc\nd\nM2\n",
-        )
-        .await;
+        write_file(&op, "f.txt", "M1\nb\nc\nd\nM2\n").await;
 
         let result = op_grep(
-            &op, Some("/f.txt"), Some("M[12]"), None,
-            None, Some(5), Some(5), None, // generous context
+            &op,
+            Some("/f.txt"),
+            Some("M[12]"),
+            None,
+            None,
+            Some(5),
+            Some(5),
+            None, // generous context
         )
         .await
         .unwrap();
@@ -943,9 +1004,14 @@ mod tests {
 
         // files_with_matches + context → context is ignored.
         let result = op_grep(
-            &op, Some("/data.rs"), Some("MATCH"), None,
+            &op,
+            Some("/data.rs"),
+            Some("MATCH"),
+            None,
             Some("files_with_matches"),
-            Some(10), Some(10), None,
+            Some(10),
+            Some(10),
+            None,
         )
         .await
         .unwrap();
@@ -966,8 +1032,14 @@ mod tests {
 
         // Pattern is all-lowercase → smart-case makes it insensitive.
         let result = op_grep(
-            &op, Some("/f.txt"), Some("hello"), None,
-            None, None, None, None, // case_insensitive = None → smart
+            &op,
+            Some("/f.txt"),
+            Some("hello"),
+            None,
+            None,
+            None,
+            None,
+            None, // case_insensitive = None → smart
         )
         .await
         .unwrap();
@@ -986,8 +1058,14 @@ mod tests {
 
         // Pattern has uppercase 'H' → smart-case keeps it sensitive.
         let result = op_grep(
-            &op, Some("/f.txt"), Some("Hello"), None,
-            None, None, None, None,
+            &op,
+            Some("/f.txt"),
+            Some("Hello"),
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1006,8 +1084,14 @@ mod tests {
 
         // Explicit case_insensitive=true overrides smart-case.
         let result = op_grep(
-            &op, Some("/f.txt"), Some("Foo"), None,
-            None, None, None, Some(true),
+            &op,
+            Some("/f.txt"),
+            Some("Foo"),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
         )
         .await
         .unwrap();
@@ -1027,8 +1111,14 @@ mod tests {
         // Explicit case_insensitive=false forces sensitive even for
         // all-lowercase patterns.
         let result = op_grep(
-            &op, Some("/f.txt"), Some("foo"), None,
-            None, None, None, Some(false),
+            &op,
+            Some("/f.txt"),
+            Some("foo"),
+            None,
+            None,
+            None,
+            None,
+            Some(false),
         )
         .await
         .unwrap();

@@ -65,7 +65,8 @@ impl ToolFunction for ListResourcesTool {
 
         // Sort by kind then name for readability.
         entries.sort_by(|a, b| {
-            a.kind.as_str()
+            a.kind
+                .as_str()
                 .cmp(b.kind.as_str())
                 .then_with(|| a.name.cmp(&b.name))
         });
@@ -112,12 +113,14 @@ impl ToolFunction for DescribeResourceTool {
             message: "resource catalog is not initialized (running outside the runtime)".into(),
         })?;
 
-        let entry = catalog.get(&input.name).ok_or_else(|| ToolError::RegistryError {
-            message: format!(
-                "unknown resource '{}'. Call list_resources to see available names.",
-                input.name
-            ),
-        })?;
+        let entry = catalog
+            .get(&input.name)
+            .ok_or_else(|| ToolError::RegistryError {
+                message: format!(
+                    "unknown resource '{}'. Call list_resources to see available names.",
+                    input.name
+                ),
+            })?;
 
         let mut lines = Vec::new();
         lines.push(format!("Name:        {}", entry.name));

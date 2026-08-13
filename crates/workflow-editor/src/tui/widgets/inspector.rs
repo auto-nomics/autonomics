@@ -82,11 +82,19 @@ impl<'a> Widget for InspectorWidget<'a> {
             if let Some(edge) = manifest.edges.iter().find(|e| e.id == eid) {
                 lines.push(Line::from(Span::styled(
                     "Edge",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(format!("  id       {}", edge.id)));
-                lines.push(Line::from(format!("  source   {}:{}", edge.source, edge.source_handle)));
-                lines.push(Line::from(format!("  target   {}:{}", edge.target, edge.target_handle)));
+                lines.push(Line::from(format!(
+                    "  source   {}:{}",
+                    edge.source, edge.source_handle
+                )));
+                lines.push(Line::from(format!(
+                    "  target   {}:{}",
+                    edge.target, edge.target_handle
+                )));
             }
         } else {
             lines.push(Line::from(Span::styled(

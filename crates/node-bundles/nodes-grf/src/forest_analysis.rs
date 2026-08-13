@@ -28,37 +28,80 @@ pub struct GetForestWeightsNode {
     meta: NodePorts,
 }
 impl Clone for GetForestWeightsNode {
-    fn clone(&self) -> Self { Self { spec: self.spec.clone(), meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 pub struct GetForestWeightsNodeFactory;
 impl NodeFactory for GetForestWeightsNodeFactory {
-    fn kind(&self) -> &'static str { "grf_get_forest_weights" }
-    fn desc(&self) -> &'static str { "Compute forest weights for new data." }
-    fn doc(&self) -> &'static str { "grf_get_forest_weights: port 0 = forest, port 1 = train X, port 2 = test X. Emits the α(test, train) weights matrix as a long (test, train, weight) table." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(GetForestWeightsSpec) }
-    fn ports(&self) -> NodePorts {
-        NodePorts::new().add_input_port(None).add_input_port(None).add_input_port(None).add_output_port(None)
+    fn kind(&self) -> &'static str {
+        "grf_get_forest_weights"
     }
-    fn build(&self, spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
-        Ok(Box::new(GetForestWeightsNode { spec: serde_json::from_value(spec)?, meta: self.ports() }))
+    fn desc(&self) -> &'static str {
+        "Compute forest weights for new data."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_get_forest_weights: port 0 = forest, port 1 = train X, port 2 = test X. Emits the α(test, train) weights matrix as a long (test, train, weight) table."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(GetForestWeightsSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new()
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_output_port(None)
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+        Ok(Box::new(GetForestWeightsNode {
+            spec: serde_json::from_value(spec)?,
+            meta: self.ports(),
+        }))
     }
 }
 #[async_trait]
 impl DagNode for GetForestWeightsNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_get_forest_weights" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_get_forest_weights"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
-        let fb = common::collect_port(node, inputs, 0).await?.into_iter().next()
+        let fb = common::collect_port(node, inputs, 0)
+            .await?
+            .into_iter()
+            .next()
             .ok_or_else(|| dag_err(node, "input port 0 (forest) not connected"))?;
         let train_b = common::collect_port(node, inputs, 1).await?;
         let test_b = common::collect_port(node, inputs, 2).await?;
         let forest = common::decode_forest(node, &fb)?;
         let (train_x, _) = common::batch_to_matrix(node, &train_b)?;
         let (test_x, _) = common::batch_to_matrix(node, &test_b)?;
-        let out = self.spec.compute(&forest, train_x, test_x).map_err(|e| dag_err(node, &e.to_string()))?;
+        let out = self
+            .spec
+            .compute(&forest, train_x, test_x)
+            .map_err(|e| dag_err(node, &e.to_string()))?;
         // weights is column-major (n_train × n_test): emit long (test, train, weight).
         let mut t_idx: Vec<i64> = Vec::with_capacity(out.weights.len());
         let mut r_idx: Vec<i64> = Vec::with_capacity(out.weights.len());
@@ -79,7 +122,8 @@ impl DagNode for GetForestWeightsNode {
                 Arc::new(Int64Array::from(r_idx)),
                 Arc::new(Float64Array::from(out.weights)),
             ],
-        ).map_err(|e| dag_err(node, &format!("weights batch: {e}")))?;
+        )
+        .map_err(|e| dag_err(node, &format!("weights batch: {e}")))?;
         common::emit(ctx, node, batch)
     }
 }
@@ -93,31 +137,72 @@ pub struct SplitFrequenciesNode {
     meta: NodePorts,
 }
 impl Clone for SplitFrequenciesNode {
-    fn clone(&self) -> Self { Self { spec: self.spec.clone(), meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 pub struct SplitFrequenciesNodeFactory;
 impl NodeFactory for SplitFrequenciesNodeFactory {
-    fn kind(&self) -> &'static str { "grf_split_frequencies" }
-    fn desc(&self) -> &'static str { "Split-frequency matrix of a forest." }
-    fn doc(&self) -> &'static str { "grf_split_frequencies: port 0 = forest. Emits (depth, feature) split counts as a long table." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(SplitFrequenciesSpec) }
-    fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
-        Ok(Box::new(SplitFrequenciesNode { spec: serde_json::from_value(spec)?, meta: self.ports() }))
+    fn kind(&self) -> &'static str {
+        "grf_split_frequencies"
+    }
+    fn desc(&self) -> &'static str {
+        "Split-frequency matrix of a forest."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_split_frequencies: port 0 = forest. Emits (depth, feature) split counts as a long table."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(SplitFrequenciesSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new().add_input_port(None).add_output_port(None)
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+        Ok(Box::new(SplitFrequenciesNode {
+            spec: serde_json::from_value(spec)?,
+            meta: self.ports(),
+        }))
     }
 }
 #[async_trait]
 impl DagNode for SplitFrequenciesNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_split_frequencies" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_split_frequencies"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
-        let fb = common::collect_port(node, inputs, 0).await?.into_iter().next()
+        let fb = common::collect_port(node, inputs, 0)
+            .await?
+            .into_iter()
+            .next()
             .ok_or_else(|| dag_err(node, "input port 0 (forest) not connected"))?;
         let forest = common::decode_forest(node, &fb)?;
-        let out = self.spec.compute(&forest).map_err(|e| dag_err(node, &e.to_string()))?;
+        let out = self
+            .spec
+            .compute(&forest)
+            .map_err(|e| dag_err(node, &e.to_string()))?;
         let mut depth: Vec<i64> = Vec::new();
         let mut feature: Vec<i64> = Vec::new();
         let mut count: Vec<i64> = Vec::new();
@@ -139,7 +224,8 @@ impl DagNode for SplitFrequenciesNode {
                 Arc::new(Int64Array::from(feature)),
                 Arc::new(Int64Array::from(count)),
             ],
-        ).map_err(|e| dag_err(node, &format!("splitfreq batch: {e}")))?;
+        )
+        .map_err(|e| dag_err(node, &format!("splitfreq batch: {e}")))?;
         common::emit(ctx, node, batch)
     }
 }
@@ -153,31 +239,72 @@ pub struct VariableImportanceNode {
     meta: NodePorts,
 }
 impl Clone for VariableImportanceNode {
-    fn clone(&self) -> Self { Self { spec: self.spec.clone(), meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 pub struct VariableImportanceNodeFactory;
 impl NodeFactory for VariableImportanceNodeFactory {
-    fn kind(&self) -> &'static str { "grf_variable_importance" }
-    fn desc(&self) -> &'static str { "Variable-importance scores of a forest." }
-    fn doc(&self) -> &'static str { "grf_variable_importance: port 0 = forest. Emits one `importance` row per feature." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(VariableImportanceSpec) }
-    fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
-        Ok(Box::new(VariableImportanceNode { spec: serde_json::from_value(spec)?, meta: self.ports() }))
+    fn kind(&self) -> &'static str {
+        "grf_variable_importance"
+    }
+    fn desc(&self) -> &'static str {
+        "Variable-importance scores of a forest."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_variable_importance: port 0 = forest. Emits one `importance` row per feature."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(VariableImportanceSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new().add_input_port(None).add_output_port(None)
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+        Ok(Box::new(VariableImportanceNode {
+            spec: serde_json::from_value(spec)?,
+            meta: self.ports(),
+        }))
     }
 }
 #[async_trait]
 impl DagNode for VariableImportanceNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_variable_importance" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_variable_importance"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
-        let fb = common::collect_port(node, inputs, 0).await?.into_iter().next()
+        let fb = common::collect_port(node, inputs, 0)
+            .await?
+            .into_iter()
+            .next()
             .ok_or_else(|| dag_err(node, "input port 0 (forest) not connected"))?;
         let forest = common::decode_forest(node, &fb)?;
-        let out = self.spec.compute(&forest).map_err(|e| dag_err(node, &e.to_string()))?;
+        let out = self
+            .spec
+            .compute(&forest)
+            .map_err(|e| dag_err(node, &e.to_string()))?;
         let n = out.importance.len();
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -185,10 +312,13 @@ impl DagNode for VariableImportanceNode {
                 Field::new("importance", DataType::Float64, false),
             ])),
             vec![
-                Arc::new(Int64Array::from((0..n).map(|i| i as i64).collect::<Vec<_>>())),
+                Arc::new(Int64Array::from(
+                    (0..n).map(|i| i as i64).collect::<Vec<_>>(),
+                )),
                 Arc::new(Float64Array::from(out.importance)),
             ],
-        ).map_err(|e| dag_err(node, &format!("importance batch: {e}")))?;
+        )
+        .map_err(|e| dag_err(node, &format!("importance batch: {e}")))?;
         common::emit(ctx, node, batch)
     }
 }
@@ -202,35 +332,83 @@ pub struct GetTreeNode {
     meta: NodePorts,
 }
 impl Clone for GetTreeNode {
-    fn clone(&self) -> Self { Self { spec: self.spec.clone(), meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 pub struct GetTreeNodeFactory;
 impl NodeFactory for GetTreeNodeFactory {
-    fn kind(&self) -> &'static str { "grf_get_tree" }
-    fn desc(&self) -> &'static str { "Extract a single tree (serialized)." }
-    fn doc(&self) -> &'static str { "grf_get_tree: port 0 = forest, spec.index selects the tree. Emits a single-row `tree` binary column." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(GetTreeSpec) }
-    fn ports(&self) -> NodePorts { NodePorts::new().add_input_port(None).add_output_port(None) }
-    fn build(&self, spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
-        Ok(Box::new(GetTreeNode { spec: serde_json::from_value(spec)?, meta: self.ports() }))
+    fn kind(&self) -> &'static str {
+        "grf_get_tree"
+    }
+    fn desc(&self) -> &'static str {
+        "Extract a single tree (serialized)."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_get_tree: port 0 = forest, spec.index selects the tree. Emits a single-row `tree` binary column."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(GetTreeSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new().add_input_port(None).add_output_port(None)
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+        Ok(Box::new(GetTreeNode {
+            spec: serde_json::from_value(spec)?,
+            meta: self.ports(),
+        }))
     }
 }
 #[async_trait]
 impl DagNode for GetTreeNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_get_tree" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_get_tree"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
-        let fb = common::collect_port(node, inputs, 0).await?.into_iter().next()
+        let fb = common::collect_port(node, inputs, 0)
+            .await?
+            .into_iter()
+            .next()
             .ok_or_else(|| dag_err(node, "input port 0 (forest) not connected"))?;
         let forest = common::decode_forest(node, &fb)?;
-        let out = self.spec.extract(&forest).map_err(|e| dag_err(node, &e.to_string()))?;
+        let out = self
+            .spec
+            .extract(&forest)
+            .map_err(|e| dag_err(node, &e.to_string()))?;
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("tree", DataType::Binary, false)])),
-            vec![Arc::new(arrow_array::BinaryArray::from(vec![Some(out.serialized.as_slice())]))],
-        ).map_err(|e| dag_err(node, &format!("tree batch: {e}")))?;
+            Arc::new(Schema::new(vec![Field::new(
+                "tree",
+                DataType::Binary,
+                false,
+            )])),
+            vec![Arc::new(arrow_array::BinaryArray::from(vec![Some(
+                out.serialized.as_slice(),
+            )]))],
+        )
+        .map_err(|e| dag_err(node, &format!("tree batch: {e}")))?;
         common::emit(ctx, node, batch)
     }
 }
@@ -244,20 +422,38 @@ pub struct MergeForestsNode {
     meta: NodePorts,
 }
 impl Clone for MergeForestsNode {
-    fn clone(&self) -> Self { Self { meta: self.meta.clone() } }
+    fn clone(&self) -> Self {
+        Self {
+            meta: self.meta.clone(),
+        }
+    }
 }
 pub struct MergeForestsNodeFactory;
 impl NodeFactory for MergeForestsNodeFactory {
-    fn kind(&self) -> &'static str { "grf_merge_forests" }
-    fn desc(&self) -> &'static str { "Merge multiple forests into one." }
-    fn doc(&self) -> &'static str { "grf_merge_forests: ports 0..7 = forest-exchange batches (same kind). Concatenates their trees and emits a single forest-exchange batch on port 0." }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(MergeForestsSpec) }
+    fn kind(&self) -> &'static str {
+        "grf_merge_forests"
+    }
+    fn desc(&self) -> &'static str {
+        "Merge multiple forests into one."
+    }
+    fn doc(&self) -> &'static str {
+        "grf_merge_forests: ports 0..7 = forest-exchange batches (same kind). Concatenates their trees and emits a single forest-exchange batch on port 0."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(MergeForestsSpec)
+    }
     fn ports(&self) -> NodePorts {
         let mut p = NodePorts::new();
-        for _ in 0..8 { p = p.add_input_port(None); }
+        for _ in 0..8 {
+            p = p.add_input_port(None);
+        }
         p.add_output_port(None)
     }
-    fn build(&self, _spec: serde_json::Value, _c: NodeCtx) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
+    fn build(
+        &self,
+        _spec: serde_json::Value,
+        _c: NodeCtx,
+    ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         // The spec's `forests` field is filled from the connected ports at
         // execute time; kind/n_features are read from the first batch.
         Ok(Box::new(MergeForestsNode { meta: self.ports() }))
@@ -265,11 +461,24 @@ impl NodeFactory for MergeForestsNodeFactory {
 }
 #[async_trait]
 impl DagNode for MergeForestsNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "grf_merge_forests" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    async fn execute(&mut self, ctx: &NodeCtx, inputs: &[NodeInput], _r: &dag_core::dag::node_event::NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "grf_merge_forests"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _r: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         let node = self.kind();
         let batches = common::collect_all(node, inputs).await?;
         if batches.is_empty() {
@@ -282,7 +491,11 @@ impl DagNode for MergeForestsNode {
         for b in &batches {
             forests.push(common::get_binary(node, b, FOREST_BYTES)?.to_vec());
         }
-        let spec = MergeForestsSpec { forests, kind: first, n_features };
+        let spec = MergeForestsSpec {
+            forests,
+            kind: first,
+            n_features,
+        };
         let out = spec.merge().map_err(|e| dag_err(node, &e.to_string()))?;
         let batch = common::encode_forest(&out.forest)?;
         common::emit(ctx, node, batch)
@@ -290,5 +503,8 @@ impl DagNode for MergeForestsNode {
 }
 
 fn dag_err(node: &str, msg: &str) -> DagError {
-    DagError::NodeError { node_type: node.into(), msg: msg.to_string() }
+    DagError::NodeError {
+        node_type: node.into(),
+        msg: msg.to_string(),
+    }
 }

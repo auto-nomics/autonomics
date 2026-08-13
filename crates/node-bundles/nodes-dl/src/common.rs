@@ -4,18 +4,15 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-    RecordBatch, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, FieldRef, Schema};
-use dl::Tensor;
 use dag_core::dag::DagError;
+use dl::Tensor;
 
 /// Create a `Tensor` from named numeric columns across all batches.
-pub fn extract_tensor(
-    batches: &[RecordBatch],
-    columns: &[String],
-) -> Result<Tensor, DagError> {
+pub fn extract_tensor(batches: &[RecordBatch], columns: &[String]) -> Result<Tensor, DagError> {
     let n_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     let n_cols = columns.len();
     let mut data = vec![0.0f64; n_rows * n_cols];
@@ -31,14 +28,14 @@ pub fn extract_tensor(
 }
 
 /// Extract a single numeric column as `Vec<f64>`, nulls → NaN.
-pub fn extract_numeric_column(
-    batches: &[RecordBatch],
-    name: &str,
-) -> Result<Vec<f64>, DagError> {
-    let schema = batches.first().ok_or(DagError::NodeError {
-        node_type: "dl".into(),
-        msg: "no input rows".into(),
-    })?.schema();
+pub fn extract_numeric_column(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, DagError> {
+    let schema = batches
+        .first()
+        .ok_or(DagError::NodeError {
+            node_type: "dl".into(),
+            msg: "no input rows".into(),
+        })?
+        .schema();
     let idx = schema.index_of(name).map_err(|_| DagError::NodeError {
         node_type: "dl".into(),
         msg: format!("column '{name}' not found"),
@@ -67,8 +64,7 @@ pub fn concat_input(
 
     let mut arrays = Vec::with_capacity(n_cols);
     for col_idx in 0..n_cols {
-        let chunks: Vec<&dyn Array> =
-            batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
+        let chunks: Vec<&dyn Array> = batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
         let combined = arrow_select::concat::concat(&chunks).map_err(|e| DagError::NodeError {
             node_type: "dl".into(),
             msg: format!("concat input columns: {e}"),
@@ -93,10 +89,15 @@ pub async fn collect_port(
             node_type: node_type.into(),
             msg: format!("input port {port} not connected"),
         })?;
-    input.data.clone().collect().await.map_err(|e| DagError::NodeError {
-        node_type: node_type.into(),
-        msg: format!("collect port {port}: {e}"),
-    })
+    input
+        .data
+        .clone()
+        .collect()
+        .await
+        .map_err(|e| DagError::NodeError {
+            node_type: node_type.into(),
+            msg: format!("collect port {port}: {e}"),
+        })
 }
 
 /// Collect batches from port 0.
@@ -113,10 +114,13 @@ pub fn emit_batch(
     batch: RecordBatch,
     node_type: &str,
 ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
-    let df = ctx.session().read_batch(batch).map_err(|e| DagError::NodeError {
-        node_type: node_type.into(),
-        msg: format!("read_batch: {e}"),
-    })?;
+    let df = ctx
+        .session()
+        .read_batch(batch)
+        .map_err(|e| DagError::NodeError {
+            node_type: node_type.into(),
+            msg: format!("read_batch: {e}"),
+        })?;
     let mut res = dag_core::dag::graph::PortOutputs::new();
     res.insert(0, df);
     Ok(res)

@@ -249,10 +249,7 @@ fn compute_replacements(
 
         if chunk.old_lines.is_empty() {
             // Pure addition.
-            let insertion_idx = if original_lines
-                .last()
-                .is_some_and(String::is_empty)
-            {
+            let insertion_idx = if original_lines.last().is_some_and(String::is_empty) {
                 original_lines.len() - 1
             } else {
                 original_lines.len()
@@ -440,7 +437,11 @@ mod tests {
         let original = "foo\nbar\nbaz\n";
         let outcome = fuzzy_edit(original, "bar", "QUX", false);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, count, fuzzy } => {
+            FuzzyEditOutcome::Replaced {
+                new_content,
+                count,
+                fuzzy,
+            } => {
                 assert_eq!(new_content, "foo\nQUX\nbaz\n");
                 assert_eq!(count, 1);
                 assert!(!fuzzy);
@@ -454,7 +455,9 @@ mod tests {
         let original = "a\nb\nc\nd\n";
         let outcome = fuzzy_edit(original, "b\nc", "X\nY", false);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+            FuzzyEditOutcome::Replaced {
+                new_content, count, ..
+            } => {
                 assert_eq!(new_content, "a\nX\nY\nd\n");
                 assert_eq!(count, 1);
             }
@@ -467,7 +470,9 @@ mod tests {
         let original = "foo  \nbar\n";
         let outcome = fuzzy_edit(original, "foo", "FOO", false);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, fuzzy, .. } => {
+            FuzzyEditOutcome::Replaced {
+                new_content, fuzzy, ..
+            } => {
                 assert_eq!(new_content, "FOO\nbar\n");
                 assert!(fuzzy, "should be flagged as fuzzy match");
             }
@@ -480,7 +485,9 @@ mod tests {
         let original = "fn main() {\n    println!(\"hi\");\n}\n";
         let outcome = fuzzy_edit(original, "println!(\"hi\");", "println!(\"bye\");", false);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, fuzzy, .. } => {
+            FuzzyEditOutcome::Replaced {
+                new_content, fuzzy, ..
+            } => {
                 assert!(new_content.contains("bye"));
                 assert!(fuzzy);
             }
@@ -514,7 +521,9 @@ mod tests {
     fn test_fuzzy_edit_replace_all() {
         let outcome = fuzzy_edit("foo\nfoo\nbar\n", "foo", "X", true);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+            FuzzyEditOutcome::Replaced {
+                new_content, count, ..
+            } => {
                 assert_eq!(new_content, "X\nX\nbar\n");
                 assert_eq!(count, 2);
             }
@@ -526,7 +535,9 @@ mod tests {
     fn test_fuzzy_edit_delete_line() {
         let outcome = fuzzy_edit("a\nb\nc\n", "b", "", false);
         match outcome {
-            FuzzyEditOutcome::Replaced { new_content, count, .. } => {
+            FuzzyEditOutcome::Replaced {
+                new_content, count, ..
+            } => {
                 assert_eq!(new_content, "a\nc\n");
                 assert_eq!(count, 1);
             }

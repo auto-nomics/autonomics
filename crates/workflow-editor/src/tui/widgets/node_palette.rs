@@ -29,7 +29,9 @@ impl<'a> Widget for NodePaletteWidget<'a> {
                 }
                 items.push(ListItem::new(Line::from(Span::styled(
                     format!("▾ {}", k.category),
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 ))));
                 last_cat = k.category.clone();
             }
@@ -61,12 +63,16 @@ impl<'a> Widget for NodePaletteWidget<'a> {
         // take borders, so we draw a top border manually.
         list.render(area, buf);
         if area.height > 0 && area.width > 0 {
-            buf[(area.left(), area.top())].set_symbol("┌").set_style(border_style);
+            buf[(area.left(), area.top())]
+                .set_symbol("┌")
+                .set_style(border_style);
             buf[(area.right() - 1, area.top())]
                 .set_symbol("┐")
                 .set_style(border_style);
             for y in area.top() + 1..area.bottom() - 1 {
-                buf[(area.left(), y)].set_symbol("│").set_style(border_style);
+                buf[(area.left(), y)]
+                    .set_symbol("│")
+                    .set_style(border_style);
                 buf[(area.right() - 1, y)]
                     .set_symbol("│")
                     .set_style(border_style);

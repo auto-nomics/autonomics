@@ -30,8 +30,12 @@ pub fn rdrobust_res(
     let n = y.len();
     let mut d_t = 0;
     let mut d_z = 0;
-    if t.is_some() { d_t = 1; }
-    if let Some(zm) = z { d_z = zm.ncols(); }
+    if t.is_some() {
+        d_t = 1;
+    }
+    if let Some(zm) = z {
+        d_z = zm.ncols();
+    }
     let ncol = 1 + d_t + d_z;
     let mut res = Mat::zeros(n, ncol);
 
@@ -108,7 +112,8 @@ pub fn rdrobust_res(
                     }
                     let jf = jiz as f64;
                     if jf > 0.0 {
-                        res[(pi, 1 + d_t + i)] = (jf / (jf + 1.0)).sqrt() * (zm[(pi, i)] - z_j / jf);
+                        res[(pi, 1 + d_t + i)] =
+                            (jf / (jf + 1.0)).sqrt() * (zm[(pi, i)] - z_j / jf);
                     }
                 }
             }
@@ -117,7 +122,9 @@ pub fn rdrobust_res(
         for i in 0..n {
             res[(i, 0)] = y[i] - m[(i, 0)];
             if d_t == 1 {
-                if let Some(tv) = t { res[(i, 1)] = tv[i] - m[(i, 1)]; }
+                if let Some(tv) = t {
+                    res[(i, 1)] = tv[i] - m[(i, 1)];
+                }
             }
             if d_z > 0 {
                 if let Some(zm) = z {
@@ -131,16 +138,25 @@ pub fn rdrobust_res(
         let w: Vec<f64> = match vce {
             "hc0" => vec![1.0; n],
             "hc1" => {
-                if has_cluster { vec![1.0; n] }
-                else { let f = (n as f64 / (n - d) as f64).sqrt(); vec![f; n] }
+                if has_cluster {
+                    vec![1.0; n]
+                } else {
+                    let f = (n as f64 / (n - d) as f64).sqrt();
+                    vec![f; n]
+                }
             }
-            "hc2" => hii.iter().map(|&h| (1.0 - h).max(1e-8).recip().sqrt()).collect(),
+            "hc2" => hii
+                .iter()
+                .map(|&h| (1.0 - h).max(1e-8).recip().sqrt())
+                .collect(),
             _ => hii.iter().map(|&h| (1.0 - h).max(1e-8).recip()).collect(),
         };
         for i in 0..n {
             res[(i, 0)] = w[i] * (y[i] - m[(i, 0)]);
             if d_t == 1 {
-                if let Some(tv) = t { res[(i, 1)] = w[i] * (tv[i] - m[(i, 1)]); }
+                if let Some(tv) = t {
+                    res[(i, 1)] = w[i] * (tv[i] - m[(i, 1)]);
+                }
             }
             if d_z > 0 {
                 if let Some(zm) = z {
@@ -189,13 +205,17 @@ pub fn rdrobust_vce(
                         sum += res[(nn, 0)].powi(2) * rx[(nn, i)] * rx[(nn, j)];
                     }
                     meat[(i, j)] = sum;
-                    if i != j { meat[(j, i)] = sum; }
+                    if i != j {
+                        meat[(j, i)] = sum;
+                    }
                 }
             }
         } else {
             let mut r_comb = vec![0.0; n];
             for nn in 0..n {
-                for l in 0..(1 + d) { r_comb[nn] += res[(nn, l)] * s[l]; }
+                for l in 0..(1 + d) {
+                    r_comb[nn] += res[(nn, l)] * s[l];
+                }
             }
             for i in 0..k {
                 for j in i..k {
@@ -204,7 +224,9 @@ pub fn rdrobust_vce(
                         sum += r_comb[nn].powi(2) * rx[(nn, i)] * rx[(nn, j)];
                     }
                     meat[(i, j)] = sum;
-                    if i != j { meat[(j, i)] = sum; }
+                    if i != j {
+                        meat[(j, i)] = sum;
+                    }
                 }
             }
         }
@@ -238,7 +260,16 @@ pub fn rdrobust_vce(
 
         for indices in &cidx {
             let score = if c_half_opt.is_some() {
-                crv2_cluster_score(indices, d, s, rx, res, sqrt_rx, c_half_opt.as_ref().unwrap(), k)
+                crv2_cluster_score(
+                    indices,
+                    d,
+                    s,
+                    rx,
+                    res,
+                    sqrt_rx,
+                    c_half_opt.as_ref().unwrap(),
+                    k,
+                )
             } else {
                 simple_cluster_score(indices, d, s, rx, res)
             };
@@ -254,7 +285,9 @@ pub fn rdrobust_vce(
         add_tcrossprod(&mut meat, &score, k);
     }
     for i in 0..k {
-        for j in 0..k { meat[(i, j)] *= w; }
+        for j in 0..k {
+            meat[(i, j)] *= w;
+        }
     }
     meat
 }
@@ -264,21 +297,35 @@ fn add_tcrossprod(meat: &mut Mat<f64>, score: &[f64], k: usize) {
         for j in i..k {
             let val = score[i] * score[j];
             meat[(i, j)] += val;
-            if i != j { meat[(j, i)] += val; }
+            if i != j {
+                meat[(j, i)] += val;
+            }
         }
     }
 }
 
-fn simple_cluster_score(indices: &[usize], d: usize, s: &[f64], rx: &Mat<f64>, res: &Mat<f64>) -> Vec<f64> {
+fn simple_cluster_score(
+    indices: &[usize],
+    d: usize,
+    s: &[f64],
+    rx: &Mat<f64>,
+    res: &Mat<f64>,
+) -> Vec<f64> {
     let k = rx.ncols();
     let mut sv = vec![0.0; k];
     for &idx in indices {
         if d == 0 {
-            for j in 0..k { sv[j] += rx[(idx, j)] * res[(idx, 0)]; }
+            for j in 0..k {
+                sv[j] += rx[(idx, j)] * res[(idx, 0)];
+            }
         } else {
             let mut r_comb = 0.0;
-            for l in 0..(1 + d) { r_comb += res[(idx, l)] * s[l]; }
-            for j in 0..k { sv[j] += rx[(idx, j)] * r_comb; }
+            for l in 0..(1 + d) {
+                r_comb += res[(idx, l)] * s[l];
+            }
+            for j in 0..k {
+                sv[j] += rx[(idx, j)] * r_comb;
+            }
         }
     }
     sv
@@ -303,9 +350,13 @@ fn crv3_cluster_score(
     for a in 0..k {
         for b in a..k {
             let mut sum = 0.0;
-            for &idx in indices { sum += srx[(idx, a)] * srx[(idx, b)]; }
+            for &idx in indices {
+                sum += srx[(idx, a)] * srx[(idx, b)];
+            }
             l_g[(a, b)] = sum;
-            if a != b { l_g[(b, a)] = sum; }
+            if a != b {
+                l_g[(b, a)] = sum;
+            }
         }
     }
 
@@ -325,7 +376,9 @@ fn crv3_cluster_score(
         for a in 0..k {
             for &idx in indices {
                 let mut r_comb = 0.0;
-                for l in 0..(1 + d) { r_comb += res[(idx, l)] * s[l]; }
+                for l in 0..(1 + d) {
+                    r_comb += res[(idx, l)] * s[l];
+                }
                 if has_sqrt_rx {
                     u_g[a] += srx[(idx, a)] * srx[(idx, 0)] * r_comb;
                 } else {
@@ -338,7 +391,9 @@ fn crv3_cluster_score(
     // G - L_g
     let mut gm_l = Mat::zeros(k, k);
     for a in 0..k {
-        for b in 0..k { gm_l[(a, b)] = g_mat[(a, b)] - l_g[(a, b)]; }
+        for b in 0..k {
+            gm_l[(a, b)] = g_mat[(a, b)] - l_g[(a, b)];
+        }
     }
 
     let m_g = lu_inverse(&gm_l);
@@ -346,13 +401,17 @@ fn crv3_cluster_score(
     // M_g * u_g
     let mut m_u = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { m_u[a] += m_g[(a, b)] * u_g[b]; }
+        for b in 0..k {
+            m_u[a] += m_g[(a, b)] * u_g[b];
+        }
     }
 
     // score = u_g + L_g * m_u
     let mut score = u_g;
     for a in 0..k {
-        for b in 0..k { score[a] += l_g[(a, b)] * m_u[b]; }
+        for b in 0..k {
+            score[a] += l_g[(a, b)] * m_u[b];
+        }
     }
     score
 }
@@ -377,9 +436,13 @@ fn crv2_cluster_score(
     for a in 0..k {
         for b in a..k {
             let mut sum = 0.0;
-            for &idx in indices { sum += srx[(idx, a)] * srx[(idx, b)]; }
+            for &idx in indices {
+                sum += srx[(idx, a)] * srx[(idx, b)];
+            }
             l_g[(a, b)] = sum;
-            if a != b { l_g[(b, a)] = sum; }
+            if a != b {
+                l_g[(b, a)] = sum;
+            }
         }
     }
 
@@ -399,7 +462,9 @@ fn crv2_cluster_score(
         for a in 0..k {
             for &idx in indices {
                 let mut r_comb = 0.0;
-                for l in 0..(1 + d) { r_comb += res[(idx, l)] * s[l]; }
+                for l in 0..(1 + d) {
+                    r_comb += res[(idx, l)] * s[l];
+                }
                 if has_sqrt_rx {
                     u_g[a] += srx[(idx, a)] * srx[(idx, 0)] * r_comb;
                 } else {
@@ -416,42 +481,60 @@ fn crv2_cluster_score(
     let (eigvals_asc, eigvecs) = sym_eigen(&f_sq).unwrap_or((vec![0.0; k], Mat::zeros(k, k)));
     let sigma2: Vec<f64> = eigvals_asc.iter().map(|&v| v.max(0.0)).collect();
 
-    let c_coef: Vec<f64> = sigma2.iter().map(|&s2| {
-        if s2 < 1e-14 { 0.0 }
-        else { ((1.0 - s2).max(1e-8).recip().sqrt() - 1.0) / s2 }
-    }).collect();
+    let c_coef: Vec<f64> = sigma2
+        .iter()
+        .map(|&s2| {
+            if s2 < 1e-14 {
+                0.0
+            } else {
+                ((1.0 - s2).max(1e-8).recip().sqrt() - 1.0) / s2
+            }
+        })
+        .collect();
 
     // Ru_g = C_half * u_g
     let mut ru_g = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { ru_g[a] += c_half[(a, b)] * u_g[b]; }
+        for b in 0..k {
+            ru_g[a] += c_half[(a, b)] * u_g[b];
+        }
     }
 
     // V' * Ru_g
     let mut vt_ru = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { vt_ru[a] += eigvecs[(b, a)] * ru_g[b]; }
+        for b in 0..k {
+            vt_ru[a] += eigvecs[(b, a)] * ru_g[b];
+        }
     }
 
     // adj = V * (c_coef .* vt_ru)
     let mut adj = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { adj[a] += eigvecs[(a, b)] * c_coef[b] * vt_ru[b]; }
+        for b in 0..k {
+            adj[a] += eigvecs[(a, b)] * c_coef[b] * vt_ru[b];
+        }
     }
 
     // tC_half * adj
     let mut tc_adj = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { tc_adj[a] += t_c_half[(a, b)] * adj[b]; }
+        for b in 0..k {
+            tc_adj[a] += t_c_half[(a, b)] * adj[b];
+        }
     }
 
     // L_g * tc_adj
     let mut l_tc_adj = vec![0.0; k];
     for a in 0..k {
-        for b in 0..k { l_tc_adj[a] += l_g[(a, b)] * tc_adj[b]; }
+        for b in 0..k {
+            l_tc_adj[a] += l_g[(a, b)] * tc_adj[b];
+        }
     }
 
     let mut score = u_g;
-    for a in 0..k { score[a] += l_tc_adj[a]; }
+    for a in 0..k {
+        score[a] += l_tc_adj[a];
+    }
     score
 }

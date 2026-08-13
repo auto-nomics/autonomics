@@ -19,20 +19,20 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
-use agentik_core::storage::{AgentStorage, AgentProfileRegistry};
+use agentik_core::storage::{AgentProfileRegistry, AgentStorage};
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use dag_core::resource_catalog::{
-    ResourceCatalog, ResourceEntry, ResourceKind, ResourceAddress, DbKind, DocKind,
+    DbKind, DocKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind,
 };
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use datalake::Datalake;
-use futures::FutureExt;
 use fs::OpendalFileStorage;
+use futures::FutureExt;
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
@@ -46,12 +46,24 @@ use crate::tools::DefaultToolSetError;
 // can build a dynamic system prompt that only mentions tools the profile
 // actually enables.
 impl PromptCapabilities for agentik_core::AgentProfile {
-    fn enable_bibliography(&self) -> bool { self.enable_bibliography }
-    fn enable_opengwas(&self) -> bool { self.enable_opengwas }
-    fn enable_opentargets(&self) -> bool { self.enable_opentargets }
-    fn enable_gwascatalog(&self) -> bool { self.enable_gwascatalog }
-    fn enable_iceberg(&self) -> bool { self.enable_iceberg }
-    fn enable_dag_history(&self) -> bool { self.enable_dag_history }
+    fn enable_bibliography(&self) -> bool {
+        self.enable_bibliography
+    }
+    fn enable_opengwas(&self) -> bool {
+        self.enable_opengwas
+    }
+    fn enable_opentargets(&self) -> bool {
+        self.enable_opentargets
+    }
+    fn enable_gwascatalog(&self) -> bool {
+        self.enable_gwascatalog
+    }
+    fn enable_iceberg(&self) -> bool {
+        self.enable_iceberg
+    }
+    fn enable_dag_history(&self) -> bool {
+        self.enable_dag_history
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -143,9 +155,8 @@ impl SharedInfra {
         if let Some(parent) = manifest_db.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let resources = Arc::new(
-            ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await,
-        );
+        let resources =
+            Arc::new(ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await);
 
         // Register built-in resources from RuntimeConfig (config-as-resource).
         register_config_resources(&resources, config);
@@ -234,10 +245,8 @@ impl SharedInfra {
         let bib_db_path = resources
             .resolve_database("db.bib")
             .unwrap_or_else(|_| config.bib_db_path.clone());
-        let bib = Arc::new(
-            bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
-                .await?,
-        );
+        let bib =
+            Arc::new(bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone()).await?);
 
         let writing_db_path = resources
             .resolve_database("db.writing")
@@ -310,9 +319,8 @@ impl SharedInfra {
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);
         } else {
-            builder = builder.with_system_prompt_section(
-                crate::config::build_system_prompt(profile),
-            );
+            builder =
+                builder.with_system_prompt_section(crate::config::build_system_prompt(profile));
         }
 
         builder = builder
@@ -525,10 +533,30 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
 
     // ── Doc / reference paths ────────────────────────────────────────
     for (logical, path, desc, kind) in [
-        ("doc.docs", "docs", "Project documentation root", DocKind::Notes),
-        ("doc.logs", "logs", "Application logs directory", DocKind::Notes),
-        ("doc.reference", "reference", "Reference data / panels", DocKind::Notes),
-        ("doc.fixtures", "test_datasets", "Test fixture data", DocKind::Notes),
+        (
+            "doc.docs",
+            "docs",
+            "Project documentation root",
+            DocKind::Notes,
+        ),
+        (
+            "doc.logs",
+            "logs",
+            "Application logs directory",
+            DocKind::Notes,
+        ),
+        (
+            "doc.reference",
+            "reference",
+            "Reference data / panels",
+            DocKind::Notes,
+        ),
+        (
+            "doc.fixtures",
+            "test_datasets",
+            "Test fixture data",
+            DocKind::Notes,
+        ),
     ] {
         let p = config.data_dir.join(path);
         reg(
@@ -560,20 +588,76 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
     // Registered so SDK clients can resolve via ResourceCatalog::global().
     // Each SDK crate falls back to its own const when the global is not set.
     for (logical, url, desc) in [
-        ("endpoint.eutils", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils", "NCBI E-utilities API"),
-        ("endpoint.embase", "https://api.elsevier.com/content/embase/article", "Elsevier Embase API"),
-        ("endpoint.openalex", "https://api.openalex.org", "OpenAlex REST API"),
-        ("endpoint.s2_graph", "https://api.semanticscholar.org/graph/v1", "Semantic Scholar Graph API"),
-        ("endpoint.s2_reco", "https://api.semanticscholar.org/recommendations/v1", "Semantic Scholar Recommendations API"),
-        ("endpoint.opentargets", "https://api.platform.opentargets.org/api/v4/graphql", "Open Targets GraphQL API"),
-        ("endpoint.crossref", "https://api.crossref.org", "Crossref REST API"),
-        ("endpoint.gwascatalog_ss", "https://www.ebi.ac.uk/gwas/summary-statistics/api", "GWAS Catalog Summary Stats API"),
-        ("endpoint.gwascatalog_rest", "https://www.ebi.ac.uk/gwas/rest/api", "GWAS Catalog REST API"),
-        ("endpoint.gwascatalog_search", "https://www.ebi.ac.uk/gwas/api/search", "GWAS Catalog Solr Search API"),
-        ("endpoint.gwascatalog_ftp", "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics", "GWAS Catalog FTP (summary stats files)"),
-        ("endpoint.europepmc", "https://www.ebi.ac.uk/europepmc/webservices/rest", "Europe PMC REST API"),
-        ("endpoint.biorxiv", "https://api.biorxiv.org", "bioRxiv/medRxiv API"),
-        ("endpoint.arxiv", "http://export.arxiv.org/api/query", "arXiv API"),
+        (
+            "endpoint.eutils",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+            "NCBI E-utilities API",
+        ),
+        (
+            "endpoint.embase",
+            "https://api.elsevier.com/content/embase/article",
+            "Elsevier Embase API",
+        ),
+        (
+            "endpoint.openalex",
+            "https://api.openalex.org",
+            "OpenAlex REST API",
+        ),
+        (
+            "endpoint.s2_graph",
+            "https://api.semanticscholar.org/graph/v1",
+            "Semantic Scholar Graph API",
+        ),
+        (
+            "endpoint.s2_reco",
+            "https://api.semanticscholar.org/recommendations/v1",
+            "Semantic Scholar Recommendations API",
+        ),
+        (
+            "endpoint.opentargets",
+            "https://api.platform.opentargets.org/api/v4/graphql",
+            "Open Targets GraphQL API",
+        ),
+        (
+            "endpoint.crossref",
+            "https://api.crossref.org",
+            "Crossref REST API",
+        ),
+        (
+            "endpoint.gwascatalog_ss",
+            "https://www.ebi.ac.uk/gwas/summary-statistics/api",
+            "GWAS Catalog Summary Stats API",
+        ),
+        (
+            "endpoint.gwascatalog_rest",
+            "https://www.ebi.ac.uk/gwas/rest/api",
+            "GWAS Catalog REST API",
+        ),
+        (
+            "endpoint.gwascatalog_search",
+            "https://www.ebi.ac.uk/gwas/api/search",
+            "GWAS Catalog Solr Search API",
+        ),
+        (
+            "endpoint.gwascatalog_ftp",
+            "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics",
+            "GWAS Catalog FTP (summary stats files)",
+        ),
+        (
+            "endpoint.europepmc",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest",
+            "Europe PMC REST API",
+        ),
+        (
+            "endpoint.biorxiv",
+            "https://api.biorxiv.org",
+            "bioRxiv/medRxiv API",
+        ),
+        (
+            "endpoint.arxiv",
+            "http://export.arxiv.org/api/query",
+            "arXiv API",
+        ),
     ] {
         reg(
             logical,
@@ -596,10 +680,26 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
         );
     }
     for (logical, env_key, desc) in [
-        ("config.s3_endpoint", "ICEBERG_S3_ENDPOINT", "S3 endpoint for Iceberg"),
-        ("config.s3_bucket", "ICEBERG_S3_BUCKET", "S3 bucket for Iceberg"),
-        ("config.s3_region", "ICEBERG_S3_REGION", "S3 region for Iceberg"),
-        ("config.s3_warehouse", "ICEBERG_S3_WAREHOUSE", "S3 warehouse path for Iceberg"),
+        (
+            "config.s3_endpoint",
+            "ICEBERG_S3_ENDPOINT",
+            "S3 endpoint for Iceberg",
+        ),
+        (
+            "config.s3_bucket",
+            "ICEBERG_S3_BUCKET",
+            "S3 bucket for Iceberg",
+        ),
+        (
+            "config.s3_region",
+            "ICEBERG_S3_REGION",
+            "S3 region for Iceberg",
+        ),
+        (
+            "config.s3_warehouse",
+            "ICEBERG_S3_WAREHOUSE",
+            "S3 warehouse path for Iceberg",
+        ),
     ] {
         if let Some(val) = read_env(env_key) {
             reg(
@@ -1132,7 +1232,9 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .or_else(|| {
+                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
+                                })
                                 .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1203,7 +1305,9 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .or_else(|| {
+                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
+                                })
                                 .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1248,10 +1352,7 @@ impl RuntimeHost {
                 };
                 // Reject if path already exists.
                 if self.profiles.iter().any(|p| p.path == child.path) {
-                    let _ = reply_tx.send(Err(format!(
-                        "Profile '{}' already exists",
-                        child.path
-                    )));
+                    let _ = reply_tx.send(Err(format!("Profile '{}' already exists", child.path)));
                     return;
                 }
                 // Persist to storage.
@@ -1269,15 +1370,16 @@ impl RuntimeHost {
                             let _ = reply_tx.send(Ok(child_path));
                         }
                         Ok(Err(e)) => {
-                            let _ = reply_tx.send(Err(format!(
-                                "Failed to persist derived profile: {e}"
-                            )));
+                            let _ = reply_tx
+                                .send(Err(format!("Failed to persist derived profile: {e}")));
                         }
                         Err(panic_payload) => {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .or_else(|| {
+                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
+                                })
                                 .unwrap_or_else(|| "<panic in create_profile>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1507,7 +1609,9 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                                .or_else(|| {
+                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
+                                })
                                 .unwrap_or_else(|| "<panic in list_persisted_agents>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -2348,11 +2452,7 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
         AgentEvent::Requesting => (AgentStatus::Running, None),
 
         // ── Tool-level signals (overwrite the lifecycle-derived status) ──
-        AgentEvent::ToolCall { name, .. }
-        | AgentEvent::ToolCallBackground {
-            name,
-            seq: _,
-        } => (
+        AgentEvent::ToolCall { name, .. } | AgentEvent::ToolCallBackground { name, seq: _ } => (
             AgentStatus::AwaitingTool { tool: name.clone() },
             Some(name.clone()),
         ),
@@ -2372,10 +2472,7 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
 
         AgentEvent::ToolBackgroundComplete { ok, seq: _ } => {
             let prefix = if *ok { "ok" } else { "err" };
-            (
-                AgentStatus::Running,
-                Some(format!("bg_tool[{prefix}]")),
-            )
+            (AgentStatus::Running, Some(format!("bg_tool[{prefix}]")))
         }
 
         // ── Aggregated LLM responses ──
@@ -2411,9 +2508,7 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
             max_retries,
         } => (
             AgentStatus::Running,
-            Some(format!(
-                "retrying ({attempt}/{max_retries}): {message}"
-            )),
+            Some(format!("retrying ({attempt}/{max_retries}): {message}")),
         ),
 
         // ── Context-management events — agent is busy, keep Running ──
@@ -2481,9 +2576,7 @@ mod status_derivation_tests {
 
     #[test]
     fn lifecycle_idle_flips_to_idle() {
-        let (s, _) = derive_agent_status(&AgentEvent::LifecycleChanged(
-            AgentLifecycleStatus::Idle,
-        ));
+        let (s, _) = derive_agent_status(&AgentEvent::LifecycleChanged(AgentLifecycleStatus::Idle));
         assert_eq!(s, AgentStatus::Idle);
     }
 
@@ -2497,9 +2590,8 @@ mod status_derivation_tests {
 
     #[test]
     fn lifecycle_waiting_flips_to_awaiting_tool() {
-        let (s, _) = derive_agent_status(&AgentEvent::LifecycleChanged(
-            AgentLifecycleStatus::Waiting,
-        ));
+        let (s, _) =
+            derive_agent_status(&AgentEvent::LifecycleChanged(AgentLifecycleStatus::Waiting));
         assert_eq!(
             s,
             AgentStatus::AwaitingTool {
@@ -2518,9 +2610,8 @@ mod status_derivation_tests {
 
     #[test]
     fn lifecycle_error_flips_to_failed() {
-        let (s, _) = derive_agent_status(&AgentEvent::LifecycleChanged(
-            AgentLifecycleStatus::Error,
-        ));
+        let (s, _) =
+            derive_agent_status(&AgentEvent::LifecycleChanged(AgentLifecycleStatus::Error));
         assert!(matches!(s, AgentStatus::Failed { .. }));
     }
 
@@ -2541,7 +2632,12 @@ mod status_derivation_tests {
             name: "run_bash".into(),
             input: json!({}),
         });
-        assert_eq!(s, AgentStatus::AwaitingTool { tool: "run_bash".into() });
+        assert_eq!(
+            s,
+            AgentStatus::AwaitingTool {
+                tool: "run_bash".into()
+            }
+        );
         assert_eq!(ev.as_deref(), Some("run_bash"));
     }
 
@@ -2704,10 +2800,7 @@ mod status_tests {
         assert_eq!(AgentStatus::Idle.tag(), "idle");
         assert_eq!(AgentStatus::Running.tag(), "running");
         assert_eq!(
-            AgentStatus::AwaitingTool {
-                tool: "x".into()
-            }
-            .tag(),
+            AgentStatus::AwaitingTool { tool: "x".into() }.tag(),
             "awaiting_tool"
         );
         assert_eq!(AgentStatus::Completed.tag(), "completed");
@@ -2966,9 +3059,8 @@ mod send_message_tests {
         let control = HostControl::new(cmd_tx, event_tx);
 
         // Spawn the "caller" — sends the message and awaits reply.
-        let caller = tokio::spawn(async move {
-            control.send_message("worker", "hello there").await
-        });
+        let caller =
+            tokio::spawn(async move { control.send_message("worker", "hello there").await });
 
         // "Host" side: receive the command and reply Ok(()).
         let cmd = cmd_rx.recv().await.expect("command received");
@@ -2996,9 +3088,7 @@ mod send_message_tests {
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
 
-        let caller = tokio::spawn(async move {
-            control.send_message("nonexistent", "test").await
-        });
+        let caller = tokio::spawn(async move { control.send_message("nonexistent", "test").await });
 
         let cmd = cmd_rx.recv().await.expect("command received");
         match cmd {

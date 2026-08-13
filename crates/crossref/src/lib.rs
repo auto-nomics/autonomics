@@ -47,5 +47,5 @@ pub mod types;
 pub use client::{CrossrefClient, CrossrefClientBuilder};
 pub use convert::work_to_article;
 pub use error::{CrossrefError, Result};
-pub use tools::crossref_registrations;
 pub use tools::crossref_extended_registrations;
+pub use tools::crossref_registrations;

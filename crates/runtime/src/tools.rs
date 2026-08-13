@@ -104,7 +104,11 @@ pub async fn writing_tools(db_path: &str) -> Result<Vec<ToolRegistration>, writi
             Arc::new(writing_base::NullEngine)
         }
     };
-    Ok(writing_base::writing_all_registrations(store, None, Some(engine)))
+    Ok(writing_base::writing_all_registrations(
+        store,
+        None,
+        Some(engine),
+    ))
 }
 
 /// Resolves the writing DB path: the `AUTONOMICS_WRITING_DB` env var if set,

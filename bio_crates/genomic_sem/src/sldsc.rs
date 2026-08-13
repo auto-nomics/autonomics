@@ -11,10 +11,10 @@ use crate::ldsc::block_jackknife_regression;
 #[derive(Clone, Debug)]
 pub struct SldscPartition {
     pub name: String,
-    pub s: Mat<f64>,         // per-annotation genetic covariance
-    pub v: Mat<f64>,         // per-annotation sampling covariance
-    pub s_tau: Mat<f64>,     // per-annotation tau (effect per SNP)
-    pub v_tau: Mat<f64>,     // sampling covariance of tau
+    pub s: Mat<f64>,     // per-annotation genetic covariance
+    pub v: Mat<f64>,     // per-annotation sampling covariance
+    pub s_tau: Mat<f64>, // per-annotation tau (effect per SNP)
+    pub v_tau: Mat<f64>, // sampling covariance of tau
 }
 
 /// Stratified LDSC output.
@@ -23,8 +23,8 @@ pub struct SldscOutput {
     pub partitions: Vec<SldscPartition>,
     pub intercepts: Mat<f64>,
     pub n: Mat<f64>,
-    pub m: Mat<f64>,         // per-annotation M values
-    pub prop: Vec<f64>,      // proportion of SNPs per annotation
+    pub m: Mat<f64>,    // per-annotation M values
+    pub prop: Vec<f64>, // proportion of SNPs per annotation
 }
 
 /// Run stratified LDSC.

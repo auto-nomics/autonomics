@@ -111,11 +111,11 @@ pub struct HierNetFit {
     pub diagonal: bool,
     pub family: HierNetFamily,
     // Standardization attributes
-    pub mx: Vec<f64>,    // centering for X
-    pub sx: Vec<f64>,    // scaling for X (1.0 if not scaled)
-    pub my: f64,         // centering for Y
-    pub mzz: Vec<f64>,   // centering for ZZ
-    pub szz: Vec<f64>,   // scaling for ZZ (1.0 if not scaled)
+    pub mx: Vec<f64>,  // centering for X
+    pub sx: Vec<f64>,  // scaling for X (1.0 if not scaled)
+    pub my: f64,       // centering for Y
+    pub mzz: Vec<f64>, // centering for ZZ
+    pub szz: Vec<f64>, // scaling for ZZ (1.0 if not scaled)
 }
 
 /// Path of fits over multiple lambdas
@@ -209,7 +209,11 @@ pub fn fit(
 
     // Compute interactions
     let zz_matrix = interactions::compute_interactions(&std_x.data, n, p, config.diagonal);
-    let cp2 = if config.diagonal { p * (p - 1) / 2 + p } else { p * (p - 1) / 2 };
+    let cp2 = if config.diagonal {
+        p * (p - 1) / 2 + p
+    } else {
+        p * (p - 1) / 2
+    };
 
     // Center ZZ
     let (zz, mzz, szz) = {
@@ -223,11 +227,13 @@ pub fn fit(
             mean /= n as f64;
             mzz[j] = mean;
         }
-        let zz: Vec<f64> = (0..cp2*n).map(|idx| {
-            let j = idx / n;
-            let i = idx % n;
-            zz_matrix[j * n + i] - mzz[j]
-        }).collect();
+        let zz: Vec<f64> = (0..cp2 * n)
+            .map(|idx| {
+                let j = idx / n;
+                let i = idx % n;
+                zz_matrix[j * n + i] - mzz[j]
+            })
+            .collect();
         (zz, mzz, szz)
     };
 
@@ -235,7 +241,9 @@ pub fn fit(
     let lam_l2 = lam * config.delta;
 
     // Initialize coefficients
-    let init = warm.cloned().unwrap_or_else(|| HierNetCoefs::zeros(p, config.diagonal));
+    let init = warm
+        .cloned()
+        .unwrap_or_else(|| HierNetCoefs::zeros(p, config.diagonal));
 
     let coefs = if config.family == HierNetFamily::Gaussian {
         if config.strong {
@@ -322,9 +330,29 @@ pub fn fit(
 
     // Compute objective
     let obj = if config.family == HierNetFamily::Gaussian {
-        compute_objective_gaussian(&std_x.data, &zz, &y_centered, &coefs, lam_l1, lam_l2, n, p, config.diagonal)
+        compute_objective_gaussian(
+            &std_x.data,
+            &zz,
+            &y_centered,
+            &coefs,
+            lam_l1,
+            lam_l2,
+            n,
+            p,
+            config.diagonal,
+        )
     } else {
-        compute_objective_logistic(&std_x.data, &zz, y, &coefs, lam_l1, lam_l2, n, p, config.diagonal)
+        compute_objective_logistic(
+            &std_x.data,
+            &zz,
+            y,
+            &coefs,
+            lam_l1,
+            lam_l2,
+            n,
+            p,
+            config.diagonal,
+        )
     };
 
     Ok(HierNetFit {
@@ -343,11 +371,7 @@ pub fn fit(
 }
 
 /// Fit a lambda path.
-pub fn fit_path(
-    x: &[f64],
-    y: &[f64],
-    config: &HierNetConfig,
-) -> crate::Result<HierNetPath> {
+pub fn fit_path(x: &[f64], y: &[f64], config: &HierNetConfig) -> crate::Result<HierNetPath> {
     let n = y.len();
     let p = x.len() / n;
 
@@ -404,26 +428,41 @@ pub fn predict(fit: &HierNetFit, x_new: &[f64], n: usize) -> Vec<f64> {
 
     // Standardize new X using training centering/scaling
     let x_std: Vec<f64> = (0..p)
-        .flat_map(|j| {
-            (0..n).map(move |i| (x_new[j * n + i] - fit.mx[j]) / fit.sx[j])
-        })
+        .flat_map(|j| (0..n).map(move |i| (x_new[j * n + i] - fit.mx[j]) / fit.sx[j]))
         .collect();
 
     // Compute interactions for new X
     let zz_raw = interactions::compute_interactions(&x_std, n, p, fit.diagonal);
-    let cp2 = if fit.diagonal { p * (p - 1) / 2 + p } else { p * (p - 1) / 2 };
+    let cp2 = if fit.diagonal {
+        p * (p - 1) / 2 + p
+    } else {
+        p * (p - 1) / 2
+    };
 
     // Center using training mzz
-    let zz: Vec<f64> = (0..cp2 * n).map(|idx| {
-        let j = idx / n;
-        let i = idx % n;
-        zz_raw[j * n + i] - fit.mzz[j]
-    }).collect();
+    let zz: Vec<f64> = (0..cp2 * n)
+        .map(|idx| {
+            let j = idx / n;
+            let i = idx % n;
+            zz_raw[j * n + i] - fit.mzz[j]
+        })
+        .collect();
 
-    let yhat = interactions::compute_yhat(&x_std, n, p, &zz, fit.diagonal, &fit.coefs.th, &fit.coefs.bp, &fit.coefs.bn);
+    let yhat = interactions::compute_yhat(
+        &x_std,
+        n,
+        p,
+        &zz,
+        fit.diagonal,
+        &fit.coefs.th,
+        &fit.coefs.bp,
+        &fit.coefs.bn,
+    );
 
     if fit.family == HierNetFamily::Logistic {
-        yhat.iter().map(|&yh| 1.0 / (1.0 + (-(fit.coefs.b0 + yh)).exp())).collect()
+        yhat.iter()
+            .map(|&yh| 1.0 / (1.0 + (-(fit.coefs.b0 + yh)).exp()))
+            .collect()
     } else {
         yhat.iter().map(|&yh| yh + fit.my).collect()
     }

@@ -1286,7 +1286,9 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
             iceberg_catalog: None,
             datalake: Arc::new(Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
             global_sem: None,
         };
 
@@ -1347,7 +1349,9 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             iceberg_catalog: None,
             datalake: Arc::new(Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
             global_sem: None,
         };
 

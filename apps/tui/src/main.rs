@@ -375,9 +375,7 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let catalog = Arc::new(
-        ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await,
-    );
+    let catalog = Arc::new(ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await);
 
     // Register built-in resources (same as SharedInfra::open would do).
     let _ = ResourceCatalog::set_global(catalog.clone());
@@ -387,8 +385,8 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
     match args.action {
         DataAction::Add(a) => {
             use dag_core::resource_catalog::{
-                ArchiveSpec, CsvOptions, IngestionSpec, ResourceAddress,
-                ResourceEntry, ResourceKind, SourceFormat, WriteMode,
+                ArchiveSpec, CsvOptions, IngestionSpec, ResourceAddress, ResourceEntry,
+                ResourceKind, SourceFormat, WriteMode,
             };
 
             let format = match a.format.as_str() {
@@ -398,7 +396,7 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 other => {
                     return Err(color_eyre::eyre::eyre!(
                         "unknown format '{other}': expected parquet, csv, or tsv"
-                    ))
+                    ));
                 }
             };
 
@@ -409,7 +407,7 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 other => {
                     return Err(color_eyre::eyre::eyre!(
                         "unknown mode '{other}': expected create_if_not_exists, create_or_replace, or append"
-                    ))
+                    ));
                 }
             };
 
@@ -417,7 +415,11 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 SourceFormat::Csv | SourceFormat::Tsv => Some(CsvOptions {
                     has_header: !a.no_header,
                     delimiter: a.delimiter.unwrap_or_else(|| {
-                        if matches!(format, SourceFormat::Tsv) { '\t' } else { ',' }
+                        if matches!(format, SourceFormat::Tsv) {
+                            '\t'
+                        } else {
+                            ','
+                        }
                     }),
                     file_extension: None,
                     compression: None,
@@ -427,17 +429,23 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
 
             // Resolve archive config: --archive flag + env vars.
             let archive_spec = if a.archive {
-                let remote = std::env::var("ARCHIVE_REMOTE")
-                    .map_err(|_| color_eyre::eyre::eyre!(
+                let remote = std::env::var("ARCHIVE_REMOTE").map_err(|_| {
+                    color_eyre::eyre::eyre!(
                         "--archive requires ARCHIVE_REMOTE env var (e.g. 'aliyun')"
-                    ))?;
-                let bucket = std::env::var("ARCHIVE_BUCKET")
-                    .map_err(|_| color_eyre::eyre::eyre!(
+                    )
+                })?;
+                let bucket = std::env::var("ARCHIVE_BUCKET").map_err(|_| {
+                    color_eyre::eyre::eyre!(
                         "--archive requires ARCHIVE_BUCKET env var (e.g. 'autonomics-data')"
-                    ))?;
+                    )
+                })?;
                 // Auto-derive archive path: bucket/schema/table/
                 let remote_path = format!("{}/{}/", a.schema, a.table);
-                Some(ArchiveSpec { remote, remote_path: format!("{bucket}/{remote_path}"), checksum: true })
+                Some(ArchiveSpec {
+                    remote,
+                    remote_path: format!("{bucket}/{remote_path}"),
+                    checksum: true,
+                })
             } else {
                 None
             };
@@ -470,7 +478,10 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
 
             // Build the ingestion spec.
             let src_name = if archive_spec.is_some() {
-                Some(format!("source.{}", a.name.strip_prefix("iceberg.").unwrap_or(&a.name)))
+                Some(format!(
+                    "source.{}",
+                    a.name.strip_prefix("iceberg.").unwrap_or(&a.name)
+                ))
             } else {
                 None
             };
@@ -541,13 +552,19 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
 
             // ── If --archive: execute archive + ingest in one shot ──────
             if a.archive {
-                let Some(ref src_name) = src_name else { unreachable!() };
+                let Some(ref src_name) = src_name else {
+                    unreachable!()
+                };
 
                 // Step 1: Archive source to cloud.
                 println!("\n[1/2] Archiving source…");
                 match catalog.archive(src_name).await {
-                    Ok(o) => println!("  ✓ {} files, {} bytes, {:.1}s",
-                        o.files_transferred, o.size_bytes, o.duration_ms as f64 / 1000.0),
+                    Ok(o) => println!(
+                        "  ✓ {} files, {} bytes, {:.1}s",
+                        o.files_transferred,
+                        o.size_bytes,
+                        o.duration_ms as f64 / 1000.0
+                    ),
                     Err(e) => {
                         println!("  ✗ archive failed: {e}");
                         println!("\nResource registered but archive/ingest incomplete.");
@@ -559,11 +576,16 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
                 // Step 2: Ingest into Iceberg.
                 println!("\n[2/2] Ingesting into Iceberg…");
                 let datalake = Arc::new(datalake::Datalake::new());
-                let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
+                let executor =
+                    runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
                 match executor.ingest(&a.name).await {
                     Ok(o) if o.skipped => println!("  ⊘ skipped (table already has data)"),
-                    Ok(o) => println!("  ✓ {} rows, {} files, {:.1}s",
-                        o.rows_written, o.files_processed, o.duration_ms as f64 / 1000.0),
+                    Ok(o) => println!(
+                        "  ✓ {} rows, {} files, {:.1}s",
+                        o.rows_written,
+                        o.files_processed,
+                        o.duration_ms as f64 / 1000.0
+                    ),
                     Err(e) => {
                         println!("  ✗ ingest failed: {e}");
                         println!("\nSource archived ✓ but ingest incomplete.");

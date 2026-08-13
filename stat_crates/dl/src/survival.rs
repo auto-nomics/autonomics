@@ -179,9 +179,7 @@ impl TimeBins {
             }
             _ => {
                 let step = (t_max - t_min) / n_bins as f64;
-                (0..=n_bins)
-                    .map(|k| t_min + step * k as f64)
-                    .collect()
+                (0..=n_bins).map(|k| t_min + step * k as f64).collect()
             }
         };
 

@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use schemars::Schema;
 use std::sync::Arc;
 use uuid::Uuid;
+use workflow_editor::WorkflowManager;
 use workflow_editor::error::Result;
 use workflow_editor::executor::{NodeCtx, NodeExecutor, NodeReporter, PortInputs, PortOutputs};
 use workflow_editor::model::{EdgeEntry, NodeEntry, PortSpec};
 use workflow_editor::registry::{NodeFactory, NodeRegistry};
-use workflow_editor::WorkflowManager;
 
 /// Echo node: copies inputs forward and emits `"out" -> "echoed"`.
 struct EchoNode;
@@ -191,16 +191,26 @@ async fn run_executes_topologically() {
         target: n2_id,
         target_handle: "in".into(),
     });
-    client.save_workflow(manifest.clone(), "wire").await.unwrap();
+    client
+        .save_workflow(manifest.clone(), "wire")
+        .await
+        .unwrap();
 
     let result = client.run(id, Default::default()).await.unwrap();
     // Both nodes should have produced an "out" -> "echoed" output.
-    assert!(result.outputs.values().any(|v| v == &serde_json::json!("echoed")));
+    assert!(
+        result
+            .outputs
+            .values()
+            .any(|v| v == &serde_json::json!("echoed"))
+    );
     // The Phase 1 final_outputs surface "out" ports under the node label.
-    assert!(result
-        .final_outputs
-        .values()
-        .any(|v| v == &serde_json::json!("echoed")));
+    assert!(
+        result
+            .final_outputs
+            .values()
+            .any(|v| v == &serde_json::json!("echoed"))
+    );
 }
 
 #[tokio::test]

@@ -21,8 +21,7 @@ pub struct HostControl {
     /// Broadcast sender for `HostEvent` stream. Cloned cheaply (Arc
     /// internally); each subscriber gets its own lag-tracked receiver.
     /// `None` for tests / pre-initialization contexts.
-    pub(crate) event_broadcast:
-        Option<tokio::sync::broadcast::Sender<crate::host::HostEvent>>,
+    pub(crate) event_broadcast: Option<tokio::sync::broadcast::Sender<crate::host::HostEvent>>,
 }
 
 impl HostControl {
@@ -624,4 +623,3 @@ pub struct RouteCandidate {
     pub score: f64,
     pub matched_tags: Vec<String>,
 }
-

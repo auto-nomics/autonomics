@@ -7,16 +7,12 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
-use crate::forest::{
-    CausalSurvivalSpec, CausalSurvivalTrainer, ForestBlob, ForestStats,
-};
-use crate::nodes::regression_forest::{
-    arrow_batches_to_matrix, NodeTrainOptions,
-};
+use crate::forest::{CausalSurvivalSpec, CausalSurvivalTrainer, ForestBlob, ForestStats};
+use crate::nodes::regression_forest::{NodeTrainOptions, arrow_batches_to_matrix};
 use crate::{GrfError, Result};
 use grf_sys as sys;
 
@@ -50,7 +46,9 @@ pub struct CausalSurvivalForestOutput {
 pub struct CausalSurvivalForestFactory;
 
 impl CausalSurvivalForestFactory {
-    pub fn kind() -> &'static str { "grf_causal_survival_forest" }
+    pub fn kind() -> &'static str {
+        "grf_causal_survival_forest"
+    }
 }
 
 impl CausalSurvivalForestSpec {
@@ -60,12 +58,20 @@ impl CausalSurvivalForestSpec {
             return Err(GrfError::Missing("no rows".into()));
         }
         let schema = batches[0].schema();
-        let reserved = [&self.time_column_name, &self.w_column_name, &self.censor_column_name];
+        let reserved = [
+            &self.time_column_name,
+            &self.w_column_name,
+            &self.censor_column_name,
+        ];
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !reserved.contains(&f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !reserved.contains(&f.name()) && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
@@ -74,36 +80,51 @@ impl CausalSurvivalForestSpec {
         let w = arrow_batches_to_f64_safe(batches, &self.w_column_name, n_rows)?;
         let censor_i64 = arrow_batches_to_int64(batches, &self.censor_column_name, n_rows)?;
         let censor: Vec<f64> = censor_i64.into_iter().map(|c| c as f64).collect();
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64_safe(batches, c, n_rows))
             .transpose()?;
 
         let trained = CausalSurvivalTrainer::fit(CausalSurvivalSpec {
-            x: x_matrix, time, w, censor,
-            target: self.target, horizon: self.horizon,
+            x: x_matrix,
+            time,
+            w,
+            censor,
+            target: self.target,
+            horizon: self.horizon,
             failure_times: self.failure_times.clone(),
             sample_weights: weights,
             options: self.options.to_sys(),
         })?;
         let stats = ForestStats::from(&trained);
-        Ok(CausalSurvivalForestOutput { forest: trained, stats })
+        Ok(CausalSurvivalForestOutput {
+            forest: trained,
+            stats,
+        })
     }
 }
 
-fn arrow_batches_to_time(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
-) -> Result<Vec<f64>> {
+fn arrow_batches_to_time(batches: &[RecordBatch], col: &str, n_rows: usize) -> Result<Vec<f64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Float64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Float64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Float64", col)))?;
         for i in 0..batch.num_rows() {
-            let v = if arr.is_null(i) { f64::NAN } else { arr.value(i) };
+            let v = if arr.is_null(i) {
+                f64::NAN
+            } else {
+                arr.value(i)
+            };
             if v.is_nan() || v < 0.0 {
                 return Err(GrfError::Shape(format!(
-                    "time column '{}' has non-positive / NaN value", col
+                    "time column '{}' has non-positive / NaN value",
+                    col
                 )));
             }
             out.push(v);
@@ -113,29 +134,39 @@ fn arrow_batches_to_time(
 }
 
 fn arrow_batches_to_f64_safe(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
+    batches: &[RecordBatch],
+    col: &str,
+    n_rows: usize,
 ) -> Result<Vec<f64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Float64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Float64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Float64", col)))?;
         for i in 0..batch.num_rows() {
-            out.push(if arr.is_null(i) { f64::NAN } else { arr.value(i) });
+            out.push(if arr.is_null(i) {
+                f64::NAN
+            } else {
+                arr.value(i)
+            });
         }
     }
     Ok(out)
 }
 
-fn arrow_batches_to_int64(
-    batches: &[RecordBatch], col: &str, n_rows: usize,
-) -> Result<Vec<i64>> {
+fn arrow_batches_to_int64(batches: &[RecordBatch], col: &str, n_rows: usize) -> Result<Vec<i64>> {
     let mut out = Vec::with_capacity(n_rows);
     for batch in batches {
-        let arr = batch.column_by_name(col)
+        let arr = batch
+            .column_by_name(col)
             .ok_or_else(|| GrfError::Shape(format!("column '{}' not found", col)))?;
-        let arr = arr.as_any().downcast_ref::<Int64Array>()
+        let arr = arr
+            .as_any()
+            .downcast_ref::<Int64Array>()
             .ok_or_else(|| GrfError::Shape(format!("column '{}' is not Int64", col)))?;
         for i in 0..batch.num_rows() {
             out.push(if arr.is_null(i) { 0 } else { arr.value(i) });
@@ -150,7 +181,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(CausalSurvivalForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(CausalSurvivalForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

@@ -8,7 +8,7 @@ use crate::error::{Result, StorageError};
 use crate::model::{SnapshotInfo, WorkflowManifest};
 use crate::store::pool::DbPool;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 /// Workflow repository — wraps a [`DbPool`]. Cheap to clone.

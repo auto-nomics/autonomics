@@ -31,11 +31,15 @@ fn run_fit(fx: &Fixture) -> glinternet::GlinternetFit {
 
     let mut x_cat = Vec::new();
     for &ci in &cat_indices {
-        for i in 0..n { x_cat.push(fx.x[ci * n + i] as usize); }
+        for i in 0..n {
+            x_cat.push(fx.x[ci * n + i] as usize);
+        }
     }
     let mut z = Vec::new();
     for &ci in &cont_indices {
-        for i in 0..n { z.push(fx.x[ci * n + i]); }
+        for i in 0..n {
+            z.push(fx.x[ci * n + i]);
+        }
     }
 
     let config = glinternet::GlinternetConfig {
@@ -63,7 +67,10 @@ fn mixed_finds_continuous_main_effects() {
     let fx = load();
     let fit = run_fit(&fx);
     let last = fit.active_set.last().unwrap();
-    assert!(last.n_vars()[1] >= 1, "expected continuous main effects at last lambda");
+    assert!(
+        last.n_vars()[1] >= 1,
+        "expected continuous main effects at last lambda"
+    );
 }
 
 #[test]
@@ -93,7 +100,8 @@ fn mixed_objective_decreasing() {
         assert!(
             fit.obj_value[i] <= fit.obj_value[i - 1] + 1e-6,
             "objective should be non-increasing: [{i}]={:.6} > [{:.6}",
-            fit.obj_value[i], fit.obj_value[i - 1]
+            fit.obj_value[i],
+            fit.obj_value[i - 1]
         );
     }
 }

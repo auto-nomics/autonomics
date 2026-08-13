@@ -6,13 +6,11 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::forest::{ForestBlob, PredictRequest, Predictions};
-use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix,
-};
+use crate::nodes::regression_forest::{arrow_batches_to_f64, arrow_batches_to_matrix};
 use crate::{GrfError, Result};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -45,7 +43,9 @@ pub struct PredictForestOutput {
 }
 
 impl PredictForestOutput {
-    pub fn n_samples(&self) -> usize { self.n_samples }
+    pub fn n_samples(&self) -> usize {
+        self.n_samples
+    }
 }
 
 impl From<Predictions> for PredictForestOutput {
@@ -65,7 +65,9 @@ impl From<Predictions> for PredictForestOutput {
 pub struct PredictForestFactory;
 
 impl PredictForestFactory {
-    pub fn kind() -> &'static str { "grf_predict_forest" }
+    pub fn kind() -> &'static str {
+        "grf_predict_forest"
+    }
 }
 
 impl PredictForestSpec {
@@ -82,8 +84,10 @@ impl PredictForestSpec {
         // original Y values for prediction, so we must not strip the
         // outcome column. The grf core predict functions use the
         // outcome_index to locate Y internally.
-        let train_schema = train_batches.first().map(|b| b.schema()).ok_or_else(||
-            GrfError::Missing("empty train batches".into()))?;
+        let train_schema = train_batches
+            .first()
+            .map(|b| b.schema())
+            .ok_or_else(|| GrfError::Missing("empty train batches".into()))?;
         let train_all_cols: Vec<String> = (0..train_schema.fields().len())
             .map(|i| train_schema.field(i).name().clone())
             .collect();
@@ -93,10 +97,16 @@ impl PredictForestSpec {
             PredictRequest::oob(train_x, train_outcome_index, self.num_threads_opt())
         } else if let Some(test_batches) = test_batches {
             let test_n = test_batches.iter().map(|b| b.num_rows()).sum();
-            let test_schema = test_batches.first().map(|b| b.schema()).ok_or_else(||
-                GrfError::Missing("empty test batches".into()))?;
+            let test_schema = test_batches
+                .first()
+                .map(|b| b.schema())
+                .ok_or_else(|| GrfError::Missing("empty test batches".into()))?;
             let test_cols: Vec<String> = if self.x_column_names.is_empty() {
-                test_schema.fields().iter().map(|f| f.name().clone()).collect()
+                test_schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect()
             } else {
                 self.x_column_names.clone()
             };
@@ -111,7 +121,11 @@ impl PredictForestSpec {
     }
 
     fn num_threads_opt(&self) -> Option<u32> {
-        if self.num_threads == 0 { None } else { Some(self.num_threads) }
+        if self.num_threads == 0 {
+            None
+        } else {
+            Some(self.num_threads)
+        }
     }
 }
 
@@ -124,7 +138,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(PredictForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(PredictForestSpec)
+}
 
 // `arrow_batches_to_f64` is used by other nodes; surface here to keep the
 // import set stable.

@@ -37,8 +37,8 @@ pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
 pub use query::{
-    ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource, OpenAlexSource,
-    PubmedSource, S2Source, SourceBatch,
+    ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource,
+    OpenAlexSource, PubmedSource, S2Source, SourceBatch,
 };
 pub use shared::BibShared;
 

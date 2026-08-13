@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use dl::*;
-    use rand::SeedableRng;
     use rand::Rng;
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     fn gen_classification_data(n: usize, seed: u64) -> (Tensor, Tensor) {
@@ -14,7 +14,9 @@ mod tests {
         for _ in 0..n {
             let cls = if rng.random::<f64>() < 0.5 { 0 } else { 1 };
             let center = if cls == 0 { -1.0f64 } else { 1.0 };
-            for _ in 0..4 { x.push(center + rng.random::<f64>() * 0.5); }
+            for _ in 0..4 {
+                x.push(center + rng.random::<f64>() * 0.5);
+            }
             y.push(cls as f64);
         }
         (Tensor::from_rows(n, 4, &x), Tensor::from_rows(n, 1, &y))
@@ -32,8 +34,13 @@ mod tests {
             let u = rng.random::<f64>();
             let t = -u.ln() / (0.3 * risk.exp().max(0.1));
             x.extend_from_slice(&[x1, x2, rng.random::<f64>() * 2.0, rng.random::<f64>() * 2.0]);
-            if t < 5.0 { events.push(1); times.push(t.max(0.01)); }
-            else { events.push(0); times.push(5.0); }
+            if t < 5.0 {
+                events.push(1);
+                times.push(t.max(0.01));
+            } else {
+                events.push(0);
+                times.push(5.0);
+            }
         }
         (Tensor::from_rows(n, 4, &x), times, events)
     }
@@ -49,7 +56,11 @@ mod tests {
             batch_norm: false,
             task_type: TaskType::Classification,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.01, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.01,
+                    ..Default::default()
+                },
                 n_epochs: 50,
                 batch_size: 16,
                 ..Default::default()
@@ -59,10 +70,12 @@ mod tests {
         let json = serde_json::to_string(&result.model).unwrap();
         let mut restored: MlpModel = serde_json::from_str(&json).unwrap();
         let probs = predict_mlp(&mut restored, &x_test);
-        let correct = (0..50).filter(|&i| {
-            let p = probs.at(i, 0);
-            ((if p > 0.5 { 1.0 } else { 0.0 }) - y_test.at(i, 0)).abs() < 0.5
-        }).count();
+        let correct = (0..50)
+            .filter(|&i| {
+                let p = probs.at(i, 0);
+                ((if p > 0.5 { 1.0 } else { 0.0 }) - y_test.at(i, 0)).abs() < 0.5
+            })
+            .count();
         let acc = correct as f64 / 50.0;
         assert!(acc > 0.65, "test accuracy too low: {acc:.2}");
     }
@@ -89,7 +102,11 @@ mod tests {
             batch_norm: false,
             task_type: TaskType::Regression,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.005, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.005,
+                    ..Default::default()
+                },
                 n_epochs: 100,
                 batch_size: 16,
                 ..Default::default()
@@ -97,7 +114,10 @@ mod tests {
         };
         let result = train_mlp(&x, &y, None, &config).unwrap();
         let preds = result.predictions;
-        let mse: f64 = (0..n).map(|i| (preds.at(i, 0) - y_data[i]).powi(2)).sum::<f64>() / n as f64;
+        let mse: f64 = (0..n)
+            .map(|i| (preds.at(i, 0) - y_data[i]).powi(2))
+            .sum::<f64>()
+            / n as f64;
         assert!(mse < 5.0, "regression MSE too high: {mse:.3}");
     }
 
@@ -110,7 +130,11 @@ mod tests {
             activation: Activation::Relu,
             dropout: 0.0,
             train: TrainConfig {
-                optimizer: OptimizerConfig { kind: OptimizerKind::Adam, lr: 0.005, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.005,
+                    ..Default::default()
+                },
                 n_epochs: 50,
                 batch_size: 16,
                 ..Default::default()
@@ -134,21 +158,30 @@ mod tests {
         let config = MlpConfig {
             hidden_sizes: vec![8],
             task_type: TaskType::Classification,
-            train: TrainConfig { n_epochs: 10, batch_size: 10, ..Default::default() },
+            train: TrainConfig {
+                n_epochs: 10,
+                batch_size: 10,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let result = train_mlp(&x, &y, None, &config).unwrap();
         let checkpoint = serde_json::to_string(&result.model).unwrap();
         let artifact = DLModelArtifact {
-            backend: "burn".into(), architecture: Architecture::Mlp,
+            backend: "burn".into(),
+            architecture: Architecture::Mlp,
             task_type: ArtifactTaskType::Classification,
             checkpoint_json: checkpoint,
             feature_names: vec!["x1".into(), "x2".into(), "x3".into(), "x4".into()],
             label_column: Some("y".into()),
-            time_column: None, event_column: None, scaler_json: None,
+            time_column: None,
+            event_column: None,
+            scaler_json: None,
             training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(), best_epoch: None,
-                best_val_metric: None, total_params: result.model.n_params(),
+                n_epochs_run: result.training_log.len(),
+                best_epoch: None,
+                best_val_metric: None,
+                total_params: result.model.n_params(),
             },
         };
         let bytes = artifact.to_bytes().unwrap();
@@ -165,9 +198,12 @@ mod tests {
             hidden_sizes: vec![32, 16],
             task_type: TaskType::Classification,
             train: TrainConfig {
-                n_epochs: 200, batch_size: 32,
+                n_epochs: 200,
+                batch_size: 32,
                 early_stopping: Some(mlp::EarlyStoppingConfig {
-                    metric: "val_loss".into(), patience: 5, mode: "min".into(),
+                    metric: "val_loss".into(),
+                    patience: 5,
+                    mode: "min".into(),
                 }),
                 ..Default::default()
             },
@@ -185,7 +221,8 @@ mod tests {
             hidden_sizes: vec![16, 8],
             task_type: TaskType::Classification,
             train: TrainConfig {
-                n_epochs: 20, batch_size: 10,
+                n_epochs: 20,
+                batch_size: 10,
                 gradient_clip_norm: Some(1.0),
                 ..Default::default()
             },
@@ -203,7 +240,9 @@ mod tests {
         let events = vec![1; 10];
         let bins = TimeBins::fit(&times, &events, 5, "quantile");
         assert_eq!(bins.n_bins(), 5);
-        for &t in &times { assert!(bins.bin_of(t).is_some()); }
+        for &t in &times {
+            assert!(bins.bin_of(t).is_some());
+        }
     }
 
     #[test]
@@ -213,7 +252,10 @@ mod tests {
             hidden_sizes: vec![16],
             task_type: TaskType::Classification,
             train: TrainConfig {
-                optimizer: OptimizerConfig { lr: 0.01, ..Default::default() },
+                optimizer: OptimizerConfig {
+                    lr: 0.01,
+                    ..Default::default()
+                },
                 scheduler: SchedulerConfig::Cosine { max_epochs: 30 },
                 n_epochs: 30,
                 batch_size: 10,
@@ -235,9 +277,13 @@ mod tests {
             task_type: TaskType::Classification,
             train: TrainConfig {
                 optimizer: OptimizerConfig {
-                    kind: OptimizerKind::Adamw, lr: 0.01, weight_decay: 0.01, ..Default::default()
+                    kind: OptimizerKind::Adamw,
+                    lr: 0.01,
+                    weight_decay: 0.01,
+                    ..Default::default()
                 },
-                n_epochs: 20, batch_size: 10,
+                n_epochs: 20,
+                batch_size: 10,
                 ..Default::default()
             },
             ..Default::default()
@@ -254,9 +300,13 @@ mod tests {
             task_type: TaskType::Classification,
             train: TrainConfig {
                 optimizer: OptimizerConfig {
-                    kind: OptimizerKind::Sgd, lr: 0.1, momentum: 0.9, ..Default::default()
+                    kind: OptimizerKind::Sgd,
+                    lr: 0.1,
+                    momentum: 0.9,
+                    ..Default::default()
                 },
-                n_epochs: 30, batch_size: 10,
+                n_epochs: 30,
+                batch_size: 10,
                 ..Default::default()
             },
             ..Default::default()

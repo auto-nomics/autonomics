@@ -75,7 +75,10 @@ pub fn get_binary<'a>(node: &str, batch: &'a RecordBatch, col: &str) -> Result<&
         .downcast_ref::<BinaryArray>()
         .ok_or_else(|| dag_err(node, &format!("column '{col}' is not Binary")))?;
     if arr.len() != 1 {
-        return Err(dag_err(node, &format!("column '{col}' must have exactly 1 row")));
+        return Err(dag_err(
+            node,
+            &format!("column '{col}' must have exactly 1 row"),
+        ));
     }
     Ok(arr.value(0))
 }
@@ -123,10 +126,7 @@ pub async fn collect_port(
 }
 
 /// Collect every connected input port, concatenated in port-index order.
-pub async fn collect_all(
-    node: &str,
-    inputs: &[NodeInput],
-) -> Result<Vec<RecordBatch>, DagError> {
+pub async fn collect_all(node: &str, inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {
     let mut out = Vec::new();
     for input in inputs {
         let batches = input
@@ -141,10 +141,7 @@ pub async fn collect_all(
 }
 
 /// Fetch the forest-exchange batch from port 0 and rebuild the forest.
-pub async fn take_forest(
-    node: &str,
-    inputs: &[NodeInput],
-) -> Result<ForestBlob, DagError> {
+pub async fn take_forest(node: &str, inputs: &[NodeInput]) -> Result<ForestBlob, DagError> {
     let batches = collect_port(node, inputs, 0).await?;
     let first = batches
         .first()
@@ -238,7 +235,10 @@ pub fn causal_forest_schema() -> SchemaRef {
 /// Encode a `CausalForestOutput` into a single-row exchange batch.
 pub fn encode_causal_forest(out: &grf::nodes::CausalForestOutput) -> Result<RecordBatch, DagError> {
     let oob = out.oob_predictions.as_ref();
-    let forest_bytes = out.forest.serialize().map_err(|e| dag_err("grf", &format!("forest serialize: {e}")))?;
+    let forest_bytes = out
+        .forest
+        .serialize()
+        .map_err(|e| dag_err("grf", &format!("forest serialize: {e}")))?;
     let (y_orig, w_orig) = out.original_outcomes().unwrap_or((&[], &[]));
     let oob_bytes = oob.map(|o| f64vec_to_bytes(&o.values));
     RecordBatch::try_new(
@@ -247,19 +247,32 @@ pub fn encode_causal_forest(out: &grf::nodes::CausalForestOutput) -> Result<Reco
             Arc::new(BinaryArray::from(vec![Some(forest_bytes.as_slice())])),
             Arc::new(StringArray::from(vec![out.forest.kind().as_str()])),
             Arc::new(Int32Array::from(vec![out.forest.n_features() as i32])),
-            Arc::new(BinaryArray::from(vec![Some(f64vec_to_bytes(&out.y_hat).as_slice())])),
-            Arc::new(BinaryArray::from(vec![Some(f64vec_to_bytes(&out.w_hat).as_slice())])),
-            Arc::new(BinaryArray::from(vec![Some(f64vec_to_bytes(y_orig).as_slice())])),
-            Arc::new(BinaryArray::from(vec![Some(f64vec_to_bytes(w_orig).as_slice())])),
+            Arc::new(BinaryArray::from(vec![Some(
+                f64vec_to_bytes(&out.y_hat).as_slice(),
+            )])),
+            Arc::new(BinaryArray::from(vec![Some(
+                f64vec_to_bytes(&out.w_hat).as_slice(),
+            )])),
+            Arc::new(BinaryArray::from(vec![Some(
+                f64vec_to_bytes(y_orig).as_slice(),
+            )])),
+            Arc::new(BinaryArray::from(vec![Some(
+                f64vec_to_bytes(w_orig).as_slice(),
+            )])),
             Arc::new(BinaryArray::from(vec![oob_bytes.as_deref()])),
-            Arc::new(Int32Array::from(vec![oob.map(|o| o.pred_length as i32).unwrap_or(0)])),
+            Arc::new(Int32Array::from(vec![
+                oob.map(|o| o.pred_length as i32).unwrap_or(0),
+            ])),
         ],
     )
     .map_err(|e| dag_err("grf", &format!("causal batch: {e}")))
 }
 
 /// Decode a causal-forest exchange batch into a `CausalForestOutput`.
-pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::nodes::CausalForestOutput, DagError> {
+pub fn decode_causal_forest(
+    node: &str,
+    batch: &RecordBatch,
+) -> Result<grf::nodes::CausalForestOutput, DagError> {
     let forest = decode_forest(node, batch)?;
     let y_hat = bytes_to_f64vec(get_binary(node, batch, CAUSAL_Y_HAT)?)?;
     let w_hat = bytes_to_f64vec(get_binary(node, batch, CAUSAL_W_HAT)?)?;
@@ -269,7 +282,10 @@ pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::node
         Ok(b) if !b.is_empty() => {
             let pred_length = get_i32(node, batch, OOB_PRED_LENGTH)? as usize;
             let values = bytes_to_f64vec(b)?;
-            Some(OobPredictions { values, pred_length })
+            Some(OobPredictions {
+                values,
+                pred_length,
+            })
         }
         _ => None,
     };
@@ -283,19 +299,19 @@ pub fn decode_causal_forest(node: &str, batch: &RecordBatch) -> Result<grf::node
     // Validate length consistency to catch encoding bugs early.
     let n = y_orig.len();
     if w_orig.len() != n || y_hat.len() != n || w_hat.len() != n {
-        return Err(dag_err(node, &format!(
-            "causal batch length mismatch: y_orig={}, w_orig={}, y_hat={}, w_hat={}",
-            n, w_orig.len(), y_hat.len(), w_hat.len()
-        )));
+        return Err(dag_err(
+            node,
+            &format!(
+                "causal batch length mismatch: y_orig={}, w_orig={}, y_hat={}, w_hat={}",
+                n,
+                w_orig.len(),
+                y_hat.len(),
+                w_hat.len()
+            ),
+        ));
     }
     Ok(grf::nodes::CausalForestOutput::from_parts(
-        forest,
-        y_hat,
-        w_hat,
-        oob,
-        stats,
-        y_orig,
-        w_orig,
+        forest, y_hat, w_hat, oob, stats, y_orig, w_orig,
     ))
 }
 
@@ -329,7 +345,8 @@ pub fn batch_to_matrix(
     for batch in batches {
         let r = batch.num_rows();
         for (j, name) in cols.iter().enumerate() {
-            let arr = batch.column_by_name(name)
+            let arr = batch
+                .column_by_name(name)
                 .ok_or_else(|| dag_err(node, &format!("column '{name}' not found")))?;
             if let Some(f) = arr.as_any().downcast_ref::<Float64Array>() {
                 for i in 0..r {
@@ -337,7 +354,11 @@ pub fn batch_to_matrix(
                 }
             } else if let Some(iv) = arr.as_any().downcast_ref::<arrow_array::Int64Array>() {
                 for i in 0..r {
-                    buf[j * n_rows + offset + i] = if iv.is_null(i) { f64::NAN } else { iv.value(i) as f64 };
+                    buf[j * n_rows + offset + i] = if iv.is_null(i) {
+                        f64::NAN
+                    } else {
+                        iv.value(i) as f64
+                    };
                 }
             } else {
                 return Err(dag_err(node, &format!("column '{name}' is not numeric")));
@@ -345,7 +366,14 @@ pub fn batch_to_matrix(
         }
         offset += r;
     }
-    Ok((Matrix { data: buf, n_rows, n_cols: cols.len() }, cols))
+    Ok((
+        Matrix {
+            data: buf,
+            n_rows,
+            n_cols: cols.len(),
+        },
+        cols,
+    ))
 }
 
 // ── OOB predictions emission ───────────────────────────────────────────
@@ -355,7 +383,11 @@ use grf::forest::OobPredictions;
 /// Turn column-major OOB predictions (pred_length × n) into a RecordBatch with
 /// one Float64 column per prediction output.
 pub fn oob_to_batch(node: &str, oob: &OobPredictions) -> Result<RecordBatch, DagError> {
-    let n = if oob.pred_length == 0 { 0 } else { oob.values.len() / oob.pred_length };
+    let n = if oob.pred_length == 0 {
+        0
+    } else {
+        oob.values.len() / oob.pred_length
+    };
     let fields: Vec<Field> = (0..oob.pred_length)
         .map(|k| Field::new(format!("pred_{k}"), DataType::Float64, false))
         .collect();

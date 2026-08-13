@@ -178,8 +178,7 @@ pub fn concat_input(
 
     let mut arrays = Vec::with_capacity(n_cols);
     for col_idx in 0..n_cols {
-        let chunks: Vec<&dyn Array> =
-            batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
+        let chunks: Vec<&dyn Array> = batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
         let combined = arrow_select::concat::concat(&chunks).map_err(|e| DagError::NodeError {
             node_type: "ml".into(),
             msg: format!("concat input columns: {e}"),

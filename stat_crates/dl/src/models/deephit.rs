@@ -15,15 +15,13 @@ use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{self, Backend as BurnBackend, B};
-use crate::configs::{
-    Activation, EpochLog, LayerWeights, SchedulerConfig, TrainConfig,
-};
+use crate::backend::{self, B, Backend as BurnBackend};
 use crate::configs::EarlyStoppingConfig;
+use crate::configs::{Activation, EpochLog, LayerWeights, SchedulerConfig, TrainConfig};
 use crate::data;
 use crate::models::burn_net::{self, BurnMlp};
-use crate::scheduler::Scheduler;
 use crate::scaler::StandardScaler;
+use crate::scheduler::Scheduler;
 use crate::survival::TimeBins;
 use crate::tensor::Tensor;
 
@@ -81,7 +79,10 @@ pub struct DeepHitModel {
 
 impl DeepHitModel {
     pub fn n_params(&self) -> usize {
-        self.shared_layers.iter().map(|l| l.n_params()).sum::<usize>()
+        self.shared_layers
+            .iter()
+            .map(|l| l.n_params())
+            .sum::<usize>()
             + self.head_layers.iter().map(|l| l.n_params()).sum::<usize>()
     }
 }
@@ -161,9 +162,7 @@ pub fn train_deephit(
                     continue;
                 }
                 if let Some(bin) = time_bins.bin_of(times[global_i]) {
-                    let prob = probs
-                        .clone()
-                        .slice([local_i..local_i + 1, bin..bin + 1]);
+                    let prob = probs.clone().slice([local_i..local_i + 1, bin..bin + 1]);
                     let log_p = prob.clamp(1e-8_f32, 1.0).log();
                     nll = nll.add(log_p.neg().squeeze(1));
                 }

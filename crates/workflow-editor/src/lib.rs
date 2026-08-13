@@ -31,12 +31,12 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
-pub mod error;
-pub mod model;
-pub mod store;
-pub mod registry;
 pub mod api;
+pub mod error;
 pub mod executor;
+pub mod model;
+pub mod registry;
+pub mod store;
 
 #[cfg(feature = "tui")]
 pub mod tui;
@@ -45,12 +45,12 @@ pub use error::{Result as WfResult, WorkflowError};
 
 pub use api::{WorkflowClient, WorkflowCmd, WorkflowManager};
 pub use executor::{
-    NodeCtx, NodeExecutor, NodeReporter, PortInputs, PortOutputs, Scheduler, SopContext,
-    SopGuard, SubgraphNode, ValidationReport, WorkflowResult,
+    NodeCtx, NodeExecutor, NodeReporter, PortInputs, PortOutputs, Scheduler, SopContext, SopGuard,
+    SubgraphNode, ValidationReport, WorkflowResult,
 };
 pub use model::{
-    EdgeEntry, NodeEntry, NodeKindInfo, PortSpec, Skill, SkillInfo, SnapshotInfo, Tool,
-    Viewport, WorkflowManifest, CURRENT_SCHEMA_VERSION,
+    CURRENT_SCHEMA_VERSION, EdgeEntry, NodeEntry, NodeKindInfo, PortSpec, Skill, SkillInfo,
+    SnapshotInfo, Tool, Viewport, WorkflowManifest,
 };
 pub use registry::{NodeFactory, NodeRegistry, SkillFactory, SkillRegistry};
 pub use store::{NodeKindRepo, SkillRepo, WorkflowRepo, WorkflowSummary};

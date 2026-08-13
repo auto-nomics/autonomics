@@ -7,15 +7,13 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
-use crate::forest::{
-    ForestBlob, ForestStats, MultiCausalSpec, MultiCausalTrainer, OobPredictions,
-};
+use crate::forest::{ForestBlob, ForestStats, MultiCausalSpec, MultiCausalTrainer, OobPredictions};
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -43,7 +41,9 @@ pub struct MultiArmCausalForestSpec {
     pub options: NodeTrainOptions,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone)]
 pub struct MultiArmCausalForestOutput {
@@ -55,7 +55,9 @@ pub struct MultiArmCausalForestOutput {
 pub struct MultiArmCausalForestFactory;
 
 impl MultiArmCausalForestFactory {
-    pub fn kind() -> &'static str { "grf_multi_arm_causal_forest" }
+    pub fn kind() -> &'static str {
+        "grf_multi_arm_causal_forest"
+    }
 }
 
 impl MultiArmCausalForestSpec {
@@ -68,15 +70,22 @@ impl MultiArmCausalForestSpec {
         let mut reserved: Vec<&String> = self.y_column_names.iter().collect();
         reserved.push(&self.w_column_name);
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !reserved.iter().any(|r| *r == f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !reserved.iter().any(|r| *r == f.name())
+                        && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
         let x_matrix = arrow_batches_to_matrix(batches, &x_cols, n_rows)?;
-        let y_columns: Vec<Vec<f64>> = self.y_column_names.iter()
+        let y_columns: Vec<Vec<f64>> = self
+            .y_column_names
+            .iter()
             .map(|name| arrow_batches_to_f64(batches, name, n_rows))
             .collect::<Result<Vec<_>>>()?;
         let w = arrow_batches_to_f64(batches, &self.w_column_name, n_rows)?;
@@ -87,7 +96,9 @@ impl MultiArmCausalForestSpec {
             levels.dedup();
             levels.len()
         };
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
@@ -103,7 +114,11 @@ impl MultiArmCausalForestSpec {
         })?;
         let oob = trained.oob_predictions();
         let stats = ForestStats::from(&trained);
-        Ok(MultiArmCausalForestOutput { forest: trained, oob_predictions: oob, stats })
+        Ok(MultiArmCausalForestOutput {
+            forest: trained,
+            oob_predictions: oob,
+            stats,
+        })
     }
 }
 
@@ -113,7 +128,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(MultiArmCausalForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(MultiArmCausalForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

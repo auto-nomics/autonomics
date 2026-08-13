@@ -13,14 +13,11 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 use super::common;
-use super::train_nodes::{build_training_log_batch, EarlyStoppingSpec};
+use super::train_nodes::{EarlyStoppingSpec, build_training_log_batch};
 use dl::{
-    Architecture, ArtifactTaskType, DLModelArtifact, TrainingMeta,
-    Pooling, PositionalEncoding, TransformerConfig,
-    OptimizerConfig, OptimizerKind, SchedulerConfig,
-    TaskType, TrainConfig,
-    train_transformer, predict_transformer,
-    Tensor,
+    Architecture, ArtifactTaskType, DLModelArtifact, OptimizerConfig, OptimizerKind, Pooling,
+    PositionalEncoding, SchedulerConfig, TaskType, Tensor, TrainConfig, TrainingMeta,
+    TransformerConfig, predict_transformer, train_transformer,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -67,13 +64,18 @@ pub struct TransformerTrainSpec {
     pub standardize_features: bool,
 }
 
-use super::train_nodes::{TaskTypeSpec, d_d_model, d_n_heads, d_n_layers, d_d_ff,
-    d_dropout, d_pooling, d_pos_enc, d_opt, d_lr, d_epochs, d_batch, d_seed, d_std};
+use super::train_nodes::{
+    TaskTypeSpec, d_batch, d_d_ff, d_d_model, d_dropout, d_epochs, d_lr, d_n_heads, d_n_layers,
+    d_opt, d_pooling, d_pos_enc, d_seed, d_std,
+};
 
 impl TransformerTrainSpec {
     fn to_config(&self) -> Result<TransformerConfig, DagError> {
         let opt_kind = OptimizerKind::from_str(&self.optimizer).ok_or_else(|| {
-            common::err("dl_transformer_train", format!("unknown optimizer: {}", self.optimizer))
+            common::err(
+                "dl_transformer_train",
+                format!("unknown optimizer: {}", self.optimizer),
+            )
         })?;
         let pooling = match self.pooling.as_str() {
             "cls" => Pooling::Cls,
@@ -111,10 +113,12 @@ impl TransformerTrainSpec {
                 n_epochs: self.n_epochs,
                 batch_size: self.batch_size,
                 gradient_clip_norm: None,
-                early_stopping: self.early_stopping.as_ref().map(|es| dl::mlp::EarlyStoppingConfig {
-                    metric: es.metric.clone(),
-                    patience: es.patience,
-                    mode: es.mode.clone(),
+                early_stopping: self.early_stopping.as_ref().map(|es| {
+                    dl::mlp::EarlyStoppingConfig {
+                        metric: es.metric.clone(),
+                        patience: es.patience,
+                        mode: es.mode.clone(),
+                    }
                 }),
                 standardize: self.standardize_features,
                 seed: self.seed,
@@ -125,14 +129,20 @@ impl TransformerTrainSpec {
 
 pub struct TransformerTrainFactory;
 impl NodeFactory for TransformerTrainFactory {
-    fn kind(&self) -> &'static str { "dl_transformer_train" }
-    fn desc(&self) -> &'static str { "Transformer encoder for tabular data." }
+    fn kind(&self) -> &'static str {
+        "dl_transformer_train"
+    }
+    fn desc(&self) -> &'static str {
+        "Transformer encoder for tabular data."
+    }
     fn doc(&self) -> &'static str {
         "dl_transformer_train: trains a Transformer encoder model for tabular classification/regression. \
         Each feature is projected to a d_model-dimensional token, multi-head self-attention captures \
         feature interactions. Outputs predictions (port 0), DLModelArtifact (port 1), training log (port 2)."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(TransformerTrainSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(TransformerTrainSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -147,7 +157,10 @@ impl NodeFactory for TransformerTrainFactory {
         _ctx: NodeCtx,
     ) -> Result<Box<dyn DagNode>, dag_core::registry::error::Error> {
         let s: TransformerTrainSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(TransformerTrainNode { spec: s, meta: self.ports() }))
+        Ok(Box::new(TransformerTrainNode {
+            spec: s,
+            meta: self.ports(),
+        }))
     }
 }
 
@@ -159,10 +172,18 @@ struct TransformerTrainNode {
 
 #[async_trait]
 impl DagNode for TransformerTrainNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "dl_transformer_train" }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "dl_transformer_train"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -190,8 +211,13 @@ impl DagNode for TransformerTrainNode {
         };
 
         let config = self.spec.to_config()?;
-        let result = train_transformer(&x, &y_tensor, val.as_ref().map(|(xv, yv)| (xv, yv)), &config)
-            .map_err(|e| common::err("dl_transformer_train", e))?;
+        let result = train_transformer(
+            &x,
+            &y_tensor,
+            val.as_ref().map(|(xv, yv)| (xv, yv)),
+            &config,
+        )
+        .map_err(|e| common::err("dl_transformer_train", e))?;
 
         // Port 0: training predictions.
         let (_schema, mut fields, mut arrays) = common::concat_input(&train_batches)?;
@@ -199,7 +225,11 @@ impl DagNode for TransformerTrainNode {
         match config.task_type {
             TaskType::Classification => {
                 let probs: Vec<f64> = (0..n_preds).map(|i| result.predictions.at(i, 0)).collect();
-                fields.push(Arc::new(Field::new("pred_probability", DataType::Float64, false)));
+                fields.push(Arc::new(Field::new(
+                    "pred_probability",
+                    DataType::Float64,
+                    false,
+                )));
                 arrays.push(Arc::new(Float64Array::from(probs)));
             }
             TaskType::Regression => {
@@ -243,19 +273,28 @@ impl DagNode for TransformerTrainNode {
                 Field::new("architecture", DataType::Utf8, false),
             ])),
             vec![
-                Arc::new(arrow_array::BinaryArray::from(vec![artifact_bytes.as_slice()])),
+                Arc::new(arrow_array::BinaryArray::from(vec![
+                    artifact_bytes.as_slice(),
+                ])),
                 Arc::new(arrow_array::StringArray::from(vec!["transformer"])),
             ],
-        ).map_err(|e| common::err("dl_transformer_train", format!("build artifact batch: {e}")))?;
+        )
+        .map_err(|e| common::err("dl_transformer_train", format!("build artifact batch: {e}")))?;
 
         // Port 2: training log.
         let log_batch = build_training_log_batch(&result.training_log)?;
 
-        let df0 = ctx.session().read_batch(pred_batch)
+        let df0 = ctx
+            .session()
+            .read_batch(pred_batch)
             .map_err(|e| common::err("dl_transformer_train", format!("read_batch(0): {e}")))?;
-        let df1 = ctx.session().read_batch(artifact_batch)
+        let df1 = ctx
+            .session()
+            .read_batch(artifact_batch)
             .map_err(|e| common::err("dl_transformer_train", format!("read_batch(1): {e}")))?;
-        let df2 = ctx.session().read_batch(log_batch)
+        let df2 = ctx
+            .session()
+            .read_batch(log_batch)
             .map_err(|e| common::err("dl_transformer_train", format!("read_batch(2): {e}")))?;
 
         let mut res = PortOutputs::new();

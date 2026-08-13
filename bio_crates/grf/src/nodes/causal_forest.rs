@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Matrix;
@@ -23,7 +23,7 @@ use crate::forest::{
     CausalSpec, CausalTrainer, ForestBlob, ForestStats, RegressionSpec, RegressionTrainer,
 };
 use crate::nodes::regression_forest::{
-    arrow_batches_to_f64, arrow_batches_to_matrix, NodeTrainOptions,
+    NodeTrainOptions, arrow_batches_to_f64, arrow_batches_to_matrix,
 };
 use crate::{GrfError, Result};
 use grf_sys as sys;
@@ -55,7 +55,9 @@ pub struct CausalForestSpec {
     pub options: NodeTrainOptions,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone)]
 pub struct CausalForestOutput {
@@ -121,7 +123,9 @@ impl CausalForestOutput {
 pub struct CausalForestFactory;
 
 impl CausalForestFactory {
-    pub fn kind() -> &'static str { "grf_causal_forest" }
+    pub fn kind() -> &'static str {
+        "grf_causal_forest"
+    }
 }
 
 impl CausalForestSpec {
@@ -133,17 +137,23 @@ impl CausalForestSpec {
         let schema = batches[0].schema();
         let reserved = [&self.y_column_name, &self.w_column_name];
         let x_cols = if self.x_column_names.is_empty() {
-            schema.fields().iter()
-                .filter(|f| !reserved.contains(&f.name())
-                    && matches!(f.data_type(), DataType::Float64))
-                .map(|f| f.name().clone()).collect()
+            schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !reserved.contains(&f.name()) && matches!(f.data_type(), DataType::Float64)
+                })
+                .map(|f| f.name().clone())
+                .collect()
         } else {
             self.x_column_names.clone()
         };
         let x_matrix = arrow_batches_to_matrix(batches, &x_cols, n_rows)?;
         let y = arrow_batches_to_f64(batches, &self.y_column_name, n_rows)?;
         let w = arrow_batches_to_f64(batches, &self.w_column_name, n_rows)?;
-        let weights = self.sample_weights_column.as_ref()
+        let weights = self
+            .sample_weights_column
+            .as_ref()
             .map(|c| arrow_batches_to_f64(batches, c, n_rows))
             .transpose()?;
 
@@ -162,12 +172,16 @@ impl CausalForestSpec {
                     // Only forward weights if all forests should weight them.
                 }
                 let y_forest = RegressionTrainer::fit(RegressionSpec {
-                    x: x_matrix.clone(), y: y.clone(),
-                    sample_weights: weights.clone(), options: nuisance_opts.clone(),
+                    x: x_matrix.clone(),
+                    y: y.clone(),
+                    sample_weights: weights.clone(),
+                    options: nuisance_opts.clone(),
                 })?;
                 let w_forest = RegressionTrainer::fit(RegressionSpec {
-                    x: x_matrix.clone(), y: w.clone(),
-                    sample_weights: weights.clone(), options: nuisance_opts,
+                    x: x_matrix.clone(),
+                    y: w.clone(),
+                    sample_weights: weights.clone(),
+                    options: nuisance_opts,
                 })?;
                 // Re-collect OOB predictions: the forests' OOB buffers are
                 // already populated by grf core when compute_oob_predictions
@@ -178,13 +192,17 @@ impl CausalForestSpec {
                 } else {
                     // Re-predict OOB.
                     use crate::forest::PredictRequest;
-                    y_forest.predict(PredictRequest::oob(x_matrix.clone(), x_cols.len(), Some(1)))?.values
+                    y_forest
+                        .predict(PredictRequest::oob(x_matrix.clone(), x_cols.len(), Some(1)))?
+                        .values
                 };
                 let w_hat = if let Some(oob) = w_forest.oob_predictions() {
                     oob.values
                 } else {
                     use crate::forest::PredictRequest;
-                    w_forest.predict(PredictRequest::oob(x_matrix.clone(), x_cols.len(), Some(1)))?.values
+                    w_forest
+                        .predict(PredictRequest::oob(x_matrix.clone(), x_cols.len(), Some(1)))?
+                        .values
                 };
                 (y_hat, w_hat)
             }
@@ -225,7 +243,9 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(CausalForestSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(CausalForestSpec)
+}
 
 #[allow(dead_code)]
 fn _sys_marker(_: sys::TrainOptions) {}

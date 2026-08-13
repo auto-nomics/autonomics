@@ -45,7 +45,8 @@ fn read_covstruc_from_batch(
     let mut s_vec = Vec::with_capacity(z);
     for i in 0..z {
         let col_name = format!("s_{i}");
-        let arr = batch.column_by_name(&col_name)
+        let arr = batch
+            .column_by_name(&col_name)
             .ok_or_else(|| DagError::NodeError {
                 node_type: "gsem".into(),
                 msg: format!("missing column '{col_name}'"),
@@ -63,7 +64,8 @@ fn read_covstruc_from_batch(
     let mut v_vec = Vec::with_capacity(z * z);
     for i in 0..(z * z) {
         let col_name = format!("v_{i}");
-        let arr = batch.column_by_name(&col_name)
+        let arr = batch
+            .column_by_name(&col_name)
             .ok_or_else(|| DagError::NodeError {
                 node_type: "gsem".into(),
                 msg: format!("missing column '{col_name}'"),
@@ -78,7 +80,8 @@ fn read_covstruc_from_batch(
     }
     let v = Mat::from_fn(z, z, |i, j| v_vec[i * z + j]);
 
-    let m = batch.column_by_name("m")
+    let m = batch
+        .column_by_name("m")
         .and_then(|a| a.as_any().downcast_ref::<Float64Array>())
         .map(|a| a.value(0))
         .unwrap_or(100_000.0);
@@ -139,7 +142,8 @@ fn build_results_batch(
             Arc::new(Float64Array::from(chisq)),
             Arc::new(Float64Array::from(df_vals)),
         ],
-    ).map_err(|e| DagError::NodeError {
+    )
+    .map_err(|e| DagError::NodeError {
         node_type: "gsem".into(),
         msg: format!("arrow error: {e}"),
     })?;
@@ -254,10 +258,7 @@ impl NodeFactory for GsemMungeNodeFactory {
         let out = ctx.output_var.to_string();
         let input = input_0(ctx).to_string();
         let tmp = ctx.fresh_var("munged_file");
-        let n_flag = cfg
-            .n
-            .map(|v| format!(" --N {v}"))
-            .unwrap_or_default();
+        let n_flag = cfg.n.map(|v| format!(" --N {v}")).unwrap_or_default();
         let trait_flag = cfg
             .trait_name
             .as_deref()
@@ -311,11 +312,16 @@ impl DagNode for GsemMungeNode {
             msg: "missing input DataFrame".into(),
         })?;
 
-        let batches: Vec<RecordBatch> = input.data.clone().collect().await
-            .map_err(|e| DagError::NodeError {
-                node_type: GSEM_MUNGE_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: GSEM_MUNGE_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         if batches.is_empty() {
             return Err(DagError::NodeError {
@@ -341,7 +347,9 @@ impl DagNode for GsemMungeNode {
             msg: format!("arrow error: {e}"),
         })?;
 
-        let df = node_ctx.session().read_batch(batch)
+        let df = node_ctx
+            .session()
+            .read_batch(batch)
             .map_err(|e| DagError::NodeError {
                 node_type: GSEM_MUNGE_NODE_KIND.into(),
                 msg: format!("read_batch: {e}"),
@@ -376,7 +384,12 @@ fn munge_sumstats(
 ) -> Result<MungedArrays, DagError> {
     // ── 1. Resolve column names from the first batch ──
     let first = &batches[0];
-    let header: Vec<String> = first.schema().fields().iter().map(|f| f.name().clone()).collect();
+    let header: Vec<String> = first
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
     let mapping = genomic_sem::munge::map_column_names(&header);
 
     // mapping: original column name → canonical name.
@@ -424,9 +437,7 @@ fn munge_sumstats(
         let num_rows = batch.num_rows();
 
         // Helper: find column index by resolved canonical name.
-        let find_col = |name: &str| -> Option<usize> {
-            schema.index_of(name).ok()
-        };
+        let find_col = |name: &str| -> Option<usize> { schema.index_of(name).ok() };
 
         // SNP column is mandatory.
         let snp_idx = find_col(snp_col).ok_or_else(|| DagError::NodeError {
@@ -446,7 +457,8 @@ fn munge_sumstats(
                 node_type: GSEM_MUNGE_NODE_KIND.into(),
                 msg: format!("Z column '{zc}' not found"),
             })?;
-            let z_arr = batch.column(zi)
+            let z_arr = batch
+                .column(zi)
                 .as_any()
                 .downcast_ref::<Float64Array>()
                 .ok_or_else(|| DagError::NodeError {
@@ -466,14 +478,16 @@ fn munge_sumstats(
                 node_type: GSEM_MUNGE_NODE_KIND.into(),
                 msg: format!("P column '{pc}' not found"),
             })?;
-            let eff_arr = batch.column(ei)
+            let eff_arr = batch
+                .column(ei)
                 .as_any()
                 .downcast_ref::<Float64Array>()
                 .ok_or_else(|| DagError::NodeError {
                     node_type: GSEM_MUNGE_NODE_KIND.into(),
                     msg: "effect column is not Float64".into(),
                 })?;
-            let p_arr = batch.column(pi)
+            let p_arr = batch
+                .column(pi)
                 .as_any()
                 .downcast_ref::<Float64Array>()
                 .ok_or_else(|| DagError::NodeError {
@@ -505,7 +519,8 @@ fn munge_sumstats(
                 node_type: GSEM_MUNGE_NODE_KIND.into(),
                 msg: format!("N column '{nc}' not found"),
             })?;
-            let n_arr = batch.column(ni)
+            let n_arr = batch
+                .column(ni)
                 .as_any()
                 .downcast_ref::<Float64Array>()
                 .ok_or_else(|| DagError::NodeError {
@@ -548,9 +563,7 @@ fn munge_sumstats(
         let info_pass: Vec<bool> = if let Some(ic) = info_col.as_deref() {
             let idx = find_col(ic).unwrap_or(usize::MAX);
             if idx != usize::MAX {
-                let arr = batch.column(idx)
-                    .as_any()
-                    .downcast_ref::<Float64Array>();
+                let arr = batch.column(idx).as_any().downcast_ref::<Float64Array>();
                 (0..num_rows)
                     .map(|i| {
                         arr.and_then(|a| Some(a.value(i)))
@@ -569,9 +582,7 @@ fn munge_sumstats(
         let maf_pass: Vec<bool> = if let Some(mc) = maf_col.as_deref() {
             let idx = find_col(mc).unwrap_or(usize::MAX);
             if idx != usize::MAX {
-                let arr = batch.column(idx)
-                    .as_any()
-                    .downcast_ref::<Float64Array>();
+                let arr = batch.column(idx).as_any().downcast_ref::<Float64Array>();
                 (0..num_rows)
                     .map(|i| {
                         arr.and_then(|a| Some(a.value(i)))
@@ -933,11 +944,12 @@ async fn discover_traits(
 
     let mut traits = Vec::new();
     for batch in &batches {
-        let vals = dag_core::node::string_opt_values(batch.column(0).as_ref())
-            .ok_or(DagError::NodeError {
+        let vals = dag_core::node::string_opt_values(batch.column(0).as_ref()).ok_or(
+            DagError::NodeError {
                 node_type: GSEM_LDSC_NODE_KIND.into(),
                 msg: "trait column is not a string type".into(),
-            })?;
+            },
+        )?;
         for v in vals {
             traits.push(v.unwrap_or_default());
         }
@@ -1065,7 +1077,8 @@ fn extract_arrays(
             // All z columns must be non-null (inner join guarantees this).
             let mut all_valid = true;
             for (i, &zi) in z_idx.iter().enumerate() {
-                let arr = batch.column(zi)
+                let arr = batch
+                    .column(zi)
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .unwrap();
@@ -1079,7 +1092,8 @@ fn extract_arrays(
                 continue;
             }
             for (i, &ni) in n_idx.iter().enumerate() {
-                let arr = batch.column(ni)
+                let arr = batch
+                    .column(ni)
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .unwrap();
@@ -1098,7 +1112,13 @@ fn extract_arrays(
         });
     }
 
-    Ok(LdscArrays { z, n, l2, wld, n_snps })
+    Ok(LdscArrays {
+        z,
+        n,
+        l2,
+        wld,
+        n_snps,
+    })
 }
 
 /// Run the multivariate LDSC regression: for each (i,j) pair with i ≤ j,
@@ -1315,11 +1335,16 @@ impl DagNode for GsemUsermodelNode {
             node_type: GSEM_USERMODEL_NODE_KIND.into(),
             msg: "missing input".into(),
         })?;
-        let batches: Vec<RecordBatch> = input.data.clone().collect().await
-            .map_err(|e| DagError::NodeError {
-                node_type: GSEM_USERMODEL_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: GSEM_USERMODEL_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches[0].num_rows() == 0 {
             return Err(DagError::NodeError {
                 node_type: GSEM_USERMODEL_NODE_KIND.into(),
@@ -1342,14 +1367,17 @@ impl DagNode for GsemUsermodelNode {
             ..Default::default()
         };
 
-        let result = genomic_sem::usermodel::usermodel(&covstruc, &user_config)
-            .map_err(|e| DagError::NodeError {
+        let result = genomic_sem::usermodel::usermodel(&covstruc, &user_config).map_err(|e| {
+            DagError::NodeError {
                 node_type: GSEM_USERMODEL_NODE_KIND.into(),
                 msg: e.to_string(),
-            })?;
+            }
+        })?;
 
         let output_batch = build_results_batch(&result.results, &result.modelfit)?;
-        let df = node_ctx.session().read_batch(output_batch)
+        let df = node_ctx
+            .session()
+            .read_batch(output_batch)
             .map_err(|e| DagError::NodeError {
                 node_type: GSEM_USERMODEL_NODE_KIND.into(),
                 msg: format!("read_batch: {e}"),
@@ -1456,11 +1484,16 @@ impl DagNode for GsemCommonfactorNode {
             node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
             msg: "missing input".into(),
         })?;
-        let batches: Vec<RecordBatch> = input.data.clone().collect().await
-            .map_err(|e| DagError::NodeError {
-                node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches[0].num_rows() == 0 {
             return Err(DagError::NodeError {
                 node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
@@ -1477,14 +1510,17 @@ impl DagNode for GsemCommonfactorNode {
         };
 
         let config = genomic_sem::commonfactor::CommonFactorConfig { estimation };
-        let result = genomic_sem::commonfactor::commonfactor(&covstruc, &config)
-            .map_err(|e| DagError::NodeError {
+        let result = genomic_sem::commonfactor::commonfactor(&covstruc, &config).map_err(|e| {
+            DagError::NodeError {
                 node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
                 msg: e.to_string(),
-            })?;
+            }
+        })?;
 
         let output_batch = build_results_batch(&result.results, &result.modelfit)?;
-        let df = node_ctx.session().read_batch(output_batch)
+        let df = node_ctx
+            .session()
+            .read_batch(output_batch)
             .map_err(|e| DagError::NodeError {
                 node_type: GSEM_COMMONFACTOR_NODE_KIND.into(),
                 msg: format!("read_batch: {e}"),
@@ -1548,9 +1584,7 @@ impl NodeFactory for GsemRgmodelNodeFactory {
     }
 
     fn ports(&self) -> NodePorts {
-        NodePorts::new()
-            .add_input_port(None)
-            .add_output_port(None) // schema depends on n_traits at runtime
+        NodePorts::new().add_input_port(None).add_output_port(None) // schema depends on n_traits at runtime
     }
 
     fn build(
@@ -1600,11 +1634,16 @@ impl DagNode for GsemRgmodelNode {
             node_type: GSEM_RGMODEL_NODE_KIND.into(),
             msg: "missing input".into(),
         })?;
-        let batches: Vec<RecordBatch> = input.data.clone().collect().await
-            .map_err(|e| DagError::NodeError {
-                node_type: GSEM_RGMODEL_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: GSEM_RGMODEL_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches[0].num_rows() == 0 {
             return Err(DagError::NodeError {
                 node_type: GSEM_RGMODEL_NODE_KIND.into(),
@@ -1614,8 +1653,8 @@ impl DagNode for GsemRgmodelNode {
 
         let batch = &batches[0];
         let covstruc = read_covstruc_from_batch(batch, self.config.n_traits)?;
-        let result = genomic_sem::rgmodel::rgmodel(&covstruc, false)
-            .map_err(|e| DagError::NodeError {
+        let result =
+            genomic_sem::rgmodel::rgmodel(&covstruc, false).map_err(|e| DagError::NodeError {
                 node_type: GSEM_RGMODEL_NODE_KIND.into(),
                 msg: e.to_string(),
             })?;
@@ -1632,15 +1671,17 @@ impl DagNode for GsemRgmodelNode {
             columns.push(Arc::new(Float64Array::from(vec![result.v_r[(i, i)]])));
         }
 
-        let output_batch = RecordBatch::try_new(
-            rgmodel_output_schema(k),
-            columns,
-        ).map_err(|e| DagError::NodeError {
-            node_type: GSEM_RGMODEL_NODE_KIND.into(),
-            msg: format!("arrow: {e}"),
-        })?;
+        let output_batch =
+            RecordBatch::try_new(rgmodel_output_schema(k), columns).map_err(|e| {
+                DagError::NodeError {
+                    node_type: GSEM_RGMODEL_NODE_KIND.into(),
+                    msg: format!("arrow: {e}"),
+                }
+            })?;
 
-        let df = node_ctx.session().read_batch(output_batch)
+        let df = node_ctx
+            .session()
+            .read_batch(output_batch)
             .map_err(|e| DagError::NodeError {
                 node_type: GSEM_RGMODEL_NODE_KIND.into(),
                 msg: format!("read_batch: {e}"),
@@ -1930,11 +1971,11 @@ mod tests {
         let result = run_multivariate_ldsc(
             &arrays,
             2,
-            1000.0, // M
-            10,     // few blocks for speed
+            1000.0,        // M
+            10,            // few blocks for speed
             &[None, None], // continuous traits
             &[None, None],
-            false,         // no standardization
+            false, // no standardization
             &["t1".into(), "t2".into()],
         )
         .unwrap();

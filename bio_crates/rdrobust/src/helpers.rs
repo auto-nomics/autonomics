@@ -221,7 +221,9 @@ pub fn lu_inverse(m: &Mat<f64>) -> Mat<f64> {
 
 /// SPD matrix inverse via Cholesky. Returns None if not SPD.
 pub fn spd_inverse(m: &Mat<f64>) -> Option<Mat<f64>> {
-    Llt::new(m.as_ref(), Side::Lower).ok().map(|llt| llt.inverse())
+    Llt::new(m.as_ref(), Side::Lower)
+        .ok()
+        .map(|llt| llt.inverse())
 }
 
 /// Symmetric eigendecomposition. Returns (eigenvalues_ascending, eigenvectors).

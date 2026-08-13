@@ -415,9 +415,7 @@ fn default_init_b(data: &LongData, spec: &ModelSpec) -> Vec<f64> {
     let mut b = vec![0.0_f64; layout.npm];
 
     // --- OLS starting values for fixed effects ---
-    let fixed_cols: Vec<usize> = (0..layout.nv)
-        .filter(|&k| spec.idg[k] != 0)
-        .collect();
+    let fixed_cols: Vec<usize> = (0..layout.nv).filter(|&k| spec.idg[k] != 0).collect();
     let p = fixed_cols.len();
     let betas = if p > 0 {
         compute_ols(data, &fixed_cols, layout.nv)
@@ -541,8 +539,8 @@ fn compute_ols(data: &LongData, fixed_cols: &[usize], nv: usize) -> Vec<f64> {
             let y_mean = data.y.iter().sum::<f64>() / n.max(1) as f64;
             (0..p)
                 .map(|j| {
-                    let is_intercept = (0..n)
-                        .all(|r| (data.x[r * nv + fixed_cols[j]] - 1.0).abs() < 1e-8);
+                    let is_intercept =
+                        (0..n).all(|r| (data.x[r * nv + fixed_cols[j]] - 1.0).abs() < 1e-8);
                     if is_intercept { y_mean } else { 0.0 }
                 })
                 .collect()
@@ -2340,7 +2338,9 @@ mod cross_validation {
             iceberg_catalog: None,
             datalake: Arc::new(Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
             global_sem: None,
         }
     }
@@ -2581,9 +2581,7 @@ mod cross_validation {
 
     /// Helper: run the hlme node with default init (no explicit init_b) and
     /// return (loglik, niter, conv, ng, posterior_rows).
-    async fn run_full_opt(
-        cfg: HlmeConfig,
-    ) -> (f64, i32, String, usize, usize) {
+    async fn run_full_opt(cfg: HlmeConfig) -> (f64, i32, String, usize, usize) {
         let batch = load_data_batch();
         let df = SessionContext::new().read_batch(batch).unwrap();
         let input = NodeInput { port: 0, data: df };
@@ -2868,8 +2866,6 @@ mod cross_validation {
             rel < 1e-6,
             "Float64 ID loglik mismatch: Rust={loglik:.8}, R={golden_ll:.8}, rel={rel:.3e}"
         );
-        eprintln!(
-            "PASS float64_id_same_as_int64: ns={ns}, loglik={loglik:.6} R={golden_ll:.6}"
-        );
+        eprintln!("PASS float64_id_same_as_int64: ns={ns}, loglik={loglik:.6} R={golden_ll:.6}");
     }
 }

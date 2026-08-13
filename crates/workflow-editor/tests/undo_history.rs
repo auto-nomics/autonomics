@@ -7,9 +7,9 @@
 //! - Saving twice produces two snapshots in the history.
 //! - `client.checkout` restores a prior snapshot.
 
-use workflow_editor::model::{EdgeEntry, NodeEntry, PortSpec, WorkflowManifest};
-use workflow_editor::WorkflowManager;
 use uuid::Uuid;
+use workflow_editor::WorkflowManager;
+use workflow_editor::model::{EdgeEntry, NodeEntry, PortSpec, WorkflowManifest};
 
 fn empty_manifest() -> WorkflowManifest {
     WorkflowManifest::new("test")
@@ -78,10 +78,7 @@ async fn checkout_restores_prior_snapshot_in_storage() {
         outputs: vec![PortSpec::new("out", "out")],
         params: serde_json::json!({}),
     });
-    client
-        .save_workflow(m1, "v1")
-        .await
-        .unwrap();
+    client.save_workflow(m1, "v1").await.unwrap();
 
     // v2 — append a second node + an edge
     let mut m2 = client.load_workflow(wf_id).await.unwrap();
@@ -102,10 +99,7 @@ async fn checkout_restores_prior_snapshot_in_storage() {
         target: id2,
         target_handle: "in".into(),
     });
-    client
-        .save_workflow(m2, "v2")
-        .await
-        .unwrap();
+    client.save_workflow(m2, "v2").await.unwrap();
 
     // History has at least 2 snapshots (create_workflow adds an empty one).
     let history = client.history(wf_id).await.unwrap();
@@ -129,8 +123,16 @@ async fn checkout_restores_prior_snapshot_in_storage() {
     // Checkout to v1 — manifest should drop v2-node and the edge.
     client.checkout(wf_id, v1_snapshot.id).await.unwrap();
     let restored = client.load_workflow(wf_id).await.unwrap();
-    assert_eq!(restored.nodes.len(), 1, "v2-node should be gone after checkout");
-    assert_eq!(restored.edges.len(), 0, "v2 edge should be gone after checkout");
+    assert_eq!(
+        restored.nodes.len(),
+        1,
+        "v2-node should be gone after checkout"
+    );
+    assert_eq!(
+        restored.edges.len(),
+        0,
+        "v2 edge should be gone after checkout"
+    );
 
     // Checkout back to v2 — manifest should have both.
     client.checkout(wf_id, v2_snapshot.id).await.unwrap();

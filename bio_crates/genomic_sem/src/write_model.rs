@@ -12,7 +12,7 @@
 /// ...
 /// ```
 pub fn write_model(
-    loadings: &[Vec<f64>],  // n_vars × n_factors
+    loadings: &[Vec<f64>], // n_vars × n_factors
     var_names: &[String],
     cutoff: f64,
     fix_resid: bool,
@@ -34,7 +34,10 @@ pub fn write_model(
         if must_load {
             // Ensure each variable loads on at least one factor
             for i in 0..n_vars {
-                let max_val = adjusted_loadings[i].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let max_val = adjusted_loadings[i]
+                    .iter()
+                    .cloned()
+                    .fold(f64::NEG_INFINITY, f64::max);
                 for f in 0..n_factors {
                     if (adjusted_loadings[i][f] - max_val).abs() < 1e-10 {
                         adjusted_loadings[i][f] = cutoff + 0.01;
@@ -94,7 +97,12 @@ mod tests {
 
     #[test]
     fn test_write_model_two_factor() {
-        let loadings = vec![vec![0.8, 0.1], vec![0.7, 0.2], vec![0.1, 0.8], vec![0.2, 0.7]];
+        let loadings = vec![
+            vec![0.8, 0.1],
+            vec![0.7, 0.2],
+            vec![0.1, 0.8],
+            vec![0.2, 0.7],
+        ];
         let names = vec!["V1".into(), "V2".into(), "V3".into(), "V4".into()];
         let model = write_model(&loadings, &names, 0.3, true, false, false, false);
         assert!(model.contains("F1 =~ V1 + V2"));

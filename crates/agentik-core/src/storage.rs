@@ -262,11 +262,7 @@ impl AgentProfile {
     ///
     /// The child inherits all resolved capabilities from the parent. Any
     /// field in `overrides` that is `Some` replaces the inherited value.
-    pub fn derive_child(
-        &self,
-        segment: &str,
-        overrides: ProfileOverrides,
-    ) -> Result<Self, String> {
+    pub fn derive_child(&self, segment: &str, overrides: ProfileOverrides) -> Result<Self, String> {
         agentik_types::validate_segment(segment)
             .map_err(|e| format!("invalid profile segment `{segment}`: {e}"))?;
 
@@ -288,21 +284,15 @@ impl AgentProfile {
             enable_bibliography: overrides
                 .enable_bibliography
                 .unwrap_or(self.enable_bibliography),
-            enable_writing: overrides
-                .enable_writing
-                .unwrap_or(self.enable_writing),
-            enable_opengwas: overrides
-                .enable_opengwas
-                .unwrap_or(self.enable_opengwas),
+            enable_writing: overrides.enable_writing.unwrap_or(self.enable_writing),
+            enable_opengwas: overrides.enable_opengwas.unwrap_or(self.enable_opengwas),
             enable_opentargets: overrides
                 .enable_opentargets
                 .unwrap_or(self.enable_opentargets),
             enable_gwascatalog: overrides
                 .enable_gwascatalog
                 .unwrap_or(self.enable_gwascatalog),
-            enable_iceberg: overrides
-                .enable_iceberg
-                .unwrap_or(self.enable_iceberg),
+            enable_iceberg: overrides.enable_iceberg.unwrap_or(self.enable_iceberg),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -525,9 +515,7 @@ pub trait AgentStorage: Send + Sync {
     /// Read all persisted agent metadata. Used by the dashboard on
     /// process startup to surface agents that ran in the previous
     /// session. Returns entries ordered by `updated_at` descending.
-    async fn list_persisted_agents(
-        &self,
-    ) -> Result<Vec<PersistedAgentGraph>, StorageError>;
+    async fn list_persisted_agents(&self) -> Result<Vec<PersistedAgentGraph>, StorageError>;
 
     // ── Session log (WAL) ────────────────────────────────────
 
@@ -588,7 +576,10 @@ pub trait AgentProfileRegistry: Send + Sync {
     async fn get_profile(&self, id: Uuid) -> Result<Option<AgentProfile>, StorageError>;
     async fn get_profile_by_path(&self, path: &str) -> Result<Option<AgentProfile>, StorageError>;
     async fn list_profiles(&self) -> Result<Vec<AgentProfile>, StorageError>;
-    async fn list_child_profiles(&self, parent_path: &str) -> Result<Vec<AgentProfile>, StorageError>;
+    async fn list_child_profiles(
+        &self,
+        parent_path: &str,
+    ) -> Result<Vec<AgentProfile>, StorageError>;
     async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
     async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError>;
 
@@ -644,9 +635,7 @@ pub async fn restore_session_state(
         .get_latest_snapshot_for_session(agent_id, session_id)
         .await?;
     let snapshot_ts = snapshot.as_ref().map(|s| s.ts).unwrap_or(0);
-    let mut state = snapshot
-        .map(|s| s.state)
-        .unwrap_or_default();
+    let mut state = snapshot.map(|s| s.state).unwrap_or_default();
     let messages = storage
         .get_messages_since_for_session(session_id, snapshot_ts)
         .await?;

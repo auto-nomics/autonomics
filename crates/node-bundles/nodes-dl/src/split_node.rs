@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, RecordBatch};
 use arrow_array::RecordBatchOptions;
+use arrow_array::{Array, RecordBatch};
 use arrow_select::interleave::interleave;
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -36,26 +36,38 @@ pub struct TrainValTestSplitSpec {
     pub seed: u64,
 }
 
-fn d_val() -> f64 { 0.15 }
-fn d_test() -> f64 { 0.15 }
-fn d_seed() -> u64 { 42 }
+fn d_val() -> f64 {
+    0.15
+}
+fn d_test() -> f64 {
+    0.15
+}
+fn d_seed() -> u64 {
+    42
+}
 
 pub struct TrainValTestSplitFactory;
 impl NodeFactory for TrainValTestSplitFactory {
-    fn kind(&self) -> &'static str { NODE }
-    fn desc(&self) -> &'static str { "Three-way split into train/validation/test sets." }
+    fn kind(&self) -> &'static str {
+        NODE
+    }
+    fn desc(&self) -> &'static str {
+        "Three-way split into train/validation/test sets."
+    }
     fn doc(&self) -> &'static str {
         "dl_train_val_test_split: partitions data into train (port 0), validation (port 1), \
         and test (port 2) sets. Supports stratified splitting to preserve class/event \
         proportions across all three subsets."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(TrainValTestSplitSpec) }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(TrainValTestSplitSpec)
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
-            .add_output_port(None)  // 0: train
-            .add_output_port(None)  // 1: validation
-            .add_output_port(None)  // 2: test
+            .add_output_port(None) // 0: train
+            .add_output_port(None) // 1: validation
+            .add_output_port(None) // 2: test
     }
     fn build(
         &self,
@@ -84,10 +96,18 @@ struct TrainValTestSplitNode {
 
 #[async_trait]
 impl DagNode for TrainValTestSplitNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { NODE }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        NODE
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -121,9 +141,18 @@ impl DagNode for TrainValTestSplitNode {
         let val_batch = select_rows(&batches, &val_idx)?;
         let test_batch = select_rows(&batches, &test_idx)?;
 
-        let df0 = ctx.session().read_batch(train_batch).map_err(|e| common::err(NODE, format!("read_batch(0): {e}")))?;
-        let df1 = ctx.session().read_batch(val_batch).map_err(|e| common::err(NODE, format!("read_batch(1): {e}")))?;
-        let df2 = ctx.session().read_batch(test_batch).map_err(|e| common::err(NODE, format!("read_batch(2): {e}")))?;
+        let df0 = ctx
+            .session()
+            .read_batch(train_batch)
+            .map_err(|e| common::err(NODE, format!("read_batch(0): {e}")))?;
+        let df1 = ctx
+            .session()
+            .read_batch(val_batch)
+            .map_err(|e| common::err(NODE, format!("read_batch(1): {e}")))?;
+        let df2 = ctx
+            .session()
+            .read_batch(test_batch)
+            .map_err(|e| common::err(NODE, format!("read_batch(2): {e}")))?;
 
         let mut res = PortOutputs::new();
         res.insert(0, df0);
@@ -190,12 +219,16 @@ fn three_way_split(
 
 fn select_rows(batches: &[RecordBatch], indices: &[usize]) -> Result<RecordBatch, DagError> {
     use arrow::datatypes::SchemaRef;
-    let schema: SchemaRef = batches.first().ok_or(common::err(NODE, "no input"))?.schema();
+    let schema: SchemaRef = batches
+        .first()
+        .ok_or(common::err(NODE, "no input"))?
+        .schema();
     let n_cols = schema.fields().len();
     let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(n_cols);
 
     for col_i in 0..n_cols {
-        let col_arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(col_i).as_ref()).collect();
+        let col_arrays: Vec<&dyn Array> =
+            batches.iter().map(|b| b.column(col_i).as_ref()).collect();
         let indices_pairs: Vec<(usize, usize)> = indices
             .iter()
             .map(|&global_idx| {

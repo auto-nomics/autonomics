@@ -68,6 +68,9 @@ fn test_glinternet_mixed_fit() {
     assert_eq!(fit.lambda.len(), fx.lambda.len());
     for (i, (got, expected)) in fit.lambda.iter().zip(fx.lambda.iter()).enumerate() {
         let re = (got - expected).abs() / expected.abs().max(1e-10);
-        assert!(re < 1e-3, "lambda[{i}] mismatch: got {got}, expected {expected}");
+        assert!(
+            re < 1e-3,
+            "lambda[{i}] mismatch: got {got}, expected {expected}"
+        );
     }
 }

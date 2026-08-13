@@ -662,7 +662,9 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(std::path::PathBuf::from("."))),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
             global_sem: None,
         }
     }
@@ -1131,10 +1133,9 @@ mod tests {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
         };
-        let (rg, n_snp) =
-            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg())
-                .await
-                .expect("intersection join should succeed");
+        let (rg, n_snp) = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg())
+            .await
+            .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");
         assert!(rg.rg_ratio.is_finite());
     }

@@ -2,7 +2,7 @@
 //!
 //! Port of `glinternet.cv()` in R.
 
-use super::{fit, predict, Family, GlinternetConfig, GlinternetFit, GlinternetData};
+use super::{Family, GlinternetConfig, GlinternetData, GlinternetFit, fit, predict};
 
 /// CV result.
 #[derive(Debug, Clone)]

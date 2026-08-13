@@ -13,7 +13,7 @@ use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
 use crate::{GrfError, Result};
@@ -39,7 +39,9 @@ pub struct GenerateCausalDataOutput {
 pub struct GenerateCausalDataFactory;
 
 impl GenerateCausalDataFactory {
-    pub fn kind() -> &'static str { "grf_generate_causal_data" }
+    pub fn kind() -> &'static str {
+        "grf_generate_causal_data"
+    }
 }
 
 impl GenerateCausalDataSpec {
@@ -64,21 +66,29 @@ impl GenerateCausalDataSpec {
             // Confounder → treatment probability.
             let conf = x_rows[i][0];
             let prob = 1.0 / (1.0 + (-conf).exp());
-            w[i] = if rand::random::<f64>() < prob { 1.0 } else { 0.0 };
+            w[i] = if rand::random::<f64>() < prob {
+                1.0
+            } else {
+                0.0
+            };
             // CATE function (grf R style).
-            let tau = 1.0 + x_rows[i][1] - 0.5 * x_rows[i][2] + 0.1 * x_rows[i].get(3).copied().unwrap_or(0.0);
+            let tau = 1.0 + x_rows[i][1] - 0.5 * x_rows[i][2]
+                + 0.1 * x_rows[i].get(3).copied().unwrap_or(0.0);
             true_tau[i] = tau;
             y[i] = tau * w[i] + normal.sample(&mut rng);
         }
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("y", DataType::Float64, false),
-            Field::new("w", DataType::Float64, false),
-            Field::new("true_tau", DataType::Float64, false),
-            // x0..x{p-1}
-        ].into_iter().chain((0..self.p).map(|j|
-            Field::new(format!("x{}", j), DataType::Float64, false)
-        )).collect::<Vec<_>>()));
+        let schema = Arc::new(Schema::new(
+            vec![
+                Field::new("y", DataType::Float64, false),
+                Field::new("w", DataType::Float64, false),
+                Field::new("true_tau", DataType::Float64, false),
+                // x0..x{p-1}
+            ]
+            .into_iter()
+            .chain((0..self.p).map(|j| Field::new(format!("x{}", j), DataType::Float64, false)))
+            .collect::<Vec<_>>(),
+        ));
         let mut cols: Vec<Arc<dyn Array>> = vec![
             Arc::new(Float64Array::from(y.clone())),
             Arc::new(Float64Array::from(w.clone())),
@@ -98,4 +108,6 @@ fn _schema() -> SchemaRef {
 }
 
 #[allow(dead_code)]
-fn _schemars() -> schemars::Schema { schema_for!(GenerateCausalDataSpec) }
+fn _schemars() -> schemars::Schema {
+    schema_for!(GenerateCausalDataSpec)
+}

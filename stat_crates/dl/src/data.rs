@@ -1,13 +1,13 @@
 //! Data conversion helpers between `dl::Tensor` (f64) and Burn tensors (f32).
 
-use burn::tensor::{Tensor, TensorData};
 use burn::module::Param;
 use burn::nn::Linear;
+use burn::tensor::{Tensor, TensorData};
 
 use crate::backend::{B, Backend};
-use burn_ndarray::NdArrayDevice;
 use crate::configs::LayerWeights;
 use crate::tensor::Tensor as DlTensor;
+use burn_ndarray::NdArrayDevice;
 
 // ─── f64 Tensor → Burn tensors ─────────────────────────────────────────
 
@@ -38,10 +38,7 @@ pub fn rows_to_burn(
             f32_data.push(data.at(i, j) as f32);
         }
     }
-    Tensor::<Backend, 2>::from_data(
-        TensorData::new(f32_data, [indices.len(), ncols]),
-        device,
-    )
+    Tensor::<Backend, 2>::from_data(TensorData::new(f32_data, [indices.len(), ncols]), device)
 }
 
 /// Convert selected rows' single column to a Burn 1-D autodiff tensor.

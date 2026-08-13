@@ -69,15 +69,33 @@ pub struct RdRobustNodeConfig {
     pub stdvars: bool,
 }
 
-fn default_cutoff() -> f64 { 0.0 }
-fn default_p() -> usize { 1 }
-fn default_kernel() -> String { "triangular".into() }
-fn default_bwselect() -> String { "mserd".into() }
-fn default_vce() -> String { "nn".into() }
-fn default_level() -> f64 { 95.0 }
-fn default_scalepar() -> f64 { 1.0 }
-fn default_nnmatch() -> usize { 3 }
-fn default_stdvars() -> bool { false }
+fn default_cutoff() -> f64 {
+    0.0
+}
+fn default_p() -> usize {
+    1
+}
+fn default_kernel() -> String {
+    "triangular".into()
+}
+fn default_bwselect() -> String {
+    "mserd".into()
+}
+fn default_vce() -> String {
+    "nn".into()
+}
+fn default_level() -> f64 {
+    95.0
+}
+fn default_scalepar() -> f64 {
+    1.0
+}
+fn default_nnmatch() -> usize {
+    3
+}
+fn default_stdvars() -> bool {
+    false
+}
 
 // =====================================================================
 // Output schema
@@ -125,14 +143,19 @@ pub struct RdRobustNode {
 
 impl RdRobustNode {
     pub fn new(config: RdRobustNodeConfig) -> Self {
-        Self { meta: port_layout(), config }
+        Self {
+            meta: port_layout(),
+            config,
+        }
     }
 }
 
 pub struct RdRobustNodeFactory;
 
 impl NodeFactory for RdRobustNodeFactory {
-    fn kind(&self) -> &'static str { RDROBUST_NODE_KIND }
+    fn kind(&self) -> &'static str {
+        RDROBUST_NODE_KIND
+    }
     fn desc(&self) -> &'static str {
         "Local-polynomial RD estimation with robust bias correction (Calonico et al.)."
     }
@@ -141,22 +164,34 @@ impl NodeFactory for RdRobustNodeFactory {
         with robust bias-corrected inference. Supports sharp and fuzzy RD, \
         covariate adjustment, cluster-robust SEs, and multiple bandwidth selectors."
     }
-    fn spec_schema(&self) -> schemars::Schema { schema_for!(RdRobustNodeConfig) }
-    fn ports(&self) -> NodePorts { port_layout() }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(RdRobustNodeConfig)
+    }
+    fn ports(&self) -> NodePorts {
+        port_layout()
+    }
 
-    fn build(&self, spec: serde_json::Value, _ctx: NodeCtx)
-        -> dag_core::registry::error::Result<Box<dyn DagNode>>
-    {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: RdRobustNodeConfig = serde_json::from_value(spec)?;
         Ok(Box::new(RdRobustNode::new(config)))
     }
 
-    fn codegen_r(&self, spec: &serde_json::Value, ctx: &mut dag_core::codegen::CodegenCtx)
-        -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError>
-    {
+    fn codegen_r(
+        &self,
+        spec: &serde_json::Value,
+        ctx: &mut dag_core::codegen::CodegenCtx,
+    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let cfg = parse_spec::<RdRobustNodeConfig>(spec, RDROBUST_NODE_KIND)?;
-        let input = ctx.input_vars.first().map(|s| s.as_str()).unwrap_or("__missing_input");
+        let input = ctx
+            .input_vars
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("__missing_input");
         let out = ctx.output_var.to_string();
 
         let mut args = vec![
@@ -171,9 +206,15 @@ impl NodeFactory for RdRobustNodeFactory {
             format!("level = {}", cfg.level),
             format!("scalepar = {}", cfg.scalepar),
         ];
-        if let Some(h) = cfg.h { args.push(format!("h = {h}")); }
-        if let Some(col) = &cfg.cluster { args.push(format!("cluster = {input}${col}")); }
-        if let Some(col) = &cfg.fuzzy { args.push(format!("fuzzy = {input}${col}")); }
+        if let Some(h) = cfg.h {
+            args.push(format!("h = {h}"));
+        }
+        if let Some(col) = &cfg.cluster {
+            args.push(format!("cluster = {input}${col}"));
+        }
+        if let Some(col) = &cfg.fuzzy {
+            args.push(format!("fuzzy = {input}${col}"));
+        }
 
         let code = vec![
             "# rdrobust: local-polynomial RD estimation".to_string(),
@@ -184,15 +225,25 @@ impl NodeFactory for RdRobustNodeFactory {
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 
-    fn r_packages(&self) -> Vec<String> { vec!["rdrobust".into()] }
+    fn r_packages(&self) -> Vec<String> {
+        vec!["rdrobust".into()]
+    }
 }
 
 #[async_trait]
 impl DagNode for RdRobustNode {
-    fn ports(&self) -> &NodePorts { &self.meta }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new((*self).clone()) }
-    fn kind(&self) -> &'static str { RDROBUST_NODE_KIND }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new((*self).clone())
+    }
+    fn kind(&self) -> &'static str {
+        RDROBUST_NODE_KIND
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     async fn execute(
         &mut self,
@@ -201,11 +252,16 @@ impl DagNode for RdRobustNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(RdNodeError::EmptyInput)?;
-        let batches: Vec<RecordBatch> = input.data.clone().collect().await
-            .map_err(|e| DagError::NodeError {
-                node_type: RDROBUST_NODE_KIND.into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches: Vec<RecordBatch> =
+            input
+                .data
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: RDROBUST_NODE_KIND.into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() || batches.iter().map(|b| b.num_rows()).sum::<usize>() == 0 {
             return Err(RdNodeError::EmptyInput.into());
         }
@@ -214,11 +270,14 @@ impl DagNode for RdRobustNode {
         let y = extract_f64(&batches, &cfg.y)?;
         let x = extract_f64(&batches, &cfg.x)?;
 
-        let cluster = cfg.cluster.as_ref()
+        let cluster = cfg
+            .cluster
+            .as_ref()
             .and_then(|c| extract_opt_f64(&batches, c));
 
         let rd_cfg = rdrobust::RdRobustConfig {
-            y, x,
+            y,
+            x,
             c: cfg.cutoff,
             p: cfg.p,
             q: cfg.p + 1,
@@ -241,7 +300,9 @@ impl DagNode for RdRobustNode {
         })?;
 
         let batch = build_rdrobust_result(&result)?;
-        let df = node_ctx.session().read_batch(batch)
+        let df = node_ctx
+            .session()
+            .read_batch(batch)
             .map_err(RdNodeError::ReadBatch)?;
 
         let mut res = PortOutputs::new();
@@ -273,13 +334,29 @@ fn build_rdrobust_result(r: &rdrobust::RdRobustOutput) -> Result<RecordBatch, Rd
     let bwselect = StringArray::from(vec![Some(r.bwselect.as_str()), None, None]);
     let vce = StringArray::from(vec![Some(r.vce_type.as_str()), None, None]);
 
-    let batch = RecordBatch::try_new(output_schema(), vec![
-        Arc::new(method_arr), Arc::new(coef_arr), Arc::new(se_arr),
-        Arc::new(z_arr), Arc::new(pv_arr), Arc::new(ci_lo), Arc::new(ci_hi),
-        Arc::new(h_left), Arc::new(h_right), Arc::new(b_left), Arc::new(b_right),
-        Arc::new(n_l), Arc::new(n_r), Arc::new(n_h_l), Arc::new(n_h_r),
-        Arc::new(kernel), Arc::new(bwselect), Arc::new(vce),
-    ])?;
+    let batch = RecordBatch::try_new(
+        output_schema(),
+        vec![
+            Arc::new(method_arr),
+            Arc::new(coef_arr),
+            Arc::new(se_arr),
+            Arc::new(z_arr),
+            Arc::new(pv_arr),
+            Arc::new(ci_lo),
+            Arc::new(ci_hi),
+            Arc::new(h_left),
+            Arc::new(h_right),
+            Arc::new(b_left),
+            Arc::new(b_right),
+            Arc::new(n_l),
+            Arc::new(n_r),
+            Arc::new(n_h_l),
+            Arc::new(n_h_r),
+            Arc::new(kernel),
+            Arc::new(bwselect),
+            Arc::new(vce),
+        ],
+    )?;
     Ok(batch)
 }
 
@@ -298,11 +375,9 @@ mod tests {
             iceberg_catalog: None,
             datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
-            resources: std::sync::Arc::new(
-                dag_core::resource_catalog::ResourceCatalog::new(
-                    std::path::PathBuf::from(".")
-                ),
-            ),
+            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
+                std::path::PathBuf::from("."),
+            )),
         }
     }
 
@@ -317,7 +392,8 @@ mod tests {
                 let noise1: f64 = rng.random();
                 let noise2: f64 = rng.random();
                 let r = x1 + x2 + noise1 - 0.5;
-                let y = 1.0 + r - 0.5 * r * r + 0.3 * r * r * r + (r >= 0.0) as i32 as f64 + noise2 - 0.5;
+                let y = 1.0 + r - 0.5 * r * r + 0.3 * r * r * r + (r >= 0.0) as i32 as f64 + noise2
+                    - 0.5;
                 (y, r)
             })
             .unzip();
@@ -325,10 +401,14 @@ mod tests {
             Field::new("y", DataType::Float64, false),
             Field::new("x", DataType::Float64, false),
         ]));
-        RecordBatch::try_new(schema, vec![
-            Arc::new(Float64Array::from(y)),
-            Arc::new(Float64Array::from(x)),
-        ]).unwrap()
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(y)),
+                Arc::new(Float64Array::from(x)),
+            ],
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -369,7 +449,12 @@ mod tests {
         let df = SessionContext::new().read_batch(batch).unwrap();
         let input = NodeInput { port: 0, data: df };
 
-        let res = node.execute(&node_ctx(), &[input], &dag_core::dag::node_event::NodeReporter::noop())
+        let res = node
+            .execute(
+                &node_ctx(),
+                &[input],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
             .await
             .unwrap();
 
@@ -378,15 +463,25 @@ mod tests {
         assert_eq!(batch.num_rows(), 3); // Conventional, Bias-Corrected, Robust
 
         // Check the robust row (index 2) has finite coefficient and SE
-        let coef = batch.column(1).as_any().downcast_ref::<Float64Array>().unwrap();
-        let se = batch.column(2).as_any().downcast_ref::<Float64Array>().unwrap();
+        let coef = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let se = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
         assert!(coef.value(2).is_finite());
         assert!(se.value(2) > 0.0);
 
         // The treatment effect should be positive (we set tau=1 in the DGP).
         // With 500 obs and a cubic DGP, the estimate can deviate from 1.0.
         let robust_coef = coef.value(2);
-        assert!(robust_coef.is_finite() && robust_coef > 0.0,
-            "expected positive finite, got {robust_coef}");
+        assert!(
+            robust_coef.is_finite() && robust_coef > 0.0,
+            "expected positive finite, got {robust_coef}"
+        );
     }
 }

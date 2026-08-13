@@ -58,11 +58,7 @@ pub fn compute_norms_cont(data: &GlinternetData, r: &[f64]) -> Vec<f64> {
 ///
 /// Port of `compute_norms_cat_cat()` in `c_routines.c`.
 /// Each row of `indices` gives (cat_i, cat_j) — 1-based within cat subset.
-pub fn compute_norms_cat_cat(
-    data: &GlinternetData,
-    r: &[f64],
-    indices: &[[usize; 2]],
-) -> Vec<f64> {
+pub fn compute_norms_cat_cat(data: &GlinternetData, r: &[f64], indices: &[[usize; 2]]) -> Vec<f64> {
     let n = data.n;
     let p = indices.len();
     let mut result = vec![0.0; p];
@@ -127,7 +123,10 @@ pub fn compute_norms_cont_cont(
         };
 
         let n_sq = n as f64 * n as f64;
-        result[j] = ((n_sq * (cont_norms[xi - 1].powi(2) + cont_norms[yi - 1].powi(2)) + term) / 3.0).sqrt() / n as f64;
+        result[j] = ((n_sq * (cont_norms[xi - 1].powi(2) + cont_norms[yi - 1].powi(2)) + term)
+            / 3.0)
+            .sqrt()
+            / n as f64;
     }
 
     result
@@ -175,7 +174,11 @@ pub fn get_lambda_max(candidates: &Candidates) -> f64 {
 /// Generate lambda grid.
 ///
 /// Port of `get_lambda_grid()` in R.
-pub fn get_lambda_grid(candidates: &Candidates, n_lambda: usize, lambda_min_ratio: f64) -> Vec<f64> {
+pub fn get_lambda_grid(
+    candidates: &Candidates,
+    n_lambda: usize,
+    lambda_min_ratio: f64,
+) -> Vec<f64> {
     let lambda_max = get_lambda_max(candidates);
     let lambda_min = lambda_min_ratio * lambda_max;
 

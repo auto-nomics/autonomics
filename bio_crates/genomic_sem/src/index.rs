@@ -74,11 +74,13 @@ pub fn local_srmd(
     lhs_var: &[Vec<f64>],
     rhs_var: &[Vec<f64>],
 ) -> f64 {
-    let lhs_pooled_sd: Vec<f64> = lhs_var.iter()
+    let lhs_pooled_sd: Vec<f64> = lhs_var
+        .iter()
         .map(|v| v.iter().sum::<f64>().max(0.0) / v.len() as f64)
         .map(|v| v.sqrt())
         .collect();
-    let rhs_pooled_sd: Vec<f64> = rhs_var.iter()
+    let rhs_pooled_sd: Vec<f64> = rhs_var
+        .iter()
         .map(|v| v.iter().sum::<f64>().max(0.0) / v.len() as f64)
         .map(|v| v.sqrt())
         .collect();
@@ -130,7 +132,9 @@ mod tests {
     #[test]
     fn test_sub_sv() {
         let mut s = Mat::zeros(4, 4);
-        for i in 0..4 { s[(i, i)] = (i + 1) as f64; }
+        for i in 0..4 {
+            s[(i, i)] = (i + 1) as f64;
+        }
         let v = Mat::<f64>::identity(10, 10);
         let (s_sub, v_sub) = sub_sv(&s, &v, &[0, 2]);
         assert_eq!(s_sub.nrows(), 2);

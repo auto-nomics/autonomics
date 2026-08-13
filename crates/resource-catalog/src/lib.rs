@@ -37,16 +37,16 @@ pub mod registry;
 pub mod resolve;
 pub mod validate;
 
+pub use archive::{ArchivableResource, ArchiveOutcome, ArchiveSpec, ArchiveStatus};
 pub use catalog::ResourceCatalog;
 pub use drift::{CatalogSnapshot, DriftWarning};
 pub use entry::ResourceEntry;
 pub use error::{ResourceError, Result};
 pub use iceberg_const::CATALOG_NAME;
+pub use ingestion::{CsvOptions, IngestionOutcome, IngestionSpec, SourceFormat, WriteMode};
 pub use kind::{DbKind, DocKind, ResourceAddress, ResourceKind};
 pub use persist::{ManifestStore, TursoManifestStore};
 pub use provider::ResourceProvider;
-pub use archive::{ArchiveOutcome, ArchiveSpec, ArchiveStatus, ArchivableResource};
-pub use ingestion::{CsvOptions, IngestionOutcome, IngestionSpec, SourceFormat, WriteMode};
 pub use registry::ResourceRegistry;
 
 /// Resolve an endpoint URL from the global catalog, falling back to
