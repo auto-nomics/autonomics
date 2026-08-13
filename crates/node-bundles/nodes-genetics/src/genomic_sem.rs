@@ -845,12 +845,16 @@ impl DagNode for GsemLdscNode {
         // no declared schema (e.g. SQL nodes). Validate at runtime so missing
         // columns produce a clear error instead of a cryptic SQL failure.
         {
-            let schema_batches = input.data.clone().collect().await.map_err(|e| {
-                DagError::NodeError {
-                    node_type: GSEM_LDSC_NODE_KIND.into(),
-                    msg: format!("schema check: collect failed: {e}"),
-                }
-            })?;
+            let schema_batches =
+                input
+                    .data
+                    .clone()
+                    .collect()
+                    .await
+                    .map_err(|e| DagError::NodeError {
+                        node_type: GSEM_LDSC_NODE_KIND.into(),
+                        msg: format!("schema check: collect failed: {e}"),
+                    })?;
             if schema_batches.is_empty() || schema_batches[0].num_columns() == 0 {
                 return Err(DagError::NodeError {
                     node_type: GSEM_LDSC_NODE_KIND.into(),
@@ -863,8 +867,7 @@ impl DagNode for GsemLdscNode {
                 fields.iter().map(|f| f.name().as_str()).collect();
             for required in &["rsid", "z", "n", "trait"] {
                 if !have.contains(required) {
-                    let available: Vec<&str> =
-                        fields.iter().map(|f| f.name().as_str()).collect();
+                    let available: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
                     return Err(DagError::NodeError {
                         node_type: GSEM_LDSC_NODE_KIND.into(),
                         msg: format!(
@@ -1433,7 +1436,11 @@ fn run_multivariate_ldsc(
         for i in 0..=j {
             // ── Per-pair data (possibly allele-aligned for gencov) ──
             let (l2_p, chi_p, wld_p, n_j_p, n_k_p): (
-                Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>,
+                Vec<f64>,
+                Vec<f64>,
+                Vec<f64>,
+                Vec<f64>,
+                Vec<f64>,
             ) = if i == j {
                 // h²: chi = Z². Filter by chisq_max on Z².
                 let mut l2 = Vec::new();
@@ -1558,9 +1565,7 @@ fn run_multivariate_ldsc(
                          wld range:     [{wld_min:.4}, {wld_max:.4}]\n\
                          weights_ld:    [{wl_min:.4e}, {wl_max:.4e}]\n\
                          chisq_max:     {chisq_max_eff:.1}",
-                        result.reg_tot,
-                        result.intercept,
-                        result.coef,
+                        result.reg_tot, result.intercept, result.coef,
                     ),
                 });
             }
@@ -2518,7 +2523,7 @@ mod tests {
         let arrays = LdscArrays {
             z: vec![vec![0.0; n_snps]; 2],
             n: vec![vec![1000.0; n_snps]; 2],
-            l2: vec![1.0; n_snps],  // constant l2 → singular regression
+            l2: vec![1.0; n_snps], // constant l2 → singular regression
             wld: vec![1.0; n_snps],
             n_snps,
         };
@@ -2547,10 +2552,7 @@ mod tests {
             }
             Err(e) => {
                 let msg = e.to_string();
-                assert!(
-                    msg.contains("not finite"),
-                    "unexpected error: {msg}"
-                );
+                assert!(msg.contains("not finite"), "unexpected error: {msg}");
             }
         }
     }

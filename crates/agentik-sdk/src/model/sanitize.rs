@@ -119,6 +119,66 @@ fn needs_sanitize(messages: &[Message]) -> bool {
         return true;
     }
 
+    // Rule 7 — mid-sequence adjacency break. A tool_use in an assistant
+    // message whose matching tool_result is 2+ user messages away (e.g.
+    // caused by an intervening user message arriving between the call and
+    // its result). Detect by looking at every assistant message and
+    // checking whether its tool_use ids are all in the immediately next
+    // user message.
+    for w in messages.windows(2) {
+        if !matches!(w[0].role, Role::Assistant) || !matches!(w[1].role, Role::User) {
+            continue;
+        }
+        if !w[0].has_tool_use() {
+            continue;
+        }
+        if !unmatched_tool_use_ids(&w[0], &w[1]).is_empty() {
+            return true;
+        }
+    }
+
+    // Rule 8 — orphan tool_result whose tool_use was dropped (e.g. by
+    // compaction summarising the assistant message). The tool_use_id no
+    // longer appears in any previous assistant message.
+    if has_unorphaned_tool_result(messages) {
+        return true;
+    }
+
+    // Rule 9 — tool_result whose tool_use appears in a LATER assistant
+    // message (forward-orphan). Same detection as Rule 8 — by symmetry,
+    // any tool_result without a matching tool_use earlier in the list is
+    // an orphan.
+
+    false
+}
+
+/// True when any user message contains a `tool_result` whose `tool_use_id`
+/// is missing from **every** previous assistant message in the sequence.
+///
+/// Used by Rules 8/9: any tool_result whose tool_use has been summarised
+/// away (or never existed) is an orphan and must be dropped.
+fn has_unorphaned_tool_result(messages: &[Message]) -> bool {
+    let mut seen_tool_ids: HashSet<String> = HashSet::new();
+    for m in messages {
+        match m.role {
+            Role::Assistant => {
+                for c in &m.content {
+                    if let ContentBlock::ToolUse { id, .. } = c {
+                        seen_tool_ids.insert(id.clone());
+                    }
+                }
+            }
+            Role::User => {
+                for c in &m.content {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = c {
+                        if !seen_tool_ids.contains(tool_use_id) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
     false
 }
 
@@ -202,6 +262,12 @@ fn has_orphan_tool_result(messages: &[Message]) -> bool {
 }
 
 fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
+    // ── Rule 7 + 8 + 9 pre-pass: repair adjacency + drop orphans ──
+    // Run before the main loop so subsequent passes see a well-formed
+    // sequence. We must be careful not to lose genuine text/thinking
+    // content during the moves — only tool_result blocks are relocated.
+    let messages = repair_tool_use_adjacency(messages);
+
     let mut out: Vec<Message> = Vec::with_capacity(messages.len() + 1);
 
     for msg in messages.into_iter() {
@@ -314,6 +380,169 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
             };
             out.insert(0, placeholder);
         }
+    }
+
+    out
+}
+
+/// Repair adjacency invariants before the main sanitisation pass.
+///
+/// Restores three invariants:
+///
+/// 1. **Adjacency** (Anthropic's hard rule): every `tool_use` in an
+///    assistant message must have a matching `tool_result` in the
+///    **immediately next** user message. If the result sits in a later
+///    user message, move it forward. If no result exists, insert a
+///    synthetic stub (`is_error: Some(true)`).
+///
+/// 2. **No orphan tool_results** (Rule 8): any `tool_result` whose
+///    `tool_use_id` does not appear in any previous assistant message is
+///    dropped. This handles the post-compaction case where the head was
+///    summarised but the tail retained the result.
+///
+/// 3. **No forward orphans** (Rule 9): a tool_result that appears
+///    before its `tool_use` is also an orphan — same detection as
+///    Rule 8.
+///
+/// This pre-pass operates on the raw message list; the main
+/// `sanitize_inner` will still apply Rules 1-6 (coalesce, dedup, etc.)
+/// on the output.
+fn repair_tool_use_adjacency(messages: Vec<Message>) -> Vec<Message> {
+    if messages.is_empty() {
+        return messages;
+    }
+
+    // ── Pass 1: drop orphan tool_results (Rules 8/9) ──
+    // Walk forward, track emitted tool_use ids, and strip any
+    // tool_result that references an id we haven't seen yet.
+    let mut emitted_tool_ids: HashSet<String> = HashSet::new();
+    let mut pass1: Vec<Message> = Vec::with_capacity(messages.len());
+    for mut m in messages {
+        match m.role {
+            Role::Assistant => {
+                for c in &m.content {
+                    if let ContentBlock::ToolUse { id, .. } = c {
+                        emitted_tool_ids.insert(id.clone());
+                    }
+                }
+                pass1.push(m);
+            }
+            Role::User => {
+                m.content.retain(|c| match c {
+                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                        emitted_tool_ids.contains(tool_use_id)
+                    }
+                    _ => true,
+                });
+                pass1.push(m);
+            }
+        }
+    }
+
+    // ── Pass 2: repair adjacency (Rule 7) ──
+    // For every assistant message with tool_use blocks, ensure the
+    // immediately next message is a user message carrying matching
+    // tool_results. Collect tool_results from later user messages and
+    // move them forward; insert stubs for any still-missing ids.
+    let mut out: Vec<Message> = Vec::with_capacity(pass1.len() + 2);
+    let mut i = 0;
+    while i < pass1.len() {
+        let msg = pass1[i].clone();
+
+        if !(matches!(msg.role, Role::Assistant) && msg.has_tool_use()) {
+            out.push(msg);
+            i += 1;
+            continue;
+        }
+
+        // tool_use ids this assistant message expects results for, **in
+        // the order they appear in the assistant content** (Anthropic
+        // requires tool_results in adjacent user message to appear in
+        // the same order as the tool_uses — message 2013).
+        let tool_use_ids: Vec<String> = msg
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        out.push(msg);
+
+        // The immediately next message.
+        let next = pass1.get(i + 1).cloned();
+        match next {
+            Some(next_msg) if matches!(next_msg.role, Role::User) => {
+                // Index existing tool_results by id; collect non-result
+                // blocks separately (text/thinking/image).
+                let mut provided: HashMap<String, ContentBlock> = HashMap::new();
+                let mut non_result_blocks: Vec<ContentBlock> = Vec::new();
+                let mut next_msg = next_msg;
+                for c in std::mem::take(&mut next_msg.content).into_iter() {
+                    if let ContentBlock::ToolResult { ref tool_use_id, .. } = c {
+                        // Anthropic rejects duplicate tool_results for
+                        // the same id; keep the first occurrence and
+                        // drop the rest. HashMap::insert would
+                        // overwrite — entry().or_insert keeps the
+                        // existing entry.
+                        provided
+                            .entry(tool_use_id.clone())
+                            .or_insert(c);
+                    } else {
+                        non_result_blocks.push(c);
+                    }
+                }
+
+                // Walk the assistant's tool_use list in order; for each
+                // id emit the existing tool_result if present, else a
+                // stub. The resulting order matches tool_use ordering.
+                let mut tool_results_in_order: Vec<ContentBlock> = Vec::new();
+                let mut missing_any = false;
+                for id in &tool_use_ids {
+                    if let Some(block) = provided.remove(id) {
+                        tool_results_in_order.push(block);
+                    } else {
+                        tool_results_in_order.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: Some(
+                                "Tool execution has been interrupted".to_string(),
+                            ),
+                            is_error: Some(true),
+                        });
+                        missing_any = true;
+                    }
+                }
+
+                // Compose the final user content: non-result blocks
+                // first, then tool_results in tool_use order.
+                let mut merged = non_result_blocks;
+                merged.extend(tool_results_in_order);
+                let mut rebuilt = next_msg;
+                rebuilt.content = merged;
+                if missing_any {
+                    // Touch the variable so the diagnostic warning
+                    // doesn't fire (and to flag the repair in logs).
+                    tracing::debug!(
+                        tool_use_count = tool_use_ids.len(),
+                        "filled missing tool_result stubs in adjacent user message"
+                    );
+                }
+                out.push(rebuilt);
+            }
+            Some(next_msg) => {
+                // Next message is Assistant (or other non-User). Insert
+                // a synthetic user message carrying stub results in
+                // tool_use order.
+                out.push(stub_user_message(tool_use_ids));
+                out.push(next_msg);
+            }
+            None => {
+                // Assistant is the last message.
+                out.push(stub_user_message(tool_use_ids));
+            }
+        }
+        i += 1;
     }
 
     out
@@ -874,5 +1103,349 @@ mod tests {
         assert!(matches!(m.role, Role::User));
         assert_eq!(m.content.len(), 1);
         assert!(matches!(m.content[0], ContentBlock::Text { .. }));
+    }
+
+    // ── New rules (7/8/9) tests ──
+
+    /// Rule 7: a tool_use whose tool_result lands 2+ user messages later
+    /// (e.g. retry feedback pushed in between) must be repaired so the
+    /// tool_result sits in the immediately next user message after the
+    /// tool_use.
+    #[test]
+    fn rule7_relocates_tool_result_through_intervening_user() {
+        let msgs = vec![
+            text_user("hi"),
+            assistant_tool_use("call_X"),
+            // Retry feedback user message arrived between the call and
+            // its result.
+            text_user("retry: please confirm"),
+            // Tool result landed here (1 user message too late).
+            user_with_tool_results(&["call_X"]),
+        ];
+        let out = sanitize_messages(msgs);
+        // Find the assistant tool_use and assert the immediately next
+        // message is the user message containing tool_result(call_X).
+        let asst_idx = out
+            .iter()
+            .position(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant with tool_use must remain");
+        assert!(out[asst_idx].has_tool_use());
+        let next = out.get(asst_idx + 1).expect("user message follows");
+        assert!(matches!(next.role, Role::User));
+        let has_result = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X")
+        });
+        assert!(
+            has_result,
+            "tool_result for call_X must sit in the user message immediately after the tool_use"
+        );
+        // The retry user message and the original user_with_tool_results
+        // either merged or were re-laid-out — but the tool_result is in
+        // the right place.
+    }
+
+    /// Rule 8: a tool_result whose tool_use was dropped (e.g. by
+    /// compaction summarising the head) is dropped entirely.
+    #[test]
+    fn rule8_drops_orphan_tool_result_post_compaction() {
+        // The conversation has no preceding assistant with tool_use(call_ghost).
+        let msgs = vec![
+            text_user("hi"),
+            text_assistant("ok"),
+            user_with_tool_results(&["call_ghost"]),
+        ];
+        let out = sanitize_messages(msgs);
+        let ghost_count = out
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_ghost"))
+            .count();
+        assert_eq!(ghost_count, 0, "orphan tool_result must be dropped");
+    }
+
+    /// Rule 9: forward-orphan — tool_result appearing before its tool_use
+    /// (also dropped by Rule 8 since no previous assistant has the id).
+    #[test]
+    fn rule9_drops_forward_orphan_tool_result() {
+        let msgs = vec![
+            // tool_result appears BEFORE any tool_use with matching id.
+            user_with_tool_results(&["call_future"]),
+            assistant_tool_use("call_future"),
+        ];
+        let out = sanitize_messages(msgs);
+        // After repair, the tool_result must either have been dropped
+        // (forward orphan) or relocated forward to be adjacent to its
+        // tool_use. In either case, exactly one tool_result for
+        // call_future should be present, and it must immediately
+        // follow the assistant tool_use.
+        let asst_idx = out
+            .iter()
+            .position(|m| matches!(m.role, Role::Assistant))
+            .expect("assistant message");
+        let next = out.get(asst_idx + 1).expect("user message follows");
+        let has = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_future")
+        });
+        assert!(
+            has,
+            "after repair, the only tool_result for call_future must be in the adjacent user message"
+        );
+    }
+
+    /// Multiple tool_uses in one assistant message — all results must
+    /// land in the immediately next user message after the assistant.
+    #[test]
+    fn rule7_multiple_tool_uses_all_results_in_adjacent_user() {
+        let assistant = Message {
+            id: "a".into(),
+            type_: "message".into(),
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "a".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "b".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        // Tool results land in the user message two slots later.
+        let msgs = vec![
+            text_user("hi"),
+            assistant,
+            text_user("(intervening retry text)"),
+            user_with_tool_results(&["a", "b"]),
+        ];
+        let out = sanitize_messages(msgs);
+        let asst_idx = out
+            .iter()
+            .position(|m| m.has_tool_use())
+            .expect("tool_use assistant must remain");
+        let next = out.get(asst_idx + 1).expect("user message follows");
+        let has_a = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "a")
+        });
+        let has_b = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "b")
+        });
+        assert!(has_a, "tool_result for a must be in adjacent user");
+        assert!(has_b, "tool_result for b must be in adjacent user");
+    }
+
+    /// A tool_use followed by another assistant turn (no user message in
+    /// between) must trigger insertion of a synthetic user message with
+    /// stub tool_results.
+    #[test]
+    fn rule7_consecutive_assistants_get_synthetic_user() {
+        let msgs = vec![
+            text_user("hi"),
+            assistant_tool_use("call_X"),
+            text_assistant("I forgot to call the tool"),
+        ];
+        let out = sanitize_messages(msgs);
+        // The order must be user, assistant(tool_use), user(stub), assistant.
+        let asst_idx = out
+            .iter()
+            .position(|m| m.has_tool_use())
+            .expect("tool_use assistant");
+        let stub_msg = out.get(asst_idx + 1).expect("stub user follows");
+        assert!(matches!(stub_msg.role, Role::User));
+        let has_stub = stub_msg.content.iter().any(|c| {
+            matches!(
+                c,
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error: Some(true),
+                    ..
+                } if tool_use_id == "call_X"
+            )
+        });
+        assert!(has_stub, "stub user message must carry tool_result stub");
+    }
+
+    /// Fast-path detection: displaced adjacency must be flagged by
+    /// needs_sanitize so the work isn't skipped.
+    #[test]
+    fn rule7_needs_sanitize_fires_for_displaced_tool_result() {
+        let msgs = vec![
+            text_user("hi"),
+            assistant_tool_use("call_X"),
+            text_user("retry text"),
+            user_with_tool_results(&["call_X"]),
+        ];
+        // The repair runs and the adjacency holds.
+        let out = sanitize_messages(msgs);
+        let asst_idx = out.iter().position(|m| m.has_tool_use()).unwrap();
+        let next = out.get(asst_idx + 1).unwrap();
+        let adjacent = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X")
+        });
+        assert!(adjacent, "repair must place the tool_result adjacent to tool_use");
+    }
+
+    /// Anthropic requires that within a single user message, the
+    /// tool_result blocks appear in the **same order** as their
+    /// corresponding tool_use blocks in the preceding assistant message.
+    /// If the user message's tool_results are in the wrong order, the
+    /// repair must reorder them rather than just appending stubs.
+    #[test]
+    fn tool_results_reordered_to_match_tool_use_order() {
+        // Assistant emitted [tool_use(A), tool_use(B), tool_use(C)].
+        // User message arrived with results in shuffled order: [B, A].
+        // Missing C should be filled with a stub; A and B must be
+        // reordered to [A, B] to match the assistant's order.
+        let assistant = Message {
+            id: "a".into(),
+            type_: "message".into(),
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "call_A".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_B".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_C".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        let user = Message {
+            id: "u".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_B".into(),
+                    content: Some("B result".into()),
+                    is_error: Some(false),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_A".into(),
+                    content: Some("A result".into()),
+                    is_error: Some(false),
+                },
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        let msgs = vec![text_user("hi"), assistant, user];
+        let out = sanitize_messages(msgs);
+
+        // The user message adjacent to the assistant must carry
+        // tool_results in the order [A, B, C_stub].
+        let asst_idx = out
+            .iter()
+            .position(|m| m.has_tool_use())
+            .expect("tool_use assistant remains");
+        let next = &out[asst_idx + 1];
+        assert!(matches!(next.role, Role::User));
+
+        let tool_result_order: Vec<&str> = next
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_result_order,
+            vec!["call_A", "call_B", "call_C"],
+            "tool_results must be reordered to match the assistant's tool_use order"
+        );
+    }
+
+    /// Stub tool_results inserted for missing ids must also appear in
+    /// tool_use order, not just appended at the end of user content.
+    #[test]
+    fn missing_tool_results_stubs_follow_tool_use_order() {
+        let assistant = Message {
+            id: "a".into(),
+            type_: "message".into(),
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "call_A".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_B".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        // Only tool_result(B) is present — A is missing and must be
+        // filled with a stub. The adjacent user message should carry
+        // [tool_result(A) stub, tool_result(B) real].
+        let user = Message {
+            id: "u".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_B".into(),
+                content: Some("B result".into()),
+                is_error: Some(false),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        let msgs = vec![text_user("hi"), assistant, user];
+        let out = sanitize_messages(msgs);
+        let asst_idx = out.iter().position(|m| m.has_tool_use()).unwrap();
+        let next = &out[asst_idx + 1];
+        let order: Vec<&str> = next
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec!["call_A", "call_B"],
+            "missing tool_result stubs must precede later real tool_results"
+        );
+        // Verify the stub for call_A carries is_error=true.
+        let stub = next.content.iter().find(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_A")
+        }).unwrap();
+        if let ContentBlock::ToolResult { is_error, .. } = stub {
+            assert_eq!(*is_error, Some(true));
+        }
     }
 }

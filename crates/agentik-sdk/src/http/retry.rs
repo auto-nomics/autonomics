@@ -149,8 +149,8 @@ impl RetryPolicy {
                     }
                 }
                 RetryCondition::RateLimit => {
-                    if let AnthropicError::HttpError { status, .. } = error
-                        && *status == 429
+                    if matches!(error, AnthropicError::RateLimit { .. })
+                        || matches!(error, AnthropicError::HttpError { status: 429, .. })
                     {
                         return true;
                     }
@@ -295,6 +295,10 @@ mod tests {
         let policy = RetryPolicy::default();
 
         assert!(policy.should_retry(&AnthropicError::Timeout));
+        assert!(policy.should_retry(&AnthropicError::RateLimit {
+            status: 429,
+            message: "Rate limited".to_string(),
+        }));
         assert!(policy.should_retry(&AnthropicError::HttpError {
             status: 429,
             message: "Rate limited".to_string(),

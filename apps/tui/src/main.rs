@@ -98,9 +98,11 @@ enum Command {
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
 
-    /// Data operations — ingest source files into Iceberg, archive/restore
-    /// via cloud object storage (rclone).
-    Data(DataArgs),
+    /// Resource catalog management — browse, inspect, register, ingest,
+    /// archive/restore/verify, drift check, and export. Covers all resource
+    /// types (Iceberg tables, file paths, API endpoints, databases, docs,
+    /// config).
+    Resource(ResourceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -242,90 +244,172 @@ struct ExportArgs {
     limit: Option<usize>,
 }
 
+/// Parse `key=value` into a tuple for `--metadata`.
+fn parse_key_value(s: &str) -> color_eyre::Result<(String, String)> {
+    s.split_once('=')
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .ok_or_else(|| color_eyre::eyre::eyre!("expected key=value, got '{s}'"))
+}
+
 // ---------------------------------------------------------------------------
-// data subcommand
+// resource subcommand
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Args)]
-struct DataArgs {
+struct ResourceArgs {
     #[command(subcommand)]
-    action: DataAction,
-
-    /// Specific resource name to operate on. If omitted, operates on ALL
-    /// resources that have the relevant spec (ingestion_spec or archive_spec).
-    #[arg(long, short = 'r', global = true)]
-    resource: Option<String>,
+    action: ResourceAction,
 }
 
-/// Subcommands under `autonomics-tui data ...`.
+/// Subcommands under `autonomics-tui resource ...`.
 #[derive(Debug, Subcommand)]
-enum DataAction {
-    /// Register a new parquet/csv source → Iceberg table ingestion job.
-    /// Creates a ResourceEntry with ingestion_spec in the catalog.
-    Add(AddDataArgs),
+enum ResourceAction {
+    /// List all registered resources in a table. Supports filtering by kind,
+    /// tag, or substring match on the name.
+    List(ResourceListArgs),
 
-    /// Remove a resource entry from the catalog (does NOT drop the Iceberg
-    /// table or delete source files — only unregisters the catalog entry).
-    Remove(RemoveDataArgs),
+    /// Show full details for a single resource (address, metadata, tags,
+    /// archive status, ingestion spec).
+    Show(ResourceShowArgs),
 
-    /// Ingest source files (parquet/csv/tsv) into Iceberg tables.
-    /// Iterates all resources with an `ingestion_spec`, or a single
-    /// resource when `--resource` is given.
-    Ingest,
+    /// Register a new resource entry in the catalog. The `--kind` determines
+    /// which address fields are required. For `iceberg_table`, optional
+    /// `--source` registers an ingestion spec; `--archive` additionally
+    /// pushes source to cloud and ingests into Iceberg in one step.
+    Add(ResourceAddArgs),
 
-    /// Restore resources from cloud object storage (rclone pull).
-    /// Iterates all resources with an `archive_spec`.
-    Restore,
+    /// Remove a resource from the catalog manifest (does NOT drop Iceberg
+    /// tables or delete files — only unregisters the catalog entry).
+    Remove(ResourceRemoveArgs),
 
-    /// Archive resources to cloud object storage (rclone push).
-    /// Iterates all resources with an `archive_spec`.
-    Archive,
+    /// Ingest source files into Iceberg tables. Operates on resources with
+    /// an ingestion_spec, or a single resource via `--resource`.
+    Ingest(ResourceTargetArgs),
 
-    /// List resources that have ingestion or archive specs configured.
-    /// Shows current status (archived_at, verified, etc.).
-    List,
+    /// Push a resource's content to its configured cloud archive (rclone).
+    Archive(ResourceTargetArgs),
+
+    /// Pull a resource's content from its configured cloud archive (rclone).
+    Restore(ResourceTargetArgs),
+
+    /// Verify that local content matches the cloud archive (rclone check).
+    Verify(ResourceTargetArgs),
+
+    /// Check all registered resources against live state (Iceberg catalog +
+    /// filesystem) and report mismatches. Never mutates the catalog.
+    Drift(ResourceDriftArgs),
+
+    /// Export the full catalog manifest as JSON to stdout or a file.
+    Export(ResourceExportArgs),
 }
 
-/// Arguments for `data add`.
+/// Arguments for `resource list`.
 #[derive(Debug, Args)]
-struct AddDataArgs {
-    /// Logical resource name, e.g. "iceberg.gwas.sumstats".
+struct ResourceListArgs {
+    /// Filter by resource kind: iceberg_table, file_path, endpoint, config,
+    /// database, doc.
+    #[arg(long)]
+    kind: Option<String>,
+
+    /// Filter by tag (resources matching ANY of the given tags are shown).
+    #[arg(long)]
+    tag: Vec<String>,
+
+    /// Substring filter on the resource name (case-insensitive).
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Show only resources that have an archive_spec.
+    #[arg(long)]
+    archivable: bool,
+
+    /// Show only resources that have an ingestion_spec.
+    #[arg(long)]
+    ingestible: bool,
+
+    /// Output format: table (default) or json.
+    #[arg(long, default_value = "table")]
+    format: String,
+}
+
+/// Arguments for `resource show`.
+#[derive(Debug, Args)]
+struct ResourceShowArgs {
+    /// Logical resource name.
+    name: String,
+}
+
+/// Arguments for `resource add`.
+#[derive(Debug, Args)]
+struct ResourceAddArgs {
+    /// Logical resource name (stable identifier, e.g. "ldscore.1000g_eur").
     #[arg(long)]
     name: String,
 
     /// Human-readable description.
     #[arg(long)]
-    description: Option<String>,
+    description: String,
 
-    /// Source file path or glob (e.g. "/data/gwas/*.parquet").
+    /// Resource kind: iceberg_table, file_path, endpoint, config, database, doc.
     #[arg(long)]
-    source: String,
+    kind: String,
 
-    /// Source format: parquet, csv, or tsv.
-    #[arg(long, default_value = "parquet")]
-    format: String,
-
-    /// Iceberg schema name (e.g. "gwas").
+    // ── IcebergTable address fields ───────────────────────────────────
+    /// Iceberg schema name (for kind=iceberg_table).
     #[arg(long)]
-    schema: String,
+    schema: Option<String>,
 
-    /// Iceberg table name (e.g. "sumstats").
+    /// Iceberg table name (for kind=iceberg_table).
     #[arg(long)]
-    table: String,
+    table: Option<String>,
 
-    /// Partition columns (repeat for multiple, e.g. --partition chrom --partition pop).
+    // ── FilePath / Database / Doc address fields ──────────────────────
+    /// Filesystem path (for kind=file_path, database, doc).
+    #[arg(long)]
+    path: Option<String>,
+
+    // ── Endpoint address fields ───────────────────────────────────────
+    /// API base URL (for kind=endpoint).
+    #[arg(long)]
+    url: Option<String>,
+
+    // ── Config address fields ─────────────────────────────────────────
+    /// Config key (for kind=config).
+    #[arg(long)]
+    key: Option<String>,
+
+    /// Config value (for kind=config).
+    #[arg(long)]
+    value: Option<String>,
+
+    // ── Database-specific ─────────────────────────────────────────────
+    /// Database backend: sqlite, turso, postgres (for kind=database).
+    #[arg(long)]
+    db_kind: Option<String>,
+
+    // ── Doc-specific ──────────────────────────────────────────────────
+    /// Doc category: docs, logs, archive, notes, fixtures (for kind=doc).
+    #[arg(long)]
+    doc_kind: Option<String>,
+
+    // ── Ingestion spec fields (iceberg_table only) ────────────────────
+    /// Source file path or glob for ingestion (e.g. "/data/gwas/*.parquet").
+    /// When set, an ingestion_spec is attached to the resource.
+    #[arg(long)]
+    source: Option<String>,
+
+    /// Source format: parquet, csv, or tsv (default: parquet).
+    #[arg(long)]
+    format: Option<String>,
+
+    /// Partition columns (repeatable, e.g. --partition chrom).
     #[arg(long)]
     partition: Vec<String>,
 
-    /// Write mode: create_if_not_exists, create_or_replace, or append.
-    #[arg(long, default_value = "create_if_not_exists")]
-    mode: String,
-
-    /// Archive source to cloud AND ingest into Iceberg in one step.
-    /// Reads ARCHIVE_REMOTE and ARCHIVE_BUCKET env vars for cloud config.
-    /// Archive path is auto-derived as $ARCHIVE_BUCKET/<schema>/<table>/.
+    /// Write mode: create_if_not_exists, create_or_replace, or append
+    /// (default: create_if_not_exists).
     #[arg(long)]
-    archive: bool,
+    mode: Option<String>,
 
     /// CSV delimiter character (default: ','). For tsv, '\t' is used.
     #[arg(long)]
@@ -335,37 +419,66 @@ struct AddDataArgs {
     #[arg(long)]
     no_header: bool,
 
-    /// Metadata key=value pair (repeat for multiple, e.g. --metadata source=Zenodo --metadata n_snps=1187349).
+    // ── Compound: --archive does register + rclone push + Iceberg ingest ─
+    /// Archive source to cloud AND ingest into Iceberg in one step.
+    /// Requires ARCHIVE_REMOTE and ARCHIVE_BUCKET env vars.
+    /// Only meaningful with --source for kind=iceberg_table.
+    #[arg(long)]
+    archive: bool,
+
+    // ── Common optional fields ────────────────────────────────────────
+    /// Metadata key=value pair (repeatable).
     #[arg(long, value_parser = parse_key_value)]
     metadata: Vec<(String, String)>,
 
-    /// Tag (repeat for multiple, e.g. --tag ld_score --tag reference_panel).
+    /// Tag (repeatable).
     #[arg(long)]
     tag: Vec<String>,
 }
 
-/// Parse `key=value` into a tuple for `--metadata`.
-fn parse_key_value(s: &str) -> color_eyre::Result<(String, String)> {
-    s.split_once('=')
-        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        .ok_or_else(|| color_eyre::eyre::eyre!("expected key=value, got '{s}'"))
-}
-
-/// Arguments for `data remove`.
+/// Arguments for `resource remove`.
 #[derive(Debug, Args)]
-struct RemoveDataArgs {
+struct ResourceRemoveArgs {
     /// Logical resource name to remove.
-    #[arg(long)]
     name: String,
+
+    /// Skip confirmation prompt.
+    #[arg(long, short = 'y')]
+    yes: bool,
 }
 
-fn run_data(args: DataArgs) -> color_eyre::Result<()> {
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
-    runtime.block_on(async { run_data_async(args).await })
+/// Arguments for archive/restore/verify (single resource or all archivable).
+#[derive(Debug, Args)]
+struct ResourceTargetArgs {
+    /// Logical resource name. If omitted, operates on ALL archivable resources.
+    #[arg(long, short = 'r')]
+    resource: Option<String>,
 }
 
-async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
+/// Arguments for `resource drift`.
+#[derive(Debug, Args)]
+struct ResourceDriftArgs {
+    /// Also check Iceberg tables (requires the datalake to be reachable).
+    #[arg(long)]
+    check_iceberg: bool,
+}
+
+/// Arguments for `resource export`.
+#[derive(Debug, Args)]
+struct ResourceExportArgs {
+    /// Write to file instead of stdout.
+    #[arg(long, short = 'o')]
+    output: Option<PathBuf>,
+}
+
+// ---------------------------------------------------------------------------
+// resource subcommand implementation
+// ---------------------------------------------------------------------------
+
+/// Open the resource catalog from the default RuntimeConfig location.
+/// Uses `load_or_error` so that a locked or corrupt manifest DB produces
+/// a clear error instead of silently returning an empty catalog.
+async fn open_catalog() -> color_eyre::Result<Arc<dag_core::resource_catalog::ResourceCatalog>> {
     use dag_core::resource_catalog::ResourceCatalog;
     use runtime::config::RuntimeConfig;
 
@@ -375,430 +488,785 @@ async fn run_data_async(args: DataArgs) -> color_eyre::Result<()> {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let catalog = Arc::new(ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await);
-
-    // Register built-in resources (same as SharedInfra::open would do).
+    let catalog = Arc::new(
+        ResourceCatalog::load_or_error(&config.data_dir, &manifest_db)
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                // Detect the common "database is locked" case and give
+                // actionable advice.
+                if msg.contains("locked") || msg.contains("busy") {
+                    color_eyre::eyre::eyre!(
+                        "resource-manifest.db is locked — another TUI process is likely running.\n\
+                         \n\
+                         Options:\n\
+                         1. Close the other TUI instance and retry.\n\
+                         2. DB path: {}\n\
+                         \n\
+                         Underlying error: {msg}",
+                        manifest_db.display()
+                    )
+                } else {
+                    color_eyre::eyre::eyre!(
+                        "failed to open resource catalog at {}: {msg}",
+                        manifest_db.display()
+                    )
+                }
+            })?,
+    );
     let _ = ResourceCatalog::set_global(catalog.clone());
-    // Re-register providers by opening a minimal engine.
-    // For now, the catalog should have persisted entries from a prior TUI run.
+    Ok(catalog)
+}
+
+fn run_resource(args: ResourceArgs) -> color_eyre::Result<()> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+    runtime.block_on(async { run_resource_async(args).await })
+}
+
+async fn run_resource_async(args: ResourceArgs) -> color_eyre::Result<()> {
+    let catalog = open_catalog().await?;
 
     match args.action {
-        DataAction::Add(a) => {
-            use dag_core::resource_catalog::{
-                ArchiveSpec, CsvOptions, IngestionSpec, ResourceAddress, ResourceEntry,
-                ResourceKind, SourceFormat, WriteMode,
-            };
+        ResourceAction::List(a) => resource_list(&catalog, a).await,
+        ResourceAction::Show(a) => resource_show(&catalog, a),
+        ResourceAction::Add(a) => resource_add(&catalog, a).await,
+        ResourceAction::Remove(a) => resource_remove(&catalog, a).await,
+        ResourceAction::Ingest(a) => resource_ingest(&catalog, a).await,
+        ResourceAction::Archive(a) => resource_archive(&catalog, a).await,
+        ResourceAction::Restore(a) => resource_restore(&catalog, a).await,
+        ResourceAction::Verify(a) => resource_verify(&catalog, a).await,
+        ResourceAction::Drift(a) => resource_drift(&catalog, a).await,
+        ResourceAction::Export(a) => resource_export(&catalog, a),
+    }
+}
 
-            let format = match a.format.as_str() {
-                "parquet" => SourceFormat::Parquet,
-                "csv" => SourceFormat::Csv,
-                "tsv" => SourceFormat::Tsv,
-                other => {
-                    return Err(color_eyre::eyre::eyre!(
-                        "unknown format '{other}': expected parquet, csv, or tsv"
-                    ));
-                }
-            };
+async fn resource_list(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceListArgs,
+) -> color_eyre::Result<()> {
+    let mut entries = catalog.list();
 
-            let mode = match a.mode.as_str() {
-                "create_if_not_exists" => WriteMode::CreateIfNotExists,
-                "create_or_replace" => WriteMode::CreateOrReplace,
-                "append" => WriteMode::Append,
-                other => {
-                    return Err(color_eyre::eyre::eyre!(
-                        "unknown mode '{other}': expected create_if_not_exists, create_or_replace, or append"
-                    ));
-                }
-            };
+    // ── Filters ─────────────────────────────────────────────────────
+    if let Some(ref kind) = args.kind {
+        entries.retain(|e| e.kind.as_str() == kind.as_str());
+    }
+    if !args.tag.is_empty() {
+        entries.retain(|e| args.tag.iter().any(|t| e.tags.contains(t)));
+    }
+    if let Some(ref name) = args.name {
+        let lower = name.to_lowercase();
+        entries.retain(|e| e.name.to_lowercase().contains(&lower));
+    }
+    if args.archivable {
+        entries.retain(|e| e.archive_spec.is_some());
+    }
+    if args.ingestible {
+        entries.retain(|e| e.ingestion_spec.is_some());
+    }
 
-            let csv_options = match format {
-                SourceFormat::Csv | SourceFormat::Tsv => Some(CsvOptions {
-                    has_header: !a.no_header,
-                    delimiter: a.delimiter.unwrap_or_else(|| {
-                        if matches!(format, SourceFormat::Tsv) {
-                            '\t'
-                        } else {
-                            ','
-                        }
-                    }),
-                    file_extension: None,
-                    compression: None,
-                }),
-                _ => None,
-            };
+    if entries.is_empty() {
+        println!("No resources match the given filters.");
+        return Ok(());
+    }
 
-            // Resolve archive config: --archive flag + env vars.
-            let archive_spec = if a.archive {
-                let remote = std::env::var("ARCHIVE_REMOTE").map_err(|_| {
-                    color_eyre::eyre::eyre!(
-                        "--archive requires ARCHIVE_REMOTE env var (e.g. 'aliyun')"
-                    )
-                })?;
-                let bucket = std::env::var("ARCHIVE_BUCKET").map_err(|_| {
-                    color_eyre::eyre::eyre!(
-                        "--archive requires ARCHIVE_BUCKET env var (e.g. 'autonomics-data')"
-                    )
-                })?;
-                // Auto-derive archive path: bucket/schema/table/
-                let remote_path = format!("{}/{}/", a.schema, a.table);
-                Some(ArchiveSpec {
-                    remote,
-                    remote_path: format!("{bucket}/{remote_path}"),
-                    checksum: true,
-                })
-            } else {
-                None
-            };
+    // Sort by kind then name for readability.
+    entries.sort_by(|a, b| {
+        a.kind
+            .as_str()
+            .cmp(b.kind.as_str())
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
-            // For archiving, resolve what to upload:
-            // - Single file → archive just that file
-            // - Directory → archive that directory
-            // - Glob pattern → walk up to the first real directory
-            let archive_local_path = {
-                let p = std::path::Path::new(&a.source);
-                if p.is_file() {
-                    // Single file — rclone copies just this file.
-                    p.to_path_buf()
-                } else if p.is_dir() {
-                    // Directory — rclone copies the directory contents.
-                    p.to_path_buf()
+    match args.format.as_str() {
+        "json" => {
+            let json = serde_json::to_string_pretty(&entries)?;
+            println!("{json}");
+        }
+        _ => {
+            // Table output.
+            println!("{} resources:\n", entries.len());
+            println!(
+                "  {:<14} {:<30} {:<10} {:<8} {:<8} {}",
+                "KIND", "NAME", "ARCHIVE", "INGEST", "", "DESCRIPTION"
+            );
+            println!("  {:-<120}", "");
+            for e in &entries {
+                let desc = if e.description.len() > 50 {
+                    format!("{}…", &e.description[..47])
                 } else {
-                    // Glob pattern (e.g. /data/**/*.parquet) — walk up
-                    // to the first existing directory.
-                    let mut dir = p.parent().unwrap_or(p);
-                    while !dir.is_dir() {
-                        dir = match dir.parent() {
-                            Some(p) => p,
-                            None => break,
-                        };
-                    }
-                    dir.to_path_buf()
-                }
-            };
-
-            // Build the ingestion spec.
-            let src_name = if archive_spec.is_some() {
-                Some(format!(
-                    "source.{}",
-                    a.name.strip_prefix("iceberg.").unwrap_or(&a.name)
-                ))
-            } else {
-                None
-            };
-
-            let spec = IngestionSpec {
-                source_path: a.source.clone(),
-                source_format: format,
-                partition_by: a.partition.clone(),
-                mode,
-                restore_before: false,
-                archive_after: false,
-                source_resource: src_name.clone(),
-                csv_options,
-            };
-
-            // Register source FilePath resource (for archive linkage).
-            if let Some(ref sn) = src_name {
-                if let Some(ref aspec) = archive_spec {
-                    let src_entry = ResourceEntry::new(
-                        sn.clone(),
-                        ResourceKind::FilePath,
-                        &format!("Source files for {}", a.name),
-                        ResourceAddress::path(&archive_local_path),
-                    )
-                    .with_archive(aspec.clone());
-                    catalog.register(src_entry)?;
-                }
-            }
-
-            // Register the target IcebergTable entry.
-            let mut entry_builder = ResourceEntry::new(
-                a.name.clone(),
-                ResourceKind::IcebergTable,
-                a.description.as_deref().unwrap_or(""),
-                ResourceAddress::iceberg(&a.schema, &a.table),
-            )
-            .with_ingestion(spec);
-
-            if !a.metadata.is_empty() {
-                entry_builder = entry_builder.with_metadata(a.metadata.iter().cloned().collect());
-            }
-            if !a.tag.is_empty() {
-                entry_builder = entry_builder.with_tags(a.tag.clone());
-            }
-
-            catalog.register(entry_builder)?;
-            catalog.persist().await;
-
-            println!("✓ Registered resource '{}'", a.name);
-            println!("  target: iceberg.{}.{}", a.schema, a.table);
-            println!("  source: {} ({})", a.source, a.format);
-            if !a.partition.is_empty() {
-                println!("  partition: {}", a.partition.join(", "));
-            }
-            println!("  mode: {}", a.mode);
-            if !a.metadata.is_empty() {
-                println!("  metadata:");
-                for (k, v) in &a.metadata {
-                    println!("    {k} = {v}");
-                }
-            }
-            if !a.tag.is_empty() {
-                println!("  tags: {}", a.tag.join(", "));
-            }
-            if let Some(ref aspec) = archive_spec {
-                println!("  archive: {}:{}", aspec.remote, aspec.remote_path);
-            }
-
-            // ── If --archive: execute archive + ingest in one shot ──────
-            if a.archive {
-                let Some(ref src_name) = src_name else {
-                    unreachable!()
+                    e.description.clone()
                 };
-
-                // Step 1: Archive source to cloud.
-                println!("\n[1/2] Archiving source…");
-                match catalog.archive(src_name).await {
-                    Ok(o) => println!(
-                        "  ✓ {} files, {} bytes, {:.1}s",
-                        o.files_transferred,
-                        o.size_bytes,
-                        o.duration_ms as f64 / 1000.0
-                    ),
-                    Err(e) => {
-                        println!("  ✗ archive failed: {e}");
-                        println!("\nResource registered but archive/ingest incomplete.");
-                        println!("Retry: autonomics-tui data archive -r {src_name}");
-                        return Ok(());
-                    }
-                }
-
-                // Step 2: Ingest into Iceberg.
-                println!("\n[2/2] Ingesting into Iceberg…");
-                let datalake = Arc::new(datalake::Datalake::new());
-                let executor =
-                    runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
-                match executor.ingest(&a.name).await {
-                    Ok(o) if o.skipped => println!("  ⊘ skipped (table already has data)"),
-                    Ok(o) => println!(
-                        "  ✓ {} rows, {} files, {:.1}s",
-                        o.rows_written,
-                        o.files_processed,
-                        o.duration_ms as f64 / 1000.0
-                    ),
-                    Err(e) => {
-                        println!("  ✗ ingest failed: {e}");
-                        println!("\nSource archived ✓ but ingest incomplete.");
-                        println!("Retry: autonomics-tui data ingest -r {}", a.name);
-                        return Ok(());
-                    }
-                }
-                println!("\n✓ Done — registered + archived + ingested.");
-            } else {
-                println!("\nTo ingest: autonomics-tui data ingest -r {}", a.name);
-            }
-            return Ok(());
-        }
-
-        DataAction::Remove(a) => {
-            if catalog.deregister(&a.name).is_some() {
-                catalog.persist().await;
-                println!("✓ Removed resource '{}'", a.name);
-            } else {
-                println!("— resource '{}' not found in catalog", a.name);
-            }
-            return Ok(());
-        }
-
-        DataAction::Ingest => {
-            // Need Datalake for Iceberg table creation/insertion.
-            let datalake = Arc::new(datalake::Datalake::new());
-            let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
-
-            let targets: Vec<String> = match &args.resource {
-                Some(name) => vec![name.clone()],
-                None => catalog
-                    .list()
-                    .into_iter()
-                    .filter(|e| e.ingestion_spec.is_some())
-                    .map(|e| e.name)
-                    .collect(),
-            };
-
-            if targets.is_empty() {
-                println!("No resources with ingestion_spec registered.");
-                println!("Register resources with IngestionSpec via the ResourceCatalog first.");
-                return Ok(());
-            }
-
-            println!("Ingesting {} resource(s)…\n", targets.len());
-            let mut ok = 0u32;
-            let mut fail = 0u32;
-            for name in &targets {
-                print!("  {name}: ");
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                match executor.ingest(name).await {
-                    Err(e) => {
-                        println!("✗ {e}");
-                        fail += 1;
-                    }
-                    Ok(o) if o.skipped => {
-                        println!("⊘ skipped (already has data)");
-                        ok += 1;
-                    }
-                    Ok(o) => {
-                        println!(
-                            "✓ {} rows, {} files, {:.1}s",
-                            o.rows_written,
-                            o.files_processed,
-                            o.duration_ms as f64 / 1000.0
-                        );
-                        ok += 1;
-                    }
-                }
-            }
-            println!("\nDone: {ok} ok, {fail} failed.");
-        }
-
-        DataAction::Restore => {
-            let targets: Vec<String> = match &args.resource {
-                Some(name) => vec![name.clone()],
-                None => catalog
-                    .list_archivable()
-                    .into_iter()
-                    .map(|r| r.name)
-                    .collect(),
-            };
-
-            if targets.is_empty() {
-                println!("No resources with archive_spec registered.");
-                return Ok(());
-            }
-
-            println!("Restoring {} resource(s) from archive…\n", targets.len());
-            let mut ok = 0u32;
-            let mut fail = 0u32;
-            for name in &targets {
-                print!("  {name}: ");
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                match catalog.restore(name).await {
-                    Err(e) => {
-                        println!("✗ {e}");
-                        fail += 1;
-                    }
-                    Ok(o) => {
-                        println!(
-                            "✓ {} files, {} bytes, {:.1}s",
-                            o.files_transferred,
-                            o.size_bytes,
-                            o.duration_ms as f64 / 1000.0
-                        );
-                        ok += 1;
-                    }
-                }
-            }
-            println!("\nDone: {ok} ok, {fail} failed.");
-        }
-
-        DataAction::Archive => {
-            let targets: Vec<String> = match &args.resource {
-                Some(name) => vec![name.clone()],
-                None => catalog
-                    .list_archivable()
-                    .into_iter()
-                    .map(|r| r.name)
-                    .collect(),
-            };
-
-            if targets.is_empty() {
-                println!("No resources with archive_spec registered.");
-                return Ok(());
-            }
-
-            println!("Archiving {} resource(s) to cloud…\n", targets.len());
-            let mut ok = 0u32;
-            let mut fail = 0u32;
-            for name in &targets {
-                print!("  {name}: ");
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                match catalog.archive(name).await {
-                    Err(e) => {
-                        println!("✗ {e}");
-                        fail += 1;
-                    }
-                    Ok(o) => {
-                        println!(
-                            "✓ {} files, {} bytes, {:.1}s → {}",
-                            o.files_transferred,
-                            o.size_bytes,
-                            o.duration_ms as f64 / 1000.0,
-                            name
-                        );
-                        ok += 1;
-                    }
-                }
-            }
-            println!("\nDone: {ok} ok, {fail} failed.");
-            catalog.persist().await;
-        }
-
-        DataAction::List => {
-            // List ingestible resources.
-            let ingestible: Vec<_> = catalog
-                .list()
-                .into_iter()
-                .filter(|e| e.ingestion_spec.is_some())
-                .collect();
-            if !ingestible.is_empty() {
-                println!("Ingestible resources ({}):", ingestible.len());
-                for e in &ingestible {
-                    let spec = e.ingestion_spec.as_ref().unwrap();
-                    println!(
-                        "  {} [{} → {}]",
-                        e.name,
-                        spec.source_format.as_str(),
-                        e.kind.as_str()
-                    );
-                    println!("    source: {}", spec.source_path);
-                    if !spec.partition_by.is_empty() {
-                        println!("    partition: {}", spec.partition_by.join(", "));
-                    }
-                    println!("    mode: {}", spec.mode.as_str());
-                    if spec.restore_before {
-                        println!("    restore_before: ✓");
-                    }
-                    if spec.archive_after {
-                        println!("    archive_after: ✓");
-                    }
-                }
-                println!();
-            }
-
-            // List archivable resources.
-            let archivable = catalog.list_archivable();
-            if !archivable.is_empty() {
-                println!("Archivable resources ({}):", archivable.len());
-                for r in &archivable {
-                    let status = match (&r.archived_at, r.verified) {
-                        (Some(ts), Some(true)) => format!("archived ✓ ({ts})"),
-                        (Some(ts), _) => format!("archived ({ts})"),
-                        _ => "not archived".to_string(),
-                    };
-                    println!("  {} → {} ({})", r.name, r.remote, status);
-                }
-            }
-
-            if ingestible.is_empty() && archivable.is_empty() {
-                println!("No data resources registered.");
-                println!("Resources are registered via ResourceProvider in the runtime.");
-                println!("Run the TUI once to populate the catalog, then use this command.");
+                let has_archive = if e.archive_spec.is_some() { "✓" } else { "" };
+                let has_ingest = if e.ingestion_spec.is_some() {
+                    "✓"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {:<14} {:<30} {:<8} {:<8} {}",
+                    e.kind.as_str(),
+                    e.name,
+                    has_archive,
+                    has_ingest,
+                    desc
+                );
             }
         }
     }
 
+    Ok(())
+}
+
+fn resource_show(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceShowArgs,
+) -> color_eyre::Result<()> {
+    let entry = catalog.get(&args.name).ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "resource '{}' not found. Use 'autonomics-tui resource list' to see names.",
+            args.name
+        )
+    })?;
+
+    println!("Name:        {}", entry.name);
+    println!("Kind:        {}", entry.kind.as_str());
+    println!("Description: {}", entry.description);
+    println!("Address:     {:?}", entry.address);
+
+    if !entry.metadata.is_empty() {
+        println!("Metadata:");
+        for (k, v) in &entry.metadata {
+            println!("  {k} = {v}");
+        }
+    }
+
+    if !entry.tags.is_empty() {
+        println!("Tags:        {}", entry.tags.join(", "));
+    }
+
+    if let Some(ref spec) = entry.archive_spec {
+        println!("\nArchive Spec:");
+        println!("  remote:      {}:{}", spec.remote, spec.remote_path);
+        println!("  checksum:    {}", spec.checksum);
+    }
+
+    if let Some(ref status) = entry.archive_status {
+        println!("\nArchive Status:");
+        if let Some(ref ts) = status.archived_at {
+            println!("  archived_at: {ts}");
+        }
+        if let Some(ref ts) = status.restored_at {
+            println!("  restored_at: {ts}");
+        }
+        if let Some(n) = status.file_count {
+            println!("  file_count:  {n}");
+        }
+        if let Some(s) = status.size_bytes {
+            println!("  size_bytes:  {s}");
+        }
+        if let Some(v) = status.verified {
+            println!("  verified:    {}", if v { "✓" } else { "✗" });
+        }
+    }
+
+    if let Some(ref spec) = entry.ingestion_spec {
+        println!("\nIngestion Spec:");
+        println!("  source_path:   {}", spec.source_path);
+        println!("  source_format: {}", spec.source_format.as_str());
+        if !spec.partition_by.is_empty() {
+            println!("  partition_by:  {}", spec.partition_by.join(", "));
+        }
+        println!("  mode:          {}", spec.mode.as_str());
+        if spec.restore_before {
+            println!("  restore_before: ✓");
+        }
+        if spec.archive_after {
+            println!("  archive_after:  ✓");
+        }
+        if let Some(ref src) = spec.source_resource {
+            println!("  source_resource: {src}");
+        }
+    }
+
+    // Show the rclone commands for archivable resources.
+    if entry.archive_spec.is_some() {
+        if let Ok(cmd) = catalog.archive_command(&entry.name) {
+            println!("\nArchive command:  {cmd}");
+        }
+        if let Ok(cmd) = catalog.restore_command(&entry.name) {
+            println!("Restore command:  {cmd}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn resource_add(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceAddArgs,
+) -> color_eyre::Result<()> {
+    use dag_core::resource_catalog::{
+        ArchiveSpec, CsvOptions, DbKind, DocKind, IngestionSpec, ResourceAddress, ResourceEntry,
+        ResourceKind, SourceFormat, WriteMode,
+    };
+
+    let kind = ResourceKind::from_str(&args.kind).ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "unknown kind '{}': expected iceberg_table, file_path, endpoint, config, database, or doc",
+            args.kind
+        )
+    })?;
+
+    let address =
+        match kind {
+            ResourceKind::IcebergTable => {
+                let schema = args.schema.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--schema is required for kind=iceberg_table")
+                })?;
+                let table = args.table.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--table is required for kind=iceberg_table")
+                })?;
+                ResourceAddress::iceberg(schema, table)
+            }
+            ResourceKind::FilePath => {
+                let path = args.path.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--path is required for kind=file_path")
+                })?;
+                ResourceAddress::path(path)
+            }
+            ResourceKind::Endpoint => {
+                let url = args.url.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--url is required for kind=endpoint")
+                })?;
+                ResourceAddress::endpoint(url)
+            }
+            ResourceKind::Config => {
+                let key = args
+                    .key
+                    .as_deref()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("--key is required for kind=config"))?;
+                let value = args.value.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--value is required for kind=config")
+                })?;
+                ResourceAddress::config(key, value)
+            }
+            ResourceKind::Database => {
+                let path = args.path.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--path is required for kind=database")
+                })?;
+                let db_kind = match args.db_kind.as_deref() {
+                    Some("turso") => DbKind::Turso,
+                    Some("postgres") => DbKind::Postgres,
+                    _ => DbKind::Sqlite,
+                };
+                ResourceAddress::database(db_kind, path)
+            }
+            ResourceKind::Doc => {
+                let path = args
+                    .path
+                    .as_deref()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("--path is required for kind=doc"))?;
+                let doc_kind = match args.doc_kind.as_deref() {
+                    Some("logs") => DocKind::Logs,
+                    Some("archive") => DocKind::Archive,
+                    Some("notes") => DocKind::Notes,
+                    Some("fixtures") => DocKind::Fixtures,
+                    _ => DocKind::Docs,
+                };
+                ResourceAddress::doc(doc_kind, path)
+            }
+        };
+
+    let mut entry_builder = ResourceEntry::new(&args.name, kind, &args.description, address);
+
+    if !args.metadata.is_empty() {
+        entry_builder = entry_builder.with_metadata(args.metadata.iter().cloned().collect());
+    }
+    if !args.tag.is_empty() {
+        entry_builder = entry_builder.with_tags(args.tag.clone());
+    }
+
+    // ── Ingestion spec (--source, iceberg_table only) ───────────────────
+    let mut ingestion_spec: Option<IngestionSpec> = None;
+    let mut archive_spec: Option<ArchiveSpec> = None;
+    let mut archive_local_path: Option<PathBuf> = None;
+    let mut source_resource_name: Option<String> = None;
+
+    if let Some(ref source_path) = args.source {
+        if kind != ResourceKind::IcebergTable {
+            return Err(color_eyre::eyre::eyre!(
+                "--source is only valid for kind=iceberg_table"
+            ));
+        }
+
+        let format_str = args.format.as_deref().unwrap_or("parquet");
+        let format = match format_str {
+            "parquet" => SourceFormat::Parquet,
+            "csv" => SourceFormat::Csv,
+            "tsv" => SourceFormat::Tsv,
+            other => {
+                return Err(color_eyre::eyre::eyre!(
+                    "unknown format '{other}': expected parquet, csv, or tsv"
+                ));
+            }
+        };
+
+        let mode_str = args.mode.as_deref().unwrap_or("create_if_not_exists");
+        let mode = match mode_str {
+            "create_if_not_exists" => WriteMode::CreateIfNotExists,
+            "create_or_replace" => WriteMode::CreateOrReplace,
+            "append" => WriteMode::Append,
+            other => {
+                return Err(color_eyre::eyre::eyre!(
+                    "unknown mode '{other}': expected create_if_not_exists, create_or_replace, or append"
+                ));
+            }
+        };
+
+        let csv_options = match format {
+            SourceFormat::Csv | SourceFormat::Tsv => Some(CsvOptions {
+                has_header: !args.no_header,
+                delimiter: args.delimiter.unwrap_or_else(|| {
+                    if matches!(format, SourceFormat::Tsv) {
+                        '\t'
+                    } else {
+                        ','
+                    }
+                }),
+                file_extension: None,
+                compression: None,
+            }),
+            _ => None,
+        };
+
+        // Resolve archive config: --archive flag + env vars.
+        if args.archive {
+            let remote = std::env::var("ARCHIVE_REMOTE").map_err(|_| {
+                color_eyre::eyre::eyre!("--archive requires ARCHIVE_REMOTE env var (e.g. 'aliyun')")
+            })?;
+            let bucket = std::env::var("ARCHIVE_BUCKET").map_err(|_| {
+                color_eyre::eyre::eyre!(
+                    "--archive requires ARCHIVE_BUCKET env var (e.g. 'autonomics-data')"
+                )
+            })?;
+            let schema = args.schema.as_deref().unwrap_or("data");
+            let table = args.table.as_deref().unwrap_or("default");
+            let remote_path = format!("{}/{}/{}/", bucket, schema, table);
+            archive_spec = Some(ArchiveSpec {
+                remote,
+                remote_path,
+                checksum: true,
+            });
+
+            // Resolve the local path to archive (file / dir / glob parent).
+            let p = std::path::Path::new(source_path);
+            archive_local_path = Some(if p.is_file() || p.is_dir() {
+                p.to_path_buf()
+            } else {
+                let mut dir = p.parent().unwrap_or(p);
+                while !dir.is_dir() {
+                    dir = match dir.parent() {
+                        Some(p) => p,
+                        None => break,
+                    };
+                }
+                dir.to_path_buf()
+            });
+
+            source_resource_name = Some(format!(
+                "source.{}",
+                args.name.strip_prefix("iceberg.").unwrap_or(&args.name)
+            ));
+        }
+
+        ingestion_spec = Some(IngestionSpec {
+            source_path: source_path.clone(),
+            source_format: format,
+            partition_by: args.partition.clone(),
+            mode,
+            restore_before: false,
+            archive_after: false,
+            source_resource: source_resource_name.clone(),
+            csv_options,
+        });
+    }
+
+    if let Some(ref spec) = ingestion_spec {
+        entry_builder = entry_builder.with_ingestion(spec.clone());
+    }
+
+    let registered_name = args.name.clone();
+    catalog.register(entry_builder)?;
+    catalog.persist().await;
+
+    // ── Register linked source FilePath resource for archive ────────────
+    if let (Some(sn), Some(aspec), Some(local)) =
+        (&source_resource_name, &archive_spec, &archive_local_path)
+    {
+        let src_entry = ResourceEntry::new(
+            sn.clone(),
+            ResourceKind::FilePath,
+            &format!("Source files for {}", args.name),
+            ResourceAddress::path(local),
+        )
+        .with_archive(aspec.clone());
+        catalog.register(src_entry)?;
+        catalog.persist().await;
+    }
+
+    // ── Summary output ──────────────────────────────────────────────────
+    println!(
+        "✓ Registered resource '{}' ({})",
+        args.name,
+        args.kind.as_str()
+    );
+    if let Some(ref spec) = ingestion_spec {
+        println!(
+            "  source: {} ({})",
+            spec.source_path,
+            spec.source_format.as_str()
+        );
+        if !spec.partition_by.is_empty() {
+            println!("  partition: {}", spec.partition_by.join(", "));
+        }
+        println!("  mode: {}", spec.mode.as_str());
+    }
+    if let Some(ref aspec) = archive_spec {
+        println!("  archive: {}:{}", aspec.remote, aspec.remote_path);
+    }
+
+    // ── Compound: --archive does register + push + ingest ───────────────
+    if args.archive {
+        let Some(ref src_name) = source_resource_name else {
+            return Ok(());
+        };
+
+        // Step 1: Archive source to cloud.
+        println!("\n[1/2] Archiving source…");
+        match catalog.archive(src_name).await {
+            Ok(o) => println!(
+                "  ✓ {} files, {} bytes, {:.1}s",
+                o.files_transferred,
+                o.size_bytes,
+                o.duration_ms as f64 / 1000.0
+            ),
+            Err(e) => {
+                println!("  ✗ archive failed: {e}");
+                println!("\nResource registered but archive/ingest incomplete.");
+                println!("Retry: autonomics-tui resource archive -r {src_name}");
+                return Ok(());
+            }
+        }
+
+        // Step 2: Ingest into Iceberg.
+        println!("\n[2/2] Ingesting into Iceberg…");
+        let datalake = Arc::new(datalake::Datalake::new());
+        let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
+        match executor.ingest(&registered_name).await {
+            Ok(o) if o.skipped => println!("  ⊘ skipped (table already has data)"),
+            Ok(o) => println!(
+                "  ✓ {} rows, {} files, {:.1}s",
+                o.rows_written,
+                o.files_processed,
+                o.duration_ms as f64 / 1000.0
+            ),
+            Err(e) => {
+                println!("  ✗ ingest failed: {e}");
+                println!("\nSource archived ✓ but ingest incomplete.");
+                println!("Retry: autonomics-tui resource ingest -r {registered_name}");
+                return Ok(());
+            }
+        }
+        println!("\n✓ Done — registered + archived + ingested.");
+    } else if ingestion_spec.is_some() {
+        println!("\nTo ingest: autonomics-tui resource ingest -r {registered_name}");
+    }
+
+    Ok(())
+}
+
+async fn resource_remove(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceRemoveArgs,
+) -> color_eyre::Result<()> {
+    // Show what would be removed.
+    let entry = catalog
+        .get(&args.name)
+        .ok_or_else(|| color_eyre::eyre::eyre!("resource '{}' not found", args.name))?;
+
+    if !args.yes {
+        eprint!(
+            "Remove '{}' ({}) from the catalog? [y/N] ",
+            entry.name,
+            entry.kind.as_str()
+        );
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        if !matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+
+    catalog.deregister(&args.name);
+    catalog.persist().await;
+    println!("✓ Removed resource '{}'", args.name);
+    Ok(())
+}
+
+async fn resource_archive(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceTargetArgs,
+) -> color_eyre::Result<()> {
+    let targets = resolve_archive_targets(catalog, &args.resource);
+
+    if targets.is_empty() {
+        println!("No archivable resources found.");
+        return Ok(());
+    }
+
+    println!("Archiving {} resource(s) to cloud…\n", targets.len());
+    let mut ok = 0u32;
+    let mut fail = 0u32;
+    for name in &targets {
+        print!("  {name}: ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        match catalog.archive(name).await {
+            Err(e) => {
+                println!("✗ {e}");
+                fail += 1;
+            }
+            Ok(o) => {
+                println!(
+                    "✓ {} files, {} bytes, {:.1}s",
+                    o.files_transferred,
+                    o.size_bytes,
+                    o.duration_ms as f64 / 1000.0
+                );
+                ok += 1;
+            }
+        }
+    }
+    println!("\nDone: {ok} ok, {fail} failed.");
+    catalog.persist().await;
+    Ok(())
+}
+
+async fn resource_restore(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceTargetArgs,
+) -> color_eyre::Result<()> {
+    let targets = resolve_archive_targets(catalog, &args.resource);
+
+    if targets.is_empty() {
+        println!("No archivable resources found.");
+        return Ok(());
+    }
+
+    println!("Restoring {} resource(s) from cloud…\n", targets.len());
+    let mut ok = 0u32;
+    let mut fail = 0u32;
+    for name in &targets {
+        print!("  {name}: ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        match catalog.restore(name).await {
+            Err(e) => {
+                println!("✗ {e}");
+                fail += 1;
+            }
+            Ok(o) => {
+                println!(
+                    "✓ {} files, {} bytes, {:.1}s",
+                    o.files_transferred,
+                    o.size_bytes,
+                    o.duration_ms as f64 / 1000.0
+                );
+                ok += 1;
+            }
+        }
+    }
+    println!("\nDone: {ok} ok, {fail} failed.");
+    Ok(())
+}
+
+async fn resource_verify(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceTargetArgs,
+) -> color_eyre::Result<()> {
+    let targets = resolve_archive_targets(catalog, &args.resource);
+
+    if targets.is_empty() {
+        println!("No archivable resources found.");
+        return Ok(());
+    }
+
+    println!("Verifying {} resource(s)…\n", targets.len());
+    let mut ok = 0u32;
+    let mut fail = 0u32;
+    for name in &targets {
+        print!("  {name}: ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        match catalog.verify_archive(name).await {
+            Ok(true) => {
+                println!("✓ verified");
+                ok += 1;
+            }
+            Ok(false) => {
+                println!("✗ mismatch (local ≠ remote)");
+                fail += 1;
+            }
+            Err(e) => {
+                println!("✗ {e}");
+                fail += 1;
+            }
+        }
+    }
+    println!("\nDone: {ok} ok, {fail} failed.");
+    catalog.persist().await;
+    Ok(())
+}
+
+/// Resolve the list of resource names for archive/restore/verify.
+/// Single resource when `--resource` is given; all archivable otherwise.
+fn resolve_archive_targets(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    resource: &Option<String>,
+) -> Vec<String> {
+    match resource {
+        Some(name) => vec![name.clone()],
+        None => catalog
+            .list_archivable()
+            .into_iter()
+            .map(|r| r.name)
+            .collect(),
+    }
+}
+
+/// Resolve the list of resource names for ingest.
+/// Single resource when `--resource` is given; all ingestible otherwise.
+fn resolve_ingest_targets(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    resource: &Option<String>,
+) -> Vec<String> {
+    match resource {
+        Some(name) => vec![name.clone()],
+        None => catalog
+            .list()
+            .into_iter()
+            .filter(|e| e.ingestion_spec.is_some())
+            .map(|e| e.name)
+            .collect(),
+    }
+}
+
+async fn resource_ingest(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceTargetArgs,
+) -> color_eyre::Result<()> {
+    let targets = resolve_ingest_targets(catalog, &args.resource);
+
+    if targets.is_empty() {
+        println!("No resources with ingestion_spec registered.");
+        println!("Register with: autonomics-tui resource add --kind iceberg_table --source …");
+        return Ok(());
+    }
+
+    let datalake = Arc::new(datalake::Datalake::new());
+    let executor = runtime::ingestion::IngestionExecutor::new(catalog.clone(), datalake);
+
+    println!("Ingesting {} resource(s)…\n", targets.len());
+    let mut ok = 0u32;
+    let mut fail = 0u32;
+    for name in &targets {
+        print!("  {name}: ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        match executor.ingest(name).await {
+            Err(e) => {
+                println!("✗ {e}");
+                fail += 1;
+            }
+            Ok(o) if o.skipped => {
+                println!("⊘ skipped (already has data)");
+                ok += 1;
+            }
+            Ok(o) => {
+                println!(
+                    "✓ {} rows, {} files, {:.1}s",
+                    o.rows_written,
+                    o.files_processed,
+                    o.duration_ms as f64 / 1000.0
+                );
+                ok += 1;
+            }
+        }
+    }
+    println!("\nDone: {ok} ok, {fail} failed.");
+    Ok(())
+}
+
+async fn resource_drift(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceDriftArgs,
+) -> color_eyre::Result<()> {
+    use dag_core::resource_catalog::CatalogSnapshot;
+
+    let mut snapshot = CatalogSnapshot::default();
+
+    if args.check_iceberg {
+        let datalake = datalake::Datalake::new();
+        match datalake.list_all_tables().await {
+            Ok(tables) => {
+                snapshot.tables = tables
+                    .into_iter()
+                    .filter_map(|(ns, table)| {
+                        let schema = ns.last()?.clone();
+                        Some((schema, table))
+                    })
+                    .collect();
+            }
+            Err(e) => {
+                eprintln!("⚠ could not reach datalake for drift check: {e}");
+                eprintln!("  (file-path/database/doc checks still run)");
+            }
+        }
+    }
+
+    let warnings = catalog.check_drift(&snapshot);
+
+    if warnings.is_empty() {
+        println!("✓ No drift detected — all registered resources are present.");
+        return Ok(());
+    }
+
+    println!("⚠ {} drift warning(s):\n", warnings.len());
+    for w in &warnings {
+        println!("  [{}] {}", w.name, w.detail);
+    }
+    println!("\n(Index is unchanged — these are warnings only.)");
+    Ok(())
+}
+
+fn resource_export(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceExportArgs,
+) -> color_eyre::Result<()> {
+    let entries = catalog.list();
+    let json = serde_json::to_string_pretty(&entries)?;
+
+    match &args.output {
+        Some(path) => {
+            std::fs::write(path, &json)?;
+            println!("Exported {} resources to {}", entries.len(), path.display());
+        }
+        None => {
+            println!("{json}");
+        }
+    }
     Ok(())
 }
 
@@ -1168,6 +1636,6 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(run_bib(bib))
         }
-        Command::Data(data) => run_data(data),
+        Command::Resource(res) => run_resource(res),
     }
 }

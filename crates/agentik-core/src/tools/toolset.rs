@@ -220,6 +220,27 @@ impl Toolset {
         // ---- Spawn all tool tasks ----
         for tc in toolcalls {
             let Some(registration) = self.registry.get(&tc.name) else {
+                // Unknown tool name. Don't silently skip — the LLM
+                // will not see a tool_result for this id and may
+                // produce another round of tool_use blocks without
+                // results, masking the underlying issue. Emit a stub
+                // error ToolResult so the adjacency invariant holds
+                // and the model sees a clear error explaining what
+                // happened. The list of available tool names is
+                // embedded so the model can self-correct on the next
+                // turn.
+                let available: Vec<String> = self
+                    .registry
+                    .definitions()
+                    .into_iter()
+                    .map(|d| d.name)
+                    .collect();
+                let msg = format!(
+                    "Unknown tool '{}'. Available tools: {}",
+                    tc.name,
+                    available.join(", ")
+                );
+                immediate_results.push(ToolResult::error_with_id(tc.id.clone(), msg));
                 continue;
             };
 
@@ -817,5 +838,74 @@ mod tests {
             !async_entry.is_read(),
             "prior async task should not be marked read"
         );
+    }
+
+    /// When the LLM emits a tool_use whose name is not in the registry
+    /// (e.g. it remembered `opengwas_gwasinfo` from older docs, but the
+    /// table-returning variant has been migrated to a DAG source node),
+    /// the toolset must produce a stub error ToolResult for the missing
+    /// id. Otherwise the conversation is left with a tool_use that has
+    /// no matching tool_result, and Anthropic returns message 2013.
+    #[tokio::test]
+    async fn unknown_tool_name_emits_stub_error_result() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![MockTool::new("ok").into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        // Mix a real tool_use (unknown name) with a known one. Note:
+        // the LLM may call `opengwas_gwasinfo` (an older name removed
+        // when the table-returning variant migrated to a DAG source
+        // node); the toolset must produce a stub error result so the
+        // Anthropic adjacency invariant is preserved.
+        let toolcalls = vec![
+            ToolUse {
+                id: "call_unknown".to_string(),
+                name: "opengwas_gwasinfo".to_string(),
+                input: serde_json::json!({}),
+            },
+            ToolUse {
+                id: "call_known".to_string(),
+                name: "test_tool".to_string(),
+                input: json!({ "reason": "test" }),
+            },
+        ];
+        let results = toolset
+            .execute(&toolcalls, None)
+            .await
+            .expect("execute must succeed even with unknown tool names");
+
+        // One result per tool_use must be produced — otherwise the
+        // conversation has a tool_use block without a matching
+        // tool_result, and Anthropic returns message 2013.
+        assert_eq!(results.len(), 2);
+
+        let unknown = results
+            .iter()
+            .find(|r| r.tool_use_id == "call_unknown")
+            .expect("stub result for unknown tool must exist");
+        assert_eq!(
+            unknown.is_error,
+            Some(true),
+            "unknown tool must be marked is_error=true"
+        );
+        let content = unknown.text_content();
+        assert!(
+            content.contains("Unknown tool 'opengwas_gwasinfo'"),
+            "stub error must name the unknown tool: {content}"
+        );
+        assert!(
+            content.contains("test_tool"),
+            "stub error must list available tools so the model can self-correct: {content}"
+        );
+
+        let known = results
+            .iter()
+            .find(|r| r.tool_use_id == "call_known")
+            .expect("real result for known tool");
+        assert!(
+            known.is_error != Some(true),
+            "known tool must not be flagged as error"
+        );
+        assert_eq!(known.text_content(), "ok");
     }
 }

@@ -32,6 +32,7 @@ use tracing::{Level, span};
 use uuid::Uuid;
 
 use crate::agent::{AgentConfig, InternalEvent, TokenBudget};
+use agentik_sdk::model::sanitize::sanitize_messages;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result};
 use crate::lifecycle::AgentLifecycle;
@@ -78,16 +79,6 @@ pub mod error {
              tool_result arrived out of order"
         )]
         OrphanToolResult { tool_use_id: String },
-
-        #[error(
-            "unexpected message layout: expected a user-role message after the tool_use \
-             at index {msg_index} (id '{tool_use_id}'), but found a different role or \
-             message structure"
-        )]
-        UnexpectedMessageLayout {
-            msg_index: usize,
-            tool_use_id: String,
-        },
     }
 }
 
@@ -509,11 +500,22 @@ impl Session {
                             is_error,
                         });
                 } else {
-                    return Err(error::Error::UnexpectedMessageLayout {
-                        msg_index: tc_msg_index,
-                        tool_use_id: tool_use_id.clone(),
-                    }
-                    .into());
+                    // Slot at tc_msg_index + 1 is non-User (e.g. another
+                    // assistant turn, or a checkpoint summary message).
+                    // Insert a fresh User message carrying only the
+                    // tool_result so the Anthropic adjacency invariant
+                    // (every tool_use followed immediately by a user
+                    // message with the matching tool_result) is
+                    // preserved at insertion. The previous error
+                    // (`UnexpectedMessageLayout`) was the source of
+                    // messages.1118 violations.
+                    let mut tool_res_msg = msg.clone();
+                    tool_res_msg.content = vec![ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    }];
+                    self.messages.insert(tc_msg_index + 1, tool_res_msg);
                 }
             } else {
                 let mut tool_res_msg = msg.clone();
@@ -659,6 +661,12 @@ impl Session {
             });
         }
 
+        // The head/tail split can leave orphaned tool_results whose
+        // tool_use was summarised away. Run the Anthropic-invariant
+        // sanitizer and, if it repaired anything, re-emit a fresh WAL
+        // ReplaceSessionState so the persisted shape is also clean.
+        self.sanitize_and_persist();
+
         tracing::debug!(
             messages = self.messages.len(),
             ancestors = self.ancestor_summaries.len(),
@@ -720,6 +728,53 @@ impl Session {
         self.persist_snapshot().await;
         if let Some(storage) = &self.shared.storage {
             let _ = storage.end_session(self.id).await;
+        }
+    }
+
+    /// Run the Anthropic-invariant sanitizer over `self.messages` and, if
+    /// any repair was performed, replace the in-memory conversation with
+    /// the sanitized version and emit `PersistOp::ReplaceSessionState` so
+    /// the WAL reflects the cleaned shape.
+    ///
+    /// Without this, `Model::request` would silently run `sanitize_messages`
+    /// at the API boundary and throw the patched result away — meaning
+    /// every subsequent turn would re-patch the same broken shape and any
+    /// snapshot/restore would resurrect the broken state. This method
+    /// makes the repair *durable*.
+    ///
+    /// Cheap when nothing needs fixing: `sanitize_messages` returns the
+    /// input `Vec` untouched (no allocation), so we only enter the WAL
+    /// path when at least one rule fired.
+    pub fn sanitize_and_persist(&mut self) {
+        // Compare lengths before/after — same length means no repair was
+        // needed (sanitize_messages either returns the input unchanged or
+        // rebuilds a new Vec with potentially different length).
+        let before_len = self.messages.len();
+        let original_ptr = self.messages.as_ptr();
+        let sanitized = sanitize_messages(std::mem::take(&mut self.messages));
+        let same_alloc = sanitized.as_ptr() == original_ptr && sanitized.len() == before_len;
+        self.messages = sanitized;
+        if same_alloc {
+            return;
+        }
+        let after_len = self.messages.len();
+        tracing::info!(
+            messages_before = before_len,
+            messages_after = after_len,
+            "session messages sanitized (Anthropic-invariant repair); persisting"
+        );
+
+        if let Some(tx) = &self.persist_tx {
+            let state = SessionState {
+                messages: self.messages.clone(),
+                summary: self.summary.clone(),
+                ancestor_summaries: self.ancestor_summaries.clone(),
+            };
+            let _ = tx.send(PersistOp::ReplaceSessionState {
+                agent_id: self.shared.id,
+                session_id: self.id,
+                state,
+            });
         }
     }
 
@@ -1443,6 +1498,10 @@ impl Session {
 
         let all_tools = self.visible_tools(allowed);
 
+        // Repair any Anthropic-invariant violations before sending and
+        // persist the repaired shape so future turns don't re-patch.
+        self.sanitize_and_persist();
+
         // Race the initial HTTP request against cancellation so that
         // Ctrl+C interrupts even before the first stream event arrives.
         let mut stream = tokio::select! {
@@ -1977,5 +2036,184 @@ mod tests {
     fn make_test_session() -> Session {
         let shared = AgentShared::new_for_tests();
         Session::new_for_tests(shared, agentik_types::AgentPath::root())
+    }
+
+    /// When the slot immediately after a `tool_use` is non-User (e.g.
+    /// another assistant turn or a checkpoint user message pushed in
+    /// between the call and its result), `add_message` must insert a
+    /// fresh User message carrying the `tool_result` so Anthropic's
+    /// adjacency invariant holds at the source. Previously this returned
+    /// `UnexpectedMessageLayout`, which surfaced as the messages.1118
+    /// 400 from the API.
+    #[test]
+    fn add_message_inserts_user_slot_when_next_is_non_user() {
+        let mut session = make_test_session();
+        session.remember(Message::user("hi")).unwrap();
+        session
+            .remember(Message {
+                id: "a".into(),
+                type_: "message".into(),
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "call_X".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                }],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            })
+            .unwrap();
+        // Push a non-user message between the tool_use and its result.
+        session
+            .messages
+            .push(Message {
+                id: "u_intermediate".into(),
+                type_: "message".into(),
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "checkpoint summary".into(),
+                }],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            });
+        session
+            .remember(Message::tool_result("call_X", "alpha", false))
+            .unwrap();
+        // Find the assistant tool_use and assert the immediately next
+        // message is a User carrying tool_result(call_X).
+        let asst_idx = session
+            .messages
+            .iter()
+            .position(|m| m.has_tool_use())
+            .expect("assistant with tool_use");
+        let next = &session.messages[asst_idx + 1];
+        assert!(
+            matches!(next.role, Role::User),
+            "next message must be User (inserted for adjacency)"
+        );
+        let has_result = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X")
+        });
+        assert!(
+            has_result,
+            "adjacent user message must carry tool_result(call_X)"
+        );
+        let count = session
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "tool_result must be inserted exactly once (no duplicates)"
+        );
+    }
+
+    /// `sanitize_and_persist` must repair a misadjacent tool_result and
+    /// leave the conversation well-formed. Without it, every LLM
+    /// request would re-patch the same broken state and any snapshot
+    /// would resurrect the broken shape.
+    #[test]
+    fn sanitize_and_persist_repairs_misadjacent_tool_result() {
+        let mut session = make_test_session();
+        // Build: [user, assistant{tool_use}, user{retry text},
+        //        user{tool_result}] — the tool_result is one user
+        // message too late.
+        session.remember(Message::user("hi")).unwrap();
+        session
+            .remember(Message {
+                id: "a".into(),
+                type_: "message".into(),
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "call_X".into(),
+                    name: "t".into(),
+                    input: serde_json::json!({}),
+                }],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            })
+            .unwrap();
+        session
+            .remember(Message {
+                id: "u_retry".into(),
+                type_: "message".into(),
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "retry please".into(),
+                }],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            })
+            .unwrap();
+        session
+            .remember(Message::tool_result("call_X", "ok", false))
+            .unwrap();
+
+        let before_len = session.messages.len();
+        session.sanitize_and_persist();
+        let after_len = session.messages.len();
+
+        // Adjacency: tool_use(call_X) must be followed immediately by a
+        // user message containing tool_result(call_X).
+        let asst_idx = session
+            .messages
+            .iter()
+            .position(|m| m.has_tool_use())
+            .expect("tool_use assistant remains");
+        let next = &session.messages[asst_idx + 1];
+        assert!(matches!(next.role, Role::User));
+        let has_adjacent = next.content.iter().any(|c| {
+            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X")
+        });
+        assert!(
+            has_adjacent,
+            "after sanitize_and_persist, tool_result(call_X) must sit in the adjacent user message"
+        );
+        // The repair moved blocks between messages; the count may change
+        // (dedup + relocate). What matters is that exactly one
+        // tool_result for call_X survives.
+        let total = session
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X"))
+            .count();
+        assert_eq!(total, 1, "exactly one tool_result for call_X must remain");
+        // Length may have changed (one synthetic user message inserted
+        // / one empty after-retract dropped).
+        let _ = (before_len, after_len);
+    }
+
+    /// `sanitize_and_persist` must be a no-op when the conversation is
+    /// already well-formed (fast-path: same Vec returned by
+    /// `sanitize_messages`).
+    #[test]
+    fn sanitize_and_persist_is_noop_on_clean_conversation() {
+        let mut session = make_test_session();
+        session.remember(Message::user("hi")).unwrap();
+        session.remember(Message::assistant_text("hello")).unwrap();
+        session.remember(Message::user("how are you?")).unwrap();
+        let before = session.messages.clone();
+        session.sanitize_and_persist();
+        // Clean input: no change in messages, no synthetic inserts.
+        assert_eq!(session.messages.len(), before.len());
+        for (a, b) in session.messages.iter().zip(before.iter()) {
+            assert_eq!(a.role, b.role);
+            assert_eq!(a.content.len(), b.content.len());
+        }
     }
 }

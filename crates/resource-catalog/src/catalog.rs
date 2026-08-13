@@ -89,6 +89,41 @@ impl ResourceCatalog {
         catalog
     }
 
+    /// Like [`load_or_new`](Self::load_or_new) but **returns errors instead
+    /// of silently degrading**.
+    ///
+    /// `load_or_new` is designed for the runtime bootstrap path where
+    /// keeping the system running (even with an empty catalog) is preferred.
+    /// CLI tools and subcommands should use this method so that a locked or
+    /// corrupt manifest DB surfaces a clear error rather than silently
+    /// returning an empty catalog.
+    pub async fn load_or_error(
+        base_dir: impl Into<PathBuf>,
+        db_path: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let base_dir = base_dir.into();
+        let store = TursoManifestStore::open(&db_path).await?;
+        let persist: Arc<dyn ManifestStore> = Arc::new(store);
+
+        let catalog = ResourceCatalog {
+            inner: Arc::new(RwLock::new(ResourceRegistry::new())),
+            persist: Some(persist.clone()),
+            base_dir,
+        };
+
+        let entries = persist.load().await?;
+        {
+            let mut reg = catalog.inner.write().expect("catalog lock");
+            for entry in entries {
+                if let Err(e) = reg.register(entry) {
+                    tracing::warn!("resource catalog: loading persisted entry: {e}");
+                }
+            }
+        }
+
+        Ok(catalog)
+    }
+
     /// Set the process-wide global catalog. Only the first call succeeds.
     pub fn set_global(arc: Arc<Self>) -> Result<()> {
         GLOBAL.set(arc).map_err(|_| ResourceError::GlobalAlreadySet)
