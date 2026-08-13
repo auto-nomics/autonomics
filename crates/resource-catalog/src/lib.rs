@@ -31,6 +31,7 @@ pub mod error;
 pub mod iceberg_const;
 pub mod ingestion;
 pub mod kind;
+pub mod patch;
 pub mod persist;
 pub mod provider;
 pub mod registry;
@@ -41,6 +42,7 @@ pub use archive::{ArchivableResource, ArchiveOutcome, ArchiveSpec, ArchiveStatus
 pub use catalog::ResourceCatalog;
 pub use drift::{CatalogSnapshot, DriftWarning};
 pub use entry::ResourceEntry;
+pub use patch::ResourcePatch;
 pub use error::{ResourceError, Result};
 pub use iceberg_const::CATALOG_NAME;
 pub use ingestion::{CsvOptions, IngestionOutcome, IngestionSpec, SourceFormat, WriteMode};
@@ -58,7 +60,7 @@ pub fn endpoint_or(logical: &str, fallback: &str) -> String {
         .and_then(|cat| cat.resolve_endpoint(logical).ok())
         .unwrap_or_else(|| fallback.to_string())
 }
-pub use resolve::IcebergIdent;
+pub use resolve::{IcebergIdent, ObjectStorageHandle};
 
 #[cfg(test)]
 mod tests;

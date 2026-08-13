@@ -877,6 +877,10 @@ mod tests {
         let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
 
         let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)
@@ -944,6 +948,10 @@ mod tests {
         let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
 
         let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)

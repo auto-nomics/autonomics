@@ -81,4 +81,21 @@ impl Model {
             .request_stream(messages, tools.to_vec(), &self.model_info)
             .await
     }
+
+    /// Like [`request_stream`](Self::request_stream) but also sets the
+    /// top-level `system` field on the request. Use this when the
+    /// caller has a system prompt that should NOT be mixed into the
+    /// messages array (avoids same-role coalescing that breaks
+    /// tool_use/tool_result adjacency).
+    pub async fn request_stream_with_system(
+        &self,
+        messages: Vec<Message>,
+        tools: &[ToolDefinition],
+        system: Option<String>,
+    ) -> Result<MessageStream, AnthropicError> {
+        let messages = sanitize_messages(messages);
+        self.client
+            .request_stream_with_system(messages, tools.to_vec(), &self.model_info, system)
+            .await
+    }
 }

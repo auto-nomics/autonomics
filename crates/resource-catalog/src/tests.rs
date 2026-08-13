@@ -221,3 +221,126 @@ fn serialization_round_trip() {
     let back: ResourceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(back, entry);
 }
+
+// ── ObjectStorage (post-Iceberg) ─────────────────────────────────────────
+
+fn object_storage_entry() -> ResourceEntry {
+    ResourceEntry::new(
+        "ldscore.1000g_eur",
+        ResourceKind::ObjectStorage,
+        "1000G EUR LD scores (parquet)",
+        ResourceAddress::object_storage("autonomics", "/ld_score/1000g_eur/"),
+    )
+}
+
+#[test]
+fn object_storage_register_and_resolve() {
+    let cat = ResourceCatalog::new("/tmp");
+    cat.register(object_storage_entry()).unwrap();
+    let h = cat.resolve_object_storage("ldscore.1000g_eur").unwrap();
+    assert_eq!(h.bucket, "autonomics");
+    assert_eq!(h.prefix, "/ld_score/1000g_eur/");
+    assert!(h.partition_columns.is_empty());
+}
+
+#[test]
+fn object_storage_unknown_name_is_error() {
+    let cat = ResourceCatalog::new("/tmp");
+    assert!(matches!(
+        cat.resolve_object_storage("nope"),
+        Err(ResourceError::UnknownResource(_))
+    ));
+}
+
+#[test]
+fn object_storage_kind_mismatch_when_resolving_as_iceberg() {
+    let cat = ResourceCatalog::new("/tmp");
+    cat.register(object_storage_entry()).unwrap();
+    // Resolving an ObjectStorage entry via the Iceberg API surfaces
+    // KindMismatch — explicit, not silent.
+    assert!(matches!(
+        cat.resolve_iceberg("ldscore.1000g_eur"),
+        Err(ResourceError::KindMismatch { .. })
+    ));
+}
+
+#[test]
+fn object_storage_validation_rejects_empty_bucket_and_unprefixed_path() {
+    let mut reg = ResourceRegistry::new();
+    let bad_bucket = ResourceEntry::new(
+        "x",
+        ResourceKind::ObjectStorage,
+        "no bucket",
+        ResourceAddress::ObjectStorage {
+            bucket: String::new(),
+            prefix: "/foo/".into(),
+            file_format: crate::kind::ObjectFileFormat::Parquet,
+            partition_columns: vec![],
+        },
+    );
+    assert!(matches!(
+        reg.register(bad_bucket),
+        Err(ResourceError::Validation(_))
+    ));
+
+    let bad_prefix = ResourceEntry::new(
+        "x",
+        ResourceKind::ObjectStorage,
+        "no slash",
+        ResourceAddress::ObjectStorage {
+            bucket: "b".into(),
+            prefix: "foo/".into(), // must start with /
+            file_format: crate::kind::ObjectFileFormat::Parquet,
+            partition_columns: vec![],
+        },
+    );
+    assert!(matches!(
+        reg.register(bad_prefix),
+        Err(ResourceError::Validation(_))
+    ));
+}
+
+#[test]
+fn object_storage_with_partition_columns_round_trips() {
+    let entry = ResourceEntry::new(
+        "ld_matrix.eur",
+        ResourceKind::ObjectStorage,
+        "chr-partitioned LD matrix",
+        ResourceAddress::object_storage_with(
+            "autonomics",
+            "/ld_matrix/eur/",
+            crate::kind::ObjectFileFormat::Parquet,
+            vec!["chr".into()],
+        ),
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: ResourceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+    match &back.address {
+        ResourceAddress::ObjectStorage { partition_columns, .. } => {
+            assert_eq!(partition_columns, &vec!["chr".to_string()]);
+        }
+        _ => panic!("expected ObjectStorage"),
+    }
+}
+
+#[test]
+fn object_storage_and_iceberg_can_coexist() {
+    // The migration is additive — both kinds live side-by-side so callers
+    // can move over per-table without a big-bang switch.
+    let cat = ResourceCatalog::new("/tmp");
+    cat.register(ld_entry()).unwrap();
+    cat.register(object_storage_entry_with_different_name()).unwrap();
+    assert_eq!(cat.list().len(), 2);
+    assert!(cat.resolve_iceberg("ldscore.1000g_eur").is_ok());
+    assert!(cat.resolve_object_storage("ld_matrix.eur").is_ok());
+}
+
+fn object_storage_entry_with_different_name() -> ResourceEntry {
+    ResourceEntry::new(
+        "ld_matrix.eur",
+        ResourceKind::ObjectStorage,
+        "EUR LD matrix",
+        ResourceAddress::object_storage("autonomics", "/ld_matrix/eur/"),
+    )
+}

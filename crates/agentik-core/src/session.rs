@@ -15,6 +15,7 @@
 //! summarized into `ancestor_summaries`, and only the recent tail is retained
 //! in `messages`. This eliminates the former `Memory`/`MemoryItem` layer.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentik_sdk::model::Model;
@@ -231,6 +232,17 @@ pub struct Session {
     pub token_budget: TokenBudget,
     pub cancel_token: CancellationToken,
 
+    /// Active `wait_task` watchers keyed by task seq. Each value is the
+    /// child cancel token for the spawned watcher. Before spawning a new
+    /// watcher for the same task, the old one is cancelled to prevent
+    /// duplicate message injection.
+    pub(crate) active_wait_watchers: HashMap<u64, CancellationToken>,
+
+    /// System prompt set by `build_context` and consumed by `request`.
+    /// Kept separate from `messages` so the sanitizer never sees it
+    /// and tool_use/tool_result indices are not shifted by coalescing.
+    pub(crate) pending_system_prompt: Option<String>,
+
     /// Back-reference to shared agent resources.
     pub(crate) shared: Arc<AgentShared>,
 }
@@ -266,6 +278,8 @@ impl Session {
             toolset,
             token_budget: TokenBudget::default(),
             cancel_token: CancellationToken::new(),
+            active_wait_watchers: HashMap::new(),
+            pending_system_prompt: None,
             shared,
         }
     }
@@ -297,6 +311,8 @@ impl Session {
             toolset,
             token_budget: TokenBudget::default(),
             cancel_token,
+            active_wait_watchers: HashMap::new(),
+            pending_system_prompt: None,
             shared,
         }
     }
@@ -326,6 +342,8 @@ impl Session {
             toolset,
             token_budget: TokenBudget::default(),
             cancel_token: CancellationToken::new(),
+            active_wait_watchers: HashMap::new(),
+            pending_system_prompt: None,
             shared,
         }
     }
@@ -464,6 +482,27 @@ impl Session {
         }
 
         if !others_content_blocks.is_empty() {
+            // De-dupe consecutive identical user text messages. Background
+            // watchers (wait_task timeout) can inject the same message
+            // multiple times if the LLM calls wait_task in a loop. Without
+            // this guard, each copy is persisted and wastes context.
+            if msg.role == Role::User {
+                if let Some(last) = self.messages.last() {
+                    if last.role == Role::User && last.content == others_content_blocks {
+                        tracing::debug!(
+                            "dropping duplicate consecutive user message ({} bytes)",
+                            others_content_blocks
+                                .iter()
+                                .map(|cb| match cb {
+                                    ContentBlock::Text { text } => text.len(),
+                                    _ => 0,
+                                })
+                                .sum::<usize>()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
             let mut other_msg = msg.clone();
             other_msg.content = others_content_blocks;
             self.messages.push(other_msg);
@@ -815,6 +854,21 @@ impl Session {
                 true
             }
             InternalEvent::BgTaskComplete { id: _, seq } => {
+                // If a wait_task watcher is active for this task, suppress the
+                // generic "has completed" notification — the watcher will
+                // inject a more detailed message with the actual result.
+                if self.active_wait_watchers.contains_key(&seq) {
+                    tracing::debug!(
+                        seq,
+                        "suppressing BgTaskComplete notification — wait_watcher is active"
+                    );
+                    // Still emit the UI event so the task panel updates.
+                    if let Some((_, ok)) = self.toolset.task_brief(seq).await {
+                        self.shared
+                            .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
+                    }
+                    return true;
+                }
                 if let Some((name, ok)) = self.toolset.task_brief(seq).await {
                     self.shared
                         .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
@@ -846,6 +900,7 @@ impl Session {
                 // transition to Cancelled so the agent is ready for new work.
                 // Background watchers have a child token tied to the old
                 // (now-cancelled) token, so they exit silently.
+                self.active_wait_watchers.clear();
                 if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Waiting {
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
                     self.shared.send_event(AgentEvent::TurnAborted);
@@ -1152,6 +1207,18 @@ impl Session {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(120);
 
+                // Cancel any existing watcher for this task before spawning a
+                // new one. This prevents duplicate message injection when the
+                // LLM calls wait_task on the same still-running task multiple
+                // times (either across turns or as parallel tool calls).
+                if let Some(old) = self.active_wait_watchers.remove(&task_seq) {
+                    old.cancel();
+                    tracing::debug!(
+                        task_seq,
+                        "cancelled previous watcher before spawning new one"
+                    );
+                }
+
                 // Spawn a background watcher that will inject a message when
                 // the task completes or the timeout expires. A child cancel
                 // token ensures the watcher exits silently if the user
@@ -1159,6 +1226,7 @@ impl Session {
                 let tasks = self.shared.tasks.clone();
                 let tx = internal_event_tx.clone();
                 let cancel = self.cancel_token.child_token();
+                self.active_wait_watchers.insert(task_seq, cancel.clone());
                 crate::supervise::spawn_safe_drop(
                     "wait_watcher",
                     Self::wait_watcher(tasks, task_seq, timeout_secs, tx, cancel),
@@ -1445,12 +1513,11 @@ impl Session {
         let system_prompt = builder.parse();
         let context_messages = self.render_context()?.to_vec();
 
-        let context = Context::new()
-            .with_system_prompt(system_prompt)
-            .with_conversations(context_messages)
-            .build();
+        // Store system prompt on the session so request() can pass it
+        // via params.system instead of mixing it into messages.
+        self.pending_system_prompt = Some(system_prompt);
 
-        Ok(context)
+        Ok(context_messages)
     }
 
     async fn request(
@@ -1501,11 +1568,23 @@ impl Session {
         // Repair any Anthropic-invariant violations before sending and
         // persist the repaired shape so future turns don't re-patch.
         self.sanitize_and_persist();
+        // sanitize_and_persist may have modified self.messages (dedup,
+        // coalesce, adjacency repair). Rebuild context from the
+        // repaired messages so the API receives the clean shape.
+        context = self.build_context().await?;
+
+        // Final defensive sanitize on the actual context (without
+        // system prompt — it's stored separately now, so there's no
+        // same-role coalescing risk).
+        context = sanitize_messages(context);
 
         // Race the initial HTTP request against cancellation so that
         // Ctrl+C interrupts even before the first stream event arrives.
+        // System prompt is passed via params.system (top-level field),
+        // NOT mixed into messages — avoids same-role coalescing.
+        let system = self.pending_system_prompt.take();
         let mut stream = tokio::select! {
-            r = model.request_stream(context, &all_tools) => r?,
+            r = model.request_stream_with_system(context, &all_tools, system) => r?,
             _ = self.cancel_token.cancelled() => {
                 tracing::info!("LLM request cancelled before stream started");
                 return Err(crate::error::AgentError::Cancelled);
@@ -2215,5 +2294,64 @@ mod tests {
             assert_eq!(a.role, b.role);
             assert_eq!(a.content.len(), b.content.len());
         }
+    }
+
+    /// Consecutive identical user text messages must be collapsed to a
+    /// single copy. Background `wait_task` watchers can inject the same
+    /// timeout message multiple times when the LLM calls wait_task in a
+    /// loop — without this guard each copy is persisted and wastes context.
+    #[test]
+    fn add_message_drops_consecutive_duplicate_user_text() {
+        let mut session = make_test_session();
+        let msg_text = "Background task 'download' (#50) did not complete \
+                         within 120 seconds. It is still running.";
+        session.remember(Message::user(msg_text)).unwrap();
+        let count_after_first = session.messages.len();
+
+        // Second identical message — must be dropped.
+        session.remember(Message::user(msg_text)).unwrap();
+        assert_eq!(
+            session.messages.len(),
+            count_after_first,
+            "duplicate consecutive user message must be dropped"
+        );
+
+        // Third identical message — still dropped.
+        session.remember(Message::user(msg_text)).unwrap();
+        assert_eq!(
+            session.messages.len(),
+            count_after_first,
+            "third identical user message must also be dropped"
+        );
+    }
+
+    /// Non-identical consecutive user messages must be kept. Only exact
+    /// duplicates are collapsed.
+    #[test]
+    fn add_message_keeps_distinct_consecutive_user_text() {
+        let mut session = make_test_session();
+        session.remember(Message::user("first message")).unwrap();
+        session.remember(Message::user("second message")).unwrap();
+        assert_eq!(
+            session.messages.len(),
+            2,
+            "distinct consecutive user messages must both be kept"
+        );
+    }
+
+    /// After a different message (e.g. assistant reply) interleaves, the
+    /// same text can appear again — the dedup is strictly consecutive.
+    #[test]
+    fn add_message_allows_same_text_after_interleaving() {
+        let mut session = make_test_session();
+        session.remember(Message::user("hello")).unwrap();
+        session.remember(Message::assistant_text("hi there")).unwrap();
+        // Now "hello" again is fine — not consecutive duplicate.
+        session.remember(Message::user("hello")).unwrap();
+        assert_eq!(
+            session.messages.len(),
+            3,
+            "same text after an interleaved message is not a duplicate"
+        );
     }
 }

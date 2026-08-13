@@ -272,6 +272,13 @@ enum ResourceAction {
     /// archive status, ingestion spec).
     Show(ResourceShowArgs),
 
+    /// Update mutable fields on an existing resource (currently:
+    /// description). Other fields (`address`, `metadata`, `tags`,
+    /// `archive_status`, `ingestion_spec`) are left untouched. This
+    /// avoids the remove-and-re-add round-trip that would clobber
+    /// runtime state.
+    Update(ResourceUpdateArgs),
+
     /// Register a new resource entry in the catalog. The `--kind` determines
     /// which address fields are required. For `iceberg_table`, optional
     /// `--source` registers an ingestion spec; `--archive` additionally
@@ -339,6 +346,18 @@ struct ResourceShowArgs {
     name: String,
 }
 
+/// Arguments for `resource update`.
+#[derive(Debug, Args)]
+struct ResourceUpdateArgs {
+    /// Logical resource name.
+    name: String,
+
+    /// New description text. Replaces the existing description in full.
+    /// Pass an empty string ("") to clear it.
+    #[arg(long)]
+    description: Option<String>,
+}
+
 /// Arguments for `resource add`.
 #[derive(Debug, Args)]
 struct ResourceAddArgs {
@@ -391,6 +410,15 @@ struct ResourceAddArgs {
     /// Doc category: docs, logs, archive, notes, fixtures (for kind=doc).
     #[arg(long)]
     doc_kind: Option<String>,
+
+    // ── ObjectStorage address fields ──────────────────────────────────
+    /// Object-store bucket name (for kind=object_storage).
+    #[arg(long)]
+    bucket: Option<String>,
+
+    /// Object-store prefix, must start with '/' (for kind=object_storage).
+    #[arg(long)]
+    prefix: Option<String>,
 
     // ── Ingestion spec fields (iceberg_table only) ────────────────────
     /// Source file path or glob for ingestion (e.g. "/data/gwas/*.parquet").
@@ -530,6 +558,7 @@ async fn run_resource_async(args: ResourceArgs) -> color_eyre::Result<()> {
     match args.action {
         ResourceAction::List(a) => resource_list(&catalog, a).await,
         ResourceAction::Show(a) => resource_show(&catalog, a),
+        ResourceAction::Update(a) => resource_update(&catalog, a).await,
         ResourceAction::Add(a) => resource_add(&catalog, *a).await,
         ResourceAction::Remove(a) => resource_remove(&catalog, a).await,
         ResourceAction::Ingest(a) => resource_ingest(&catalog, a).await,
@@ -702,6 +731,42 @@ fn resource_show(
     Ok(())
 }
 
+async fn resource_update(
+    catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
+    args: ResourceUpdateArgs,
+) -> color_eyre::Result<()> {
+    use dag_core::resource_catalog::ResourcePatch;
+
+    if args.description.is_none() {
+        return Err(color_eyre::eyre::eyre!(
+            "no fields specified for update. pass --description \"...\""
+        ));
+    }
+
+    // Snapshot the old description so the user sees what changed.
+    let before = catalog.get(&args.name).ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "resource '{}' not found. Use 'autonomics-tui resource list' to see names.",
+            args.name
+        )
+    })?;
+    let old_desc = before.description.clone();
+
+    let mut patch = ResourcePatch::new();
+    if let Some(d) = args.description.clone() {
+        patch = patch.description(d);
+    }
+
+    let updated = catalog
+        .patch(&args.name, patch)
+        .map_err(color_eyre::Report::new)?;
+    catalog.persist().await;
+
+    println!("✓ Updated resource '{}'", updated.name);
+    println!("    description: {} -> {}", old_desc, updated.description);
+    Ok(())
+}
+
 async fn resource_add(
     catalog: &Arc<dag_core::resource_catalog::ResourceCatalog>,
     args: ResourceAddArgs,
@@ -713,7 +778,7 @@ async fn resource_add(
 
     let kind = ResourceKind::from_str(&args.kind).ok_or_else(|| {
         color_eyre::eyre::eyre!(
-            "unknown kind '{}': expected iceberg_table, file_path, endpoint, config, database, or doc",
+            "unknown kind '{}': expected iceberg_table, object_storage, file_path, endpoint, config, database, or doc",
             args.kind
         )
     })?;
@@ -775,6 +840,15 @@ async fn resource_add(
                     _ => DocKind::Docs,
                 };
                 ResourceAddress::doc(doc_kind, path)
+            }
+            ResourceKind::ObjectStorage => {
+                let bucket = args.bucket.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--bucket is required for kind=object_storage")
+                })?;
+                let prefix = args.prefix.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--prefix is required for kind=object_storage")
+                })?;
+                ResourceAddress::object_storage(bucket, prefix)
             }
         };
 

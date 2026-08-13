@@ -433,15 +433,46 @@ impl LdscHsqNode {
         ctx.register_table("sumstats", input.clone().into_view())
             .map_err(LdscNodeError::ReadBatch)?;
 
-        // 2. Read per-annotation M_5_50 — the L2-summed SNP count that
+        // 2. If the panel is declared as ObjectStorage in the catalog,
+        //    register a DataFusion `ListingTable` for the panel and its
+        //    companion `_m` table against the engine's object store. Legacy
+        //    Iceberg callers skip this and read `iceberg.ld_score.*` directly.
+        if ld_ref.uses_object_storage() {
+            // scheme "oss" mirrors the aliyun OSS bucket used in production;
+            // the runtime `RuntimeEnv` has already registered an OSS-backed
+            // `opendal::Operator` for this URL prefix.
+            const PANEL_SCHEME: &str = "oss";
+            if let Some(handle) = &ld_ref.handle {
+                crate::ldsc_common::register_listing_table(
+                    ctx,
+                    &ld_ref.table_name,
+                    handle,
+                    PANEL_SCHEME,
+                )
+                .await
+                .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+            }
+            if let Some(m_handle) = &ld_ref.m_handle {
+                crate::ldsc_common::register_listing_table(
+                    ctx,
+                    &ld_ref.m_table_name,
+                    m_handle,
+                    PANEL_SCHEME,
+                )
+                .await
+                .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+            }
+        }
+
+        // 3. Read per-annotation M_5_50 — the L2-summed SNP count that
         //    normalises the LDSC regression slope into h².  This comes from the
         //    companion `_m` table (written alongside the LD scores), NOT from
         //    COUNT(*) of the panel.
-        let m = crate::ldsc_common::read_m_5_50(ctx, &ld_ref.m_sql, 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, ld_ref.m_table_ref(), 1)
             .await
             .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 
-        // 3. Build SQL: join sumstats with LD score panel on rsid.
+        // 4. Build SQL: join sumstats with LD score panel on rsid.
         //    The 1000g_eur panel has separate ld_score (ref LD) and w_ld
         //    (weight LD) columns.
         let sql = format!(
@@ -454,7 +485,7 @@ impl LdscHsqNode {
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             rsid = INPUT_RSID_COL,
-            ld_table = ld_ref.sql,
+            ld_table = ld_ref.panel_table_ref(),
             Z = LD_Z_COL,
             N = LD_N_COL,
             REF = LD_REF_COL,
@@ -672,6 +703,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, cfg)
             .await
@@ -811,6 +846,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         let res =
             LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscHsqConfig::new(20, None)).await;

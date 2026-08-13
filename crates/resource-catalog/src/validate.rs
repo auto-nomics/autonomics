@@ -72,6 +72,23 @@ pub fn validate(entry: &ResourceEntry) -> Result<()> {
                 )));
             }
         }
+        ResourceAddress::ObjectStorage {
+            bucket, prefix, ..
+        } => {
+            if bucket.is_empty() {
+                return Err(ResourceError::Validation(format!(
+                    "object_storage resource '{}' has an empty bucket",
+                    entry.name
+                )));
+            }
+            if !prefix.starts_with('/') {
+                return Err(ResourceError::Validation(format!(
+                    "object_storage resource '{}' prefix must start with '/': {}",
+                    entry.name,
+                    prefix
+                )));
+            }
+        }
     }
 
     Ok(())

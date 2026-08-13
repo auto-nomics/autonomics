@@ -74,6 +74,19 @@ fn needs_sanitize(messages: &[Message]) -> bool {
         return true;
     }
 
+    // Duplicate Text blocks within a single message (accumulated by
+    // coalescing or repeated message injection on restart).
+    for m in messages {
+        let mut seen_texts: HashSet<&str> = HashSet::new();
+        for c in &m.content {
+            if let ContentBlock::Text { text } = c {
+                if !seen_texts.insert(text.as_str()) {
+                    return true;
+                }
+            }
+        }
+    }
+
     // Rule 2 — duplicate tool_result for the same tool_use_id, either within
     // one message or split between an assistant message and its immediately
     // following user message (which can happen when tool results are appended
@@ -281,7 +294,7 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
             if matches_same_role(&prev.role, &msg.role) {
                 let mut merged_blocks = std::mem::take(&mut prev.content);
                 merged_blocks.extend(msg.content);
-                prev.content = dedup_tool_results(merged_blocks);
+                prev.content = dedup_content_blocks(merged_blocks);
                 continue;
             }
         }
@@ -290,7 +303,7 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
         // then maybe insert an orphan-stub for the *previous* tool_use
         // message before we push it.
         let normalised = Message {
-            content: dedup_tool_results(msg.content),
+            content: dedup_content_blocks(msg.content),
             ..msg
         };
 
@@ -590,6 +603,10 @@ fn stub_user_message(tool_use_ids: Vec<String>) -> Message {
 
 /// Drop duplicate `tool_result` blocks within a single message's content,
 /// keeping the first occurrence of each `tool_use_id`.
+///
+/// Superseded by [`dedup_content_blocks`] which also handles text dedup.
+/// Kept for tests that want to verify tool_result-only dedup behaviour.
+#[cfg(test)]
 fn dedup_tool_results(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::with_capacity(blocks.len());
@@ -598,6 +615,40 @@ fn dedup_tool_results(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
             if !seen.insert(tool_use_id.clone()) {
                 continue;
             }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Drop duplicate content blocks within a single message's content list.
+///
+/// This is a superset of [`dedup_tool_results`]: it also collapses
+/// identical consecutive `Text` blocks (same content) that accumulate
+/// when multiple same-role messages are coalesced by Rule 5/6 — e.g.
+/// when an agent restarts and a "恢复任务" message is injected several
+/// times before sanitisation runs.
+///
+/// Keeps the first occurrence of each unique text/tool_result id;
+/// thinking, image, and tool_use blocks are always kept (they carry
+/// distinct metadata).
+fn dedup_content_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
+    let mut seen_tool_results: HashSet<String> = HashSet::new();
+    let mut seen_texts: HashSet<String> = HashSet::new();
+    let mut out = Vec::with_capacity(blocks.len());
+    for c in blocks {
+        match &c {
+            ContentBlock::ToolResult { tool_use_id, .. } => {
+                if !seen_tool_results.insert(tool_use_id.clone()) {
+                    continue;
+                }
+            }
+            ContentBlock::Text { text } => {
+                if !seen_texts.insert(text.clone()) {
+                    continue;
+                }
+            }
+            _ => {}
         }
         out.push(c);
     }
@@ -1447,5 +1498,41 @@ mod tests {
         if let ContentBlock::ToolResult { is_error, .. } = stub {
             assert_eq!(*is_error, Some(true));
         }
+    }
+
+    /// Duplicate text blocks within a single message (accumulated by
+    /// coalescing same-role messages on agent restart) must be
+    /// collapsed. Without this, each restart inflates the context by
+    /// N× the injected "resume" text.
+    #[test]
+    fn duplicate_text_blocks_collapsed_in_coalesced_message() {
+        let resume = "系统重启了，请你恢复任务";
+        let msgs = vec![
+            text_user("hi"),
+            text_assistant("hello"),
+            text_user(resume),
+            text_user(resume),
+            text_user(resume),
+            text_user(resume),
+            text_assistant("ok"),
+        ];
+        let out = sanitize_messages(msgs);
+        let coalesced = out
+            .iter()
+            .find(|m| {
+                m.content.iter().any(|c| {
+                    matches!(c, ContentBlock::Text { text } if text == resume)
+                })
+            })
+            .expect("resume text must survive");
+        let resume_count = coalesced
+            .content
+            .iter()
+            .filter(|c| matches!(c, ContentBlock::Text { text } if text == resume))
+            .count();
+        assert_eq!(
+            resume_count, 1,
+            "duplicate text blocks must be collapsed to 1"
+        );
     }
 }

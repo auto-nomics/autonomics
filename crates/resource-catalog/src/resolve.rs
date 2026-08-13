@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::catalog::ResourceCatalog;
 use crate::error::{ResourceError, Result};
-use crate::kind::ResourceAddress;
+use crate::kind::{ObjectFileFormat, ResourceAddress};
 
 /// A fully-qualified Iceberg table identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +45,38 @@ impl IcebergIdent {
             schema: self.schema.clone(),
             table: format!("{}{}", self.table, suffix),
         }
+    }
+}
+
+/// A resolved object-storage address — the post-migration counterpart to
+/// [`IcebergIdent`] for tabular reference data.
+///
+/// `bucket` is scheme-agnostic (e.g. `"autonomics"`, `"1000g-eur"`); the
+/// concrete scheme (`s3://`, `oss://`, `file://`) and credentials are
+/// supplied at runtime by the registered
+/// [`datafusion::object_store::ObjectStore`] for the bucket's URL prefix.
+/// `prefix` is the bucket-relative path (always starts with `/`,
+/// enforced by [`crate::validate`]).
+///
+/// This struct is **pure data** — registering it as a DataFusion table is
+/// the responsibility of the caller (see
+/// `nodes_ldsc::ldsc_common::register_listing_table`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectStorageHandle {
+    pub bucket: String,
+    pub prefix: String,
+    pub file_format: ObjectFileFormat,
+    pub partition_columns: Vec<String>,
+}
+
+impl ObjectStorageHandle {
+    /// Compose the DataFusion `ListingTable` URL — `<scheme>://<bucket><prefix>`.
+    /// Scheme is left to the caller via the registered `ObjectStoreUrl`;
+    /// we expose the prefix as a `Path` so callers can build the URL with
+    /// their preferred scheme (`s3://`, `oss://`, `file://`).
+    pub fn prefix_path(&self) -> String {
+        let p = self.prefix.trim_start_matches('/');
+        format!("/{p}")
     }
 }
 
@@ -184,6 +216,37 @@ impl ResourceCatalog {
             }),
         }
     }
+
+    /// Resolve a logical name to an [`ObjectStorageHandle`] — the
+    /// post-migration counterpart to [`resolve_iceberg`](Self::resolve_iceberg).
+    ///
+    /// Returns the bucket + prefix + format + partition columns needed to
+    /// build a DataFusion `ListingTable` against the bucket's registered
+    /// object store. Errors with [`ResourceError::KindMismatch`] if the
+    /// logical name resolves to a non-`object_storage` address.
+    pub fn resolve_object_storage(&self, name: &str) -> Result<ObjectStorageHandle> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        match &entry.address {
+            ResourceAddress::ObjectStorage {
+                bucket,
+                prefix,
+                file_format,
+                partition_columns,
+            } => Ok(ObjectStorageHandle {
+                bucket: bucket.clone(),
+                prefix: prefix.clone(),
+                file_format: *file_format,
+                partition_columns: partition_columns.clone(),
+            }),
+            other => Err(ResourceError::KindMismatch {
+                name: name.to_string(),
+                expected: "object_storage",
+                found: kind_str(other),
+            }),
+        }
+    }
 }
 
 pub(crate) fn kind_str(address: &ResourceAddress) -> &'static str {
@@ -194,5 +257,6 @@ pub(crate) fn kind_str(address: &ResourceAddress) -> &'static str {
         ResourceAddress::Config { .. } => "config",
         ResourceAddress::Database { .. } => "database",
         ResourceAddress::Doc { .. } => "doc",
+        ResourceAddress::ObjectStorage { .. } => "object_storage",
     }
 }

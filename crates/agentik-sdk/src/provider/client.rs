@@ -25,6 +25,21 @@ pub trait ApiClient: Send + Sync {
         model_info: &ModelInfo,
     ) -> Result<MessageStream, AnthropicError>;
 
+    /// Like `request_stream` but also sets the top-level `system` field.
+    /// Default implementation delegates to `request_stream` (ignoring
+    /// `system`); the concrete `AnthropicApiClient` overrides to pass
+    /// it through to `MessageCreateParams.system`.
+    async fn request_stream_with_system(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        model_info: &ModelInfo,
+        system: Option<String>,
+    ) -> Result<MessageStream, AnthropicError> {
+        let _ = system;
+        self.request_stream(messages, tools, model_info).await
+    }
+
     async fn test_connection(&self) -> Result<(), AnthropicError>;
 }
 
@@ -150,6 +165,40 @@ impl ApiClient for AnthropicApiClient {
             .try_into()
             .unwrap_or(u32::MAX);
         let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
+
+        let preserve_thinking = model_info.supports_thinking;
+        for msg in &messages {
+            let content = message_to_content(msg.clone(), preserve_thinking);
+            builder = match msg.role {
+                Role::User => builder.message(Role::User, content),
+                Role::Assistant => builder.message(Role::Assistant, content),
+            };
+        }
+
+        builder = builder.tools(tools);
+        builder = inject_thinking(builder, model_info);
+
+        let params = builder.build();
+        self.client.messages().create_stream(params).await
+    }
+
+    async fn request_stream_with_system(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        model_info: &ModelInfo,
+        system: Option<String>,
+    ) -> Result<MessageStream, AnthropicError> {
+        let max_tokens: u32 = model_info
+            .max_output_tokens
+            .max(1)
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let mut builder = MessageCreateBuilder::new(model_info.model_name.clone(), max_tokens);
+
+        if let Some(s) = system {
+            builder = builder.system(s);
+        }
 
         let preserve_thinking = model_info.supports_thinking;
         for msg in &messages {

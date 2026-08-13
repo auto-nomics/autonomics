@@ -6,8 +6,10 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::entry::ResourceEntry;
 use crate::error::{ResourceError, Result};
+use crate::patch::ResourcePatch;
 use crate::persist::{ManifestStore, TursoManifestStore};
 use crate::registry::ResourceRegistry;
+use crate::validate::validate;
 
 /// The process-wide singleton. Set once during bootstrap (see
 /// [`ResourceCatalog::set_global`]); non-node SDK crates resolve through it via
@@ -143,6 +145,46 @@ impl ResourceCatalog {
     /// Call [`persist`](Self::persist) afterwards to update the manifest.
     pub fn deregister(&self, name: &str) -> Option<ResourceEntry> {
         self.inner.write().expect("catalog lock").remove(name)
+    }
+
+    /// Apply a partial patch to an existing resource, in memory only.
+    ///
+    /// Only fields explicitly set on the patch are touched — every
+    /// other field (`address`, `kind`, `metadata`, `tags`,
+    /// `archive_spec`, `archive_status`, `ingestion_spec`) is left
+    /// unchanged. This is the safe alternative to
+    /// [`deregister`](Self::deregister) + [`register`](Self::register),
+    /// which would clobber runtime state like `archive_status`.
+    ///
+    /// Returns the post-patch entry.
+    ///
+    /// # Errors
+    ///
+    /// - [`ResourceError::UnknownResource`] if no entry has that name.
+    /// - [`ResourceError::Validation`] if `patch.is_empty()` (no field
+    ///   was set — a clear signal the caller forgot to pass a flag).
+    /// - [`ResourceError::Validation`] if the resulting entry violates
+    ///   the registration-time validator (currently no rule applies to
+    ///   `description`, but this future-proofs the API).
+    ///
+    /// **Does not persist.** Call [`persist`](Self::persist) afterwards,
+    /// matching the `register` / `deregister` convention. The CLI does
+    /// this immediately so a CLI invocation is durable end-to-end.
+    pub fn patch(&self, name: &str, patch: ResourcePatch) -> Result<ResourceEntry> {
+        if patch.is_empty() {
+            return Err(ResourceError::Validation(
+                "patch is empty: nothing to update (set at least one field, e.g. --description)".into(),
+            ));
+        }
+        let mut reg = self.inner.write().expect("catalog lock");
+        let entry = reg
+            .get_mut(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        if let Some(d) = patch.description {
+            entry.description = d;
+        }
+        validate(entry)?;
+        Ok(entry.clone())
     }
 
     /// Register a provider's resources, surfacing validation/duplicate errors.
@@ -293,6 +335,100 @@ mod tests {
         assert_eq!(status.file_count, Some(42));
         assert_eq!(status.size_bytes, Some(1073741824));
         assert_eq!(status.verified, Some(true));
+    }
+
+    #[test]
+    fn patch_updates_description_in_memory_and_leaves_other_fields_untouched() {
+        let cat = ResourceCatalog::new("/tmp");
+        cat.register(sample()).unwrap();
+
+        let before = cat.get("ldscore.1000g_eur").expect("sample registered");
+        let original_kind = before.kind;
+        let original_address = before.address.clone();
+        let original_description = before.description.clone();
+        assert_eq!(original_description, "1000G EUR LD scores");
+
+        let updated = cat
+            .patch(
+                "ldscore.1000g_eur",
+                crate::patch::ResourcePatch::new().description("EUR-only LD scores, v2"),
+            )
+            .expect("patch should succeed");
+
+        // Returned entry reflects the new description.
+        assert_eq!(updated.description, "EUR-only LD scores, v2");
+
+        // Side effect: in-memory catalog now sees the new description.
+        let after = cat.get("ldscore.1000g_eur").expect("entry still present");
+        assert_eq!(after.description, "EUR-only LD scores, v2");
+
+        // Other fields are untouched — this is the whole point of patch.
+        assert_eq!(after.kind, original_kind);
+        assert_eq!(after.address, original_address);
+    }
+
+    #[test]
+    fn patch_unknown_resource_returns_unknown_resource_error() {
+        let cat = ResourceCatalog::new("/tmp");
+        let err = cat
+            .patch(
+                "does-not-exist",
+                crate::patch::ResourcePatch::new().description("x"),
+            )
+            .expect_err("missing name must error");
+        assert!(
+            matches!(err, crate::error::ResourceError::UnknownResource(ref n) if n == "does-not-exist"),
+            "expected UnknownResource, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn patch_empty_patch_returns_validation_error() {
+        let cat = ResourceCatalog::new("/tmp");
+        cat.register(sample()).unwrap();
+
+        let err = cat
+            .patch(
+                "ldscore.1000g_eur",
+                crate::patch::ResourcePatch::new(), // no fields set
+            )
+            .expect_err("empty patch must error");
+        assert!(
+            matches!(err, crate::error::ResourceError::Validation(_)),
+            "expected Validation, got {err:?}"
+        );
+
+        // And the entry must be unchanged — empty patch must not silently
+        // mutate state.
+        let after = cat.get("ldscore.1000g_eur").expect("entry still present");
+        assert_eq!(after.description, "1000G EUR LD scores");
+    }
+
+    #[tokio::test]
+    async fn patch_then_persist_survives_reload_round_trip() {
+        let store: Arc<dyn ManifestStore> =
+            Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
+        let cat = ResourceCatalog::with_persist("/tmp", store.clone());
+        cat.register(sample()).unwrap();
+
+        cat.patch(
+            "ldscore.1000g_eur",
+            crate::patch::ResourcePatch::new().description("EUR LD scores, regenerated 2026-08"),
+        )
+        .expect("patch");
+        cat.persist().await;
+
+        // Reload from a fresh catalog wrapping the SAME store.
+        let loaded = store.load().await.expect("manifest load");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].description, "EUR LD scores, regenerated 2026-08");
+
+        // Other fields are intact across the round-trip too.
+        assert_eq!(loaded[0].name, "ldscore.1000g_eur");
+        assert_eq!(
+            loaded[0].address,
+            ResourceAddress::iceberg("ld_score", "1000g_eur")
+        );
     }
 }
 

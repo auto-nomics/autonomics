@@ -520,6 +520,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"baselineLD_v2_2_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"baselineLD_v2_2_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         let res = LdscSldscNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscSldscConfig::new()).await;
         assert!(res.is_err(), "should error without Iceberg catalog");

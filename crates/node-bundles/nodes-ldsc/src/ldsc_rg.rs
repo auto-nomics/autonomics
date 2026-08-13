@@ -876,6 +876,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
             .await
@@ -1082,6 +1086,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg()).await;
         assert!(
@@ -1132,6 +1140,10 @@ mod tests {
         let ld_ref = crate::ldsc_common::LdScoreRef {
             sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
             m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
+            handle: None,
+            m_handle: None,
+            table_name: String::new(),
+            m_table_name: String::new(),
         };
         let (rg, n_snp) = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg())
             .await

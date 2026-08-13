@@ -59,6 +59,20 @@ impl ResourceCatalog {
                         });
                     }
                 }
+                ResourceAddress::ObjectStorage { bucket, prefix, .. } => {
+                    // ObjectStorage drift requires a live object store probe; we
+                    // surface a soft warning that includes the resolved prefix
+                    // so an operator can verify out-of-band. The snapshot type
+                    // is intentionally Iceberg-scoped — extending it to OSS is
+                    // tracked in a separate task.
+                    warnings.push(DriftWarning {
+                        name: entry.name.clone(),
+                        detail: format!(
+                            "object_storage resource declared at bucket `{bucket}` prefix `{prefix}` — \
+                             verify presence in the OSS bucket (no live probe wired)"
+                        ),
+                    });
+                }
                 _ => {}
             }
         }
