@@ -645,6 +645,27 @@ fn munge_sumstats(
 
 const GSEM_LDSC_NODE_KIND: &str = "gsem_ldsc";
 
+/// Input schema for `gsem_ldsc`: long-format munged sumstats with a `trait`
+/// column identifying which trait each row belongs to.
+///
+/// Columns:
+/// - `rsid` (Utf8) — SNP identifier, used for the LD-panel join key.
+/// - `z` (Float64) — standardized effect size (Z-score).
+/// - `n` (Float64) — sample size for this SNP in this trait.
+/// - `trait` (Utf8) — trait label; the node pivots on this to build per-trait
+///   columns before the multivariate regression.
+///
+/// `a1`/`a2` and other columns from `gsem_munge` are allowed as extra columns
+/// (the schema check permits superset outputs) but are not required.
+fn ldsc_input_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("rsid", DataType::Utf8, false),
+        Field::new("z", DataType::Float64, true),
+        Field::new("n", DataType::Float64, true),
+        Field::new("trait", DataType::Utf8, true),
+    ]))
+}
+
 /// Config for `gsem_ldsc` node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GsemLdscConfig {
@@ -740,7 +761,14 @@ impl NodeFactory for GsemLdscNodeFactory {
         joins with the univariate LD-score panel from Iceberg, runs multivariate LD Score \
         regression with block jackknife to estimate the genetic covariance matrix S and its \
         sampling covariance V. Outputs a single-row DataFrame (s_0..s_z, v_0..v_zz, m) \
-        consumable by gsem_usermodel / gsem_commonfactor / gsem_rgmodel."
+        consumable by gsem_usermodel / gsem_commonfactor / gsem_rgmodel.\n\n\
+        INPUT SCHEMA (validated at DAG-build time when the upstream port declares a schema, \
+        and at runtime otherwise):\n\
+        - rsid (Utf8) — SNP identifier\n\
+        - z (Float64) — standardized Z-score\n\
+        - n (Float64) — sample size\n\
+        - trait (Utf8) — trait label; must have exactly n_traits unique values\n\
+        Typically produced by gsem_munge → SQL(UNION ALL with 'trait' column)."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -749,7 +777,7 @@ impl NodeFactory for GsemLdscNodeFactory {
 
     fn ports(&self) -> NodePorts {
         NodePorts::new()
-            .add_input_port(None) // long-format munged sumstats
+            .add_input_port(Some(ldsc_input_schema())) // long-format munged sumstats
             .add_output_port(Some(ldsc_output_schema(2))) // placeholder; real schema depends on n_traits
     }
 
@@ -760,7 +788,7 @@ impl NodeFactory for GsemLdscNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: GsemLdscConfig = serde_json::from_value(spec)?;
         let meta = NodePorts::new()
-            .add_input_port(None)
+            .add_input_port(Some(ldsc_input_schema()))
             .add_output_port(Some(ldsc_output_schema(config.n_traits)));
         Ok(Box::new(GsemLdscNode { meta, config }))
     }
@@ -800,6 +828,43 @@ impl DagNode for GsemLdscNode {
         })?;
 
         let session = node_ctx.session();
+
+        // ── 0. Runtime schema validation ──
+        // The port-level schema check is skipped when the upstream port has
+        // no declared schema (e.g. SQL nodes). Validate at runtime so missing
+        // columns produce a clear error instead of a cryptic SQL failure.
+        {
+            let schema_batches = input.data.clone().collect().await.map_err(|e| {
+                DagError::NodeError {
+                    node_type: GSEM_LDSC_NODE_KIND.into(),
+                    msg: format!("schema check: collect failed: {e}"),
+                }
+            })?;
+            if schema_batches.is_empty() || schema_batches[0].num_columns() == 0 {
+                return Err(DagError::NodeError {
+                    node_type: GSEM_LDSC_NODE_KIND.into(),
+                    msg: "input DataFrame is empty — expected columns: rsid, z, n, trait".into(),
+                });
+            }
+            let schema_ref = schema_batches[0].schema();
+            let fields = schema_ref.fields();
+            let have: std::collections::HashSet<&str> =
+                fields.iter().map(|f| f.name().as_str()).collect();
+            for required in &["rsid", "z", "n", "trait"] {
+                if !have.contains(required) {
+                    let available: Vec<&str> =
+                        fields.iter().map(|f| f.name().as_str()).collect();
+                    return Err(DagError::NodeError {
+                        node_type: GSEM_LDSC_NODE_KIND.into(),
+                        msg: format!(
+                            "input is missing required column '{required}'. \
+                             Expected: rsid, z, n, trait. \
+                             Available: {available:?}"
+                        ),
+                    });
+                }
+            }
+        }
 
         // ── 1. Resolve LD-score panel from resource catalog ──
         let ld_ref = LdScoreRefCompat::resolve(&node_ctx.resources);
@@ -1972,6 +2037,31 @@ mod tests {
     }
 
     // ── gsem_ldsc tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_ldsc_input_schema_has_required_columns() {
+        let schema = ldsc_input_schema();
+        assert!(schema.field_with_name("rsid").is_ok());
+        assert!(schema.field_with_name("z").is_ok());
+        assert!(schema.field_with_name("n").is_ok());
+        assert!(schema.field_with_name("trait").is_ok());
+        // Exactly 4 required columns.
+        assert_eq!(schema.fields().len(), 4);
+    }
+
+    #[test]
+    fn test_ldsc_input_schema_munge_output_compatibility() {
+        // The gsem_munge output schema is a superset of ldsc_input_schema
+        // (has a1/a2 extra). schema_compatible should accept this — but
+        // gsem_munge output lacks "trait" column, so the DAG schema check
+        // would reject a direct munge→ldsc edge (which is correct: the user
+        // must add a trait column via SQL first).
+        let munge_schema = munge_output_schema();
+        let _ldsc_in = ldsc_input_schema();
+        // munge has rsid, z, n, a1, a2 — ldsc needs rsid, z, n, trait.
+        // ldsc's "trait" is absent from munge → not directly compatible.
+        assert!(munge_schema.field_with_name("trait").is_err());
+    }
 
     #[test]
     fn test_ldsc_output_schema_2_traits() {
