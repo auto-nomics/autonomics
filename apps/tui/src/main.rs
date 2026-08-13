@@ -102,7 +102,7 @@ enum Command {
     /// archive/restore/verify, drift check, and export. Covers all resource
     /// types (Iceberg tables, file paths, API endpoints, databases, docs,
     /// config).
-    Resource(ResourceArgs),
+    Resource(Box<ResourceArgs>),
 }
 
 #[derive(Debug, Args)]
@@ -276,7 +276,7 @@ enum ResourceAction {
     /// which address fields are required. For `iceberg_table`, optional
     /// `--source` registers an ingestion spec; `--archive` additionally
     /// pushes source to cloud and ingests into Iceberg in one step.
-    Add(ResourceAddArgs),
+    Add(Box<ResourceAddArgs>),
 
     /// Remove a resource from the catalog manifest (does NOT drop Iceberg
     /// tables or delete files — only unregisters the catalog entry).
@@ -530,7 +530,7 @@ async fn run_resource_async(args: ResourceArgs) -> color_eyre::Result<()> {
     match args.action {
         ResourceAction::List(a) => resource_list(&catalog, a).await,
         ResourceAction::Show(a) => resource_show(&catalog, a),
-        ResourceAction::Add(a) => resource_add(&catalog, a).await,
+        ResourceAction::Add(a) => resource_add(&catalog, *a).await,
         ResourceAction::Remove(a) => resource_remove(&catalog, a).await,
         ResourceAction::Ingest(a) => resource_ingest(&catalog, a).await,
         ResourceAction::Archive(a) => resource_archive(&catalog, a).await,
@@ -587,8 +587,8 @@ async fn resource_list(
             // Table output.
             println!("{} resources:\n", entries.len());
             println!(
-                "  {:<14} {:<30} {:<10} {:<8} {:<8} {}",
-                "KIND", "NAME", "ARCHIVE", "INGEST", "", "DESCRIPTION"
+                "  {:<14} {:<30} {:<10} {:<8} {:<8} DESCRIPTION",
+                "KIND", "NAME", "ARCHIVE", "INGEST", ""
             );
             println!("  {:-<120}", "");
             for e in &entries {
@@ -827,7 +827,7 @@ async fn resource_add(
         let csv_options = match format {
             SourceFormat::Csv | SourceFormat::Tsv => Some(CsvOptions {
                 has_header: !args.no_header,
-                delimiter: args.delimiter.unwrap_or_else(|| {
+                delimiter: args.delimiter.unwrap_or({
                     if matches!(format, SourceFormat::Tsv) {
                         '\t'
                     } else {
@@ -907,7 +907,7 @@ async fn resource_add(
         let src_entry = ResourceEntry::new(
             sn.clone(),
             ResourceKind::FilePath,
-            &format!("Source files for {}", args.name),
+            format!("Source files for {}", args.name),
             ResourceAddress::path(local),
         )
         .with_archive(aspec.clone());
@@ -1636,6 +1636,6 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(run_bib(bib))
         }
-        Command::Resource(res) => run_resource(res),
+        Command::Resource(res) => run_resource(*res),
     }
 }
