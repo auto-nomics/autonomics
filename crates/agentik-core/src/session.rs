@@ -40,7 +40,7 @@ use crate::prompt::compact;
 use crate::prompt::system_prompt_builder;
 use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentSnapshot, AgentStorage, PersistOp};
-use crate::tools::task_runtime::TaskStore;
+use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use crate::tools::{ToolRegistry, Toolset};
 
 // ── Compaction constants ───────────────────────────────────────────
@@ -699,6 +699,16 @@ impl Session {
                 false
             }
             InternalEvent::ResetCancelToken(token) => {
+                // If we were Waiting, the cancel interrupted the wait —
+                // transition to Cancelled so the agent is ready for new work.
+                // Background watchers have a child token tied to the old
+                // (now-cancelled) token, so they exit silently.
+                if *self.lifecycle.status()
+                    == agentik_types::AgentLifecycleStatus::Waiting
+                {
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
+                    self.shared.send_event(AgentEvent::TurnAborted);
+                }
                 self.cancel_token = token.clone();
                 // Wire the fresh cancel token into the toolset so that
                 // Ctrl+C also interrupts running tool tasks.
@@ -770,11 +780,18 @@ impl Session {
                 Ok(()) => {
                     // After agent_workflow, if the lifecycle is still
                     // "running" it means tool calls were executed and the
-                    // agent needs another API round.  Only stop when the
+                    // agent needs another API round. Only stop when the
                     // lifecycle has transitioned away from running (e.g.
-                    // Idle via self.stop(), or Error).
+                    // Idle via self.stop(), Error, or Waiting).
                     if !self.lifecycle.is_running() {
-                        self.shared.send_event(AgentEvent::Done);
+                        // Don't emit `Done` when waiting for background
+                        // tasks — the turn isn't complete, just paused.
+                        // The watcher will inject a message to resume.
+                        if *self.lifecycle.status()
+                            != agentik_types::AgentLifecycleStatus::Waiting
+                        {
+                            self.shared.send_event(AgentEvent::Done);
+                        }
                         true
                     } else {
                         false
@@ -960,6 +977,88 @@ impl Session {
             .execute(&toolcalls, Some(internal_event_tx.clone()))
             .await?;
 
+        // ── Non-blocking wait_task: detect "waiting" results ──
+        //
+        // The `wait_task` tool now returns immediately with `status: "waiting"`
+        // when the target task is still running (instead of blocking). Here we
+        // detect those results, spawn background watchers, and keep the
+        // lifecycle as `Waiting` so the session loop exits — just like going
+        // `Idle`. When a watcher fires, it injects a message that re-enters
+        // `run_session`.
+        let mut registered_waits = false;
+        for tr in &tool_results {
+            // Match the result back to its toolcall to see if it was wait_task.
+            let is_wait_task = toolcalls
+                .iter()
+                .find(|tc| tc.id == tr.tool_use_id)
+                .is_some_and(|tc| tc.name == "wait_task");
+            if !is_wait_task {
+                continue;
+            }
+            // Check the result content for the "waiting" sentinel.
+            let content = tr.text_content();
+            if content.contains("\"status\":\"waiting\"")
+                || content.contains("\"status\": \"waiting\"")
+            {
+                // Extract task number and timeout from the wait_task input.
+                let tc = toolcalls
+                    .iter()
+                    .find(|tc| tc.id == tr.tool_use_id)
+                    .expect("matched above");
+                let task_seq = tc
+                    .input
+                    .get("task")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let timeout_secs = tc
+                    .input
+                    .get("timeout_seconds")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(120);
+
+                // Spawn a background watcher that will inject a message when
+                // the task completes or the timeout expires. A child cancel
+                // token ensures the watcher exits silently if the user
+                // interrupts (Ctrl+C) while Waiting.
+                let tasks = self.shared.tasks.clone();
+                let tx = internal_event_tx.clone();
+                let cancel = self.cancel_token.child_token();
+                crate::supervise::spawn_safe_drop(
+                    "wait_watcher",
+                    Self::wait_watcher(tasks, task_seq, timeout_secs, tx, cancel),
+                );
+                registered_waits = true;
+                tracing::info!(
+                    task_seq,
+                    timeout_secs,
+                    "registered background watcher for wait_task"
+                );
+            }
+        }
+
+        if registered_waits {
+            // Keep lifecycle as `Waiting` — the session loop will exit.
+            // The watcher(s) will inject messages to re-enter run_session.
+            // Emit tool results so the UI shows the "waiting" status.
+            for tr in &tool_results {
+                self.shared.send_event(AgentEvent::ToolResult {
+                    ok: !tr.is_error.unwrap_or_default(),
+                    content: tr.text_content(),
+                });
+            }
+            for tr in &tool_results {
+                let msg = Message::tool_result(
+                    tr.tool_use_id.clone(),
+                    tr.text_content(),
+                    tr.is_error.unwrap_or_default(),
+                );
+                self.remember(msg.clone())?;
+                self.token_budget.add_pending_message(&msg);
+            }
+            // Skip compaction — there's no immediate next LLM call.
+            return Ok(());
+        }
+
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
 
         for tr in &tool_results {
@@ -1009,6 +1108,126 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    /// Background watcher for a non-blocking `wait_task`.
+    ///
+    /// Spawns as a fire-and-forget task when the agent calls `wait_task` on a
+    /// still-running background task. It monitors the task's status via the
+    /// watch channel, racing completion against a timeout. When either fires,
+    /// it injects a [`InternalEvent::MessageInject`] to wake the agent.
+    ///
+    /// The agent's session loop has already exited (lifecycle = `Waiting`),
+    /// so the injected message re-enters `run_session` and the LLM receives
+    /// the result as a new user message.
+    async fn wait_watcher(
+        tasks: Arc<tokio::sync::RwLock<TaskStore>>,
+        task_seq: u64,
+        timeout_secs: u64,
+        tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) {
+        use std::time::Duration;
+
+        // Clone the status watch receiver while holding the read lock briefly.
+        let status_rx = {
+            let tasks = tasks.read().await;
+            match tasks.find_by_seq(task_seq) {
+                Some(task)
+                    if matches!(task.status(), TaskStatus::Running) =>
+                {
+                    Some(task.status_receiver_clone())
+                }
+                _ => None, // Already completed or not found — handle below.
+            }
+        };
+
+        // If the task already finished (race), inject immediately.
+        let Some(mut status_rx) = status_rx else {
+            // Read the result if available.
+            let message = {
+                let tasks = tasks.read().await;
+                match tasks.find_by_seq(task_seq) {
+                    Some(task) => match task.tool_result() {
+                        Some(result) => {
+                            let is_error = result.is_error.unwrap_or(false);
+                            let content = result.text_content();
+                            let label = if is_error { "error" } else { "completed" };
+                            format!(
+                                "Background task '{}' (#{task_seq}) has {label}.\nResult:\n{content}",
+                                task.name()
+                            )
+                        }
+                        None => format!(
+                            "Background task '{}' (#{task_seq}) is no longer running.",
+                            task.name()
+                        ),
+                    },
+                    None => format!("Background task #{task_seq} no longer exists."),
+                }
+            };
+            let _ = tx.send(InternalEvent::MessageInject(vec![
+                ContentBlock::Text { text: message },
+            ]));
+            return;
+        };
+
+        // Race task completion against timeout and user cancellation.
+        let completed = tokio::select! {
+            result = status_rx.changed() => result.is_ok(),
+            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => false,
+            _ = cancel.cancelled() => {
+                tracing::info!(task_seq, "wait_watcher cancelled by user");
+                return; // Silent exit — don't inject a wakeup message.
+            }
+        };
+
+        let message = if completed {
+            // Task status changed — read the actual result.
+            let tasks = tasks.read().await;
+            match tasks.find_by_seq(task_seq) {
+                Some(task) => match task.status() {
+                    TaskStatus::Done(_) => match task.tool_result() {
+                        Some(result) => {
+                            let content = result.text_content();
+                            format!(
+                                "Background task '{}' (#{task_seq}) has completed successfully.\nResult:\n{content}",
+                                task.name()
+                            )
+                        }
+                        None => format!(
+                            "Background task '{}' (#{task_seq}) has completed.",
+                            task.name()
+                        ),
+                    },
+                    TaskStatus::Failed(ref e) => format!(
+                        "Background task '{}' (#{task_seq}) has failed:\n{e}",
+                        task.name()
+                    ),
+                    TaskStatus::Running => format!(
+                        "Background task '{}' (#{task_seq}) status unclear, still running.",
+                        task.name()
+                    ),
+                },
+                None => format!("Background task #{task_seq} no longer exists."),
+            }
+        } else {
+            // Timeout — task is still running.
+            let tasks = tasks.read().await;
+            let name = tasks
+                .find_by_seq(task_seq)
+                .map(|t| t.name().to_string())
+                .unwrap_or_else(|| format!("#{task_seq}"));
+            format!(
+                "Background task '{name}' (#{task_seq}) did not complete within {timeout_secs} seconds. \
+                 It is still running. You can check its status with `view_task_status` or \
+                 wait again with `wait_task`."
+            )
+        };
+
+        let _ = tx.send(InternalEvent::MessageInject(vec![
+            ContentBlock::Text { text: message },
+        ]));
     }
 
     pub(crate) fn stop(&mut self) {

@@ -932,6 +932,22 @@ impl DataEngineManager {
     /// `std::sync::Mutex` — it is never held across an `.await` point, so
     /// there is no risk of blocking the executor.
     pub fn client_for_session(&self, session_id: &str) -> DataEngineClient {
+        self.client_for_session_with_ref(session_id, session_id)
+    }
+
+    /// Like [`client_for_session`](Self::client_for_session) but lets the
+    /// caller choose the default DAG history ref for the new session.
+    ///
+    /// When the session already exists, `history_ref` is ignored (the
+    /// existing session's ref is kept).  When creating a new session, the
+    /// engine's `history_ref` is set to `history_ref` instead of the
+    /// default `"main"` — this is what gives each agent its own isolated
+    /// snapshot lineage in the shared history database.
+    pub fn client_for_session_with_ref(
+        &self,
+        session_id: &str,
+        history_ref: &str,
+    ) -> DataEngineClient {
         let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
 
         // Fast path: session already exists.
@@ -944,7 +960,9 @@ impl DataEngineManager {
         }
 
         // Slow path: create new session.
-        let new_engine = self.template.new_session();
+        // Use the caller-provided history_ref so each agent gets its own
+        // snapshot lineage instead of all committing to "main".
+        let new_engine = self.template.new_session().with_history_ref(history_ref);
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let server = SessionServer {
             session_id: session_id.to_string(),
@@ -954,7 +972,7 @@ impl DataEngineManager {
         };
         let task = tokio::task::spawn(server.run());
 
-        tracing::info!(session_id, "created new DAG session");
+        tracing::info!(session_id, history_ref, "created new DAG session");
         sessions.insert(
             session_id.to_string(),
             SessionHandle {

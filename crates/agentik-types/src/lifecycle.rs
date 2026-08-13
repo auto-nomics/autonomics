@@ -22,7 +22,10 @@
 ///   │                                                 │                     │
 ///   │         Cancelled ◀────── user Ctrl+C ─────────┘                     │
 ///   │            │                    ▲                                    │
-///   │            │ (next message)     │ wait_task overrides ToolRunning    │
+///   │            │ (next message)     │ wait_task on running task           │
+///   │            │                    │ exits loop + spawns watcher         │
+///   │            │                    │ watcher injects msg to resume       │
+///   │            │                    │ Ctrl+C also cancels watcher         │
 ///   └────────────┴──→ Requesting     ──→ Waiting ──→ Requesting            │
 ///
 ///   Error ◀─── fatal failure (persists until next message)
@@ -72,12 +75,13 @@ pub enum AgentLifecycleStatus {
     /// free context-window space).
     Compacting,
 
-    /// Agent is blocked inside `wait_task`, waiting for a background tool
-    /// task to finish. Semantically a "paused" state: the agent isn't
-    /// computing, it's idle-then-resume. The session loop is still alive
-    /// (cancel works, events drain), but the composer should enqueue
-    /// messages rather than send them directly. The lifecycle is reset to
-    /// `Requesting` once `wait_task` returns.
+    /// Agent has called `wait_task` on a still-running background task and
+    /// the session loop has exited (like `Idle`). A background watcher is
+    /// monitoring the task; when it completes or times out, the watcher
+    /// injects a message that re-enters `run_session`. The agent is fully
+    /// responsive — Ctrl+C cancels the wait and transitions to `Cancelled`.
+    /// New messages are enqueued and will be processed when the watcher
+    /// fires or the user sends a new message.
     Waiting,
 
     /// The user intentionally interrupted the current turn (Ctrl+C).

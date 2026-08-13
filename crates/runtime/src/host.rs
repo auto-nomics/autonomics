@@ -370,7 +370,13 @@ impl SharedInfra {
 
         let file_storage = self.file_storage.clone();
         let datalake = self.datalake.clone();
-        let engine_client = self.engine_manager.client_for_session(&profile.path);
+        // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
+        // as the session key — NOT profile.path, which is shared by all agents
+        // spawned from the same profile blueprint. Using profile.path here was
+        // a multi-agent migration legacy bug: two agents with the same profile
+        // would silently share the same DAG graph, so add_node / add_edge /
+        // run_dag calls from one agent would mutate the other agent's DAG.
+        let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());
 

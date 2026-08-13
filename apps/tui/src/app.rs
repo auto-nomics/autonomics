@@ -541,7 +541,12 @@ impl App {
                         // messages the user typed while the agent was busy.
                         let may_have_pending = matches!(
                             event,
-                            AgentEvent::Done | AgentEvent::TurnAborted | AgentEvent::Error(_)
+                            AgentEvent::Done
+                                | AgentEvent::TurnAborted
+                                | AgentEvent::Error(_)
+                        ) || matches!(
+                            event,
+                            AgentEvent::LifecycleChanged(AgentStatus::Waiting)
                         );
                         if matches!(
                             event,
@@ -1171,8 +1176,9 @@ impl App {
                 // Already quitting — no-op.
                 return;
             }
-            if !self.state.active_tab_state_mut().status.is_active() {
-                // Idle, Error, or Aborted — quit immediately.
+            let active_status = self.state.active_status();
+            if !active_status.is_active() && active_status != AgentStatus::Waiting {
+                // Idle, Error, Cancelled, or Aborted — quit immediately.
                 self.should_quit = true;
                 return;
             }

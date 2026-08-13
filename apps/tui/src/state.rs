@@ -260,22 +260,20 @@ impl Default for AgentTabState {
 
 impl AgentTabState {
     /// Returns true when the user can type and send messages.
-    /// Sending is allowed in any non-active state except Waiting —
-    /// in Error/Cancelled the user can immediately retry or steer the agent.
-    /// In Waiting the agent is blocked on wait_task, so messages must be
-    /// enqueued for delivery after the wait completes.
+    /// Sending is allowed in any non-active state — Idle, Error, Cancelled,
+    /// and Waiting all behave like "ready for new work". In Waiting the
+    /// agent loop has exited (paused for a background task watcher); a new
+    /// message will re-enter run_session immediately.
     pub fn can_send(&self) -> bool {
-        !self.status.is_active()
-            && self.status != AgentStatus::Waiting
-            && !self.input.is_empty()
+        !self.status.is_active() && !self.input.is_empty()
     }
 
     /// Returns true when the composer has text that can be enqueued for
-    /// later delivery (agent is busy or waiting). Only meaningful when the
-    /// agent is actively processing or waiting on a background task.
+    /// later delivery (agent is actively processing). When Waiting the
+    /// agent loop has exited, so messages go through immediately via
+    /// `can_send` instead.
     pub fn can_enqueue(&self) -> bool {
-        (self.status.is_active() || self.status == AgentStatus::Waiting)
-            && !self.input.is_empty()
+        self.status.is_active() && !self.input.is_empty()
     }
 
     /// Number of messages waiting in the pending queue.
@@ -950,11 +948,12 @@ mod tests {
         assert!(ts.can_send());
         assert!(!ts.can_enqueue());
 
-        // Waiting + text → can enqueue only — the agent is blocked on
-        // wait_task; messages must queue for delivery after the wait.
+        // Waiting + text → can send directly — the agent loop has exited
+        // (paused for a background task watcher). A new message re-enters
+        // run_session immediately, just like Idle/Cancelled.
         ts.status = AgentStatus::Waiting;
-        assert!(!ts.can_send());
-        assert!(ts.can_enqueue());
+        assert!(ts.can_send());
+        assert!(!ts.can_enqueue());
     }
 
     #[test]

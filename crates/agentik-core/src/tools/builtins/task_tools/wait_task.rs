@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
 
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
@@ -11,10 +9,12 @@ use crate::tools::{ToolError, ToolFunction};
 
 #[tool(
     name = "wait_task",
-    description = "Block until the specified background task finishes, then return its result. \
-                  If the task is already done, returns immediately. \
-                  If the task does not exist, returns an error. \
-                  If the timeout is reached before the task finishes, returns timeout status."
+    description = "Wait for a background task to finish. \
+                  If the task is already done, returns its result immediately. \
+                  If the task is still running, the agent pauses (exits its processing loop) \
+                  and will be automatically resumed with the task's result when it completes \
+                  or when the timeout expires. \
+                  If the task does not exist, returns an error."
 )]
 pub struct WaitTaskInput {
     #[desc = "Task number (#N) of the background task to wait for, as shown when it was spawned"]
@@ -25,11 +25,11 @@ pub struct WaitTaskInput {
 }
 
 pub struct WaitTaskTool {
-    tasks: Arc<RwLock<TaskStore>>,
+    tasks: Arc<tokio::sync::RwLock<TaskStore>>,
 }
 
 impl WaitTaskTool {
-    pub fn new(tasks: Arc<RwLock<TaskStore>>) -> Self {
+    pub fn new(tasks: Arc<tokio::sync::RwLock<TaskStore>>) -> Self {
         Self { tasks }
     }
 
@@ -87,69 +87,49 @@ impl WaitTaskTool {
 impl ToolFunction for WaitTaskTool {
     type Input = WaitTaskInput;
 
-    /// Sync — inherently a blocking wait, must never go to background.
-    /// timeout_seconds is set high enough to cover the full wait.
+    /// Non-blocking — returns immediately regardless of task status.
+    /// The session loop intercepts "waiting" results and exits the agent
+    /// loop, spawning a background watcher that re-injects a message when
+    /// the task completes or times out.
     fn timeout_seconds(&self) -> u64 {
-        300
+        10
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let timeout_secs = input.timeout_seconds.unwrap_or(120);
 
-        // Phase 1: look up the task; if already done, return immediately.
-        let mut status_rx = {
-            let tasks = self.tasks.read().await;
-            let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
-                return Ok(AgentToolResult::error(format!(
-                    "no background task #{}, use `view_task_status` to list active tasks",
-                    input.task
-                )));
-            };
-
-            match task.status() {
-                TaskStatus::Done(_) | TaskStatus::Failed(_) => {
-                    // Already finished — read lock still held, but read_result
-                    // will acquire its own read lock so we need to drop first.
-                    drop(tasks);
-                    return self.read_result(input.task).await;
-                }
-                TaskStatus::Running => {}
-            }
-
-            // Still running — clone the receiver so we can wait outside the lock.
-            task.status_receiver_clone()
-        };
-        // ^ read lock dropped here — the wait below is lock-free.
-
-        // Phase 2: wait for status change or timeout.
-        let completed = tokio::select! {
-            result = status_rx.changed() => {
-                result.is_ok()
-            }
-            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
-                false
-            }
+        let tasks = self.tasks.read().await;
+        let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
+            return Ok(AgentToolResult::error(format!(
+                "no background task #{}, use `view_task_status` to list active tasks",
+                input.task
+            )));
         };
 
-        if completed {
-            self.read_result(input.task).await
-        } else {
-            // Timeout — task is still running.
-            let tasks = self.tasks.read().await;
-            let name = tasks
-                .iter()
-                .find(|t| t.seq() == input.task)
-                .map(|t| t.name().to_string())
-                .unwrap_or_else(|| format!("#{}", input.task));
-
-            Ok(AgentToolResult::success_json(serde_json::json!({
-                "task": input.task,
-                "name": name,
-                "status": "timeout",
-                "content": format!(
-                    "task did not finish within {timeout_secs} seconds; it is still running"
-                ),
-            })))
+        match task.status() {
+            TaskStatus::Done(_) | TaskStatus::Failed(_) => {
+                // Already finished — return the result right away.
+                drop(tasks);
+                self.read_result(input.task).await
+            }
+            TaskStatus::Running => {
+                // Still running — return immediately with a "waiting" sentinel.
+                // The session loop will detect this and:
+                //   1. Spawn a background watcher for this task
+                //   2. Exit the agent processing loop (like going Idle)
+                //   3. When the task completes or times out, inject a message
+                //      to wake the agent.
+                let name = task.name().to_string();
+                Ok(AgentToolResult::success_json(serde_json::json!({
+                    "task": input.task,
+                    "name": name,
+                    "status": "waiting",
+                    "timeout_seconds": timeout_secs,
+                    "content": "The agent has paused to wait for this background task. \
+                                It will automatically resume when the task completes \
+                                or the timeout expires."
+                })))
+            }
         }
     }
 }
