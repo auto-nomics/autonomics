@@ -95,7 +95,7 @@ pub struct AutoEncoderTrainOutput {
 
 pub fn train_autoencoder(
     x: &Tensor,
-    _val: Option<(&Tensor,)>,
+    val: Option<(&Tensor,)>,
     config: &AutoEncoderConfig,
 ) -> Result<AutoEncoderTrainOutput, String> {
     let device = backend::device();
@@ -172,12 +172,38 @@ pub fn train_autoencoder(
         }
 
         let train_loss = epoch_loss / n_batches as f64;
+
+        // Compute validation reconstruction loss if val data is provided.
+        let (val_loss, val_metric) = if let Some((xv,)) = val {
+            let xv_scaled = scaler
+                .as_ref()
+                .map(|s| s.transform(xv))
+                .unwrap_or_else(|| xv.clone());
+            let infer_net = net.valid();
+            let x_burn = data::f64_to_burn_infer(&xv_scaled, &device);
+            let latent = infer_net.encoder.forward(x_burn, config.activation);
+            let recon = infer_net.decoder.forward(latent, config.activation);
+            // Compute MSE manually (infer backend is non-autodiff).
+            let recon_t = data::burn2d_to_tensor(recon);
+            let (n, m) = xv_scaled.shape();
+            let mut se = 0.0f64;
+            for i in 0..n {
+                for j in 0..m {
+                    let d = recon_t.at(i, j) - xv_scaled.at(i, j);
+                    se += d * d;
+                }
+            }
+            (Some(se / (n * m) as f64), None)
+        } else {
+            (None, None)
+        };
+
         let lr = sched.lr();
         training_log.push(EpochLog {
             epoch,
             train_loss,
-            val_loss: None,
-            val_metric: None,
+            val_loss,
+            val_metric,
             lr,
         });
         sched.step();

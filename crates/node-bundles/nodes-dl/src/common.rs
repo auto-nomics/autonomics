@@ -9,7 +9,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, FieldRef, Schema};
 use dag_core::dag::DagError;
-use dl::Tensor;
+use dl::{EpochLog, Tensor};
 
 /// Create a `Tensor` from named numeric columns across all batches.
 pub fn extract_tensor(batches: &[RecordBatch], columns: &[String]) -> Result<Tensor, DagError> {
@@ -164,4 +164,11 @@ pub fn err(node_type: &str, msg: impl Into<String>) -> DagError {
         node_type: node_type.into(),
         msg: msg.into(),
     }
+}
+
+/// Extract the best epoch (by val_metric) from a training log.
+/// Returns (best_epoch, best_val_metric), or (None, None) if no val_metric.
+pub fn best_epoch_from_log(log: &[EpochLog]) -> (Option<usize>, Option<f64>) {
+    let best = log.iter().filter(|l| l.val_metric.is_some()).last();
+    (best.map(|l| l.epoch), best.and_then(|l| l.val_metric))
 }

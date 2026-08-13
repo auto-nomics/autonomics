@@ -190,8 +190,11 @@ impl NodeFactory for MlpTrainFactory {
     fn doc(&self) -> &'static str {
         "dl_mlp_train: trains a multilayer perceptron with configurable hidden layers, \
         activation, dropout, batch normalization, learning-rate scheduling, gradient clipping, \
-        and early stopping on a validation set. Outputs training predictions (port 0), a \
-        DLModelArtifact (port 1), and a per-epoch training log (port 2)."
+        and early stopping on a validation set.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional).\n\
+        out[0]=training predictions (pred_probability + prediction columns), \
+        out[1]=model artifact (artifact_bytes column — connect to dl_predict/dl_model_save/dl_embed port 0), \
+        out[2]=per-epoch training log (epoch, train_loss, val_loss, val_metric, lr)."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MlpTrainSpec)
@@ -313,21 +316,14 @@ impl DagNode for MlpTrainNode {
             time_column: None,
             event_column: None,
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: result
-                    .training_log
-                    .iter()
-                    .filter(|l| l.val_metric.is_some())
-                    .last()
-                    .map(|l| l.epoch),
-                best_val_metric: result
-                    .training_log
-                    .iter()
-                    .filter(|l| l.val_metric.is_some())
-                    .last()
-                    .and_then(|l| l.val_metric),
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)
@@ -477,8 +473,11 @@ impl NodeFactory for DeepSurvTrainFactory {
     fn doc(&self) -> &'static str {
         "dl_deepsurv_train: trains a neural network with Cox proportional hazards partial \
         likelihood loss. Maintains the proportional hazards assumption while relaxing the \
-        linearity constraint of standard Cox regression. Outputs risk scores (port 0), \
-        DLModelArtifact (port 1), and training log (port 2)."
+        linearity constraint of standard Cox regression.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional).\n\
+        out[0]=training predictions (pred_risk_score column), \
+        out[1]=model artifact (artifact_bytes column), \
+        out[2]=per-epoch training log."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(DeepSurvTrainSpec)
@@ -593,21 +592,14 @@ impl DagNode for DeepSurvTrainNode {
             time_column: Some(self.spec.time_column.clone()),
             event_column: Some(self.spec.event_column.clone()),
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: result
-                    .training_log
-                    .iter()
-                    .filter(|l| l.val_metric.is_some())
-                    .last()
-                    .map(|l| l.epoch),
-                best_val_metric: result
-                    .training_log
-                    .iter()
-                    .filter(|l| l.val_metric.is_some())
-                    .last()
-                    .and_then(|l| l.val_metric),
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)

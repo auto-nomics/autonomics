@@ -138,7 +138,10 @@ impl NodeFactory for TransformerTrainFactory {
     fn doc(&self) -> &'static str {
         "dl_transformer_train: trains a Transformer encoder model for tabular classification/regression. \
         Each feature is projected to a d_model-dimensional token, multi-head self-attention captures \
-        feature interactions. Outputs predictions (port 0), DLModelArtifact (port 1), training log (port 2)."
+        feature interactions.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional).\n\
+        out[0]=training predictions, out[1]=model artifact (artifact_bytes column), \
+        out[2]=training log."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(TransformerTrainSpec)
@@ -257,11 +260,14 @@ impl DagNode for TransformerTrainNode {
             time_column: None,
             event_column: None,
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: None,
-                best_val_metric: None,
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)

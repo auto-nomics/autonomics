@@ -139,8 +139,10 @@ impl NodeFactory for AutoEncoderTrainFactory {
     }
     fn doc(&self) -> &'static str {
         "dl_autoencoder_train: trains an autoencoder or variational autoencoder for unsupervised \
-        feature learning. Outputs latent representations (port 0), DLModelArtifact (port 1), \
-        and training log (port 2)."
+        feature learning.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional, used for val_loss computation).\n\
+        out[0]=latent representations (latent_0..latent_N columns), \
+        out[1]=model artifact (artifact_bytes column), out[2]=training log."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(AutoEncoderTrainSpec)
@@ -194,9 +196,25 @@ impl DagNode for AutoEncoderTrainNode {
         _r: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let train_batches = common::collect_port(inputs, 0, "dl_autoencoder_train").await?;
+        let val_batches = if inputs.iter().any(|i| i.port == 1) {
+            Some(common::collect_port(inputs, 1, "dl_autoencoder_train").await?)
+        } else {
+            None
+        };
+
         let x = common::extract_tensor(&train_batches, &self.spec.features)?;
+        let val = if let Some(vb) = &val_batches {
+            Some((common::extract_tensor(vb, &self.spec.features)?,))
+        } else {
+            None
+        };
+
         let config = self.spec.to_config()?;
-        let result = train_autoencoder(&x, None, &config)
+        let val_ref: Option<(&dl::Tensor,)> = val.as_ref().map(|t| {
+            let r: &dl::Tensor = &t.0;
+            (r,)
+        });
+        let result = train_autoencoder(&x, val_ref, &config)
             .map_err(|e| common::err("dl_autoencoder_train", e))?;
 
         // Port 0: latent + reconstruction.
@@ -227,11 +245,14 @@ impl DagNode for AutoEncoderTrainNode {
             time_column: None,
             event_column: None,
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: None,
-                best_val_metric: None,
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)
@@ -365,8 +386,10 @@ impl NodeFactory for DeepHitTrainFactory {
     }
     fn doc(&self) -> &'static str {
         "dl_deephit_train: trains a DeepHit model for survival analysis with competing risks. \
-        Directly estimates cause-specific cumulative incidence functions without the PH assumption. \
-        Outputs risk scores (port 0), DLModelArtifact (port 1), training log (port 2)."
+        Directly estimates cause-specific cumulative incidence functions without the PH assumption.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional).\n\
+        out[0]=training predictions (pred_risk_score column), \
+        out[1]=model artifact (artifact_bytes column), out[2]=training log."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(DeepHitTrainSpec)
@@ -455,11 +478,14 @@ impl DagNode for DeepHitTrainNode {
             time_column: Some(self.spec.time_column.clone()),
             event_column: Some(self.spec.event_column.clone()),
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: None,
-                best_val_metric: None,
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)
@@ -581,8 +607,10 @@ impl NodeFactory for RnnTrainFactory {
     }
     fn doc(&self) -> &'static str {
         "dl_rnn_train: trains a recurrent neural network (LSTM/GRU/RNN) for longitudinal or \
-        sequence data. Supports bidirectional processing and multiple pooling strategies. \
-        Outputs predictions (port 0), DLModelArtifact (port 1), training log (port 2)."
+        sequence data. Supports bidirectional processing and multiple pooling strategies.\n\
+        Ports: in[0]=training data, in[1]=validation data (optional).\n\
+        out[0]=training predictions, out[1]=model artifact (artifact_bytes column), \
+        out[2]=training log."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(RnnTrainSpec)
@@ -707,11 +735,14 @@ impl DagNode for RnnTrainNode {
             time_column: None,
             event_column: None,
             scaler_json: None,
-            training_meta: TrainingMeta {
-                n_epochs_run: result.training_log.len(),
-                best_epoch: None,
-                best_val_metric: None,
-                total_params: result.model.n_params(),
+            training_meta: {
+                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                TrainingMeta {
+                    n_epochs_run: result.training_log.len(),
+                    best_epoch,
+                    best_val_metric,
+                    total_params: result.model.n_params(),
+                }
             },
         };
         let artifact_bytes = serde_json::to_vec(&artifact)
@@ -750,7 +781,9 @@ impl NodeFactory for EmbedFactory {
     }
     fn doc(&self) -> &'static str {
         "dl_embed: extracts latent representations or intermediate layer outputs from a trained \
-        DL model. Useful for visualization, clustering, or downstream analysis."
+        DL model. Supports Autoencoder, MLP, Transformer, and RNN architectures. \
+        Outputs embed_0, embed_1, ... columns. Useful for visualization, clustering, \
+        or downstream analysis."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(EmbedSpec)
@@ -831,33 +864,28 @@ impl DagNode for EmbedNode {
                     serde_json::from_str(&artifact.checkpoint_json)
                         .map_err(|e| common::err("dl_embed", format!("deserialize AE: {e}")))?;
                 let latent = predict_autoencoder_latent(&mut model, &x);
-                let n = latent.nrows();
-                for d in 0..latent.ncols() {
-                    let col: Vec<f64> = (0..n).map(|i| latent.at(i, d)).collect();
-                    fields.push(Arc::new(Field::new(
-                        format!("embed_{d}"),
-                        DataType::Float64,
-                        false,
-                    )));
-                    arrays.push(Arc::new(Float64Array::from(col)));
-                }
+                push_embed_columns(&latent, &mut fields, &mut arrays);
             }
             Architecture::Mlp => {
                 let mut model: MlpModel = serde_json::from_str(&artifact.checkpoint_json)
                     .map_err(|e| common::err("dl_embed", format!("deserialize MLP: {e}")))?;
                 let h = dl::embed_mlp(&mut model, &x);
-                for d in 0..h.ncols() {
-                    let col: Vec<f64> = (0..h.nrows()).map(|i| h.at(i, d)).collect();
-                    fields.push(Arc::new(Field::new(
-                        format!("embed_{d}"),
-                        DataType::Float64,
-                        false,
-                    )));
-                    arrays.push(Arc::new(Float64Array::from(col)));
-                }
+                push_embed_columns(&h, &mut fields, &mut arrays);
+            }
+            Architecture::Transformer => {
+                let mut model: TransformerModel =
+                    serde_json::from_str(&artifact.checkpoint_json)
+                        .map_err(|e| common::err("dl_embed", format!("deserialize Transformer: {e}")))?;
+                let h = dl::embed_transformer(&mut model, &x);
+                push_embed_columns(&h, &mut fields, &mut arrays);
+            }
+            Architecture::Rnn => {
+                let mut model: RnnModel = serde_json::from_str(&artifact.checkpoint_json)
+                    .map_err(|e| common::err("dl_embed", format!("deserialize RNN: {e}")))?;
+                let h = dl::embed_rnn(&mut model, &x);
+                push_embed_columns(&h, &mut fields, &mut arrays);
             }
             _ => {
-                // For other architectures, fall back to predict output.
                 return Err(common::err(
                     "dl_embed",
                     format!("embed not yet supported for {:?}", artifact.architecture),
@@ -890,6 +918,24 @@ fn make_artifact_batch(bytes: &[u8], arch: &str) -> Result<RecordBatch, DagError
         node_type: "dl".into(),
         msg: format!("build artifact batch: {e}"),
     })
+}
+
+/// Push embedding columns (`embed_0`, `embed_1`, …) from a Tensor.
+fn push_embed_columns(
+    h: &dl::Tensor,
+    fields: &mut Vec<Arc<Field>>,
+    arrays: &mut Vec<Arc<dyn arrow_array::Array>>,
+) {
+    let n = h.nrows();
+    for d in 0..h.ncols() {
+        let col: Vec<f64> = (0..n).map(|i| h.at(i, d)).collect();
+        fields.push(Arc::new(Field::new(
+            format!("embed_{d}"),
+            DataType::Float64,
+            false,
+        )));
+        arrays.push(Arc::new(Float64Array::from(col)));
+    }
 }
 
 fn emit_three(

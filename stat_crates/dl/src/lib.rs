@@ -73,27 +73,54 @@ pub fn embed_mlp(model: &mut mlp::MlpModel, x: &Tensor) -> Tensor {
         .unwrap_or_else(|| x.clone());
 
     let infer_model = models::burn_net::BurnMlp::<backend::B>::from_weights(&model.layers, &device);
-    let x_burn = data::f64_to_burn_infer(&x_scaled, &device);
+    embed_from_burn_mlp(&x_scaled, &infer_model, model.config.activation)
+}
 
-    // Forward through all layers except the last (output head).
+/// Extract penultimate-layer embeddings from a trained Transformer.
+pub fn embed_transformer(model: &mut transformer::TransformerModel, x: &Tensor) -> Tensor {
+    let device = backend::device();
+    let x_scaled = model
+        .scaler
+        .as_ref()
+        .map(|s| s.transform(x))
+        .unwrap_or_else(|| x.clone());
+
+    let infer_model = models::burn_net::BurnMlp::<backend::B>::from_weights(&model.layers, &device);
+    // Transformer uses GELU activation internally.
+    embed_from_burn_mlp(&x_scaled, &infer_model, configs::Activation::Gelu)
+}
+
+/// Extract penultimate-layer embeddings from a trained RNN.
+pub fn embed_rnn(model: &mut rnn::RnnModel, x: &Tensor) -> Tensor {
+    let device = backend::device();
+    let x_scaled = model
+        .scaler
+        .as_ref()
+        .map(|s| s.transform(x))
+        .unwrap_or_else(|| x.clone());
+
+    let infer_model = models::burn_net::BurnMlp::<backend::B>::from_weights(&model.layers, &device);
+    // RNN uses ReLU activation internally.
+    embed_from_burn_mlp(&x_scaled, &infer_model, configs::Activation::Relu)
+}
+
+/// Forward through all layers except the last (output head) and return the
+/// penultimate layer's output as a feature matrix.
+fn embed_from_burn_mlp(
+    x_scaled: &Tensor,
+    infer_model: &models::burn_net::BurnMlp<backend::B>,
+    activation: configs::Activation,
+) -> Tensor {
+    let device = backend::device();
     let n_layers = infer_model.layers.len();
-    let mut h = x_burn;
-    for (i, layer) in infer_model.layers.iter().enumerate() {
-        h = layer.forward(h);
-        if i < n_layers - 1 {
-            h = models::burn_net::apply_activation(h, model.config.activation);
-        }
-    }
-    // h is now the output. We want the penultimate layer output.
-    // Re-do forward but stop before the last layer.
-    let mut h = data::f64_to_burn_infer(&x_scaled, &device);
+    let mut h = data::f64_to_burn_infer(x_scaled, &device);
     for (i, layer) in infer_model.layers.iter().enumerate() {
         if i == n_layers - 1 {
             break;
         }
         h = layer.forward(h);
         if i < n_layers - 2 {
-            h = models::burn_net::apply_activation(h, model.config.activation);
+            h = models::burn_net::apply_activation(h, activation);
         }
     }
     data::burn2d_to_tensor(h)

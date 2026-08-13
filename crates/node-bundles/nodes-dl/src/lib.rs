@@ -48,9 +48,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(predict_node::PredictFactory));
         registry.register(Box::new(phase3_nodes::EmbedFactory));
 
-        // ── L2: Inference ───────────────────────────────────────────────
-        registry.register(Box::new(predict_node::PredictFactory));
-
         // ── L3: Management ──────────────────────────────────────────────
         registry.register(Box::new(model_nodes::ModelSaveFactory));
         registry.register(Box::new(model_nodes::ModelLoadFactory));
