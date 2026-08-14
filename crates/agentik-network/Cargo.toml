@@ -22,9 +22,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 arc-swap = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 
-[[example]]
-name = "arena"
-path = "examples/arena.rs"
-
 [lints]
 workspace = true
