@@ -15,13 +15,14 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 
 /// VFS paths for the built-in reference panels.
-pub const VFS_LDSCORE_1000G_EUR: &str = "vfs:///data/oss/ld_score/1000g_eur/";
-pub const VFS_LDSCORE_1000G_EUR_M: &str = "vfs:///data/oss/ld_score/1000g_eur_m/";
+pub const VFS_LDSCORE_1000G_EUR: &str = "vfs:///data/ldsc/1000g_eur.parquet";
+pub const VFS_LDSCORE_1000G_EUR_M: &str = "vfs:///data/ldsc/1000g_eur_m.parquet";
 pub const VFS_LDSCORE_BASELINELD_V2_2_EUR: &str =
-    "vfs:///data/oss/ld_score/baselineLD_v2_2_eur/";
+    "vfs:///data/ldsc/baselineLD_v2_2_eur.parquet";
 pub const VFS_LDSCORE_BASELINELD_V2_2_EUR_M: &str =
-    "vfs:///data/oss/ld_score/baselineLD_v2_2_eur_m/";
-pub const VFS_LDSCORE_UKBB_EUR: &str = "vfs:///data/oss/ld_score/ukbb_eur/";
+    "vfs:///data/ldsc/baselineLD_v2_2_eur_m.parquet";
+pub const VFS_LDSCORE_UKBB_EUR: &str =
+    "vfs:///data/ukbb/UKBB.EUR.ldscore.parquet/";
 
 /// Quote a DataFusion table name for SQL interpolation.
 ///

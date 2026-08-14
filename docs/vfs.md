@@ -68,3 +68,36 @@ vfs:///data/local/gwas/foo.parquet
 ```
 
 Credentials remain runtime configuration in `vfs.toml`.
+
+## Current LDSC mounts
+
+The local converted panels are mounted under:
+
+```toml
+[[backend]]
+id = "ldsc-local"
+type = "local"
+root = "/"
+
+[[mount]]
+path = "/data/ldsc"
+backend = "ldsc-local"
+source = "/mnt/projects/autonomics_projects/autonomics/reference/ldsc_data/parquet"
+read_only = true
+
+[[mount]]
+path = "/data/ukbb"
+backend = "ldsc-local"
+source = "/mnt/disk3/ld_score"
+read_only = true
+```
+
+The LDSC nodes use these VFS paths:
+
+```text
+vfs:///data/ldsc/1000g_eur.parquet
+vfs:///data/ldsc/1000g_eur_m.parquet
+vfs:///data/ldsc/baselineLD_v2_2_eur.parquet
+vfs:///data/ldsc/baselineLD_v2_2_eur_m.parquet
+vfs:///data/ukbb/UKBB.EUR.ldscore.parquet/
+```
