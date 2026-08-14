@@ -39,6 +39,13 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
             backtrace = %bt,
             "thread panicked"
         );
+        // Directly write to stderr + flush so the panic is visible even if
+        // the tracing subscriber's buffer is not flushed before exit.
+        eprintln!();
+        eprintln!("=== PANIC (init_logging hook) ===");
+        eprintln!("{info}");
+        eprintln!("{bt}");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
     }));
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {

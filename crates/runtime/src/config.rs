@@ -304,7 +304,7 @@ impl RuntimeConfig {
             opengwas_cache_dir,
             agent_identity,
             system_prompt,
-            enable_iceberg: resolve_flag(base, |b| b.enable_iceberg, true),
+            enable_iceberg: resolve_flag(base, |b| b.enable_iceberg, false),
             enable_dag_history: resolve_flag(base, |b| b.enable_dag_history, true),
             enable_bibliography: resolve_flag(base, |b| b.enable_bibliography, true),
             enable_writing: resolve_flag(base, |b| b.enable_writing, true),

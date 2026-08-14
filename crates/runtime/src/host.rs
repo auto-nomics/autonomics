@@ -145,7 +145,10 @@ impl SharedInfra {
     /// (identity, prompts, tool flags) are **not** read — those are passed
     /// to [`RuntimeHost::spawn_agent`] instead.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
+        tracing::info!("SharedInfra::open: starting");
+
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
+        tracing::info!("SharedInfra::open: file storage ready");
 
         // ── Resource Catalog ─────────────────────────────────────────
         // Open (or load) the centralized resource catalog first, so every
@@ -155,8 +158,10 @@ impl SharedInfra {
         if let Some(parent) = manifest_db.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        tracing::info!("SharedInfra::open: opening resource catalog at {}", manifest_db.display());
         let resources =
             Arc::new(ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await);
+        tracing::info!("SharedInfra::open: resource catalog loaded");
 
         // Register built-in resources from RuntimeConfig (config-as-resource).
         register_config_resources(&resources, config);
@@ -165,6 +170,7 @@ impl SharedInfra {
         // can resolve endpoints via `ResourceCatalog::global()`.
         let _ = ResourceCatalog::set_global(resources.clone());
 
+        tracing::info!("SharedInfra::open: building DataEngine (iceberg={})", config.enable_iceberg);
         // ── DataEngine ───────────────────────────────────────────────
         let mut engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
@@ -187,6 +193,7 @@ impl SharedInfra {
         }
 
         let mut engine = engine_builder.build();
+        tracing::info!("SharedInfra::open: DataEngine built");
 
         // ── DAG history ──────────────────────────────────────────────
         if config.enable_dag_history {
@@ -216,6 +223,7 @@ impl SharedInfra {
         }
 
         let engine_manager = Arc::new(DataEngineManager::new(engine));
+        tracing::info!("SharedInfra::open: DataEngineManager created");
 
         // ── Datalake ─────────────────────────────────────────────────
         let datalake = Arc::new(Datalake::new());
@@ -229,6 +237,7 @@ impl SharedInfra {
         // Open once and clone — both trait objects share the same underlying
         // connection (and its Mutex).  Opening the file twice creates two
         // separate Database objects and risks file-lock contention.
+        tracing::info!("SharedInfra::open: opening agent storage at {}", agent_db.display());
         let turso_store = match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => {
                 tracing::info!(path = %agent_db.display(), "agent storage opened");
@@ -245,12 +254,14 @@ impl SharedInfra {
         let bib_db_path = resources
             .resolve_database("db.bib")
             .unwrap_or_else(|_| config.bib_db_path.clone());
+        tracing::info!("SharedInfra::open: opening bibliography db at {}", bib_db_path.display());
         let bib =
             Arc::new(bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone()).await?);
 
         let writing_db_path = resources
             .resolve_database("db.writing")
             .unwrap_or_else(|_| config.writing_db_path.clone());
+        tracing::info!("SharedInfra::open: opening writing db at {}", writing_db_path.display());
         let writing = Arc::new(
             writing_base::WritingShared::open_with(
                 &writing_db_path.to_string_lossy(),
@@ -266,6 +277,7 @@ impl SharedInfra {
             check_drift_best_effort(&resources, &datalake).await;
         }
         resources.persist().await;
+        tracing::info!("SharedInfra::open: all infrastructure ready");
 
         Ok(Self {
             engine_manager,
@@ -1049,7 +1061,9 @@ struct AgentEntry {
 impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
+        tracing::info!("RuntimeHost::open: delegating to SharedInfra::open");
         let mut infra = SharedInfra::open(config).await?;
+        tracing::info!("RuntimeHost::open: infrastructure ready, creating channels");
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (registration_tx, registration_rx) = mpsc::unbounded_channel();
@@ -1060,6 +1074,7 @@ impl RuntimeHost {
         let (event_broadcast, _) = tokio::sync::broadcast::channel(256);
         let control = crate::control::HostControl::new(cmd_tx, event_broadcast.clone());
         infra.host_control = Some(control.clone());
+        tracing::info!("RuntimeHost::open: host created successfully");
         Ok(Self {
             infra,
             network: AgentNetwork::new(),

@@ -36,7 +36,8 @@ impl IcebergConfig {
 
 impl Default for IcebergConfig {
     fn default() -> Self {
-        let catalog_uri = env::var("ICEBERG_REST_URI").expect("ICEBERG_REST_URI not set");
+        let catalog_uri = env::var("ICEBERG_REST_URI")
+            .unwrap_or_else(|_| "http://localhost:8181".to_string());
         Self {
             catalog_uri,
             // Read S3 config from env to match Python (infra/datalake/src/datalake/catalog.py).
@@ -46,9 +47,9 @@ impl Default for IcebergConfig {
                 .unwrap_or_else(|_| "http://localhost:3900".to_string()),
             s3_region: env::var("ICEBERG_S3_REGION").unwrap_or_else(|_| "garage".to_string()),
             s3_access_key_id: env::var("ICEBERG_S3_ACCESS_KEY_ID")
-                .expect("ICEBERG_S3_ACCESS_KEY_ID not set"),
+                .unwrap_or_else(|_| "".to_string()),
             s3_secret_access_key: env::var("ICEBERG_S3_SECRET_ACCESS_KEY")
-                .expect("ICEBERG_S3_SECRET_ACCESS_KEY not set"),
+                .unwrap_or_else(|_| "".to_string()),
         }
     }
 }

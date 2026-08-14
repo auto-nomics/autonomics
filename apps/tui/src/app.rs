@@ -133,6 +133,7 @@ impl App {
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let (mut host, profiles) = runtime.block_on(async {
+            tracing::info!("startup: opening agent storage for profile loading");
             // Open storage directly for profile seeding/loading (the host
             // also opens it, but we need AgentProfileRegistry trait methods
             // which aren't on the AgentStorage trait object).
@@ -147,6 +148,7 @@ impl App {
                     None
                 }
             };
+            tracing::info!("startup: seeding default profiles + loading");
             let profiles = if let Some(ref s) = storage {
                 use agentik_core::storage::AgentProfileRegistry;
                 let _ = s.seed_defaults_if_empty().await;
@@ -154,12 +156,15 @@ impl App {
             } else {
                 Vec::new()
             };
+            tracing::info!("startup: loaded {} profile(s)", profiles.len());
 
             // Drop the temporary storage connection BEFORE opening the host
             // to avoid holding two connections to the same SQLite DB
             // simultaneously (can cause lock contention).
+            tracing::info!("startup: dropping temp storage connection");
             drop(storage);
 
+            tracing::info!("startup: opening RuntimeHost");
             // Now open the host (it will open the same DB again — Turso WAL
             // mode supports concurrent connections from the same process).
             let host = match RuntimeHost::open(&config).await {
