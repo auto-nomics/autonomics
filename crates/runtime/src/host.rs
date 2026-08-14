@@ -3166,15 +3166,6 @@ async fn relay_loop(
         tokio::select! {
             biased;
 
-            event = handle.recv_event() => match event {
-                Some(ev) => {
-                    if event_tx.send((name.clone(), ev)).is_err() {
-                        break;
-                    }
-                }
-                None => break,
-            },
-
             cmd = cmd_rx.recv() => match cmd {
                 Some(AgentCommand::Message(text)) => {
                     handle.send_message(text);
@@ -3207,7 +3198,20 @@ async fn relay_loop(
                     handle.shutdown();
                     break;
                 }
-            }
+            },
+
+            // Events are checked AFTER commands so that a streaming
+            // event flood cannot starve Cancel / Shutdown.  Commands are
+            // infrequent, so prioritising them adds negligible latency
+            // to event forwarding while guaranteeing prompt interrupts.
+            event = handle.recv_event() => match event {
+                Some(ev) => {
+                    if event_tx.send((name.clone(), ev)).is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            },
         }
     }
 

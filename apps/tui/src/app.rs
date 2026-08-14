@@ -479,6 +479,17 @@ impl App {
 
             // Pre-extract host to avoid multiple `&mut self.host` borrows
             // in the select! branches below.
+            //
+            // Drain pending host commands BEFORE waiting on the select!.
+            // During streaming, agent events flood the biased select! and
+            // starve the host-command branch (recv_and_process_command),
+            // so CancelAgent / DeliverMessage commands sent from key
+            // handlers pile up unprocessed. Draining here ensures every
+            // command is handled promptly on each loop iteration.
+            if let Some(host) = self.host.as_mut() {
+                host.try_process_commands();
+            }
+
             let host_ptr = self.host.as_mut().map(|h| h as *mut RuntimeHost);
 
             tokio::select! {
