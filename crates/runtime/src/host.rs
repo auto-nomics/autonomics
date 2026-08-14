@@ -405,30 +405,62 @@ impl SharedInfra {
 // AgentHandle — per-agent control struct
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Build the VFS from `state_dir/vfs.toml`, falling back to sane env-based
-/// defaults when no manifest has been created yet.
+/// Build the VFS from `state_dir/vfs.toml`.
+///
+/// On first launch the default manifest is materialized to disk so operators
+/// can inspect and edit the exact mounts the process is using. The generated
+/// file can contain credentials supplied by the environment, so its parent
+/// directory is created and the file is written with user-only permissions on
+/// Unix.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
     let manifest_path = config.state_dir.join("vfs.toml");
     let manifest = match std::fs::read_to_string(&manifest_path) {
         Ok(source) => VfsManifest::from_toml(&source)
             .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_vfs_manifest(config),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let manifest = default_vfs_manifest(config);
+            write_vfs_manifest(&manifest_path, &manifest)?;
+            manifest
+        }
         Err(e) => return Err(format!("read {}: {e}", manifest_path.display())),
     };
     MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())
 }
 
+fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<(), String> {
+    let Some(parent) = path.parent() else {
+        return Err(format!("VFS manifest path has no parent: {}", path.display()));
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("create VFS manifest directory {}: {e}", parent.display()))?;
+
+    let source = toml::to_string_pretty(manifest)
+        .map_err(|e| format!("serialize {}: {e}", path.display()))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .and_then(|mut file| {
+            use std::io::Write;
+            file.write_all(source.as_bytes())
+        })
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
 fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
     let mut backend = vec![BackendDefinition {
         id: "default".into(),
-        config: vfs::BackendConfig::local(
-            config.data_dir.to_string_lossy().to_string(),
-        ),
+        config: vfs::BackendConfig::local("/"),
     }];
     let mut mount = vec![MountDefinition {
         path: "/".into(),
         backend: "default".into(),
-        remote: String::new(),
+        source: config.data_dir.to_string_lossy().to_string(),
         read_only: false,
     }];
 
@@ -449,7 +481,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         mount.push(MountDefinition {
             path: "/data/s3".into(),
             backend: "s3-prod".into(),
-            remote: String::new(),
+            source: "/".into(),
             read_only: true,
         });
     }
@@ -468,7 +500,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         mount.push(MountDefinition {
             path: "/data/oss".into(),
             backend: "oss-prod".into(),
-            remote: String::new(),
+            source: "/".into(),
             read_only: true,
         });
     }
@@ -2934,5 +2966,37 @@ impl Drop for RuntimeHost {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+mod vfs_tests {
+    use super::*;
+
+    #[test]
+    fn build_vfs_materializes_default_manifest_on_first_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        let manifest_path = config.state_dir.join("vfs.toml");
+
+        build_vfs(&config).unwrap();
+        let source = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest = VfsManifest::from_toml(&source).unwrap();
+        assert_eq!(manifest.mount[0].source, config.data_dir.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn generated_manifest_is_writable_and_parses_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("vfs.toml");
+        let manifest = VfsManifest::local_root(dir.path().join("data").to_string_lossy().to_string());
+
+        write_vfs_manifest(&path, &manifest).unwrap();
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        let parsed = VfsManifest::from_toml(&source).unwrap();
+        assert_eq!(parsed, manifest);
     }
 }

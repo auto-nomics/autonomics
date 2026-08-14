@@ -4,13 +4,13 @@ Autonomics exposes storage resources through one Unix-style namespace. The runti
 
 ## Mount manifest
 
-The runtime loads `state_dir/vfs.toml`. If it does not exist, a root local mount plus environment-configured `/data/s3` and `/data/oss` mounts are created.
+The runtime loads `state_dir/vfs.toml`. On first launch it creates that file with a root local mount plus any environment-configured `/data/s3` and `/data/oss` mounts, then loads it.
 
 ```toml
 [[backend]]
 id = "default"
 type = "local"
-root = "/mnt/disk3/test"
+root = "/"
 
 [[backend]]
 id = "oss-prod"
@@ -23,14 +23,18 @@ secret_access_key = "..."
 [[mount]]
 path = "/"
 backend = "default"
+source = "/mnt/disk3/test"
 
 [[mount]]
 path = "/data/oss"
 backend = "oss-prod"
+source = "/"
 read_only = true
 ```
 
-Paths are routed by the longest matching mount and rewritten to the backend key. For example:
+`source` explicitly names the file, directory, or object prefix being mounted, analogous to a Linux bind mount. For local backends it can be an absolute host path; it must lie inside the backend root. For S3/OSS it is the prefix inside the configured bucket, with `/` meaning the bucket root.
+
+Paths are routed by the longest matching mount and rewritten from `source` to the virtual `path`. For example:
 
 ```text
 vfs:///data/oss/ld_score/1000g_eur/part.parquet
@@ -48,11 +52,12 @@ A local parquet can be exposed the same way by mounting its containing directory
 [[backend]]
 id = "gwas-local"
 type = "local"
-root = "/mnt/disk2/gwas"
+root = "/"
 
 [[mount]]
 path = "/data/local/gwas"
 backend = "gwas-local"
+source = "/mnt/disk2/gwas"
 read_only = true
 ```
 

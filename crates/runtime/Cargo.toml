@@ -28,6 +28,7 @@ writing-base = { path = "../writing-base" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }
+toml = "0.8"
 tracing = { workspace = true }
 arc-swap.workspace = true
 serde_json = { workspace = true }
@@ -40,3 +41,4 @@ workspace = true
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"

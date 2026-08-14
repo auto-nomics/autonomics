@@ -26,12 +26,13 @@
 //! [[mount]]
 //! path = "/data/ldscore"
 //! backend = "oss-prod"
-//! remote = "ld_score"
+//! source = "/ld_score"
 //! read_only = true
 //! ```
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::object_store::path::Path;
@@ -198,16 +199,21 @@ pub struct BackendDefinition {
     pub config: BackendConfig,
 }
 
-/// A mount entry in `vfs.toml`.
+/// A mount entry in `vfs.toml`, analogous to a Linux bind mount.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MountDefinition {
-    /// Absolute virtual path, for example `/data/ldscore`.
+    /// Absolute virtual mount point, for example `/data/ldscore`.
     pub path: String,
     /// Backend id from `[backend]`.
     pub backend: String,
-    /// Prefix inside the backend. Empty means mount the backend root.
-    #[serde(default)]
-    pub remote: String,
+    /// Source path being mounted.
+    ///
+    /// For a local backend this can be an absolute host path or a path
+    /// relative to the backend root. For object stores it is the prefix inside
+    /// the configured bucket. `/` (or the legacy empty value) mounts the
+    /// backend root.
+    #[serde(alias = "remote")]
+    pub source: String,
     /// Reject mutations through this mount.
     #[serde(default)]
     pub read_only: bool,
@@ -231,12 +237,12 @@ impl VfsManifest {
         Self {
             backend: vec![BackendDefinition {
                 id: "default".into(),
-                config: BackendConfig::local(root),
+                config: BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
                 path: "/".into(),
                 backend: "default".into(),
-                remote: String::new(),
+                source: root.into(),
                 read_only: false,
             }],
         }
@@ -246,10 +252,64 @@ impl VfsManifest {
 #[derive(Clone)]
 struct Mount {
     virtual_prefix: Path,
-    remote_prefix: Path,
+    source_prefix: Path,
     store: Arc<dyn ObjectStore>,
     read_only: bool,
     definition: MountDefinition,
+}
+
+/// Resolve a mount's declarative source path to a backend key.
+fn backend_source_key(config: &BackendConfig, source: &str) -> Result<String, String> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return Ok(String::new());
+    }
+
+    match config {
+        BackendConfig::Local { root } => {
+            let root = lexical_absolute(PathBuf::from(root));
+            let source_path = PathBuf::from(trimmed);
+            let source_abs = if source_path.is_absolute() {
+                lexical_absolute(source_path)
+            } else {
+                lexical_absolute(root.join(source_path))
+            };
+            source_abs
+                .strip_prefix(&root)
+                .map(|relative| relative.to_string_lossy().to_string())
+                .map_err(|_| {
+                    format!(
+                        "local source '{}' is outside backend root '{}'",
+                        trimmed,
+                        root.display()
+                    )
+                })
+        }
+        BackendConfig::S3 { .. } | BackendConfig::Oss { .. } => {
+            Ok(trimmed.trim_start_matches('/').to_string())
+        }
+    }
+}
+
+/// Lexically normalize a path without resolving symlinks or requiring it to
+/// exist. Mount validation must remain usable for paths created later.
+fn lexical_absolute(path: PathBuf) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 /// A prefix-routed DataFusion `ObjectStore`.
@@ -293,13 +353,15 @@ impl MountedObjectStore {
             }
             let virtual_prefix = Path::parse(&definition.path)
                 .map_err(|e| MountError::Config(format!("mount path '{}': {e}", definition.path)))?;
-            let remote_prefix = Path::parse(&definition.remote).map_err(|e| {
-                MountError::Config(format!("mount remote '{}': {e}", definition.remote))
+            let source_key = backend_source_key(&backend.config, &definition.source)
+                .map_err(|e| MountError::Config(format!("mount '{}': {e}", definition.path)))?;
+            let source_prefix = Path::parse(&source_key).map_err(|e| {
+                MountError::Config(format!("mount source '{}': {e}", definition.source))
             })?;
 
             mounts.push(Mount {
                 virtual_prefix,
-                remote_prefix,
+                source_prefix,
                 store,
                 read_only: definition.read_only,
                 definition: definition.clone(),
@@ -336,7 +398,7 @@ impl MountedObjectStore {
             .prefix_match(&mount.virtual_prefix)
             .map(|parts| parts.map(|part| part.as_ref().to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
-        let mut remote = mount.remote_prefix.clone();
+        let mut remote = mount.source_prefix.clone();
         for part in suffix {
             remote = remote.join(part);
         }
@@ -428,14 +490,14 @@ impl ObjectStore for MountedObjectStore {
             return futures::stream::iter(Err(not_mounted(prefix))).boxed();
         };
         let mount_prefix = mount.virtual_prefix.clone();
-        let remote_prefix = mount.remote_prefix.clone();
+        let source_prefix = mount.source_prefix.clone();
 
         mount
             .store
             .list(Some(&remote))
             .map(move |meta| {
                 let mut meta = meta?;
-                meta.location = remap_location(&meta.location, &remote_prefix, &mount_prefix)?;
+                meta.location = remap_location(&meta.location, &source_prefix, &mount_prefix)?;
                 Ok(meta)
             })
             .boxed()
@@ -448,14 +510,14 @@ impl ObjectStore for MountedObjectStore {
         let (mount, remote) = self.resolve(prefix).map_err(|_| not_mounted(prefix))?;
         let result = mount.store.list_with_delimiter(Some(&remote)).await?;
         let mount_prefix = mount.virtual_prefix.clone();
-        let remote_prefix = mount.remote_prefix.clone();
+        let source_prefix = mount.source_prefix.clone();
 
         let objects = result
             .objects
             .into_iter()
             .map(|mut meta| {
                 meta.location =
-                    remap_location(&meta.location, &remote_prefix, &mount_prefix)?;
+                    remap_location(&meta.location, &source_prefix, &mount_prefix)?;
                 Ok(meta)
             })
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
@@ -463,7 +525,7 @@ impl ObjectStore for MountedObjectStore {
             .common_prefixes
             .into_iter()
             .map(|location| {
-                remap_location(&location, &remote_prefix, &mount_prefix)
+                remap_location(&location, &source_prefix, &mount_prefix)
             })
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
 
@@ -509,12 +571,12 @@ impl ObjectStore for MountedObjectStore {
 }
 
 fn remap_location(
-    remote: &Path,
-    remote_prefix: &Path,
+    source: &Path,
+    source_prefix: &Path,
     virtual_prefix: &Path,
 ) -> Result<Path, ObjectStoreError> {
-    let suffix = remote
-        .prefix_match(remote_prefix)
+    let suffix = source
+        .prefix_match(source_prefix)
         .map(|parts| parts.map(|part| part.as_ref().to_string()).collect::<Vec<_>>())
         .unwrap_or_default();
     let mut path = virtual_prefix.clone();
@@ -534,24 +596,24 @@ mod tests {
             backend: vec![
                 BackendDefinition {
                     id: "default".into(),
-                    config: BackendConfig::local(root.to_string_lossy().to_string()),
+                    config: BackendConfig::local("/"),
                 },
                 BackendDefinition {
                     id: "nested".into(),
-                    config: BackendConfig::local(nested.to_string_lossy().to_string()),
+                    config: BackendConfig::local("/"),
                 },
             ],
             mount: vec![
                 MountDefinition {
                     path: "/".into(),
                     backend: "default".into(),
-                    remote: String::new(),
+                    source: root.to_string_lossy().to_string(),
                     read_only: false,
                 },
                 MountDefinition {
                     path: "/data/panels".into(),
                     backend: "nested".into(),
-                    remote: "remote-prefix".into(),
+                    source: nested.join("remote-prefix").to_string_lossy().to_string(),
                     read_only: true,
                 },
             ],
@@ -565,7 +627,7 @@ mod tests {
         let manifest = nested_manifest(root.path(), nested.path());
         let vfs = MountedObjectStore::from_manifest(&manifest).unwrap();
 
-        // Physical backend key includes the remote prefix; VFS callers do not.
+        // Physical backend key includes the mounted source; VFS callers do not.
          OpendalFileStorage::new(nested.path())
             .op
             .write("remote-prefix/panel.parquet", b"panel".to_vec())
@@ -611,6 +673,28 @@ mod tests {
     }
 
     #[test]
+    fn local_source_outside_backend_root_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "local".into(),
+                config: BackendConfig::local(root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/outside".into(),
+                backend: "local".into(),
+                source: outside.path().to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        assert!(matches!(
+            MountedObjectStore::from_manifest(&manifest),
+            Err(MountError::Config(_))
+        ));
+    }
+
+    #[test]
     fn duplicate_mounts_are_rejected() {
         let root = tempfile::tempdir().unwrap();
         let backend = BackendDefinition {
@@ -620,7 +704,7 @@ mod tests {
         let mount = MountDefinition {
             path: "/data".into(),
             backend: "default".into(),
-            remote: String::new(),
+            source: "/".into(),
             read_only: false,
         };
         let manifest = VfsManifest {
@@ -631,6 +715,37 @@ mod tests {
             MountedObjectStore::from_manifest(&manifest),
             Err(MountError::DuplicateMount(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod single_file_tests {
+    use super::*;
+    use datafusion::object_store::ObjectStoreExt;
+
+    #[tokio::test]
+    async fn single_local_file_can_be_mounted_at_virtual_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("panel.parquet");
+        std::fs::write(&source, b"single").unwrap();
+
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "local".into(),
+                config: BackendConfig::local("/"),
+            }],
+            mount: vec![MountDefinition {
+                path: "/data/panel.parquet".into(),
+                backend: "local".into(),
+                source: source.to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let vfs = MountedObjectStore::from_manifest(&manifest).unwrap();
+        let path = Path::parse("/data/panel.parquet").unwrap();
+
+        assert_eq!(vfs.get(&path).await.unwrap().bytes().await.unwrap().as_ref(), b"single");
+        assert!(vfs.put(&path, b"new".to_vec().into()).await.is_err());
     }
 }
 
