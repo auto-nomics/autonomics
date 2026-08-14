@@ -408,20 +408,6 @@ mod tests {
 
     #[tokio::test]
     async fn runs_rdrobust_node() {
-        // Datalake::default() reads ICEBERG_REST_URI; set a dummy value for tests.
-        // Datalake::default() reads several env vars; set dummy values for tests.
-        unsafe {
-            if std::env::var("ICEBERG_REST_URI").is_err() {
-                std::env::set_var("ICEBERG_REST_URI", "http://localhost:8185");
-            }
-            if std::env::var("ICEBERG_S3_ACCESS_KEY_ID").is_err() {
-                std::env::set_var("ICEBERG_S3_ACCESS_KEY_ID", "test");
-            }
-            if std::env::var("ICEBERG_S3_SECRET_ACCESS_KEY").is_err() {
-                std::env::set_var("ICEBERG_S3_SECRET_ACCESS_KEY", "test");
-            }
-        }
-
         let mut node = RdRobustNode::new(RdRobustNodeConfig {
             y: "y".into(),
             x: "x".into(),

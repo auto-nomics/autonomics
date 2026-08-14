@@ -21,9 +21,5 @@ The LD matrix is folded into two per-SNP scalars (`m1`/`m2`) pre-fit, collapsing
 
 Exposed as `univariate_mixer` and `bivariate_mixer` node kinds (`data-engine/nodes/univariate_mixer.rs`). Two-phase pipeline:
 
-1. Offline `precompute_tags` produces an Iceberg table (`eur_tagsuff`) containing per-tag sufficient statistics
+1. Offline `precompute_tags` produces a VFS table (`eur_tagsuff`) containing per-tag sufficient statistics
 2. The runtime node loads sumstats, joins with tagsuff by rsid, and invokes `fit1`
-
-## Data infrastructure
-
-For the full algorithm derivation, pipeline diagram, and decision record, see [`docs/data_infra/univariate_mixer.md`](../data_infra/univariate_mixer.md).

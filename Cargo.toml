@@ -44,9 +44,7 @@ members = [
   "bio_crates/lcv",
   "bio_crates/mtag",
   "bio_crates/mrlap",
-  "infra/sink_ld_matrix",
   "crates/visualization",
-  "infra/sink_af",
 
   "bio_crates/cpassoc",
   "bio_crates/magma",

@@ -609,11 +609,11 @@ No new crate — codegen lives inside `data-engine` because it needs access to
    Option: parse the SQL for table names; or add an optional `table_names`
    field to `SqlNodeSpec`.
 
-3. **I/O path translation.** Rust nodes read from Iceberg tables
-   (`iceberg.gwas.bmi`) and virtual filesystem paths. The generated R script
-   needs real filesystem paths or Iceberg R bindings (which don't exist yet).
-   Decision: for Iceberg sources, emit a comment with the table name and a
-   placeholder `# TODO: export iceberg table to CSV first`. For file paths,
+3. **I/O path translation.** Rust nodes read from VFS tables
+   (`vfs.gwas.bmi`) and virtual filesystem paths. The generated R script
+   needs real filesystem paths or VFS R bindings (which don't exist yet).
+   Decision: for VFS sources, emit a comment with the table name and a
+   placeholder `# TODO: export vfs table to CSV first`. For file paths,
    pass through as-is (the Rust node already uses real paths).
 
 4. **Node-specific auxiliary output.** Some Rust nodes produce diagnostic

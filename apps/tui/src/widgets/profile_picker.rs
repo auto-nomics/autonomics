@@ -596,7 +596,6 @@ impl ProfilePicker {
         flag("opengwas", p.enable_opengwas);
         flag("opentargets", p.enable_opentargets);
         flag("gwascatalog", p.enable_gwascatalog);
-        flag("iceberg", p.enable_iceberg);
         flag("dag-history", p.enable_dag_history);
 
         // Truncate to fit.

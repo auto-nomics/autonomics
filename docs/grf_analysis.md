@@ -276,7 +276,7 @@ impl DagNode for CausalForestNode {
 | 已有 crate | grf 适用性 | 借鉴要点 |
 |---|---|---|
 | `ldsc-sys` (`build.rs` + Eigen, 静态库 + bindgen) | ✅ grf 也是 Eigen+CMake | 复用同一套 build 脚手架 |
-| `mtag` 节点 (Iceberg 表 + DAG 端口 + serialized model blob) | ✅ forest 本身就是个 blob | DAG 节点间以 `ForestBlob` 传递训练结果 |
+| `mtag` 节点 (VFS 表 + DAG 端口 + serialized model blob) | ✅ forest 本身就是个 blob | DAG 节点间以 `ForestBlob` 传递训练结果 |
 | `magma` (`test_data` 在 aliyun) | ✅ grf 也需要 fixture | `aliyun://autonomics-data/grf/test-data/` 归档 |
 | `coloc` (R 交叉验证 golden tests) | ✅ grf 全部 12 个 forest 都需要 | `grf_xxx` 节点对每种 forest 跑 R grf 同输入 → bit-equal |
 
@@ -418,7 +418,7 @@ forest 类型在 `ForestBlob` header 里编码 (`u8` magic), 节点根据 magic 
 1. **许可证 (GPL-3)**: 静态链接 grf core 后, `grf-sys` 的输出 .a 是 GPL-3. 如果 `autonomics` 整体是 Apache-2.0/MIT, 解决方案: 把 `grf-sys` 作为独立 GPL-3 crate 在用户机器上 build, 或者用 LGPL 兼容的策略 (load-time dynamic linking + 命令行 `grf_xxx`). **需要法务 early-on 决策**.
 2. **Eigen**: 已经在 `ldsc-sys` 等用过, 无新风险.
 3. **Forest 二进制兼容性**: grf 升级后序列化格式可能变, 锁定 2.6.1 版本, 在 `grf-sys/build.rs` 中 pin version.
-4. **大森林 OOM**: grf 1M × 30 float forest ≈ 25 GB. DAG 节点应支持 `forest` 端口流式写出到 Iceberg / parquet, 而不是塞进 DAG 内存.
+4. **大森林 OOM**: grf 1M × 30 float forest ≈ 25 GB. DAG 节点应支持 `forest` 端口流式写出到 VFS / parquet, 而不是塞进 DAG 内存.
 5. **节点间 seed 一致性**: DAG 节点并行时, 每个节点内部 seed 来自 spec, 不要依赖全局 RNG. (grf 2.6.1 已经用 `runtime_context.random_seed` 显式 seed, OK.)
 
 ---

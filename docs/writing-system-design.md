@@ -18,7 +18,7 @@
 | **结构化标引** | 文档内部不是平铺文本，而是语义块树（段落/公式/图表/声明）；声明可挂载证据链（引文 + 数据） |
 | **引文自动管理** | 引用风格切换 (natbib / biblatex)；断引检测；引文图谱（哪段话引了哪篇文） |
 | **Agent 优化编辑** | AST 级语义操作（插入段落 / 移动章节 / 插入引文），而非文本 diff；稳定 block ID；可组合编辑脚本 |
-| **数据 & 图表插入** | DAG DataFrame → LaTeX tabular；VizNode 产物 → `\includegraphics`；Iceberg 查询 → 内联表格 |
+| **数据 & 图表插入** | DAG DataFrame → LaTeX tabular；VizNode 产物 → `\includegraphics`；VFS 查询 → 内联表格 |
 | **LaTeX 编译** | 可插拔引擎（Tectonic 内嵌 / XeLaTeX 子进程），模板系统，实时编译反馈 |
 
 ### 非目标
@@ -415,8 +415,8 @@ pub enum TableSource {
         max_rows: Option<usize>,       // 截断
         format: TableFormat,           // booktabs / plain / longtable
     },
-    /// Iceberg SQL 查询。
-    IcebergQuery {
+    /// VFS SQL 查询。
+    VFSQuery {
         sql: String,
         format: TableFormat,
     },
@@ -1018,7 +1018,7 @@ pub struct EditScript {
 |------|------|
 | `doc_insert_table` | 插入表格（手动数据或 DAG 输出引用） |
 | `doc_insert_figure` | 插入图片（文件路径或 DAG artifact） |
-| `doc_insert_data` | 从 Iceberg 查询 → 表格/内联值 |
+| `doc_insert_data` | 从 VFS 查询 → 表格/内联值 |
 | `doc_cross_reference` | 创建交叉引用 |
 
 #### 编译工具

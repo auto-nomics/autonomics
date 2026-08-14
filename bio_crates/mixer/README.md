@@ -192,7 +192,7 @@ Fisher-Yates 部分洗牌，rayon 并行），与 C++ **统计一致**（非逐 
 
 `univariate_mixer`（fit1）与 `bivariate_mixer`（fit2）已注册为 data-engine DAG 节点
 （`crates/data-engine/.../nodes/`）。`bivariate_mixer` 4 输入：trait1/trait2 sumstats +
-trait1/trait2 fit1 结果；从 Iceberg 数据湖读 LD/AF，调 `mixer::bivariate::fit2`，默认
+trait1/trait2 fit1 结果；从 VFS 数据湖读 LD/AF，调 `mixer::bivariate::fit2`，默认
 `sampling=true`，并计算 **bit-exact 随机剪枝权重**（`weights.rs`，与原版 `set_weights_randprune` 逐位一致）。
 
 ## 随机剪枝权重（`weights.rs`）

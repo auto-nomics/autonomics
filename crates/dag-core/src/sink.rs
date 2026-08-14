@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Whether a sink appends to, or overwrites, its destination.
 ///
-/// Used by both file sinks and Iceberg sinks.
+/// Used by file-producing sink nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SinkMode {

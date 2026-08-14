@@ -27,12 +27,14 @@ use arc_swap::ArcSwapOption;
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
-use vfs::{BackendDefinition, MountedObjectStore, MountDefinition, OpendalFileStorage, VfsManifest};
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use vfs::{
+    BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
+};
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::AgentStatus;
@@ -53,9 +55,6 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     }
     fn enable_gwascatalog(&self) -> bool {
         self.enable_gwascatalog
-    }
-    fn enable_iceberg(&self) -> bool {
-        self.enable_iceberg
     }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
@@ -133,7 +132,7 @@ impl SharedInfra {
     /// Open all shared resources from a global [`RuntimeConfig`].
     ///
     /// The config's `data_dir`, `state_dir`, `agent_db`, and feature flags
-    /// for Iceberg / DAG history are consumed here. Per-agent settings
+    /// for DAG history are consumed here. Per-agent settings
     /// (identity, prompts, tool flags) are **not** read — those are passed
     /// to [`RuntimeHost::spawn_agent`] instead.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
@@ -193,14 +192,17 @@ impl SharedInfra {
         let engine_manager = Arc::new(DataEngineManager::new(engine));
         tracing::info!("SharedInfra::open: DataEngineManager created");
 
-// ── Agent storage ────────────────────────────────────────────
+        // ── Agent storage ────────────────────────────────────────────
         // Resolve DB paths from the catalog (allows provider overrides and
         // persistence-backed path changes; falls back to RuntimeConfig).
         let agent_db = config.agent_db.clone();
         // Open once and clone — both trait objects share the same underlying
         // connection (and its Mutex).  Opening the file twice creates two
         // separate Database objects and risks file-lock contention.
-        tracing::info!("SharedInfra::open: opening agent storage at {}", agent_db.display());
+        tracing::info!(
+            "SharedInfra::open: opening agent storage at {}",
+            agent_db.display()
+        );
         let turso_store = match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => {
                 tracing::info!(path = %agent_db.display(), "agent storage opened");
@@ -215,12 +217,18 @@ impl SharedInfra {
         let profile_storage: Arc<dyn AgentProfileRegistry> = Arc::new(turso_store);
 
         let bib_db_path = config.bib_db_path.clone();
-        tracing::info!("SharedInfra::open: opening bibliography db at {}", bib_db_path.display());
+        tracing::info!(
+            "SharedInfra::open: opening bibliography db at {}",
+            bib_db_path.display()
+        );
         let bib =
             Arc::new(bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone()).await?);
 
         let writing_db_path = config.writing_db_path.clone();
-        tracing::info!("SharedInfra::open: opening writing db at {}", writing_db_path.display());
+        tracing::info!(
+            "SharedInfra::open: opening writing db at {}",
+            writing_db_path.display()
+        );
         let writing = Arc::new(
             writing_base::WritingShared::open_with(
                 &writing_db_path.to_string_lossy(),
@@ -438,7 +446,10 @@ fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
 
 fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<(), String> {
     let Some(parent) = path.parent() else {
-        return Err(format!("VFS manifest path has no parent: {}", path.display()));
+        return Err(format!(
+            "VFS manifest path has no parent: {}",
+            path.display()
+        ));
     };
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("create VFS manifest directory {}: {e}", parent.display()))?;
@@ -474,34 +485,12 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
     }];
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
-        std::env::var("ICEBERG_S3_BUCKET"),
-        std::env::var("ICEBERG_S3_ACCESS_KEY_ID"),
-        std::env::var("ICEBERG_S3_SECRET_ACCESS_KEY"),
-    ) {
-        let region = std::env::var("ICEBERG_S3_REGION").unwrap_or_else(|_| "auto".into());
-        let cfg = match std::env::var("ICEBERG_S3_ENDPOINT") {
-            Ok(endpoint) => vfs::BackendConfig::s3_compatible(bucket, endpoint, region, ak, sk),
-            Err(_) => vfs::BackendConfig::s3(bucket, region, ak, sk),
-        };
-        backend.push(BackendDefinition {
-            id: "s3-prod".into(),
-            config: cfg,
-        });
-        mount.push(MountDefinition {
-            path: "/data/s3".into(),
-            backend: "s3-prod".into(),
-            source: "/".into(),
-            read_only: true,
-        });
-    }
-
-    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
         std::env::var("OSS_BUCKET"),
         std::env::var("OSS_ACCESS_KEY_ID"),
         std::env::var("OSS_SECRET_ACCESS_KEY"),
     ) {
-        let endpoint = std::env::var("OSS_ENDPOINT")
-            .unwrap_or_else(|_| "oss-cn-beijing.aliyuncs.com".into());
+        let endpoint =
+            std::env::var("OSS_ENDPOINT").unwrap_or_else(|_| "oss-cn-beijing.aliyuncs.com".into());
         backend.push(BackendDefinition {
             id: "oss-prod".into(),
             config: vfs::BackendConfig::oss(bucket, endpoint, ak, sk),
@@ -2591,7 +2580,7 @@ mod status_tests {
     async fn broadcast_receives_agent_status_changed() {
         use std::time::Duration;
 
-        // The full RuntimeHost::open requires DataEngine/Iceberg/Turso
+        // The full RuntimeHost::open requires DataEngine/Turso
         // setup which is heavy for a unit test. Instead, exercise the
         // broadcast wiring at the module level by directly calling
         // the low-level emit_host_event pattern.
@@ -2634,7 +2623,7 @@ mod interrupt_agent_tests {
     //! Phase 3 — interrupt_agent vs shutdown_agent distinction.
     //!
     //! These tests verify the command-layer invariants without spinning
-    //! up a full RuntimeHost (which requires DataEngine/Iceberg/Turso).
+    //! up a full RuntimeHost (which requires DataEngine/Turso).
     //! The full integration test would be: spawn agent → delegate_to →
     //! interrupt_agent → assert LifecycleChanged(Cancelled) and agent
     //! still in registry.
@@ -2993,14 +2982,18 @@ mod vfs_tests {
         build_vfs(&config).unwrap();
         let source = std::fs::read_to_string(&manifest_path).unwrap();
         let manifest = VfsManifest::from_toml(&source).unwrap();
-        assert_eq!(manifest.mount[0].source, config.data_dir.to_string_lossy().to_string());
+        assert_eq!(
+            manifest.mount[0].source,
+            config.data_dir.to_string_lossy().to_string()
+        );
     }
 
     #[test]
     fn generated_manifest_is_writable_and_parses_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("vfs.toml");
-        let manifest = VfsManifest::local_root(dir.path().join("data").to_string_lossy().to_string());
+        let manifest =
+            VfsManifest::local_root(dir.path().join("data").to_string_lossy().to_string());
 
         write_vfs_manifest(&path, &manifest).unwrap();
 

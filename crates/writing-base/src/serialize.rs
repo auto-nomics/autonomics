@@ -252,12 +252,6 @@ fn render_block(block: &Block, out: &mut String) {
                     out.push_str("  \\end{tabular}\n");
                     let _ = format;
                 }
-                TableSource::IcebergQuery { sql, .. } => {
-                    out.push_str(&format!("  % Iceberg query: {sql}\n"));
-                    out.push_str("  \\begin{tabular}{l}\n");
-                    out.push_str("    (unresolved query) \\\\\n");
-                    out.push_str("  \\end{tabular}\n");
-                }
             }
 
             if let Some(ref label) = tbl.meta.label {

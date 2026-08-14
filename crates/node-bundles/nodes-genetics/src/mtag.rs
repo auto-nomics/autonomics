@@ -2,8 +2,8 @@
 //!
 //! Takes **two** upstream GWAS summary-statistics `DataFrame`s (trait 1 and
 //! trait 2, each with Z-scores, sample sizes, allele frequencies, and rsid),
-//! queries the Iceberg data lake for the LD score panel under
-//! `iceberg.ld_score.*`, runs:
+//! queries the VFS-mounted reference dataset for the LD score panel under
+//! `vfs.ld_score.*`, runs:
 //!
 //! 1. **Σ estimation** — bivariate LDSC regression to get the residual
 //!    covariance intercepts (Σ[i,j] = gencov/h² intercept).
@@ -53,8 +53,8 @@ pub enum MtagNodeError {
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("failed to read result batch: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
+    #[error("reference data error: {0}")]
+    ReferenceData(String),
 }
 
 impl ::dag_core::dag::NodeError for MtagNodeError {
@@ -62,7 +62,6 @@ impl ::dag_core::dag::NodeError for MtagNodeError {
         "mtag"
     }
 }
-
 
 // =====================================================================
 // Schemas
@@ -223,7 +222,7 @@ const MTAG_NODE_KIND: &str = "mtag";
 /// traits.
 ///
 /// Accepts two upstream `DataFrame`s (trait 1 on port 0, trait 2 on port 1),
-/// each with columns `z`, `n`, `frq`, `rsid`. Queries the Iceberg data lake
+/// each with columns `z`, `n`, `frq`, `rsid`. Queries the VFS-mounted reference dataset
 /// for the LD score panel, runs LDSC bivariate regression for Σ estimation,
 /// GMM for Ω estimation, and the MTAG conditional formula. Outputs per-trait
 /// result `DataFrame`s (port 0 = trait 1, port 1 = trait 2).
@@ -247,7 +246,7 @@ impl NodeFactory for MtagNodeFactory {
     fn doc(&self) -> &'static str {
         "MTAG (Multi-Trait Analysis of GWAS) transform node. Takes two upstream \
         summary statistics DataFrames (trait 1 on port 0, trait 2 on port 1, each \
-        with z, n, frq, rsid), queries the Iceberg data lake for the LD score \
+        with z, n, frq, rsid), queries the VFS-mounted reference dataset for the LD score \
         panel, runs LDSC bivariate regression for residual covariance (Sigma) \
         estimation, GMM for genetic covariance (Omega) estimation, and the MTAG \
         conditional-expectation formula. Outputs two per-trait result DataFrames \
@@ -402,9 +401,13 @@ impl DagNode for MtagNode {
 
         let ctx = node_ctx.session();
 
-        nodes_ldsc::ldsc_common::register_listing_table(&ctx, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_UKBB_EUR)
+        nodes_ldsc::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel",
+            nodes_ldsc::ldsc_common::VFS_LDSCORE_UKBB_EUR,
+        )
         .await
-        .map_err(|e| MtagNodeError::Datalake(e.to_string()))?;
+        .map_err(|e| MtagNodeError::ReferenceData(e.to_string()))?;
 
         // Run the full pipeline.
         let (batch1, batch2) =
@@ -423,7 +426,7 @@ impl DagNode for MtagNode {
 impl MtagNode {
     /// The catalog-independent MTAG pipeline.
     ///
-    /// Given a [`SessionContext`] in which `iceberg.ld_score.{ld_table}` resolves
+    /// Given a [`SessionContext`] in which `vfs.ld_score.{ld_table}` resolves
     /// to an LD-score panel, this:
     /// 1. Registers the two upstream sumstats as temp tables.
     /// 2. 3-way inner joins on rsid with the LD panel.

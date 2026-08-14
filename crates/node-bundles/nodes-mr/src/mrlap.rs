@@ -4,7 +4,7 @@
 //! de-biasing correction) as a single DAG node with two GWAS sumstat inputs.
 //!
 //! Mirrors [`super::ldsc_rg::LdscRgNode`] for the LD-score-regression stage
-//! (3-way inner join of exposure × outcome × the Iceberg LD-score panel) and
+//! (3-way inner join of exposure × outcome × the VFS LD-score panel) and
 //! [`super::hdl_l::HdlLNode`] for the sumstat parsing + one-row result emission.
 
 use std::sync::Arc;
@@ -83,7 +83,7 @@ pub struct MrlapSpec {
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
-/// Hardcoded Iceberg LD-score panel table — same panel as ldsc_hsq / ldsc_rg.
+/// Hardcoded VFS LD-score panel table — same panel as ldsc_hsq / ldsc_rg.
 
 fn default_n_blocks() -> usize {
     200
@@ -129,7 +129,7 @@ impl NodeFactory for MrlapNodeFactory {
         "MRlap: sample-overlap-aware Mendelian randomisation (cross-trait LDSC + IVW-MR + correction)."
     }
     fn doc(&self) -> &'static str {
-        "Reads two GWAS sumstat tables + an Iceberg LD-score panel, runs the \
+        "Reads two GWAS sumstat tables + a VFS LD-score panel, runs the \
          full MRlap pipeline: cross-trait LDSC (h², λ, rg), distance-pruned \
          IVW-MR, and the de-biasing correction for sample overlap / weak \
          instruments / Winner's curse. Emits a one-row summary."
@@ -376,14 +376,18 @@ impl DagNode for MrlapNode {
             return Err(err("no SNPs survive harmonisation"));
         }
 
-        // ---- LDSC stage: 3-way join via the Iceberg LD panel ----
+        // ---- LDSC stage: 3-way join via the VFS LD panel ----
         let ctx = node_ctx.session();
         ctx.register_table("sumstats1", in0.data.clone().into_view())
             .map_err(|e| err(format!("register sumstats1: {e}")))?;
         ctx.register_table("sumstats2", in1.data.clone().into_view())
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
-        nodes_ldsc::ldsc_common::register_listing_table(&ctx, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR)
+        nodes_ldsc::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel",
+            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR,
+        )
         .await
         .map_err(|e| err(format!("register ld panel: {e}")))?;
 

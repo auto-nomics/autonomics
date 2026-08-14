@@ -1,8 +1,8 @@
 //! Core data model for the bibliography management library.
 //!
 //! All structs are plain serializable data — no I/O, no side-effects.
-//! They are designed to map cleanly onto both Iceberg table rows (for
-//! the datalake) and CSL-JSON / BibTeX export formats.
+//! They are designed to map cleanly onto both structured storage rows and
+//! CSL-JSON / BibTeX export formats.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -246,7 +246,7 @@ pub enum IdKind {
 }
 
 impl IdKind {
-    /// Lowercased string label used for serde and Iceberg column naming.
+    /// Lowercased string label used for serde and column naming.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Doi => "doi",

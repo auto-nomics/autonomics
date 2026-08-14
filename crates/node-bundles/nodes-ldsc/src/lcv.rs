@@ -1,8 +1,8 @@
 //! Latent Causal Variable (LCV) node — genetic causality proportion (gcp).
 //!
 //! Takes **two** upstream GWAS summary-statistics `DataFrame`s (trait 1 and
-//! trait 2, each with Z-scores, sample sizes, and rsid), queries the Iceberg
-//! data lake for the LD score panel under `iceberg.ld_score.*`, inner-joins all
+//! trait 2, each with Z-scores, sample sizes, and rsid), queries the VFS
+//! data lake for the LD score panel under `vfs.ld_score.*`, inner-joins all
 //! three on rsid so only SNPs shared by *both* traits and the panel survive,
 //! and runs LCV via [`lcv::model::run_lcv`]. Outputs a single-row summary
 //! `DataFrame` with the posterior gcp, its z-score and p-value, the genetic
@@ -41,8 +41,8 @@ pub enum LcvNodeError {
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("failed to read result batch: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
+    #[error("reference data error: {0}")]
+    ReferenceData(String),
 }
 
 impl ::dag_core::dag::NodeError for LcvNodeError {
@@ -50,7 +50,6 @@ impl ::dag_core::dag::NodeError for LcvNodeError {
         "lcv"
     }
 }
-
 
 // =====================================================================
 // Schemas
@@ -176,7 +175,7 @@ const LCV_NODE_KIND: &str = "lcv";
 /// causality between two GWAS traits.
 ///
 /// Accepts two upstream `DataFrame`s (trait 1 on port 0, trait 2 on port 1),
-/// queries the Iceberg data lake for the LD score panel, inner-joins all three
+/// queries the VFS-mounted reference dataset for the LD score panel, inner-joins all three
 /// on rsid, and runs LCV. Each upstream `DataFrame` must have columns `z`
 /// (Float64), `n` (Float64), and `rsid` (Utf8).
 #[derive(Clone)]
@@ -200,7 +199,7 @@ impl NodeFactory for LcvNodeFactory {
         "Latent Causal Variable (LCV) transform node for inferring the genetic \
         causality proportion (gcp) between two GWAS traits. Takes two upstream \
         summary statistics DataFrames (trait 1 on port 0, trait 2 on port 1, each \
-        with z, n, rsid), queries the Iceberg data lake for the LD score panel, \
+        with z, n, rsid), queries the VFS-mounted reference dataset for the LD score panel, \
         3-way joins on rsid, and runs LCV. Outputs a single-row summary with \
         posterior gcp mean/SE, partial-causality z-score and p-value, fully-causal \
         p-values, genetic correlation, and per-trait h² z-scores.\n\n\
@@ -348,17 +347,15 @@ impl DagNode for LcvNode {
         })?;
 
         let ctx = node_ctx.session();
-        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
-        .await
-        .map_err(|e| LcvNodeError::Datalake(e.to_string()))?;
-        let (out, n_snp) = Self::run_with_ctx(
+        crate::ldsc_common::register_listing_table(
             &ctx,
-            &input1.data,
-            &input2.data,
             "ld_panel",
-            &self.config,
+            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
         )
-        .await?;
+        .await
+        .map_err(|e| LcvNodeError::ReferenceData(e.to_string()))?;
+        let (out, n_snp) =
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ld_panel", &self.config).await?;
 
         let batch = build_result_batch(&out, n_snp)?;
         let df = ctx.read_batch(batch).map_err(LcvNodeError::ReadBatch)?;
@@ -666,7 +663,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a SessionContext with an in-memory `iceberg.ld_score.1000g_eur`.
+    /// Build a SessionContext with an in-memory `vfs.ld_score.1000g_eur`.
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);

@@ -1,7 +1,7 @@
 //! SuSiE-RSS DAG node — Bayesian fine-mappinging from GWAS summary statistics.
 //!
 //! Consumes GWAS z-scores (or bhat/shat) from the upstream port, reads the LD
-//! correlation matrix from the Iceberg `ld_matrix.eur_chr{N}` panel tables,
+//! correlation matrix from the VFS `ld_matrix.eur_chr{N}` panel tables,
 //! runs [`susie::susie_rss`], and emits per-variant posterior inclusion
 //! probabilities (PIPs), credible-set membership, and posterior moments.
 //!
@@ -10,7 +10,7 @@
 //!   (snp, z, n, chrom)
 //! ```
 //!
-//! The LD matrix in Iceberg stores `unphased_r2` (squared correlations).
+//! The LD matrix in VFS stores `unphased_r2` (squared correlations).
 //! Signed correlations are reconstructed as `sign(z_j × z_k) × √(r²_jk)`,
 //! the standard approximation when only r² is available from PLINK `--r2`.
 
@@ -116,7 +116,7 @@ pub struct SusieRssSpec {
     /// z-score method: "wald" (PVE-adjusted) or "score" (already on σ²=1 scale).
     #[serde(default = "default_z_method")]
     pub z_method: String,
-    /// Minimum r² threshold for LD pairs from the Iceberg panel. Default 0.0
+    /// Minimum r² threshold for LD pairs from the VFS panel. Default 0.0
     /// (all pairs used). Set higher (e.g. 0.05) to sparsify large regions.
     #[serde(default = "default_r2_min")]
     pub r2_min: f64,
@@ -192,10 +192,10 @@ impl NodeFactory for SusieRssNodeFactory {
         NODE_KIND
     }
     fn desc(&self) -> &'static str {
-        "SuSiE-RSS: Bayesian fine-mappinging from GWAS z-scores + Iceberg LD panel."
+        "SuSiE-RSS: Bayesian fine-mappinging from GWAS z-scores + VFS LD panel."
     }
     fn doc(&self) -> &'static str {
-        "Reads LD correlations from iceberg.ld_matrix.eur_chr{N}, runs susie_rss, \
+        "Reads LD correlations from vfs.ld_matrix.eur_chr{N}, runs susie_rss, \
          and outputs PIPs, credible-set membership, and posterior moments."
     }
     fn spec_schema(&self) -> schemars::Schema {
@@ -344,16 +344,16 @@ async fn collect_input_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, Da
     Ok(batches)
 }
 
-// ─── LD matrix loading from Iceberg ──────────────────────────────────────────
+// ─── LD matrix loading from VFS ──────────────────────────────────────────
 
-/// LD pair from the Iceberg `ld_matrix` table.
+/// LD pair from the VFS `ld_matrix` table.
 struct LdPair {
     id_a: String,
     id_b: String,
     r2: f64,
 }
 
-/// Query the Iceberg LD matrix for one chromosome and return all pairs with
+/// Query the VFS LD matrix for one chromosome and return all pairs with
 /// r² ≥ `r2_min` that involve at least one SNP in `snp_set`.
 async fn load_ld_pairs(
     ctx: &datafusion::prelude::SessionContext,
@@ -372,7 +372,11 @@ async fn load_ld_pairs(
                 &format!("vfs:///data/oss/ld_matrix/eur_chr{chrom}/"),
             )
             .await
-            .map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
+            .map_err(|e| {
+                SusieNodeError::Df(datafusion::error::DataFusionError::External(
+                    e.to_string().into(),
+                ))
+            })?;
             table_name
         }
     };
@@ -381,8 +385,16 @@ async fn load_ld_pairs(
          FROM {table_sql} \
          WHERE unphased_r2 >= {r2_min}"
     );
-    let df = ctx.sql(&sql).await.map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
-    let batches = df.collect().await.map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
+    let df = ctx.sql(&sql).await.map_err(|e| {
+        SusieNodeError::Df(datafusion::error::DataFusionError::External(
+            e.to_string().into(),
+        ))
+    })?;
+    let batches = df.collect().await.map_err(|e| {
+        SusieNodeError::Df(datafusion::error::DataFusionError::External(
+            e.to_string().into(),
+        ))
+    })?;
 
     let mut pairs = Vec::new();
     for batch in &batches {
@@ -554,15 +566,14 @@ impl DagNode for SusieRssNode {
         let z_filt: Vec<f64> = keep.iter().map(|&i| z[i]).collect();
         reporter.info(format!("susie_rss: {p} variants with valid z-scores"));
 
-        // ── load LD from Iceberg and build correlation matrix ──
+        // ── load LD from VFS and build correlation matrix ──
         let ctx = node_ctx.session();
         let snp_set: std::collections::HashSet<String> = snps_filt.iter().cloned().collect();
         reporter.info(format!(
-            "susie_rss: querying LD matrix iceberg.ld_matrix.eur_chr{chrom} (r² ≥ {})…",
+            "susie_rss: querying LD matrix vfs.ld_matrix.eur_chr{chrom} (r² ≥ {})…",
             self.spec.r2_min
         ));
-        let ld_pairs =
-            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, None).await?;
+        let ld_pairs = load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, None).await?;
         reporter.info(format!("susie_rss: loaded {} LD pairs", ld_pairs.len()));
 
         let r = build_corr_matrix(&snps_filt, &z_filt, &ld_pairs);
@@ -677,7 +688,11 @@ impl DagNode for SusieRssNode {
         )
         .map_err(SusieNodeError::Arrow)?;
 
-        let df = ctx.read_batch(batch).map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
+        let df = ctx.read_batch(batch).map_err(|e| {
+            SusieNodeError::Df(datafusion::error::DataFusionError::External(
+                e.to_string().into(),
+            ))
+        })?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

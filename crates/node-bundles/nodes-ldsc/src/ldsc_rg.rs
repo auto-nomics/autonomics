@@ -1,8 +1,8 @@
 //! LD Score Regression bivariate node — genetic correlation (rg).
 //!
 //! Takes **two** upstream GWAS summary-statistics `DataFrame`s (trait 1 and
-//! trait 2, each with Z-scores, sample sizes, and rsid), queries the Iceberg
-//! data lake for the LD score panel under `iceberg.ld_score.*`, inner-joins all
+//! trait 2, each with Z-scores, sample sizes, and rsid), queries the VFS
+//! data lake for the LD score panel under `vfs.ld_score.*`, inner-joins all
 //! three on rsid so only SNPs shared by *both* traits and the panel survive,
 //! and runs the bivariate LD Score Regression via [`ldsc::regress::RG::new`].
 //! Outputs a single-row summary `DataFrame` with rg, its SE/z/p, the cross-trait
@@ -45,8 +45,8 @@ pub enum LdscRgNodeError {
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("failed to read result batch: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
+    #[error("reference data error: {0}")]
+    ReferenceData(String),
 }
 
 impl ::dag_core::dag::NodeError for LdscRgNodeError {
@@ -54,7 +54,6 @@ impl ::dag_core::dag::NodeError for LdscRgNodeError {
         "ldsc_rg"
     }
 }
-
 
 // =====================================================================
 // Schemas
@@ -194,7 +193,7 @@ const LDSC_RG_NODE_KIND: &str = "ldsc_rg";
 /// correlation (rg) between two GWAS traits.
 ///
 /// Accepts two upstream `DataFrame`s (trait 1 on port 0, trait 2 on port 1),
-/// queries the Iceberg data lake for the LD score panel, inner-joins all three
+/// queries the VFS-mounted reference dataset for the LD score panel, inner-joins all three
 /// on rsid (so only SNPs shared by both traits and the panel are used), and
 /// runs the bivariate regression.
 ///
@@ -223,7 +222,7 @@ impl NodeFactory for LdscRgNodeFactory {
         "Bivariate LD Score Regression transform node for genetic correlation (rg) \
         estimation between two GWAS traits. Takes two upstream summary statistics \
         DataFrames (trait 1 on port 0, trait 2 on port 1, each with z, n, rsid), \
-        queries the Iceberg data lake for the LD score panel, 3-way joins on rsid, \
+        queries the VFS-mounted reference dataset for the LD score panel, 3-way joins on rsid, \
         and runs bivariate LDSC. Outputs a single-row summary with rg, its SE/z/p, \
         cross-trait gencov, and each trait's h².\n\n\
         IMPORTANT — you MUST perform the following quality control on the \
@@ -313,7 +312,7 @@ impl NodeFactory for LdscRgNodeFactory {
 impl LdscRgNode {
     /// Construct an [`LdscRgNode`].
     ///
-    /// The per-execution `SessionContext` (object-store registry + Iceberg
+    /// The per-execution `SessionContext` (object-store registry + VFS
     /// catalog) is injected by the framework at `execute` time, so the node
     /// holds only its algorithm configuration. Both upstream `DataFrame`s
     /// must expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
@@ -388,8 +387,8 @@ impl DagNode for LdscRgNode {
                 "missing trait-2 input DataFrame (port 1)".into(),
             )))?;
 
-        // 1. Build an isolated DataFusion context with the Iceberg catalog
-        //    registered (under "iceberg"), then delegate to the
+        // 1. Build an isolated DataFusion context with the VFS catalog
+        //    registered (under "vfs"), then delegate to the
         //    catalog-independent pipeline. Splitting here lets the pipeline be
         //    exercised end-to-end against an in-memory catalog (see
         //    `tests::run_with_test_catalog`).
@@ -404,12 +403,20 @@ impl DagNode for LdscRgNode {
         //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
-        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
+        crate::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel",
+            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+        )
         .await
-        .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_listing_table(&ctx, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
+        .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
+        crate::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel_m",
+            crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+        )
         .await
-        .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
+        .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
         let (rg, n_snp) = Self::run_with_ctx(
             &ctx,
             &input1.data,
@@ -433,7 +440,7 @@ impl DagNode for LdscRgNode {
 impl LdscRgNode {
     /// The catalog-independent rg pipeline.
     ///
-    /// Given a [`SessionContext`] in which `iceberg.ld_score.{ld_table}` resolves
+    /// Given a [`SessionContext`] in which `vfs.ld_score.{ld_table}` resolves
     /// to an LD-score panel, this registers the two upstream sumstats
     /// `DataFrame`s as `sumstats1` / `sumstats2`, runs the 3-way inner join on
     /// rsid (keeping only SNPs shared by both traits and the panel), collects
@@ -441,7 +448,7 @@ impl LdscRgNode {
     ///
     /// Returns the fitted [`ldsc::regress::RG`] and the SNP count. Extracted
     /// from [`DagNode::execute`](LdscRgNode::execute) so the full pipeline can
-    /// be tested against an in-memory catalog without a live Iceberg REST
+    /// be tested against an in-memory catalog without a live VFS object-store backend
     /// server.
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
@@ -470,7 +477,7 @@ impl LdscRgNode {
         //               l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
         //        FROM sumstats1 AS s1
         //        INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-        //        INNER JOIN iceberg.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
+        //        INNER JOIN vfs.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
         //        ORDER BY l.locus.position"#,
         //     ... (same bind params)
         // );
@@ -552,7 +559,7 @@ impl LdscRgNode {
         // M_5_50 SNP set used when LD scores were computed.
         let m = crate::ldsc_common::read_m_5_50(ctx, m_table, 1)
             .await
-            .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
+            .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
         let two_step = two_step.or(
             if intercept_hsq1.is_none() && intercept_hsq2.is_none() && intercept_gencov.is_none() {
                 Some(30.0)
@@ -732,11 +739,11 @@ mod tests {
     // In-memory catalog harness
     // -----------------------------------------------------------------
     //
-    // The production node resolves the LD panel through `iceberg.ld_score.*`
+    // The production node resolves the LD panel through `vfs.ld_score.*`
     // via a live REST catalog. To exercise the *full* pipeline
     // (SQL 3-way join → vector extraction → RG fit → output batch)
     // deterministically and without any external service, we register an
-    // in-memory `MemoryCatalogProvider` under the same `iceberg` name, with a
+    // in-memory `MemoryCatalogProvider` under the same `vfs` name, with a
     // `ld_score.1000g_eur` table backed by a `MemTable`. The node's SQL then
     // resolves identically to production.
 
@@ -806,7 +813,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a `SessionContext` with an in-memory `iceberg.ld_score.1000g_eur`
+    /// Build a `SessionContext` with an in-memory `vfs.ld_score.1000g_eur`
     /// table holding `ld_panel_batch(n)`, plus its `1000g_eur_m` companion
     /// (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
@@ -832,7 +839,8 @@ mod tests {
         let m_table = MemTable::try_new(m_batch.schema(), vec![vec![m_batch]]).unwrap();
 
         ctx.register_table("1000g_eur", Arc::new(table)).unwrap();
-        ctx.register_table("1000g_eur_m", Arc::new(m_table)).unwrap();
+        ctx.register_table("1000g_eur_m", Arc::new(m_table))
+            .unwrap();
         ctx
     }
 
@@ -1064,9 +1072,15 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z1, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z2, &rs2, 1000.0)).unwrap();
 
-        let res =
-            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", "1000g_eur_m", &constrained_cfg())
-                .await;
+        let res = LdscRgNode::run_with_ctx(
+            &ctx,
+            &df1,
+            &df2,
+            "1000g_eur",
+            "1000g_eur_m",
+            &constrained_cfg(),
+        )
+        .await;
         assert!(
             res.is_err(),
             "disjoint rsid sets must error, not silently return NaN"
@@ -1112,10 +1126,16 @@ mod tests {
         let df2 = ctx
             .read_batch(sumstats_batch(&z2, &shared, 1000.0))
             .unwrap();
-        let (rg, n_snp) =
-            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", "1000g_eur_m", &constrained_cfg())
-            .await
-            .expect("intersection join should succeed");
+        let (rg, n_snp) = LdscRgNode::run_with_ctx(
+            &ctx,
+            &df1,
+            &df2,
+            "1000g_eur",
+            "1000g_eur_m",
+            &constrained_cfg(),
+        )
+        .await
+        .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");
         assert!(rg.rg_ratio.is_finite());
     }

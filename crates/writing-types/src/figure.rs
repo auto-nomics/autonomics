@@ -164,8 +164,6 @@ pub enum TableSource {
         max_rows: Option<usize>,
         format: TableFormat,
     },
-    /// Iceberg SQL query (resolved before compilation).
-    IcebergQuery { sql: String, format: TableFormat },
 }
 
 /// Column alignment.

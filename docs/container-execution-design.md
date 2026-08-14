@@ -12,7 +12,7 @@ The DAG engine currently has two execution modalities:
    node kind is a hand-ported Rust reimplementation of a reference R/Python/C++
    bioinformatics tool (LDSC, MiXeR, LAVA, SuSiE, MAGMA, coloc, BKMR, …).
    The scheduler spawns `execute` as a tokio task and the node runs in-process,
-   sharing the engine's `RuntimeEnv`, Iceberg catalog, and opendal filesystem.
+   sharing the engine's `RuntimeEnv`, VFS catalog, and opendal filesystem.
 
 2. **Subprocess execution** — the recently-introduced "faithful port" pattern
    (univariate/bivariate MiXeR). The Rust node is a thin shim that writes the
@@ -47,7 +47,7 @@ packages, native libraries, reference data mounts). The engine handles:
 
 - Serializing the node's upstream `DataFrame`(s) to a staging area.
 - Building/pulling the container image (or using a pre-built one).
-- Mounting data volumes (opendal root, Iceberg warehouse, reference panels).
+- Mounting data volumes (opendal root, VFS warehouse, reference panels).
 - Invoking the container with the right entrypoint.
 - Deserializing the output back into a `DataFrame`.
 
@@ -128,7 +128,7 @@ and opens the door to running *any* native tool without a Rust port.
                             │  └────────────────────┘  │
                             │  Mounts:                  │
                             │   /data (opendal root)    │
-                            │   /warehouse (iceberg)    │
+                            │   /warehouse (vfs)    │
                             │   /reference (read-only)  │
                             │   /staging (read-write)   │
                             └───────────────────────────┘
@@ -447,8 +447,6 @@ impl DagNode for ContainerNode {
 #[derive(Clone)]
 pub struct NodeCtx {
     pub runtime_env: Arc<RuntimeEnv>,
-    pub iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    pub datalake: Arc<Datalake>,
     pub opendal: Option<Arc<vfs::OpendalFileStorage>>,
     /// Container runtime for container-backed node execution.
     /// `None` when the engine is not configured for containers.
@@ -657,7 +655,7 @@ These are global engine-level mounts, merged with per-node `read_only_mounts`.
 | Malicious image | Pin images by digest (`@sha256:...`) in production. Only pull from trusted registries. |
 | Resource exhaustion | Per-node CPU/memory limits (`--cpus`, `--memory`). Scheduler's existing semaphore controls concurrency. |
 | Host path exposure | Only `staging`, opendal root, and explicitly declared reference mounts are visible. No blanket host mount. |
-| Secret leakage | No env vars with credentials passed to containers by default. Iceberg catalog credentials are resolved on the host; containers receive data via files, not tokens. |
+| Secret leakage | No env vars with credentials passed to containers by default. VFS credentials are resolved on the host; containers receive data via files, not tokens. |
 
 ---
 
@@ -912,9 +910,9 @@ in Phase 4, but Docker is the pragmatic default.
 2. **Shared memory**: Some R/Python tools need `--shm-size` larger than the
    default 64MB. Proposed: `shm_size: Option<String>` field.
 
-3. **Iceberg access from containers**: Should containers have direct Iceberg
+3. **VFS access from containers**: Should containers have direct VFS
    REST catalog access (network = host + credentials), or should the engine
-   always pre-materialize Iceberg tables into Parquet files in staging?
+   always pre-materialize VFS tables into Parquet files in staging?
    Proposed: start with pre-materialization (no network), add direct access
    later if performance demands it.
 

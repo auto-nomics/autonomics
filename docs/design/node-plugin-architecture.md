@@ -114,7 +114,7 @@ impl NodeRegistry {
 
 | crate | 节点 | 依赖的算法 crate | LOC (≈) |
 |-------|------|-----------------|---------|
-| **nodes-io** | source_file, source_iceberg, sink_file, sink_iceberg, source_opentargets | opentargets, datalake | ~2,100 |
+| **nodes-io** | source_file, sink_file, source_opentargets | opentargets, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
@@ -287,7 +287,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | `hdl_l_scan → hdl_l::*` (节点间) | 同属 `nodes-genetics`，bundle 内 `pub use` 解决 |
 | `nodes/ml/* → nodes/ml/common.rs` | 已在 bundle 内部，直接迁移 |
 | `nodes/hypothesize/* → nodes/hypothesize/common.rs` | 同上 |
-| `sink_iceberg` 内部常量 (`ICEBERG_RESERVED_BARE_NAMES`) | 随 `nodes-io` 迁移 |
+| `sink_file` 的路径规范化 helper | 随 `nodes-io` 迁移 |
 
 ## 4. 迁移计划
 
@@ -336,7 +336,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 
 | 批次 | bundle | 节点数 | 特殊注意 |
 |------|--------|--------|----------|
-| 3a | nodes-io | 6 | 提取 `normalize_path` 到共享位置; sink_iceberg 常量迁移 |
+| 3a | nodes-io | 3 | 提取 `normalize_path` 到共享位置 |
 | 3b | nodes-causal | 8 | cmest 6 变体 |
 | 3c | nodes-lcmm | 3 | hlme 3 节点 |
 | 3d | nodes-mr | 4 | mr + mrlap + mrpresso + mvmr |

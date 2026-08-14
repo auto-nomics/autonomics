@@ -135,7 +135,7 @@ pub struct SchedulerConfig {
     /// Mutations (`replace_node`, `add_edge`, `delete_edge`, …) automatically
     /// mark affected nodes and their transitive descendants dirty. Callers can
     /// also manually mark nodes dirty via [`crate::dag::DAG::mark_dirty`] —
-    /// useful when an external input (file, Iceberg table) has changed.
+    /// useful when an external input (file or VFS dataset) has changed.
     pub incremental: bool,
 }
 

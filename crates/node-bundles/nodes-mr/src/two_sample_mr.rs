@@ -515,7 +515,7 @@ fn default_clump_pop() -> String {
 /// LD clumping backend selection.
 ///
 /// `Opengwas` (the default) sends SNPs to the remote OpenGWAS `/ld/clump`
-/// endpoint. `IcebergLd` queries the Iceberg `ld_matrix.eur_chr{N}` pairwise
+/// endpoint. `LocalLd` queries the VFS `ld_matrix.eur_chr{N}` pairwise
 /// r² tables and performs greedy clumping entirely in Rust — no network
 /// access required.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -527,13 +527,13 @@ pub enum ClumpMode {
     #[serde(rename = "opengwas")]
     #[default]
     Opengwas,
-    /// Local Iceberg `ld_matrix.eur_chr{N}` pairwise r² tables.
+    /// Local VFS `ld_matrix.eur_chr{N}` pairwise r² tables.
     ///
-    /// The node queries `iceberg.ld_matrix.eur_chr{chrom}` for r² pairs
+    /// The node queries `vfs:///data/oss/ld_matrix/eur_chr{chrom}/` for r² pairs
     /// involving the instrument SNPs and runs greedy clumping in Rust.
     /// No network access or API token required.
-    #[serde(rename = "iceberg_ld")]
-    IcebergLd,
+    #[serde(rename = "local_ld")]
+    LocalLd,
 }
 
 /// LD clumping parameters for selecting independent instruments via the
@@ -560,7 +560,7 @@ pub struct ClumpConfig {
     #[serde(default = "default_clump_pop")]
     pub pop: String,
     /// Clumping backend. Default: OpenGWAS remote API ([`ClumpMode::Opengwas`]).
-    /// Use [`ClumpMode::IcebergLd`] to clump against the local Iceberg
+    /// Use [`ClumpMode::LocalLd`] to clump against the local VFS
     /// `ld_matrix.eur_chr{N}` pairwise r² tables — no network or API token
     /// required.
     #[serde(default)]
@@ -647,7 +647,7 @@ fn parse_clumped_rsids(resp: &serde_json::Value) -> std::collections::HashSet<St
 }
 
 /// Filter `inputs` to only the independent index SNPs. Dispatches to the
-/// OpenGWAS remote endpoint or the Iceberg LD matrix based on
+/// OpenGWAS remote endpoint or the VFS LD matrix based on
 /// [`ClumpConfig::mode`].
 async fn clump_instruments(
     inputs: Vec<mr::harmonise::HarmoniseInput>,
@@ -660,7 +660,7 @@ async fn clump_instruments(
     }
     match &cfg.mode {
         ClumpMode::Opengwas => clump_opengwas(inputs, cfg).await,
-        ClumpMode::IcebergLd => clump_iceberg_ld(inputs, cfg, session, ld_base).await,
+        ClumpMode::LocalLd => clump_local_ld(inputs, cfg, session, ld_base).await,
     }
 }
 
@@ -719,10 +719,10 @@ async fn clump_opengwas(
     Ok(filtered)
 }
 
-/// Iceberg LD matrix backend. Queries `iceberg.ld_matrix.eur_chr{N}` for
+/// VFS LD matrix backend. Queries `vfs:///data/oss/ld_matrix/eur_chr{N}/` for
 /// pairwise r² values between instrument SNPs and runs greedy clumping in
 /// Rust. No network access or API token required.
-async fn clump_iceberg_ld(
+async fn clump_local_ld(
     inputs: Vec<mr::harmonise::HarmoniseInput>,
     cfg: &ClumpConfig,
     session: &datafusion::prelude::SessionContext,
@@ -741,13 +741,13 @@ async fn clump_iceberg_ld(
         .collect::<Vec<_>>()
         .join(", ");
 
-    // Query the Iceberg ld_matrix tables for all r² pairs involving our SNPs.
+    // Query the VFS LD matrix tables for all r² pairs involving our SNPs.
     // We query chromosomes 1-22 (standard autosomes).
     let mut r2_map: HashMap<(String, String), f64> = HashMap::new();
     let mut skipped_chroms: Vec<u32> = Vec::new();
     for chrom in 1..=22 {
         // Resolve per-chromosome LD-matrix table SQL from the catalog, or
-        // fall back to the hardcoded `iceberg.ld_matrix.eur_chr{N}`.
+        // fall back to the VFS directory `vfs:///data/oss/ld_matrix/eur_chr{N}/`.
         let table_sql = match ld_base {
             Some(base) => format!("{base}{chrom}"),
             None => {
@@ -841,7 +841,7 @@ async fn clump_iceberg_ld(
         );
     }
 
-    // Build ClumpSnp list. Since the Iceberg ld_matrix doesn't provide
+    // Build ClumpSnp list. Since the VFS LD matrix doesn't provide
     // chromosome/position info, we pass placeholder values — the greedy
     // clumping uses r² from the pre-computed table directly.
     let clump_snps: Vec<mr::clump::ClumpSnp> = inputs
@@ -868,7 +868,7 @@ async fn clump_iceberg_ld(
     let kept_rsids = mr::clump::greedy_clump(&clump_snps, cfg.r2, cfg.kb, r2_fn);
 
     tracing::info!(
-        "LD clumping (Iceberg ld_matrix): {} of {} SNPs retained as independent instruments (r²={})",
+        "LD clumping (VFS LD matrix): {} of {} SNPs retained as independent instruments (r²={})",
         kept_rsids.len(),
         inputs.len(),
         cfg.r2,
@@ -1017,14 +1017,14 @@ impl NodeFactory for TwoSampleMrNodeFactory {
                     spec.clump.r2, spec.clump.kb, spec.clump.p1, spec.clump.pop,
                 ));
             }
-            ClumpMode::IcebergLd => {
-                // Iceberg LD clumping: the Rust runtime queries the
-                // iceberg.ld_matrix.eur_chr{N} tables and performs greedy
+            ClumpMode::LocalLd => {
+                // VFS LD clumping: the Rust runtime queries the
+                // vfs:///data/oss/ld_matrix/eur_chr{N}/ tables and performs greedy
                 // clumping. In the R codegen (used for cross-validation),
                 // we emit a note since R's clump_data() only supports
                 // OpenGWAS. The exposure data entering this point has
                 // already been clumped by the Rust node.
-                code.push("# LD clumping performed via Iceberg ld_matrix table".to_string());
+                code.push("# LD clumping performed via VFS LD matrix table".to_string());
                 code.push("# (Rust runtime uses greedy clumping on pre-computed r²;".to_string());
                 code.push(format!(
                     "#  {exp_dat} is already clumped to independent instruments)"
@@ -1174,9 +1174,8 @@ impl DagNode for TwoSampleMrNode {
         // ---- LD clumping ----
         let session = node_ctx.session();
         // Resolve the LD-matrix base table from the catalog (falls back to
-        // hardcoded `iceberg.ld_matrix.eur_chr{N}` when not registered).
-        let hinputs =
-            clump_instruments(hinputs, &self.spec.clump, &session, Some("eur_chr")).await?;
+        // VFS directory when no explicit table base is provided).
+        let hinputs = clump_instruments(hinputs, &self.spec.clump, &session, None).await?;
 
         // ---- harmonise ----
         let harmonised =
@@ -1336,12 +1335,12 @@ mod tests {
     }
 
     #[test]
-    fn clump_mode_iceberg_ld_deserialises() {
+    fn clump_mode_local_ld_deserialises() {
         let json = serde_json::json!({
-            "mode": { "type": "iceberg_ld" },
+            "mode": { "type": "local_ld" },
         });
         let c: ClumpConfig = serde_json::from_value(json).unwrap();
-        assert_eq!(c.mode, ClumpMode::IcebergLd);
+        assert_eq!(c.mode, ClumpMode::LocalLd);
     }
 
     #[test]
@@ -1354,18 +1353,18 @@ mod tests {
     }
 
     #[test]
-    fn spec_with_iceberg_ld_clump_deserialises() {
+    fn spec_with_local_ld_clump_deserialises() {
         let json = serde_json::json!({
             "id_exposure": "exp",
             "id_outcome": "out",
             "clump": {
                 "r2": 0.01,
                 "kb": 1000,
-                "mode": { "type": "iceberg_ld" },
+                "mode": { "type": "local_ld" },
             },
         });
         let spec: TwoSampleMrNodeSpec = serde_json::from_value(json).unwrap();
-        assert_eq!(spec.clump.mode, ClumpMode::IcebergLd);
+        assert_eq!(spec.clump.mode, ClumpMode::LocalLd);
         assert!((spec.clump.r2 - 0.01).abs() < f64::EPSILON);
     }
 
@@ -1464,7 +1463,7 @@ mod tests {
 
     // ---- End-to-end tests (require OPENGWAS_TOKEN + network) ----
 
-    /// Build a test SessionContext (used by clump_instruments for IcebergLd mode).
+    /// Build a test SessionContext (used by clump_instruments for LocalLd mode).
     fn test_session() -> datafusion::prelude::SessionContext {
         datafusion::prelude::SessionContext::new()
     }
@@ -1626,9 +1625,9 @@ mod tests {
         assert!(!afr_snps.is_empty(), "AFR clumping returned no SNPs");
     }
 
-    // ---- IcebergLd clumping tests (mock Iceberg ld_matrix tables) ----
+    // ---- LocalLd clumping tests (mock VFS LD matrix tables) ----
 
-    /// Register mock `iceberg.ld_matrix.eur_chr{N}` tables in the session with
+    /// Register mock `vfs:///data/oss/ld_matrix/eur_chr{N}/` tables in the session with
     /// known r² pairs for testing. All other chromosomes are empty.
     async fn register_mock_ld_tables(session: &datafusion::prelude::SessionContext) {
         use datafusion::catalog::{
@@ -1667,7 +1666,7 @@ mod tests {
     }
 
     /// Build 4 test instruments: rs1 (most significant) through rs4.
-    fn iceberg_test_inputs() -> Vec<mr::harmonise::HarmoniseInput> {
+    fn local_ld_test_inputs() -> Vec<mr::harmonise::HarmoniseInput> {
         let data: &[(&str, f64, f64)] = &[
             ("rs1", 0.10, 0.01), // z=10, p ≈ 1e-23 — most significant
             ("rs2", 0.08, 0.01), // z=8
@@ -1694,7 +1693,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iceberg_clump_prunes_high_ld() {
+    async fn local_ld_clump_prunes_high_ld() {
         // rs1↔rs2 r²=0.9, rs3↔rs4 r²=0.8. With r2_thresh=0.001:
         // rs1 (most significant) selected as index → prunes rs2.
         // rs3 selected as index → prunes rs4.
@@ -1702,17 +1701,17 @@ mod tests {
         let session = test_session();
         register_mock_ld_tables(&session).await;
 
-        let inputs = iceberg_test_inputs();
+        let inputs = local_ld_test_inputs();
         let cfg = ClumpConfig {
             r2: 0.001,
             kb: 5000,
             p1: 5e-8,
-            mode: ClumpMode::IcebergLd,
+            mode: ClumpMode::LocalLd,
             ..ClumpConfig::default()
         };
         let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
-            .expect("iceberg clumping should succeed");
+            .expect("local LD clumping should succeed");
 
         let snps: std::collections::HashSet<&str> =
             clumped.iter().map(|r| r.snp.as_str()).collect();
@@ -1735,17 +1734,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iceberg_clump_relaxed_threshold_keeps_more() {
+    async fn local_ld_clump_relaxed_threshold_keeps_more() {
         // With r2=0.95, no pair exceeds threshold → all 4 retained.
         let session = test_session();
         register_mock_ld_tables(&session).await;
 
-        let inputs = iceberg_test_inputs();
+        let inputs = local_ld_test_inputs();
         let cfg = ClumpConfig {
             r2: 0.95,
             kb: 5000,
             p1: 5e-8,
-            mode: ClumpMode::IcebergLd,
+            mode: ClumpMode::LocalLd,
             ..ClumpConfig::default()
         };
         let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
@@ -1755,7 +1754,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn iceberg_clump_no_ld_data_keeps_all() {
+    async fn local_ld_clump_no_ld_data_keeps_all() {
         // SNPs with no r² entries in the table → treated as independent → all kept.
         let session = test_session();
         register_mock_ld_tables(&session).await;
@@ -1796,7 +1795,7 @@ mod tests {
             r2: 0.001,
             kb: 5000,
             p1: 5e-8,
-            mode: ClumpMode::IcebergLd,
+            mode: ClumpMode::LocalLd,
             ..ClumpConfig::default()
         };
         let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))

@@ -4,8 +4,8 @@ use agentik_core::tools::Toolset;
 use agentik_sdk::types::tools::{ToolResult, ToolUse};
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
-use vfs::OpendalFileStorage;
 use serde_json::json;
+use vfs::OpendalFileStorage;
 
 fn build_tooluse(id: &str, name: &str, input: serde_json::Value) -> ToolUse {
     ToolUse {
@@ -44,7 +44,7 @@ async fn test_add_source_sql_run_dag() {
         .build();
     let (client, _handle) = spawn_with_engine(engine);
 
-    // 3. Register tools (no more datalake param)
+    // 3. Register tools.
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
     let mut registry = agentik_core::tools::ToolRegistry::new();
     registry.register_all(tools).unwrap();
@@ -132,26 +132,6 @@ async fn test_add_source_sql_run_dag() {
         .unwrap();
     assert_eq!(results.len(), 1);
     check_ok(&results[0], "add_edge sql->sink");
-
-    // 9. Add datalake sink node (separate from the file sink above; both tools
-    //    must coexist in the toolset and accept inputs independently).
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc6",
-                "add_node",
-                json!({
-                    "id": "sink_lake",
-                    "kind": "sink_iceberg",
-                    "spec": {"ident": "gwas.iris_test", "mode": "overwrite"}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_node datalake_sink");
 }
 
 /// Regression: when a SqlNode output contains a Struct-typed column,

@@ -182,9 +182,6 @@ pub struct RuntimeConfig {
     pub system_prompt: Option<String>,
 
     // ── Feature flags ─────────────────────────────────────────────────
-    /// Whether to enable the Iceberg data lake integration.
-    pub enable_iceberg: bool,
-
     /// Whether to enable DAG history persistence (snapshots / refs).
     pub enable_dag_history: bool,
 
@@ -304,7 +301,6 @@ impl RuntimeConfig {
             opengwas_cache_dir,
             agent_identity,
             system_prompt,
-            enable_iceberg: resolve_flag(base, |b| b.enable_iceberg, false),
             enable_dag_history: resolve_flag(base, |b| b.enable_dag_history, true),
             enable_bibliography: resolve_flag(base, |b| b.enable_bibliography, true),
             enable_writing: resolve_flag(base, |b| b.enable_writing, true),
@@ -429,7 +425,7 @@ into **refs** (branches) — each ref is an independent lineage.\n\
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
 All SQL in this system runs on Apache DataFusion. The following rules apply to \
-every SQL string you write — whether in `add_sql_node`, `add_source` (Iceberg paths), \
+every SQL string you write — whether in `add_sql_node`, `add_source`, \
 or any other tool that accepts SQL.\n\
 \n\
 - **Double-quote all column names**: DataFusion normalizes unquoted identifiers to \
@@ -454,36 +450,6 @@ or any other tool that accepts SQL.\n\
   The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, \
   `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).";
 
-const PROMPT_ICEBERG: &str = "\n\
-### Data Persistence (Iceberg Data Lake)\n\
-- **Prefer the Iceberg data lake for any intermediate or derived data** that needs to \
-persist beyond a single DAG run — transformed datasets, analysis results, reference \
-tables, snapshots, or any table you may re-query later.\n\
-- Writing to Iceberg keeps data queryable (SQL, DataFusion), versioned (snapshots), \
-and immediately consumable by downstream pipeline nodes — far better than ad-hoc \
-CSV/Parquet files scattered on the local filesystem.\n\
-- Use the filesystem only for ephemeral scratch files, downloaded raw artifacts \
-that have not yet been ingested, or small human-readable summaries meant for \
-immediate inspection.\n\
-\n\
-### Data Infrastructure\n\
-\n\
-The Iceberg data lake (`reference` namespace) contains reusable reference panels:\n\
-\n\
-- **GRCh37/GRCh38 gene annotation** — `reference.grch{37,38}_genes`: structured \
-  Ensembl GTF (gene, transcript, exon, CDS, UTR). Columns include `contig`, \
-  `feature`, `start`, `end_pos`, `strand`, `gene_id`, `gene_name`, `gene_biotype`, \
-  `transcript_id`. Use `end_pos` (not `end`) for the end coordinate. \
-  Query `WHERE feature = 'gene'` for gene boundaries.\n\
-- **GRCh37/GRCh38 contig metadata** — `reference.grch{37,38}_contigs`: \
-  `contig, length, md5` per chromosome (1–22, X, Y, MT).\n\
-- **dbSNP155 variants** — `reference.dbsnp155` (~928M rows): every variant has \
-  both GRCh37 and GRCh38 coordinates. Columns: `rsid` (int64), `chrom`, \
-  `pos_37`, `pos_38`, `ref_37`, `ref_38`, `alt_37`, `alt_38`. \
-  Use `WHERE rsid = <number>` for rsID→position lookup. \
-  **Caution**: this table has ~928M rows — always use filters (`chrom`, `rsid`, \
-  position range); never scan the full table.";
-
 const PROMPT_GENERAL: &str = "\n\
 ### General\n\
 - Read, write, and manage files on the local filesystem.\n\
@@ -501,7 +467,6 @@ pub trait PromptCapabilities {
     fn enable_opengwas(&self) -> bool;
     fn enable_opentargets(&self) -> bool;
     fn enable_gwascatalog(&self) -> bool;
-    fn enable_iceberg(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
 }
 
@@ -534,10 +499,6 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
 
     s.push_str(PROMPT_SQL_CONVENTIONS);
 
-    if caps.enable_iceberg() {
-        s.push_str(PROMPT_ICEBERG);
-    }
-
     s.push_str(PROMPT_GENERAL);
     s
 }
@@ -561,9 +522,6 @@ pub fn default_system_prompt() -> String {
         fn enable_gwascatalog(&self) -> bool {
             true
         }
-        fn enable_iceberg(&self) -> bool {
-            true
-        }
         fn enable_dag_history(&self) -> bool {
             true
         }
@@ -584,9 +542,6 @@ impl PromptCapabilities for RuntimeConfig {
     fn enable_gwascatalog(&self) -> bool {
         self.enable_gwascatalog
     }
-    fn enable_iceberg(&self) -> bool {
-        self.enable_iceberg
-    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -605,7 +560,7 @@ impl RuntimeConfig {
         format!(
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
              dag_history_db: {}, bib_db: {}, app_db: {}, \
-             iceberg: {}, dag_history: {}, bib: {}, opengwas: {}, \
+             dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {} }}",
             self.name,
             self.data_dir.display(),
@@ -613,7 +568,6 @@ impl RuntimeConfig {
             self.dag_history_db.display(),
             self.bib_db_path.display(),
             self.app_db_path.display(),
-            self.enable_iceberg,
             self.enable_dag_history,
             self.enable_bibliography,
             self.enable_opengwas,
@@ -646,7 +600,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
     pub(crate) system_prompt: Option<String>,
-    pub(crate) enable_iceberg: Option<bool>,
     pub(crate) enable_dag_history: Option<bool>,
     pub(crate) enable_bibliography: Option<bool>,
     pub(crate) enable_writing: Option<bool>,
@@ -731,12 +684,6 @@ impl RuntimeConfigBuilder {
     /// Custom system prompt section. Pass `None` to use the built-in default.
     pub fn system_prompt(mut self, prompt: Option<String>) -> Self {
         self.system_prompt = prompt;
-        self
-    }
-
-    /// Enable or disable the Iceberg data lake integration.
-    pub fn enable_iceberg(mut self, enabled: bool) -> Self {
-        self.enable_iceberg = Some(enabled);
         self
     }
 
@@ -870,7 +817,6 @@ mod tests {
         );
         assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
         assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
-        assert!(cfg.enable_iceberg);
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
@@ -901,7 +847,6 @@ mod tests {
             .opengwas_token("secret-token")
             .agent_identity("Custom agent")
             .system_prompt(Some("Custom prompt".to_string()))
-            .enable_iceberg(false)
             .enable_dag_history(false)
             .enable_opengwas(false)
             .build();
@@ -915,7 +860,6 @@ mod tests {
         assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
         assert_eq!(cfg.agent_identity, "Custom agent");
         assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
-        assert!(!cfg.enable_iceberg);
         assert!(!cfg.enable_dag_history);
         assert!(!cfg.enable_opengwas);
         // Flags not touched → still true
@@ -946,15 +890,12 @@ mod tests {
         assert!(prompt.contains("Open Targets Platform"));
         assert!(prompt.contains("GWAS Catalog (EBI)"));
         assert!(prompt.contains("DAG Version Control"));
-        assert!(prompt.contains("Iceberg Data Lake"));
-
         // Minimal config — no external service tools.
         let cfg = RuntimeConfig::builder()
             .enable_bibliography(false)
             .enable_opengwas(false)
             .enable_opentargets(false)
             .enable_gwascatalog(false)
-            .enable_iceberg(false)
             .enable_dag_history(false)
             .build();
         let prompt = build_system_prompt(&cfg);
@@ -963,7 +904,6 @@ mod tests {
         assert!(!prompt.contains("Open Targets Platform"));
         assert!(!prompt.contains("GWAS Catalog (EBI)"));
         assert!(!prompt.contains("DAG Version Control"));
-        assert!(!prompt.contains("Iceberg Data Lake"));
         // These are always present:
         assert!(prompt.contains("Core Competencies"));
         assert!(prompt.contains("Data Pipeline (DAG Engine)"));

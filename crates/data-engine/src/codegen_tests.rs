@@ -5,14 +5,11 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 
-/// Minimal registry for codegen tests (no Iceberg / opendal needed).
+/// Minimal registry for codegen tests (no VFS storage needed).
 fn test_registry() -> crate::node_registry::NodeRegistry {
     let ctx = SessionContext::new();
     let runtime_env = ctx.runtime_env();
-    crate::default_registry::build_default_registry(
-        runtime_env,
-        None,
-    )
+    crate::default_registry::build_default_registry(runtime_env, None)
 }
 
 // ── topo sort ───────────────────────────────────────────────────────────────

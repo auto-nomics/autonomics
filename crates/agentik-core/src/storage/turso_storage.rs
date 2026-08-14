@@ -1203,10 +1203,6 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_gwascatalog")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
-        enable_iceberg: config
-            .get("enable_iceberg")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
         enable_dag_history: config
             .get("enable_dag_history")
             .and_then(|v| v.as_bool())
@@ -1232,7 +1228,6 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_opengwas": profile.enable_opengwas,
         "enable_opentargets": profile.enable_opentargets,
         "enable_gwascatalog": profile.enable_gwascatalog,
-        "enable_iceberg": profile.enable_iceberg,
         "enable_dag_history": profile.enable_dag_history,
         "preferred_model": profile.preferred_model,
     })
@@ -1818,7 +1813,6 @@ mod tests {
             enable_opengwas: false,
             enable_opentargets: true,
             enable_gwascatalog: false,
-            enable_iceberg: true,
             enable_dag_history: false,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             created_at: now_ms(),
@@ -2027,7 +2021,6 @@ mod tests {
             enable_opengwas: true,
             enable_opentargets: true,
             enable_gwascatalog: true,
-            enable_iceberg: true,
             enable_dag_history: true,
             preferred_model: None,
             ..AgentProfile::new("researcher")

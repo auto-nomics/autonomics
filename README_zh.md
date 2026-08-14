@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-`autonomics` 是一个面向**智能体驱动的流行病学与统计遗传学研究**的 Rust 工作空间。分析人员不再依赖脚本和笔记本，而是与 LLM 智能体对话，由智能体构建、运行并检查真实的计算流水线——组装一个由类型化节点组成的 DataFusion DAG，读取基因组格式（VCF / BGEN / PLINK），拟合统计遗传学模型，运行流行病学与临床生物统计分析（因果推断、中介分析、生存分析、回归、混合模型等），并将结果持久化到 Iceberg 数据湖。
+`autonomics` 是一个面向**智能体驱动的流行病学与统计遗传学研究**的 Rust 工作空间。分析人员不再依赖脚本和笔记本，而是与 LLM 智能体对话，由智能体构建、运行并检查真实的计算流水线——组装一个由类型化节点组成的 DataFusion DAG，读取基因组格式（VCF / BGEN / PLINK），拟合统计遗传学模型，运行流行病学与临床生物统计分析（因果推断、中介分析、生存分析、回归、混合模型等），并通过 VFS 挂载持久化结果。
 
 与目前主流的面向编码的Agent框架不同，autonomics底层基于Datafusion DAG构建，封装了SQL节点及大量专业分析节点，可以利用Agent的能力高效完成数据查询与变换，效率远超传统的手动分析工作流。
 
@@ -10,7 +10,7 @@
 
 - **LLM SDK + 智能体运行时**（`agentik-*`）——兼容 Anthropic 的客户端，支持多服务商、SSE 流式输出和工具/函数调用；其上是处理记忆压缩、生命周期管理和多智能体编排的智能体循环。
 - **DataFusion DAG 引擎**（`data-engine`）——一个类型化、并发调度的节点图，每个步骤变换 `DataFrame`。智能体通过工具调用组装并运行流水线；重计算量任务——统计遗传学（MiXeR、LDSC、MR、LAVA）与流行病学/临床生物统计（因果推断、中介、生存分析、ROC、LASSO、WQS 等）——均作为纯 Rust 节点逻辑运行于 [`faer`](https://github.com/sarah-ek/faer) 之上。
-- **生物信息学 I/O**（`biofusion`、`datalake`）——针对常见基因组格式的 DataFusion 读取器，以及由 Iceberg 支撑、存储 LD 参考面板和预计算充分统计量表的数据湖。
+- **生物信息学 I/O**（`biofusion`、`vfs`）——针对常见基因组格式的 DataFusion 读取器，以及面向参考面板和派生数据集的挂载感知文件访问。
 - **科学数据客户端**（`eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`）——无需离开对话即可从 NCBI、OpenGWAS、GWAS Catalog 和 Open Targets Platform 获取元数据、汇总统计数据与靶点–疾病关联评分。
 
 ## 演示
@@ -34,7 +34,7 @@
         ┌──────────────────────┼──────────────────────┐
         │                      │                      │
         ▼                      ▼                      ▼
-  agentik-tools          datalake-tools         data-engine-tools
+  agentik-tools          runtime tools        data-engine-tools
   (bash, 生命周期)       (列出/查询表)           (add_node, run_dag)
                                                         │
                                                ┌────────▼────────┐
@@ -78,8 +78,8 @@
         │       ▲              ▲                ▲                   │
         │       │              │                │                   │
         │  ┌────┴──────────────┴────────────────┴──┐                │
-        │  │         Iceberg catalog                │                │
-        │  │    (datalake + biofusion 读取器)       │                │
+        │  │         VFS catalog                │                │
+        │  │    (VFS mounts + biofusion 读取器)       │                │
         │  └────────────────────────────────────────┘                │
         │                                                           │
         │  离线：                                                     │
@@ -149,7 +149,7 @@
 
 智能体从 `agentik-core` 获取工具。数据引擎工具通过通道与一个串行化的 `DataEngineServer` 通信，因此一次对话可以创建、检查、运行和清空数据处理 DAG，而无需直接共享可变的引擎状态。DAG 将数据读入 DataFusion `DataFrame`，对其进行变换，并可将文件输出持久化。
 
-重计算量任务在 DAG 节点内以纯 Rust 运行。统计遗传学算法（MiXeR、LDSC、MR、LAVA、HDL、MTAG 等）与流行病学/临床生物统计方法（因果推断、中介分析、生存分析、回归、混合模型等）均构建于 `faer` 之上。LD 参考数据和预计算的充分统计量存储在 Iceberg 数据湖中；离线 `precompute_tags` 流水线物化了每个 tag 的汇总标量，使运行时拟合永远无需扫描完整 LD 矩阵。
+重计算量任务在 DAG 节点内以纯 Rust 运行。统计遗传学算法（MiXeR、LDSC、MR、LAVA、HDL、MTAG 等）与流行病学/临床生物统计方法（因果推断、中介分析、生存分析、回归、混合模型等）均构建于 `faer` 之上。LD 参考数据通过 VFS 挂载载入；离线 `precompute_tags` 流水线物化了每个 tag 的汇总标量，使运行时拟合永远无需扫描完整 LD 矩阵。
 
 GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客户端让智能体无需离开对话即可获取元数据、汇总统计数据和靶点–疾病关联评分。大型测试夹具（LD 矩阵、金标准输出）保存在私有 OSS 存储桶中，通过 `rclone` 恢复。
 
@@ -158,7 +158,7 @@ GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客
 | 领域               | 成员                                                                                                                    | 职责                                                                                                                                                                                                  |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 智能体平台         | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                              | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                                                            |
-| 数据分析           | `data-engine`、`data-engine-tools`、`fs`、`datalake`、`datalake-tools`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、OpenDAL 文件、Iceberg 存储与查询工具、生物格式导入，以及 R/ggplot2 可视化。                                                                                          |
+| 数据分析           | `data-engine`、`data-engine-tools`、`vfs`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、挂载感知 OpenDAL 文件、生物格式导入，以及 R/ggplot2 可视化。                                                                                          |
 | 统计遗传学         | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mtag`、`mrlap`、`lcv`、`cpassoc`、`magma`                                        | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MTAG、MRlap、LCV、CPASSOC 和 MAGMA 的纯 Rust 移植，基于 `faer`。                                 |
 | 流行病学与生物统计 | `statkit`、`epi`                                                                                                        | 基础统计（OLS/WLS/logistic/Cox 回归、描述性统计）与高层流行病学方法（因果推断、中介分析、生存分析、ROC、RCS、LASSO、WQS、CLPM、GBTM、LCA、SEM、竞争风险、多状态模型、随机森林 + SHAP），基于 `faer`。 |
 | 科学数据客户端     | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                  | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                                                          |
@@ -202,10 +202,9 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo run -p tui
 
 - [**统计与流行病学节点**](docs/sta_epi_nodes_zh.md) — 流行病学与临床生物统计分析的 DAG 节点目录：线性/logistic/Cox 回归、生存分析（KM + log-rank）、因果推断（IPTW/PSM）、因果中介（VanderWeele / CMAverse）、ROC/AUC/DeLong、RCS、LASSO、WQS、卡方检验、荟萃分析。
 
-### 数据基础设施与可视化
+### 可视化
 
 - [**可视化（`visualization`）**](docs/visualization_zh.md) — 通过 R/ggplot2 将 DataFusion 渲染为 PNG（Arrow IPC 桥接、opendal 输出）。
-- [数据基础设施](docs/data_infra_zh.md) — LD 矩阵、子图和单变量 MiXeR 流水线文档。
 
 ## 工作空间结构
 
@@ -219,9 +218,7 @@ autonomics/
 │   ├── data-engine-tools/   # data-engine 操作的 ToolFunction 适配器
 │   ├── biofusion/           # 基因组文件格式的 DataFusion 读取器
 │   ├── biofusion-cache/     # biofusion 读取器的缓存层
-│   ├── datalake/            # Iceberg REST catalog 和 DataFusion 集成
-│   ├── datalake-tools/      # 查询和描述 Iceberg 表的智能体工具
-│   ├── fs/                  # 基于 OpenDAL 的文件存储和文件工具
+│   ├── vfs/                 # 基于 OpenDAL 的挂载感知文件存储和工具
 │   ├── visualization/       # 通过 R/ggplot2 将 DataFusion 渲染为 PNG (VizNode)
 │   ├── eutils/              # NCBI E-utilities 客户端
 │   ├── opengwas/            # OpenGWAS 客户端
@@ -276,7 +273,6 @@ rclone copy aliyun://autonomics-data/mixer/test-data/fixtures/ \
 
 > **注意：** 该存储桶目前为私有。请联系仓库所有者获取访问凭据。配置完成后，使用提供的 endpoint、key 和 secret 配置 `rclone`——上述示例中的 `aliyun:` remote 名称应指向该配置。
 
-每个依赖外部数据的测试文件都在头部注释中记录了其归档路径和恢复命令。完整约定见 [`docs/data_infra/univariate_mixer.md`](docs/data_infra/univariate_mixer.md) 和记忆条目 `test-data-archive-convention`。
 
 ## 环境要求
 

@@ -13,7 +13,7 @@
 //!   capabilities to an agentik agent. These return LLM-friendly Markdown
 //!   (unstructured output).
 //! - **DAG nodes** — `DagNode` source nodes that emit tabular DataFrames for
-//!   structured-data pipelines (sink to CSV / Iceberg, join, filter, …).
+//!   structured-data pipelines (sink to CSV, join, filter, …).
 //!
 //! # Quick start (SDK only)
 //!

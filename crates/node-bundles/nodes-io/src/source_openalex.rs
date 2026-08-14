@@ -3,7 +3,7 @@
 //! Two source nodes that pull tabular data from the [OpenAlex API](
 //! https://api.openalex.org) and emit it as a DataFusion `DataFrame`, so
 //! structured bibliometric data can flow through a DAG (aggregate, join,
-//! sink to CSV/Iceberg, …).
+//! sink to CSV/VFS, …).
 //!
 //! - [`OpenAlexWorksNode`] (`source_openalex_works`) — fetch works as a
 //!   flat table (id, doi, title, year, type, cited_by_count, oa_status,

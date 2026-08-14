@@ -769,7 +769,7 @@ impl NodeFactory for GsemLdscNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Takes munged GWAS sumstats for N traits (long-format DataFrame with rsid, z, n, trait), \
-        joins with the univariate LD-score panel from Iceberg, runs multivariate LD Score \
+        joins with the univariate LD-score panel from VFS, runs multivariate LD Score \
         regression with block jackknife to estimate the genetic covariance matrix S and its \
         sampling covariance V. Outputs a single-row DataFrame (s_0..s_z, v_0..v_zz, m) \
         consumable by gsem_usermodel / gsem_commonfactor / gsem_rgmodel.\n\n\
@@ -881,13 +881,21 @@ impl DagNode for GsemLdscNode {
         }
 
         // ── 1. Register LD-score panel and companion M table from catalog ──
-        nodes_ldsc::ldsc_common::register_listing_table(&session, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR)
+        nodes_ldsc::ldsc_common::register_listing_table(
+            &session,
+            "ld_panel",
+            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR,
+        )
         .await
         .map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),
             msg: format!("register LD panel failed: {e}"),
         })?;
-        nodes_ldsc::ldsc_common::register_listing_table(&session, "ld_panel_m", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
+        nodes_ldsc::ldsc_common::register_listing_table(
+            &session,
+            "ld_panel_m",
+            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+        )
         .await
         .map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),
@@ -2362,36 +2370,51 @@ mod tests {
 
         // Three traits with INDEPENDENT Z-score patterns.
         // Trait 0: sign alternates every 2, moderate signal
-        let z0: Vec<f64> = (0..n_snps).map(|i| {
-            let chi = 1.0 + 0.01 * l2[i];
-            if i % 2 == 0 { chi.sqrt() } else { -chi.sqrt() }
-        }).collect();
+        let z0: Vec<f64> = (0..n_snps)
+            .map(|i| {
+                let chi = 1.0 + 0.01 * l2[i];
+                if i % 2 == 0 { chi.sqrt() } else { -chi.sqrt() }
+            })
+            .collect();
         // Trait 1: sign alternates every 3, different magnitude
-        let z1: Vec<f64> = (0..n_snps).map(|i| {
-            let chi = 1.0 + 0.005 * l2[i];
-            if i % 3 == 0 { chi.sqrt() } else { -chi.sqrt() }
-        }).collect();
+        let z1: Vec<f64> = (0..n_snps)
+            .map(|i| {
+                let chi = 1.0 + 0.005 * l2[i];
+                if i % 3 == 0 { chi.sqrt() } else { -chi.sqrt() }
+            })
+            .collect();
         // Trait 2: sign alternates every 5, yet another pattern
-        let z2: Vec<f64> = (0..n_snps).map(|i| {
-            let chi = 1.0 + 0.002 * l2[i];
-            if i % 5 == 0 { chi.sqrt() } else { -chi.sqrt() }
-        }).collect();
+        let z2: Vec<f64> = (0..n_snps)
+            .map(|i| {
+                let chi = 1.0 + 0.002 * l2[i];
+                if i % 5 == 0 { chi.sqrt() } else { -chi.sqrt() }
+            })
+            .collect();
 
         let arrays = LdscArrays {
             z: vec![z0, z1, z2],
-            n: vec![vec![100000.0; n_snps], vec![80000.0; n_snps], vec![60000.0; n_snps]],
+            n: vec![
+                vec![100000.0; n_snps],
+                vec![80000.0; n_snps],
+                vec![60000.0; n_snps],
+            ],
             l2,
             wld,
             n_snps,
         };
 
         let result = run_multivariate_ldsc(
-            &arrays, 3, 5000.0, 20,
-            &[None, None, None], &[None, None, None],
+            &arrays,
+            3,
+            5000.0,
+            20,
+            &[None, None, None],
+            &[None, None, None],
             false,
             &["t0".into(), "t1".into(), "t2".into()],
             None, // no chisq_max filter
-        ).unwrap();
+        )
+        .unwrap();
 
         // h² (diagonal) should all be positive but different.
         let h2_0 = result.s[(0, 0)];
@@ -2414,12 +2437,18 @@ mod tests {
         eprintln!("  gc₀₂={gc_02:.6}  gc₁₂={gc_12:.6}  h²₂={h2_2:.6}");
 
         let tol = 1e-8;
-        assert!((gc_01 - h2_1).abs() > tol || (gc_01 - h2_0).abs() > tol,
-            "BUG: gencov(0,1)={gc_01:.6} equals h²₀={h2_0:.6} or h²₁={h2_1:.6}");
-        assert!((gc_02 - h2_2).abs() > tol || (gc_02 - h2_0).abs() > tol,
-            "BUG: gencov(0,2)={gc_02:.6} equals h²₀={h2_0:.6} or h²₂={h2_2:.6}");
-        assert!((gc_12 - h2_2).abs() > tol || (gc_12 - h2_1).abs() > tol,
-            "BUG: gencov(1,2)={gc_12:.6} equals h²₁={h2_1:.6} or h²₂={h2_2:.6}");
+        assert!(
+            (gc_01 - h2_1).abs() > tol || (gc_01 - h2_0).abs() > tol,
+            "BUG: gencov(0,1)={gc_01:.6} equals h²₀={h2_0:.6} or h²₁={h2_1:.6}"
+        );
+        assert!(
+            (gc_02 - h2_2).abs() > tol || (gc_02 - h2_0).abs() > tol,
+            "BUG: gencov(0,2)={gc_02:.6} equals h²₀={h2_0:.6} or h²₂={h2_2:.6}"
+        );
+        assert!(
+            (gc_12 - h2_2).abs() > tol || (gc_12 - h2_1).abs() > tol,
+            "BUG: gencov(1,2)={gc_12:.6} equals h²₁={h2_1:.6} or h²₂={h2_2:.6}"
+        );
 
         // Symmetry check
         assert!((result.s[(0, 1)] - result.s[(1, 0)]).abs() < 1e-15);
@@ -2496,7 +2525,7 @@ mod tests {
 
     /// Verify that `extract_arrays` skips SNPs with NULL or non-finite l2/wld
     /// values. This was the root cause of the all-NULL S/V bug: NULL ld_score
-    /// or w_ld entries from the Iceberg panel produced NaN that contaminated
+    /// or w_ld entries from the VFS panel produced NaN that contaminated
     /// every regression sum.
     #[test]
     fn test_extract_arrays_filters_null_l2_wld() {

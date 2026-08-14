@@ -1,7 +1,7 @@
 //! LD Score Regression (LDSC) transform node.
 //!
 //! Takes a single upstream GWAS summary statistics `DataFrame` (with Z-scores,
-//! sample sizes, and rsid), queries the Iceberg data lake for LD score panel
+//! sample sizes, and rsid), queries the VFS-mounted reference dataset for LD score panel
 //! data under `genetics.ld_score`, joins on rsid, and runs LD Score Regression
 //! via [`ldsc::hsq::estimate_h2`]. Outputs a single-row summary `DataFrame`
 //! with h², intercept, ratio, and per-annotation coefficients.
@@ -34,8 +34,8 @@ pub enum LdscNodeError {
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("failed to read result batch: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
+    #[error("reference data error: {0}")]
+    ReferenceData(String),
 }
 
 impl ::dag_core::dag::NodeError for LdscNodeError {
@@ -130,7 +130,7 @@ fn build_result_batch(r: &ldsc::hsq::HsqResult) -> Result<RecordBatch, LdscNodeE
 
 /// A transform node that runs LD Score Regression for SNP-heritability (h²).
 ///
-/// Accepts raw GWAS summary statistics as input, queries the Iceberg data lake
+/// Accepts raw GWAS summary statistics as input, queries the VFS-mounted reference dataset
 /// for LD score panel data, performs the join internally, and runs LDSC.
 ///
 /// The upstream `DataFrame` must have columns named exactly `z` (Float64),
@@ -199,7 +199,7 @@ impl NodeFactory for LdscHsqNodeFactory {
     fn doc(&self) -> &'static str {
         "LD Score Regression (LDSC) transform node for SNP-heritability (h²) \
         estimation. Takes a single upstream GWAS summary statistics DataFrame \
-        (with z, n, rsid columns), queries the Iceberg data lake for LD score \
+        (with z, n, rsid columns), queries the VFS-mounted reference dataset for LD score \
         panel data, joins on rsid, and runs LDSC via block-jackknife. Outputs a \
         single-row summary with h², intercept, ratio, and per-annotation \
         coefficients.\n\n\
@@ -318,7 +318,7 @@ impl NodeFactory for LdscHsqNodeFactory {
 impl LdscHsqNode {
     /// Construct an [`LdscHsqNode`].
     ///
-    /// The per-execution `SessionContext` (object-store registry + Iceberg
+    /// The per-execution `SessionContext` (object-store registry + VFS
     /// catalog) is injected by the framework at `execute` time, so the node
     /// holds only its algorithm configuration. The upstream `DataFrame` must
     /// expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
@@ -374,19 +374,27 @@ impl DagNode for LdscHsqNode {
                 "no input DataFrame".into(),
             )))?;
 
-        // 1. Build an isolated DataFusion context with the Iceberg catalog
-        //    registered (under "iceberg"), then delegate to the
+        // 1. Build an isolated DataFusion context with the VFS catalog
+        //    registered (under "vfs"), then delegate to the
         //    catalog-independent pipeline. Splitting here lets the pipeline
         //    be exercised end-to-end against an in-memory catalog (see
         //    `tests`).
         let ctx = node_ctx.session();
 
-        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
+        crate::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel",
+            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+        )
         .await
-        .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_listing_table(&ctx, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
+        .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
+        crate::ldsc_common::register_listing_table(
+            &ctx,
+            "ld_panel_m",
+            crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+        )
         .await
-        .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+        .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
 
         let result =
             Self::run_with_ctx(&ctx, &input.data, "ld_panel", "ld_panel_m", &self.ldsc_hsq).await?;
@@ -404,14 +412,14 @@ impl DagNode for LdscHsqNode {
 impl LdscHsqNode {
     /// The catalog-independent h² pipeline.
     ///
-    /// Given a [`SessionContext`] in which `iceberg.ld_score.{ld_table}` resolves
+    /// Given a [`SessionContext`] in which `vfs.ld_score.{ld_table}` resolves
     /// to an LD-score panel, this registers the upstream sumstats `DataFrame` as
     /// `sumstats`, runs the inner join on rsid, and fits
     /// [`ldsc::hsq::estimate_h2`].
     ///
     /// Extracted from [`DagNode::execute`](LdscHsqNode::execute) so the full
     /// pipeline can be tested against an in-memory catalog without a live
-    /// Iceberg REST server.
+    /// VFS object-store backend.
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
@@ -429,7 +437,7 @@ impl LdscHsqNode {
         //    COUNT(*) of the panel.
         let m = crate::ldsc_common::read_m_5_50(ctx, m_table, 1)
             .await
-            .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+            .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
 
         // 4. Build SQL: join sumstats with LD score panel on rsid.
         //    The 1000g_eur panel has separate ld_score (ref LD) and w_ld
@@ -533,7 +541,7 @@ mod tests {
     // -----------------------------------------------------------------
     //
     // Same approach as `ldsc_rg::tests`: register an in-memory
-    // `MemoryCatalogProvider` under the production `iceberg` name with a
+    // `MemoryCatalogProvider` under the production `vfs` name with a
     // `ld_score.1000g_eur` `MemTable`, so the node's SQL resolves identically
     // to production and the full pipeline (join → estimate_h2 → batch) runs
     // deterministically with no external service.
@@ -602,7 +610,7 @@ mod tests {
         .unwrap()
     }
 
-    /// `SessionContext` with an in-memory `iceberg.ld_score.1000g_eur` table
+    /// `SessionContext` with an in-memory `vfs.ld_score.1000g_eur` table
     /// plus its `1000g_eur_m` companion (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();

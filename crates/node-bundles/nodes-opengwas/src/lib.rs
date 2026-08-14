@@ -4,7 +4,7 @@
 //! https://gwas-api.mrcieu.ac.uk/) REST API and emit it as DataFusion
 //! `DataFrame`s, so GWAS association tables, variant annotations, study
 //! metadata, etc. can flow through a DAG (join, filter via `sql_node`,
-//! sink to CSV/Iceberg, …).
+//! sink to CSV/VFS, …).
 //!
 //! All are zero-input / single-output source nodes. They reuse the
 //! `opengwas` SDK client and require the `OPENGWAS_TOKEN` environment

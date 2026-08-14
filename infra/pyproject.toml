@@ -1,25 +1,11 @@
 [project]
 name = "autonomics-infra"
 version = "0.1.0"
-description = "Data infrastructure scripts for the autonomics project"
+description = "Reference-data infrastructure scripts for the autonomics project"
 requires-python = ">=3.13"
 dependencies = [
-    "pyiceberg>=0.11.1",
-    "pyarrow>=18.0.0",
     "boto3>=1.43.52",
-    "numpy>=2.5.1",
-    "pandas>=3.0.5",
-    "datalake",
 ]
 
 [tool.uv.workspace]
-members = [
-    "datalake",
-    "thousand_genomes",
-    "sink_ldsc_panel",
-    "sink_reference_genome",
-    "sink_dbsnp",
-]
-
-[tool.uv.sources]
-datalake = { workspace = true }
+members = ["thousand_genomes"]

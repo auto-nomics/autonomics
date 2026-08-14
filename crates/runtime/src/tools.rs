@@ -12,10 +12,10 @@ use writing_base::LatexEngine;
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
-use vfs::OpendalFileStorage;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
 use opentargets::OpenTargetsClient;
+use vfs::OpendalFileStorage;
 
 use crate::config::RuntimeConfig;
 
@@ -112,7 +112,7 @@ pub fn resolve_writing_db_path() -> String {
 }
 
 /// The complete default tool set: File + OpenGWAS + Open Targets
-/// + GWAS Catalog + DataLake + DataEngine + Bibliography.
+/// + GWAS Catalog + DataEngine + Bibliography.
 ///
 /// Pass a shared [`OpendalFileStorage`] used by both the fs tools
 /// and the OpenGWAS download tool.
@@ -156,7 +156,6 @@ pub async fn tool_set_from_config(
     }
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
-
 
     if config.enable_bibliography {
         match bib_tools(&config.bib_db_path.to_string_lossy()).await {

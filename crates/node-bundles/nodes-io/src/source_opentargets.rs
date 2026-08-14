@@ -3,7 +3,7 @@
 //! Two source nodes that pull tabular data from the [Open Targets Platform](
 //! https://platform.opentargets.org/api) GraphQL API and emit it as a
 //! DataFusion `DataFrame`, so association score tables and search hits can
-//! flow through a DAG (join, filter via `sql_node`, sink to CSV/Iceberg, …).
+//! flow through a DAG (join, filter via `sql_node`, sink to CSV/VFS, …).
 //!
 //! - [`OpentargetsAssociationsNode`] (`source_opentargets_associations`) —
 //!   target↔disease association score table.

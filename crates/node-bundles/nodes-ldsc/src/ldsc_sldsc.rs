@@ -11,7 +11,7 @@
 //! Coefficient_p / Prop._h2 / Prop._h2_SE / Enrichment / Enrichment_SE /
 //! Enrichment_p — mirroring the Python LDSC `.results` table.
 //!
-//! Unlike [`super::ldsc_hsq`] which reads LD scores from the Iceberg lake
+//! Unlike [`super::ldsc_hsq`] which reads LD scores from the VFS lake
 //! (single-column panel), this node reads multi-column baseline-LD from files
 //! because the lake does not yet have a multi-annotation panel table.
 //!
@@ -55,8 +55,8 @@ pub enum LdscSldscNodeError {
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("failed to read result batch: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("datalake error: {0}")]
-    Datalake(String),
+    #[error("reference data error: {0}")]
+    ReferenceData(String),
     #[error("not yet implemented: {0}")]
     Unimplemented(String),
 }
@@ -156,7 +156,7 @@ pub fn build_result_batch(
 // Config
 // =====================================================================
 
-/// Iceberg table name for the baselineLD v2.2 panel (hardcoded).
+/// VFS table name for the baselineLD v2.2 panel (hardcoded).
 
 /// Configuration for the S-LDSC node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -330,16 +330,29 @@ impl DagNode for LdscSldscNode {
 
         let session = ctx.session();
 
-        crate::ldsc_common::register_listing_table(&session, "ld_panel", crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR)
+        crate::ldsc_common::register_listing_table(
+            &session,
+            "ld_panel",
+            crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR,
+        )
         .await
-        .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_listing_table(&session, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR_M)
+        .map_err(|e| LdscSldscNodeError::ReferenceData(e.to_string()))?;
+        crate::ldsc_common::register_listing_table(
+            &session,
+            "ld_panel_m",
+            crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR_M,
+        )
         .await
-        .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
+        .map_err(|e| LdscSldscNodeError::ReferenceData(e.to_string()))?;
 
-        let result =
-            Self::run_with_ctx(&session, &input.data, "ld_panel", "ld_panel_m", &self.config)
-                .await?;
+        let result = Self::run_with_ctx(
+            &session,
+            &input.data,
+            "ld_panel",
+            "ld_panel_m",
+            &self.config,
+        )
+        .await?;
 
         let batch = build_result_batch(&result)?;
         let df = session
@@ -353,7 +366,7 @@ impl DagNode for LdscSldscNode {
 }
 
 impl LdscSldscNode {
-    /// The S-LDSC pipeline: query Iceberg for multi-annotation LD scores + M,
+    /// The S-LDSC pipeline: query VFS for multi-annotation LD scores + M,
     /// join with upstream sumstats, run the regression, derive per-annotation
     /// results.
     async fn run_with_ctx(
@@ -528,7 +541,7 @@ mod tests {
             &LdscSldscConfig::new(),
         )
         .await;
-        assert!(res.is_err(), "should error without Iceberg catalog");
+        assert!(res.is_err(), "should error without VFS catalog");
     }
 
     /// `build_result_batch` wires a `SldscResults` into the declared output

@@ -2,13 +2,13 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-`autonomics` is a Rust workspace for **agent-driven epidemiological and statistical-genetics research**. Rather than scripts and notebooks, an analyst converses with an LLM agent that builds, runs, and inspects real computational pipelines — composing a DataFusion DAG of typed nodes, reading genomic formats (VCF / BGEN / PLINK), fitting statistical-genetics models, running epidemiological and clinical-biostatistics analyses (causal inference, mediation, survival, regression, mixture models, …), and persisting results to an Iceberg data lake.
+`autonomics` is a Rust workspace for **agent-driven epidemiological and statistical-genetics research**. Rather than scripts and notebooks, an analyst converses with an LLM agent that builds, runs, and inspects real computational pipelines — composing a DataFusion DAG of typed nodes, reading genomic formats (VCF / BGEN / PLINK), fitting statistical-genetics models, running epidemiological and clinical-biostatistics analyses (causal inference, mediation, survival, regression, mixture models, …), and persisting results through VFS-mounted storage.
 
 Four pieces, usually kept separate, are integrated here:
 
 - **LLM SDK + agent runtime** (`agentik-*`) — an Anthropic-compatible client with multi-provider support, SSE streaming, and tool / function calling, on top of an agent loop that handles memory compaction, lifecycle management, and multi-agent orchestration.
 - **DataFusion DAG engine** (`data-engine`) — a typed, concurrently-scheduled node graph where each step transforms `DataFrame`s. The agent assembles and runs pipelines through tool calls; heavy computation — statistical genetics (MiXeR, LDSC, MR, LAVA) and epidemiology/clinical biostatistics (causal inference, mediation, survival, ROC, LASSO, WQS, …) — runs as pure-Rust node logic over [`faer`](https://github.com/sarah-ek/faer).
-- **Bioinformatics I/O** (`biofusion`, `datalake`) — DataFusion readers for common genomic formats and an Iceberg-backed lake holding LD reference panels and precomputed sufficient-statistics tables.
+- **Bioinformatics I/O** (`biofusion`, `vfs`) — DataFusion readers for common genomic formats and mount-aware file access to reference panels and derived datasets.
 - **Scientific data clients** (`eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`) — fetch metadata and summary statistics from NCBI, OpenGWAS, the GWAS Catalog, and the Open Targets Platform without leaving the conversation.
 
 ## Demo
@@ -32,7 +32,7 @@ Four pieces, usually kept separate, are integrated here:
         ┌──────────────────────┼──────────────────────┐
         │                      │                      │
         ▼                      ▼                      ▼
-  agentik-tools          datalake-tools         data-engine-tools
+  agentik-tools          runtime tools         data-engine-tools
   (bash, lifecycle)      (list/query tables)    (add_node, run_dag)
                                                         │
                                                ┌────────▼────────┐
@@ -76,8 +76,8 @@ Four pieces, usually kept separate, are integrated here:
         │       ▲              ▲                ▲                   │
         │       │              │                │                   │
         │  ┌────┴──────────────┴────────────────┴──┐                │
-        │  │         Iceberg catalog                │                │
-        │  │    (datalake + biofusion readers)      │                │
+        │  │         VFS catalog                │                │
+        │  │    (VFS mounts + biofusion readers)      │                │
         │  └────────────────────────────────────────┘                │
         │                                                           │
         │  Offline:                                                  │
@@ -147,7 +147,7 @@ Four pieces, usually kept separate, are integrated here:
 
 An agent receives tools from `agentik-core`. The data-engine tools communicate with one serialized `DataEngineServer` through channels, so a conversation can create, inspect, run, and clear a data-processing DAG without sharing mutable engine state directly. The DAG reads data into DataFusion `DataFrame`s, transforms it, and can persist file outputs.
 
-Heavy computation runs in pure Rust within DAG nodes. Statistical-genetics algorithms (MiXeR, LDSC, MR, LAVA, HDL, MTAG, …) and epidemiological/clinical-biostatistics methods (causal inference, mediation, survival analysis, regression, mixture models, …) are both built on `faer`. LD reference data and precomputed sufficient statistics are stored in an Iceberg data lake; the offline `precompute_tags` pipeline materializes per-tag summary scalars so that runtime fitting never scans the full LD matrix.
+Heavy computation runs in pure Rust within DAG nodes. Statistical-genetics algorithms (MiXeR, LDSC, MR, LAVA, HDL, MTAG, …) and epidemiological/clinical-biostatistics methods (causal inference, mediation, survival analysis, regression, mixture models, …) are both built on `faer`. LD reference data and precomputed sufficient statistics are loaded from VFS mounts; the offline `precompute_tags` pipeline materializes per-tag summary scalars so that runtime fitting never scans the full LD matrix.
 
 API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets Platform let agents fetch metadata, summary statistics, and target–disease association scores without leaving the conversation. Large test fixtures (LD matrices, gold-standard outputs) are kept in a private OSS bucket and restored via `rclone`.
 
@@ -156,7 +156,7 @@ API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets P
 | Area                         | Members                                                                                                                                    | Responsibility                                                                                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                                 | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                                          |
-| Data analysis                | `data-engine`, `data-engine-tools`, `fs`, `datalake`, `datalake-tools`, `biofusion`, `biofusion-cache`, `visualization`                    | DAG execution, Agent-exposed DAG operations, OpenDAL files, Iceberg storage and query tools, biological-format ingestion, and R/ggplot2 visualization.             |
+| Data analysis                | `data-engine`, `data-engine-tools`, `vfs`, `biofusion`, `biofusion-cache`, `visualization`                    | DAG execution, Agent-exposed DAG operations, mount-aware OpenDAL files, biological-format ingestion, and R/ggplot2 visualization.             |
 | Statistical genetics         | `ldsc`, `mr`, `mixer`, `lava`, `hdl`, `mtag`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                           | Pure-Rust ports of LD Score Regression, TwoSampleMR, MiXeR (spike-and-slab causal mixture), LAVA (local genetic correlation), HDL-L, MTAG, MRlap, LCV, CPASSOC, and MAGMA, built on `faer`. |
 | Epidemiology & biostatistics | `statkit`, `epi`                                                                                                                           | Foundational statistics (OLS/WLS/logistic/Cox regression, descriptive stats) and higher-level epidemiological methods (causal inference, mediation, survival, ROC, RCS, LASSO, WQS, CLPM, GBTM, LCA, SEM, competing risks, multistate, Random Forest + SHAP), built on `faer`. |
 | Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`                                                                                     | Clients for NCBI E-utilities, OpenGWAS, the GWAS Catalog, and the Open Targets Platform.                                                                          |
@@ -200,10 +200,9 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 
 - [**Statistical & Epi Nodes**](docs/sta_epi_nodes.md) — DAG node catalogue for epidemiological and clinical-biostatistics analyses: linear/logistic/Cox regression, survival (KM + log-rank), causal inference (IPTW/PSM), causal mediation (VanderWeele / CMAverse), ROC/AUC/DeLong, RCS, LASSO, WQS, chi-square, meta-analysis.
 
-### Data Infrastructure & Visualization
+### Visualization
 
 - [**Visualization (`visualization`)**](docs/visualization.md) — DataFusion → PNG rendering via R/ggplot2 (Arrow IPC bridge, opendal output).
-- [Data Infrastructure](docs/data_infra.md) — LD matrix, subgraph, and univariate MiXeR pipeline docs.
 
 ## Workspace structure
 
@@ -217,9 +216,7 @@ autonomics/
 │   ├── data-engine-tools/   # ToolFunction adapters for data-engine operations
 │   ├── biofusion/           # DataFusion readers for genomics file formats
 │   ├── biofusion-cache/     # Caching layer for biofusion readers
-│   ├── datalake/            # Iceberg REST catalog and DataFusion integration
-│   ├── datalake-tools/      # Agent tools for querying and describing Iceberg tables
-│   ├── fs/                  # OpenDAL-backed file storage and file tools
+│   ├── vfs/                 # OpenDAL-backed mount-aware file storage and tools
 │   ├── visualization/       # DataFusion → PNG rendering via R/ggplot2 (VizNode)
 │   ├── eutils/              # NCBI E-utilities client
 │   ├── opengwas/            # OpenGWAS client
@@ -274,7 +271,6 @@ rclone copy aliyun://autonomics-data/mixer/test-data/fixtures/ \
 
 > **Note:** The bucket is currently private. Contact the repository owner for access credentials. Once provisioned, configure `rclone` with the provided endpoint, key, and secret — the `aliyun:` remote name in the examples above should point to that configuration.
 
-Every test file that depends on external data documents its archive path and restore command in a header comment. See [`docs/data_infra/univariate_mixer.md`](docs/data_infra/univariate_mixer.md) and the memory entry `test-data-archive-convention` for the full convention.
 
 ## Requirements
 

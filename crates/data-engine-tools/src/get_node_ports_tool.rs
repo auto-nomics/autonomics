@@ -15,7 +15,7 @@ use crate::ExecError;
                   Call this before add_edge to know which ports are available."
 )]
 pub struct GetNodePortsInput {
-    /// The node kind to query (e.g. "sql", "source_file", "source_iceberg", "sink_file", "sink_iceberg", "ldsc", "linear_regression", "mock").
+    /// The node kind to query (e.g. "sql", "source_file", "sink_file", "ldsc", "linear_regression", "mock").
     pub kind: String,
 }
 

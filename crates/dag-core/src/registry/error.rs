@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn humanize_leaves_unknown_phrases_untouched() {
-        let raw = "unknown variant `ftp`, expected `file` or `iceberg`";
+        let raw = "unknown variant `ftp`, expected `file` or `parquet`";
         assert_eq!(humanize_serde_error(raw), raw);
     }
 

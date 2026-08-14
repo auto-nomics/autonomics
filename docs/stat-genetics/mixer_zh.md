@@ -21,9 +21,5 @@ LD 矩阵在拟合前被折叠为两个每 SNP 标量（`m1`/`m2`），将 O(nnz
 
 作为 `univariate_mixer` 和 `bivariate_mixer` 节点类型暴露（`data-engine/nodes/univariate_mixer.rs`）。两阶段流水线：
 
-1. 离线 `precompute_tags` 生成包含每 tag 充分统计量的 Iceberg 表（`eur_tagsuff`）
+1. 离线 `precompute_tags` 生成包含每 tag 充分统计量的 VFS 表（`eur_tagsuff`）
 2. 运行时节点加载汇总统计，按 rsid 与 tagsuff 连接，并调用 `fit1`
-
-## 数据基础设施
-
-完整的算法推导、流水线图和决策记录见 [`docs/data_infra/univariate_mixer.md`](../data_infra/univariate_mixer.md)。

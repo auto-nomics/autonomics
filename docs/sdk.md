@@ -82,11 +82,6 @@ MINIMAX_API_KEY=        # MiniMax provider
 DEEPSEEK_API_KEY=
 ZAI_API_KEY=
 
-# Iceberg data lake (datalake crate)
-ICEBERG_REST_URI=
-ICEBERG_S3_ACCESS_KEY_ID=
-ICEBERG_S3_SECRET_ACCESS_KEY=
-
 # Scientific data clients
 OPENGWAS_TOKEN=         # OpenGWAS / GWAS Catalog bearer token
 EUTILS_API_KEY=         # optional; raises NCBI rate limit 3→10 req/s

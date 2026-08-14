@@ -135,9 +135,17 @@ impl RelationKind {
 /// loop.
 #[derive(Debug, Clone)]
 pub enum PersistOp {
-    StartSession { agent_id: Uuid, session_id: Uuid },
-    AppendMessage { session_id: Uuid, message: Message },
-    EndSession { session_id: Uuid },
+    StartSession {
+        agent_id: Uuid,
+        session_id: Uuid,
+    },
+    AppendMessage {
+        session_id: Uuid,
+        message: Message,
+    },
+    EndSession {
+        session_id: Uuid,
+    },
     /// Compaction replaced the session's message history in-place.
     /// The WAL must persist the new state so a crash after compaction
     /// doesn't restore stale pre-compaction messages.
@@ -169,7 +177,6 @@ pub struct ProfileOverrides {
     pub enable_opengwas: Option<bool>,
     pub enable_opentargets: Option<bool>,
     pub enable_gwascatalog: Option<bool>,
-    pub enable_iceberg: Option<bool>,
     pub enable_dag_history: Option<bool>,
 }
 
@@ -213,7 +220,6 @@ pub struct AgentProfile {
     pub enable_opengwas: bool,
     pub enable_opentargets: bool,
     pub enable_gwascatalog: bool,
-    pub enable_iceberg: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -257,7 +263,6 @@ impl AgentProfile {
             enable_opengwas: true,
             enable_opentargets: true,
             enable_gwascatalog: true,
-            enable_iceberg: true,
             enable_dag_history: true,
             preferred_model: None,
             created_at: now,
@@ -300,7 +305,6 @@ impl AgentProfile {
             enable_gwascatalog: overrides
                 .enable_gwascatalog
                 .unwrap_or(self.enable_gwascatalog),
-            enable_iceberg: overrides.enable_iceberg.unwrap_or(self.enable_iceberg),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -329,7 +333,6 @@ impl AgentProfile {
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
-                enable_iceberg: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -349,7 +352,6 @@ impl AgentProfile {
                 enable_opengwas: false,
                 enable_opentargets: true,
                 enable_gwascatalog: false,
-                enable_iceberg: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -369,7 +371,6 @@ impl AgentProfile {
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
-                enable_iceberg: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -402,7 +403,6 @@ impl AgentProfile {
                 enable_opengwas: false,
                 enable_opentargets: false,
                 enable_gwascatalog: false,
-                enable_iceberg: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,

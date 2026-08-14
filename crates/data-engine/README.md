@@ -7,7 +7,7 @@ It is intentionally independent of the Agent loop. `data-engine-tools` adapts it
 ## Data flow
 
 ```text
-FileSourceNode / IcebergSourceNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> FileSinkNode / IcebergSinkNode
+FileSourceNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> FileSinkNode
        │                           │
        └──────────── fan-out ──────┴──> more transformations
 ```
@@ -19,14 +19,13 @@ Every edge connects one named output port to one named input port. The public co
 | Node | Inputs → outputs | Purpose |
 | --- | --- | --- |
 | `FileSourceNode` | 0 → 1 | Reads CSV, Parquet, or a biological file (VCF, BAM, BED, …) into a DataFusion `DataFrame`. |
-| `IcebergSourceNode` | 0 → 1 | Reads an Iceberg table by `namespace.table` identifier into a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
-| `LdscHsqNode` | 1 → 1 | LD Score Regression for SNP-heritability (h²). Reads LD scores from the Iceberg `ld_score` panel. |
+| `LdscHsqNode` | 1 → 1 | LD Score Regression for SNP-heritability (h²). Reads LD scores from the configured VFS reference panel. |
 | `LdscRgNode` | 1+ → 1 | Bivariate LD Score Regression for genetic correlation (rg). |
 | `LdscSldscNode` | 1 → 1 | Stratified LD Score Regression (S-LDSC). Reads multi-annotation baselineLD from files (`ref_ld_chr` / `w_ld_chr` config prefixes). Outputs a per-annotation result table. |
 | `FileSinkNode` | 1 → 0 | Writes CSV or Parquet. |
-| `IcebergSinkNode` | 1 → 0 | Writes a `DataFrame` to an Iceberg table via the catalog's `INSERT INTO` path. |
+| `FileSinkNode` | 1 → 0 | Writes CSV or Parquet through the configured VFS mount. |
 
 `biofusion` supplies the biological readers used by `FileSourceNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
 
@@ -63,7 +62,7 @@ assert!(report.ok, "pipeline errors: {:?}", report.errors);
 
 Use `engine.view_dag()` to obtain a Graphviz DOT representation. `engine.get_output(node_id).await` returns the in-memory port outputs of a completed node.
 
-## Iceberg and object storage
+## Object storage
 
 `DataEngine::builder()` creates a standalone DataFusion session. Add integrations only when the pipeline needs them:
 
@@ -76,18 +75,16 @@ use vfs::OpendalFileStorage;
 let files = Arc::new(OpendalFileStorage::new("/data"));
 let engine = DataEngine::builder()
     .register_opendal_fs(files)?
-    .register_iceberg()
-    .await?
     .build();
 # Ok(())
 # }
 ```
 
-The engine uses a REST Iceberg catalog when registered. Reading an Iceberg source is supported; writing an Iceberg sink currently returns a clear `not yet implemented` error.
+The engine routes mounted virtual paths through the registered VFS object store.
 
 ## Agent-facing runtime
 
-`runtime::spawn_with_engine` hosts an `IcebergDataEngine` in a Tokio task and returns a cloneable `DataEngineClient`. Requests use an unbounded command channel plus one-shot replies. `data-engine-tools` exposes the following operations to an Agent:
+`runtime::spawn_with_engine` hosts a `DataEngine` in a Tokio task and returns a cloneable `DataEngineClient`. Requests use an unbounded command channel plus one-shot replies. `data-engine-tools` exposes the following operations to an Agent:
 
 - add source, SQL, sink, and linear-regression nodes;
 - connect nodes with default or explicit ports;
@@ -104,4 +101,4 @@ Run the crate tests with a writable target directory:
 CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p data-engine
 ```
 
-The crate includes fixture-driven pipeline tests, graph validation tests, scheduler/concurrency tests, and an ignored Iceberg connectivity test. The latter requires a reachable configured catalog.
+The crate includes fixture-driven pipeline tests, graph validation tests, scheduler/concurrency tests, and VFS-backed integration tests.

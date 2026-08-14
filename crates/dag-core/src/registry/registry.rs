@@ -82,17 +82,14 @@ pub trait NodeFactory: Send + Sync {
 /// Ingredients for building an isolated [`SessionContext`] per node execution.
 ///
 /// Instead of sharing a single `SessionContext` (which causes CatalogList
-/// collisions on `register_table`), nodes receive the `RuntimeEnv` and an
-/// optional `Iceberg` catalog, and construct their own context at execution
-/// time via [`new_isolated_ctx`].
+/// collisions on `register_table`), nodes receive the `RuntimeEnv` and
+/// construct their own context at execution time via [`new_isolated_ctx`].
 #[derive(Clone)]
 pub struct NodeCtx {
     /// Shared object-store registry — all nodes reference the same
     /// `RuntimeEnv` so file:// / s3:// stores registered by the engine
     /// builder are reachable.
     pub runtime_env: Arc<RuntimeEnv>,
-    /// operations (create/drop/load) that go through the Iceberg API
-    /// directly rather than DataFusion SQL.
     /// The opendal-backed file storage registered with the engine, used by
     /// artifact-producing nodes (e.g. `VizNode`) to write outputs into the
     /// engine's virtualized filesystem rather than the host filesystem.

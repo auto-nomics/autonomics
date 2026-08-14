@@ -19,7 +19,7 @@ pub use dag_core::sink::SinkMode;
 /// [`DAG`] of nodes executed by an async scheduler.
 pub struct DataEngine {
     ctx: SessionContext,
-/// The immutable engine ingredients, handed to the DAG scheduler on every
+    /// The immutable engine ingredients, handed to the DAG scheduler on every
     /// `run` so each node `execute` can build a fresh isolated `SessionContext`
     /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
     /// mutable `SessionContext` state can never accumulate across runs.
@@ -78,7 +78,7 @@ impl DataEngine {
         }
     }
 
-pub fn builder() -> DataEngineBuilder {
+    pub fn builder() -> DataEngineBuilder {
         DataEngineBuilder::default()
     }
 
@@ -641,7 +641,7 @@ pub fn builder() -> DataEngineBuilder {
     /// Mark a node (and all its transitive descendants) as dirty, so the next
     /// [`Self::run`] will re-execute them even in incremental mode.
     ///
-    /// Use this when an external input (file, Iceberg table, API response) has
+    /// Use this when an external input (file, VFS dataset, API response) has
     /// changed outside the engine and the node's cached output is stale.
     pub fn mark_node_dirty(&mut self, node_id: &str) {
         self.dag.mark_dirty(node_id);
@@ -708,18 +708,15 @@ impl DataEngineBuilder {
     /// All mounted backends are addressed through one namespace, for example
     /// `vfs:///data/ldscore/1000g_eur/`.
     pub fn with_vfs(self, vfs: MountedObjectStore) -> Self {
-        let url = ObjectStoreUrl::parse("vfs://")
-            .expect("vfs:// is a valid object-store URL");
+        let url = ObjectStoreUrl::parse("vfs://").expect("vfs:// is a valid object-store URL");
         self.runtime_env
             .register_object_store(url.as_ref(), Arc::new(vfs));
         self
     }
 
-pub fn build(self) -> DataEngine {
+    pub fn build(self) -> DataEngine {
         // Keep a backward-compatible ctx for tests / ad-hoc table registration.
-        let ctx = crate::node_registry::registry::new_isolated_ctx(
-            self.runtime_env.clone(),
-        );
+        let ctx = crate::node_registry::registry::new_isolated_ctx(self.runtime_env.clone());
         DataEngine::new_from_parts(ctx, self.runtime_env, self.opendal)
     }
 }
@@ -801,7 +798,7 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
     }
 
-    // ── Existing opendal+iceberg integration test ──────────────────────
+    // ── Existing OpenDAL/DataFusion integration test ────────────────────
 
     #[tokio::test]
     async fn test_dataengine_opendal_datafusion() {

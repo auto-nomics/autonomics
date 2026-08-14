@@ -4,7 +4,7 @@
 //! Graph API](https://api.semanticscholar.org/graph/v1) and emit it as a
 //! DataFusion `DataFrame`, so paper metadata tables and author search hits
 //! can flow through a DAG (join, filter via `sql_node`, sink to
-//! CSV/Iceberg, …).
+//! CSV/VFS, …).
 //!
 //! - [`S2PaperSearchNode`] (`source_s2_paper_search`) — relevance paper
 //!   search → structured table.
