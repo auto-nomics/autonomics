@@ -100,6 +100,7 @@ pub(crate) struct AgentShared {
     pub context_provider: Option<Arc<dyn ContextProvider>>,
     pub system_prompt_section: Option<String>,
     pub system_prompt_identity: Option<String>,
+    pub(crate) memory: Option<Arc<crate::memory::MemoryBackend>>,
     pub skill_runtime: Option<SharedSkillRuntime>,
     pub tool_registry: Arc<ToolRegistry>,
     /// Shared background-task list — the same Arc baked into the registry's
@@ -159,6 +160,7 @@ impl AgentShared {
             context_provider: None,
             system_prompt_section: None,
             system_prompt_identity: None,
+            memory: None,
             skill_runtime: None,
             tool_registry: Arc::new(ToolRegistry::new()),
             tasks: Arc::new(tokio::sync::RwLock::new(
@@ -1496,6 +1498,12 @@ impl Session {
 
         if let Some(ref extra) = self.shared.system_prompt_section {
             builder = builder.with_extra_section(extra);
+        }
+
+        if let Some(memory) = &self.shared.memory {
+            if let Some(section) = memory.prompt_section().await {
+                builder = builder.with_extra_section(section);
+            }
         }
 
         if let Some(rt) = &self.shared.skill_runtime {

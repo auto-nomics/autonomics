@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
+use crate::memory::{MemoryBackend, MemoryConfig, memory_registrations};
 use crate::session::AgentShared;
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
@@ -23,6 +24,7 @@ pub struct AgentBuilder {
     tools: Vec<ToolRegistration>,
     system_prompt_section: Option<String>,
     system_prompt_identity: Option<String>,
+    memory: Option<MemoryConfig>,
     agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
     /// Stable agent UUID. If `None`, a fresh v4 UUID is generated at build time.
     id: Option<Uuid>,
@@ -46,6 +48,7 @@ impl Clone for AgentBuilder {
             tools: Vec::new(),
             system_prompt_section: self.system_prompt_section.clone(),
             system_prompt_identity: self.system_prompt_identity.clone(),
+            memory: self.memory.clone(),
             agent_event_tx: self.agent_event_tx.clone(),
             id: self.id,
             path: self.path.clone(),
@@ -67,6 +70,7 @@ impl AgentBuilder {
             tools: Vec::new(),
             system_prompt_section: None,
             system_prompt_identity: None,
+            memory: None,
             agent_event_tx: None,
             id: None,
             path: None,
@@ -118,6 +122,15 @@ impl AgentBuilder {
 
     pub fn with_system_prompt_identity(mut self, identity: impl Into<String>) -> Self {
         self.system_prompt_identity = Some(identity.into());
+        self
+    }
+
+    /// Enable persistent cross-session memory for this agent.
+    ///
+    /// Root-level agents generate and consolidate memory; all agents receive
+    /// read/search tools and summary injection when `use_memory` is enabled.
+    pub fn with_memory(mut self, config: MemoryConfig) -> Self {
+        self.memory = Some(config);
         self
     }
 
@@ -193,6 +206,12 @@ impl AgentBuilder {
 
         let mut registry = ToolRegistry::new();
         registry.register_all(self.tools)?;
+        let memory = self
+            .memory
+            .map(|config| Arc::new(MemoryBackend::new(config)));
+        if let Some(backend) = memory.as_ref().filter(|backend| backend.config.use_memory) {
+            registry.register_all(memory_registrations(Arc::clone(backend)))?;
+        }
         registry.register_all(crate::tools::task_registrations(tasks.clone()))?;
         registry.register_all(crate::tools::plan_registrations(plan_handle))?;
         if let Some((_, todo_reg)) = &skill_runtime {
@@ -211,6 +230,7 @@ impl AgentBuilder {
             context_provider: self.context_provider,
             system_prompt_section: self.system_prompt_section,
             system_prompt_identity: self.system_prompt_identity,
+            memory,
             skill_runtime: skill_runtime.map(|(rt, _)| rt),
             tool_registry: registry,
             tasks,

@@ -61,6 +61,9 @@ const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
 /// Default agent persistence database filename (relative to `state_dir`).
 const DEFAULT_AGENT_DB: &str = "agent.db";
 
+/// Default persistent-memory directory (relative to `state_dir`).
+const DEFAULT_MEMORY_DIR: &str = "memories";
+
 /// Default bibliography database path.
 ///
 /// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
@@ -121,6 +124,15 @@ pub const ENV_HTTP_REQUEST_TIMEOUT_SECS: &str = "AUTONOMICS_HTTP_REQUEST_TIMEOUT
 /// proxy (e.g. `http://proxy.corp:3128`).
 pub const ENV_HTTP_PROXY: &str = "AUTONOMICS_HTTP_PROXY";
 
+/// Env var overriding the persistent-memory root.
+pub const ENV_MEMORY_DIR: &str = "AUTONOMICS_MEMORY_DIR";
+
+/// Env var enabling or disabling memory read/injection.
+pub const ENV_USE_MEMORY: &str = "AUTONOMICS_USE_MEMORY";
+
+/// Env var enabling or disabling startup memory generation.
+pub const ENV_GENERATE_MEMORY: &str = "AUTONOMICS_GENERATE_MEMORY";
+
 // ---------------------------------------------------------------------------
 // RuntimeConfig
 // ---------------------------------------------------------------------------
@@ -160,6 +172,9 @@ pub struct RuntimeConfig {
     /// registry, session logs (WAL), and memory snapshots for cross-process
     /// recovery.
     pub agent_db: PathBuf,
+    /// Optional persistent-memory root. Defaults to `state_dir/memories`.
+    #[serde(default)]
+    pub memory_dir: Option<PathBuf>,
 
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
@@ -199,6 +214,12 @@ pub struct RuntimeConfig {
 
     /// Whether to enable GWAS Catalog tools.
     pub enable_gwascatalog: bool,
+    /// Inject persistent memory and expose memory read/search tools.
+    #[serde(default = "default_true")]
+    pub use_memory: bool,
+    /// Generate and consolidate persistent memory for root-level agents.
+    #[serde(default = "default_true")]
+    pub generate_memory: bool,
 
     // ── HTTP client (shared via `BibShared`) ─────────────────────────
     /// Configuration for the process-wide `reqwest::Client` used by
@@ -214,6 +235,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self::resolve(None)
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl RuntimeConfig {
@@ -264,6 +289,10 @@ impl RuntimeConfig {
         let agent_db = base
             .and_then(|b| b.agent_db.clone())
             .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
+        let memory_dir = base
+            .and_then(|b| b.memory_dir.clone())
+            .or_else(|| env_path(ENV_MEMORY_DIR))
+            .or_else(|| Some(state_dir.join(DEFAULT_MEMORY_DIR)));
 
         let name = base
             .and_then(|b| b.name.clone())
@@ -287,6 +316,17 @@ impl RuntimeConfig {
             |b: Option<&RuntimeConfigBuilder>,
              getter: fn(&RuntimeConfigBuilder) -> Option<bool>,
              default: bool| { b.and_then(getter).unwrap_or(default) };
+        let resolve_env_flag = |explicit: Option<bool>, env: &'static str| {
+            explicit.or_else(|| {
+                std::env::var(env)
+                    .ok()
+                    .and_then(|value| match value.as_str() {
+                        "1" | "true" | "yes" | "on" => Some(true),
+                        "0" | "false" | "no" | "off" => Some(false),
+                        _ => None,
+                    })
+            })
+        };
 
         Self {
             name,
@@ -297,6 +337,7 @@ impl RuntimeConfig {
             writing_db_path,
             app_db_path,
             agent_db,
+            memory_dir,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,
@@ -307,6 +348,13 @@ impl RuntimeConfig {
             enable_opengwas: resolve_flag(base, |b| b.enable_opengwas, true),
             enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
+            use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
+                .unwrap_or(true),
+            generate_memory: resolve_env_flag(
+                base.and_then(|b| b.generate_memory),
+                ENV_GENERATE_MEMORY,
+            )
+            .unwrap_or(true),
             bib_http: resolve_bib_http(base),
         }
     }
@@ -596,6 +644,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
+    pub(crate) memory_dir: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -606,6 +655,8 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_opengwas: Option<bool>,
     pub(crate) enable_opentargets: Option<bool>,
     pub(crate) enable_gwascatalog: Option<bool>,
+    pub(crate) use_memory: Option<bool>,
+    pub(crate) generate_memory: Option<bool>,
     pub(crate) bib_http: Option<BibHttpOptions>,
 }
 
@@ -660,6 +711,12 @@ impl RuntimeConfigBuilder {
     /// Path to the agent persistence database (Turso/SQLite).
     pub fn agent_db(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_db = Some(path.into());
+        self
+    }
+
+    /// Explicit persistent-memory root.
+    pub fn memory_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.memory_dir = Some(path.into());
         self
     }
 
@@ -720,6 +777,18 @@ impl RuntimeConfigBuilder {
     /// Enable or disable GWAS Catalog tools.
     pub fn enable_gwascatalog(mut self, enabled: bool) -> Self {
         self.enable_gwascatalog = Some(enabled);
+        self
+    }
+
+    /// Enable or disable memory read/injection.
+    pub fn use_memory(mut self, enabled: bool) -> Self {
+        self.use_memory = Some(enabled);
+        self
+    }
+
+    /// Enable or disable startup memory generation.
+    pub fn generate_memory(mut self, enabled: bool) -> Self {
+        self.generate_memory = Some(enabled);
         self
     }
 
@@ -817,11 +886,17 @@ mod tests {
         );
         assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
         assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
+        assert_eq!(
+            cfg.memory_dir,
+            Some(expected_state_dir.join(DEFAULT_MEMORY_DIR))
+        );
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
+        assert!(cfg.use_memory);
+        assert!(cfg.generate_memory);
 
         // Restore env vars.
         // SAFETY: single-threaded within this test fn.
@@ -844,11 +919,14 @@ mod tests {
             .dag_history_db("/tmp/custom-history.db")
             .bib_db_path("/tmp/custom-bib.db")
             .app_db_path("/tmp/custom-app.db")
+            .memory_dir("/tmp/custom-memories")
             .opengwas_token("secret-token")
             .agent_identity("Custom agent")
             .system_prompt(Some("Custom prompt".to_string()))
             .enable_dag_history(false)
             .enable_opengwas(false)
+            .use_memory(false)
+            .generate_memory(true)
             .build();
 
         assert_eq!(cfg.name, "test-agent");
@@ -857,6 +935,7 @@ mod tests {
         assert_eq!(cfg.dag_history_db, PathBuf::from("/tmp/custom-history.db"));
         assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
         assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
+        assert_eq!(cfg.memory_dir, Some(PathBuf::from("/tmp/custom-memories")));
         assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
         assert_eq!(cfg.agent_identity, "Custom agent");
         assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
@@ -866,6 +945,8 @@ mod tests {
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
+        assert!(!cfg.use_memory);
+        assert!(cfg.generate_memory);
     }
 
     #[test]

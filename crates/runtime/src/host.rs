@@ -19,6 +19,7 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
+use agentik_core::memory::MemoryConfig;
 use agentik_core::storage::{AgentProfileRegistry, AgentStorage};
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
@@ -120,6 +121,8 @@ pub struct SharedInfra {
     /// LaTeX writing system (store + optional engine), opened **once** per
     /// process. Reuses `bib` for citation resolution when available.
     pub writing: Arc<writing_base::WritingShared>,
+    /// Persistent cross-session memory configuration shared by root agents.
+    pub memory_config: Option<MemoryConfig>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -215,6 +218,17 @@ impl SharedInfra {
         let storage: Arc<dyn AgentStorage> = Arc::new(turso_store.clone());
         // Profile registry — clone of the same storage (shares one connection).
         let profile_storage: Arc<dyn AgentProfileRegistry> = Arc::new(turso_store);
+        let memory_config = (config.use_memory || config.generate_memory).then(|| {
+            let mut memory = MemoryConfig::new(
+                config
+                    .memory_dir
+                    .clone()
+                    .unwrap_or_else(|| config.state_dir.join("memories")),
+            );
+            memory.use_memory = config.use_memory;
+            memory.generate_memory = config.generate_memory;
+            memory
+        });
 
         let bib_db_path = config.bib_db_path.clone();
         tracing::info!(
@@ -245,9 +259,10 @@ impl SharedInfra {
             vfs,
             storage,
             profile_storage,
-            runtime_handle: tokio::runtime::Handle::current(),
             bib,
             writing,
+            memory_config,
+            runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
     }
@@ -286,6 +301,9 @@ impl SharedInfra {
             .with_config_json(config_json)
             .with_system_prompt_identity(&profile.agent_identity)
             .with_storage(storage.clone());
+        if let Some(memory) = self.memory_config.clone() {
+            builder = builder.with_memory(memory);
+        }
 
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);

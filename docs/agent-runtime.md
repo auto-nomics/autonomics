@@ -9,6 +9,7 @@ Uniform agent loop, memory management, tool dispatch, and multi-agent orchestrat
 - **Uniform agent loop** — One behavioral loop for all agents. Agent personality and tooling are configured _only_ through the toolset and system prompt; no agent-specific code paths in the loop itself (see `crates/agentik-core/src/agent.rs`).
 - **Reactive context** — `AgentContext` trait: implement `read()` / `write()`. The loop polls the version at each boundary and injects a `[context-update]` message into memory when it changes. Built-in `InMemoryAgentContext` for tests.
 - **Memory with compaction** — `Memory` keeps a rolling list of summarized `MemoryItem`s. When token pressure rises against the model's `context_length`, the oldest segment is summarized by the LLM into a `summary` and a fresh segment is opened.
+- **Persistent cross-session memory** — Root-level agents extract high-signal memories from idle persisted sessions, consolidate them into `MEMORY.md` and `memory_summary.md`, inject the compact summary into the system prompt, and expose bounded `memory_*` read/search tools.
 - **Toolset** — `ToolRegistration` + `Toolset` handle schema exposure, parallel dispatch, and per-tool timeouts. Every `T: ToolFunction` is auto-erased to `DynToolFunction` for heterogeneous storage.
 - **Built-in tools** — `attempt_complete`, `abort_task` (lifecycle), `bash` (subprocess with kill-on-drop and tail-truncated output).
 - **Lifecycle** — `AgentLifecycle` (IDLE / RUNNING / ABORTED) driven by built-in lifecycle tools, so agents self-terminate without external orchestration.
@@ -16,6 +17,25 @@ Uniform agent loop, memory management, tool dispatch, and multi-agent orchestrat
 - **Observation** — Optional `mpsc` event channel streams `AgentUiEvent`s (Thinking, LlmResponse, ToolCall, ToolResult, Requesting, Done, Error) to a TUI or logger.
 - **Snapshots** — `AgentSnapshotStorage` trait with a SQLite backend for persisting agent memory and status.
 - **Multi-agent `ProcessManager`** — Spawn, start, stop, restart, and inject messages into multiple agents as independent tokio tasks; aggregates all per-agent events into one `broadcast::Receiver<ProcessEvent>` stream with exit status (`Completed` / `Error` / `Panicked` / `Cancelled` / `Stopped`).
+
+## Persistent memory
+
+The runtime maintains a global memory workspace (default: `~/.autonomics/memories`)
+separate from per-session compaction. On startup, a root-level agent runs the
+Codex-style two-phase pipeline:
+
+1. Phase 1 claims idle persisted sessions in the agent database, extracts a
+   structured `raw_memory`, rollout summary, and slug, redacts obvious secret
+   lines, and records a source hash so unchanged sessions are skipped.
+2. Phase 2 takes the singleton global consolidation lock, syncs bounded stage-1
+   records into `raw_memories.md` and `rollout_summaries/`, merges those inputs
+   with existing memory artifacts and ad-hoc user update notes, then writes
+   `MEMORY.md` and the `v1`-prefixed `memory_summary.md`.
+
+All agents can search or read memory through dedicated tools; only the compact
+summary is automatically prompt-loaded. Set `AUTONOMICS_MEMORY_DIR`,
+`AUTONOMICS_USE_MEMORY`, and `AUTONOMICS_GENERATE_MEMORY` to override the
+runtime defaults.
 
 ## Proc macros (`agentik-proc`)
 
