@@ -141,6 +141,7 @@ fn format_content(
 async fn search_file(
     op: &opendal::Operator,
     entry_path: &str,
+    display_path: &str,
     re: &Regex,
     output_mode: GrepOutputMode,
     before: usize,
@@ -186,7 +187,7 @@ async fn search_file(
 
     let output_lines = match output_mode {
         GrepOutputMode::Content => {
-            format_content(&lines, &match_indices, entry_path, before, after)
+            format_content(&lines, &match_indices, display_path, before, after)
         }
         // Other modes don't need per-line output.
         _ => Vec::new(),
@@ -194,7 +195,7 @@ async fn search_file(
 
     (
         Some(FileResult {
-            path: entry_path.to_string(),
+            path: display_path.to_string(),
             match_count: match_indices.len(),
             output_lines,
         }),
@@ -269,7 +270,7 @@ fn format_grep_result(
 /// - `case_insensitive`: `Some(true)` = always, `Some(false)` = never,
 ///   `None` = smart-case (auto-insensitive when pattern is all-lowercase)
 pub async fn op_grep(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     pattern: Option<&str>,
     glob_filter: Option<&str>,
@@ -280,11 +281,13 @@ pub async fn op_grep(
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let pattern = pattern.ok_or("missing 'pattern' for grep")?;
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
     // Verify the search root exists.
     // Without this, OpenDAL's recursive lister on a missing path returns
     // an empty stream and the op would silently report "(no matches)".
-    let meta = match op.stat(&vpath).await {
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -321,7 +324,8 @@ pub async fn op_grep(
             }
         }
         let (fr, scanned, skipped) = search_file(
-            op,
+            &op,
+            &remote,
             &vpath,
             &re,
             output_mode,
@@ -346,7 +350,7 @@ pub async fn op_grep(
 
     // ── Directory grep ──
     let mut lister = op
-        .lister_with(&vpath)
+        .lister_with(&remote)
         .recursive(true)
         .await
         .map_err(|e| e.to_string())?;
@@ -365,6 +369,7 @@ pub async fn op_grep(
         }
 
         let entry_path = entry.path().to_string();
+        let display_path = storage.remap_entry_to_virtual(&vpath, &entry_path);
 
         // Apply glob filename filter.
         if let Some(ref gp) = glob_pat {
@@ -375,8 +380,9 @@ pub async fn op_grep(
         }
 
         let (fr, scanned, skipped) = search_file(
-            op,
+            &op,
             &entry_path,
+            &display_path,
             &re,
             output_mode,
             before,
@@ -418,24 +424,26 @@ pub async fn op_grep(
 /// Uses OpenDAL lister to enumerate, then matches each entry path
 /// against the user-supplied pattern via the `glob` crate.
 pub async fn op_glob(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     pattern: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let pattern = pattern.ok_or("missing 'pattern' for glob")?;
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
     // Build a glob pattern. We match against the path relative to the
     // search root so that `**/*.rs` works regardless of where we root.
     let pat = glob::Pattern::new(pattern).map_err(|e| format!("Invalid glob pattern: {e}"))?;
 
     let mut lister = op
-        .lister_with(&vpath)
+        .lister_with(&remote)
         .recursive(true)
         .await
         .map_err(|e| e.to_string())?;
 
-    let prefix = vpath.trim_end_matches('/');
+    let prefix = remote.trim_end_matches('/');
     let mut matches: Vec<String> = Vec::new();
 
     while let Some(entry) = lister.next().await {
@@ -447,9 +455,15 @@ pub async fn op_glob(
         let p = entry.path().to_string();
         // Strip the search prefix so the pattern matches relative paths.
         let rel = p.strip_prefix(prefix).unwrap_or(&p).trim_start_matches('/');
+        let display = storage.remap_entry_to_virtual(&vpath, &p);
 
-        if pat.matches(rel) || pat.matches(&p) {
-            matches.push(format!("/{p}"));
+        if pat.matches(rel) || pat.matches(&display) {
+            let rendered = if display.starts_with('/') {
+                display
+            } else {
+                format!("/{display}")
+            };
+            matches.push(rendered);
             if matches.len() >= GLOB_MAX_RESULTS {
                 break;
             }
@@ -477,12 +491,16 @@ mod tests {
     use agentik_sdk::types::ToolResultContent;
     use std::sync::Arc;
 
-    fn make_op() -> opendal::Operator {
-        Arc::new(OpendalFileStorage::new_temp()).op.clone()
+    fn make_op() -> Arc<OpendalFileStorage> {
+        Arc::new(OpendalFileStorage::new_temp())
     }
 
-    async fn write_file(op: &opendal::Operator, path: &str, content: &str) {
-        op.write(path, content.to_string()).await.unwrap();
+    async fn write_file(storage: &OpendalFileStorage, path: &str, content: &str) {
+        storage
+            .resolve(path)
+            .write(path, content.to_string())
+            .await
+            .unwrap();
     }
 
     fn json_val(result: AgentToolResult) -> serde_json::Value {
@@ -495,21 +513,30 @@ mod tests {
     // ── test helpers for the new multi-parameter op_grep ──
 
     /// Basic grep: path + pattern only, all advanced options default.
-    async fn grep(op: &opendal::Operator, path: &str, pattern: &str) -> AgentToolResult {
-        op_grep(op, Some(path), Some(pattern), None, None, None, None, None)
-            .await
-            .unwrap()
+    async fn grep(storage: &OpendalFileStorage, path: &str, pattern: &str) -> AgentToolResult {
+        op_grep(
+            storage,
+            Some(path),
+            Some(pattern),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     /// Grep with a glob filter.
     async fn grep_glob(
-        op: &opendal::Operator,
+        storage: &OpendalFileStorage,
         path: &str,
         pattern: &str,
         glob: &str,
     ) -> AgentToolResult {
         op_grep(
-            op,
+            storage,
             Some(path),
             Some(pattern),
             Some(glob),
@@ -526,9 +553,9 @@ mod tests {
 
     #[tokio::test]
     async fn grep_nonexistent_directory_errors() {
-        let op = make_op();
+        let storage = make_op();
         let result = op_grep(
-            &op,
+            &storage,
             Some("/no_such_dir_xyz"),
             Some("anything"),
             None,
@@ -549,10 +576,10 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_finds_matches() {
-        let op = make_op();
-        write_file(&op, "a.txt", "hello world\nfoo bar\nnope\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "hello world\nfoo bar\nnope\n").await;
 
-        let result = grep(&op, "/a.txt", "hello").await;
+        let result = grep(&storage, "/a.txt", "hello").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("a.txt"));
@@ -564,10 +591,10 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_no_matches() {
-        let op = make_op();
-        write_file(&op, "a.txt", "hello\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "hello\n").await;
 
-        let result = grep(&op, "/a.txt", "zzz_absent").await;
+        let result = grep(&storage, "/a.txt", "zzz_absent").await;
         let json = json_val(result);
         assert_eq!(json["matches"].as_str().unwrap(), "(no matches)");
         assert_eq!(json["files_scanned"], 1);
@@ -575,20 +602,20 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_with_glob_filter_match() {
-        let op = make_op();
-        write_file(&op, "code.rs", "fn main() {}\n").await;
+        let storage = make_op();
+        write_file(&storage, "code.rs", "fn main() {}\n").await;
 
-        let result = grep_glob(&op, "/code.rs", "fn", "*.rs").await;
+        let result = grep_glob(&storage, "/code.rs", "fn", "*.rs").await;
         let json = json_val(result);
         assert!(json["matches"].as_str().unwrap().contains("fn main"));
     }
 
     #[tokio::test]
     async fn grep_single_file_with_glob_filter_no_match() {
-        let op = make_op();
-        write_file(&op, "code.rs", "fn main() {}\n").await;
+        let storage = make_op();
+        write_file(&storage, "code.rs", "fn main() {}\n").await;
 
-        let result = grep_glob(&op, "/code.rs", "fn", "*.txt").await;
+        let result = grep_glob(&storage, "/code.rs", "fn", "*.txt").await;
         let json = json_val(result);
         assert_eq!(json["matches"].as_str().unwrap(), "(no matches)");
         assert_eq!(json["files_scanned"], 0);
@@ -596,13 +623,13 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_allows_large_file() {
-        let op = make_op();
+        let storage = make_op();
         // 300 KB — exceeds the 256 KB directory-scan limit but is well
         // within the 2 GB single-file limit.
         let big = "target\n".repeat(50_000); // ~350 KB
-        write_file(&op, "big.txt", &big).await;
+        write_file(&storage, "big.txt", &big).await;
 
-        let result = grep(&op, "/big.txt", "target").await;
+        let result = grep(&storage, "/big.txt", "target").await;
         let json = json_val(result);
         // Single-file grep should read and search the file successfully.
         assert_eq!(json["files_scanned"], 1);
@@ -612,12 +639,14 @@ mod tests {
 
     #[tokio::test]
     async fn grep_single_file_skips_binary() {
-        let op = make_op();
-        op.write("blob.bin", b"\x00target\x00".to_vec())
+        let storage = make_op();
+        storage
+            .resolve("/")
+            .write("blob.bin", b"\x00target\x00".to_vec())
             .await
             .unwrap();
 
-        let result = grep(&op, "/blob.bin", "target").await;
+        let result = grep(&storage, "/blob.bin", "target").await;
         let json = json_val(result);
         assert_eq!(json["matches"].as_str().unwrap(), "(no matches)");
         assert_eq!(json["files_skipped"], 1);
@@ -626,11 +655,11 @@ mod tests {
 
     #[tokio::test]
     async fn grep_finds_matches() {
-        let op = make_op();
-        write_file(&op, "a.txt", "hello world\nfoo bar\n").await;
-        write_file(&op, "b.txt", "no match here\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "hello world\nfoo bar\n").await;
+        write_file(&storage, "b.txt", "no match here\n").await;
 
-        let result = grep(&op, "/", "hello").await;
+        let result = grep(&storage, "/", "hello").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("a.txt"));
@@ -640,11 +669,11 @@ mod tests {
 
     #[tokio::test]
     async fn grep_with_glob_filter() {
-        let op = make_op();
-        write_file(&op, "code.rs", "fn main() {}\n").await;
-        write_file(&op, "doc.md", "fn not_code()\n").await;
+        let storage = make_op();
+        write_file(&storage, "code.rs", "fn main() {}\n").await;
+        write_file(&storage, "doc.md", "fn not_code()\n").await;
 
-        let result = grep_glob(&op, "/", "fn", "*.rs").await;
+        let result = grep_glob(&storage, "/", "fn", "*.rs").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("code.rs"));
@@ -653,19 +682,19 @@ mod tests {
 
     #[tokio::test]
     async fn grep_no_matches() {
-        let op = make_op();
-        write_file(&op, "x.txt", "nothing interesting\n").await;
+        let storage = make_op();
+        write_file(&storage, "x.txt", "nothing interesting\n").await;
 
-        let result = grep(&op, "/", "zzz_absent").await;
+        let result = grep(&storage, "/", "zzz_absent").await;
         let json = json_val(result);
         assert_eq!(json["matches"].as_str().unwrap(), "(no matches)");
     }
 
     #[tokio::test]
     async fn grep_invalid_regex() {
-        let op = make_op();
+        let storage = make_op();
         let result = op_grep(
-            &op,
+            &storage,
             Some("/"),
             Some("[unclosed"),
             None,
@@ -680,12 +709,12 @@ mod tests {
 
     #[tokio::test]
     async fn glob_finds_files() {
-        let op = make_op();
-        write_file(&op, "src/main.rs", "").await;
-        write_file(&op, "src/util.rs", "").await;
-        write_file(&op, "README.md", "").await;
+        let storage = make_op();
+        write_file(&storage, "src/main.rs", "").await;
+        write_file(&storage, "src/util.rs", "").await;
+        write_file(&storage, "README.md", "").await;
 
-        let result = op_glob(&op, Some("/"), Some("**/*.rs")).await.unwrap();
+        let result = op_glob(&storage, Some("/"), Some("**/*.rs")).await.unwrap();
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("main.rs"));
@@ -695,22 +724,22 @@ mod tests {
 
     #[tokio::test]
     async fn glob_no_matches() {
-        let op = make_op();
-        write_file(&op, "a.txt", "").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "").await;
 
-        let result = op_glob(&op, Some("/"), Some("*.xyz")).await.unwrap();
+        let result = op_glob(&storage, Some("/"), Some("*.xyz")).await.unwrap();
         let json = json_val(result);
         assert_eq!(json["matches"].as_str().unwrap(), "(no matches)");
     }
 
     #[tokio::test]
     async fn grep_skips_large_file() {
-        let op = make_op();
+        let storage = make_op();
         let big = "x".repeat(300_000);
-        write_file(&op, "big.txt", &big).await;
-        write_file(&op, "small.txt", "target line\n").await;
+        write_file(&storage, "big.txt", &big).await;
+        write_file(&storage, "small.txt", "target line\n").await;
 
-        let result = grep(&op, "/", "target").await;
+        let result = grep(&storage, "/", "target").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("small.txt"));
@@ -719,13 +748,15 @@ mod tests {
 
     #[tokio::test]
     async fn grep_skips_binary_file() {
-        let op = make_op();
-        op.write("blob.bin", b"\x00target\x00".to_vec())
+        let storage = make_op();
+        storage
+            .resolve("/")
+            .write("blob.bin", b"\x00target\x00".to_vec())
             .await
             .unwrap();
-        write_file(&op, "real.txt", "target line\n").await;
+        write_file(&storage, "real.txt", "target line\n").await;
 
-        let result = grep(&op, "/", "target").await;
+        let result = grep(&storage, "/", "target").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("real.txt"));
@@ -737,13 +768,13 @@ mod tests {
 
     #[tokio::test]
     async fn output_mode_files_with_matches() {
-        let op = make_op();
-        write_file(&op, "a.rs", "match here\nnope\nmatch again\n").await;
-        write_file(&op, "b.rs", "match too\n").await;
-        write_file(&op, "c.txt", "nothing\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.rs", "match here\nnope\nmatch again\n").await;
+        write_file(&storage, "b.rs", "match too\n").await;
+        write_file(&storage, "c.txt", "nothing\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/"),
             Some("match"),
             None,
@@ -766,13 +797,13 @@ mod tests {
 
     #[tokio::test]
     async fn output_mode_count() {
-        let op = make_op();
-        write_file(&op, "a.rs", "target\nx\ntarget\ntarget\n").await;
-        write_file(&op, "b.rs", "target\n").await;
-        write_file(&op, "c.txt", "nope\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.rs", "target\nx\ntarget\ntarget\n").await;
+        write_file(&storage, "b.rs", "target\n").await;
+        write_file(&storage, "c.txt", "nope\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/"),
             Some("target"),
             None,
@@ -794,11 +825,11 @@ mod tests {
 
     #[tokio::test]
     async fn output_mode_content_is_default() {
-        let op = make_op();
-        write_file(&op, "a.txt", "hello\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "hello\n").await;
 
         // No output_mode → defaults to content.
-        let result = grep(&op, "/", "hello").await;
+        let result = grep(&storage, "/", "hello").await;
         let json = json_val(result);
         let matches = json["matches"].as_str().unwrap();
         assert!(matches.contains("hello"));
@@ -808,10 +839,10 @@ mod tests {
 
     #[tokio::test]
     async fn output_mode_invalid_errors() {
-        let op = make_op();
-        write_file(&op, "a.txt", "hello\n").await;
+        let storage = make_op();
+        write_file(&storage, "a.txt", "hello\n").await;
         let result = op_grep(
-            &op,
+            &storage,
             Some("/"),
             Some("hello"),
             None,
@@ -828,11 +859,11 @@ mod tests {
 
     #[tokio::test]
     async fn context_after_shows_following_lines() {
-        let op = make_op();
-        write_file(&op, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
+        let storage = make_op();
+        write_file(&storage, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/code.rs"),
             Some("MATCH"),
             None,
@@ -857,11 +888,11 @@ mod tests {
 
     #[tokio::test]
     async fn context_before_shows_preceding_lines() {
-        let op = make_op();
-        write_file(&op, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
+        let storage = make_op();
+        write_file(&storage, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/code.rs"),
             Some("MATCH"),
             None,
@@ -884,11 +915,11 @@ mod tests {
 
     #[tokio::test]
     async fn context_both_before_and_after() {
-        let op = make_op();
-        write_file(&op, "f.txt", "a\nb\nMATCH\nc\nd\n").await;
+        let storage = make_op();
+        write_file(&storage, "f.txt", "a\nb\nMATCH\nc\nd\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("MATCH"),
             None,
@@ -911,12 +942,12 @@ mod tests {
 
     #[tokio::test]
     async fn context_separator_between_noncontiguous_groups() {
-        let op = make_op();
+        let storage = make_op();
         // Two matches far apart, with before=1 after=1.
-        write_file(&op, "f.txt", "M1\nx\nx\nx\nx\nx\nM2\n").await;
+        write_file(&storage, "f.txt", "M1\nx\nx\nx\nx\nx\nM2\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("M[12]"),
             None,
@@ -941,13 +972,13 @@ mod tests {
 
     #[tokio::test]
     async fn context_overlapping_windows_merge() {
-        let op = make_op();
+        let storage = make_op();
         // Two matches only 2 lines apart — with before=2, after=2
         // their context windows overlap and should merge into one group.
-        write_file(&op, "f.txt", "a\nb\nM1\nc\nM2\nd\n").await;
+        write_file(&storage, "f.txt", "a\nb\nM1\nc\nM2\nd\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("M[12]"),
             None,
@@ -972,12 +1003,12 @@ mod tests {
 
     #[tokio::test]
     async fn context_at_file_boundaries() {
-        let op = make_op();
+        let storage = make_op();
         // Match at first and last lines — context should clamp.
-        write_file(&op, "f.txt", "M1\nb\nc\nd\nM2\n").await;
+        write_file(&storage, "f.txt", "M1\nb\nc\nd\nM2\n").await;
 
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("M[12]"),
             None,
@@ -999,12 +1030,12 @@ mod tests {
 
     #[tokio::test]
     async fn context_only_affects_content_mode() {
-        let op = make_op();
-        write_file(&op, "data.rs", "alpha\nMATCH\nbeta\n").await;
+        let storage = make_op();
+        write_file(&storage, "data.rs", "alpha\nMATCH\nbeta\n").await;
 
         // files_with_matches + context → context is ignored.
         let result = op_grep(
-            &op,
+            &storage,
             Some("/data.rs"),
             Some("MATCH"),
             None,
@@ -1027,12 +1058,12 @@ mod tests {
 
     #[tokio::test]
     async fn smart_case_all_lowercase_matches_case_insensitive() {
-        let op = make_op();
-        write_file(&op, "f.txt", "Hello World\nHELLO\nhello\n").await;
+        let storage = make_op();
+        write_file(&storage, "f.txt", "Hello World\nHELLO\nhello\n").await;
 
         // Pattern is all-lowercase → smart-case makes it insensitive.
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("hello"),
             None,
@@ -1053,12 +1084,12 @@ mod tests {
 
     #[tokio::test]
     async fn smart_case_pattern_with_uppercase_is_case_sensitive() {
-        let op = make_op();
-        write_file(&op, "f.txt", "Hello\nhello\nHELLO\n").await;
+        let storage = make_op();
+        write_file(&storage, "f.txt", "Hello\nhello\nHELLO\n").await;
 
         // Pattern has uppercase 'H' → smart-case keeps it sensitive.
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("Hello"),
             None,
@@ -1079,12 +1110,12 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_case_insensitive_true() {
-        let op = make_op();
-        write_file(&op, "f.txt", "Foo\nfoo\nFOO\n").await;
+        let storage = make_op();
+        write_file(&storage, "f.txt", "Foo\nfoo\nFOO\n").await;
 
         // Explicit case_insensitive=true overrides smart-case.
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("Foo"),
             None,
@@ -1105,13 +1136,13 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_case_sensitive_false() {
-        let op = make_op();
-        write_file(&op, "f.txt", "Foo\nfoo\nFOO\n").await;
+        let storage = make_op();
+        write_file(&storage, "f.txt", "Foo\nfoo\nFOO\n").await;
 
         // Explicit case_insensitive=false forces sensitive even for
         // all-lowercase patterns.
         let result = op_grep(
-            &op,
+            &storage,
             Some("/f.txt"),
             Some("foo"),
             None,

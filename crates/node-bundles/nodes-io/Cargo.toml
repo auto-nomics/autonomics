@@ -30,6 +30,7 @@ datafusion.workspace = true
 [dev-dependencies]
 tokio = { workspace = true }
 arrow-buffer.workspace = true
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

@@ -50,13 +50,15 @@ const BINARY_CONTROL_RATIO: f32 = 0.30;
 
 /// `read` — rich read with line numbers (text), base64 (image), or formatted (notebook).
 pub async fn op_read(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "read")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
     let ext = std::path::Path::new(raw_path)
         .extension()
@@ -65,25 +67,27 @@ pub async fn op_read(
         .unwrap_or_default();
 
     if ext == "ipynb" {
-        return read_notebook(op, &vpath, raw_path).await;
+        return read_notebook(&op, &remote, raw_path).await;
     }
     if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-        return read_image(op, &vpath, raw_path, &ext).await;
+        return read_image(&op, &remote, raw_path, &ext).await;
     }
-    read_text_numbered(op, &vpath, raw_path, offset, limit).await
+    read_text_numbered(&op, &remote, raw_path, offset, limit).await
 }
 
 /// `cat` — plain text read, no line numbers, no special formatting.
 pub async fn op_cat(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "cat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let meta = match op.stat(&vpath).await {
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -106,7 +110,7 @@ pub async fn op_cat(
         })));
     }
 
-    let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
+    let buf = op.read(&remote).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
     if is_binary(&bytes) {
         return Ok(binary_refused(raw_path, bytes.len() as u64));
@@ -139,7 +143,7 @@ pub async fn op_cat(
 /// `limit`. Mirrors `cat` / `read` semantics so the three ops stay
 /// interchangeable for paging through a file.
 pub async fn op_head(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -148,8 +152,10 @@ pub async fn op_head(
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
     let start = offset.unwrap_or(1).saturating_sub(1);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let meta = match op.stat(&vpath).await {
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -164,7 +170,7 @@ pub async fn op_head(
         )));
     }
 
-    let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
+    let buf = op.read(&remote).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
     if is_binary(&bytes) {
         return Ok(binary_refused(raw_path, bytes.len() as u64));
@@ -192,7 +198,7 @@ pub async fn op_head(
 /// response sets `offset_ignored: true` so the caller can detect the
 /// mismatch and switch to `cat` / `read` if they meant to page.
 pub async fn op_tail(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -200,8 +206,10 @@ pub async fn op_tail(
     let raw_path = require_path(path, "tail")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let meta = match op.stat(&vpath).await {
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -216,7 +224,7 @@ pub async fn op_tail(
         )));
     }
 
-    let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
+    let buf = op.read(&remote).await.map_err(|e| e.to_string())?;
     let bytes = buf.to_vec();
     if is_binary(&bytes) {
         return Ok(binary_refused(raw_path, bytes.len() as u64));
@@ -252,18 +260,23 @@ pub async fn op_tail(
 /// final-consistency window where a freshly written file is not yet
 /// visible to a follow-up stat.
 pub async fn op_write(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     content: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "write")?;
     let content = content.unwrap_or("").to_string();
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(e) = storage.check_writable(&vpath) {
+        return Ok(AgentToolResult::error(format!("write: {raw_path}: {e}")));
+    }
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
     let size = content.len() as u64;
 
     // Atomic-replace path: drop any existing entry first so the Fs
     // backend's overwrite path cannot race with its size bookkeeping.
-    if let Err(e) = op.delete(&vpath).await {
+    if let Err(e) = op.delete(&remote).await {
         if !matches!(e.kind(), opendal::ErrorKind::NotFound) {
             return Ok(AgentToolResult::error(format!(
                 "write: failed to clear {raw_path}: {e}"
@@ -271,7 +284,7 @@ pub async fn op_write(
         }
     }
 
-    op.write(&vpath, content.into_bytes())
+    op.write(&remote, content.into_bytes())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -279,7 +292,7 @@ pub async fn op_write(
     // NotFound on the stat that immediately follows a write in the same
     // process. Retry a handful of times before declaring a real failure.
     for attempt in 0..5 {
-        if op.stat(&vpath).await.is_ok() {
+        if op.stat(&remote).await.is_ok() {
             return Ok(AgentToolResult::success_json(serde_json::json!({
                 "path": raw_path,
                 "size": size,
@@ -307,7 +320,7 @@ pub async fn op_write(
 /// All error paths return `Ok(ToolResult::error(...))` (never `Err`) so the
 /// LLM always receives a structured result.
 pub async fn op_edit(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     old_string: Option<&str>,
     new_string: Option<&str>,
@@ -333,9 +346,11 @@ pub async fn op_edit(
     }
 
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
     // Read current content.
-    let buf = match op.read(&vpath).await {
+    let buf = match op.read(&remote).await {
         Ok(b) => b,
         Err(e) => {
             return Ok(AgentToolResult::error(format!(
@@ -367,7 +382,7 @@ pub async fn op_edit(
             count,
             fuzzy,
         } => {
-            if let Err(e) = op.write(&vpath, new_content.into_bytes()).await {
+            if let Err(e) = op.write(&remote, new_content.into_bytes()).await {
                 return Ok(AgentToolResult::error(format!(
                     "Failed to write {raw_path}: {e}"
                 )));
@@ -397,7 +412,7 @@ pub async fn op_edit(
 /// All error paths return `Ok(ToolResult::error(...))` so the LLM always
 /// receives a structured result.
 pub async fn op_patch(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     patch: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let patch_text = match patch {
@@ -426,7 +441,15 @@ pub async fn op_patch(
         match hunk {
             apply_patch::Hunk::AddFile { path, contents } => {
                 let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
-                if let Err(e) = op.write(&vpath, contents.clone().into_bytes()).await {
+                if let Err(e) = storage.check_writable(&vpath) {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to write {}: {e}",
+                        path.display()
+                    )));
+                }
+                let op = storage.resolve(&vpath);
+                let remote = storage.resolve_path(&vpath);
+                if let Err(e) = op.write(&remote, contents.clone().into_bytes()).await {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to write {}: {e}",
                         path.display()
@@ -440,7 +463,15 @@ pub async fn op_patch(
 
             apply_patch::Hunk::DeleteFile { path } => {
                 let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
-                if let Err(e) = op.delete(&vpath).await {
+                if let Err(e) = storage.check_writable(&vpath) {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to delete {}: {e}",
+                        path.display()
+                    )));
+                }
+                let op = storage.resolve(&vpath);
+                let remote = storage.resolve_path(&vpath);
+                if let Err(e) = op.delete(&remote).await {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to delete {}: {e}",
                         path.display()
@@ -458,9 +489,11 @@ pub async fn op_patch(
                 chunks,
             } => {
                 let src_vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                let src_op = storage.resolve(&src_vpath);
+                let src_remote = storage.resolve_path(&src_vpath);
 
                 // Read original content.
-                let buf = match op.read(&src_vpath).await {
+                let buf = match src_op.read(&src_remote).await {
                     Ok(b) => b,
                     Err(e) => {
                         return Ok(AgentToolResult::error(format!(
@@ -496,18 +529,28 @@ pub async fn op_patch(
                     .unwrap_or_else(|| path.display().to_string());
 
                 let dest_vpath = OpendalFileStorage::normalize_path(&dest_display);
+                if let Err(e) = storage.check_writable(&dest_vpath) {
+                    return Ok(AgentToolResult::error(format!(
+                        "Failed to write {}: {e}",
+                        dest_display
+                    )));
+                }
+                let dest_op = storage.resolve(&dest_vpath);
+                let dest_remote = storage.resolve_path(&dest_vpath);
 
                 // Write result.
-                if let Err(e) = op.write(&dest_vpath, new_content.into_bytes()).await {
+                if let Err(e) = dest_op.write(&dest_remote, new_content.into_bytes()).await {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to write {}: {e}",
                         dest_display
                     )));
                 }
 
-                // Remove original on move.
+                // Remove original on move. The original lives on the
+                // source backend (it may differ from the destination's),
+                // so delete through the source operator + source key.
                 if move_path.is_some() {
-                    if let Err(e) = op.delete(&src_vpath).await {
+                    if let Err(e) = src_op.delete(&src_remote).await {
                         return Ok(AgentToolResult::error(format!(
                             "Failed to remove original {}: {e}",
                             path.display()
@@ -531,15 +574,20 @@ pub async fn op_patch(
 /// `touch` — create empty file if it doesn't exist; no-op if it does
 /// (OpenDAL cannot set mtime).
 pub async fn op_touch(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "touch")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(e) = storage.check_writable(&vpath) {
+        return Ok(AgentToolResult::error(format!("touch: {raw_path}: {e}")));
+    }
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let exists = op.stat(&vpath).await.is_ok();
+    let exists = op.stat(&remote).await.is_ok();
     if !exists {
-        op.write(&vpath, "").await.map_err(|e| e.to_string())?;
+        op.write(&remote, "").await.map_err(|e| e.to_string())?;
     }
 
     Ok(AgentToolResult::success_json(serde_json::json!({
@@ -563,92 +611,300 @@ const DEFAULT_LS_LIMIT: usize = 200;
 /// includes a `truncated` flag and a `next_offset` hint so the caller can
 /// continue listing when more entries remain.
 pub async fn op_ls(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     recursive: Option<bool>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
-    // Match Unix `ls` (non-recursive by default); pass recursive=true
-    // for the previous recursive listing behaviour.
     let recursive = recursive.unwrap_or(false);
-    // Treat 0 as "no explicit limit" — the field is optional in the schema
-    // and some callers default-empty rather than omitting it.
     let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
     let skip = offset.unwrap_or(0);
 
-    let mut lister = if recursive {
-        op.lister_with(&vpath).recursive(true).await
-    } else {
-        // Fs backend needs trailing '/' for non-recursive listing
-        let scan = if vpath.ends_with('/') {
-            vpath.clone()
-        } else {
-            format!("{vpath}/")
-        };
-        op.lister_with(&scan).recursive(false).await
-    }
-    .map_err(|e| e.to_string())?;
-
-    // OpenDAL's Fs backend yields the scan root itself as the first entry
-    // (e.g. listing "/" includes "/" as a directory entry). We strip the
-    // trailing slash for comparison so it matches both "/" and "/sub/".
-    let scan_root = vpath.trim_end_matches('/').to_string();
-
+    // ── Composite listing helper ──
+    //
+    // We collect entries from (a) the default-fs backend (after
+    // dispatching through the mount table to find the covering mount
+    // if any), and (b) any direct-child mount points, into a single
+    // deduped, sorted, paginated list.
+    //
+    // The list returned has the form Vec<serde_json::Value> with one
+    // entry per `name`, `is_dir`, `size`.
     let mut items: Vec<serde_json::Value> = Vec::with_capacity(max.min(1024));
-    // Track the index of the current entry across the whole stream so we
-    // can implement offset pagination.
-    let mut idx = 0usize;
     let mut truncated = false;
 
-    while let Some(entry) = lister.next().await {
-        let entry = entry.map_err(|e| e.to_string())?;
+    let mount = storage.mounts.as_ref().and_then(|m| {
+        use datafusion::object_store::path::Path as DsPath;
+        let ds = DsPath::parse(&vpath).ok()?;
+        m.handle_for(&ds)
+    });
+    let child_mounts: Vec<String> = storage
+        .mounts
+        .as_ref()
+        .map(|m| {
+            use datafusion::object_store::path::Path as DsPath;
+            m.mount_paths()
+                .into_iter()
+                .filter(|p| {
+                    // Strict direct-child mount only.
+                    if let Ok(ds) = DsPath::parse(p) {
+                        if let Some(parent) = ds.parent() {
+                            let parent_str = parent.as_ref();
+                            let vp_trim = vpath.trim_end_matches('/');
+                            return parent_str == vp_trim
+                                || (vp_trim == "/" && !parent_str.is_empty());
+                        }
+                    }
+                    false
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
-        // Skip the scan-root self-entry (see comment above).
-        let entry_path_raw = entry.path().to_string();
-        if entry.metadata().is_dir() && entry_path_raw.trim_end_matches('/') == scan_root {
-            continue;
-        }
-
-        idx += 1;
-
-        // Skip entries before the requested offset.
-        if idx <= skip {
-            continue;
-        }
-
-        // Stop once we have filled the page. We still report `truncated`
-        // because this entry existed and was refused — there is at least
-        // one more entry beyond the current page.
-        if items.len() >= max {
-            truncated = true;
-            break;
-        }
-
-        let entry_path = entry.path().to_string();
-        let meta = entry.metadata();
-        let is_dir = meta.is_dir();
-        let size = if is_dir {
-            0
+    // ── Case 1: recursive — use ObjectStore-style stream via opendal ──
+    if recursive {
+        // For recursive listing we walk the path on the resolved
+        // operator (single backend), then append child mounts' contents.
+        let op = storage.resolve(&vpath);
+        let remote = storage.resolve_path(&vpath);
+        let scan = if remote.is_empty() {
+            "/".to_string()
+        } else if remote.ends_with('/') {
+            remote.clone()
         } else {
-            op.stat(&entry_path)
-                .await
-                .ok()
-                .map(|m| m.content_length())
-                .unwrap_or(meta.content_length())
+            format!("{remote}/")
         };
-        items.push(serde_json::json!({
-            "name": entry_path,
-            "is_dir": is_dir,
-            "size": size,
-        }));
-    }
+        let mut lister = op
+            .lister_with(&scan)
+            .recursive(true)
+            .await
+            .map_err(|e| e.to_string())?;
+        let scan_root = remote.trim_end_matches('/').to_string();
+        let mut idx = 0usize;
+        while let Some(entry) = lister.next().await {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let entry_path = entry.path().to_string();
+            // Remap the backend-local entry back into the virtual
+            // namespace for display and shadow checks.
+            let display = storage.remap_entry_to_virtual(&vpath, &entry_path);
+            // Skip the scan-root self-entry.
+            if entry.metadata().is_dir() && entry_path.trim_end_matches('/') == scan_root {
+                continue;
+            }
+            // Skip entries shadowed by a child mount.
+            let trimmed = display.trim_end_matches('/');
+            if child_mounts
+                .iter()
+                .any(|m| m.trim_end_matches('/') == trimmed)
+            {
+                continue;
+            }
+            idx += 1;
+            if idx <= skip {
+                continue;
+            }
+            if items.len() >= max {
+                truncated = true;
+                break;
+            }
+            let meta = entry.metadata();
+            let is_dir = meta.is_dir();
+            let size = if is_dir { 0 } else { meta.content_length() };
+            items.push(serde_json::json!({
+                "name": display,
+                "is_dir": is_dir,
+                "size": size,
+            }));
+        }
 
-    // `truncated` is only set inside the loop when an entry was refused
-    // after the page was already full. If the stream ended naturally with
-    // exactly `max` entries, `truncated` stays false — that is the
-    // non-truncated boundary case.
+        // If we still have room, append each child mount's contents.
+        if !truncated {
+            for mp in &child_mounts {
+                if let Some(mounts) = &storage.mounts {
+                    use datafusion::object_store::path::Path as DsPath;
+                    if let Ok(ds) = DsPath::parse(mp) {
+                        if let Some(h) = mounts.handle_for(&ds) {
+                            let child_op = (*h.backend_op).clone();
+                            let child_remote = storage.resolve_path(mp);
+                            let child_scan = if child_remote.is_empty() {
+                                "/".to_string()
+                            } else {
+                                child_remote
+                            };
+                            let mut ml =
+                                match child_op.lister_with(&child_scan).recursive(true).await {
+                                    Ok(l) => l,
+                                    Err(_) => continue,
+                                };
+                            while let Some(entry) = ml.next().await {
+                                if let Ok(entry) = entry {
+                                    idx += 1;
+                                    if idx <= skip {
+                                        continue;
+                                    }
+                                    if items.len() >= max {
+                                        truncated = true;
+                                        break;
+                                    }
+                                    let meta = entry.metadata();
+                                    let entry_path = entry.path().to_string();
+                                    let display = storage.remap_entry_to_virtual(mp, &entry_path);
+                                    let is_dir = meta.is_dir();
+                                    let size = if is_dir { 0 } else { meta.content_length() };
+                                    items.push(serde_json::json!({
+                                        "name": display,
+                                        "is_dir": is_dir,
+                                        "size": size,
+                                    }));
+                                }
+                            }
+                            if truncated {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // ── Case 2: non-recursive — list children of `vpath` ──
+        // If a single mount covers vpath entirely, list inside it.
+        if let Some(handle) = mount {
+            let op = (*handle.backend_op).clone();
+            let scan_remote = storage.resolve_path(&vpath);
+            let scan_remote_cmp = scan_remote.clone();
+            let scan = if scan_remote.ends_with('/') || scan_remote.is_empty() {
+                if scan_remote.is_empty() {
+                    "/".to_string()
+                } else {
+                    scan_remote
+                }
+            } else {
+                format!("{scan_remote}/")
+            };
+            let mut lister = op
+                .lister_with(&scan)
+                .recursive(false)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut idx = 0usize;
+            while let Some(entry) = lister.next().await {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let entry_path_raw = entry.path().to_string();
+                if entry.metadata().is_dir()
+                    && entry_path_raw.trim_end_matches('/') == scan_remote_cmp.trim_end_matches('/')
+                {
+                    continue;
+                }
+                idx += 1;
+                if idx <= skip {
+                    continue;
+                }
+                if items.len() >= max {
+                    truncated = true;
+                    break;
+                }
+                let meta = entry.metadata();
+                let is_dir = meta.is_dir();
+                let size = if is_dir { 0 } else { meta.content_length() };
+                // Remap to virtual form (strip the mount's backend
+                // source prefix, re-attach the virtual prefix).
+                let display = storage.remap_entry_to_virtual(&vpath, &entry_path_raw);
+                items.push(serde_json::json!({
+                    "name": display,
+                    "is_dir": is_dir,
+                    "size": size,
+                }));
+            }
+            // Append direct-child mount synthetic entries. This is the
+            // "root mount" case where the path equals the mount's
+            // virtual prefix — we want the listing to also surface
+            // sibling mounts at the same level.
+            if !truncated && handle.definition.path == vpath {
+                for mp in &child_mounts {
+                    idx += 1;
+                    if idx <= skip {
+                        continue;
+                    }
+                    if items.len() >= max {
+                        truncated = true;
+                        break;
+                    }
+                    items.push(serde_json::json!({
+                        "name": mp,
+                        "is_dir": true,
+                        "size": 0,
+                    }));
+                }
+            }
+        } else {
+            // Default-fs non-recursive + synthetic direct-child mounts.
+            let op = storage.resolve(&vpath);
+            let scan = if vpath.ends_with('/') {
+                vpath.clone()
+            } else {
+                format!("{vpath}/")
+            };
+            let mut lister = op
+                .lister_with(&scan)
+                .recursive(false)
+                .await
+                .map_err(|e| e.to_string())?;
+            let scan_root = vpath.trim_end_matches('/').to_string();
+            let mut idx = 0usize;
+            while let Some(entry) = lister.next().await {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let entry_path_raw = entry.path().to_string();
+                let trimmed = entry_path_raw.trim_end_matches('/').to_string();
+                // Skip default-fs directories that are shadowed by mounts.
+                if entry.metadata().is_dir()
+                    && child_mounts
+                        .iter()
+                        .any(|m| m.trim_end_matches('/') == trimmed)
+                {
+                    continue;
+                }
+                if entry.metadata().is_dir() && trimmed == scan_root {
+                    continue;
+                }
+                idx += 1;
+                if idx <= skip {
+                    continue;
+                }
+                if items.len() >= max {
+                    truncated = true;
+                    break;
+                }
+                let meta = entry.metadata();
+                let is_dir = meta.is_dir();
+                let size = if is_dir { 0 } else { meta.content_length() };
+                items.push(serde_json::json!({
+                    "name": entry_path_raw,
+                    "is_dir": is_dir,
+                    "size": size,
+                }));
+            }
+            // Inject child mount points as synthetic directory entries.
+            if !truncated {
+                for mp in &child_mounts {
+                    idx += 1;
+                    if idx <= skip {
+                        continue;
+                    }
+                    if items.len() >= max {
+                        truncated = true;
+                        break;
+                    }
+                    items.push(serde_json::json!({
+                        "name": mp,
+                        "is_dir": true,
+                        "size": 0,
+                    }));
+                }
+            }
+        }
+    }
 
     let returned = items.len();
     let next_offset = if truncated {
@@ -656,7 +912,6 @@ pub async fn op_ls(
     } else {
         None
     };
-
     let mut payload = serde_json::json!({
         "path": vpath,
         "entries": items,
@@ -666,18 +921,19 @@ pub async fn op_ls(
     if let Some(no) = next_offset {
         payload["next_offset"] = serde_json::json!(no);
     }
-
     Ok(AgentToolResult::success_json(payload))
 }
 
 /// `stat` — file metadata.
 pub async fn op_stat(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "stat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
-    let meta = match op.stat(&vpath).await {
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(_) => {
             return Ok(AgentToolResult::error(format!(
@@ -696,17 +952,24 @@ pub async fn op_stat(
 
 /// `mkdir` — create a directory.
 pub async fn op_mkdir(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "mkdir")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(e) = storage.check_writable(&vpath) {
+        return Ok(AgentToolResult::error(format!("mkdir: {raw_path}: {e}")));
+    }
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
     // OpenDAL Fs backend requires a trailing '/' for directory creation.
-    let dir_path = if vpath.ends_with('/') {
-        vpath.clone()
+    let dir_path = if remote.is_empty() {
+        "/".to_string()
+    } else if remote.ends_with('/') {
+        remote
     } else {
-        format!("{vpath}/")
+        format!("{remote}/")
     };
 
     op.create_dir(&dir_path).await.map_err(|e| e.to_string())?;
@@ -725,7 +988,7 @@ pub async fn op_mkdir(
 /// - Non-empty directories are refused unless `recursive=true` is passed;
 ///   empty directories can be removed without the flag.
 pub async fn op_rm(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     recursive: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
@@ -738,8 +1001,13 @@ pub async fn op_rm(
              Use a sub-path like '/tmp' instead.",
         ));
     }
+    if let Err(e) = storage.check_writable(&vpath) {
+        return Ok(AgentToolResult::error(format!("rm: {raw_path}: {e}")));
+    }
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let meta = match op.stat(&vpath).await {
+    let meta = match op.stat(&remote).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -755,7 +1023,7 @@ pub async fn op_rm(
         // Empty-directory removal: succeeds only if the directory has no
         // entries. Non-empty directories are explicitly refused here so
         // the caller sees a clear message instead of a silent wipe.
-        return match op.delete(&vpath).await {
+        return match op.delete(&remote).await {
             Ok(()) => Ok(AgentToolResult::success_json(serde_json::json!({
                 "path": raw_path,
                 "deleted": true,
@@ -768,7 +1036,7 @@ pub async fn op_rm(
         };
     }
 
-    op.delete_with(&vpath)
+    op.delete_with(&remote)
         .recursive(recursive_flag)
         .await
         .map_err(|e| e.to_string())?;
@@ -780,9 +1048,33 @@ pub async fn op_rm(
     })))
 }
 
+/// `mount_list` — list every mount defined for this VFS.
+///
+/// Returns the full mount manifest (path / backend / source /
+/// read_only) so the agent can introspect the available
+/// mount points without needing them listed in the system prompt.
+pub async fn op_mount_list(storage: &OpendalFileStorage) -> Result<AgentToolResult, ToolError> {
+    let mounts: Vec<serde_json::Value> = storage
+        .mount_definitions()
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "path": d.path,
+                "backend": d.backend,
+                "source": d.source,
+                "read_only": d.read_only,
+            })
+        })
+        .collect();
+    Ok(AgentToolResult::success_json(serde_json::json!({
+        "mounts": mounts,
+        "count": mounts.len(),
+    })))
+}
+
 /// `cp` — copy a file.
 pub async fn op_cp(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     src: Option<&str>,
     dst: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
@@ -790,8 +1082,27 @@ pub async fn op_cp(
     let raw_dst = require_named_path(dst, "dst", "cp")?;
     let vsrc = OpendalFileStorage::normalize_path(raw_src);
     let vdst = OpendalFileStorage::normalize_path(raw_dst);
-
-    op.copy(&vsrc, &vdst).await.map_err(|e| e.to_string())?;
+    if let Err(e) = storage.check_writable(&vdst) {
+        return Ok(AgentToolResult::error(format!("cp: {raw_dst}: {e}")));
+    }
+    let src_op = storage.resolve(&vsrc);
+    let dst_op = storage.resolve(&vdst);
+    let src_remote = storage.resolve_path(&vsrc);
+    let dst_remote = storage.resolve_path(&vdst);
+    // OpenDAL copy is backend-internal. If src and dst resolve to
+    // different backends, fall back to read+write.
+    if !storage.same_backend(&vsrc, &vdst) {
+        let buf = src_op.read(&src_remote).await.map_err(|e| e.to_string())?;
+        dst_op
+            .write(&dst_remote, buf)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        src_op
+            .copy(&src_remote, &dst_remote)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "src": raw_src,
@@ -802,7 +1113,7 @@ pub async fn op_cp(
 
 /// `mv` — rename/move a file.
 pub async fn op_mv(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     src: Option<&str>,
     dst: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
@@ -810,8 +1121,32 @@ pub async fn op_mv(
     let raw_dst = require_named_path(dst, "dst", "mv")?;
     let vsrc = OpendalFileStorage::normalize_path(raw_src);
     let vdst = OpendalFileStorage::normalize_path(raw_dst);
-
-    op.rename(&vsrc, &vdst).await.map_err(|e| e.to_string())?;
+    if let Err(e) = storage.check_writable(&vsrc) {
+        return Ok(AgentToolResult::error(format!("mv: {raw_src}: {e}")));
+    }
+    if let Err(e) = storage.check_writable(&vdst) {
+        return Ok(AgentToolResult::error(format!("mv: {raw_dst}: {e}")));
+    }
+    let src_op = storage.resolve(&vsrc);
+    let dst_op = storage.resolve(&vdst);
+    let src_remote = storage.resolve_path(&vsrc);
+    let dst_remote = storage.resolve_path(&vdst);
+    if !storage.same_backend(&vsrc, &vdst) {
+        let buf = src_op.read(&src_remote).await.map_err(|e| e.to_string())?;
+        dst_op
+            .write(&dst_remote, buf)
+            .await
+            .map_err(|e| e.to_string())?;
+        src_op
+            .delete(&src_remote)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        src_op
+            .rename(&src_remote, &dst_remote)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(AgentToolResult::success_json(serde_json::json!({
         "src": raw_src,
@@ -822,13 +1157,15 @@ pub async fn op_mv(
 
 /// `wc` — count lines, words, and bytes.
 pub async fn op_wc(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "wc")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let op = storage.resolve(&vpath);
+    let remote = storage.resolve_path(&vpath);
 
-    let buf = op.read(&vpath).await.map_err(|e| e.to_string())?;
+    let buf = op.read(&remote).await.map_err(|e| e.to_string())?;
     let bytes = buf.len();
     let data = buf.to_vec();
     let text = String::from_utf8_lossy(&data);
@@ -847,19 +1184,25 @@ pub async fn op_wc(
 /// `├──` / `└──` / `│` tree characters (instead of plain indented
 /// slashes which were hard to scan visually).
 pub async fn op_tree(
-    op: &opendal::Operator,
+    storage: &OpendalFileStorage,
     path: Option<&str>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let max_entries = limit.unwrap_or(500);
 
+    // Dispatch through the mount table: the operator plus the
+    // backend-local key it expects.
+    let remote = storage.resolve_path(&vpath);
     // OpenDAL Fs backend requires a trailing '/' to walk recursively.
-    let scan = if vpath.ends_with('/') {
-        vpath.clone()
+    let scan = if remote.is_empty() {
+        "/".to_string()
+    } else if remote.ends_with('/') {
+        remote.clone()
     } else {
-        format!("{vpath}/")
+        format!("{remote}/")
     };
+    let op: opendal::Operator = storage.resolve(&vpath);
     let mut lister = op
         .lister_with(&scan)
         .recursive(true)
@@ -870,16 +1213,20 @@ pub async fn op_tree(
     // self-entry to avoid duplicating it in the rendered tree.
     let mut entries: Vec<(usize, String, bool)> = Vec::new();
     let prefix = vpath.trim_end_matches('/');
-    let scan_root = if prefix.is_empty() { "/" } else { prefix };
+    let scan_root = remote.trim_end_matches('/').to_string();
     while let Some(entry) = lister.next().await {
         let entry = entry.map_err(|e| e.to_string())?;
-        let p = entry.path().to_string();
+        let p_raw = entry.path().to_string();
         let is_dir = entry.metadata().is_dir();
 
-        if is_dir && p.trim_end_matches('/') == scan_root.trim_end_matches('/') {
+        if is_dir && p_raw.trim_end_matches('/') == scan_root {
             continue;
         }
 
+        // Remap the backend-local path into the mount's virtual
+        // namespace (e.g. `mnt/.../parquet/1000g_eur.parquet` →
+        // `/data/ldsc/1000g_eur.parquet`).
+        let p = storage.remap_entry_to_virtual(&vpath, &p_raw);
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {
@@ -1037,12 +1384,12 @@ pub async fn op_tree(
 /// Text read with line numbers (cat -n style).
 async fn read_text_numbered(
     op: &opendal::Operator,
-    vpath: &str,
+    remote_path: &str,
     display_path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let meta = match op.stat(vpath).await {
+    let meta = match op.stat(remote_path).await {
         Ok(m) => m,
         Err(e) if matches!(e.kind(), opendal::ErrorKind::NotFound) => {
             return Ok(AgentToolResult::error(format!(
@@ -1069,7 +1416,7 @@ async fn read_text_numbered(
         })));
     }
 
-    let reader = op.reader(vpath).await.map_err(|e| e.to_string())?;
+    let reader = op.reader(remote_path).await.map_err(|e| e.to_string())?;
     let buf = reader
         .read(0..total_size)
         .await
@@ -1119,12 +1466,12 @@ async fn read_text_numbered(
 /// Image read → base64 image block.
 async fn read_image(
     op: &opendal::Operator,
-    vpath: &str,
+    remote_path: &str,
     display_path: &str,
     ext: &str,
 ) -> Result<AgentToolResult, ToolError> {
     let total_size = op
-        .stat(vpath)
+        .stat(remote_path)
         .await
         .map(|m| m.content_length())
         .unwrap_or(0);
@@ -1134,7 +1481,7 @@ async fn read_image(
         )));
     }
 
-    let reader = op.reader(vpath).await.map_err(|e| e.to_string())?;
+    let reader = op.reader(remote_path).await.map_err(|e| e.to_string())?;
     let buf = reader
         .read(0..total_size)
         .await
@@ -1164,11 +1511,11 @@ fn image_media_type(ext: &str) -> &'static str {
 /// Notebook (.ipynb) read → formatted text.
 async fn read_notebook(
     op: &opendal::Operator,
-    vpath: &str,
+    remote_path: &str,
     display_path: &str,
 ) -> Result<AgentToolResult, ToolError> {
     let total_size = op
-        .stat(vpath)
+        .stat(remote_path)
         .await
         .map(|m| m.content_length())
         .unwrap_or(0);
@@ -1178,7 +1525,7 @@ async fn read_notebook(
         )));
     }
 
-    let reader = op.reader(vpath).await.map_err(|e| e.to_string())?;
+    let reader = op.reader(remote_path).await.map_err(|e| e.to_string())?;
     let buf = reader
         .read(0..total_size)
         .await

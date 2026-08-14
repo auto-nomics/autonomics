@@ -246,6 +246,13 @@ impl NodeFactory for FileSourceNodeFactory {
 }
 
 pub fn normalize_path(path: &str) -> String {
+    if let Some((scheme, rest)) = path.split_once("://") {
+        if scheme.eq_ignore_ascii_case("vfs") || scheme.eq_ignore_ascii_case("file") {
+            let normalized = vfs::OpendalFileStorage::normalize_path(rest);
+            return format!("{scheme}://{normalized}");
+        }
+        return path.to_string();
+    }
     let trimmed = path
         .trim_matches('/')
         .strip_prefix("./")
@@ -255,6 +262,33 @@ pub fn normalize_path(path: &str) -> String {
         "/".to_string()
     } else {
         format!("/{trimmed}")
+    }
+}
+
+/// DataFusion treats `file://` paths as its built-in local filesystem even
+/// when an OpenDAL-backed store is registered under that URL. Mounted virtual
+/// paths therefore must be addressed through the dedicated `vfs://` store.
+fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
+    if path.starts_with("vfs://") {
+        return path.to_string();
+    }
+
+    let Some(storage) = node_ctx.opendal.as_ref() else {
+        return path.to_string();
+    };
+
+    let candidate = if let Some(rest) = path.strip_prefix("file://") {
+        normalize_path(rest)
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        return path.to_string();
+    };
+
+    if storage.is_mounted(&candidate) {
+        format!("vfs://{candidate}")
+    } else {
+        path.to_string()
     }
 }
 
@@ -283,7 +317,7 @@ impl DagNode for FileSourceNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ctx = node_ctx.session();
-        let path = normalize_path(&self.path);
+        let path = source_path(&node_ctx, &normalize_path(&self.path));
         let fmt = self
             .format
             .or_else(|| FileFormat::from_path(&path))
@@ -353,7 +387,10 @@ async fn read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use std::sync::Arc;
     use vfs::OpendalFileStorage;
+    use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
     #[tokio::test]
     async fn test_load_vcf() {
@@ -508,8 +545,67 @@ mod tests {
             }
         }
     }
-}
 
+    #[tokio::test]
+    async fn source_file_reads_mounted_paths() {
+        let backend_root = tempfile::tempdir().unwrap();
+        let source_dir = backend_root.path().join("mounted-source");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(source_dir.join("data.csv"), "id\n1\n2\n").unwrap();
+
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/mount".into(),
+                backend: "default".into(),
+                source: source_dir.to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            mounted.clone(),
+        ));
+        let ctx = datafusion::prelude::SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
+        ctx.runtime_env().register_object_store(
+            ObjectStoreUrl::parse("file://").unwrap().as_ref(),
+            file_storage.clone(),
+        );
+        let node_ctx = dag_core::registry::NodeCtx {
+            runtime_env: ctx.runtime_env().clone(),
+            opendal: Some(file_storage),
+            global_sem: None,
+        };
+
+        for path in [
+            "vfs:///mount/data.csv",
+            "file:///mount/data.csv",
+            "/mount/data.csv",
+        ] {
+            let mut node = FileSourceNode::new(path.into(), None);
+            let outputs = node
+                .execute(
+                    &node_ctx,
+                    &[],
+                    &dag_core::dag::node_event::NodeReporter::noop(),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("read {path} failed: {e}"));
+            let df = outputs.get(&0).expect("source output port");
+            assert_eq!(
+                df.clone().count().await.unwrap(),
+                2,
+                "unexpected row count for {path}"
+            );
+        }
+    }
+}
 
 /// Cast every Float32 column to Float64, leaving all other columns unchanged.
 fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {

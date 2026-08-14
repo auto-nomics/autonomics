@@ -139,10 +139,19 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
-        tracing::info!("SharedInfra::open: file storage ready");
-
+        // Build the VFS mount table first so we can attach it to the
+        // agent-facing `OpendalFileStorage`. This makes the `vfs`
+        // tool see mounted paths (otherwise it would only see the
+        // bare `data_dir` local FS).
         let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
+        let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+            &config.data_dir,
+            vfs.clone(),
+        ));
+        tracing::info!(
+            mounts = ?file_storage.mount_paths(),
+            "SharedInfra::open: file storage ready (with VFS mounts)"
+        );
 
         tracing::info!(
             mounts = ?vfs.mount_paths(),

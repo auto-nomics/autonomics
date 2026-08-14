@@ -23,7 +23,9 @@ use crate::storage::OpendalFileStorage;
     description = "Virtual filesystem operations through OpenDAL VFS. \
         All operations execute in pure Rust — no system shell is spawned. \
         Supported ops: read, cat, ls, cp, mv, rm, mkdir, stat, touch, \
-        write, edit, patch, head, tail, wc, grep, glob, tree. \
+        write, edit, patch, head, tail, wc, grep, glob, tree, mount_list. \
+        Paths may be covered by VFS mounts (see mount_list). Read-only \
+        mounts reject writes. \
         Unsupported (will error): chmod, chown, ln, pipes, redirects."
 )]
 pub struct VfsBashInput {
@@ -85,20 +87,25 @@ impl ToolFunction for VfsBashTool {
     type Input = VfsBashInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let op = &self.storage.op;
+        let storage = &self.storage;
 
         match input.op.as_str() {
+            // ── introspection ──
+            "mount_list" => ops::op_mount_list(storage).await,
+
             // ── reading ──
-            "read" => ops::op_read(op, input.path.as_deref(), input.offset, input.limit).await,
-            "cat" => ops::op_cat(op, input.path.as_deref(), input.offset, input.limit).await,
-            "head" => ops::op_head(op, input.path.as_deref(), input.offset, input.limit).await,
-            "tail" => ops::op_tail(op, input.path.as_deref(), input.offset, input.limit).await,
+            "read" => ops::op_read(storage, input.path.as_deref(), input.offset, input.limit).await,
+            "cat" => ops::op_cat(storage, input.path.as_deref(), input.offset, input.limit).await,
+            "head" => ops::op_head(storage, input.path.as_deref(), input.offset, input.limit).await,
+            "tail" => ops::op_tail(storage, input.path.as_deref(), input.offset, input.limit).await,
 
             // ── writing ──
-            "write" => ops::op_write(op, input.path.as_deref(), input.content.as_deref()).await,
+            "write" => {
+                ops::op_write(storage, input.path.as_deref(), input.content.as_deref()).await
+            }
             "edit" => {
                 ops::op_edit(
-                    op,
+                    storage,
                     input.path.as_deref(),
                     input.old_string.as_deref(),
                     input.new_string.as_deref(),
@@ -106,13 +113,13 @@ impl ToolFunction for VfsBashTool {
                 )
                 .await
             }
-            "touch" => ops::op_touch(op, input.path.as_deref()).await,
-            "patch" => ops::op_patch(op, input.patch.as_deref()).await,
+            "touch" => ops::op_touch(storage, input.path.as_deref()).await,
+            "patch" => ops::op_patch(storage, input.patch.as_deref()).await,
 
             // ── filesystem ──
             "ls" => {
                 ops::op_ls(
-                    op,
+                    storage,
                     input.path.as_deref(),
                     input.recursive,
                     input.limit,
@@ -120,18 +127,18 @@ impl ToolFunction for VfsBashTool {
                 )
                 .await
             }
-            "stat" => ops::op_stat(op, input.path.as_deref()).await,
-            "mkdir" => ops::op_mkdir(op, input.path.as_deref()).await,
-            "rm" => ops::op_rm(op, input.path.as_deref(), input.recursive).await,
-            "cp" => ops::op_cp(op, input.src.as_deref(), input.dst.as_deref()).await,
-            "mv" => ops::op_mv(op, input.src.as_deref(), input.dst.as_deref()).await,
-            "wc" => ops::op_wc(op, input.path.as_deref()).await,
-            "tree" => ops::op_tree(op, input.path.as_deref(), input.limit).await,
+            "stat" => ops::op_stat(storage, input.path.as_deref()).await,
+            "mkdir" => ops::op_mkdir(storage, input.path.as_deref()).await,
+            "rm" => ops::op_rm(storage, input.path.as_deref(), input.recursive).await,
+            "cp" => ops::op_cp(storage, input.src.as_deref(), input.dst.as_deref()).await,
+            "mv" => ops::op_mv(storage, input.src.as_deref(), input.dst.as_deref()).await,
+            "wc" => ops::op_wc(storage, input.path.as_deref()).await,
+            "tree" => ops::op_tree(storage, input.path.as_deref(), input.limit).await,
 
             // ── search ──
             "grep" => {
                 search::op_grep(
-                    op,
+                    storage,
                     input.path.as_deref(),
                     input.pattern.as_deref(),
                     input.glob.as_deref(),
@@ -142,13 +149,15 @@ impl ToolFunction for VfsBashTool {
                 )
                 .await
             }
-            "glob" => search::op_glob(op, input.path.as_deref(), input.pattern.as_deref()).await,
+            "glob" => {
+                search::op_glob(storage, input.path.as_deref(), input.pattern.as_deref()).await
+            }
 
             // ── unsupported ──
             other => Ok(AgentToolResult::error(format!(
                 "Unknown or unsupported operation '{other}'. \
                  Supported: read cat ls cp mv rm mkdir stat touch write edit patch \
-                 head tail wc grep glob tree."
+                 head tail wc grep glob tree mount_list."
             ))),
         }
     }
@@ -1272,5 +1281,97 @@ mod tests {
         let result = tool.run(r).await.unwrap();
         let json = result_json(result);
         assert!(json["content"].as_str().unwrap().contains("你好"));
+    }
+
+    // ── mounted storage regression (non-empty mount source) ──────────
+
+    /// Build a tool whose root mount maps `/` to a subdirectory of the
+    /// backend root — the layout real `vfs.toml` files use. Writes and
+    /// reads must land in the mount source, not the process root.
+    fn make_mounted_tool() -> (VfsBashTool, tempfile::TempDir, std::path::PathBuf) {
+        use crate::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
+
+        let backend_root = tempfile::tempdir().unwrap();
+        let source_dir = backend_root.path().join("ws");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/".into(),
+                backend: "default".into(),
+                source: source_dir.to_string_lossy().to_string(),
+                read_only: false,
+            }],
+        };
+        let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            vfs,
+        ));
+        let tool = VfsBashTool { storage };
+        (tool, backend_root, source_dir)
+    }
+
+    #[tokio::test]
+    async fn write_read_ls_through_mount_with_nonempty_source() {
+        let (tool, _backend_root, source_dir) = make_mounted_tool();
+
+        let mut w = input("write");
+        w.path = Some("/hello.txt".into());
+        w.content = Some("hello world".into());
+        let res = tool.run(w).await.unwrap();
+        assert_ne!(res.is_error, Some(true), "write failed: {res:?}");
+
+        // Bytes must land inside the mount's source directory.
+        let on_disk = std::fs::read(source_dir.join("hello.txt")).unwrap();
+        assert_eq!(on_disk, b"hello world");
+
+        let mut r = input("cat");
+        r.path = Some("/hello.txt".into());
+        let result = tool.run(r).await.unwrap();
+        let json = result_json(result);
+        assert!(json["content"].as_str().unwrap().contains("hello world"));
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<&str> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("hello.txt")),
+            "expected hello.txt in listing, got: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mkdir_and_rm_through_mount() {
+        let (tool, _backend_root, source_dir) = make_mounted_tool();
+
+        let mut m = input("mkdir");
+        m.path = Some("/sub".into());
+        let res = tool.run(m).await.unwrap();
+        assert_ne!(res.is_error, Some(true), "mkdir failed: {res:?}");
+        assert!(source_dir.join("sub").is_dir());
+
+        let mut w = input("write");
+        w.path = Some("/sub/file.txt".into());
+        w.content = Some("data".into());
+        let res = tool.run(w).await.unwrap();
+        assert_ne!(res.is_error, Some(true), "write failed: {res:?}");
+
+        let mut rm = input("rm");
+        rm.path = Some("/sub".into());
+        rm.recursive = Some(true);
+        let res = tool.run(rm).await.unwrap();
+        assert_ne!(res.is_error, Some(true), "rm failed: {res:?}");
+        assert!(!source_dir.join("sub").exists());
     }
 }

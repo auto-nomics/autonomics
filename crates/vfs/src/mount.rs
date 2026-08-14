@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use datafusion::object_store::path::Path;
 use datafusion::object_store::{
-    Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, Result, PutOptions, PutPayload, PutResult,
+    Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -58,10 +58,7 @@ pub enum MountError {
     #[error("invalid mount path '{0}': expected an absolute path")]
     InvalidMountPath(String),
     #[error("failed to build backend '{id}': {source}")]
-    BuildBackend {
-        id: String,
-        source: opendal::Error,
-    },
+    BuildBackend { id: String, source: opendal::Error },
     #[error("invalid configuration: {0}")]
     Config(String),
     #[error("I/O error: {0}")]
@@ -74,7 +71,9 @@ pub enum MountError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BackendConfig {
-    Local { root: String },
+    Local {
+        root: String,
+    },
     S3 {
         bucket: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,10 +148,10 @@ impl BackendConfig {
 
     fn build(&self) -> Result<opendal::Operator, opendal::Error> {
         match self {
-            Self::Local { root } => opendal::Operator::new(
-                opendal::services::Fs::default().root(root),
-            )
-            .map(|op| op.finish()),
+            Self::Local { root } => {
+                opendal::Operator::new(opendal::services::Fs::default().root(root))
+                    .map(|op| op.finish())
+            }
             Self::S3 {
                 bucket,
                 endpoint,
@@ -234,15 +233,19 @@ impl VfsManifest {
     }
 
     pub fn local_root(root: impl Into<String>) -> Self {
+        let root = root.into();
         Self {
+            // The backend is rooted at `root` itself so listing `/`
+            // returns `root`'s contents rather than the entire
+            // filesystem.
             backend: vec![BackendDefinition {
                 id: "default".into(),
-                config: BackendConfig::local("/"),
+                config: BackendConfig::local(&root),
             }],
             mount: vec![MountDefinition {
                 path: "/".into(),
                 backend: "default".into(),
-                source: root.into(),
+                source: "/".into(),
                 read_only: false,
             }],
         }
@@ -254,8 +257,28 @@ struct Mount {
     virtual_prefix: Path,
     source_prefix: Path,
     store: Arc<dyn ObjectStore>,
+    /// Clone of the backend's OpenDAL operator. Used by callers that need
+    /// raw opendal access (e.g. the agent-facing `OpendalFileStorage`
+    /// wrapper, which exposes an OpenDAL-style surface). Wrapped in
+    /// `Arc` so cloning the outer [`MountedObjectStore`] is cheap.
+    backend_op: Arc<opendal::Operator>,
     read_only: bool,
     definition: MountDefinition,
+}
+
+/// Handle returned by [`MountedObjectStore::handle_for`]. Exposes the
+/// minimal information an external caller needs to dispatch a path
+/// through the mount table: which mount owns it, the underlying backend
+/// operator, and whether the mount is read-only.
+#[derive(Clone)]
+pub struct MountHandle {
+    pub definition: MountDefinition,
+    pub backend_op: Arc<opendal::Operator>,
+    pub read_only: bool,
+    /// Backend-relative key that `definition.source` maps to inside the
+    /// backend operator. Mirrors `Mount::source_prefix`; callers that
+    /// dispatch to `backend_op` must prepend this to the virtual suffix.
+    pub source_prefix: Path,
 }
 
 /// Resolve a mount's declarative source path to a backend key.
@@ -336,23 +359,35 @@ impl MountedObjectStore {
             if !definition.path.starts_with('/') {
                 return Err(MountError::InvalidMountPath(definition.path.clone()));
             }
-            let backend = backends
-                .get(&definition.backend)
-                .ok_or_else(|| MountError::UnknownBackend {
-                    path: definition.path.clone(),
-                    backend: definition.backend.clone(),
+            let backend =
+                backends
+                    .get(&definition.backend)
+                    .ok_or_else(|| MountError::UnknownBackend {
+                        path: definition.path.clone(),
+                        backend: definition.backend.clone(),
+                    })?;
+            let operator = backend
+                .config
+                .build()
+                .map_err(|source| MountError::BuildBackend {
+                    id: backend.id.clone(),
+                    source,
                 })?;
-            let operator = backend.config.build().map_err(|source| MountError::BuildBackend {
-                id: backend.id.clone(),
-                source,
-            })?;
+            // Share the same operator between the DataFusion-side
+            // `store` (which already wraps it as an ObjectStore) and
+            // the OpenDAL-side `backend_op` exposed via MountHandle.
+            // Cloning the Operator is cheap (Arc inside).
             let store: Arc<dyn ObjectStore> =
-                Arc::new(OpendalFileStorage::from_operator(operator));
-            if seen_mount_paths.insert(definition.path.clone(), mounts.len()).is_some() {
+                Arc::new(OpendalFileStorage::from_operator(operator.clone()));
+            if seen_mount_paths
+                .insert(definition.path.clone(), mounts.len())
+                .is_some()
+            {
                 return Err(MountError::DuplicateMount(definition.path.clone()));
             }
-            let virtual_prefix = Path::parse(&definition.path)
-                .map_err(|e| MountError::Config(format!("mount path '{}': {e}", definition.path)))?;
+            let virtual_prefix = Path::parse(&definition.path).map_err(|e| {
+                MountError::Config(format!("mount path '{}': {e}", definition.path))
+            })?;
             let source_key = backend_source_key(&backend.config, &definition.source)
                 .map_err(|e| MountError::Config(format!("mount '{}': {e}", definition.path)))?;
             let source_prefix = Path::parse(&source_key).map_err(|e| {
@@ -363,6 +398,7 @@ impl MountedObjectStore {
                 virtual_prefix,
                 source_prefix,
                 store,
+                backend_op: Arc::new(operator),
                 read_only: definition.read_only,
                 definition: definition.clone(),
             });
@@ -392,11 +428,37 @@ impl MountedObjectStore {
             .find(|mount| path.prefix_matches(&mount.virtual_prefix))
     }
 
+    /// Public-facing mount lookup. Returns a [`MountHandle`] for the
+    /// mount whose virtual prefix is the longest match against `path`,
+    /// or `None` if no mount covers the path.
+    ///
+    /// Use this from wrappers that need raw OpenDAL access (e.g. the
+    /// agent's `vfs` tool); for DataFusion SQL routing use the
+    /// [`ObjectStore`] impl directly.
+    pub fn handle_for(&self, path: &Path) -> Option<MountHandle> {
+        self.find(path).map(|m| MountHandle {
+            definition: m.definition.clone(),
+            backend_op: m.backend_op.clone(),
+            read_only: m.read_only,
+            source_prefix: m.source_prefix.clone(),
+        })
+    }
+
+    /// Returns a snapshot of every mount's declarative definition, in
+    /// the same longest-prefix-first order used internally.
+    pub fn mount_definitions(&self) -> Vec<MountDefinition> {
+        self.mounts.iter().map(|m| m.definition.clone()).collect()
+    }
+
     fn resolve<'a>(&'a self, path: &'a Path) -> Result<(&'a Mount, Path), ObjectStoreError> {
         let mount = self.find(path).ok_or_else(|| not_mounted(path))?;
         let suffix = path
             .prefix_match(&mount.virtual_prefix)
-            .map(|parts| parts.map(|part| part.as_ref().to_string()).collect::<Vec<_>>())
+            .map(|parts| {
+                parts
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let mut remote = mount.source_prefix.clone();
         for part in suffix {
@@ -404,7 +466,6 @@ impl MountedObjectStore {
         }
         Ok((mount, remote))
     }
-
 
     fn reject_write(&self, path: &Path) -> Result<(), ObjectStoreError> {
         if self
@@ -482,7 +543,10 @@ impl ObjectStore for MountedObjectStore {
         })
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta, ObjectStoreError>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, Result<ObjectMeta, ObjectStoreError>> {
         let Some(prefix) = prefix else {
             return futures::stream::iter(Err(not_mounted(&Path::ROOT))).boxed();
         };
@@ -516,17 +580,14 @@ impl ObjectStore for MountedObjectStore {
             .objects
             .into_iter()
             .map(|mut meta| {
-                meta.location =
-                    remap_location(&meta.location, &source_prefix, &mount_prefix)?;
+                meta.location = remap_location(&meta.location, &source_prefix, &mount_prefix)?;
                 Ok(meta)
             })
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
         let common_prefixes = result
             .common_prefixes
             .into_iter()
-            .map(|location| {
-                remap_location(&location, &source_prefix, &mount_prefix)
-            })
+            .map(|location| remap_location(&location, &source_prefix, &mount_prefix))
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
 
         Ok(ListResult {
@@ -545,8 +606,9 @@ impl ObjectStore for MountedObjectStore {
                 let this = this.clone();
                 async move {
                     this.reject_write(&location)?;
-                    let (mount, remote) =
-                        this.resolve(&location).map_err(|_| not_mounted(&location))?;
+                    let (mount, remote) = this
+                        .resolve(&location)
+                        .map_err(|_| not_mounted(&location))?;
                     mount.store.delete(&remote).await?;
                     Ok(location)
                 }
@@ -554,19 +616,24 @@ impl ObjectStore for MountedObjectStore {
             .boxed()
     }
 
-    async fn copy_opts(&self, from: &Path, to: &Path, options: datafusion::object_store::CopyOptions) -> Result<()> {
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: datafusion::object_store::CopyOptions,
+    ) -> Result<()> {
         self.reject_write(to)?;
         let (from_mount, from_remote) = self.resolve(from).map_err(|_| not_mounted(from))?;
         let (to_mount, to_remote) = self.resolve(to).map_err(|_| not_mounted(to))?;
-        if !Arc::ptr_eq(
-            &from_mount.store,
-            &to_mount.store,
-        ) {
+        if !Arc::ptr_eq(&from_mount.store, &to_mount.store) {
             return Err(ObjectStoreError::NotSupported {
                 source: "cross-mount copy is not implemented".into(),
             });
         }
-        from_mount.store.copy_opts(&from_remote, &to_remote, options).await
+        from_mount
+            .store
+            .copy_opts(&from_remote, &to_remote, options)
+            .await
     }
 }
 
@@ -577,7 +644,11 @@ fn remap_location(
 ) -> Result<Path, ObjectStoreError> {
     let suffix = source
         .prefix_match(source_prefix)
-        .map(|parts| parts.map(|part| part.as_ref().to_string()).collect::<Vec<_>>())
+        .map(|parts| {
+            parts
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let mut path = virtual_prefix.clone();
     for part in suffix {
@@ -628,7 +699,7 @@ mod tests {
         let vfs = MountedObjectStore::from_manifest(&manifest).unwrap();
 
         // Physical backend key includes the mounted source; VFS callers do not.
-         OpendalFileStorage::new(nested.path())
+        OpendalFileStorage::new(nested.path())
             .op
             .write("remote-prefix/panel.parquet", b"panel".to_vec())
             .await
@@ -664,12 +735,22 @@ mod tests {
         let root_file = Path::parse("/scratch.txt").unwrap();
         vfs.put(&root_file, b"root".to_vec().into()).await.unwrap();
         assert_eq!(
-            vfs.get(&root_file).await.unwrap().bytes().await.unwrap().as_ref(),
+            vfs.get(&root_file)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .as_ref(),
             b"root"
         );
 
         let nested_file = Path::parse("/data/panels/new.parquet").unwrap();
-        assert!(vfs.put(&nested_file, b"forbidden".to_vec().into()).await.is_err());
+        assert!(
+            vfs.put(&nested_file, b"forbidden".to_vec().into())
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -744,7 +825,16 @@ mod single_file_tests {
         let vfs = MountedObjectStore::from_manifest(&manifest).unwrap();
         let path = Path::parse("/data/panel.parquet").unwrap();
 
-        assert_eq!(vfs.get(&path).await.unwrap().bytes().await.unwrap().as_ref(), b"single");
+        assert_eq!(
+            vfs.get(&path)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .as_ref(),
+            b"single"
+        );
         assert!(vfs.put(&path, b"new".to_vec().into()).await.is_err());
     }
 }
