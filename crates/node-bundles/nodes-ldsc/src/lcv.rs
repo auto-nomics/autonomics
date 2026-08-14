@@ -348,12 +348,7 @@ impl DagNode for LcvNode {
         })?;
 
         let ctx = node_ctx.session();
-        crate::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur",
-            "ld_panel",
-        )
+        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
         .await
         .map_err(|e| LcvNodeError::Datalake(e.to_string()))?;
         let (out, n_snp) = Self::run_with_ctx(

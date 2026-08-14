@@ -651,7 +651,7 @@ impl DagNode for LavaLocusNode {
             chroms,
         ));
         let ref_prefix =
-            nodes_ldsc::ldsc_common::resolve_ref_prefix(&node_ctx.resources, REF_PREFIX_TEMPLATE);
+            REF_PREFIX_TEMPLATE.to_string();
         let reference = match lava::plink::load_reference_template(&ref_prefix, &chroms) {
             Ok(r) => r,
             Err(e) => {

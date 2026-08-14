@@ -398,7 +398,7 @@ impl DagNode for HdlLNode {
 
         // ---- Resolve the per-chromosome PLINK reference prefix ----
         let ref_template =
-            nodes_ldsc::ldsc_common::resolve_ref_prefix(&node_ctx.resources, REF_PREFIX_TEMPLATE);
+            REF_PREFIX_TEMPLATE.to_string();
         let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
 
         // ---- Filter reference SNPs to the region [start, stop] ----

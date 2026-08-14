@@ -881,23 +881,13 @@ impl DagNode for GsemLdscNode {
         }
 
         // ── 1. Register LD-score panel and companion M table from catalog ──
-        nodes_ldsc::ldsc_common::register_catalog_table(
-            &session,
-            &node_ctx.resources,
-            "ldscore.1000g_eur",
-            "ld_panel",
-        )
+        nodes_ldsc::ldsc_common::register_listing_table(&session, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR)
         .await
         .map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),
             msg: format!("register LD panel failed: {e}"),
         })?;
-        nodes_ldsc::ldsc_common::register_catalog_table(
-            &session,
-            &node_ctx.resources,
-            "ldscore.1000g_eur.m",
-            "ld_panel_m",
-        )
+        nodes_ldsc::ldsc_common::register_listing_table(&session, "ld_panel_m", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
         .await
         .map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),

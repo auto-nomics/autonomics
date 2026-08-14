@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use arrow_array::Float64Array;
-use dag_core::resource_catalog::ResourceCatalog;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -15,14 +14,14 @@ use datafusion::datasource::listing::{
 };
 use datafusion::prelude::SessionContext;
 
-/// Resolve a PLINK reference prefix template from the catalog, falling back
-/// to `fallback` when the logical name is not registered.
-pub fn resolve_ref_prefix(catalog: &ResourceCatalog, fallback: &str) -> String {
-    match catalog.resolve_storage_path_raw("plink.1000g_eur.ref_prefix") {
-        Ok(p) => p,
-        Err(_) => fallback.to_string(),
-    }
-}
+/// VFS paths for the built-in reference panels.
+pub const VFS_LDSCORE_1000G_EUR: &str = "vfs:///data/oss/ld_score/1000g_eur/";
+pub const VFS_LDSCORE_1000G_EUR_M: &str = "vfs:///data/oss/ld_score/1000g_eur_m/";
+pub const VFS_LDSCORE_BASELINELD_V2_2_EUR: &str =
+    "vfs:///data/oss/ld_score/baselineLD_v2_2_eur/";
+pub const VFS_LDSCORE_BASELINELD_V2_2_EUR_M: &str =
+    "vfs:///data/oss/ld_score/baselineLD_v2_2_eur_m/";
+pub const VFS_LDSCORE_UKBB_EUR: &str = "vfs:///data/oss/ld_score/ukbb_eur/";
 
 /// Quote a DataFusion table name for SQL interpolation.
 ///
@@ -30,21 +29,6 @@ pub fn resolve_ref_prefix(catalog: &ResourceCatalog, fallback: &str) -> String {
 /// must be quoted in SQL.
 pub fn quote_table(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// Register one catalog storage resource as a DataFusion parquet
-/// `ListingTable` named `table_name`.
-///
-/// The catalog resolves the backend and path into a plain URL string; this
-/// helper only bridges that string into the active `SessionContext`.
-pub async fn register_catalog_table(
-    ctx: &SessionContext,
-    catalog: &ResourceCatalog,
-    logical: &str,
-    table_name: &str,
-) -> Result<(), LdscCommonError> {
-    let url = catalog.resolve_storage_url(logical)?;
-    register_listing_table(ctx, table_name, &url).await
 }
 
 /// Register a DataFusion `ListingTable` for a resolved storage URL.
@@ -121,10 +105,8 @@ pub async fn read_m_5_50(
 /// Error type for shared LDSC helpers.
 #[derive(Debug, thiserror::Error)]
 pub enum LdscCommonError {
-    #[error("failed to read from data lake: {0}")]
+    #[error("failed to read from the VFS: {0}")]
     ReadBatch(#[from] datafusion::error::DataFusionError),
-    #[error("resource catalog error: {0}")]
-    Catalog(#[from] dag_core::resource_catalog::ResourceError),
     #[error("{0}")]
     InvalidInput(String),
 }

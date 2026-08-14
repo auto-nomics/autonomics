@@ -383,12 +383,7 @@ impl DagNode for MrlapNode {
         ctx.register_table("sumstats2", in1.data.clone().into_view())
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
-        nodes_ldsc::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur",
-            "ld_panel",
-        )
+        nodes_ldsc::ldsc_common::register_listing_table(&ctx, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR)
         .await
         .map_err(|e| err(format!("register ld panel: {e}")))?;
 

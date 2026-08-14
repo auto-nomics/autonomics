@@ -330,20 +330,10 @@ impl DagNode for LdscSldscNode {
 
         let session = ctx.session();
 
-        crate::ldsc_common::register_catalog_table(
-            &session,
-            &ctx.resources,
-            "ldscore.baselineLD_v2_2_eur",
-            "ld_panel",
-        )
+        crate::ldsc_common::register_listing_table(&session, "ld_panel", crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR)
         .await
         .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_catalog_table(
-            &session,
-            &ctx.resources,
-            "ldscore.baselineLD_v2_2_eur.m",
-            "ld_panel_m",
-        )
+        crate::ldsc_common::register_listing_table(&session, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR_M)
         .await
         .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
 

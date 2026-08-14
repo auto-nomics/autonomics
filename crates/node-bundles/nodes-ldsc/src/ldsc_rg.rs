@@ -404,20 +404,10 @@ impl DagNode for LdscRgNode {
         //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
-        crate::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur",
-            "ld_panel",
-        )
+        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
         .await
         .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur.m",
-            "ld_panel_m",
-        )
+        crate::ldsc_common::register_listing_table(&ctx, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
         .await
         .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
         let (rg, n_snp) = Self::run_with_ctx(

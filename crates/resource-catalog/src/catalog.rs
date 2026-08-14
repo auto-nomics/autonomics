@@ -197,17 +197,6 @@ impl ResourceCatalog {
         Ok(entry.clone())
     }
 
-    /// Register a provider's resources.
-    pub fn register_provider(
-        &self,
-        provider: &dyn crate::provider::ResourceProvider,
-    ) -> Result<()> {
-        for entry in provider.resources() {
-            self.register(entry)?;
-        }
-        Ok(())
-    }
-
     /// Look up a resource by logical name.
     pub fn get(&self, name: &str) -> Option<ResourceEntry> {
         self.inner.read().expect("catalog lock").get(name).cloned()

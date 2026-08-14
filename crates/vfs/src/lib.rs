@@ -1,6 +1,8 @@
+pub mod mount;
 pub mod storage;
 pub mod vbash;
 
+pub use mount::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 pub use storage::OpendalFileStorage;
 pub use vbash::vbash_registrations;
 

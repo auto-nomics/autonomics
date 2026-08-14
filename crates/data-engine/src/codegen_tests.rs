@@ -12,7 +12,6 @@ fn test_registry() -> crate::node_registry::NodeRegistry {
     crate::default_registry::build_default_registry(
         runtime_env,
         None,
-        None,
         std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
             std::path::PathBuf::from("."),
         )),

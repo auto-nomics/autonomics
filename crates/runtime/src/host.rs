@@ -25,12 +25,12 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use dag_core::resource_catalog::{
-    DbKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind, StorageConfig,
+    DbKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind,
 };
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
-use vfs::OpendalFileStorage;
+use vfs::{BackendDefinition, MountedObjectStore, MountDefinition, OpendalFileStorage, VfsManifest};
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -112,7 +112,9 @@ pub struct SharedInfra {
     /// DagHistory, RuntimeEnv) is shared via `Arc`.
     pub engine_manager: Arc<DataEngineManager>,
     pub file_storage: Arc<OpendalFileStorage>,
-/// Centralized resource catalog — the single source of truth for all
+    /// Unix-style virtual filesystem mounted under `vfs://`.
+    pub vfs: Arc<MountedObjectStore>,
+    /// Centralized resource catalog — the single source of truth for all
     /// resource addresses (Iceberg tables, file paths, endpoints, config,
     /// databases). Nodes resolve resources through this instead of
     /// hardcoding names/paths.
@@ -163,16 +165,22 @@ impl SharedInfra {
 
         // Register built-in resources from RuntimeConfig (config-as-resource).
         register_config_resources(&resources, config);
-        register_storage_backends(&resources, &config.data_dir);
 
         // Set the process-wide global so SDK crates (eutils, embase, etc.)
         // can resolve endpoints via `ResourceCatalog::global()`.
         let _ = ResourceCatalog::set_global(resources.clone());
 
+        let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
+
+        tracing::info!(
+            mounts = ?vfs.mount_paths(),
+            "SharedInfra::open: VFS mounted"
+        );
         tracing::info!("SharedInfra::open: building DataEngine");
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
-            .with_resources(resources.clone());
+            .with_resources(resources.clone())
+            .with_vfs((*vfs).clone());
 
         let mut engine = engine_builder.build();
         tracing::info!("SharedInfra::open: DataEngine built");
@@ -255,6 +263,7 @@ impl SharedInfra {
         Ok(Self {
             engine_manager,
             file_storage,
+            vfs,
             resources,
             storage,
             profile_storage,
@@ -443,6 +452,77 @@ impl SharedInfra {
 /// so that all modules resolve them by logical name instead of reading env
 /// vars or config fields directly. Registration is idempotent (same-name +
 /// same-address is a no-op); failures are logged and non-fatal.
+/// Build the VFS from `state_dir/vfs.toml`, falling back to sane env-based
+/// defaults when no manifest has been created yet.
+fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
+    let manifest_path = config.state_dir.join("vfs.toml");
+    let manifest = match std::fs::read_to_string(&manifest_path) {
+        Ok(source) => VfsManifest::from_toml(&source)
+            .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_vfs_manifest(config),
+        Err(e) => return Err(format!("read {}: {e}", manifest_path.display())),
+    };
+    MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())
+}
+
+fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
+    let mut backend = vec![BackendDefinition {
+        id: "default".into(),
+        config: vfs::BackendConfig::local(
+            config.data_dir.to_string_lossy().to_string(),
+        ),
+    }];
+    let mut mount = vec![MountDefinition {
+        path: "/".into(),
+        backend: "default".into(),
+        remote: String::new(),
+        read_only: false,
+    }];
+
+    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
+        std::env::var("ICEBERG_S3_BUCKET"),
+        std::env::var("ICEBERG_S3_ACCESS_KEY_ID"),
+        std::env::var("ICEBERG_S3_SECRET_ACCESS_KEY"),
+    ) {
+        let region = std::env::var("ICEBERG_S3_REGION").unwrap_or_else(|_| "auto".into());
+        let cfg = match std::env::var("ICEBERG_S3_ENDPOINT") {
+            Ok(endpoint) => vfs::BackendConfig::s3_compatible(bucket, endpoint, region, ak, sk),
+            Err(_) => vfs::BackendConfig::s3(bucket, region, ak, sk),
+        };
+        backend.push(BackendDefinition {
+            id: "s3-prod".into(),
+            config: cfg,
+        });
+        mount.push(MountDefinition {
+            path: "/data/s3".into(),
+            backend: "s3-prod".into(),
+            remote: String::new(),
+            read_only: true,
+        });
+    }
+
+    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
+        std::env::var("OSS_BUCKET"),
+        std::env::var("OSS_ACCESS_KEY_ID"),
+        std::env::var("OSS_SECRET_ACCESS_KEY"),
+    ) {
+        let endpoint = std::env::var("OSS_ENDPOINT")
+            .unwrap_or_else(|_| "oss-cn-beijing.aliyuncs.com".into());
+        backend.push(BackendDefinition {
+            id: "oss-prod".into(),
+            config: vfs::BackendConfig::oss(bucket, endpoint, ak, sk),
+        });
+        mount.push(MountDefinition {
+            path: "/data/oss".into(),
+            backend: "oss-prod".into(),
+            remote: String::new(),
+            read_only: true,
+        });
+    }
+
+    VfsManifest { backend, mount }
+}
+
 fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) {
     use std::collections::BTreeMap;
 
@@ -631,49 +711,6 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
     }
 }
 
-
-/// Register runtime-only storage backends from environment variables.
-///
-/// Backend definitions carry credentials and are never persisted to the
-/// resource manifest. `default` always points at the host data directory;
-/// `s3-prod` and `oss-prod` are registered when the corresponding
-/// credentials are present in the environment.
-fn register_storage_backends(resources: &ResourceCatalog, data_dir: &std::path::Path) {
-    let _ = resources.register_backend(
-        "default",
-        StorageConfig::local(data_dir.to_string_lossy().to_string()),
-    );
-
-    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
-        std::env::var("ICEBERG_S3_BUCKET"),
-        std::env::var("ICEBERG_S3_ACCESS_KEY_ID"),
-        std::env::var("ICEBERG_S3_SECRET_ACCESS_KEY"),
-    ) {
-        let region = std::env::var("ICEBERG_S3_REGION").unwrap_or_else(|_| "auto".into());
-        let config = match std::env::var("ICEBERG_S3_ENDPOINT") {
-            Ok(endpoint) => StorageConfig::s3_compatible(bucket, endpoint, region, ak, sk),
-            Err(_) => StorageConfig::s3(bucket, region, ak, sk),
-        };
-        if let Err(e) = resources.register_backend("s3-prod", config) {
-            tracing::warn!(error = %e, "failed to register s3-prod storage backend");
-        }
-    }
-
-    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
-        std::env::var("OSS_BUCKET"),
-        std::env::var("OSS_ACCESS_KEY_ID"),
-        std::env::var("OSS_SECRET_ACCESS_KEY"),
-    ) {
-        let endpoint =
-            std::env::var("OSS_ENDPOINT").unwrap_or_else(|_| "oss-cn-beijing.aliyuncs.com".into());
-        if let Err(e) = resources.register_backend(
-            "oss-prod",
-            StorageConfig::oss(bucket, endpoint, ak, sk),
-        ) {
-            tracing::warn!(error = %e, "failed to register oss-prod storage backend");
-        }
-    }
-}
 
 /// Control handle for one running agent.
 ///

@@ -402,12 +402,7 @@ impl DagNode for MtagNode {
 
         let ctx = node_ctx.session();
 
-        nodes_ldsc::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.ukbb_eur",
-            "ld_panel",
-        )
+        nodes_ldsc::ldsc_common::register_listing_table(&ctx, "ld_panel", nodes_ldsc::ldsc_common::VFS_LDSCORE_UKBB_EUR)
         .await
         .map_err(|e| MtagNodeError::Datalake(e.to_string()))?;
 

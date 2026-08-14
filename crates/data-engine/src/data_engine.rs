@@ -5,7 +5,7 @@ use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
 };
-use vfs::OpendalFileStorage;
+use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
 use crate::default_registry::build_default_registry;
@@ -118,8 +118,8 @@ pub fn builder() -> DataEngineBuilder {
     ///
     /// The spec is validated against the kind's JSON Schema and deserialized
     /// by the corresponding factory. This is the primary path for node
-    /// creation — all standard node kinds (source_file, source_iceberg, sql,
-    /// sink_file, sink_iceberg, ldsc, linear_regression, mock, mr) are available.
+    /// creation — all standard node kinds (source_file, sql,
+    /// sink_file, ldsc, linear_regression, mock, mr) are available.
     pub fn add_node_from_registry(
         &mut self,
         node_id: impl Into<String>,
@@ -712,34 +712,24 @@ impl DataEngineBuilder {
         })
     }
 
-    /// Inject the centralized [`ResourceCatalog`]. When not called, the engine
-    /// defaults to an empty catalog (nodes fall back to hardcoded addresses).
+    /// Inject the centralized [`ResourceCatalog`] for non-storage resources.
     ///
-    /// Every registered storage backend is wrapped as a DataFusion
-    /// `ObjectStore` and registered on the shared `RuntimeEnv`, so nodes can
-    /// resolve `Storage` resources uniformly through opendal.
+    /// Storage access is handled by [`Self::with_vfs`]; the catalog no longer
+    /// registers individual DataFusion object stores.
     pub fn with_resources(mut self, resources: Arc<ResourceCatalog>) -> Self {
-        for name in resources.backend_names() {
-            let Some(backend) = resources.backend(&name) else {
-                continue;
-            };
-            let url = backend.config.object_store_url();
-            match ObjectStoreUrl::parse(&url) {
-                Ok(url) => {
-                    let store = Arc::new(OpendalFileStorage::from_operator(backend.operator));
-                    self.runtime_env.register_object_store(url.as_ref(), store);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        backend = %name,
-                        url = %url,
-                        error = %e,
-                        "failed to register catalog storage backend as DataFusion object store"
-                    );
-                }
-            }
-        }
         self.resources = Some(resources);
+        self
+    }
+
+    /// Register the Unix-style virtual filesystem under `vfs://`.
+    ///
+    /// All mounted backends are addressed through one namespace, for example
+    /// `vfs:///data/ldscore/1000g_eur/`.
+    pub fn with_vfs(self, vfs: MountedObjectStore) -> Self {
+        let url = ObjectStoreUrl::parse("vfs://")
+            .expect("vfs:// is a valid object-store URL");
+        self.runtime_env
+            .register_object_store(url.as_ref(), Arc::new(vfs));
         self
     }
 
@@ -831,7 +821,7 @@ mod tests {
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::common::HashMap;
     use datafusion::prelude::CsvReadOptions;
-    use vfs::OpendalFileStorage;
+    use vfs::{MountedObjectStore, OpendalFileStorage};
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
@@ -841,14 +831,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_dataengine_opendal_datafusion() {
-        let file_session = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+        let file_session = Arc::new(OpendalFileStorage::new_temp());
         let test_data_file = std::fs::read("test_datasets/Iris.csv").unwrap();
         let _write_res = file_session
             .op
             .write("/iris.csv", test_data_file)
             .await
             .unwrap();
-        let mut builder = DataEngine::builder()
+        let builder = DataEngine::builder()
             .register_opendal_fs(file_session)
             .unwrap();
         let engine = builder.build();
@@ -1383,9 +1373,7 @@ mod tests {
         for expected in [
             "sql",
             "source_file",
-            "source_iceberg",
             "sink_file",
-            "sink_iceberg",
             "ldsc",
             "linear_regression",
             "echo",
@@ -1405,9 +1393,7 @@ mod tests {
         for kind in [
             "sql",
             "source_file",
-            "source_iceberg",
             "sink_file",
-            "sink_iceberg",
             "ldsc",
             "linear_regression",
             "echo",

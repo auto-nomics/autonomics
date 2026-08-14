@@ -30,16 +30,6 @@ pub fn build_default_registry(
             .with_resources(resources.clone()),
     );
 
-    // ── Register resource providers (catalog is Arc, &self methods) ──
-    // Each bundle declares the Iceberg tables / file paths it needs.
-    // Registration is idempotent — same-name + same-address = no-op.
-    #[cfg(feature = "bundle-ldsc")]
-    let _ = resources.register_provider(&nodes_ldsc::Resources);
-    #[cfg(feature = "bundle-genetics")]
-    let _ = resources.register_provider(&nodes_genetics::Resources);
-    #[cfg(feature = "bundle-mr")]
-    let _ = resources.register_provider(&nodes_mr::Resources);
-
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
     #[cfg(feature = "bundle-ldsc")]
     registry.register_plugin(&nodes_ldsc::Plugin);

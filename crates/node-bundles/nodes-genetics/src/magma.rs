@@ -443,7 +443,7 @@ impl DagNode for MagmaGeneNode {
         // Load PLINK + annotation
         let chroms: Vec<u32> = (1..=22).collect();
         let ref_prefix =
-            nodes_ldsc::ldsc_common::resolve_ref_prefix(&node_ctx.resources, REF_PREFIX_TEMPLATE);
+            REF_PREFIX_TEMPLATE.to_string();
         let mut bed = magma::plink::BedFile::open_template(&ref_prefix, &chroms)
             .map_err(MagmaNodeError::from)?;
         let annot =

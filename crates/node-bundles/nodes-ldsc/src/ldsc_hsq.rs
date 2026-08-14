@@ -381,20 +381,10 @@ impl DagNode for LdscHsqNode {
         //    `tests`).
         let ctx = node_ctx.session();
 
-        crate::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur",
-            "ld_panel",
-        )
+        crate::ldsc_common::register_listing_table(&ctx, "ld_panel", crate::ldsc_common::VFS_LDSCORE_1000G_EUR)
         .await
         .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
-        crate::ldsc_common::register_catalog_table(
-            &ctx,
-            &node_ctx.resources,
-            "ldscore.1000g_eur.m",
-            "ld_panel_m",
-        )
+        crate::ldsc_common::register_listing_table(&ctx, "ld_panel_m", crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M)
         .await
         .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 

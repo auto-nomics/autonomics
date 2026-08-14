@@ -13,8 +13,10 @@ apply-patch = { path = "../apply-patch" }
 datafusion = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-opendal = { version = "0.57", features = ["services-fs"] }
-serde = { workspace = true }
+opendal = { version = "0.57", features = ["services-fs", "services-s3", "services-oss"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml = "0.8"
 serde_json = { workspace = true }
 tokio = { workspace = true }
 async-stream = "0.3"
