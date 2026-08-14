@@ -1,32 +1,21 @@
 //! Stratified LD Score Regression (S-LDSC) transform node.
 //!
 //! Takes a single upstream GWAS summary statistics `DataFrame` (with Z-scores,
-//! sample sizes, and rsid), reads **multi-annotation** reference LD Scores from
-//! files (e.g. baselineLD v2.2, 97 annotations), reads per-annotation M from
-//! the companion `.l2.M_5_50` files, and runs stratified LD Score Regression
-//! via [`ldsc::sumstats::estimate_sldsc`].
+//! sample sizes, and rsid), registers the VFS-mounted baselineLD v2.2
+//! multi-annotation LD-score panel and companion M Parquet panel, joins on
+//! rsid, and fits stratified LD Score Regression directly with
+//! [`ldsc::regress::Hsq::new`].
 //!
 //! Outputs a per-annotation result `DataFrame` — one row per annotation with
 //! Category / Prop._SNPs / Coefficient / Coefficient_SE / Coefficient_z /
 //! Coefficient_p / Prop._h2 / Prop._h2_SE / Enrichment / Enrichment_SE /
 //! Enrichment_p — mirroring the Python LDSC `.results` table.
 //!
-//! Unlike [`super::ldsc_hsq`] which reads LD scores from the VFS lake
-//! (single-column panel), this node reads multi-column baseline-LD from files
-//! because the lake does not yet have a multi-annotation panel table.
-//!
 //! # Reference panel data
 //!
-//! The baselineLD v2.2 reference panel (1000G EUR, 97 annotations) is archived
-//! at `aliyun:autonomics-data/ldsc/s-ldsc-ref/`. Restore with:
-//!
-//! ```bash
-//! rclone copy aliyun:autonomics-data/ldsc/s-ldsc-ref/ reference/ldsc_data/ -P
-//! ```
-//!
-//! After restore, the file prefixes for the config are:
-//! - `ref_ld_chr`: `reference/ldsc_data/baselineLD.`
-//! - `w_ld_chr`: `reference/ldsc_data/weights.hm3_noMHC.`
+//! The converted panel and M values are resolved through:
+//! - `VFS_LDSCORE_BASELINELD_V2_2_EUR`
+//! - `VFS_LDSCORE_BASELINELD_V2_2_EUR_M`
 
 use std::sync::Arc;
 
@@ -197,8 +186,8 @@ impl Default for LdscSldscConfig {
 /// A transform node that runs stratified LD Score Regression (S-LDSC).
 ///
 /// Accepts raw GWAS summary statistics as input (`z`, `n`, `rsid` columns),
-/// reads multi-annotation reference LD Scores + per-annotation M from files,
-/// and runs S-LDSC. Outputs a per-annotation result table.
+/// reads multi-annotation reference LD Scores + per-annotation M from VFS
+/// Parquet panels, and runs S-LDSC. Outputs a per-annotation result table.
 #[derive(Clone)]
 pub struct LdscSldscNode {
     meta: NodePorts,
@@ -226,7 +215,7 @@ impl NodeFactory for LdscSldscNodeFactory {
         "S-LDSC transform node for partitioning SNP-heritability across \
         functional annotations. Takes a single upstream GWAS summary \
         statistics DataFrame (z, n, rsid), reads multi-annotation reference \
-        LD Scores + per-annotation M from files (baselineLD prefix), and runs \
+        LD Scores + per-annotation M from VFS Parquet panels, and runs \
         stratified LD Score Regression. Outputs a per-annotation result table \
         with Coefficient, Prop._h2, Enrichment, and their SE / z / p."
     }
@@ -525,8 +514,8 @@ mod tests {
         }
     }
 
-    /// `run_with_ctx` is
-    /// error (either file-not-found or Unimplemented) rather than panic.
+    /// `run_with_ctx` returns an error when required tables are absent,
+    /// rather than panicking.
     #[tokio::test]
     async fn test_run_with_ctx_errors_without_catalog() {
         let ctx = datafusion::prelude::SessionContext::new();
@@ -541,11 +530,11 @@ mod tests {
             &LdscSldscConfig::new(),
         )
         .await;
-        assert!(res.is_err(), "should error without VFS catalog");
+        assert!(res.is_err(), "should error without registered panel tables");
     }
 
     /// `build_result_batch` wires a `SldscResults` into the declared output
-    /// schema. Uses synthetic data since `run_with_ctx` is stubbed.
+    /// schema. Uses synthetic data without invoking `run_with_ctx`.
     #[test]
     fn test_build_result_batch_has_declared_schema() {
         let results = ldsc::sldsc::SldscResults {

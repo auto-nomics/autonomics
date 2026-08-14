@@ -1,10 +1,10 @@
 //! Latent Causal Variable (LCV) node — genetic causality proportion (gcp).
 //!
 //! Takes **two** upstream GWAS summary-statistics `DataFrame`s (trait 1 and
-//! trait 2, each with Z-scores, sample sizes, and rsid), queries the VFS
-//! data lake for the LD score panel under `vfs.ld_score.*`, inner-joins all
-//! three on rsid so only SNPs shared by *both* traits and the panel survive,
-//! and runs LCV via [`lcv::model::run_lcv`]. Outputs a single-row summary
+//! trait 2, each with Z-scores, sample sizes, and rsid), registers the
+//! VFS-mounted 1000G EUR LD-score Parquet panel, inner-joins all three inputs
+//! on rsid so only SNPs shared by *both* traits and the panel survive, and
+//! runs LCV via [`lcv::model::run_lcv`]. Outputs a single-row summary
 //! `DataFrame` with the posterior gcp, its z-score and p-value, the genetic
 //! correlation, and per-trait h² z-scores.
 //!
@@ -367,7 +367,7 @@ impl DagNode for LcvNode {
 }
 
 impl LcvNode {
-    /// The catalog-independent LCV pipeline.
+    /// The table-name-bound LCV pipeline.
     ///
     /// Registers both upstream sumstats `DataFrame`s, runs the 3-way inner join
     /// on rsid with the LD score panel, collects aligned vectors, and calls
@@ -605,7 +605,7 @@ mod tests {
         }
     }
 
-    // ── In-memory catalog harness ──
+    // ── In-memory table harness ──
 
     const N_SNP: usize = 2000;
 
@@ -663,7 +663,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a SessionContext with an in-memory `vfs.ld_score.1000g_eur`.
+    /// Build a SessionContext with an in-memory LD panel.
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);
@@ -673,7 +673,7 @@ mod tests {
         ctx
     }
 
-    /// Run the full pipeline against the in-memory catalog.
+    /// Run the full pipeline against in-memory tables.
     async fn run_pipeline(
         z1: &[f64],
         z2: &[f64],

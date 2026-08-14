@@ -1,10 +1,10 @@
 //! LD Score Regression (LDSC) transform node.
 //!
 //! Takes a single upstream GWAS summary statistics `DataFrame` (with Z-scores,
-//! sample sizes, and rsid), queries the VFS-mounted reference dataset for LD score panel
-//! data under `genetics.ld_score`, joins on rsid, and runs LD Score Regression
-//! via [`ldsc::hsq::estimate_h2`]. Outputs a single-row summary `DataFrame`
-//! with h², intercept, ratio, and per-annotation coefficients.
+//! sample sizes, and rsid), registers the VFS-mounted 1000G EUR LD-score and
+//! companion M Parquet panels, joins on rsid, and runs LD Score Regression via
+//! [`ldsc::hsq::estimate_h2`]. Outputs a single-row summary `DataFrame` with
+//! h², intercept, ratio, and per-annotation coefficients.
 
 use std::sync::Arc;
 
@@ -374,11 +374,10 @@ impl DagNode for LdscHsqNode {
                 "no input DataFrame".into(),
             )))?;
 
-        // 1. Build an isolated DataFusion context with the VFS catalog
-        //    registered (under "vfs"), then delegate to the
-        //    catalog-independent pipeline. Splitting here lets the pipeline
-        //    be exercised end-to-end against an in-memory catalog (see
-        //    `tests`).
+        // 1. Build an isolated DataFusion context sharing the engine-wide VFS
+        //    object store, register the reference Parquet files as session
+        //    tables, then delegate to the table-name-bound pipeline. Splitting
+        //    here lets tests provide schema-compatible in-memory tables.
         let ctx = node_ctx.session();
 
         crate::ldsc_common::register_listing_table(
@@ -410,16 +409,16 @@ impl DagNode for LdscHsqNode {
 }
 
 impl LdscHsqNode {
-    /// The catalog-independent h² pipeline.
+    /// The table-name-bound h² pipeline.
     ///
-    /// Given a [`SessionContext`] in which `vfs.ld_score.{ld_table}` resolves
-    /// to an LD-score panel, this registers the upstream sumstats `DataFrame` as
-    /// `sumstats`, runs the inner join on rsid, and fits
+    /// Given a [`SessionContext`] in which `panel_table` and `m_table` resolve
+    /// to LD-score and M panels, this registers the upstream sumstats
+    /// `DataFrame` as `sumstats`, runs the inner join on rsid, and fits
     /// [`ldsc::hsq::estimate_h2`].
     ///
     /// Extracted from [`DagNode::execute`](LdscHsqNode::execute) so the full
-    /// pipeline can be tested against an in-memory catalog without a live
-    /// VFS object-store backend.
+    /// pipeline can be tested against in-memory tables without a live VFS
+    /// object-store backend.
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
@@ -439,7 +438,7 @@ impl LdscHsqNode {
             .await
             .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
 
-        // 4. Build SQL: join sumstats with LD score panel on rsid.
+        // 3. Build SQL: join sumstats with LD score panel on rsid.
         //    The 1000g_eur panel has separate ld_score (ref LD) and w_ld
         //    (weight LD) columns.
         let sql = format!(
@@ -537,14 +536,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // In-memory catalog harness
+    // In-memory table harness
     // -----------------------------------------------------------------
     //
-    // Same approach as `ldsc_rg::tests`: register an in-memory
-    // `MemoryCatalogProvider` under the production `vfs` name with a
-    // `ld_score.1000g_eur` `MemTable`, so the node's SQL resolves identically
-    // to production and the full pipeline (join → estimate_h2 → batch) runs
-    // deterministically with no external service.
+    // Same approach as `ldsc_rg::tests`: register schema-compatible `MemTable`s
+    // under the table names accepted by `run_with_ctx`, so the full pipeline
+    // (join → estimate_h2 → batch) runs deterministically without VFS.
 
     /// LD-panel row count used by the synthetic fixtures.
     const N_SNP: usize = 200;
@@ -610,8 +607,8 @@ mod tests {
         .unwrap()
     }
 
-    /// `SessionContext` with an in-memory `vfs.ld_score.1000g_eur` table
-    /// plus its `1000g_eur_m` companion (single-row M_5_50 = `n`).
+    /// `SessionContext` with an in-memory LD panel plus its companion M table
+    /// (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);

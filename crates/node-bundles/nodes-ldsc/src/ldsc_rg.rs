@@ -1,10 +1,11 @@
 //! LD Score Regression bivariate node — genetic correlation (rg).
 //!
 //! Takes **two** upstream GWAS summary-statistics `DataFrame`s (trait 1 and
-//! trait 2, each with Z-scores, sample sizes, and rsid), queries the VFS
-//! data lake for the LD score panel under `vfs.ld_score.*`, inner-joins all
-//! three on rsid so only SNPs shared by *both* traits and the panel survive,
-//! and runs the bivariate LD Score Regression via [`ldsc::regress::RG::new`].
+//! trait 2, each with Z-scores, sample sizes, and rsid), registers the
+//! VFS-mounted 1000G EUR LD-score and companion M Parquet panels, inner-joins
+//! all three inputs on rsid so only SNPs shared by *both* traits and the panel
+//! survive, and runs the bivariate LD Score Regression via
+//! [`ldsc::regress::RG::new`].
 //! Outputs a single-row summary `DataFrame` with rg, its SE/z/p, the cross-trait
 //! gencov, and each trait's h².
 //!
@@ -387,22 +388,16 @@ impl DagNode for LdscRgNode {
                 "missing trait-2 input DataFrame (port 1)".into(),
             )))?;
 
-        // 1. Build an isolated DataFusion context with the VFS catalog
-        //    registered (under "vfs"), then delegate to the
-        //    catalog-independent pipeline. Splitting here lets the pipeline be
-        //    exercised end-to-end against an in-memory catalog (see
-        //    `tests::run_with_test_catalog`).
+        // 1. Build an isolated DataFusion context sharing the engine-wide VFS
+        //    object store, register the reference Parquet files as session
+        //    tables, then delegate to the table-name-bound pipeline. Splitting
+        //    here lets tests provide schema-compatible in-memory tables.
         let ctx = node_ctx.session();
 
         // TODO: Auto select LD score panel table by population
         // TODO: Make the LD panel configurable so callers can switch between
         // panels (e.g. 1000g_eur vs ukbb_eur) without editing source.
         //
-        // --- Old ukbb_eur panel (single ld_score column, no w_ld) ---
-        // let (rg, n_snp) =
-        //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
-        //
-        // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
@@ -438,18 +433,18 @@ impl DagNode for LdscRgNode {
 }
 
 impl LdscRgNode {
-    /// The catalog-independent rg pipeline.
+    /// The table-name-bound rg pipeline.
     ///
-    /// Given a [`SessionContext`] in which `vfs.ld_score.{ld_table}` resolves
-    /// to an LD-score panel, this registers the two upstream sumstats
+    /// Given a [`SessionContext`] in which `panel_table` and `m_table` resolve
+    /// to LD-score and M panels, this registers the two upstream sumstats
     /// `DataFrame`s as `sumstats1` / `sumstats2`, runs the 3-way inner join on
     /// rsid (keeping only SNPs shared by both traits and the panel), collects
     /// the aligned vectors, and fits [`ldsc::regress::RG`].
     ///
     /// Returns the fitted [`ldsc::regress::RG`] and the SNP count. Extracted
     /// from [`DagNode::execute`](LdscRgNode::execute) so the full pipeline can
-    /// be tested against an in-memory catalog without a live VFS object-store backend
-    /// server.
+    /// be tested against in-memory tables without a live VFS object-store
+    /// backend.
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
@@ -469,18 +464,6 @@ impl LdscRgNode {
         //    separate ld_score (ref LD) and w_ld (weight LD) columns.
         //    Ordered by genomic position so the block jackknife groups
         //    consecutive SNPs.
-        //
-        // --- Old ukbb_eur panel (ld_score used for both ref_ld and w_ld) ---
-        // let sql = format!(
-        //     r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
-        //               s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
-        //               l.ld_score AS "{REF}", l.ld_score AS "{WLD}"
-        //        FROM sumstats1 AS s1
-        //        INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-        //        INNER JOIN vfs.ld_score.{table} AS l ON s1."{rsid}" = l.rsid
-        //        ORDER BY l.locus.position"#,
-        //     ... (same bind params)
-        // );
         let ld_table = crate::ldsc_common::quote_table(panel_table);
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
@@ -736,16 +719,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // In-memory catalog harness
+    // In-memory table harness
     // -----------------------------------------------------------------
     //
-    // The production node resolves the LD panel through `vfs.ld_score.*`
-    // via a live REST catalog. To exercise the *full* pipeline
-    // (SQL 3-way join → vector extraction → RG fit → output batch)
-    // deterministically and without any external service, we register an
-    // in-memory `MemoryCatalogProvider` under the same `vfs` name, with a
-    // `ld_score.1000g_eur` table backed by a `MemTable`. The node's SQL then
-    // resolves identically to production.
+    // Production registers VFS-backed `ListingTable`s, then calls the same
+    // table-name-bound pipeline. To exercise the *full* pipeline (SQL 3-way
+    // join → vector extraction → RG fit → output batch) deterministically and
+    // without VFS, tests register `MemTable`s under the table names accepted
+    // by `run_with_ctx`.
 
     /// The LD-panel row count used by the synthetic fixtures.
     const N_SNP: usize = 200;
@@ -813,9 +794,8 @@ mod tests {
         .unwrap()
     }
 
-    /// Build a `SessionContext` with an in-memory `vfs.ld_score.1000g_eur`
-    /// table holding `ld_panel_batch(n)`, plus its `1000g_eur_m` companion
-    /// (single-row M_5_50 = `n`).
+    /// Build a `SessionContext` with an in-memory LD panel, plus its companion
+    /// M table (single-row M_5_50 = `n`).
     fn ctx_with_ld_panel(n: usize) -> SessionContext {
         let ctx = SessionContext::new();
         let batch = ld_panel_batch(n);

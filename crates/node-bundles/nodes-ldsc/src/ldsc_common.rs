@@ -1,8 +1,7 @@
 //! Shared helpers for LDSC nodes.
 //!
-//! The heavy per-panel ref abstraction is gone. Consumers resolve a catalog
-//! resource by logical name, get a DataFusion listing URL, and register the
-//! parquet files as a `ListingTable` on their own session context.
+//! Nodes resolve a built-in VFS URL and register its Parquet file as a
+//! `ListingTable` on their isolated DataFusion session.
 
 use std::sync::Arc;
 

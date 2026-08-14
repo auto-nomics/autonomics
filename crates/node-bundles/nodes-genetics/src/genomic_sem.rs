@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, RecordBatch, StringArray};
+use arrow_array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use faer::Mat;
@@ -645,6 +645,12 @@ fn munge_sumstats(
 
 const GSEM_LDSC_NODE_KIND: &str = "gsem_ldsc";
 
+/// Quote a data value for SQL interpolation. Trait names come from upstream
+/// data, so they must not be inserted into SQL as raw string literals.
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// Input schema for `gsem_ldsc`: long-format munged sumstats with a `trait`
 /// column identifying which trait each row belongs to.
 ///
@@ -657,6 +663,8 @@ const GSEM_LDSC_NODE_KIND: &str = "gsem_ldsc";
 ///
 /// `a1`/`a2` and other columns from `gsem_munge` are allowed as extra columns
 /// (the schema check permits superset outputs) but are not required.
+/// Multi-trait inputs require `a1`/`a2` at runtime so Z-score direction can be
+/// aligned across traits.
 fn ldsc_input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("rsid", DataType::Utf8, false),
@@ -769,7 +777,8 @@ impl NodeFactory for GsemLdscNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Takes munged GWAS sumstats for N traits (long-format DataFrame with rsid, z, n, trait), \
-        joins with the univariate LD-score panel from VFS, runs multivariate LD Score \
+        joins with the univariate 1000G EUR LD-score panel from VFS, orders SNPs by genomic \
+        position, aligns multi-trait Z scores using a1/a2, and runs multivariate LD Score \
         regression with block jackknife to estimate the genetic covariance matrix S and its \
         sampling covariance V. Outputs a single-row DataFrame (s_0..s_z, v_0..v_zz, m) \
         consumable by gsem_usermodel / gsem_commonfactor / gsem_rgmodel.\n\n\
@@ -880,7 +889,7 @@ impl DagNode for GsemLdscNode {
             }
         }
 
-        // ── 1. Register LD-score panel and companion M table from catalog ──
+        // ── 1. Register LD-score panel and companion M table from VFS ──
         nodes_ldsc::ldsc_common::register_listing_table(
             &session,
             "ld_panel",
@@ -910,6 +919,8 @@ impl DagNode for GsemLdscNode {
                 msg: format!("register_table failed: {e}"),
             })?;
 
+        validate_unique_trait_rsids(&session).await?;
+
         // ── 3. Discover trait names from the data ──
         let trait_names = discover_traits(&session).await?;
 
@@ -925,6 +936,18 @@ impl DagNode for GsemLdscNode {
             });
         }
 
+        if trait_names.len() > 1 {
+            let input_schema = input.data.schema();
+            let has_a1 = input_schema.fields().iter().any(|f| f.name() == "a1");
+            let has_a2 = input_schema.fields().iter().any(|f| f.name() == "a2");
+            if !has_a1 || !has_a2 {
+                return Err(DagError::NodeError {
+                    node_type: GSEM_LDSC_NODE_KIND.into(),
+                    msg: "multi-trait gsem_ldsc input requires 'a1' and 'a2' columns to align Z-score direction".into(),
+                });
+            }
+        }
+
         // ── 4. Pivot sumstats to wide format, join with LD panel ──
         let joined_df = build_wide_join(&session, &trait_names, "ld_panel").await?;
 
@@ -934,7 +957,7 @@ impl DagNode for GsemLdscNode {
             msg: format!("collect failed: {e}"),
         })?;
 
-        let extracted = extract_arrays(&batches, k, &trait_names)?;
+        let extracted = extract_arrays(&batches, k)?;
 
         // ── 6. Read M_5_50 ──
         let m_sql = format!(r#"SELECT "m_5_50" FROM ld_panel_m"#);
@@ -1034,56 +1057,160 @@ async fn discover_traits(
     Ok(traits)
 }
 
-/// Build a wide-format join: pivot N traits to per-SNP columns, inner-join with
-/// the LD-score panel on rsid.
+/// Reject duplicate `(trait, rsid)` rows before the wide pivot can silently
+/// collapse them.
+async fn validate_unique_trait_rsids(
+    session: &datafusion::prelude::SessionContext,
+) -> Result<(), DagError> {
+    let df = session
+        .sql(
+            r#"SELECT "rsid", "trait", count(*) AS "n_rows"
+               FROM gsem_sumstats
+               GROUP BY "rsid", "trait"
+               HAVING count(*) > 1
+               ORDER BY "rsid", "trait"
+               LIMIT 20"#,
+        )
+        .await
+        .map_err(|e| DagError::NodeError {
+            node_type: GSEM_LDSC_NODE_KIND.into(),
+            msg: format!("duplicate check failed: {e}"),
+        })?;
+    let batches = df.collect().await.map_err(|e| DagError::NodeError {
+        node_type: GSEM_LDSC_NODE_KIND.into(),
+        msg: format!("duplicate check collect failed: {e}"),
+    })?;
+
+    let mut duplicates = Vec::new();
+    for batch in &batches {
+        let rsids = dag_core::node::string_opt_values(batch.column(0).as_ref()).ok_or(
+            DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "duplicate check 'rsid' column is not a string type".into(),
+            },
+        )?;
+        let traits = dag_core::node::string_opt_values(batch.column(1).as_ref()).ok_or(
+            DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "duplicate check 'trait' column is not a string type".into(),
+            },
+        )?;
+        let counts = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or(DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "duplicate check 'n_rows' column is not Int64".into(),
+            })?;
+        for i in 0..batch.num_rows() {
+            duplicates.push(format!(
+                "({}, {})={}x",
+                rsids[i].clone().unwrap_or_default(),
+                traits[i].clone().unwrap_or_default(),
+                counts.value(i)
+            ));
+        }
+    }
+
+    if !duplicates.is_empty() {
+        return Err(DagError::NodeError {
+            node_type: GSEM_LDSC_NODE_KIND.into(),
+            msg: format!(
+                "duplicate (trait, rsid) rows in gsem_ldsc input: {}. Deduplicate the input before regression.",
+                duplicates.join(", ")
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Build a wide-format join: pivot N traits to per-SNP columns, align Z scores
+/// to the first sorted trait's allele orientation, then inner-join with the
+/// LD-score panel on rsid in genomic order.
 async fn build_wide_join(
     session: &datafusion::prelude::SessionContext,
     trait_names: &[String],
     panel_table: &str,
 ) -> Result<datafusion::prelude::DataFrame, DagError> {
+    let align_alleles = trait_names.len() > 1;
+
     // Build conditional aggregation to pivot long → wide.
-    // Each trait gets z_{name} and n_{name} columns.
+    // Index-suffixed aliases keep trait labels out of SQL identifiers.
     let mut z_cases = Vec::new();
     let mut n_cases = Vec::new();
-    for t in trait_names {
+    let mut a1_cases = Vec::new();
+    let mut a2_cases = Vec::new();
+    for (i, t) in trait_names.iter().enumerate() {
+        let trait_literal = sql_string_literal(t);
         z_cases.push(format!(
-            r#"MAX(CASE WHEN "trait" = '{t}' THEN "z" END) AS "z_{t}""#
+            r#"MAX(CASE WHEN "trait" = {trait_literal} THEN "z" END) AS "z_{i}""#
         ));
         n_cases.push(format!(
-            r#"MAX(CASE WHEN "trait" = '{t}' THEN "n" END) AS "n_{t}""#
+            r#"MAX(CASE WHEN "trait" = {trait_literal} THEN "n" END) AS "n_{i}""#
         ));
+        if align_alleles {
+            a1_cases.push(format!(
+                r#"MAX(CASE WHEN "trait" = {trait_literal} THEN "a1" END) AS "a1_{i}""#
+            ));
+            a2_cases.push(format!(
+                r#"MAX(CASE WHEN "trait" = {trait_literal} THEN "a2" END) AS "a2_{i}""#
+            ));
+        }
     }
 
+    let allele_cols = if align_alleles {
+        format!(", {}, {}", a1_cases.join(", "), a2_cases.join(", "))
+    } else {
+        String::new()
+    };
+
     let pivot_sql = format!(
-        r#"SELECT "rsid", {z_cols}, {n_cols}
+        r#"SELECT "rsid", {z_cols}, {n_cols}{allele_cols}
            FROM gsem_sumstats
            GROUP BY "rsid""#,
         z_cols = z_cases.join(", "),
         n_cols = n_cases.join(", "),
+        allele_cols = allele_cols,
     );
+
+    if align_alleles {
+        validate_wide_alleles(session, &pivot_sql, trait_names).await?;
+    }
+
+    let mut z_and_n = Vec::new();
+    for i in 0..trait_names.len() {
+        if align_alleles {
+            z_and_n.push(format!(
+                r#"CASE
+                     WHEN upper(p."a1_{i}") = upper(p."a1_0") AND upper(p."a2_{i}") = upper(p."a2_0")
+                       THEN p."z_{i}"
+                     WHEN upper(p."a1_{i}") = upper(p."a2_0") AND upper(p."a2_{i}") = upper(p."a1_0")
+                       THEN -p."z_{i}"
+                   END AS "z_{i}""#
+            ));
+        } else {
+            z_and_n.push(format!(r#"p."z_{i}" AS "z_{i}""#));
+        }
+        z_and_n.push(format!(r#"p."n_{i}" AS "n_{i}""#));
+    }
+    let not_null_filters: Vec<String> = (0..trait_names.len())
+        .map(|i| format!(r#"p."z_{i}" IS NOT NULL"#))
+        .collect();
 
     let sql = format!(
         r#"SELECT p."rsid", {z_and_n}, l."ld_score" AS "l2", l."w_ld" AS "wld"
            FROM ({pivot_sql}) AS p
            INNER JOIN {ld_table} AS l
            ON p."rsid" = l."rsid"
-           WHERE {not_null_filters}"#,
-        z_and_n = {
-            let mut cols = Vec::new();
-            for t in trait_names {
-                cols.push(format!(r#"p."z_{t}" AS "z_{t}""#));
-                cols.push(format!(r#"p."n_{t}" AS "n_{t}""#));
-            }
-            cols.join(", ")
-        },
+           WHERE {not_null_filters}
+           ORDER BY TRY_CAST(l."locus"."contig" AS INT) NULLS LAST,
+                    l."locus"."contig",
+                    l."locus"."position",
+                    p."rsid""#,
+        z_and_n = z_and_n.join(", "),
         ld_table = nodes_ldsc::ldsc_common::quote_table(panel_table),
-        not_null_filters = {
-            let mut filters = Vec::new();
-            for t in trait_names {
-                filters.push(format!(r#"p."z_{t}" IS NOT NULL"#));
-            }
-            filters.join(" AND ")
-        },
+        not_null_filters = not_null_filters.join(" AND "),
     );
 
     session.sql(&sql).await.map_err(|e| DagError::NodeError {
@@ -1092,19 +1219,102 @@ async fn build_wide_join(
     })
 }
 
-/// Extract per-SNP arrays from the joined batches.
-fn extract_arrays(
-    batches: &[RecordBatch],
-    k: usize,
+/// Reject missing, conflicting, or ambiguous allele pairs before regression.
+async fn validate_wide_alleles(
+    session: &datafusion::prelude::SessionContext,
+    pivot_sql: &str,
     trait_names: &[String],
-) -> Result<LdscArrays, DagError> {
-    // Determine column indices: rsid, then [z_t0, n_t0, z_t1, n_t1, ...], l2, wld.
+) -> Result<(), DagError> {
+    let reference = trait_names.first().expect("multi-trait input has a trait");
+    let mismatch_filters: Vec<String> = (1..trait_names.len())
+        .map(|i| {
+            format!(
+                r#"p."a1_{i}" IS NULL OR p."a2_{i}" IS NULL OR NOT (
+                    (upper(p."a1_{i}") = upper(p."a1_0") AND upper(p."a2_{i}") = upper(p."a2_0")) OR
+                    (upper(p."a1_{i}") = upper(p."a2_0") AND upper(p."a2_{i}") = upper(p."a1_0"))
+                )"#
+            )
+        })
+        .collect();
+    let used_filter: String = (0..trait_names.len())
+        .map(|i| format!(r#"p."z_{i}" IS NOT NULL"#))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    let sql = format!(
+        r#"SELECT p."rsid", p."a1_0", p."a2_0"
+           FROM ({pivot_sql}) AS p
+           WHERE {used_filter}
+             AND (
+               p."a1_0" IS NULL OR p."a2_0" IS NULL
+                 OR upper(p."a1_0") = upper(p."a2_0")
+               OR {mismatch_filters}
+             )
+           ORDER BY p."rsid"
+           LIMIT 5"#,
+        mismatch_filters = mismatch_filters.join(" OR "),
+    );
+    let df = session.sql(&sql).await.map_err(|e| DagError::NodeError {
+        node_type: GSEM_LDSC_NODE_KIND.into(),
+        msg: format!("allele alignment check failed: {e}\nSQL: {sql}"),
+    })?;
+    let batches = df.collect().await.map_err(|e| DagError::NodeError {
+        node_type: GSEM_LDSC_NODE_KIND.into(),
+        msg: format!("allele alignment collect failed: {e}"),
+    })?;
+
+    let mut problems = Vec::new();
+    for batch in &batches {
+        let rsids = dag_core::node::string_opt_values(batch.column(0).as_ref()).ok_or(
+            DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "allele alignment 'rsid' column is not a string type".into(),
+            },
+        )?;
+        let a1s = dag_core::node::string_opt_values(batch.column(1).as_ref()).ok_or(
+            DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "allele alignment 'a1' column is not a string type".into(),
+            },
+        )?;
+        let a2s = dag_core::node::string_opt_values(batch.column(2).as_ref()).ok_or(
+            DagError::NodeError {
+                node_type: GSEM_LDSC_NODE_KIND.into(),
+                msg: "allele alignment 'a2' column is not a string type".into(),
+            },
+        )?;
+        for i in 0..batch.num_rows() {
+            problems.push(format!(
+                "{}[{}={}]",
+                rsids[i].clone().unwrap_or_default(),
+                a1s[i].clone().unwrap_or_else(|| "NULL".into()),
+                a2s[i].clone().unwrap_or_else(|| "NULL".into())
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        return Err(DagError::NodeError {
+            node_type: GSEM_LDSC_NODE_KIND.into(),
+            msg: format!(
+                "cannot align alleles for {} SNPs (examples: {}). Each trait must match reference trait '{reference}' as (a1,a2) or reversed (a2,a1); missing and conflicting alleles are rejected.",
+                problems.len(),
+                problems.join(", ")
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Extract per-SNP arrays from the joined batches.
+fn extract_arrays(batches: &[RecordBatch], k: usize) -> Result<LdscArrays, DagError> {
+    // Determine column indices: rsid, then [z_0, n_0, z_1, n_1, ...], l2, wld.
     // This matches the SQL output column order.
     let mut z_cols = Vec::with_capacity(k);
     let mut n_cols = Vec::with_capacity(k);
-    for t in trait_names {
-        z_cols.push(format!("z_{t}"));
-        n_cols.push(format!("n_{t}"));
+    for i in 0..k {
+        z_cols.push(format!("z_{i}"));
+        n_cols.push(format!("n_{i}"));
     }
 
     let mut z = vec![Vec::new(); k];
@@ -2104,6 +2314,9 @@ impl DagNode for GsemRgmodelNode {
 mod tests {
     use super::*;
     use arrow_array::Float64Array;
+    use arrow_array::{Int64Array, StructArray};
+    use datafusion::datasource::MemTable;
+    use datafusion::prelude::SessionContext;
     use std::sync::Arc as Arc2;
 
     /// Build a raw GWAS sumstats batch with typical column names.
@@ -2298,6 +2511,185 @@ mod tests {
         // munge has rsid, z, n, a1, a2 — ldsc needs rsid, z, n, trait.
         // ldsc's "trait" is absent from munge → not directly compatible.
         assert!(munge_schema.field_with_name("trait").is_err());
+    }
+
+    fn register_test_batch(ctx: &SessionContext, name: &str, batch: RecordBatch) {
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+        ctx.register_table(name, Arc::new(table)).unwrap();
+    }
+
+    fn long_sumstats_batch(
+        rsids: &[&str],
+        traits: &[&str],
+        z: &[f64],
+        n: &[f64],
+        a1: &[&str],
+        a2: &[&str],
+    ) -> RecordBatch {
+        let schema = Arc2::new(Schema::new(vec![
+            Field::new("rsid", DataType::Utf8, false),
+            Field::new("z", DataType::Float64, false),
+            Field::new("n", DataType::Float64, false),
+            Field::new("trait", DataType::Utf8, false),
+            Field::new("a1", DataType::Utf8, false),
+            Field::new("a2", DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc2::new(StringArray::from(rsids.to_vec())),
+                Arc2::new(Float64Array::from(z.to_vec())),
+                Arc2::new(Float64Array::from(n.to_vec())),
+                Arc2::new(StringArray::from(traits.to_vec())),
+                Arc2::new(StringArray::from(a1.to_vec())),
+                Arc2::new(StringArray::from(a2.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn ld_panel_batch() -> RecordBatch {
+        let contigs = vec!["2", "10", "2"];
+        let positions = vec![10_i64, 20, 30];
+        let locus = StructArray::new(
+            vec![
+                Arc2::new(Field::new("contig", DataType::Utf8, false)),
+                Arc2::new(Field::new("position", DataType::Int64, false)),
+            ]
+            .into(),
+            vec![
+                Arc2::new(StringArray::from(contigs.clone())) as Arc2<dyn Array>,
+                Arc2::new(Int64Array::from(positions.clone())),
+            ],
+            None,
+        );
+        let schema = Arc2::new(Schema::new(vec![
+            Field::new("rsid", DataType::Utf8, false),
+            Field::new("ld_score", DataType::Float64, false),
+            Field::new("w_ld", DataType::Float64, false),
+            Field::new(
+                "locus",
+                DataType::Struct(
+                    vec![
+                        Arc2::new(Field::new("contig", DataType::Utf8, false)),
+                        Arc2::new(Field::new("position", DataType::Int64, false)),
+                    ]
+                    .into(),
+                ),
+                false,
+            ),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc2::new(StringArray::from(vec!["rsA", "rsB", "rsC"])),
+                Arc2::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                Arc2::new(Float64Array::from(vec![1.0, 1.5, 2.0])),
+                Arc2::new(locus) as Arc2<dyn Array>,
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn wide_join_aligns_alleles_and_orders_genomically() {
+        let ctx = SessionContext::new();
+        register_test_batch(
+            &ctx,
+            "gsem_sumstats",
+            long_sumstats_batch(
+                &["rsA", "rsB", "rsC", "rsA", "rsB", "rsC"],
+                &["a", "a", "a", "b", "b", "b"],
+                &[2.0, 1.0, 3.0, 5.0, 4.0, 6.0],
+                &[1000.0; 6],
+                &["C", "a", "G", "T", "g", "A"],
+                &["T", "g", "A", "C", "a", "G"],
+            ),
+        );
+        register_test_batch(&ctx, "ld_panel", ld_panel_batch());
+
+        let joined = build_wide_join(&ctx, &["a".into(), "b".into()], "ld_panel")
+            .await
+            .unwrap();
+        let batches = joined.collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+
+        let rsids = batch
+            .column_by_name("rsid")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(rsids.value(0), "rsA");
+        assert_eq!(rsids.value(1), "rsC");
+        assert_eq!(rsids.value(2), "rsB");
+
+        let z_a = batch
+            .column_by_name("z_0")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let z_b = batch
+            .column_by_name("z_1")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(z_a.value(0), 2.0);
+        assert_eq!(z_a.value(1), 3.0);
+        assert_eq!(z_a.value(2), 1.0);
+        assert_eq!(z_b.value(0), -5.0);
+        assert_eq!(z_b.value(1), -6.0);
+        assert_eq!(z_b.value(2), -4.0);
+    }
+
+    #[tokio::test]
+    async fn wide_join_rejects_unalignable_alleles() {
+        let ctx = SessionContext::new();
+        register_test_batch(
+            &ctx,
+            "gsem_sumstats",
+            long_sumstats_batch(
+                &["rsA", "rsA"],
+                &["a", "b"],
+                &[2.0, 5.0],
+                &[1000.0; 2],
+                &["A", "G"],
+                &["G", "T"],
+            ),
+        );
+        register_test_batch(&ctx, "ld_panel", ld_panel_batch());
+
+        let err = build_wide_join(&ctx, &["a".into(), "b".into()], "ld_panel")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot align alleles"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn duplicate_trait_rsids_are_rejected() {
+        let ctx = SessionContext::new();
+        register_test_batch(
+            &ctx,
+            "gsem_sumstats",
+            long_sumstats_batch(
+                &["rsA", "rsA"],
+                &["a", "a"],
+                &[1.0, 2.0],
+                &[1000.0; 2],
+                &["A", "A"],
+                &["G", "G"],
+            ),
+        );
+
+        let err = validate_unique_trait_rsids(&ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("duplicate (trait, rsid)"), "{err}");
     }
 
     #[test]
@@ -2531,16 +2923,15 @@ mod tests {
     fn test_extract_arrays_filters_null_l2_wld() {
         use arrow_array::builder::Float64Builder;
         let k = 2;
-        let trait_names = vec!["t1".to_string(), "t2".to_string()];
 
         // Build a schema matching the build_wide_join SQL output:
-        // rsid, z_t1, n_t1, z_t2, n_t2, l2, wld
+        // rsid, z_0, n_0, z_1, n_1, l2, wld
         let schema = Arc2::new(Schema::new(vec![
             Field::new("rsid", DataType::Utf8, false),
-            Field::new("z_t1", DataType::Float64, true),
-            Field::new("n_t1", DataType::Float64, true),
-            Field::new("z_t2", DataType::Float64, true),
-            Field::new("n_t2", DataType::Float64, true),
+            Field::new("z_0", DataType::Float64, true),
+            Field::new("n_0", DataType::Float64, true),
+            Field::new("z_1", DataType::Float64, true),
+            Field::new("n_1", DataType::Float64, true),
             Field::new("l2", DataType::Float64, true),
             Field::new("wld", DataType::Float64, true),
         ]));
@@ -2548,10 +2939,10 @@ mod tests {
         // 5 SNPs: SNP 0-2 are clean; SNP 3 has NULL l2; SNP 4 has NaN wld.
         let rsids = StringArray::from(vec!["rs1", "rs2", "rs3", "rs4", "rs5"]);
 
-        let z_t1 = Float64Array::from(vec![1.0, 2.0, -1.5, 0.5, -2.0]);
-        let n_t1 = Float64Array::from(vec![1000.0; 5]);
-        let z_t2 = Float64Array::from(vec![0.5, -1.0, 2.0, 1.5, -0.5]);
-        let n_t2 = Float64Array::from(vec![2000.0; 5]);
+        let z_0 = Float64Array::from(vec![1.0, 2.0, -1.5, 0.5, -2.0]);
+        let n_0 = Float64Array::from(vec![1000.0; 5]);
+        let z_1 = Float64Array::from(vec![0.5, -1.0, 2.0, 1.5, -0.5]);
+        let n_1 = Float64Array::from(vec![2000.0; 5]);
 
         // l2: [10.0, 20.0, 30.0, NULL, 50.0]
         let mut l2_b = Float64Builder::new();
@@ -2575,17 +2966,17 @@ mod tests {
             schema,
             vec![
                 Arc2::new(rsids),
-                Arc2::new(z_t1),
-                Arc2::new(n_t1),
-                Arc2::new(z_t2),
-                Arc2::new(n_t2),
+                Arc2::new(z_0),
+                Arc2::new(n_0),
+                Arc2::new(z_1),
+                Arc2::new(n_1),
                 Arc2::new(l2),
                 Arc2::new(wld),
             ],
         )
         .unwrap();
 
-        let extracted = extract_arrays(&[batch], k, &trait_names).unwrap();
+        let extracted = extract_arrays(&[batch], k).unwrap();
 
         // SNPs 0-2 survive; SNPs 3 (NULL l2) and 4 (NaN wld) are filtered.
         assert_eq!(extracted.n_snps, 3);
