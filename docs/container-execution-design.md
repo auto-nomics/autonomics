@@ -449,7 +449,7 @@ pub struct NodeCtx {
     pub runtime_env: Arc<RuntimeEnv>,
     pub iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
     pub datalake: Arc<Datalake>,
-    pub opendal: Option<Arc<fs::OpendalFileStorage>>,
+    pub opendal: Option<Arc<vfs::OpendalFileStorage>>,
     /// Container runtime for container-backed node execution.
     /// `None` when the engine is not configured for containers.
     pub container_runtime: Option<Arc<dyn ContainerRuntime>>,

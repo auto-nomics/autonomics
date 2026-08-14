@@ -5,7 +5,7 @@ use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
 };
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
 use crate::default_registry::build_default_registry;
@@ -831,7 +831,7 @@ mod tests {
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::common::HashMap;
     use datafusion::prelude::CsvReadOptions;
-    use fs::OpendalFileStorage;
+    use vfs::OpendalFileStorage;
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")

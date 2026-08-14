@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::common::HashMap;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

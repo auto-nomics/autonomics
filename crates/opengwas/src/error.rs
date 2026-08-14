@@ -31,7 +31,7 @@ pub enum OpengwasError {
     Io(#[from] std::io::Error),
 
     #[error("storage error: {0}")]
-    Storage(#[from] fs::opendal::Error),
+    Storage(#[from] vfs::opendal::Error),
 }
 
 /// Result alias for OpenGWAS operations.

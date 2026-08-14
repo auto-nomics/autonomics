@@ -22,7 +22,7 @@ use dag_core::resource_catalog::ResourceCatalog;
 /// ```
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
-    opendal: Option<Arc<fs::OpendalFileStorage>>,
+    opendal: Option<Arc<vfs::OpendalFileStorage>>,
     resources: Arc<ResourceCatalog>,
 ) -> NodeRegistry {
     let mut registry = NodeRegistry::new(

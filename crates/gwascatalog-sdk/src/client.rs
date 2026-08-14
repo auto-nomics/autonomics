@@ -203,7 +203,7 @@ impl GwasCatalogClient {
     pub async fn download_stream_to_storage<F>(
         &self,
         url: &str,
-        storage: &fs::OpendalFileStorage,
+        storage: &vfs::OpendalFileStorage,
         path: &str,
         mut on_progress: F,
     ) -> Result<u64>

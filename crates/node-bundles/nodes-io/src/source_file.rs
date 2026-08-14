@@ -353,7 +353,7 @@ async fn read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs::OpendalFileStorage;
+    use vfs::OpendalFileStorage;
 
     #[tokio::test]
     async fn test_load_vcf() {

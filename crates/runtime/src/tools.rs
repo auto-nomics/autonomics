@@ -12,7 +12,7 @@ use writing_base::LatexEngine;
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
 use opentargets::OpenTargetsClient;
@@ -136,7 +136,7 @@ pub async fn tool_set_from_config(
     config: &RuntimeConfig,
 ) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
     // Filesystem / shell tools — always enabled.
-    let mut tools = fs::vbash_registrations(file_storage.clone());
+    let mut tools = vfs::vbash_registrations(file_storage.clone());
 
     if config.enable_opengwas {
         match opengwas_tools_with_token(file_storage.clone(), config.opengwas_token.as_deref()) {

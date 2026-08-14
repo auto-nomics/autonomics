@@ -2380,7 +2380,6 @@ dependencies = [
  "blake3",
  "chrono",
  "datafusion",
- "fs",
  "futures",
  "petgraph",
  "resource-catalog",
@@ -2391,6 +2390,7 @@ dependencies = [
  "tokio",
  "tracing",
  "turso",
+ "vfs",
 ]
 
 [[package]]
@@ -2496,7 +2496,6 @@ dependencies = [
  "dag-core",
  "datafusion",
  "evalue",
- "fs",
  "futures",
  "mixer",
  "mrpresso",
@@ -2532,6 +2531,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "turso",
+ "vfs",
 ]
 
 [[package]]
@@ -2546,12 +2546,12 @@ dependencies = [
  "async-trait",
  "data-engine",
  "datafusion",
- "fs",
  "nodes-sql",
  "schemars",
  "serde",
  "serde_json",
  "tokio",
+ "vfs",
 ]
 
 [[package]]
@@ -4061,31 +4061,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs"
-version = "0.1.0"
-dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
- "apply-patch",
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "datafusion",
- "futures",
- "glob",
- "opendal",
- "regex",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "fs4"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4725,7 +4700,6 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "bib-types",
- "fs",
  "futures",
  "reqwest",
  "resource-catalog",
@@ -4734,6 +4708,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "vfs",
 ]
 
 [[package]]
@@ -7020,7 +6995,6 @@ dependencies = [
  "crossref",
  "dag-core",
  "datafusion",
- "fs",
  "mr",
  "openalex",
  "opentargets",
@@ -7032,6 +7006,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "vfs",
 ]
 
 [[package]]
@@ -7251,7 +7226,6 @@ dependencies = [
  "async-trait",
  "dag-core",
  "datafusion",
- "fs",
  "schemars",
  "serde",
  "serde_json",
@@ -7259,6 +7233,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "vfs",
  "visualization",
 ]
 
@@ -8010,7 +7985,6 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "async-trait",
- "fs",
  "futures",
  "reqwest",
  "rusqlite",
@@ -8021,6 +7995,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "vfs",
 ]
 
 [[package]]
@@ -9588,7 +9563,6 @@ dependencies = [
  "data-engine",
  "data-engine-tools",
  "datafusion",
- "fs",
  "futures",
  "gwascatalog-sdk",
  "opengwas",
@@ -9602,6 +9576,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "vfs",
  "writing-base",
 ]
 
@@ -11852,6 +11827,31 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vfs"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "apply-patch",
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "datafusion",
+ "futures",
+ "glob",
+ "opendal",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "visualization"

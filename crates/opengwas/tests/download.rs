@@ -2,7 +2,7 @@ use agentik_core::tools::ToolFunction;
 use opengwas::tools::download::{DownloadFilesInput, DownloadFilesTool};
 use std::sync::Arc;
 
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use opengwas::OpengwasClient;
 
 /// Integration test — hits the live OpenGWAS API and downloads to memory storage.

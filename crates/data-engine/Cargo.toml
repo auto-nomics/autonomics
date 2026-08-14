@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 dag-core = { path = "../dag-core" }
 thiserror.workspace = true
-fs = { path = "../fs" }
+vfs = { path = "../vfs" }
 serde = { workspace = true, features = ["derive"] }
 datafusion.workspace = true
 tokio = { workspace = true }

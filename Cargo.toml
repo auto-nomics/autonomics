@@ -31,7 +31,7 @@ members = [
   "crates/eutils",
   "crates/opentargets",
   "crates/runtime",
-  "crates/fs",
+  "crates/vfs",
   "crates/biofusion",
   "crates/data-engine-tools",
   "crates/apply-patch",

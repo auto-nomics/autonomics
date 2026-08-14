@@ -99,7 +99,7 @@ pub struct NodeCtx {
     /// artifact-producing nodes (e.g. `VizNode`) to write outputs into the
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
-    pub opendal: Option<Arc<fs::OpendalFileStorage>>,
+    pub opendal: Option<Arc<vfs::OpendalFileStorage>>,
     /// The centralized resource catalog — the single source of truth for
     /// resource addresses (Iceberg tables, file paths, endpoints, config).
     /// Nodes resolve resources through this instead of hardcoding names/paths.
@@ -126,7 +126,7 @@ impl NodeCtx {
     /// needs to resolve resources.
     pub fn new(
         runtime_env: Arc<RuntimeEnv>,
-        opendal: Option<Arc<fs::OpendalFileStorage>>,
+        opendal: Option<Arc<vfs::OpendalFileStorage>>,
     ) -> Self {
         Self {
             runtime_env,
@@ -191,7 +191,7 @@ impl NodeRegistry {
     /// ingredients (wraps [`NodeCtx::new`] + [`Self::new`]).
     pub fn with_ingredients(
         runtime_env: Arc<RuntimeEnv>,
-        opendal: Option<Arc<fs::OpendalFileStorage>>,
+        opendal: Option<Arc<vfs::OpendalFileStorage>>,
     ) -> Self {
         Self::new(NodeCtx::new(runtime_env, opendal))
     }

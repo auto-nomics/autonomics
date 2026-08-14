@@ -70,7 +70,7 @@ Use `engine.view_dag()` to obtain a Graphviz DOT representation. `engine.get_out
 ```rust,no_run
 use std::sync::Arc;
 use data_engine::DataEngine;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let files = Arc::new(OpendalFileStorage::new("/data"));

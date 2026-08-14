@@ -16,7 +16,7 @@ mod unpublished;
 use std::sync::Arc;
 
 use agentik_core::tools::ToolRegistration;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 
 pub(crate) use self::helpers::json_err;
 use crate::client::GwasCatalogClient;

@@ -30,7 +30,7 @@ use dag_core::resource_catalog::{
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -369,7 +369,7 @@ impl SharedInfra {
         // run_dag calls from one agent would mutate the other agent's DAG.
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
-        let mut tools: Vec<ToolRegistration> = fs::vbash_registrations(file_storage.clone());
+        let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
 
         if profile.enable_opengwas {
             match opengwas_tools_with_token(file_storage.clone(), None) {

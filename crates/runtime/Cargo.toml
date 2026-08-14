@@ -23,7 +23,7 @@ resource-catalog = { path = "../resource-catalog" }
 dag-core = { path = "../dag-core" }
 anyhow = "1"
 datafusion.workspace = true
-fs = { path = "../fs" }
+vfs = { path = "../vfs" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
 tokio = { workspace = true }

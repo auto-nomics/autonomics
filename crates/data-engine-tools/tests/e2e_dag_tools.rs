@@ -4,7 +4,7 @@ use agentik_core::tools::Toolset;
 use agentik_sdk::types::tools::{ToolResult, ToolUse};
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use serde_json::json;
 
 fn build_tooluse(id: &str, name: &str, input: serde_json::Value) -> ToolUse {

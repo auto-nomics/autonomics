@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use crate::cli::{
     ResourceAction, ResourceAddArgs, ResourceArgs, ResourceDriftArgs, ResourceExportArgs,
-    ResourceListArgs, ResourceRemoveArgs, ResourceShowArgs, ResourceTargetArgs,
-    ResourceUpdateArgs,
+    ResourceListArgs, ResourceRemoveArgs, ResourceShowArgs, ResourceTargetArgs, ResourceUpdateArgs,
 };
 
 async fn open_catalog() -> color_eyre::Result<Arc<dag_core::resource_catalog::ResourceCatalog>> {
@@ -122,8 +121,8 @@ async fn resource_list(
             // Table output.
             println!("{} resources:\n", entries.len());
             println!(
-                "  {:<14} {:<30} {:<10} {:<8} {:<8} DESCRIPTION",
-                "KIND", "NAME", "ARCHIVE", "INGEST", ""
+                "  {:<14} {:<30} {:<8} {:<8} DESCRIPTION",
+                "KIND", "NAME", "ARCHIVE", "INGEST"
             );
             println!("  {:-<120}", "");
             for e in &entries {
@@ -290,40 +289,42 @@ async fn resource_add(
         )
     })?;
 
-    let address = match kind {
-        ResourceKind::Storage => {
-            let path = args.path.as_deref().ok_or_else(|| {
-                color_eyre::eyre::eyre!("--path is required for kind=storage")
-            })?;
-            ResourceAddress::storage("default", path)
-        }
-        ResourceKind::Endpoint => {
-            let url = args.url.as_deref().ok_or_else(|| {
-                color_eyre::eyre::eyre!("--url is required for kind=endpoint")
-            })?;
-            ResourceAddress::endpoint(url)
-        }
-        ResourceKind::Config => {
-            let key = args.key.as_deref().ok_or_else(|| {
-                color_eyre::eyre::eyre!("--key is required for kind=config")
-            })?;
-            let value = args.value.as_deref().ok_or_else(|| {
-                color_eyre::eyre::eyre!("--value is required for kind=config")
-            })?;
-            ResourceAddress::config(key, value)
-        }
-        ResourceKind::Database => {
-            let path = args.path.as_deref().ok_or_else(|| {
-                color_eyre::eyre::eyre!("--path is required for kind=database")
-            })?;
-            let db_kind = match args.db_kind.as_deref() {
-                Some("turso") => DbKind::Turso,
-                Some("postgres") => DbKind::Postgres,
-                _ => DbKind::Sqlite,
-            };
-            ResourceAddress::database(db_kind, path)
-        }
-    };
+    let address =
+        match kind {
+            ResourceKind::Storage => {
+                let path = args.path.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--path is required for kind=storage")
+                })?;
+                ResourceAddress::storage("default", path)
+            }
+            ResourceKind::Endpoint => {
+                let url = args.url.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--url is required for kind=endpoint")
+                })?;
+                ResourceAddress::endpoint(url)
+            }
+            ResourceKind::Config => {
+                let key = args
+                    .key
+                    .as_deref()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("--key is required for kind=config"))?;
+                let value = args.value.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--value is required for kind=config")
+                })?;
+                ResourceAddress::config(key, value)
+            }
+            ResourceKind::Database => {
+                let path = args.path.as_deref().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("--path is required for kind=database")
+                })?;
+                let db_kind = match args.db_kind.as_deref() {
+                    Some("turso") => DbKind::Turso,
+                    Some("postgres") => DbKind::Postgres,
+                    _ => DbKind::Sqlite,
+                };
+                ResourceAddress::database(db_kind, path)
+            }
+        };
 
     let mut entry_builder = ResourceEntry::new(&args.name, kind, &args.description, address);
 

@@ -7,7 +7,7 @@ use agentik_core::tools::{ExecutionMode, ProgressRecord, ToolContext, ToolError,
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 use serde_json::Value;
 
 #[tool(

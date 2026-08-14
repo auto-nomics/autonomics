@@ -5,7 +5,7 @@ use reqwest::{Client, header, multipart};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use fs::OpendalFileStorage;
+use vfs::OpendalFileStorage;
 
 use crate::error::{OpengwasError, Result};
 use crate::types::*;

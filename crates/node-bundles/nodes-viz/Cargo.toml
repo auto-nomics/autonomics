@@ -8,7 +8,7 @@ description = "Visualization DAG node bundle."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
-fs = { path = "../../fs" }
+vfs = { path = "../../vfs" }
 visualization = { path = "../../visualization" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
