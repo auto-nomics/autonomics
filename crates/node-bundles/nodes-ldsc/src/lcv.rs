@@ -51,11 +51,6 @@ impl ::dag_core::dag::NodeError for LcvNodeError {
     }
 }
 
-impl From<datalake::error::Error> for LcvNodeError {
-    fn from(e: datalake::error::Error) -> Self {
-        LcvNodeError::Datalake(e.to_string())
-    }
-}
 
 // =====================================================================
 // Schemas
@@ -353,13 +348,22 @@ impl DagNode for LcvNode {
         })?;
 
         let ctx = node_ctx.session();
-        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+        crate::ldsc_common::register_catalog_table(
+            &ctx,
             &node_ctx.resources,
             "ldscore.1000g_eur",
-            "1000g_eur",
-        );
-        let (out, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.config).await?;
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| LcvNodeError::Datalake(e.to_string()))?;
+        let (out, n_snp) = Self::run_with_ctx(
+            &ctx,
+            &input1.data,
+            &input2.data,
+            "ld_panel",
+            &self.config,
+        )
+        .await?;
 
         let batch = build_result_batch(&out, n_snp)?;
         let df = ctx.read_batch(batch).map_err(LcvNodeError::ReadBatch)?;
@@ -380,7 +384,7 @@ impl LcvNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_ref: &crate::ldsc_common::LdScoreRef,
+        panel_table: &str,
         cfg: &LcvConfig,
     ) -> Result<(lcv::model::LcvOutput, usize), DagError> {
         // 1. Register both upstream sumstats DataFrames.
@@ -390,7 +394,7 @@ impl LcvNode {
             .map_err(LcvNodeError::ReadBatch)?;
 
         // 2. 3-way inner join on rsid.
-        let ld_table = ld_ref.sql.clone();
+        let ld_table = crate::ldsc_common::quote_table(panel_table);
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
@@ -567,8 +571,6 @@ mod tests {
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),
@@ -678,15 +680,7 @@ mod tests {
         let batch = ld_panel_batch(n);
         let schema = batch.schema();
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-        let ld_schema = MemorySchemaProvider::new();
-        ld_schema
-            .register_table("1000g_eur".to_string(), Arc::new(table))
-            .unwrap();
-        let catalog = MemoryCatalogProvider::new();
-        catalog
-            .register_schema("ld_score", Arc::new(ld_schema))
-            .unwrap();
-        ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(catalog));
+        ctx.register_table("1000g_eur", Arc::new(table)).unwrap();
         ctx
     }
 
@@ -702,17 +696,7 @@ mod tests {
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 20000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 50000.0)).unwrap();
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        LcvNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
+        LcvNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", cfg)
             .await
             .expect("LCV pipeline should succeed")
     }
@@ -797,21 +781,11 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z, &rs2, 1000.0)).unwrap();
 
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
         let res = LcvNode::run_with_ctx(
             &ctx,
             &df1,
             &df2,
-            &ld_ref,
+            "1000g_eur",
             &LcvConfig {
                 no_blocks: 10,
                 ..Default::default()

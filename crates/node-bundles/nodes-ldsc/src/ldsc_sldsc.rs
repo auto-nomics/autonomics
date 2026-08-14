@@ -157,9 +157,6 @@ pub fn build_result_batch(
 // =====================================================================
 
 /// Iceberg table name for the baselineLD v2.2 panel (hardcoded).
-/// Reads from `iceberg.ld_score.{LD_TABLE}` (97 annotation LD scores + w_ld)
-/// and `iceberg.ld_score.{LD_TABLE}_m` (per-annotation M_5_50).
-const LD_TABLE: &str = "baselineLD_v2_2_eur";
 
 /// Configuration for the S-LDSC node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -333,14 +330,26 @@ impl DagNode for LdscSldscNode {
 
         let session = ctx.session();
 
-        // Resolve the LD-score panel from the resource catalog (with fallback).
-        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+        crate::ldsc_common::register_catalog_table(
+            &session,
             &ctx.resources,
             "ldscore.baselineLD_v2_2_eur",
-            LD_TABLE,
-        );
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
+        crate::ldsc_common::register_catalog_table(
+            &session,
+            &ctx.resources,
+            "ldscore.baselineLD_v2_2_eur.m",
+            "ld_panel_m",
+        )
+        .await
+        .map_err(|e| LdscSldscNodeError::Datalake(e.to_string()))?;
 
-        let result = Self::run_with_ctx(&session, &input.data, &ld_ref, &self.config).await?;
+        let result =
+            Self::run_with_ctx(&session, &input.data, "ld_panel", "ld_panel_m", &self.config)
+                .await?;
 
         let batch = build_result_batch(&result)?;
         let df = session
@@ -360,7 +369,8 @@ impl LdscSldscNode {
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
-        ld_ref: &crate::ldsc_common::LdScoreRef,
+        panel_table: &str,
+        m_table: &str,
         cfg: &LdscSldscConfig,
     ) -> Result<ldsc::sldsc::SldscResults, LdscSldscNodeError> {
         // 1. Register upstream sumstats.
@@ -368,7 +378,10 @@ impl LdscSldscNode {
             .map_err(LdscSldscNodeError::ReadBatch)?;
 
         // 2. Query M table for annotation names + M values.
-        let m_sql = format!(r#"SELECT "annotation", "m_5_50" FROM {}"#, ld_ref.m_sql);
+        let m_sql = format!(
+            r#"SELECT "annotation", "m_5_50" FROM {}"#,
+            crate::ldsc_common::quote_table(m_table)
+        );
         let m_df = ctx
             .sql(&m_sql)
             .await
@@ -422,7 +435,7 @@ impl LdscSldscNode {
                ON s."rsid" = l."rsid"
                ORDER BY l."locus"."position""#,
             cols = select_cols.join(", "),
-            ld_table = ld_ref.sql,
+            ld_table = crate::ldsc_common::quote_table(panel_table),
         );
 
         let joined_df = ctx.sql(&sql).await.map_err(LdscSldscNodeError::ReadBatch)?;
@@ -517,17 +530,14 @@ mod tests {
         let df = ctx
             .read_batch(arrow_array::RecordBatch::new_empty(input_schema()))
             .unwrap();
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"baselineLD_v2_2_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"baselineLD_v2_2_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        let res = LdscSldscNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscSldscConfig::new()).await;
+        let res = LdscSldscNode::run_with_ctx(
+            &ctx,
+            &df,
+            "baselineLD_v2_2_eur",
+            "baselineLD_v2_2_eur_m",
+            &LdscSldscConfig::new(),
+        )
+        .await;
         assert!(res.is_err(), "should error without Iceberg catalog");
     }
 

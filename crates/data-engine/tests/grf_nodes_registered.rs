@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datalake::Datalake;
 
 use dag_core::registry::NodeRegistry;
 
@@ -24,7 +23,6 @@ fn registry() -> NodeRegistry {
     data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
         None,
-        Arc::new(Datalake::default()),
         None,
         std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
             std::path::PathBuf::from("."),

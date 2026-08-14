@@ -1825,8 +1825,7 @@ mod cross_validation {
     use dag_core::dag::node_event::NodeReporter;
     use dag_core::registry::NodeCtx;
     use datafusion::prelude::SessionContext;
-    use datalake::Datalake;
-
+    
     const TOL_LL: f64 = 1e-8;
 
     // ---- Path helpers --------------------------------------------------
@@ -2335,8 +2334,6 @@ mod cross_validation {
         let ctx = SessionContext::new();
         NodeCtx {
             runtime_env: ctx.runtime_env(),
-            iceberg_catalog: None,
-            datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),

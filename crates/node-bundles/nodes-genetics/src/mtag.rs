@@ -63,11 +63,6 @@ impl ::dag_core::dag::NodeError for MtagNodeError {
     }
 }
 
-impl From<datalake::error::Error> for MtagNodeError {
-    fn from(e: datalake::error::Error) -> Self {
-        MtagNodeError::Datalake(e.to_string())
-    }
-}
 
 // =====================================================================
 // Schemas
@@ -407,16 +402,18 @@ impl DagNode for MtagNode {
 
         let ctx = node_ctx.session();
 
-        // Resolve the LD-score panel from the resource catalog (with fallback).
-        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef::resolve(
+        nodes_ldsc::ldsc_common::register_catalog_table(
+            &ctx,
             &node_ctx.resources,
             "ldscore.ukbb_eur",
-            "ukbb_eur",
-        );
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| MtagNodeError::Datalake(e.to_string()))?;
 
         // Run the full pipeline.
         let (batch1, batch2) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.config).await?;
+            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ld_panel", &self.config).await?;
 
         let df1 = ctx.read_batch(batch1).map_err(MtagNodeError::ReadBatch)?;
         let df2 = ctx.read_batch(batch2).map_err(MtagNodeError::ReadBatch)?;
@@ -443,7 +440,7 @@ impl MtagNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_ref: &nodes_ldsc::ldsc_common::LdScoreRef,
+        panel_table: &str,
         cfg: &MtagConfig,
     ) -> Result<(RecordBatch, RecordBatch), DagError> {
         // 1. Register both upstream sumstats DataFrames as temporary tables.
@@ -453,7 +450,7 @@ impl MtagNode {
             .map_err(MtagNodeError::ReadBatch)?;
 
         // 2. Build SQL: 3-way inner join.
-        let ld_table = &ld_ref.sql;
+        let ld_table = nodes_ldsc::ldsc_common::quote_table(panel_table);
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
@@ -507,7 +504,7 @@ impl MtagNode {
         let n_snp = z1.len();
 
         // 4. Derive M from the LD score panel.
-        let m = vec![count_panel_snp(ctx, &ld_ref.sql).await? as f64];
+        let m = vec![count_panel_snp(ctx, panel_table).await? as f64];
 
         // 5. LDSC bivariate regression for Σ estimation.
         let x = Mat::from_fn(n_snp, 1, |i, _| ref_ld[i]);
@@ -712,7 +709,10 @@ async fn count_panel_snp(
     ctx: &datafusion::prelude::SessionContext,
     ld_table_sql: &str,
 ) -> Result<usize, MtagNodeError> {
-    let sql = format!(r#"SELECT COUNT(*) AS "n" FROM {ld_table_sql}"#);
+    let sql = format!(
+        r#"SELECT COUNT(*) AS "n" FROM {}"#,
+        nodes_ldsc::ldsc_common::quote_table(ld_table_sql)
+    );
     let df = ctx.sql(&sql).await.map_err(MtagNodeError::ReadBatch)?;
     let batches = df.collect().await.map_err(MtagNodeError::ReadBatch)?;
     let batch = batches
@@ -755,8 +755,6 @@ mod tests {
     fn node_ctx() -> NodeCtx {
         NodeCtx {
             runtime_env: SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),
@@ -835,15 +833,7 @@ mod tests {
         let batch = ld_panel_batch(n);
         let schema = batch.schema();
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-        let ld_schema = MemorySchemaProvider::new();
-        ld_schema
-            .register_table("ukbb_eur".to_string(), Arc::new(table))
-            .unwrap();
-        let catalog = MemoryCatalogProvider::new();
-        catalog
-            .register_schema("ld_score", Arc::new(ld_schema))
-            .unwrap();
-        ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(catalog));
+        ctx.register_table("ukbb_eur", Arc::new(table)).unwrap();
         ctx
     }
 
@@ -874,18 +864,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-
-        let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)
+        let (batch1, batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
             .await
             .expect("MTAG pipeline should succeed");
 
@@ -947,18 +926,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"ukbb_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"ukbb_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-
-        let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &cfg)
+        let (batch1, _batch2) = MtagNode::run_with_ctx(&ctx, &df1, &df2, "ukbb_eur", &cfg)
             .await
             .expect("MTAG pipeline should succeed");
 

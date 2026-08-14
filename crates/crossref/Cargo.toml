@@ -29,7 +29,6 @@ resource-catalog = { path = "../resource-catalog" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 agentik-types = { path = "../agentik-types" }
-datalake = { path = "../datalake" }
 bib-types = { path = "../bib-types" }
 serial_test = "3"
 

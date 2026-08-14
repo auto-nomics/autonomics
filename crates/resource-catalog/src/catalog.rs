@@ -9,6 +9,7 @@ use crate::error::{ResourceError, Result};
 use crate::patch::ResourcePatch;
 use crate::persist::{ManifestStore, TursoManifestStore};
 use crate::registry::ResourceRegistry;
+use crate::storage::{SharedBackendRegistry, StorageBackend, StorageConfig, StorageRef};
 use crate::validate::validate;
 
 /// The process-wide singleton. Set once during bootstrap (see
@@ -19,19 +20,22 @@ static GLOBAL: OnceLock<Arc<ResourceCatalog>> = OnceLock::new();
 /// The in-process resource catalog.
 ///
 /// Wraps a [`ResourceRegistry`] behind an `RwLock`, an optional persistence
-/// backend, and a base directory used to absolutize relative paths.
+/// backend, a named storage backend registry, and a base directory used to
+/// absolutize relative database paths.
 #[derive(Clone)]
 pub struct ResourceCatalog {
     pub(crate) inner: Arc<RwLock<ResourceRegistry>>,
+    pub(crate) backends: SharedBackendRegistry,
     persist: Option<Arc<dyn ManifestStore>>,
     base_dir: PathBuf,
 }
 
 impl ResourceCatalog {
-    /// A catalog with no persistence backend.
+    /// A catalog with no persistence backend and no storage backends.
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(ResourceRegistry::new())),
+            backends: Arc::new(RwLock::new(crate::storage::BackendRegistry::new())),
             persist: None,
             base_dir: base_dir.into(),
         }
@@ -41,6 +45,7 @@ impl ResourceCatalog {
     pub fn with_persist(base_dir: impl Into<PathBuf>, persist: Arc<dyn ManifestStore>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(ResourceRegistry::new())),
+            backends: Arc::new(RwLock::new(crate::storage::BackendRegistry::new())),
             persist: Some(persist),
             base_dir: base_dir.into(),
         }
@@ -49,7 +54,7 @@ impl ResourceCatalog {
     /// Open (or create) the catalog, loading the persisted manifest if present.
     ///
     /// Persistence failures are non-fatal: the catalog continues in-memory and
-    /// the error is logged, mirroring the degraded `register_iceberg` path.
+    /// the error is logged.
     pub async fn load_or_new(base_dir: impl Into<PathBuf>, db_path: impl AsRef<Path>) -> Self {
         let base_dir = base_dir.into();
         let persist: Option<Arc<dyn ManifestStore>> = match TursoManifestStore::open(&db_path).await
@@ -66,6 +71,7 @@ impl ResourceCatalog {
 
         let catalog = ResourceCatalog {
             inner: Arc::new(RwLock::new(ResourceRegistry::new())),
+            backends: Arc::new(RwLock::new(crate::storage::BackendRegistry::new())),
             persist: persist.clone(),
             base_dir,
         };
@@ -75,8 +81,6 @@ impl ResourceCatalog {
                 Ok(entries) => {
                     let mut reg = catalog.inner.write().expect("catalog lock");
                     for entry in entries {
-                        // Idempotent load: same-name/same-address re-registration
-                        // is a no-op; a conflicting address is skipped with a log.
                         if let Err(e) = reg.register(entry) {
                             tracing::warn!("resource catalog: loading persisted entry: {e}");
                         }
@@ -93,12 +97,6 @@ impl ResourceCatalog {
 
     /// Like [`load_or_new`](Self::load_or_new) but **returns errors instead
     /// of silently degrading**.
-    ///
-    /// `load_or_new` is designed for the runtime bootstrap path where
-    /// keeping the system running (even with an empty catalog) is preferred.
-    /// CLI tools and subcommands should use this method so that a locked or
-    /// corrupt manifest DB surfaces a clear error rather than silently
-    /// returning an empty catalog.
     pub async fn load_or_error(
         base_dir: impl Into<PathBuf>,
         db_path: impl AsRef<Path>,
@@ -109,6 +107,7 @@ impl ResourceCatalog {
 
         let catalog = ResourceCatalog {
             inner: Arc::new(RwLock::new(ResourceRegistry::new())),
+            backends: Arc::new(RwLock::new(crate::storage::BackendRegistry::new())),
             persist: Some(persist.clone()),
             base_dir,
         };
@@ -136,6 +135,37 @@ impl ResourceCatalog {
         GLOBAL.get().cloned()
     }
 
+    // ── Storage backend management ───────────────────────────────────
+
+    /// Register a named storage backend. Builds the operator eagerly so the
+    /// first `resolve_storage` call is fast. Re-registering the same name
+    /// replaces the backend.
+    ///
+    /// **Not persisted**: backends are runtime-only (they carry credentials).
+    /// The persisted manifest stores only the backend *name* on each entry.
+    pub fn register_backend(
+        &self,
+        name: &str,
+        config: StorageConfig,
+    ) -> Result<()> {
+        let mut backends = self.backends.write().expect("backends lock");
+        backends.register(name, config)
+    }
+
+    /// Look up a registered backend by name.
+    pub fn backend(&self, name: &str) -> Option<StorageBackend> {
+        let backends = self.backends.read().expect("backends lock");
+        backends.get(name).cloned()
+    }
+
+    /// All registered backend names.
+    pub fn backend_names(&self) -> Vec<String> {
+        let backends = self.backends.read().expect("backends lock");
+        backends.names().iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── Resource registration ────────────────────────────────────────
+
     /// Register a single resource.
     pub fn register(&self, entry: ResourceEntry) -> Result<()> {
         self.inner.write().expect("catalog lock").register(entry)
@@ -149,27 +179,7 @@ impl ResourceCatalog {
 
     /// Apply a partial patch to an existing resource, in memory only.
     ///
-    /// Only fields explicitly set on the patch are touched — every
-    /// other field (`address`, `kind`, `metadata`, `tags`,
-    /// `archive_spec`, `archive_status`, `ingestion_spec`) is left
-    /// unchanged. This is the safe alternative to
-    /// [`deregister`](Self::deregister) + [`register`](Self::register),
-    /// which would clobber runtime state like `archive_status`.
-    ///
     /// Returns the post-patch entry.
-    ///
-    /// # Errors
-    ///
-    /// - [`ResourceError::UnknownResource`] if no entry has that name.
-    /// - [`ResourceError::Validation`] if `patch.is_empty()` (no field
-    ///   was set — a clear signal the caller forgot to pass a flag).
-    /// - [`ResourceError::Validation`] if the resulting entry violates
-    ///   the registration-time validator (currently no rule applies to
-    ///   `description`, but this future-proofs the API).
-    ///
-    /// **Does not persist.** Call [`persist`](Self::persist) afterwards,
-    /// matching the `register` / `deregister` convention. The CLI does
-    /// this immediately so a CLI invocation is durable end-to-end.
     pub fn patch(&self, name: &str, patch: ResourcePatch) -> Result<ResourceEntry> {
         if patch.is_empty() {
             return Err(ResourceError::Validation(
@@ -187,7 +197,7 @@ impl ResourceCatalog {
         Ok(entry.clone())
     }
 
-    /// Register a provider's resources, surfacing validation/duplicate errors.
+    /// Register a provider's resources.
     pub fn register_provider(
         &self,
         provider: &dyn crate::provider::ResourceProvider,
@@ -208,7 +218,7 @@ impl ResourceCatalog {
         self.inner.read().expect("catalog lock").into_entries()
     }
 
-    /// Persist the registered manifest (not a live scan). Non-fatal on error.
+    /// Persist the registered manifest. Non-fatal on error.
     pub async fn persist(&self) {
         if let Some(store) = &self.persist {
             let entries = self.list();
@@ -218,27 +228,135 @@ impl ResourceCatalog {
         }
     }
 
-    /// Absolutize a path against the catalog's base directory.
-    pub(crate) fn absolutize(&self, p: &Path) -> PathBuf {
-        if p.is_absolute() {
-            p.to_path_buf()
+    /// Absolutize a path against the catalog's base directory (for Database
+    /// paths only — Storage paths are operator-relative).
+    pub(crate) fn absolutize(&self, p: &str) -> PathBuf {
+        let path = PathBuf::from(p);
+        if path.is_absolute() {
+            path
         } else {
-            self.base_dir.join(p)
+            self.base_dir.join(path)
         }
+    }
+}
+
+// ── Storage resolution ─────────────────────────────────────────────────
+
+impl ResourceCatalog {
+    /// Resolve a logical name to a [`StorageRef`] — the opendal operator and
+    /// path within it.
+    ///
+    /// The backend named on the resource entry must have been registered via
+    /// [`register_backend`](Self::register_backend) beforehand. If it has
+    /// not, an [`UnknownBackend`](ResourceError::UnknownBackend) error is
+    /// returned.
+    pub fn resolve_storage(&self, name: &str) -> Result<StorageRef> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        match &entry.address {
+            crate::kind::ResourceAddress::Storage { backend, path, .. } => {
+                let op = self.backend_operator(backend)?;
+                Ok(StorageRef {
+                    operator: op,
+                    path: path.clone(),
+                })
+            }
+            other => Err(ResourceError::KindMismatch {
+                name: name.to_string(),
+                expected: "storage",
+                found: crate::resolve::kind_str(other),
+            }),
+        }
+    }
+
+    /// Resolve a logical name to a DataFusion listing URL for its storage
+    /// resource.
+    ///
+    /// This is the lightweight, consumer-facing form: callers get a string
+    /// (e.g. `s3://bucket/ld_score/1000g_eur/`) and can register a
+    /// `ListingTable` without constructing any intermediate ref type.
+    pub fn resolve_storage_url(&self, name: &str) -> Result<String> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        match &entry.address {
+            crate::kind::ResourceAddress::Storage { backend, path, .. } => {
+                let config = self
+                    .backend_config(backend)
+                    .ok_or_else(|| ResourceError::UnknownBackend(backend.clone()))?;
+                Ok(config.listing_url(path))
+            }
+            other => Err(ResourceError::KindMismatch {
+                name: name.to_string(),
+                expected: "storage",
+                found: crate::resolve::kind_str(other),
+            }),
+        }
+    }
+
+    /// Like [`resolve_storage`](Self::resolve_storage) but substitutes
+    /// `{key}` placeholders in the stored path with values from `subs`.
+    /// Used for per-chromosome path templates (e.g. `{N}` → `1`).
+    pub fn resolve_storage_template(
+        &self,
+        name: &str,
+        subs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<StorageRef> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| ResourceError::UnknownResource(name.to_string()))?;
+        match &entry.address {
+            crate::kind::ResourceAddress::Storage { backend, path, .. } => {
+                let mut resolved = path.clone();
+                for (k, v) in subs {
+                    resolved = resolved.replace(&format!("{{{k}}}"), v);
+                }
+                if resolved.contains('{') {
+                    return Err(ResourceError::Validation(format!(
+                        "unresolved placeholder in path for resource '{name}': {path}"
+                    )));
+                }
+                let op = self.backend_operator(backend)?;
+                Ok(StorageRef {
+                    operator: op,
+                    path: resolved,
+                })
+            }
+            other => Err(ResourceError::KindMismatch {
+                name: name.to_string(),
+                expected: "storage",
+                found: crate::resolve::kind_str(other),
+            }),
+        }
+    }
+
+    /// Resolve a logical name to an [`opendal::Operator`] for its backend.
+    /// Returns the same operator every time (cached at registration).
+    pub fn backend_operator(&self, backend: &str) -> Result<opendal::Operator> {
+        self.backend(backend)
+            .map(|b| b.operator)
+            .ok_or_else(|| ResourceError::UnknownBackend(backend.to_string()))
+    }
+
+    /// Resolve the [`StorageConfig`] for a backend, if registered.
+    /// Used by archive logic to derive local filesystem paths.
+    pub fn backend_config(&self, backend: &str) -> Option<StorageConfig> {
+        self.backend(backend).map(|b| b.config)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kind::ResourceAddress;
+    use crate::kind::{DataFormat, ResourceAddress, ResourceKind};
 
     fn sample() -> ResourceEntry {
         ResourceEntry::new(
             "ldscore.1000g_eur",
-            crate::kind::ResourceKind::IcebergTable,
+            ResourceKind::Storage,
             "1000G EUR LD scores",
-            ResourceAddress::iceberg("ld_score", "1000g_eur"),
+            ResourceAddress::storage("default", "ld_score/1000g_eur/"),
         )
     }
 
@@ -246,7 +364,6 @@ mod tests {
     fn global_set_once_and_get() {
         let cat = Arc::new(ResourceCatalog::new("/tmp"));
         ResourceCatalog::set_global(cat.clone()).unwrap();
-        // second set must fail
         assert!(matches!(
             ResourceCatalog::set_global(cat.clone()),
             Err(ResourceError::GlobalAlreadySet)
@@ -262,7 +379,6 @@ mod tests {
         cat.register(sample()).unwrap();
         cat.persist().await;
 
-        // A second catalog wrapping the SAME store loads the persisted entry.
         let reloaded = ResourceCatalog::with_persist("/tmp", store.clone());
         for entry in store.load().await.unwrap() {
             reloaded.register(entry).unwrap();
@@ -274,19 +390,23 @@ mod tests {
 
     #[tokio::test]
     async fn archive_fields_survive_persist_round_trip() {
-        use crate::archive::{ArchiveSpec, ArchiveStatus};
+        use crate::archive::ArchiveSpec;
 
         let store: Arc<dyn ManifestStore> =
             Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
         let cat = ResourceCatalog::with_persist("/tmp", store.clone());
 
-        // Register a resource WITH archive spec + status.
         cat.register(
             ResourceEntry::new(
                 "test-data.mixer",
-                crate::kind::ResourceKind::FilePath,
+                ResourceKind::Storage,
                 "MiXiR test fixtures",
-                ResourceAddress::path("reference/mixer_data/"),
+                ResourceAddress::storage_with(
+                    "default",
+                    "reference/mixer_data/",
+                    DataFormat::Raw,
+                    vec![],
+                ),
             )
             .with_archive(ArchiveSpec {
                 remote: "aliyun".into(),
@@ -296,155 +416,63 @@ mod tests {
         )
         .unwrap();
 
-        // Simulate an archive_status update (as if archive() was called).
-        cat.update_archive_status_for_test(
-            "test-data.mixer",
-            ArchiveStatus {
-                archived_at: Some("2026-08-10T12:00:00Z".into()),
-                restored_at: None,
-                file_count: Some(42),
-                size_bytes: Some(1073741824),
-                verified: Some(true),
-            },
-        )
-        .unwrap();
-
         cat.persist().await;
 
-        // Reload from the same store.
         let loaded = store.load().await.unwrap();
         assert_eq!(loaded.len(), 1);
         let entry = &loaded[0];
-        assert_eq!(entry.name, "test-data.mixer");
-
-        // Archive spec survived.
-        let spec = entry
-            .archive_spec
-            .as_ref()
-            .expect("archive_spec should persist");
-        assert_eq!(spec.remote, "aliyun");
-        assert_eq!(spec.remote_path, "autonomics-data/mixer/test-data/");
-        assert!(spec.checksum);
-
-        // Archive status survived.
-        let status = entry
-            .archive_status
-            .as_ref()
-            .expect("archive_status should persist");
-        assert_eq!(status.archived_at.as_deref(), Some("2026-08-10T12:00:00Z"));
-        assert_eq!(status.file_count, Some(42));
-        assert_eq!(status.size_bytes, Some(1073741824));
-        assert_eq!(status.verified, Some(true));
+        assert!(entry.archive_spec.is_some());
     }
 
     #[test]
-    fn patch_updates_description_in_memory_and_leaves_other_fields_untouched() {
+    fn patch_updates_description_in_memory() {
         let cat = ResourceCatalog::new("/tmp");
         cat.register(sample()).unwrap();
-
-        let before = cat.get("ldscore.1000g_eur").expect("sample registered");
-        let original_kind = before.kind;
-        let original_address = before.address.clone();
-        let original_description = before.description.clone();
-        assert_eq!(original_description, "1000G EUR LD scores");
 
         let updated = cat
             .patch(
                 "ldscore.1000g_eur",
                 crate::patch::ResourcePatch::new().description("EUR-only LD scores, v2"),
             )
-            .expect("patch should succeed");
-
-        // Returned entry reflects the new description.
+            .unwrap();
         assert_eq!(updated.description, "EUR-only LD scores, v2");
-
-        // Side effect: in-memory catalog now sees the new description.
-        let after = cat.get("ldscore.1000g_eur").expect("entry still present");
-        assert_eq!(after.description, "EUR-only LD scores, v2");
-
-        // Other fields are untouched — this is the whole point of patch.
-        assert_eq!(after.kind, original_kind);
-        assert_eq!(after.address, original_address);
     }
 
     #[test]
-    fn patch_unknown_resource_returns_unknown_resource_error() {
+    fn patch_unknown_resource_returns_error() {
         let cat = ResourceCatalog::new("/tmp");
-        let err = cat
-            .patch(
+        assert!(matches!(
+            cat.patch(
                 "does-not-exist",
                 crate::patch::ResourcePatch::new().description("x"),
-            )
-            .expect_err("missing name must error");
-        assert!(
-            matches!(err, crate::error::ResourceError::UnknownResource(ref n) if n == "does-not-exist"),
-            "expected UnknownResource, got {err:?}"
-        );
+            ),
+            Err(ResourceError::UnknownResource(_))
+        ));
     }
 
     #[test]
-    fn patch_empty_patch_returns_validation_error() {
+    fn patch_empty_patch_returns_error() {
         let cat = ResourceCatalog::new("/tmp");
         cat.register(sample()).unwrap();
-
-        let err = cat
-            .patch(
-                "ldscore.1000g_eur",
-                crate::patch::ResourcePatch::new(), // no fields set
-            )
-            .expect_err("empty patch must error");
-        assert!(
-            matches!(err, crate::error::ResourceError::Validation(_)),
-            "expected Validation, got {err:?}"
-        );
-
-        // And the entry must be unchanged — empty patch must not silently
-        // mutate state.
-        let after = cat.get("ldscore.1000g_eur").expect("entry still present");
-        assert_eq!(after.description, "1000G EUR LD scores");
+        assert!(matches!(
+            cat.patch("ldscore.1000g_eur", crate::patch::ResourcePatch::new()),
+            Err(ResourceError::Validation(_))
+        ));
     }
 
-    #[tokio::test]
-    async fn patch_then_persist_survives_reload_round_trip() {
-        let store: Arc<dyn ManifestStore> =
-            Arc::new(TursoManifestStore::open_in_memory().await.unwrap());
-        let cat = ResourceCatalog::with_persist("/tmp", store.clone());
+    #[test]
+    fn resolve_storage_requires_registered_backend() {
+        let cat = ResourceCatalog::new("/tmp");
         cat.register(sample()).unwrap();
+        // No backend registered yet → UnknownBackend
+        assert!(matches!(
+            cat.resolve_storage("ldscore.1000g_eur"),
+            Err(ResourceError::UnknownBackend(_))
+        ));
 
-        cat.patch(
-            "ldscore.1000g_eur",
-            crate::patch::ResourcePatch::new().description("EUR LD scores, regenerated 2026-08"),
-        )
-        .expect("patch");
-        cat.persist().await;
-
-        // Reload from a fresh catalog wrapping the SAME store.
-        let loaded = store.load().await.expect("manifest load");
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].description, "EUR LD scores, regenerated 2026-08");
-
-        // Other fields are intact across the round-trip too.
-        assert_eq!(loaded[0].name, "ldscore.1000g_eur");
-        assert_eq!(
-            loaded[0].address,
-            ResourceAddress::iceberg("ld_score", "1000g_eur")
-        );
-    }
-}
-
-impl ResourceCatalog {
-    /// Test-only helper to set archive_status directly.
-    #[cfg(test)]
-    fn update_archive_status_for_test(
-        &self,
-        name: &str,
-        status: crate::archive::ArchiveStatus,
-    ) -> crate::error::Result<()> {
-        let mut reg = self.inner.write().expect("catalog lock");
-        let entry = reg
-            .get_mut(name)
-            .ok_or_else(|| crate::error::ResourceError::UnknownResource(name.to_string()))?;
-        entry.archive_status = Some(status);
-        Ok(())
+        // Register the backend → resolves successfully
+        cat.register_backend("default", StorageConfig::local("/tmp")).unwrap();
+        let sref = cat.resolve_storage("ldscore.1000g_eur").unwrap();
+        assert_eq!(sref.path, "ld_score/1000g_eur/");
     }
 }

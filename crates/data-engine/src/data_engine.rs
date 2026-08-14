@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use dag_core::resource_catalog::ResourceCatalog;
 use datafusion::{
-    catalog::CatalogProvider,
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
 };
@@ -13,7 +12,6 @@ use crate::default_registry::build_default_registry;
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
-use datalake::Datalake;
 
 pub use dag_core::sink::SinkMode;
 
@@ -22,11 +20,7 @@ pub use dag_core::sink::SinkMode;
 /// [`DAG`] of nodes executed by an async scheduler.
 pub struct DataEngine {
     ctx: SessionContext,
-    /// Threaded through from the builder; retained for future engine-level
-    /// object-store / catalog reconfiguration but not yet read here.
-    datalake: Option<Arc<Datalake>>,
-
-    /// The immutable engine ingredients, handed to the DAG scheduler on every
+/// The immutable engine ingredients, handed to the DAG scheduler on every
     /// `run` so each node `execute` can build a fresh isolated `SessionContext`
     /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
     /// mutable `SessionContext` state can never accumulate across runs.
@@ -56,8 +50,6 @@ impl DataEngine {
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-        datalake: Option<Arc<Datalake>>,
         opendal: Option<Arc<OpendalFileStorage>>,
         resources: Arc<ResourceCatalog>,
     ) -> Self {
@@ -72,26 +64,17 @@ impl DataEngine {
 
         let engine_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: runtime_env.clone(),
-            iceberg_catalog: iceberg_catalog.clone(),
-            datalake: datalake
-                .clone()
-                .unwrap_or_else(|| Arc::new(Datalake::default())),
             opendal: opendal.clone(),
             resources: resources.clone(),
             global_sem,
         };
         let node_registry = build_default_registry(
             runtime_env.clone(),
-            iceberg_catalog.clone(),
-            datalake
-                .clone()
-                .unwrap_or_else(|| Arc::new(Datalake::default())),
             opendal.clone(),
             resources,
         );
         Self {
             ctx,
-            datalake,
             engine_ctx,
             dag: DAG::default(),
             node_registry: Arc::new(node_registry),
@@ -102,15 +85,7 @@ impl DataEngine {
         }
     }
 
-    /// Returns the Iceberg catalog, if a datalake is registered.
-    pub async fn catalog(&self) -> Option<Arc<iceberg_catalog_rest::RestCatalog>> {
-        match &self.datalake {
-            Some(dl) => dl.get_catalog().await.ok(),
-            None => None,
-        }
-    }
-
-    pub fn builder() -> DataEngineBuilder {
+pub fn builder() -> DataEngineBuilder {
         DataEngineBuilder::default()
     }
 
@@ -540,7 +515,7 @@ impl DataEngine {
     }
 
     /// Create a new **isolated session** sharing all heavy infrastructure
-    /// (NodeRegistry, RuntimeEnv, Iceberg catalog, DagHistory DB) but with
+    /// (NodeRegistry, RuntimeEnv, DagHistory DB) but with
     /// a fresh empty DAG and an independent history ref.
     ///
     /// This is the per-agent constructor: each agent calls this to get its
@@ -552,7 +527,6 @@ impl DataEngine {
     pub fn new_session(&self) -> Self {
         Self {
             ctx: self.ctx.clone(),
-            datalake: self.datalake.clone(),
             engine_ctx: self.engine_ctx.clone(),
             dag: DAG::default(),
             node_registry: Arc::clone(&self.node_registry),
@@ -708,8 +682,6 @@ impl DataEngine {
 
 pub struct DataEngineBuilder {
     runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    datalake: Option<Arc<Datalake>>,
     opendal: Option<Arc<OpendalFileStorage>>,
     resources: Option<Arc<ResourceCatalog>>,
 }
@@ -720,8 +692,6 @@ impl Default for DataEngineBuilder {
         let runtime_env = ctx.runtime_env();
         Self {
             runtime_env,
-            iceberg_catalog: None,
-            datalake: None,
             opendal: None,
             resources: None,
         }
@@ -744,25 +714,39 @@ impl DataEngineBuilder {
 
     /// Inject the centralized [`ResourceCatalog`]. When not called, the engine
     /// defaults to an empty catalog (nodes fall back to hardcoded addresses).
+    ///
+    /// Every registered storage backend is wrapped as a DataFusion
+    /// `ObjectStore` and registered on the shared `RuntimeEnv`, so nodes can
+    /// resolve `Storage` resources uniformly through opendal.
     pub fn with_resources(mut self, resources: Arc<ResourceCatalog>) -> Self {
+        for name in resources.backend_names() {
+            let Some(backend) = resources.backend(&name) else {
+                continue;
+            };
+            let url = backend.config.object_store_url();
+            match ObjectStoreUrl::parse(&url) {
+                Ok(url) => {
+                    let store = Arc::new(OpendalFileStorage::from_operator(backend.operator));
+                    self.runtime_env.register_object_store(url.as_ref(), store);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        backend = %name,
+                        url = %url,
+                        error = %e,
+                        "failed to register catalog storage backend as DataFusion object store"
+                    );
+                }
+            }
+        }
         self.resources = Some(resources);
         self
     }
 
-    pub async fn register_iceberg(&mut self) -> Result<()> {
-        let datalake = Arc::new(Datalake::default());
-        let provider = datalake.get_provider().await?;
-        self.iceberg_catalog = Some(Arc::new(provider));
-        self.datalake = Some(datalake);
-
-        Ok(())
-    }
-
-    pub fn build(self) -> DataEngine {
+pub fn build(self) -> DataEngine {
         // Keep a backward-compatible ctx for tests / ad-hoc table registration.
         let ctx = crate::node_registry::registry::new_isolated_ctx(
             self.runtime_env.clone(),
-            self.iceberg_catalog.clone(),
         );
         let resources = self
             .resources
@@ -770,8 +754,6 @@ impl DataEngineBuilder {
         DataEngine::new_from_parts(
             ctx,
             self.runtime_env,
-            self.iceberg_catalog,
-            self.datalake,
             self.opendal,
             resources,
         )
@@ -869,7 +851,6 @@ mod tests {
         let mut builder = DataEngine::builder()
             .register_opendal_fs(file_session)
             .unwrap();
-        builder.register_iceberg().await.unwrap();
         let engine = builder.build();
 
         engine

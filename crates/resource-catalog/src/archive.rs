@@ -350,14 +350,30 @@ impl ResourceCatalog {
     }
 
     /// Resolve the local filesystem path for an archivable resource.
+    ///
+    /// Only works for Storage resources backed by a Local filesystem (the
+    /// operator root + resource path is joined), and Database resources
+    /// (the path is absolutized against base_dir for SQLite).
     fn resolve_local_path(&self, entry: &ResourceEntry) -> Result<std::path::PathBuf> {
         match &entry.address {
-            crate::kind::ResourceAddress::FilePath(p) => Ok(self.absolutize(p)),
-            crate::kind::ResourceAddress::Database { path, .. } => Ok(self.absolutize(path)),
-            crate::kind::ResourceAddress::Doc { path, .. } => Ok(self.absolutize(path)),
+            crate::kind::ResourceAddress::Storage { backend, path, .. } => {
+                let config = self.backend_config(backend)
+                    .ok_or_else(|| ResourceError::UnknownBackend(backend.clone()))?;
+                match config.local_root() {
+                    Some(root) => Ok(std::path::PathBuf::from(root).join(path)),
+                    None => Err(ResourceError::KindMismatch {
+                        name: entry.name.clone(),
+                        expected: "storage(local) for archive",
+                        found: "storage(remote)",
+                    }),
+                }
+            }
+            crate::kind::ResourceAddress::Database { path, .. } => {
+                Ok(self.absolutize(path))
+            }
             other => Err(ResourceError::KindMismatch {
                 name: entry.name.clone(),
-                expected: "file_path/database/doc (archivable)",
+                expected: "storage(local)/database (archivable)",
                 found: crate::resolve::kind_str(other),
             }),
         }

@@ -505,8 +505,7 @@ impl DagNode for HdlLNode {
         // wrap into a PortOutputs via an isolated SessionContext (like lava nodes)
         let ctx = dag_core::registry::new_isolated_ctx(
             node_ctx.runtime_env.clone(),
-            node_ctx.iceberg_catalog.clone(),
-        );
+            );
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: HDL_L_KIND.into(),
             msg: format!("read_batch: {e}"),
@@ -532,8 +531,6 @@ mod tests {
     fn node_ctx() -> NodeCtx {
         NodeCtx {
             runtime_env: SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),

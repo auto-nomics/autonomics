@@ -9,7 +9,6 @@ description = "MICE DAG node bundle (mice.* nodes) — multivariate imputation b
 [dependencies]
 dag-core = { path = "../../dag-core" }
 mice = { path = "../../../stat_crates/mice" }
-datalake = { path = "../../datalake" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 arrow.workspace = true

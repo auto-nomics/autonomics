@@ -14,7 +14,6 @@ arrow.workspace = true
 arrow-array.workspace = true
 data-engine = { path = "../data-engine" }
 nodes-sql = { path = "../node-bundles/nodes-sql" }
-datalake = { path = "../datalake" }
 datafusion.workspace = true
 async-trait.workspace = true
 serde = { workspace = true }

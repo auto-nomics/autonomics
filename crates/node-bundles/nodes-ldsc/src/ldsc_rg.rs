@@ -55,11 +55,6 @@ impl ::dag_core::dag::NodeError for LdscRgNodeError {
     }
 }
 
-impl From<datalake::error::Error> for LdscRgNodeError {
-    fn from(e: datalake::error::Error) -> Self {
-        LdscRgNodeError::Datalake(e.to_string())
-    }
-}
 
 // =====================================================================
 // Schemas
@@ -409,13 +404,31 @@ impl DagNode for LdscRgNode {
         //     Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ukbb_eur", &self.ldsc_rg).await?;
         //
         // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
-        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+        crate::ldsc_common::register_catalog_table(
+            &ctx,
             &node_ctx.resources,
             "ldscore.1000g_eur",
-            "1000g_eur",
-        );
-        let (rg, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, &ld_ref, &self.ldsc_rg).await?;
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
+        crate::ldsc_common::register_catalog_table(
+            &ctx,
+            &node_ctx.resources,
+            "ldscore.1000g_eur.m",
+            "ld_panel_m",
+        )
+        .await
+        .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
+        let (rg, n_snp) = Self::run_with_ctx(
+            &ctx,
+            &input1.data,
+            &input2.data,
+            "ld_panel",
+            "ld_panel_m",
+            &self.ldsc_rg,
+        )
+        .await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&rg, n_snp)?;
@@ -444,7 +457,8 @@ impl LdscRgNode {
         ctx: &datafusion::prelude::SessionContext,
         input1: &datafusion::prelude::DataFrame,
         input2: &datafusion::prelude::DataFrame,
-        ld_ref: &crate::ldsc_common::LdScoreRef,
+        panel_table: &str,
+        m_table: &str,
         cfg: &LdscRgConfig,
     ) -> Result<(ldsc::regress::RG, usize), DagError> {
         // 1. Register both upstream sumstats DataFrames as temporary tables.
@@ -470,7 +484,7 @@ impl LdscRgNode {
         //        ORDER BY l.locus.position"#,
         //     ... (same bind params)
         // );
-        let ld_table = ld_ref.sql.clone();
+        let ld_table = crate::ldsc_common::quote_table(panel_table);
         let sql = format!(
             r#"SELECT s1."{z}" AS "{Z1}", s2."{z}" AS "{Z2}",
                       s1."{n}" AS "{N1}", s2."{n}" AS "{N2}",
@@ -546,7 +560,7 @@ impl LdscRgNode {
         // matching the h² node and S-LDSC. Using COUNT(*) of the panel
         // overestimates M because the panel row set can differ from the
         // M_5_50 SNP set used when LD scores were computed.
-        let m = crate::ldsc_common::read_m_5_50(ctx, &ld_ref.m_sql, 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, m_table, 1)
             .await
             .map_err(|e| LdscRgNodeError::Datalake(e.to_string()))?;
         let two_step = two_step.or(
@@ -659,8 +673,6 @@ mod tests {
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),
@@ -832,18 +844,8 @@ mod tests {
         .unwrap();
         let m_table = MemTable::try_new(m_batch.schema(), vec![vec![m_batch]]).unwrap();
 
-        let ld_schema = MemorySchemaProvider::new();
-        ld_schema
-            .register_table("1000g_eur".to_string(), Arc::new(table))
-            .unwrap();
-        ld_schema
-            .register_table("1000g_eur_m".to_string(), Arc::new(m_table))
-            .unwrap();
-        let catalog = MemoryCatalogProvider::new();
-        catalog
-            .register_schema("ld_score", Arc::new(ld_schema))
-            .unwrap();
-        ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(catalog));
+        ctx.register_table("1000g_eur", Arc::new(table)).unwrap();
+        ctx.register_table("1000g_eur_m", Arc::new(m_table)).unwrap();
         ctx
     }
 
@@ -873,17 +875,7 @@ mod tests {
         let ctx = ctx_with_ld_panel(N_SNP);
         let df1 = ctx.read_batch(sumstats_batch(z1, &rsids, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(z2, &rsids, 1000.0)).unwrap();
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, cfg)
+        LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", "1000g_eur_m", cfg)
             .await
             .expect("rg pipeline should succeed")
     }
@@ -1085,17 +1077,9 @@ mod tests {
         let df1 = ctx.read_batch(sumstats_batch(&z1, &rs1, 1000.0)).unwrap();
         let df2 = ctx.read_batch(sumstats_batch(&z2, &rs2, 1000.0)).unwrap();
 
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        let res = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg()).await;
+        let res =
+            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", "1000g_eur_m", &constrained_cfg())
+                .await;
         assert!(
             res.is_err(),
             "disjoint rsid sets must error, not silently return NaN"
@@ -1141,17 +1125,8 @@ mod tests {
         let df2 = ctx
             .read_batch(sumstats_batch(&z2, &shared, 1000.0))
             .unwrap();
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        let (rg, n_snp) = LdscRgNode::run_with_ctx(&ctx, &df1, &df2, &ld_ref, &constrained_cfg())
+        let (rg, n_snp) =
+            LdscRgNode::run_with_ctx(&ctx, &df1, &df2, "1000g_eur", "1000g_eur_m", &constrained_cfg())
             .await
             .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");

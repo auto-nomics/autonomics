@@ -653,7 +653,7 @@ async fn clump_instruments(
     inputs: Vec<mr::harmonise::HarmoniseInput>,
     cfg: &ClumpConfig,
     session: &datafusion::prelude::SessionContext,
-    ld_base: Option<&dag_core::resource_catalog::IcebergIdent>,
+    ld_base: Option<&str>,
 ) -> Result<Vec<mr::harmonise::HarmoniseInput>, TwoSampleMrNodeError> {
     if inputs.is_empty() {
         return Ok(inputs);
@@ -726,7 +726,7 @@ async fn clump_iceberg_ld(
     inputs: Vec<mr::harmonise::HarmoniseInput>,
     cfg: &ClumpConfig,
     session: &datafusion::prelude::SessionContext,
-    ld_base: Option<&dag_core::resource_catalog::IcebergIdent>,
+    ld_base: Option<&str>,
 ) -> Result<Vec<mr::harmonise::HarmoniseInput>, TwoSampleMrNodeError> {
     use std::collections::{HashMap, HashSet};
 
@@ -749,11 +749,8 @@ async fn clump_iceberg_ld(
         // Resolve per-chromosome LD-matrix table SQL from the catalog, or
         // fall back to the hardcoded `iceberg.ld_matrix.eur_chr{N}`.
         let table_sql = match ld_base {
-            Some(ident) => format!(
-                "\"{}\".\"{}\".{}{}",
-                ident.catalog, ident.schema, ident.table, chrom
-            ),
-            None => format!("iceberg.ld_matrix.eur_chr{chrom}"),
+            Some(base) => format!("{base}{chrom}"),
+            None => format!("eur_chr{chrom}"),
         };
         let sql = format!(
             "SELECT id_a, id_b, unphased_r2 \
@@ -1168,9 +1165,9 @@ impl DagNode for TwoSampleMrNode {
         let session = node_ctx.session();
         // Resolve the LD-matrix base table from the catalog (falls back to
         // hardcoded `iceberg.ld_matrix.eur_chr{N}` when not registered).
-        let ld_base = node_ctx.resources.resolve_iceberg("ldmatrix.eur_chr").ok();
+        let ld_base = node_ctx.resources.resolve_storage_path_raw("ldmatrix.eur_chr").ok();
         let hinputs =
-            clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_ref()).await?;
+            clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_deref()).await?;
 
         // ---- harmonise ----
         let harmonised =
@@ -1646,7 +1643,6 @@ mod tests {
         )
         .unwrap();
 
-        let ld_schema = MemorySchemaProvider::new();
         for chrom in 1u32..=22 {
             let table_name = format!("eur_chr{chrom}");
             let table_data: Vec<Vec<RecordBatch>> = if chrom == 1 {
@@ -1655,18 +1651,10 @@ mod tests {
                 vec![vec![]]
             };
             let table = MemTable::try_new(schema.clone(), table_data).unwrap();
-            ld_schema
+            session
                 .register_table(table_name, std::sync::Arc::new(table))
                 .unwrap();
         }
-        let catalog = MemoryCatalogProvider::new();
-        catalog
-            .register_schema("ld_matrix", std::sync::Arc::new(ld_schema))
-            .unwrap();
-        session.register_catalog(
-            dag_core::resource_catalog::CATALOG_NAME,
-            std::sync::Arc::new(catalog),
-        );
     }
 
     /// Build 4 test instruments: rs1 (most significant) through rs4.

@@ -880,8 +880,29 @@ impl DagNode for GsemLdscNode {
             }
         }
 
-        // ── 1. Resolve LD-score panel from resource catalog ──
-        let ld_ref = LdScoreRefCompat::resolve(&node_ctx.resources);
+        // ── 1. Register LD-score panel and companion M table from catalog ──
+        nodes_ldsc::ldsc_common::register_catalog_table(
+            &session,
+            &node_ctx.resources,
+            "ldscore.1000g_eur",
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| DagError::NodeError {
+            node_type: GSEM_LDSC_NODE_KIND.into(),
+            msg: format!("register LD panel failed: {e}"),
+        })?;
+        nodes_ldsc::ldsc_common::register_catalog_table(
+            &session,
+            &node_ctx.resources,
+            "ldscore.1000g_eur.m",
+            "ld_panel_m",
+        )
+        .await
+        .map_err(|e| DagError::NodeError {
+            node_type: GSEM_LDSC_NODE_KIND.into(),
+            msg: format!("register LD panel M table failed: {e}"),
+        })?;
 
         // ── 2. Register the input sumstats as a temp table ──
         session
@@ -907,7 +928,7 @@ impl DagNode for GsemLdscNode {
         }
 
         // ── 4. Pivot sumstats to wide format, join with LD panel ──
-        let joined_df = build_wide_join(&session, &trait_names, &ld_ref).await?;
+        let joined_df = build_wide_join(&session, &trait_names, "ld_panel").await?;
 
         // ── 5. Extract arrays ──
         let batches = joined_df.collect().await.map_err(|e| DagError::NodeError {
@@ -918,7 +939,7 @@ impl DagNode for GsemLdscNode {
         let extracted = extract_arrays(&batches, k, &trait_names)?;
 
         // ── 6. Read M_5_50 ──
-        let m_sql = format!(r#"SELECT "m_5_50" FROM {}"#, ld_ref.m_sql);
+        let m_sql = format!(r#"SELECT "m_5_50" FROM ld_panel_m"#);
         let m_df = session.sql(&m_sql).await.map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),
             msg: format!("M table query failed: {e}"),
@@ -971,30 +992,6 @@ impl DagNode for GsemLdscNode {
     }
 }
 
-/// Compatibility wrapper — resolves LD-score panel from resource catalog.
-struct LdScoreRefCompat {
-    sql: String,
-    m_sql: String,
-}
-
-impl LdScoreRefCompat {
-    fn resolve(catalog: &dag_core::resource_catalog::ResourceCatalog) -> Self {
-        match catalog.resolve_iceberg("ldscore.1000g_eur") {
-            Ok(ident) => {
-                let m_ident = ident.with_table_suffix("_m");
-                Self {
-                    sql: ident.sql(),
-                    m_sql: m_ident.sql(),
-                }
-            }
-            Err(_) => Self {
-                sql: r#"iceberg.ld_score."1000g_eur""#.into(),
-                m_sql: r#"iceberg.ld_score."1000g_eur_m""#.into(),
-            },
-        }
-    }
-}
-
 /// Per-SNP arrays extracted from the joined DataFrame, ready for LDSC regression.
 struct LdscArrays {
     /// k vectors of Z-scores, one per trait.
@@ -1044,7 +1041,7 @@ async fn discover_traits(
 async fn build_wide_join(
     session: &datafusion::prelude::SessionContext,
     trait_names: &[String],
-    ld_ref: &LdScoreRefCompat,
+    panel_table: &str,
 ) -> Result<datafusion::prelude::DataFrame, DagError> {
     // Build conditional aggregation to pivot long → wide.
     // Each trait gets z_{name} and n_{name} columns.
@@ -1081,7 +1078,7 @@ async fn build_wide_join(
             }
             cols.join(", ")
         },
-        ld_table = ld_ref.sql,
+        ld_table = nodes_ldsc::ldsc_common::quote_table(panel_table),
         not_null_filters = {
             let mut filters = Vec::new();
             for t in trait_names {

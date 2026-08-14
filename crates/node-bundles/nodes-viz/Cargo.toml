@@ -25,5 +25,4 @@ workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
-datalake = { path = "../../datalake" }
 tempfile = "3"

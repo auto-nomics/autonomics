@@ -72,7 +72,7 @@ impl CachedBioReader {
     pub async fn read_bio(&self, path: impl Into<String>) -> Result<()> {
         let path = path.into();
         let _format = FileFormat::from_path(&path);
-        // 1. Check existence in iceberg
+        // 1. Check existence in storage
         todo!()
     }
 }

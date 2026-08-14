@@ -20,7 +20,5 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
-datalake = { path = "../../datalake" }
-
 [lints]
 workspace = true

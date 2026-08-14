@@ -2,12 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::{
-    catalog::CatalogProvider,
     common::HashMap,
     execution::{runtime_env::RuntimeEnv, session_state::SessionStateBuilder},
     prelude::{SessionConfig, SessionContext},
 };
-use datalake::Datalake;
 use resource_catalog::ResourceCatalog;
 
 use serde::Serialize;
@@ -22,23 +20,13 @@ use crate::node::NodePorts;
 /// Each call creates a **new** `CatalogList` (so `register_table("port_0", ...)`
 /// never collides with another node's registration), while sharing the
 /// engine-wide [`RuntimeEnv`] so object stores remain reachable.
-///
-/// If an `iceberg_catalog` is provided, it is registered under `"iceberg"`
-/// on the fresh context.
-pub fn new_isolated_ctx(
-    runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-) -> SessionContext {
+pub fn new_isolated_ctx(runtime_env: Arc<RuntimeEnv>) -> SessionContext {
     let state = SessionStateBuilder::new()
         .with_default_features()
         .with_config(SessionConfig::new())
         .with_runtime_env(runtime_env)
         .build();
-    let ctx = SessionContext::new_with_state(state);
-    if let Some(cat) = iceberg_catalog {
-        ctx.register_catalog(resource_catalog::CATALOG_NAME, cat);
-    }
-    ctx
+    SessionContext::new_with_state(state)
 }
 
 pub trait NodeFactory: Send + Sync {
@@ -105,13 +93,8 @@ pub struct NodeCtx {
     /// `RuntimeEnv` so file:// / s3:// stores registered by the engine
     /// builder are reachable.
     pub runtime_env: Arc<RuntimeEnv>,
-    /// Optional Iceberg `CatalogProvider`. Nodes that need to query
-    /// `iceberg.*` tables receive `Some`; others receive `None`.
-    pub iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    /// Iceberg REST catalog handle, used by LDSC nodes for table-level
     /// operations (create/drop/load) that go through the Iceberg API
     /// directly rather than DataFusion SQL.
-    pub datalake: Arc<Datalake>,
     /// The opendal-backed file storage registered with the engine, used by
     /// artifact-producing nodes (e.g. `VizNode`) to write outputs into the
     /// engine's virtualized filesystem rather than the host filesystem.
@@ -136,21 +119,17 @@ pub struct NodeCtx {
 }
 
 impl NodeCtx {
-    /// Convenience constructor from the four engine-level ingredients.
+    /// Convenience constructor from the two engine-level ingredients.
     ///
     /// The resource catalog defaults to an empty catalog. Call
     /// [`NodeCtx::with_resources`] to inject the real catalog once a node
     /// needs to resolve resources.
     pub fn new(
         runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-        datalake: Arc<Datalake>,
         opendal: Option<Arc<fs::OpendalFileStorage>>,
     ) -> Self {
         Self {
             runtime_env,
-            iceberg_catalog,
-            datalake,
             opendal,
             resources: Arc::new(ResourceCatalog::new(PathBuf::from("."))),
             global_sem: None,
@@ -175,7 +154,7 @@ impl NodeCtx {
     /// the end of the execution — no mutable catalog state ever leaks across
     /// runs or between `clone_box` copies of a node.
     pub fn session(&self) -> SessionContext {
-        new_isolated_ctx(self.runtime_env.clone(), self.iceberg_catalog.clone())
+        new_isolated_ctx(self.runtime_env.clone())
     }
 }
 
@@ -208,20 +187,13 @@ impl NodeRegistry {
         }
     }
 
-    /// Convenience: create an empty registry from the four engine-level
+    /// Convenience: create an empty registry from the two engine-level
     /// ingredients (wraps [`NodeCtx::new`] + [`Self::new`]).
     pub fn with_ingredients(
         runtime_env: Arc<RuntimeEnv>,
-        iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-        datalake: Arc<Datalake>,
         opendal: Option<Arc<fs::OpendalFileStorage>>,
     ) -> Self {
-        Self::new(NodeCtx::new(
-            runtime_env,
-            iceberg_catalog,
-            datalake,
-            opendal,
-        ))
+        Self::new(NodeCtx::new(runtime_env, opendal))
     }
 
     /// Register a single node factory.

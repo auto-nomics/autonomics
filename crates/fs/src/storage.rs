@@ -21,7 +21,6 @@ use tempfile::TempDir;
 
 pub struct OpendalFileStorage {
     pub op: Operator,
-    root: PathBuf,
     /// Keeps the temp directory alive until this storage is dropped.
     _temp_guard: Option<TempDir>,
 }
@@ -57,6 +56,15 @@ impl OpendalFileStorage {
         }
     }
 
+    /// Wrap an existing OpenDAL operator (local FS, S3, OSS, ...) so it can
+    /// be used as a DataFusion `ObjectStore`.
+    pub fn from_operator(op: Operator) -> Self {
+        Self {
+            op,
+            _temp_guard: None,
+        }
+    }
+
     /// Create a new storage backed by the local filesystem at the given root.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
@@ -65,7 +73,6 @@ impl OpendalFileStorage {
             .finish();
         Self {
             op,
-            root,
             _temp_guard: None,
         }
     }
@@ -80,7 +87,6 @@ impl OpendalFileStorage {
             .finish();
         Self {
             op,
-            root,
             _temp_guard: Some(tmp),
         }
     }
@@ -96,12 +102,6 @@ impl OpendalFileStorage {
         (ctx, object_store)
     }
 
-    /// Convert an ObjectStore path to a local filesystem path.
-    fn to_local_path(&self, location: &Path) -> PathBuf {
-        let path_str = location.to_string();
-        let relative = path_str.strip_prefix('/').unwrap_or(&path_str);
-        self.root.join(relative)
-    }
 }
 
 impl Debug for OpendalFileStorage {
@@ -205,7 +205,6 @@ impl ObjectStore for OpendalFileStorage {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
-        let local_path = self.to_local_path(location);
         let op = self.op.clone();
         let path = location.to_string();
         Box::pin(async move {
@@ -227,14 +226,17 @@ impl ObjectStore for OpendalFileStorage {
                 GetRange::Suffix(suffix) => size.saturating_sub(suffix)..size,
             };
 
+            let buffer = op
+                .read_with(&path)
+                .range(byte_range.clone())
+                .await
+                .map_err(opendal_to_object_store_error)?;
+            let stream = futures::stream::once(async move {
+                Ok::<Bytes, ObjectStoreError>(buffer.to_bytes())
+            });
+
             Ok(GetResult {
-                payload: GetResultPayload::File(
-                    std::fs::File::open(&local_path).map_err(|e| ObjectStoreError::NotFound {
-                        path: local_path.to_string_lossy().into_owned(),
-                        source: e.into(),
-                    })?,
-                    local_path,
-                ),
+                payload: GetResultPayload::Stream(Box::pin(stream)),
                 meta: object_meta,
                 range: byte_range,
                 attributes: Attributes::default(),

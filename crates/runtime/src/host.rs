@@ -25,12 +25,11 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use dag_core::resource_catalog::{
-    DbKind, DocKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind,
+    DbKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind, StorageConfig,
 };
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
-use datalake::Datalake;
 use fs::OpendalFileStorage;
 use futures::FutureExt;
 use thiserror::Error;
@@ -113,8 +112,7 @@ pub struct SharedInfra {
     /// DagHistory, RuntimeEnv) is shared via `Arc`.
     pub engine_manager: Arc<DataEngineManager>,
     pub file_storage: Arc<OpendalFileStorage>,
-    pub datalake: Arc<Datalake>,
-    /// Centralized resource catalog — the single source of truth for all
+/// Centralized resource catalog — the single source of truth for all
     /// resource addresses (Iceberg tables, file paths, endpoints, config,
     /// databases). Nodes resolve resources through this instead of
     /// hardcoding names/paths.
@@ -165,32 +163,16 @@ impl SharedInfra {
 
         // Register built-in resources from RuntimeConfig (config-as-resource).
         register_config_resources(&resources, config);
+        register_storage_backends(&resources, &config.data_dir);
 
         // Set the process-wide global so SDK crates (eutils, embase, etc.)
         // can resolve endpoints via `ResourceCatalog::global()`.
         let _ = ResourceCatalog::set_global(resources.clone());
 
-        tracing::info!("SharedInfra::open: building DataEngine (iceberg={})", config.enable_iceberg);
-        // ── DataEngine ───────────────────────────────────────────────
-        let mut engine_builder = DataEngine::builder()
+        tracing::info!("SharedInfra::open: building DataEngine");
+        let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
             .with_resources(resources.clone());
-
-        if config.enable_iceberg {
-            match engine_builder.register_iceberg().await {
-                Ok(()) => {
-                    tracing::info!("iceberg datalake registered");
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to connect to iceberg datalake; \
-                         iceberg/datalake tools disabled — \
-                         agent spawn/resume will still work"
-                    );
-                }
-            }
-        }
 
         let mut engine = engine_builder.build();
         tracing::info!("SharedInfra::open: DataEngine built");
@@ -225,10 +207,7 @@ impl SharedInfra {
         let engine_manager = Arc::new(DataEngineManager::new(engine));
         tracing::info!("SharedInfra::open: DataEngineManager created");
 
-        // ── Datalake ─────────────────────────────────────────────────
-        let datalake = Arc::new(Datalake::new());
-
-        // ── Agent storage ────────────────────────────────────────────
+// ── Agent storage ────────────────────────────────────────────
         // Resolve DB paths from the catalog (allows provider overrides and
         // persistence-backed path changes; falls back to RuntimeConfig).
         let agent_db = resources
@@ -270,19 +249,12 @@ impl SharedInfra {
             .await?,
         );
 
-        // ── Drift check + persistence ────────────────────────────────
-        // Best-effort: compare the catalog's registered Iceberg tables
-        // against the live datalake, logging any mismatches. Non-fatal.
-        if config.enable_iceberg {
-            check_drift_best_effort(&resources, &datalake).await;
-        }
         resources.persist().await;
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
         Ok(Self {
             engine_manager,
             file_storage,
-            datalake,
             resources,
             storage,
             profile_storage,
@@ -389,7 +361,6 @@ impl SharedInfra {
         use agentik_core::tools::ToolRegistration;
 
         let file_storage = self.file_storage.clone();
-        let datalake = self.datalake.clone();
         // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
         // as the session key — NOT profile.path, which is shared by all agents
         // spawned from the same profile blueprint. Using profile.path here was
@@ -415,7 +386,6 @@ impl SharedInfra {
             tools.extend(gwascatalog_tools(file_storage));
         }
 
-        tools.extend(datalake_tools(datalake));
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
 
         if profile.enable_bibliography {
@@ -495,87 +465,67 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
         "db.agent",
         ResourceKind::Database,
         "Agent persistence database (Turso/SQLite)",
-        ResourceAddress::database(DbKind::Sqlite, &config.agent_db),
+        ResourceAddress::database(DbKind::Sqlite, config.agent_db.to_string_lossy().to_string()),
         vec!["runtime".into()],
     );
     reg(
         "db.dag_history",
         ResourceKind::Database,
         "DAG history database (snapshots/refs)",
-        ResourceAddress::database(DbKind::Sqlite, &config.dag_history_db),
+        ResourceAddress::database(DbKind::Sqlite, config.dag_history_db.to_string_lossy().to_string()),
         vec!["runtime".into()],
     );
     reg(
         "db.bib",
         ResourceKind::Database,
         "Bibliography database",
-        ResourceAddress::database(DbKind::Sqlite, &config.bib_db_path),
+        ResourceAddress::database(DbKind::Sqlite, config.bib_db_path.to_string_lossy().to_string()),
         vec!["runtime".into()],
     );
     reg(
         "db.writing",
         ResourceKind::Database,
         "Writing system database",
-        ResourceAddress::database(DbKind::Sqlite, &config.writing_db_path),
+        ResourceAddress::database(DbKind::Sqlite, config.writing_db_path.to_string_lossy().to_string()),
         vec!["runtime".into()],
     );
     reg(
         "db.app",
         ResourceKind::Database,
         "TUI / application database",
-        ResourceAddress::database(DbKind::Sqlite, &config.app_db_path),
+        ResourceAddress::database(DbKind::Sqlite, config.app_db_path.to_string_lossy().to_string()),
         vec!["runtime".into()],
     );
 
     // ── File paths ────────────────────────────────────────────────────
     reg(
         "app.data_dir",
-        ResourceKind::FilePath,
+        ResourceKind::Storage,
         "Root directory for agent file storage (downloads, scratch, artifacts)",
-        ResourceAddress::path(&config.data_dir),
+        ResourceAddress::storage("default", config.data_dir.to_string_lossy()),
         vec!["runtime".into()],
     );
     reg(
         "app.state_dir",
-        ResourceKind::FilePath,
+        ResourceKind::Storage,
         "Directory for agent-internal state",
-        ResourceAddress::path(&config.state_dir),
+        ResourceAddress::storage("default", config.state_dir.to_string_lossy()),
         vec!["runtime".into()],
     );
 
     // ── Doc / reference paths ────────────────────────────────────────
-    for (logical, path, desc, kind) in [
-        (
-            "doc.docs",
-            "docs",
-            "Project documentation root",
-            DocKind::Notes,
-        ),
-        (
-            "doc.logs",
-            "logs",
-            "Application logs directory",
-            DocKind::Notes,
-        ),
-        (
-            "doc.reference",
-            "reference",
-            "Reference data / panels",
-            DocKind::Notes,
-        ),
-        (
-            "doc.fixtures",
-            "test_datasets",
-            "Test fixture data",
-            DocKind::Notes,
-        ),
+    for (logical, path, desc) in [
+        ("doc.docs", "docs", "Project documentation root"),
+        ("doc.logs", "logs", "Application logs directory"),
+        ("doc.reference", "reference", "Reference data / panels"),
+        ("doc.fixtures", "test_datasets", "Test fixture data"),
     ] {
         let p = config.data_dir.join(path);
         reg(
             logical,
-            ResourceKind::Doc,
+            ResourceKind::Storage,
             desc,
-            ResourceAddress::doc(kind, &p),
+            ResourceAddress::storage("default", p.to_string_lossy()),
             vec!["doc".into()],
         );
     }
@@ -583,16 +533,16 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
     // ── Infra bin data paths ─────────────────────────────────────────
     reg(
         "sink.ld_matrix.data_root",
-        ResourceKind::FilePath,
+        ResourceKind::Storage,
         "Source LD matrix TSV root (1000G PLINK dataset)",
-        ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/"),
+        ResourceAddress::storage("default", "/mnt/disk2/dataset/1000g_plink/"),
         vec!["infra".into()],
     );
     reg(
         "sink.af.data_path",
-        ResourceKind::FilePath,
+        ResourceKind::Storage,
         "Source allele-frequency .afreq directory (1000G EUR)",
-        ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/eur/maf/"),
+        ResourceAddress::storage("default", "/mnt/disk2/dataset/1000g_plink/eur/maf/"),
         vec!["infra".into()],
     );
 
@@ -679,95 +629,49 @@ fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) 
             vec!["api".into()],
         );
     }
-
-    // ── Config values (from env or defaults) ──────────────────────────
-    let read_env = |key: &str| std::env::var(key).ok();
-    if let Some(uri) = read_env("ICEBERG_REST_URI") {
-        reg(
-            "config.iceberg_rest_uri",
-            ResourceKind::Config,
-            "Iceberg REST catalog URI",
-            ResourceAddress::config("ICEBERG_REST_URI", &uri),
-            vec!["iceberg".into()],
-        );
-    }
-    for (logical, env_key, desc) in [
-        (
-            "config.s3_endpoint",
-            "ICEBERG_S3_ENDPOINT",
-            "S3 endpoint for Iceberg",
-        ),
-        (
-            "config.s3_bucket",
-            "ICEBERG_S3_BUCKET",
-            "S3 bucket for Iceberg",
-        ),
-        (
-            "config.s3_region",
-            "ICEBERG_S3_REGION",
-            "S3 region for Iceberg",
-        ),
-        (
-            "config.s3_warehouse",
-            "ICEBERG_S3_WAREHOUSE",
-            "S3 warehouse path for Iceberg",
-        ),
-    ] {
-        if let Some(val) = read_env(env_key) {
-            reg(
-                logical,
-                ResourceKind::Config,
-                desc,
-                ResourceAddress::config(env_key, &val),
-                vec!["iceberg".into()],
-            );
-        }
-    }
 }
 
-/// Best-effort drift check: compare the catalog's registered Iceberg tables
-/// against the live datalake, logging warnings for missing tables or
-/// non-existent file paths. Never fails — connection errors are swallowed.
-async fn check_drift_best_effort(catalog: &ResourceCatalog, datalake: &Datalake) {
-    // Build a snapshot of the live Iceberg tables.
-    let live_tables = match datalake.list_all_tables().await {
-        Ok(tables) => tables,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "resource catalog: drift check skipped (datalake unreachable)"
-            );
-            return;
-        }
-    };
 
-    let snapshot = dag_core::resource_catalog::CatalogSnapshot {
-        tables: live_tables
-            .into_iter()
-            .filter_map(|(ns, table)| {
-                // Use the last namespace segment as the schema name (the
-                // common 2-level `schema.table` pattern).
-                let schema = ns.last()?.clone();
-                Some((schema, table))
-            })
-            .collect(),
-    };
+/// Register runtime-only storage backends from environment variables.
+///
+/// Backend definitions carry credentials and are never persisted to the
+/// resource manifest. `default` always points at the host data directory;
+/// `s3-prod` and `oss-prod` are registered when the corresponding
+/// credentials are present in the environment.
+fn register_storage_backends(resources: &ResourceCatalog, data_dir: &std::path::Path) {
+    let _ = resources.register_backend(
+        "default",
+        StorageConfig::local(data_dir.to_string_lossy().to_string()),
+    );
 
-    let warnings = catalog.check_drift(&snapshot);
-    if !warnings.is_empty() {
-        for w in &warnings {
-            tracing::warn!(
-                name = %w.name,
-                detail = %w.detail,
-                "resource catalog drift: registered resource not found in live data"
-            );
+    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
+        std::env::var("ICEBERG_S3_BUCKET"),
+        std::env::var("ICEBERG_S3_ACCESS_KEY_ID"),
+        std::env::var("ICEBERG_S3_SECRET_ACCESS_KEY"),
+    ) {
+        let region = std::env::var("ICEBERG_S3_REGION").unwrap_or_else(|_| "auto".into());
+        let config = match std::env::var("ICEBERG_S3_ENDPOINT") {
+            Ok(endpoint) => StorageConfig::s3_compatible(bucket, endpoint, region, ak, sk),
+            Err(_) => StorageConfig::s3(bucket, region, ak, sk),
+        };
+        if let Err(e) = resources.register_backend("s3-prod", config) {
+            tracing::warn!(error = %e, "failed to register s3-prod storage backend");
         }
-        tracing::warn!(
-            count = warnings.len(),
-            "resource catalog: drift check found missing resources — index unchanged"
-        );
-    } else {
-        tracing::debug!("resource catalog: drift check passed (all registered resources found)");
+    }
+
+    if let (Ok(bucket), Ok(ak), Ok(sk)) = (
+        std::env::var("OSS_BUCKET"),
+        std::env::var("OSS_ACCESS_KEY_ID"),
+        std::env::var("OSS_SECRET_ACCESS_KEY"),
+    ) {
+        let endpoint =
+            std::env::var("OSS_ENDPOINT").unwrap_or_else(|_| "oss-cn-beijing.aliyuncs.com".into());
+        if let Err(e) = resources.register_backend(
+            "oss-prod",
+            StorageConfig::oss(bucket, endpoint, ak, sk),
+        ) {
+            tracing::warn!(error = %e, "failed to register oss-prod storage backend");
+        }
     }
 }
 
@@ -2378,11 +2282,6 @@ fn capability_from_profile(
     if profile.enable_gwascatalog {
         tags.push("gwas-catalog".into());
         expertise.push("variant-lookup".into());
-    }
-    if profile.enable_iceberg {
-        tags.push("datalake".into());
-        tags.push("iceberg".into());
-        expertise.push("data-lake-query".into());
     }
     if profile.enable_dag_history {
         tags.push("pipeline".into());

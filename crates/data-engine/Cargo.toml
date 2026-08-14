@@ -6,11 +6,8 @@ edition = "2024"
 [dependencies]
 dag-core = { path = "../dag-core" }
 thiserror.workspace = true
-datalake = { path = "../datalake" }
 fs = { path = "../fs" }
 serde = { workspace = true, features = ["derive"] }
-iceberg.workspace = true
-iceberg-catalog-rest.workspace = true
 datafusion.workspace = true
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -74,8 +71,6 @@ bundle-rd = ["dep:nodes-rd"]
 bundle-dl = ["dep:nodes-dl"]
 
 [dev-dependencies]
-datalake = { path = "../datalake" }
-iceberg.workspace = true
 arrow-buffer.workspace = true
 tempfile = "3"
 csv = "1"

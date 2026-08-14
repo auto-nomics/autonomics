@@ -12,7 +12,6 @@ use writing_base::LatexEngine;
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
-use datalake::Datalake;
 use fs::OpendalFileStorage;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::{OpengwasClient, OpengwasError};
@@ -52,11 +51,6 @@ pub fn opentargets_tools() -> Vec<ToolRegistration> {
 pub fn gwascatalog_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
     let client = Arc::new(GwasCatalogClient::new());
     gwascatalog_sdk::gwascatalog_registrations(client, storage)
-}
-
-/// Iceberg data-lake tools (query_iceberg).
-pub fn datalake_tools(datalake: Arc<Datalake>) -> Vec<ToolRegistration> {
-    datalake_tools::registrations(datalake)
 }
 
 /// Default on-disk location for the bibliography database, mirroring the
@@ -127,11 +121,10 @@ pub fn resolve_writing_db_path() -> String {
 /// per-agent feature flags and token overrides.
 pub async fn default_tool_set(
     file_storage: Arc<OpendalFileStorage>,
-    datalake: Arc<Datalake>,
     data_engine_client: Arc<DataEngineClient>,
 ) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
     let cfg = RuntimeConfig::default();
-    tool_set_from_config(file_storage, datalake, data_engine_client, &cfg).await
+    tool_set_from_config(file_storage, data_engine_client, &cfg).await
 }
 
 /// Build a tool set from a [`RuntimeConfig`], enabling/disabling each
@@ -139,7 +132,6 @@ pub async fn default_tool_set(
 /// config's token overrides.
 pub async fn tool_set_from_config(
     file_storage: Arc<OpendalFileStorage>,
-    datalake: Arc<Datalake>,
     data_engine_client: Arc<DataEngineClient>,
     config: &RuntimeConfig,
 ) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
@@ -163,7 +155,6 @@ pub async fn tool_set_from_config(
         tools.extend(gwascatalog_tools(file_storage));
     }
 
-    tools.extend(datalake_tools(datalake.clone()));
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
     // Resource catalog tools — always enabled (read-only, no side effects).

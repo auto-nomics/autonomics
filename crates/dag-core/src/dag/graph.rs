@@ -1328,8 +1328,6 @@ mod tests {
         crate::registry::NodeCtx::new(
             SessionContext::new().runtime_env(),
             None,
-            std::sync::Arc::new(datalake::Datalake::default()),
-            None,
         )
     }
 

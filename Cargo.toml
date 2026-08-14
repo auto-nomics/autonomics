@@ -32,8 +32,6 @@ members = [
   "crates/opentargets",
   "crates/runtime",
   "crates/fs",
-  "crates/datalake",
-  "crates/datalake-tools",
   "crates/biofusion",
   "crates/data-engine-tools",
   "crates/apply-patch",
@@ -122,10 +120,6 @@ schemars = "1.2.1"
 arc-swap = "1.9.2"
 unicode-width = "0.2"
 
-iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "713e2016" }
-iceberg-catalog-rest = { git = "https://github.com/apache/iceberg-rust.git", rev = "713e2016" }
-iceberg-storage-opendal = { git = "https://github.com/apache/iceberg-rust.git", rev = "713e2016" }
-iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", rev = "713e2016" }
 arrow = { version = "58.3.0", features = ["prettyprint"] }
 arrow-array = "58.3.0"
 arrow-buffer = "58.3.0"

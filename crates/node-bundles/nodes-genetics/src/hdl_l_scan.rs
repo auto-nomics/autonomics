@@ -532,8 +532,7 @@ impl DagNode for HdlLScanNode {
         let batch = build_result_batch(&outcomes, &self.spec)?;
         let ctx = dag_core::registry::new_isolated_ctx(
             node_ctx.runtime_env.clone(),
-            node_ctx.iceberg_catalog.clone(),
-        );
+            );
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: HDL_L_SCAN_KIND.into(),
             msg: format!("read_batch: {e}"),

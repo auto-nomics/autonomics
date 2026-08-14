@@ -9,14 +9,12 @@ description = "Source and sink DAG node bundle."
 [dependencies]
 dag-core = { path = "../../dag-core" }
 biofusion = { path = "../../biofusion" }
-datalake = { path = "../../datalake" }
 fs = { path = "../../fs" }
 opentargets = { path = "../../opentargets" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
 mr = { path = "../../../bio_crates/mr" }
-iceberg.workspace = true
 arrow-array.workspace = true
 arrow.workspace = true
 arrow-schema.workspace = true

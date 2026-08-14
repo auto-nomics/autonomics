@@ -10,7 +10,7 @@ pub mod liability;
 use std::collections::BTreeMap;
 
 use dag_core::resource_catalog::{
-    ObjectStorageBackend, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
+    DataFormat, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -75,7 +75,7 @@ fn panel_metadata(spec: &PanelSpec<'_>, extra: &[(&str, &str)]) -> BTreeMap<Stri
 /// panel, traceable through the resource catalog.
 ///
 /// **Migration note (2026-08)**: every panel here is declared as
-/// `ResourceKind::ObjectStorage`, replacing the legacy Iceberg table address.
+/// `ResourceKind::Storage`, replacing the legacy Iceberg table address.
 /// Reads go through DataFusion's `ListingTable` over the engine's
 /// `opendal`-backed object store (see `nodes_ldsc::ldsc_common::register_listing_table`).
 /// The historical Iceberg path (`iceberg.ld_score.<table>`) is preserved in
@@ -86,19 +86,12 @@ impl ResourceProvider for Resources {
         "ldsc"
     }
     fn resources(&self) -> Vec<ResourceEntry> {
-        // OSS bucket shared by every LD-score panel. Read via the engine's
-        // opendal `oss://` operator, registered against the runtime
-        // `RuntimeEnv` at engine bootstrap. Connection details are carried
-        // by [`ObjectStorageBackend::oss_default`] — credentials fall through
-        // to the standard opendal chain (env vars, ECS metadata).
-        const PANEL_BUCKET: &str = "autonomics-data";
-        let oss_backend = ObjectStorageBackend::oss_default("https://oss-cn-hangzhou.aliyuncs.com");
 
         vec![
             // ── Univariate panel (base annotation) ──────────────────────
             ResourceEntry::new(
                 "ldscore.1000g_eur",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "1000G EUR univariate LD-score panel for LDSC h² and rg estimation. \
                  Contains a single ld_score column (the baseline 'baseL2' annotation = \
                  Σr² to all nearby SNPs within 1 cM) and a w_ld column (weight LD score \
@@ -114,7 +107,7 @@ impl ResourceProvider for Resources {
                  \n\n**Storage**: object-storage parquet partition — \
                  read via DataFusion `ListingTable` over the engine's opendal \
                  `oss://autonomics-data/ld_score/1000g_eur/` prefix.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/1000g_eur/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -145,7 +138,7 @@ impl ResourceProvider for Resources {
             // ── Univariate M companion ──────────────────────────────────
             ResourceEntry::new(
                 "ldscore.1000g_eur.m",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "M_5_50 companion table for the univariate 1000g_eur LD-score panel. \
                  Single row: annotation='baseL2', m_5_50=5,961,159 (Σ M_5_50 across \
                  22 autosomes). Read by ldsc_common::read_m_5_50() to normalise the \
@@ -153,7 +146,7 @@ impl ResourceProvider for Resources {
                  M_5_50 overestimates M and inflates h² proportionally.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/1000g_eur_m/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur_m/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/1000g_eur_m/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -183,7 +176,7 @@ impl ResourceProvider for Resources {
             // ── Multi-annotation panel (baselineLD v2.2, 97 annotations) ─
             ResourceEntry::new(
                 "ldscore.baselineLD_v2_2_eur",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "baselineLD v2.2 EUR 97-annotation LD-score panel for stratified LDSC \
                  (S-LDSC, partitioned heritability). Contains all 97 functional annotation \
                  LD-score columns (e.g. baseL2, Coding_UCSCL2, Conserved_LindbladTohL2, \
@@ -199,7 +192,7 @@ impl ResourceProvider for Resources {
                  97 × {annotation}L2:double, w_ld:double. 1,187,349 SNPs.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/baselineLD_v2_2_eur/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -233,7 +226,7 @@ impl ResourceProvider for Resources {
             // ── Multi-annotation M companion ────────────────────────────
             ResourceEntry::new(
                 "ldscore.baselineLD_v2_2_eur.m",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "M_5_50 companion table for the baselineLD v2.2 multi-annotation panel. \
                  97 rows, one per annotation. Read by ldsc_common::read_m_5_50() and the \
                  sldsc node to derive per-annotation SNP proportions, enrichment, and \
@@ -242,7 +235,7 @@ impl ResourceProvider for Resources {
                  summed across 22 autosomes.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur_m/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_m/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/baselineLD_v2_2_eur_m/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -272,7 +265,7 @@ impl ResourceProvider for Resources {
             // ── Frequency table (1000G EUR allele frequencies) ───────────
             ResourceEntry::new(
                 "ldscore.1000g_eur_frq",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "1000G EUR allele frequency table for S-LDSC QC and MAF filtering. \
                  One row per SNP per chromosome (MAF ≥ 1%, QC-passed). Used to verify \
                  MAF ranges, compute M_5_50 companion counts, and align alleles between \
@@ -282,7 +275,7 @@ impl ResourceProvider for Resources {
                  Source: Zenodo DOI 10.5281/zenodo.10515792 (1000G Phase 3 EUR QC).\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/1000g_eur_frq/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/1000g_eur_frq/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/1000g_eur_frq/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -311,7 +304,7 @@ impl ResourceProvider for Resources {
             // ── Annotation matrix (baselineLD v2.2, 97 annotations per SNP) ─
             ResourceEntry::new(
                 "ldscore.baselineLD_v2_2_eur_annot",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "baselineLD v2.2 EUR raw annotation matrix — 97 functional annotations \
                  per SNP. Each row carries 0/1 binary indicators (or continuous values \
                  for allele-frequency bin annotations) for Coding, Conserved, CTCF, DGF, \
@@ -322,7 +315,7 @@ impl ResourceProvider for Resources {
                  ~10M SNPs. Source: Zenodo DOI 10.5281/zenodo.10515792 (baselineLD v2.2, 1000G EUR).\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/baselineLD_v2_2_eur_annot/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/baselineLD_v2_2_eur_annot/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/baselineLD_v2_2_eur_annot/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -356,7 +349,7 @@ impl ResourceProvider for Resources {
             // ── HapMap3 SNP inclusion list (no MHC) ──────────────────────
             ResourceEntry::new(
                 "ldscore.hm3_no_mhc",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "HapMap3 SNP inclusion list (no MHC region). 1,217,311 SNPs used as the \
                  reference backbone for LDSC/S-LDSC analysis. GWAS summary statistics are \
                  filtered to this SNP set before regression to ensure consistent SNP \
@@ -365,7 +358,7 @@ impl ResourceProvider for Resources {
                  Schema: rsid:string only. Source: Zenodo DOI 10.5281/zenodo.10515792.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/hm3_no_mhc/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/hm3_no_mhc/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/hm3_no_mhc/"),
             )
             .with_metadata(panel_metadata(
                 &PanelSpec {
@@ -393,14 +386,14 @@ impl ResourceProvider for Resources {
             // ── Legacy UKBB panel (declared, not yet ingested) ──────────
             ResourceEntry::new(
                 "ldscore.ukbb_eur",
-                ResourceKind::ObjectStorage,
+                ResourceKind::Storage,
                 "UKBB EUR LD-score panel (single ld_score column, no w_ld). Legacy panel \
                  from the UK Biobank EUR cohort. Not yet ingested into the production \
                  lake; nodes that reference it fall back to this declaration but will \
                  fail at query time until data is loaded.\
                  \n\n**Storage**: object-storage parquet partition — \
                  `oss://autonomics-data/ld_score/ukbb_eur/`.",
-                ResourceAddress::object_storage_with_backend(PANEL_BUCKET, "/ld_score/ukbb_eur/", oss_backend.clone()),
+                ResourceAddress::storage("oss-prod", "/ld_score/ukbb_eur/"),
             )
             .with_tags(vec![
                 "ld_score".into(),

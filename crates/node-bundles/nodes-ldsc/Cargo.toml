@@ -19,11 +19,9 @@ serde_json = { workspace = true }
 thiserror.workspace = true
 faer.workspace = true
 datafusion.workspace = true
-datalake = { path = "../../datalake" }
 
 [dev-dependencies]
 tokio = { workspace = true }
-datalake = { path = "../../datalake" }
 
 [lints]
 workspace = true

@@ -15,7 +15,6 @@ rayon = "1.10"
 flate2 = "1.1"
 serde_json.workspace = true
 # e2e test only（test_univariate_mixer_e2e）：从 Iceberg 数据湖读真实 GWAS。
-datalake = { path = "../../crates/datalake" }
 datafusion.workspace = true
 arrow-array.workspace = true
 tokio = { workspace = true }

@@ -360,14 +360,11 @@ async fn load_ld_pairs(
     chrom: i64,
     r2_min: f64,
     snp_set: &std::collections::HashSet<String>,
-    ld_base: Option<&dag_core::resource_catalog::IcebergIdent>,
+    ld_base: Option<&str>,
 ) -> Result<Vec<LdPair>, SusieNodeError> {
     let table_sql = match ld_base {
-        Some(ident) => format!(
-            "\"{}\".\"{}\".{}{}",
-            ident.catalog, ident.schema, ident.table, chrom
-        ),
-        None => format!("iceberg.ld_matrix.eur_chr{chrom}"),
+        Some(base) => format!("{base}{chrom}"),
+        None => format!("ld_matrix_eur_chr{chrom}"),
     };
     let sql = format!(
         "SELECT id_a, id_b, unphased_r2 \
@@ -554,9 +551,9 @@ impl DagNode for SusieRssNode {
             "susie_rss: querying LD matrix iceberg.ld_matrix.eur_chr{chrom} (r² ≥ {})…",
             self.spec.r2_min
         ));
-        let ld_base = node_ctx.resources.resolve_iceberg("ldmatrix.eur_chr").ok();
+        let ld_base = node_ctx.resources.resolve_storage_path_raw("ldmatrix.eur_chr").ok();
         let ld_pairs =
-            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, ld_base.as_ref()).await?;
+            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, ld_base.as_deref()).await?;
         reporter.info(format!("susie_rss: loaded {} LD pairs", ld_pairs.len()));
 
         let r = build_corr_matrix(&snps_filt, &z_filt, &ld_pairs);

@@ -14,28 +14,18 @@ pub fn validate(entry: &ResourceEntry) -> Result<()> {
     }
 
     match &entry.address {
-        ResourceAddress::IcebergTable {
-            catalog,
-            schema,
-            table,
+        ResourceAddress::Storage {
+            backend, path, ..
         } => {
-            if catalog.is_empty() {
+            if backend.is_empty() {
                 return Err(ResourceError::Validation(format!(
-                    "iceberg resource '{}' has empty catalog",
+                    "storage resource '{}' has an empty backend name",
                     entry.name
                 )));
             }
-            if schema.is_empty() || table.is_empty() {
+            if path.is_empty() {
                 return Err(ResourceError::Validation(format!(
-                    "iceberg resource '{}' needs both schema and table",
-                    entry.name
-                )));
-            }
-        }
-        ResourceAddress::FilePath(p) => {
-            if p.as_os_str().is_empty() {
-                return Err(ResourceError::Validation(format!(
-                    "file-path resource '{}' has an empty path",
+                    "storage resource '{}' has an empty path",
                     entry.name
                 )));
             }
@@ -57,35 +47,10 @@ pub fn validate(entry: &ResourceEntry) -> Result<()> {
             }
         }
         ResourceAddress::Database { path, .. } => {
-            if path.as_os_str().is_empty() {
+            if path.is_empty() {
                 return Err(ResourceError::Validation(format!(
                     "database resource '{}' has an empty path",
                     entry.name
-                )));
-            }
-        }
-        ResourceAddress::Doc { path, .. } => {
-            if path.as_os_str().is_empty() {
-                return Err(ResourceError::Validation(format!(
-                    "doc resource '{}' has an empty path",
-                    entry.name
-                )));
-            }
-        }
-        ResourceAddress::ObjectStorage {
-            bucket, prefix, ..
-        } => {
-            if bucket.is_empty() {
-                return Err(ResourceError::Validation(format!(
-                    "object_storage resource '{}' has an empty bucket",
-                    entry.name
-                )));
-            }
-            if !prefix.starts_with('/') {
-                return Err(ResourceError::Validation(format!(
-                    "object_storage resource '{}' prefix must start with '/': {}",
-                    entry.name,
-                    prefix
                 )));
             }
         }

@@ -4,7 +4,6 @@ use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datalake::Datalake;
 
 /// Minimal registry for codegen tests (no Iceberg / opendal needed).
 fn test_registry() -> crate::node_registry::NodeRegistry {
@@ -13,7 +12,6 @@ fn test_registry() -> crate::node_registry::NodeRegistry {
     crate::default_registry::build_default_registry(
         runtime_env,
         None,
-        Arc::new(Datalake::default()),
         None,
         std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
             std::path::PathBuf::from("."),

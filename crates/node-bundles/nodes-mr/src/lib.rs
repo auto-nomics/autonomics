@@ -6,7 +6,7 @@ pub mod mvmr;
 pub mod two_sample_mr;
 
 use dag_core::resource_catalog::{
-    CATALOG_NAME, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
+    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -34,15 +34,15 @@ impl ResourceProvider for Resources {
         vec![
             ResourceEntry::new(
                 "ldscore.1000g_eur",
-                ResourceKind::IcebergTable,
+                ResourceKind::Storage,
                 "1000G EUR LD-score panel (used by MRLAP)",
-                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "1000g_eur"),
+                ResourceAddress::storage("default", "ld_score/1000g_eur/"),
             ),
             ResourceEntry::new(
                 "ldmatrix.eur_chr",
-                ResourceKind::IcebergTable,
+                ResourceKind::Storage,
                 "1000G EUR pairwise LD-matrix base table (per-chromosome: eur_chr{N})",
-                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_matrix", "eur_chr"),
+                ResourceAddress::storage("default", "ld_matrix/eur_chr/"),
             ),
         ]
     }

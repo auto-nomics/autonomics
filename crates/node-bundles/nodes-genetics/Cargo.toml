@@ -30,13 +30,10 @@ datafusion.workspace = true
 faer.workspace = true
 tracing.workspace = true
 futures.workspace = true
-datalake = { path = "../../datalake" }
 nanoid = "0.5.0"
 tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-datalake = { path = "../../datalake" }
-
 [lints]
 workspace = true

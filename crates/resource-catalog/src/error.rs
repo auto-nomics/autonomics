@@ -25,6 +25,10 @@ pub enum ResourceError {
     GlobalAlreadySet,
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("storage error: {0}")]
+    Storage(String),
+    #[error("backend '{0}' is not registered")]
+    UnknownBackend(String),
 }
 
 /// Convenience alias for catalog results.

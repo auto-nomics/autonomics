@@ -6,8 +6,7 @@
 
 use std::sync::Arc;
 
-use datafusion::{catalog::CatalogProvider, execution::runtime_env::RuntimeEnv};
-use datalake::Datalake;
+use datafusion::execution::runtime_env::RuntimeEnv;
 
 use dag_core::registry::NodeRegistry;
 use dag_core::resource_catalog::ResourceCatalog;
@@ -23,13 +22,11 @@ use dag_core::resource_catalog::ResourceCatalog;
 /// ```
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
-    iceberg_catalog: Option<Arc<dyn CatalogProvider>>,
-    datalake: Arc<Datalake>,
     opendal: Option<Arc<fs::OpendalFileStorage>>,
     resources: Arc<ResourceCatalog>,
 ) -> NodeRegistry {
     let mut registry = NodeRegistry::new(
-        dag_core::registry::NodeCtx::new(runtime_env, iceberg_catalog, datalake, opendal)
+        dag_core::registry::NodeCtx::new(runtime_env, opendal)
             .with_resources(resources.clone()),
     );
 

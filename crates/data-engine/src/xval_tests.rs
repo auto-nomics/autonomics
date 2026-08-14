@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datalake::Datalake;
 
 use crate::codegen::{CodegenTarget, DagCompiler};
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
@@ -19,8 +18,6 @@ fn test_registry() -> NodeRegistry {
     let runtime_env = ctx.runtime_env();
     crate::default_registry::build_default_registry(
         runtime_env,
-        None,
-        Arc::new(Datalake::default()),
         None,
         std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
             std::path::PathBuf::from("."),
@@ -1283,8 +1280,6 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
 
         let node_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: ctx.runtime_env(),
-            iceberg_catalog: None,
-            datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),
@@ -1346,8 +1341,6 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
 
         let node_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: ctx.runtime_env(),
-            iceberg_catalog: None,
-            datalake: Arc::new(Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),

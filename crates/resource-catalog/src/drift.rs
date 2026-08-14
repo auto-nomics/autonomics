@@ -1,11 +1,8 @@
 //! Declaration-first drift checking.
 //!
 //! The catalog is the authoritative declaration of what should exist. This
-//! module checks the live state (Iceberg catalog, filesystem) against that
-//! declaration and reports mismatches as warnings — it never mutates the
-//! index and never builds the index from a scan.
-
-use std::collections::HashSet;
+//! module checks the live state against that declaration and reports
+//! mismatches as warnings — it never mutates the index.
 
 use crate::catalog::ResourceCatalog;
 use crate::kind::ResourceAddress;
@@ -14,62 +11,65 @@ use crate::kind::ResourceAddress;
 /// live state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftWarning {
-    /// The logical resource name.
     pub name: String,
-    /// Human-readable description of the mismatch.
     pub detail: String,
 }
 
-/// A point-in-time snapshot of the live Iceberg catalog, used to compare
-/// against registered tables. The caller builds this (e.g. from
-/// `Datalake::list_all_tables`) so this crate stays decoupled from `datalake`.
+/// A point-in-time snapshot of the live state, used to compare against
+/// registered resources.
+///
+/// Currently scoped to Database paths that can be checked synchronously.
+/// Storage backend probing requires an async check and is surfaced as a
+/// soft warning.
 #[derive(Debug, Clone, Default)]
 pub struct CatalogSnapshot {
-    /// The set of live tables as `(namespace, table)` pairs. Multi-segment
-    /// namespaces are joined with `.`.
-    pub tables: HashSet<(String, String)>,
+    /// Known-good local paths (for Database/Doc drift detection).
+    pub local_paths: std::collections::HashSet<String>,
 }
 
 impl ResourceCatalog {
     /// Check registered resources against a live snapshot. Returns warnings
-    /// for registered-but-missing resources. Never mutates the index; never
-    /// fails startup on its own.
+    /// for registered-but-missing resources. Never mutates the index.
     pub fn check_drift(&self, snapshot: &CatalogSnapshot) -> Vec<DriftWarning> {
         let mut warnings = Vec::new();
         for entry in self.list() {
             match &entry.address {
-                ResourceAddress::IcebergTable { schema, table, .. } => {
-                    if !snapshot.tables.contains(&(schema.clone(), table.clone())) {
+                ResourceAddress::Database { path, .. } => {
+                    let abs = self.absolutize(path);
+                    if !snapshot.local_paths.contains(path) && !abs.exists() {
                         warnings.push(DriftWarning {
                             name: entry.name.clone(),
                             detail: format!(
-                                "iceberg table `{schema}.{table}` is registered but not found in the live catalog"
+                                "database path is registered but not found: {}",
+                                abs.display()
                             ),
                         });
                     }
                 }
-                ResourceAddress::FilePath(p)
-                | ResourceAddress::Database { path: p, .. }
-                | ResourceAddress::Doc { path: p, .. } => {
-                    let abs = self.absolutize(p);
-                    if !abs.exists() {
-                        warnings.push(DriftWarning {
-                            name: entry.name.clone(),
-                            detail: format!("path is registered but not found: {}", abs.display()),
-                        });
+                ResourceAddress::Storage {
+                    backend, path, ..
+                } => {
+                    // If the backend is Local, we can check the filesystem.
+                    if let Some(cfg) = self.backend_config(backend) {
+                        if let Some(root) = cfg.local_root() {
+                            let full = std::path::Path::new(root).join(path);
+                            if !full.exists() {
+                                warnings.push(DriftWarning {
+                                    name: entry.name.clone(),
+                                    detail: format!(
+                                        "storage path '{path}' not found under local root '{root}'"
+                                    ),
+                                });
+                            }
+                            continue;
+                        }
                     }
-                }
-                ResourceAddress::ObjectStorage { bucket, prefix, .. } => {
-                    // ObjectStorage drift requires a live object store probe; we
-                    // surface a soft warning that includes the resolved prefix
-                    // so an operator can verify out-of-band. The snapshot type
-                    // is intentionally Iceberg-scoped — extending it to OSS is
-                    // tracked in a separate task.
+                    // Non-local backends: soft warning (requires async probe).
                     warnings.push(DriftWarning {
                         name: entry.name.clone(),
                         detail: format!(
-                            "object_storage resource declared at bucket `{bucket}` prefix `{prefix}` — \
-                             verify presence in the OSS bucket (no live probe wired)"
+                            "storage resource at backend '{backend}' path '{path}' — \
+                             verify presence (no sync probe for remote backends)"
                         ),
                     });
                 }

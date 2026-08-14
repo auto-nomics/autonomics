@@ -14,7 +14,7 @@ pub mod univariate_mixer;
 use std::collections::BTreeMap;
 
 use dag_core::resource_catalog::{
-    CATALOG_NAME, ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
+    ResourceAddress, ResourceEntry, ResourceKind, ResourceProvider,
 };
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -100,12 +100,12 @@ impl ResourceProvider for Resources {
             // ── UKBB LD-score panel (MTAG) ────────────────────────────────
             ResourceEntry::new(
                 "ldscore.ukbb_eur",
-                ResourceKind::IcebergTable,
+                ResourceKind::Storage,
                 "UKBB EUR LD-score panel (used by MTAG). Legacy panel from the UK Biobank \
                  EUR cohort. Not yet ingested into the production lake; nodes that reference \
                  it fall back to this declaration but will fail at query time until data \
                  is loaded.",
-                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_score", "ukbb_eur"),
+                ResourceAddress::storage("default", "ld_score/ukbb_eur/"),
             )
             .with_tags(vec![
                 "ld_score".into(),
@@ -122,7 +122,7 @@ impl ResourceProvider for Resources {
             // version takes effect since genetics registers first.
             ResourceEntry::new(
                 "ldmatrix.eur_chr",
-                ResourceKind::IcebergTable,
+                ResourceKind::Storage,
                 "1000G EUR pairwise LD-matrix: one Iceberg table per chromosome \
                  (eur_chr1 … eur_chr22). Each row is an LD pair (SNP A, SNP B) with \
                  unphased r² ≥ 0.01. Sparse storage — only meaningful LD pairs are \
@@ -133,7 +133,7 @@ impl ResourceProvider for Resources {
                  precompute_tags. Schema: chrom_a, pos_a, id_a, chrom_b, pos_b, id_b, \
                  unphased_r2. SNPs identified by rsid strings — integer indices are \
                  built at runtime by consumers, not persisted.",
-                ResourceAddress::iceberg_in(CATALOG_NAME, "ld_matrix", "eur_chr"),
+                ResourceAddress::storage("default", "ld_matrix/eur_chr/"),
             )
             .with_metadata(ld_matrix_metadata())
             .with_tags(vec![
@@ -148,12 +148,12 @@ impl ResourceProvider for Resources {
             // ── PLINK reference genotypes ─────────────────────────────────
             ResourceEntry::new(
                 "plink.1000g_eur.ref_prefix",
-                ResourceKind::FilePath,
+                ResourceKind::Storage,
                 "1000G EUR PLINK reference genotypes (per-chromosome .bed/.bim/.fam). \
                  QC-filtered (MAF ≥ 1%, geno ≤ 5%) used as input for PLINK2 --r2 LD \
                  matrix computation. Pattern: {N} = chromosome number 1-22. \
                  Located at /mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc{.bed,.bim,.fam}.",
-                ResourceAddress::path("/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc"),
+                ResourceAddress::storage("default", "1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc"),
             )
             .with_metadata({
                 let mut m = BTreeMap::new();

@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 biofusion = { path = "../biofusion" }
-iceberg.workspace = true
 derive_more.workspace = true
 
 [lints]

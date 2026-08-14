@@ -975,8 +975,6 @@ mod tests {
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),

@@ -44,12 +44,6 @@ impl ::dag_core::dag::NodeError for LdscNodeError {
     }
 }
 
-impl From<datalake::error::Error> for LdscNodeError {
-    fn from(e: datalake::error::Error) -> Self {
-        LdscNodeError::Datalake(e.to_string())
-    }
-}
-
 // =====================================================================
 // Output DataFrame construction
 // =====================================================================
@@ -387,20 +381,25 @@ impl DagNode for LdscHsqNode {
         //    `tests`).
         let ctx = node_ctx.session();
 
-        // TODO: Auto select LD score panel table by population
-        // TODO: Make the LD panel configurable so callers can switch between
-        // panels (e.g. 1000g_eur vs ukbb_eur) without editing source.
-        //
-        // --- Old ukbb_eur panel (single ld_score column, no w_ld) ---
-        // let result = Self::run_with_ctx(&ctx, &input.data, "ukbb_eur", &self.ldsc_hsq).await?;
-        //
-        // --- New 1000g_eur panel (ld_score + w_ld as separate columns) ---
-        let ld_ref = crate::ldsc_common::LdScoreRef::resolve(
+        crate::ldsc_common::register_catalog_table(
+            &ctx,
             &node_ctx.resources,
             "ldscore.1000g_eur",
-            "1000g_eur",
-        );
-        let result = Self::run_with_ctx(&ctx, &input.data, &ld_ref, &self.ldsc_hsq).await?;
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+        crate::ldsc_common::register_catalog_table(
+            &ctx,
+            &node_ctx.resources,
+            "ldscore.1000g_eur.m",
+            "ld_panel_m",
+        )
+        .await
+        .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
+
+        let result =
+            Self::run_with_ctx(&ctx, &input.data, "ld_panel", "ld_panel_m", &self.ldsc_hsq).await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&result)?;
@@ -426,51 +425,19 @@ impl LdscHsqNode {
     async fn run_with_ctx(
         ctx: &datafusion::prelude::SessionContext,
         input: &datafusion::prelude::DataFrame,
-        ld_ref: &crate::ldsc_common::LdScoreRef,
+        panel_table: &str,
+        m_table: &str,
         cfg: &LdscHsqConfig,
     ) -> Result<ldsc::hsq::HsqResult, DagError> {
         // 1. Register the upstream sumstats DataFrame as a temporary table.
         ctx.register_table("sumstats", input.clone().into_view())
             .map_err(LdscNodeError::ReadBatch)?;
 
-        // 2. If the panel is declared as ObjectStorage in the catalog,
-        //    register a DataFusion `ListingTable` for the panel and its
-        //    companion `_m` table against the engine's object store. Legacy
-        //    Iceberg callers skip this and read `iceberg.ld_score.*` directly.
-        //
-        //    The backend descriptor (`ld_ref.backend`) carries the connection
-        //    details (scheme/endpoint/region/credentials/root) that
-        //    [`register_listing_table`] uses to compose the bucket URL.
-        //    The engine layer is responsible for registering a matching
-        //    `ObjectStore` on `runtime_env` before this is called.
-        if ld_ref.uses_object_storage() {
-            if let Some(handle) = &ld_ref.handle {
-                crate::ldsc_common::register_listing_table(
-                    ctx,
-                    &ld_ref.table_name,
-                    handle,
-                    &ld_ref.backend,
-                )
-                .await
-                .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
-            }
-            if let Some(m_handle) = &ld_ref.m_handle {
-                crate::ldsc_common::register_listing_table(
-                    ctx,
-                    &ld_ref.m_table_name,
-                    m_handle,
-                    &ld_ref.m_backend,
-                )
-                .await
-                .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
-            }
-        }
-
-        // 3. Read per-annotation M_5_50 — the L2-summed SNP count that
+        // 2. Read per-annotation M_5_50 — the L2-summed SNP count that
         //    normalises the LDSC regression slope into h².  This comes from the
         //    companion `_m` table (written alongside the LD scores), NOT from
         //    COUNT(*) of the panel.
-        let m = crate::ldsc_common::read_m_5_50(ctx, ld_ref.m_table_ref(), 1)
+        let m = crate::ldsc_common::read_m_5_50(ctx, m_table, 1)
             .await
             .map_err(|e| LdscNodeError::Datalake(e.to_string()))?;
 
@@ -487,7 +454,7 @@ impl LdscHsqNode {
             z = INPUT_Z_COL,
             n = INPUT_N_COL,
             rsid = INPUT_RSID_COL,
-            ld_table = ld_ref.panel_table_ref(),
+            ld_table = crate::ldsc_common::quote_table(panel_table),
             Z = LD_Z_COL,
             N = LD_N_COL,
             REF = LD_REF_COL,
@@ -526,8 +493,6 @@ mod tests {
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx {
             runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            iceberg_catalog: None,
-            datalake: std::sync::Arc::new(datalake::Datalake::default()),
             opendal: None,
             resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
                 std::path::PathBuf::from("."),
@@ -672,18 +637,9 @@ mod tests {
         .unwrap();
         let m_table = MemTable::try_new(m_batch.schema(), vec![vec![m_batch]]).unwrap();
 
-        let ld_schema = MemorySchemaProvider::new();
-        ld_schema
-            .register_table("1000g_eur".to_string(), Arc::new(table))
+        ctx.register_table("1000g_eur", Arc::new(table)).unwrap();
+        ctx.register_table("1000g_eur_m", Arc::new(m_table))
             .unwrap();
-        ld_schema
-            .register_table("1000g_eur_m".to_string(), Arc::new(m_table))
-            .unwrap();
-        let catalog = MemoryCatalogProvider::new();
-        catalog
-            .register_schema("ld_score", Arc::new(ld_schema))
-            .unwrap();
-        ctx.register_catalog(dag_core::resource_catalog::CATALOG_NAME, Arc::new(catalog));
         ctx
     }
 
@@ -702,17 +658,7 @@ mod tests {
             .collect();
         let ctx = ctx_with_ld_panel(N_SNP);
         let df = ctx.read_batch(sumstats_batch(z, &rsids)).unwrap();
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, cfg)
+        LdscHsqNode::run_with_ctx(&ctx, &df, "1000g_eur", "1000g_eur_m", cfg)
             .await
             .expect("hsq pipeline should succeed")
     }
@@ -847,18 +793,14 @@ mod tests {
         let z: Vec<f64> = (0..50).map(|i| (i as f64) * 0.1).collect();
         let df = ctx.read_batch(sumstats_batch(&z, &rsids)).unwrap();
 
-        let ld_ref = crate::ldsc_common::LdScoreRef {
-            sql: "iceberg.ld_score.\"1000g_eur\"".to_string(),
-            m_sql: "iceberg.ld_score.\"1000g_eur_m\"".to_string(),
-            handle: None,
-            m_handle: None,
-            backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            m_backend: dag_core::resource_catalog::ObjectStorageBackend::default(),
-            table_name: String::new(),
-            m_table_name: String::new(),
-        };
-        let res =
-            LdscHsqNode::run_with_ctx(&ctx, &df, &ld_ref, &LdscHsqConfig::new(20, None)).await;
+        let res = LdscHsqNode::run_with_ctx(
+            &ctx,
+            &df,
+            "1000g_eur",
+            "1000g_eur_m",
+            &LdscHsqConfig::new(20, None),
+        )
+        .await;
         assert!(
             res.is_err(),
             "no rsid overlap must error, not silently return NaN"

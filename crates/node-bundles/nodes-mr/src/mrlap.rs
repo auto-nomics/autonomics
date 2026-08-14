@@ -84,7 +84,6 @@ pub struct MrlapSpec {
     pub seed: u64,
 }
 /// Hardcoded Iceberg LD-score panel table — same panel as ldsc_hsq / ldsc_rg.
-const LD_TABLE: &str = "1000g_eur";
 
 fn default_n_blocks() -> usize {
     200
@@ -384,15 +383,17 @@ impl DagNode for MrlapNode {
         ctx.register_table("sumstats2", in1.data.clone().into_view())
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
-        // Resolve the LD-score panel from the resource catalog (with fallback).
-        let ld_ref = nodes_ldsc::ldsc_common::LdScoreRef::resolve(
+        nodes_ldsc::ldsc_common::register_catalog_table(
+            &ctx,
             &node_ctx.resources,
             "ldscore.1000g_eur",
-            LD_TABLE,
-        );
+            "ld_panel",
+        )
+        .await
+        .map_err(|e| err(format!("register ld panel: {e}")))?;
 
         // M = total SNPs in the LD panel.
-        let m = count_panel_snp(&ctx, &ld_ref.sql).await?;
+        let m = count_panel_snp(&ctx, "ld_panel").await?;
         let sql = format!(
             r#"SELECT s1."{z}" AS z1, s2."{z}" AS z2,
                       s1."{n}" AS n1, s2."{n}" AS n2,
@@ -404,7 +405,7 @@ impl DagNode for MrlapNode {
             z = IN_Z,
             n = IN_N,
             rsid = IN_RSID,
-            tbl = ld_ref.sql,
+            tbl = nodes_ldsc::ldsc_common::quote_table("ld_panel"),
         );
         let joined = ctx
             .sql(&sql)
@@ -545,7 +546,10 @@ async fn count_panel_snp(
     ctx: &datafusion::prelude::SessionContext,
     ld_table_sql: &str,
 ) -> Result<usize, DagError> {
-    let sql = format!("SELECT COUNT(*) AS n FROM {ld_table_sql}");
+    let sql = format!(
+        "SELECT COUNT(*) AS n FROM {}",
+        nodes_ldsc::ldsc_common::quote_table(ld_table_sql)
+    );
     let df = ctx
         .sql(&sql)
         .await

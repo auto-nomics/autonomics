@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Centralized, self-describing resource management: a singleton catalog that is the single source of truth for all resources (Iceberg tables, file paths, endpoints, config/env addresses, DB paths, docs)."
+description = "Centralized, self-describing resource management: a singleton catalog that is the single source of truth for all resources (object storage, endpoints, config/env addresses, DB paths)."
 
 [dependencies]
 thiserror.workspace = true
@@ -15,6 +15,7 @@ tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 turso.workspace = true
 chrono.workspace = true
+opendal = { version = "0.57", features = ["services-fs", "services-s3", "services-oss"] }
 
 [lints]
 workspace = true
