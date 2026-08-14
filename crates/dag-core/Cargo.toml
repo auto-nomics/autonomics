@@ -8,7 +8,6 @@ description = "Core DAG engine: node traits, registry, scheduler, and codegen â€
 
 [dependencies]
 thiserror.workspace = true
-resource-catalog = { path = "../resource-catalog" }
 vfs = { path = "../vfs" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

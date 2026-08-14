@@ -8,7 +8,6 @@ description = "Async Rust SDK for NCBI Entrez Programming Utilities (E-utilities
 
 [dependencies]
 bib-types = { path = "../bib-types" }
-resource-catalog = { path = "../resource-catalog" }
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }

@@ -22,13 +22,16 @@ use crate::error::{OpenTargetsError, Result};
 use crate::search::SearchResults;
 use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Default GraphQL endpoint (API v4).
 pub const DEFAULT_ENDPOINT: &str = "https://api.platform.opentargets.org/api/v4/graphql";
 
-/// Resolve the Open Targets GraphQL endpoint via the resource catalog,
-/// falling back to [`DEFAULT_ENDPOINT`] when no override is configured.
+/// Resolve the Open Targets endpoint override from the environment.
 pub fn endpoint() -> String {
-    resource_catalog::endpoint_or("endpoint.opentargets", DEFAULT_ENDPOINT)
+    env_endpoint("ENDPOINT_OPENTARGETS_URL", DEFAULT_ENDPOINT)
 }
 
 // Maximum page size accepted by the API (server enforces ≤ 3000).

@@ -16,7 +16,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-resource-catalog = { path = "../resource-catalog" }
 
 schemars.workspace = true
 [dev-dependencies]

@@ -24,9 +24,6 @@ use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, Termin
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
-use dag_core::resource_catalog::{
-    DbKind, ResourceAddress, ResourceCatalog, ResourceEntry, ResourceKind,
-};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -114,11 +111,6 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<MountedObjectStore>,
-    /// Centralized resource catalog — the single source of truth for all
-    /// resource addresses (Iceberg tables, file paths, endpoints, config,
-    /// databases). Nodes resolve resources through this instead of
-    /// hardcoding names/paths.
-    pub resources: Arc<ResourceCatalog>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -150,26 +142,6 @@ impl SharedInfra {
         let file_storage = Arc::new(OpendalFileStorage::new(&config.data_dir));
         tracing::info!("SharedInfra::open: file storage ready");
 
-        // ── Resource Catalog ─────────────────────────────────────────
-        // Open (or load) the centralized resource catalog first, so every
-        // downstream component (DataEngine nodes, SDK clients, etc.) resolves
-        // addresses through it. The manifest DB lives in state_dir.
-        let manifest_db = config.state_dir.join("resource-manifest.db");
-        if let Some(parent) = manifest_db.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        tracing::info!("SharedInfra::open: opening resource catalog at {}", manifest_db.display());
-        let resources =
-            Arc::new(ResourceCatalog::load_or_new(&config.data_dir, &manifest_db).await);
-        tracing::info!("SharedInfra::open: resource catalog loaded");
-
-        // Register built-in resources from RuntimeConfig (config-as-resource).
-        register_config_resources(&resources, config);
-
-        // Set the process-wide global so SDK crates (eutils, embase, etc.)
-        // can resolve endpoints via `ResourceCatalog::global()`.
-        let _ = ResourceCatalog::set_global(resources.clone());
-
         let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
 
         tracing::info!(
@@ -179,7 +151,6 @@ impl SharedInfra {
         tracing::info!("SharedInfra::open: building DataEngine");
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
-            .with_resources(resources.clone())
             .with_vfs((*vfs).clone());
 
         let mut engine = engine_builder.build();
@@ -187,9 +158,7 @@ impl SharedInfra {
 
         // ── DAG history ──────────────────────────────────────────────
         if config.enable_dag_history {
-            let history_db = resources
-                .resolve_database("db.dag_history")
-                .unwrap_or_else(|_| config.dag_history_db.clone());
+            let history_db = config.dag_history_db.clone();
             if let Some(parent) = history_db.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -218,9 +187,7 @@ impl SharedInfra {
 // ── Agent storage ────────────────────────────────────────────
         // Resolve DB paths from the catalog (allows provider overrides and
         // persistence-backed path changes; falls back to RuntimeConfig).
-        let agent_db = resources
-            .resolve_database("db.agent")
-            .unwrap_or_else(|_| config.agent_db.clone());
+        let agent_db = config.agent_db.clone();
         // Open once and clone — both trait objects share the same underlying
         // connection (and its Mutex).  Opening the file twice creates two
         // separate Database objects and risks file-lock contention.
@@ -238,16 +205,12 @@ impl SharedInfra {
         // Profile registry — clone of the same storage (shares one connection).
         let profile_storage: Arc<dyn AgentProfileRegistry> = Arc::new(turso_store);
 
-        let bib_db_path = resources
-            .resolve_database("db.bib")
-            .unwrap_or_else(|_| config.bib_db_path.clone());
+        let bib_db_path = config.bib_db_path.clone();
         tracing::info!("SharedInfra::open: opening bibliography db at {}", bib_db_path.display());
         let bib =
             Arc::new(bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone()).await?);
 
-        let writing_db_path = resources
-            .resolve_database("db.writing")
-            .unwrap_or_else(|_| config.writing_db_path.clone());
+        let writing_db_path = config.writing_db_path.clone();
         tracing::info!("SharedInfra::open: opening writing db at {}", writing_db_path.display());
         let writing = Arc::new(
             writing_base::WritingShared::open_with(
@@ -257,14 +220,12 @@ impl SharedInfra {
             .await?,
         );
 
-        resources.persist().await;
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
         Ok(Self {
             engine_manager,
             file_storage,
             vfs,
-            resources,
             storage,
             profile_storage,
             runtime_handle: tokio::runtime::Handle::current(),
@@ -444,14 +405,6 @@ impl SharedInfra {
 // AgentHandle — per-agent control struct
 // ═══════════════════════════════════════════════════════════════════════
 
-// ── Resource catalog bootstrap helpers ───────────────────────────────────
-
-/// Register built-in resources derived from [`RuntimeConfig`] into the catalog.
-///
-/// This folds env-derived paths and config values into the centralized catalog
-/// so that all modules resolve them by logical name instead of reading env
-/// vars or config fields directly. Registration is idempotent (same-name +
-/// same-address is a no-op); failures are logged and non-fatal.
 /// Build the VFS from `state_dir/vfs.toml`, falling back to sane env-based
 /// defaults when no manifest has been created yet.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
@@ -522,195 +475,6 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
 
     VfsManifest { backend, mount }
 }
-
-fn register_config_resources(catalog: &ResourceCatalog, config: &RuntimeConfig) {
-    use std::collections::BTreeMap;
-
-    let reg = |name: &str,
-               kind: ResourceKind,
-               desc: &str,
-               address: ResourceAddress,
-               tags: Vec<String>| {
-        let mut entry = ResourceEntry::new(name, kind, desc, address);
-        if !tags.is_empty() {
-            entry = entry.with_tags(tags);
-        }
-        if let Err(e) = catalog.register(entry) {
-            tracing::warn!("resource catalog: failed to register '{name}': {e}");
-        }
-    };
-
-    // ── Database / file paths ─────────────────────────────────────────
-    reg(
-        "db.agent",
-        ResourceKind::Database,
-        "Agent persistence database (Turso/SQLite)",
-        ResourceAddress::database(DbKind::Sqlite, config.agent_db.to_string_lossy().to_string()),
-        vec!["runtime".into()],
-    );
-    reg(
-        "db.dag_history",
-        ResourceKind::Database,
-        "DAG history database (snapshots/refs)",
-        ResourceAddress::database(DbKind::Sqlite, config.dag_history_db.to_string_lossy().to_string()),
-        vec!["runtime".into()],
-    );
-    reg(
-        "db.bib",
-        ResourceKind::Database,
-        "Bibliography database",
-        ResourceAddress::database(DbKind::Sqlite, config.bib_db_path.to_string_lossy().to_string()),
-        vec!["runtime".into()],
-    );
-    reg(
-        "db.writing",
-        ResourceKind::Database,
-        "Writing system database",
-        ResourceAddress::database(DbKind::Sqlite, config.writing_db_path.to_string_lossy().to_string()),
-        vec!["runtime".into()],
-    );
-    reg(
-        "db.app",
-        ResourceKind::Database,
-        "TUI / application database",
-        ResourceAddress::database(DbKind::Sqlite, config.app_db_path.to_string_lossy().to_string()),
-        vec!["runtime".into()],
-    );
-
-    // ── File paths ────────────────────────────────────────────────────
-    reg(
-        "app.data_dir",
-        ResourceKind::Storage,
-        "Root directory for agent file storage (downloads, scratch, artifacts)",
-        ResourceAddress::storage("default", config.data_dir.to_string_lossy()),
-        vec!["runtime".into()],
-    );
-    reg(
-        "app.state_dir",
-        ResourceKind::Storage,
-        "Directory for agent-internal state",
-        ResourceAddress::storage("default", config.state_dir.to_string_lossy()),
-        vec!["runtime".into()],
-    );
-
-    // ── Doc / reference paths ────────────────────────────────────────
-    for (logical, path, desc) in [
-        ("doc.docs", "docs", "Project documentation root"),
-        ("doc.logs", "logs", "Application logs directory"),
-        ("doc.reference", "reference", "Reference data / panels"),
-        ("doc.fixtures", "test_datasets", "Test fixture data"),
-    ] {
-        let p = config.data_dir.join(path);
-        reg(
-            logical,
-            ResourceKind::Storage,
-            desc,
-            ResourceAddress::storage("default", p.to_string_lossy()),
-            vec!["doc".into()],
-        );
-    }
-
-    // ── Infra bin data paths ─────────────────────────────────────────
-    reg(
-        "sink.ld_matrix.data_root",
-        ResourceKind::Storage,
-        "Source LD matrix TSV root (1000G PLINK dataset)",
-        ResourceAddress::storage("default", "/mnt/disk2/dataset/1000g_plink/"),
-        vec!["infra".into()],
-    );
-    reg(
-        "sink.af.data_path",
-        ResourceKind::Storage,
-        "Source allele-frequency .afreq directory (1000G EUR)",
-        ResourceAddress::storage("default", "/mnt/disk2/dataset/1000g_plink/eur/maf/"),
-        vec!["infra".into()],
-    );
-
-    // ── External API endpoints ────────────────────────────────────────
-    // Registered so SDK clients can resolve via ResourceCatalog::global().
-    // Each SDK crate falls back to its own const when the global is not set.
-    for (logical, url, desc) in [
-        (
-            "endpoint.eutils",
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
-            "NCBI E-utilities API",
-        ),
-        (
-            "endpoint.embase",
-            "https://api.elsevier.com/content/embase/article",
-            "Elsevier Embase API",
-        ),
-        (
-            "endpoint.openalex",
-            "https://api.openalex.org",
-            "OpenAlex REST API",
-        ),
-        (
-            "endpoint.s2_graph",
-            "https://api.semanticscholar.org/graph/v1",
-            "Semantic Scholar Graph API",
-        ),
-        (
-            "endpoint.s2_reco",
-            "https://api.semanticscholar.org/recommendations/v1",
-            "Semantic Scholar Recommendations API",
-        ),
-        (
-            "endpoint.opentargets",
-            "https://api.platform.opentargets.org/api/v4/graphql",
-            "Open Targets GraphQL API",
-        ),
-        (
-            "endpoint.crossref",
-            "https://api.crossref.org",
-            "Crossref REST API",
-        ),
-        (
-            "endpoint.gwascatalog_ss",
-            "https://www.ebi.ac.uk/gwas/summary-statistics/api",
-            "GWAS Catalog Summary Stats API",
-        ),
-        (
-            "endpoint.gwascatalog_rest",
-            "https://www.ebi.ac.uk/gwas/rest/api",
-            "GWAS Catalog REST API",
-        ),
-        (
-            "endpoint.gwascatalog_search",
-            "https://www.ebi.ac.uk/gwas/api/search",
-            "GWAS Catalog Solr Search API",
-        ),
-        (
-            "endpoint.gwascatalog_ftp",
-            "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics",
-            "GWAS Catalog FTP (summary stats files)",
-        ),
-        (
-            "endpoint.europepmc",
-            "https://www.ebi.ac.uk/europepmc/webservices/rest",
-            "Europe PMC REST API",
-        ),
-        (
-            "endpoint.biorxiv",
-            "https://api.biorxiv.org",
-            "bioRxiv/medRxiv API",
-        ),
-        (
-            "endpoint.arxiv",
-            "http://export.arxiv.org/api/query",
-            "arXiv API",
-        ),
-    ] {
-        reg(
-            logical,
-            ResourceKind::Endpoint,
-            desc,
-            ResourceAddress::endpoint(url),
-            vec!["api".into()],
-        );
-    }
-}
-
 
 /// Control handle for one running agent.
 ///

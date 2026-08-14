@@ -3,6 +3,10 @@ use reqwest::Client;
 use crate::error::{BiorxivError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for the bioRxiv/medRxiv API.
 ///
 /// Both `api.medrxiv.org` and `api.biorxiv.org` serve identical APIs; the
@@ -11,7 +15,7 @@ use crate::types::*;
 const BASE_URL: &str = "https://api.biorxiv.org";
 
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.biorxiv", BASE_URL)
+    env_endpoint("ENDPOINT_BIORXIV_URL", BASE_URL)
 }
 
 /// Maximum results returned per API call.

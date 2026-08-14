@@ -6,7 +6,6 @@ members = [
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",
   "crates/dag-core",
-  "crates/resource-catalog",
   "crates/data-engine",
   "crates/node-bundles/nodes-hypothesize",
   "crates/node-bundles/nodes-ml",

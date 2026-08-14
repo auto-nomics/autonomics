@@ -6,11 +6,15 @@ use serde_json::Value;
 use crate::error::{EutilsError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for all NCBI E-utility requests.
 const BASE_URL: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.eutils", BASE_URL)
+    env_endpoint("ENDPOINT_EUTILS_URL", BASE_URL)
 }
 
 // ---------------------------------------------------------------------------

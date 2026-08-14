@@ -680,7 +680,6 @@ dependencies = [
  "bib-types",
  "quick-xml 0.39.4",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serial_test",
@@ -1066,7 +1065,6 @@ dependencies = [
  "bib-types",
  "chrono",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -2103,7 +2101,6 @@ dependencies = [
  "dag-core",
  "datafusion",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -2382,7 +2379,6 @@ dependencies = [
  "datafusion",
  "futures",
  "petgraph",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -3500,7 +3496,6 @@ dependencies = [
  "async-trait",
  "bib-types",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -3744,7 +3739,6 @@ dependencies = [
  "async-trait",
  "bib-types",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -3764,7 +3758,6 @@ dependencies = [
  "async-trait",
  "bib-types",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -4702,7 +4695,6 @@ dependencies = [
  "bib-types",
  "futures",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -7828,7 +7820,6 @@ dependencies = [
  "async-trait",
  "bib-types",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -8019,7 +8010,6 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -9478,21 +9468,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resource-catalog"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "opendal",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "turso",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9567,7 +9542,6 @@ dependencies = [
  "gwascatalog-sdk",
  "opengwas",
  "opentargets",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -9939,7 +9913,6 @@ dependencies = [
  "async-trait",
  "bib-types",
  "reqwest",
- "resource-catalog",
  "schemars",
  "serde",
  "serde_json",
@@ -10235,7 +10208,6 @@ dependencies = [
 name = "sink_af"
 version = "0.1.0"
 dependencies = [
- "resource-catalog",
  "tokio",
 ]
 
@@ -10243,7 +10215,6 @@ dependencies = [
 name = "sink_ld_matrix"
 version = "0.1.0"
 dependencies = [
- "resource-catalog",
  "tokio",
 ]
 

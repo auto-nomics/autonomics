@@ -157,8 +157,6 @@ pub async fn tool_set_from_config(
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
-    // Resource catalog tools — always enabled (read-only, no side effects).
-    tools.extend(crate::resource_tools::registrations());
 
     if config.enable_bibliography {
         match bib_tools(&config.bib_db_path.to_string_lossy()).await {

@@ -3,11 +3,15 @@ use reqwest::Client;
 use crate::error::{EuropePmcError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for all Europe PMC REST API requests.
 const BASE_URL: &str = "https://www.ebi.ac.uk/europepmc/webservices/rest";
 
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.europepmc", BASE_URL)
+    env_endpoint("ENDPOINT_EUROPEPMC_URL", BASE_URL)
 }
 
 // ===========================================================================

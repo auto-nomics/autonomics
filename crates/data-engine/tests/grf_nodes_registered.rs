@@ -23,10 +23,6 @@ fn registry() -> NodeRegistry {
     data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
         None,
-        None,
-        std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
-            std::path::PathBuf::from("."),
-        )),
     )
 }
 

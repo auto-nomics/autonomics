@@ -3,20 +3,24 @@ use reqwest::Client;
 use crate::error::{Result, S2Error};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for the Semantic Scholar Academic Graph API.
 const GRAPH_BASE: &str = "https://api.semanticscholar.org/graph/v1";
 
 /// Base URL for the Semantic Scholar Recommendations API.
 const RECO_BASE: &str = "https://api.semanticscholar.org/recommendations/v1";
 
-/// Resolve the S2 Graph endpoint via the resource catalog.
+/// Resolve the S2 Graph endpoint override from the environment.
 fn graph_base() -> String {
-    resource_catalog::endpoint_or("endpoint.s2_graph", GRAPH_BASE)
+    env_endpoint("ENDPOINT_S2_GRAPH_URL", GRAPH_BASE)
 }
 
-/// Resolve the S2 Recommendations endpoint via the resource catalog.
+/// Resolve the S2 Recommendations endpoint override from the environment.
 fn reco_base() -> String {
-    resource_catalog::endpoint_or("endpoint.s2_reco", RECO_BASE)
+    env_endpoint("ENDPOINT_S2_RECO_URL", RECO_BASE)
 }
 
 // ===========================================================================

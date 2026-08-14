@@ -369,9 +369,6 @@ async fn dag_node_works_dataframe() {
     let ctx = NodeCtx {
         runtime_env: SessionContext::new().runtime_env(),
         opendal: None,
-        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
-            std::path::PathBuf::from("."),
-        )),
         global_sem: None,
     };
 

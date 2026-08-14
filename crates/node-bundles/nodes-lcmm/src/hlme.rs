@@ -2335,9 +2335,6 @@ mod cross_validation {
         NodeCtx {
             runtime_env: ctx.runtime_env(),
             opendal: None,
-            resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
-                std::path::PathBuf::from("."),
-            )),
             global_sem: None,
         }
     }

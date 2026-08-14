@@ -6,6 +6,10 @@
 
 use crate::error::{GwasCatalogError, Result};
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Summary Statistics API base URL.
 pub const SS_BASE: &str = "https://www.ebi.ac.uk/gwas/summary-statistics/api";
 /// REST (curated catalog) API base URL.
@@ -15,24 +19,24 @@ pub const SEARCH_BASE: &str = "https://www.ebi.ac.uk/gwas/api/search";
 /// HTTPS mirror of the FTP site hosting full summary-statistics files.
 pub const FTP_BASE: &str = "https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics";
 
-/// Resolve the GWAS Catalog Summary Statistics endpoint via the resource catalog.
+/// Resolve the Summary Statistics endpoint override from the environment.
 pub fn ss_base() -> String {
-    resource_catalog::endpoint_or("endpoint.gwascatalog_ss", SS_BASE)
+    env_endpoint("ENDPOINT_GWASCATALOG_SS_URL", SS_BASE)
 }
 
-/// Resolve the GWAS Catalog REST endpoint via the resource catalog.
+/// Resolve the REST endpoint override from the environment.
 pub fn rest_base() -> String {
-    resource_catalog::endpoint_or("endpoint.gwascatalog_rest", REST_BASE)
+    env_endpoint("ENDPOINT_GWASCATALOG_REST_URL", REST_BASE)
 }
 
-/// Resolve the GWAS Catalog Solr Search endpoint via the resource catalog.
+/// Resolve the Solr Search endpoint override from the environment.
 pub fn search_base() -> String {
-    resource_catalog::endpoint_or("endpoint.gwascatalog_search", SEARCH_BASE)
+    env_endpoint("ENDPOINT_GWASCATALOG_SEARCH_URL", SEARCH_BASE)
 }
 
-/// Resolve the GWAS Catalog FTP mirror endpoint via the resource catalog.
+/// Resolve the FTP mirror endpoint override from the environment.
 pub fn ftp_base() -> String {
-    resource_catalog::endpoint_or("endpoint.gwascatalog_ftp", FTP_BASE)
+    env_endpoint("ENDPOINT_GWASCATALOG_FTP_URL", FTP_BASE)
 }
 
 /// Aggregate async client for all three GWAS Catalog APIs.

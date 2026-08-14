@@ -10,13 +10,16 @@ use reqwest::Client;
 use crate::error::{OpenAlexError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for all OpenAlex API requests.
 pub const BASE_URL: &str = "https://api.openalex.org";
 
-/// Resolve the OpenAlex endpoint via the resource catalog, falling back to
-/// [`BASE_URL`] when no override is configured.
+/// Resolve the OpenAlex endpoint override from the environment.
 pub fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.openalex", BASE_URL)
+    env_endpoint("ENDPOINT_OPENALEX_URL", BASE_URL)
 }
 
 /// All OpenAlex entity endpoints share the same set of query parameters.

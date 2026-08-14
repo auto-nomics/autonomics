@@ -750,7 +750,17 @@ async fn clump_iceberg_ld(
         // fall back to the hardcoded `iceberg.ld_matrix.eur_chr{N}`.
         let table_sql = match ld_base {
             Some(base) => format!("{base}{chrom}"),
-            None => format!("eur_chr{chrom}"),
+            None => {
+                let table_name = format!("ld_matrix_eur_chr{chrom}");
+                nodes_ldsc::ldsc_common::register_listing_table(
+                    session,
+                    &table_name,
+                    &format!("vfs:///data/oss/ld_matrix/eur_chr{chrom}/"),
+                )
+                .await
+                .map_err(|e| TwoSampleMrNodeError::Clump(format!("register LD matrix: {e}")))?;
+                table_name
+            }
         };
         let sql = format!(
             "SELECT id_a, id_b, unphased_r2 \
@@ -1165,9 +1175,8 @@ impl DagNode for TwoSampleMrNode {
         let session = node_ctx.session();
         // Resolve the LD-matrix base table from the catalog (falls back to
         // hardcoded `iceberg.ld_matrix.eur_chr{N}` when not registered).
-        let ld_base = node_ctx.resources.resolve_storage_path_raw("ldmatrix.eur_chr").ok();
         let hinputs =
-            clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_deref()).await?;
+            clump_instruments(hinputs, &self.spec.clump, &session, Some("eur_chr")).await?;
 
         // ---- harmonise ----
         let harmonised =
@@ -1507,7 +1516,7 @@ mod tests {
 
         let cfg = ClumpConfig::default();
         let session = test_session();
-        let clumped = clump_instruments(inputs, &cfg, &session, None)
+        let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
             .expect("clumping should succeed");
 
@@ -1557,14 +1566,14 @@ mod tests {
             ..ClumpConfig::default()
         };
         let session = test_session();
-        let clumped = clump_instruments(inputs, &cfg, &session, None)
+        let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
             .expect("clumping should succeed");
         let relaxed_count = clumped.len();
 
         // Strict default r² → more aggressive pruning.
         let inputs2 = real_bmi_instruments();
-        let strict = clump_instruments(inputs2, &ClumpConfig::default(), &session, None)
+        let strict = clump_instruments(inputs2, &ClumpConfig::default(), &session, Some("eur_chr"))
             .await
             .expect("clumping should succeed");
         let strict_count = strict.len();
@@ -1701,7 +1710,7 @@ mod tests {
             mode: ClumpMode::IcebergLd,
             ..ClumpConfig::default()
         };
-        let clumped = clump_instruments(inputs, &cfg, &session, None)
+        let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
             .expect("iceberg clumping should succeed");
 
@@ -1739,7 +1748,7 @@ mod tests {
             mode: ClumpMode::IcebergLd,
             ..ClumpConfig::default()
         };
-        let clumped = clump_instruments(inputs, &cfg, &session, None)
+        let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
             .expect("relaxed clumping should succeed");
         assert_eq!(clumped.len(), 4, "with r²=0.95 no SNPs should be pruned");
@@ -1790,7 +1799,7 @@ mod tests {
             mode: ClumpMode::IcebergLd,
             ..ClumpConfig::default()
         };
-        let clumped = clump_instruments(inputs, &cfg, &session, None)
+        let clumped = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
             .await
             .expect("clumping should succeed");
         assert_eq!(

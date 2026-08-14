@@ -364,15 +364,25 @@ async fn load_ld_pairs(
 ) -> Result<Vec<LdPair>, SusieNodeError> {
     let table_sql = match ld_base {
         Some(base) => format!("{base}{chrom}"),
-        None => format!("ld_matrix_eur_chr{chrom}"),
+        None => {
+            let table_name = format!("ld_matrix_eur_chr{chrom}");
+            nodes_ldsc::ldsc_common::register_listing_table(
+                ctx,
+                &table_name,
+                &format!("vfs:///data/oss/ld_matrix/eur_chr{chrom}/"),
+            )
+            .await
+            .map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
+            table_name
+        }
     };
     let sql = format!(
         "SELECT id_a, id_b, unphased_r2 \
          FROM {table_sql} \
          WHERE unphased_r2 >= {r2_min}"
     );
-    let df = ctx.sql(&sql).await.map_err(SusieNodeError::Df)?;
-    let batches = df.collect().await.map_err(SusieNodeError::Df)?;
+    let df = ctx.sql(&sql).await.map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
+    let batches = df.collect().await.map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
 
     let mut pairs = Vec::new();
     for batch in &batches {
@@ -551,9 +561,8 @@ impl DagNode for SusieRssNode {
             "susie_rss: querying LD matrix iceberg.ld_matrix.eur_chr{chrom} (r² ≥ {})…",
             self.spec.r2_min
         ));
-        let ld_base = node_ctx.resources.resolve_storage_path_raw("ldmatrix.eur_chr").ok();
         let ld_pairs =
-            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, ld_base.as_deref()).await?;
+            load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, None).await?;
         reporter.info(format!("susie_rss: loaded {} LD pairs", ld_pairs.len()));
 
         let r = build_corr_matrix(&snps_filt, &z_filt, &ld_pairs);
@@ -668,7 +677,7 @@ impl DagNode for SusieRssNode {
         )
         .map_err(SusieNodeError::Arrow)?;
 
-        let df = ctx.read_batch(batch).map_err(SusieNodeError::Df)?;
+        let df = ctx.read_batch(batch).map_err(|e| SusieNodeError::Df(datafusion::error::DataFusionError::External(e.to_string().into())))?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

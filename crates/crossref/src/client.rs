@@ -5,13 +5,16 @@ use reqwest::Client;
 use crate::error::{CrossrefError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for all Crossref REST API requests.
 const BASE_URL: &str = "https://api.crossref.org";
 
-/// Resolve the Crossref endpoint via the resource catalog, falling back to
-/// [`BASE_URL`] when no override is configured.
+/// Resolve the Crossref endpoint override from the environment.
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.crossref", BASE_URL)
+    env_endpoint("ENDPOINT_CROSSREF_URL", BASE_URL)
 }
 
 // ===========================================================================

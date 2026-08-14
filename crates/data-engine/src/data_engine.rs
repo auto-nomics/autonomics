@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use dag_core::resource_catalog::ResourceCatalog;
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -51,7 +50,6 @@ impl DataEngine {
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
         opendal: Option<Arc<OpendalFileStorage>>,
-        resources: Arc<ResourceCatalog>,
     ) -> Self {
         // Global concurrency limiter shared across all agent sessions.
         // Sized to leave ≥ 2 worker threads for SessionServer actors +
@@ -65,14 +63,9 @@ impl DataEngine {
         let engine_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: runtime_env.clone(),
             opendal: opendal.clone(),
-            resources: resources.clone(),
             global_sem,
         };
-        let node_registry = build_default_registry(
-            runtime_env.clone(),
-            opendal.clone(),
-            resources,
-        );
+        let node_registry = build_default_registry(runtime_env.clone(), opendal.clone());
         Self {
             ctx,
             engine_ctx,
@@ -683,7 +676,6 @@ pub fn builder() -> DataEngineBuilder {
 pub struct DataEngineBuilder {
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<OpendalFileStorage>>,
-    resources: Option<Arc<ResourceCatalog>>,
 }
 
 impl Default for DataEngineBuilder {
@@ -693,7 +685,6 @@ impl Default for DataEngineBuilder {
         Self {
             runtime_env,
             opendal: None,
-            resources: None,
         }
     }
 }
@@ -710,15 +701,6 @@ impl DataEngineBuilder {
             opendal: Some(file_session),
             ..self
         })
-    }
-
-    /// Inject the centralized [`ResourceCatalog`] for non-storage resources.
-    ///
-    /// Storage access is handled by [`Self::with_vfs`]; the catalog no longer
-    /// registers individual DataFusion object stores.
-    pub fn with_resources(mut self, resources: Arc<ResourceCatalog>) -> Self {
-        self.resources = Some(resources);
-        self
     }
 
     /// Register the Unix-style virtual filesystem under `vfs://`.
@@ -738,15 +720,7 @@ pub fn build(self) -> DataEngine {
         let ctx = crate::node_registry::registry::new_isolated_ctx(
             self.runtime_env.clone(),
         );
-        let resources = self
-            .resources
-            .unwrap_or_else(|| Arc::new(ResourceCatalog::new(std::path::PathBuf::from("."))));
-        DataEngine::new_from_parts(
-            ctx,
-            self.runtime_env,
-            self.opendal,
-            resources,
-        )
+        DataEngine::new_from_parts(ctx, self.runtime_env, self.opendal)
     }
 }
 

@@ -4,11 +4,15 @@ use serde_json::Value;
 use crate::error::{EmbaseError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for all Embase API requests.
 const BASE_URL: &str = "https://api.elsevier.com/content/embase/article";
 
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.embase", BASE_URL)
+    env_endpoint("ENDPOINT_EMBASE_URL", BASE_URL)
 }
 
 // ---------------------------------------------------------------------------

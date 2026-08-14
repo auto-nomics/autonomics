@@ -62,4 +62,4 @@ DataFusion can then use:
 vfs:///data/local/gwas/foo.parquet
 ```
 
-Credentials remain runtime configuration in `vfs.toml`; they are not represented in the resource catalog.
+Credentials remain runtime configuration in `vfs.toml`.

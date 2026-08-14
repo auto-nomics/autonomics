@@ -6,11 +6,15 @@ use reqwest::Client;
 use crate::error::{ArxivError, Result};
 use crate::types::*;
 
+fn env_endpoint(env: &str, fallback: &str) -> String {
+    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
+}
+
 /// Base URL for the arXiv API.
 const BASE_URL: &str = "http://export.arxiv.org/api/query";
 
 fn base_url() -> String {
-    resource_catalog::endpoint_or("endpoint.arxiv", BASE_URL)
+    env_endpoint("ENDPOINT_ARXIV_URL", BASE_URL)
 }
 
 /// arXiv recommends at least 3 seconds between consecutive API calls.

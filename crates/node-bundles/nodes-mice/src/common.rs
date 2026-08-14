@@ -111,9 +111,6 @@ pub fn test_node_ctx() -> NodeCtx {
     NodeCtx {
         runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
         opendal: None,
-        resources: std::sync::Arc::new(dag_core::resource_catalog::ResourceCatalog::new(
-            std::path::PathBuf::from("."),
-        )),
         global_sem: None,
     }
 }
