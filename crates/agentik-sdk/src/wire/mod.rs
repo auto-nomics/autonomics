@@ -3,16 +3,16 @@
 //! The SDK's public surface (`MessageCreateParams`, `Message`, `MessageStream`)
 //! is shaped after the Anthropic Messages API. Each concrete provider, however,
 //! may speak a different wire protocol: Anthropic Messages, OpenAI Chat
-//! Completions, or the OpenAI Responses API.
+//! Completions, OpenAI Responses, or a provider-specific variant such as Z.ai's
+//! Anthropic-compatible gateway.
 //!
 //! [`WireProtocol`] is the seam between the protocol-neutral SDK front-end and
 //! a concrete wire format. The SDK holds one `Arc<dyn WireProtocol>` and routes
 //! every request through it, so the front-end stays uniform while the protocol
 //! impl is freely swappable.
 //!
-//! Today only [`AnthropicWire`] is implemented; OpenAI Chat and Responses
-//! adapters ship in subsequent milestones. The trait surface below is shaped to
-//! accommodate them without further API churn.
+//! The trait surface keeps the SDK front-end uniform while protocol adapters own
+//! endpoint paths, request fields, response decoding, and SSE translation.
 //!
 //! ## Canonical IR
 //!
@@ -23,9 +23,11 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod zai;
 
 pub use anthropic::AnthropicWire;
 pub use openai::{OpenAiChatWire, OpenAiResponsesWire};
+pub use zai::ZaiAnthropicWire;
 
 use crate::model::ProviderType;
 use crate::types::errors::Result;
@@ -36,9 +38,7 @@ use crate::types::streaming::MessageStreamEvent;
 /// Identifies a wire protocol on a [`ProviderType`] / `ProviderConfig`.
 ///
 /// Stored alongside a provider's connection metadata so the SDK can build the
-/// matching [`WireProtocol`] impl via [`build_wire`]. All existing presets
-/// default to [`WireProtocolKind::Anthropic`] since they expose
-/// Anthropic-compatible gateways.
+/// matching [`WireProtocol`] impl via [`build_wire`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireProtocolKind {
@@ -46,15 +46,14 @@ pub enum WireProtocolKind {
     #[default]
     Anthropic,
     /// OpenAI Chat Completions API (`POST /v1/chat/completions`).
-    ///
-    /// Implementation lands in a later milestone; [`build_wire`] currently
-    /// returns an error for this variant.
     OpenaiChat,
     /// OpenAI Responses API (`POST /v1/responses`).
-    ///
-    /// Implementation lands in a later milestone; [`build_wire`] currently
-    /// returns an error for this variant.
     OpenaiResponses,
+    /// Zhipu / BigModel's Anthropic-compatible Messages gateway.
+    ///
+    /// This keeps the Anthropic request and event shape but emits GLM's
+    /// top-level `reasoning_effort` field.
+    ZaiAnthropic,
 }
 
 impl WireProtocolKind {
@@ -65,6 +64,7 @@ impl WireProtocolKind {
             Self::Anthropic => "anthropic",
             Self::OpenaiChat => "openai_chat",
             Self::OpenaiResponses => "openai_responses",
+            Self::ZaiAnthropic => "zai_anthropic",
         }
     }
 }
@@ -242,6 +242,7 @@ pub fn build_wire(kind: WireProtocolKind) -> Result<std::sync::Arc<dyn WireProto
         WireProtocolKind::Anthropic => Ok(std::sync::Arc::new(AnthropicWire)),
         WireProtocolKind::OpenaiChat => Ok(std::sync::Arc::new(OpenAiChatWire)),
         WireProtocolKind::OpenaiResponses => Ok(std::sync::Arc::new(OpenAiResponsesWire)),
+        WireProtocolKind::ZaiAnthropic => Ok(std::sync::Arc::new(ZaiAnthropicWire)),
     }
 }
 
@@ -369,6 +370,7 @@ mod tests {
             WireProtocolKind::Anthropic,
             WireProtocolKind::OpenaiChat,
             WireProtocolKind::OpenaiResponses,
+            WireProtocolKind::ZaiAnthropic,
         ] {
             assert_eq!(
                 kind.as_str(),
@@ -376,6 +378,7 @@ mod tests {
                     WireProtocolKind::Anthropic => "anthropic",
                     WireProtocolKind::OpenaiChat => "openai_chat",
                     WireProtocolKind::OpenaiResponses => "openai_responses",
+                    WireProtocolKind::ZaiAnthropic => "zai_anthropic",
                 }
             );
         }
@@ -391,7 +394,6 @@ mod tests {
             ProviderType::Mimo,
             ProviderType::Minimax,
             ProviderType::Moonshot,
-            ProviderType::Zai,
             ProviderType::Sensenova,
         ] {
             assert_eq!(wire_protocol(&p), WireProtocolKind::Anthropic, "{p}");
@@ -400,6 +402,14 @@ mod tests {
         assert_eq!(
             wire_protocol(&ProviderType::Custom("any-openai".into())),
             WireProtocolKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn zai_uses_its_anthropic_compatible_wire() {
+        assert_eq!(
+            wire_protocol_for_provider(&ProviderType::Zai),
+            WireProtocolKind::ZaiAnthropic
         );
     }
 }

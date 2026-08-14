@@ -29,7 +29,9 @@ impl Model {
         );
         let client_config = ClientConfig::new(&provider.api_key, &provider.base_url)
             .with_auth_method(provider.auth_method.clone());
-        let anthropic = Anthropic::with_config(client_config)?;
+        let wire = crate::provider::registry::wire_protocol(&provider.provider_type);
+        let anthropic =
+            Anthropic::with_config_and_wire(client_config, crate::wire::build_wire(wire)?)?;
         let api_client = AnthropicApiClient::new(anthropic);
         Ok(Self {
             model_info,

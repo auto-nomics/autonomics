@@ -13,6 +13,7 @@ pub fn dummy_model_info(name: &str) -> ModelInfo {
         supports_streaming: true,
         supports_thinking: false,
         thinking_enabled: false,
+        thinking_required: false,
         thinking_budget: None,
         input_token_price: 1.0,
         output_token_price: 2.0,

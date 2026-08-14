@@ -60,11 +60,9 @@ pub trait ProviderPreset {
 
     /// Which wire protocol this provider's gateway speaks.
     ///
-    /// All built-in presets default to [`WireProtocolKind::Anthropic`] since
-    /// every current partner (DeepSeek, MiMo, MiniMax, Moonshot, SenseNova,
-    /// ZAI) exposes an Anthropic-compatible Messages gateway. Providers that
-    /// speak OpenAI Chat Completions or the OpenAI Responses API override this
-    /// to select the matching adapter.
+    /// Most built-in presets use an Anthropic-compatible Messages gateway.
+    /// Providers with provider-specific field names override this to select a
+    /// matching adapter.
     fn wire_protocol() -> WireProtocolKind {
         WireProtocolKind::Anthropic
     }

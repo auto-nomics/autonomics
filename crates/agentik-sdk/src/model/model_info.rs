@@ -27,6 +27,13 @@ pub struct ModelInfo {
     /// request.
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// Whether the provider requires extended thinking for this model.
+    ///
+    /// Some models (notably GLM-5.3) reject `thinking.type: "disabled"`. When
+    /// this flag is set, the request layer keeps thinking enabled even if a
+    /// caller attempts to disable it.
+    #[serde(default)]
+    pub thinking_required: bool,
     /// Optional token budget for the thinking phase. When `None`, the
     /// request layer derives a sensible default from `max_output_tokens`
     /// (half of `max_output_tokens`, clamped to ≥1024).
@@ -48,6 +55,7 @@ impl Default for ModelInfo {
             supports_streaming: false,
             supports_thinking: false,
             thinking_enabled: false,
+            thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
@@ -67,6 +75,7 @@ impl std::fmt::Debug for ModelInfo {
             .field("supports_streaming", &self.supports_streaming)
             .field("supports_thinking", &self.supports_thinking)
             .field("thinking_enabled", &self.thinking_enabled)
+            .field("thinking_required", &self.thinking_required)
             .field("thinking_budget", &self.thinking_budget)
             .field("input_token_price", &self.input_token_price)
             .field("output_token_price", &self.output_token_price)
@@ -91,6 +100,7 @@ impl PartialEq for ModelInfo {
             && self.supports_streaming == other.supports_streaming
             && self.supports_thinking == other.supports_thinking
             && self.thinking_enabled == other.thinking_enabled
+            && self.thinking_required == other.thinking_required
             && self.thinking_budget == other.thinking_budget
             && self.input_token_price == other.input_token_price
             && self.output_token_price == other.output_token_price
@@ -126,6 +136,7 @@ pub struct ModelInfoBuilder {
     supports_streaming: bool,
     supports_thinking: bool,
     thinking_enabled: bool,
+    thinking_required: bool,
     thinking_budget: Option<u32>,
     input_token_price: f64,
     output_token_price: f64,
@@ -143,6 +154,7 @@ impl ModelInfoBuilder {
             supports_streaming: false,
             supports_thinking: false,
             thinking_enabled: false,
+            thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
@@ -178,6 +190,14 @@ impl ModelInfoBuilder {
         self
     }
 
+    /// Mark thinking as required. This overrides a caller-side disable and
+    /// keeps the provider-compatible enabled request shape.
+    pub fn thinking_required(mut self) -> Self {
+        self.thinking_enabled = true;
+        self.thinking_required = true;
+        self
+    }
+
     pub fn pricing(mut self, input: f64, output: f64) -> Self {
         self.input_token_price = input;
         self.output_token_price = output;
@@ -200,6 +220,7 @@ impl ModelInfoBuilder {
             supports_streaming: self.supports_streaming,
             supports_thinking: self.supports_thinking,
             thinking_enabled: self.thinking_enabled,
+            thinking_required: self.thinking_required,
             thinking_budget: self.thinking_budget,
             input_token_price: self.input_token_price,
             output_token_price: self.output_token_price,

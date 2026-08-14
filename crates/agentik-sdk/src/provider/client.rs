@@ -227,36 +227,121 @@ impl ApiClient for AnthropicApiClient {
 /// Three cases:
 /// 1. `supports_thinking && thinking_enabled` → inject `thinking: { enabled,
 ///    budget }` + `reasoning_effort: max`.
-/// 2. `supports_thinking && !thinking_enabled` → inject `thinking: { disabled }`.
+/// 2. `supports_thinking && !thinking_enabled && !thinking_required` → inject
+///    `thinking: { disabled }`.
 ///    Some providers (MiMo, DeepSeek, GLM) **default to thinking ON** when the
 ///    field is absent, which wastes tokens and produces empty-signature thinking
 ///    blocks that get stripped on replay — causing context discontinuity and
 ///    unreliable tool calling. Explicitly disabling avoids this.
-/// 3. `!supports_thinking` → no thinking field at all (the provider may not
+/// 3. `thinking_required && !thinking_enabled` → keep thinking enabled and use
+///    the lightest valid effort. GLM-5.3 rejects disabled thinking.
+/// 4. `!supports_thinking` → no thinking field at all (the provider may not
 ///    recognise it).
 fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> MessageCreateBuilder {
     if !model_info.supports_thinking {
         return builder;
     }
-    if !model_info.thinking_enabled {
+    let thinking_enabled = model_info.thinking_enabled || model_info.thinking_required;
+    if !thinking_enabled {
         // Explicitly disable thinking so providers that default to thinking-ON
         // (e.g. MiMo) don't enter thinking mode unexpectedly.
         return builder.thinking(agentik_types::ThinkingConfig::disabled());
     }
-    // Derive a thinking token budget. The Anthropic Messages API requires
-    // `budget_tokens < max_tokens`; we default to half the output budget
-    // (clamped to ≥1024) which leaves room for the actual answer.
-    let budget = model_info.thinking_budget.unwrap_or_else(|| {
-        let half = (model_info.max_output_tokens / 2).max(1024) as u32;
-        // Ensure budget stays below max_tokens to satisfy Anthropic's API
-        // constraint (`budget_tokens` must be less than `max_tokens`).
-        let max_tokens = model_info.max_output_tokens.max(1) as u32;
-        half.min(max_tokens.saturating_sub(1)).max(1024)
-    });
     // Set both forms: Anthropic wires read `thinking`, OpenAI wires read
     // `reasoning`. Each wire picks the one it understands and ignores the
-    // other. Use the strongest effort level available.
-    builder
-        .thinking(agentik_types::ThinkingConfig::enabled(budget))
-        .reasoning_effort(agentik_types::ReasoningEffort::Max)
+    // other. Use the strongest effort level available unless a required-thinking
+    // model was explicitly configured as disabled, in which case low is the
+    // closest supported lightweight mode.
+    let effort = if model_info.thinking_required && !model_info.thinking_enabled {
+        agentik_types::ReasoningEffort::Low
+    } else {
+        agentik_types::ReasoningEffort::Max
+    };
+    // GLM-5.3 accepts the enabled thinking type but does not document a token
+    // budget. Preserve output capacity and send only the supported fields.
+    let thinking = if model_info.thinking_required {
+        agentik_types::ThinkingConfig {
+            kind: agentik_types::ThinkingKind::Enabled,
+            budget_tokens: None,
+        }
+    } else {
+        let budget = model_info.thinking_budget.unwrap_or_else(|| {
+            let half = (model_info.max_output_tokens / 2).max(1024) as u32;
+            // Ensure budget stays below max_tokens to satisfy Anthropic's API
+            // constraint (`budget_tokens` must be less than `max_tokens`).
+            let max_tokens = model_info.max_output_tokens.max(1) as u32;
+            half.min(max_tokens.saturating_sub(1)).max(1024)
+        });
+        agentik_types::ThinkingConfig::enabled(budget)
+    };
+    builder.thinking(thinking).reasoning_effort(effort)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::zai::{MODEL_GLM_5_3, ZaiProvider};
+    use agentik_types::ReasoningConfig;
+
+    fn glm_5_3_model() -> ModelInfo {
+        ZaiProvider::preset_models()
+            .into_iter()
+            .find(|model| model.model_name == MODEL_GLM_5_3)
+            .expect("GLM-5.3 preset exists")
+    }
+
+    #[test]
+    fn glm_5_3_defaults_to_max_reasoning_effort() {
+        let model = glm_5_3_model();
+        let params = inject_thinking(
+            MessageCreateBuilder::new(model.model_name.clone(), 1024),
+            &model,
+        )
+        .build();
+
+        assert!(
+            params
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.kind == agentik_types::ThinkingKind::Enabled)
+        );
+        assert!(
+            params
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.budget_tokens.is_none())
+        );
+        assert!(matches!(
+            params.reasoning,
+            Some(ReasoningConfig::Effort(agentik_types::ReasoningEffort::Max))
+        ));
+    }
+
+    #[test]
+    fn glm_5_3_disable_attempt_becomes_low_reasoning() {
+        let mut model = glm_5_3_model();
+        model.thinking_enabled = false;
+        let params = inject_thinking(
+            MessageCreateBuilder::new(model.model_name.clone(), 1024),
+            &model,
+        )
+        .build();
+
+        assert!(
+            params
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.kind == agentik_types::ThinkingKind::Enabled)
+        );
+        assert!(
+            params
+                .thinking
+                .as_ref()
+                .is_some_and(|thinking| thinking.budget_tokens.is_none())
+        );
+        assert!(matches!(
+            params.reasoning,
+            Some(ReasoningConfig::Effort(agentik_types::ReasoningEffort::Low))
+        ));
+    }
 }

@@ -5,6 +5,8 @@ use crate::provider::ProviderPreset;
 
 // ─── Model IDs ──────────────────────────────────────────────────────────────
 // Latest flagship
+pub const MODEL_GLM_5_3: &str = "glm-5.3";
+pub const MODEL_GLM_5_3_1M: &str = "glm-5.3[1m]";
 pub const MODEL_GLM_5_2: &str = "glm-5.2";
 pub const MODEL_GLM_5_1: &str = "glm-5.1";
 pub const MODEL_GLM_5: &str = "glm-5";
@@ -62,6 +64,10 @@ impl ProviderPreset for ZaiProvider {
     fn default_base_url() -> &'static str {
         ZaiEndpoint::default().base_url()
     }
+
+    fn wire_protocol() -> crate::wire::WireProtocolKind {
+        crate::wire::WireProtocolKind::ZaiAnthropic
+    }
 }
 
 impl ZaiProvider {
@@ -72,6 +78,22 @@ impl ZaiProvider {
 
     fn model_definitions() -> Vec<ModelInfo> {
         vec![
+            // ── Latest flagship: GLM-5.3 — 1M context, agent engineering ─
+            // Thinking is always enabled; `low`, `high`, and `max` are the
+            // valid reasoning-effort levels. The [1m] variant is required by
+            // the GLM Coding Plan to unlock the 1M-token context window.
+            ModelInfoBuilder::new(MODEL_GLM_5_3)
+                .context(1_000_000, 131_072)
+                .capabilities(false, true, true, true)
+                .thinking_required()
+                .pricing(1.40, 4.40)
+                .build(),
+            ModelInfoBuilder::new(MODEL_GLM_5_3_1M)
+                .context(1_000_000, 131_072)
+                .capabilities(false, true, true, true)
+                .thinking_required()
+                .pricing(1.40, 4.40)
+                .build(),
             // ── Latest flagship: GLM-5.2 — 1M context, long-horizon tasks ─
             // Stable 1M token context, 128K max output.
             // Pricing: $1.40 input / $4.40 output (Z.AI official).
@@ -174,5 +196,25 @@ impl ZaiProvider {
                 .pricing(0.10, 0.10)
                 .build(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glm_5_3_models_require_thinking() {
+        for model in ZaiProvider::preset_models() {
+            if model.model_name != MODEL_GLM_5_3 && model.model_name != MODEL_GLM_5_3_1M {
+                continue;
+            }
+            assert!(model.supports_thinking);
+            assert!(model.thinking_enabled);
+            assert!(model.thinking_required);
+            assert_eq!(model.context_length, 1_000_000);
+            assert_eq!(model.max_output_tokens, 131_072);
+            assert!(!model.vision_ability);
+        }
     }
 }
