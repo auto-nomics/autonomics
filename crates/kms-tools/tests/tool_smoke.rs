@@ -3,16 +3,17 @@
 
 use std::sync::Arc;
 
-use agentik_core::tools::{ToolFunction, ToolRegistration};
+use agentik_core::tools::ToolRegistration;
 use agentik_types::tools::ToolResultContent;
 use kms::KmsService;
-use kms_tools::{kms_readonly_registrations, kms_registrations};
+use kms_tools::{kms_readonly_registrations, kms_write_registrations};
 use serde_json::json;
 
 async fn setup() -> (Arc<KmsService>, Vec<ToolRegistration>) {
     let storage = kms::Storage::open_in_memory().await.unwrap();
     let svc = Arc::new(KmsService::from_storage(storage).await.unwrap());
-    let tools = kms_registrations(svc.clone());
+    let mut tools = kms_readonly_registrations(svc.clone());
+    tools.extend(kms_write_registrations(svc.clone()));
     (svc, tools)
 }
 
@@ -28,16 +29,76 @@ fn find_tool<'a>(tools: &'a [ToolRegistration], name: &str) -> &'a ToolRegistrat
 #[tokio::test]
 async fn test_tool_count() {
     let (_svc, tools) = setup().await;
-    // 27 tools total.
-    assert_eq!(tools.len(), 27, "expected 27 kms_* tools");
+    // 10 read tools + 17 write tools.
+    assert_eq!(tools.len(), 27, "expected 10 read + 17 write tools");
 }
 
 #[tokio::test]
 async fn test_readonly_subset() {
     let storage = kms::Storage::open_in_memory().await.unwrap();
     let svc = Arc::new(KmsService::from_storage(storage).await.unwrap());
-    let ro = kms_readonly_registrations(svc);
-    assert_eq!(ro.len(), 9, "expected 9 readonly tools");
+    let ro = kms_readonly_registrations(svc.clone());
+    assert_eq!(ro.len(), 10, "expected 10 readonly tools");
+    let mut ro_names: Vec<_> = ro.iter().map(|t| t.definition.name.as_str()).collect();
+    ro_names.sort_unstable();
+    assert_eq!(
+        ro_names,
+        vec![
+            "kms_get_entity",
+            "kms_get_entity_knowledge",
+            "kms_get_knowledge",
+            "kms_get_knowledge_batch",
+            "kms_list_entities",
+            "kms_local",
+            "kms_search_content",
+            "kms_search_entity",
+            "kms_search_subtree",
+            "kms_subtree_knowledge",
+        ]
+    );
+
+    let writes = kms_write_registrations(svc);
+    assert_eq!(writes.len(), 17, "expected 17 write tools");
+    let mut write_names: Vec<_> = writes.iter().map(|t| t.definition.name.as_str()).collect();
+    write_names.sort_unstable();
+    assert_eq!(
+        write_names,
+        vec![
+            "kms_add_nomenclature",
+            "kms_create_entity",
+            "kms_create_index",
+            "kms_create_knowledge",
+            "kms_delete_entity",
+            "kms_delete_index",
+            "kms_delete_knowledge",
+            "kms_delete_nomenclature",
+            "kms_detach_knowledge",
+            "kms_link_orphans",
+            "kms_merge_subtree",
+            "kms_move_children",
+            "kms_move_index",
+            "kms_rename_knowledge",
+            "kms_update_entity",
+            "kms_update_knowledge",
+            "kms_update_nomenclature",
+        ]
+    );
+    assert!(
+        ro.iter().all(|t| !writes
+            .iter()
+            .any(|w| w.definition.name == t.definition.name)),
+        "read and write tool sets must not overlap"
+    );
+
+    for tool in ro {
+        assert!(
+            !tool.definition.description.contains("Create")
+                && !tool.definition.description.contains("Delete")
+                && !tool.definition.description.contains("Update"),
+            "read-only tool description suggests mutation: {}",
+            tool.definition.description
+        );
+    }
 }
 
 #[tokio::test]

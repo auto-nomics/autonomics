@@ -2,25 +2,27 @@
 //!
 //! Ported from dendrite's sqlx-backed `Storage`. The original held three
 //! separate repo structs (`SqliteEntityRepo`, `SqliteKnowledgeRepo`,
-//! `SqliteIndexRepo`) each cloning the pool. With Turso, we hold a single
-//! `turso::Connection` (which is `Clone` + `Arc`-backed internally) and
-//! expose the repo functions as free functions in [`repo`]. The
-//! `Storage` struct acts as a thin connection holder.
+//! `SqliteIndexRepo`) each cloning the pool. With Turso, we hold one shared
+//! async connection lock so KMS can safely share `agent.db` with the agent
+//! storage without triggering Turso's concurrent-use guard.
 
 pub mod error;
 pub mod repo;
 pub mod types;
 
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Storage {
-    conn: turso::Connection,
+    conn: Arc<Mutex<turso::Connection>>,
 }
 
 impl Storage {
     /// Open (or create) a Turso database at `db_path` and run the KMS
-    /// schema migration. Also creates the system root index if absent.
+    /// schema migration.
     pub async fn new(db_path: &str) -> Result<Self, String> {
         if let Some(parent) = Path::new(db_path).parent() {
             if !parent.as_os_str().is_empty() {
@@ -39,9 +41,7 @@ impl Storage {
             .await
             .map_err(|e| e.to_string())?;
 
-        let storage = Self { conn };
-        storage.init_schema().await.map_err(|e| e.to_string())?;
-        Ok(storage)
+        Self::from_shared_connection(Arc::new(Mutex::new(conn))).await
     }
 
     /// Create an in-memory database (useful for tests).
@@ -52,15 +52,22 @@ impl Storage {
             .map_err(|e| e.to_string())?;
 
         let conn = db.connect().map_err(|e| e.to_string())?;
+        Self::from_shared_connection(Arc::new(Mutex::new(conn))).await
+    }
+
+    /// Share an already-open Turso connection and initialize the KMS schema.
+    pub async fn from_shared_connection(
+        conn: Arc<Mutex<turso::Connection>>,
+    ) -> Result<Self, String> {
         let storage = Self { conn };
         storage.init_schema().await.map_err(|e| e.to_string())?;
         Ok(storage)
     }
 
     async fn init_schema(&self) -> Result<(), turso::Error> {
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS entities (
+        let conn = self.conn.lock().await;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS entities (
                     id TEXT PRIMARY KEY NOT NULL,
                     definition TEXT NOT NULL
                 );
@@ -100,14 +107,14 @@ impl Storage {
                 BEGIN
                     DELETE FROM indexes WHERE parent_id = OLD.id;
                 END;",
-            )
-            .await?;
+        )
+        .await?;
         Ok(())
     }
 
-    /// Borrow the underlying Turso connection. Used by repo free functions
-    /// and the diagnostics runner.
-    pub fn conn(&self) -> &turso::Connection {
-        &self.conn
+    /// Lock the underlying Turso connection. Used by repo free functions and
+    /// the diagnostics runner.
+    pub async fn conn(&self) -> tokio::sync::MutexGuard<'_, turso::Connection> {
+        self.conn.lock().await
     }
 }

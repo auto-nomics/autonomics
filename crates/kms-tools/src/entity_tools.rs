@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use agentik_core::tools::{ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
@@ -467,22 +467,4 @@ impl ToolFunction for KmsDeleteNomenclatureTool {
             "names": names_to_json(&entity.name),
         })))
     }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Registration
-// ═══════════════════════════════════════════════════════════════════
-
-pub fn registrations(svc: Arc<KmsService>) -> Vec<ToolRegistration> {
-    vec![
-        KmsCreateEntityTool { svc: svc.clone() }.into(),
-        KmsUpdateEntityTool { svc: svc.clone() }.into(),
-        KmsDeleteEntityTool { svc: svc.clone() }.into(),
-        KmsGetEntityTool { svc: svc.clone() }.into(),
-        KmsSearchEntityTool { svc: svc.clone() }.into(),
-        KmsListEntitiesTool { svc: svc.clone() }.into(),
-        KmsAddNomenclatureTool { svc: svc.clone() }.into(),
-        KmsUpdateNomenclatureTool { svc: svc.clone() }.into(),
-        KmsDeleteNomenclatureTool { svc }.into(),
-    ]
 }

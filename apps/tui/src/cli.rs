@@ -18,12 +18,14 @@ pub enum Command {
     /// Launch the interactive TUI (default when no subcommand is given).
     Tui(TuiArgs),
 
+    /// Launch the dedicated KMS tree TUI.
+    Kms(KmsArgs),
+
     /// Local cache management helpers (refresh, inspect, purge).
     Cache(CacheArgs),
 
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
-
 }
 
 #[derive(Debug, Args)]
@@ -36,6 +38,14 @@ pub struct TuiArgs {
     /// in addition to the log file. Use this for debugging startup failures.
     #[arg(long)]
     pub nocapture: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct KmsArgs {
+    /// Agent database containing the shared KMS tables. Defaults to the
+    /// runtime agent database.
+    #[arg(long, value_name = "PATH")]
+    pub agent_db: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

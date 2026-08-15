@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use agentik_core::tools::{ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
@@ -476,23 +476,4 @@ impl ToolFunction for KmsMergeSubtreeTool {
             "moved_children": moved,
         })))
     }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Registration
-// ═══════════════════════════════════════════════════════════════════
-
-pub fn registrations(svc: Arc<KmsService>) -> Vec<ToolRegistration> {
-    vec![
-        KmsCreateIndexTool { svc: svc.clone() }.into(),
-        KmsDeleteIndexTool { svc: svc.clone() }.into(),
-        KmsMoveIndexTool { svc: svc.clone() }.into(),
-        KmsMoveChildrenTool { svc: svc.clone() }.into(),
-        KmsLocalTool { svc: svc.clone() }.into(),
-        KmsSubtreeKnowledgeTool { svc: svc.clone() }.into(),
-        KmsSearchSubtreeTool { svc: svc.clone() }.into(),
-        KmsLinkOrphansTool { svc: svc.clone() }.into(),
-        KmsDetachKnowledgeTool { svc: svc.clone() }.into(),
-        KmsMergeSubtreeTool { svc }.into(),
-    ]
 }

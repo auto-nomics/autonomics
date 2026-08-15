@@ -19,6 +19,7 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
+use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
 use agentik_core::storage::{
     AgentDelegationRecord, AgentProfileRegistry, AgentStorage, AgentTurnRecord,
 };
@@ -40,6 +41,7 @@ use vfs::{
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
+use crate::memory_kms::KmsMemoryGrounding;
 use crate::tools::DefaultToolSetError;
 
 // AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
@@ -122,6 +124,10 @@ pub struct SharedInfra {
     /// LaTeX writing system (store + optional engine), opened **once** per
     /// process. Reuses `bib` for citation resolution when available.
     pub writing: Arc<writing_base::WritingShared>,
+    /// Persistent cross-session memory backend shared by root agents.
+    pub memory: Option<Arc<MemoryBackend>>,
+    /// Optional Turso-backed KMS knowledge service.
+    pub kms: Option<Arc<kms::KmsService>>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -205,7 +211,7 @@ impl SharedInfra {
             "SharedInfra::open: opening agent storage at {}",
             agent_db.display()
         );
-        let turso_store = match TursoAgentStorage::open(&agent_db).await {
+        let turso_store = Arc::new(match TursoAgentStorage::open(&agent_db).await {
             Ok(s) => {
                 tracing::info!(path = %agent_db.display(), "agent storage opened");
                 s
@@ -213,10 +219,35 @@ impl SharedInfra {
             Err(e) => {
                 return Err(HostError::Storage(e));
             }
-        };
-        let storage: Arc<dyn AgentStorage> = Arc::new(turso_store.clone());
+        });
+        let storage: Arc<dyn AgentStorage> = turso_store.clone();
         // Profile registry — clone of the same storage (shares one connection).
-        let profile_storage: Arc<dyn AgentProfileRegistry> = Arc::new(turso_store);
+        let profile_storage: Arc<dyn AgentProfileRegistry> = turso_store.clone();
+        // Initialize the KMS schema in agent.db unconditionally; expose tools
+        // and semantic grounding only when the runtime feature is enabled.
+        let kms_storage =
+            match kms::Storage::from_shared_connection(turso_store.shared_connection()).await {
+                Ok(storage) => storage,
+                Err(error) => return Err(HostError::Other(format!("initialize KMS: {error}"))),
+            };
+        let kms = if config.enable_kms {
+            match kms::KmsService::from_storage(kms_storage).await {
+                Ok(service) => Some(Arc::new(service)),
+                Err(error) => return Err(HostError::Other(format!("open KMS: {error}"))),
+            }
+        } else {
+            None
+        };
+        let memory_store: Arc<dyn MemoryStore> = turso_store;
+        let grounding: Option<Arc<dyn SemanticGrounding>> = kms
+            .as_ref()
+            .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
+        let memory = (config.use_memory || config.generate_memory).then(|| {
+            let mut memory_config = MemoryConfig::new();
+            memory_config.use_memory = config.use_memory;
+            memory_config.generate_memory = config.generate_memory;
+            Arc::new(MemoryBackend::new(memory_config, memory_store, grounding))
+        });
 
         let bib_db_path = config.bib_db_path.clone();
         tracing::info!(
@@ -247,9 +278,11 @@ impl SharedInfra {
             vfs,
             storage,
             profile_storage,
-            runtime_handle: tokio::runtime::Handle::current(),
             bib,
             writing,
+            memory,
+            kms,
+            runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
     }
@@ -288,6 +321,13 @@ impl SharedInfra {
             .with_config_json(config_json)
             .with_system_prompt_identity(&profile.agent_identity)
             .with_storage(storage.clone());
+        if let Some(memory) = self.memory.clone() {
+            builder = builder.with_memory(
+                memory.config.clone(),
+                Arc::clone(&memory.store),
+                memory.grounding.clone(),
+            );
+        }
 
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);
@@ -406,6 +446,10 @@ impl SharedInfra {
                 ws.engine.clone(),
             );
             tools.extend(writing_tools);
+        }
+
+        if let Some(kms) = self.kms.clone() {
+            tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)

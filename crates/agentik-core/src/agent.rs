@@ -296,8 +296,21 @@ impl Agent {
             }
             crate::supervise::spawn_safe_drop(
                 "persist_worker",
-                persist_worker(persist_rx, storage),
+                persist_worker(persist_rx, Arc::clone(&storage)),
             );
+
+            if let Some(memory) = &self.shared.memory {
+                if memory.config.generate_memory && memory.config.is_root_agent(&self.shared.path) {
+                    let agent_id = self.shared.id;
+                    let storage = Arc::clone(&storage);
+                    let memory = Arc::clone(memory);
+                    let model = Arc::clone(&self.shared.model);
+                    crate::supervise::spawn_safe_drop(
+                        "memory_startup_pipeline",
+                        crate::memory::run_memory_pipeline(agent_id, storage, memory, model),
+                    );
+                }
+            }
         }
 
         // ── Restore sessions from storage ──

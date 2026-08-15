@@ -9,6 +9,7 @@ pub mod config;
 pub mod control;
 pub mod host;
 pub mod host_tools;
+pub mod memory_kms;
 pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};

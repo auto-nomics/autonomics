@@ -137,8 +137,9 @@ impl KmsService {
         })
     }
 
-    pub fn conn(&self) -> &turso::Connection {
-        self.storage.conn()
+    /// Lock the shared KMS Turso connection.
+    pub async fn lock_conn(&self) -> tokio::sync::MutexGuard<'_, turso::Connection> {
+        self.storage.conn().await
     }
 
     pub async fn get_pointer(&self) -> Uuid {
@@ -150,7 +151,7 @@ impl KmsService {
     }
 
     pub async fn find_root(&self) -> Result<Index, String> {
-        repo::index_find_root(self.storage.conn())
+        repo::index_find_root(&*self.storage.conn().await)
             .await
             .map_err(|e| e.to_string())
     }
@@ -162,7 +163,7 @@ impl KmsService {
         names: Vec<Nomenclature>,
         definition: &str,
     ) -> Result<(Entity, bool), String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
 
         // Dedup: if an entity with the same name already exists, return it.
         let lookup_name = names
@@ -222,13 +223,13 @@ impl KmsService {
     }
 
     pub async fn get_entity(&self, id: Uuid) -> Result<Entity, String> {
-        repo::entity_get(self.storage.conn(), id)
+        repo::entity_get(&*self.storage.conn().await, id)
             .await
             .map_err(|e| e.to_string())
     }
 
     pub async fn delete_entity(&self, id: Uuid) -> Result<(), String> {
-        repo::entity_delete(self.storage.conn(), id)
+        repo::entity_delete(&*self.storage.conn().await, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -240,7 +241,7 @@ impl KmsService {
         full: String,
         abbr: Option<String>,
     ) -> Result<Entity, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let entity = repo::entity_get(conn, entity_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -269,7 +270,7 @@ impl KmsService {
         full: String,
         abbr: Option<String>,
     ) -> Result<Entity, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let entity = repo::entity_get(conn, entity_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -305,7 +306,7 @@ impl KmsService {
         entity_id: Uuid,
         nomenclature_id: Uuid,
     ) -> Result<Entity, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let entity = repo::entity_get(conn, entity_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -324,13 +325,13 @@ impl KmsService {
     }
 
     pub async fn search_entity(&self, keyword: &str) -> Result<Vec<Entity>, String> {
-        repo::entity_search_by_name(self.storage.conn(), keyword)
+        repo::entity_search_by_name(&*self.storage.conn().await, keyword)
             .await
             .map_err(|e| e.to_string())
     }
 
     pub async fn list_entities(&self, filter: EntityFilter) -> Result<Vec<Entity>, String> {
-        let all = repo::entity_list_all(self.storage.conn())
+        let all = repo::entity_list_all(&*self.storage.conn().await)
             .await
             .map_err(|e| e.to_string())?;
         match filter {
@@ -346,7 +347,7 @@ impl KmsService {
     }
 
     pub async fn resolve(&self, name: &str) -> Result<Uuid, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         if let Some(entity) = repo::entity_find_by_exact_name(conn, name)
             .await
             .map_err(|e| e.to_string())?
@@ -369,7 +370,7 @@ impl KmsService {
     }
 
     pub async fn resolve_index(&self, name: &str) -> Result<Uuid, String> {
-        if let Some(idx) = repo::index_find_by_title(self.storage.conn(), name)
+        if let Some(idx) = repo::index_find_by_title(&*self.storage.conn().await, name)
             .await
             .map_err(|e| e.to_string())?
         {
@@ -379,7 +380,7 @@ impl KmsService {
     }
 
     pub async fn resolve_knowledge(&self, title: &str) -> Result<Uuid, String> {
-        if let Some(knowledge) = repo::knowledge_find_by_title(self.storage.conn(), title)
+        if let Some(knowledge) = repo::knowledge_find_by_title(&*self.storage.conn().await, title)
             .await
             .map_err(|e| e.to_string())?
         {
@@ -413,7 +414,7 @@ impl KmsService {
         new_definition: Option<&str>,
         new_names: Option<Vec<Nomenclature>>,
     ) -> Result<Entity, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let mut entity = repo::entity_get(conn, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -447,14 +448,14 @@ impl KmsService {
             source_document_id: None,
             source_chunk_idx: None,
         };
-        repo::knowledge_create(self.storage.conn(), &knowledge)
+        repo::knowledge_create(&*self.storage.conn().await, &knowledge)
             .await
             .map_err(|e| e.to_string())?;
         Ok(knowledge)
     }
 
     pub async fn get_knowledge(&self, id: Uuid) -> Result<Knowledge, String> {
-        repo::knowledge_get(self.storage.conn(), id)
+        repo::knowledge_get(&*self.storage.conn().await, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -519,7 +520,7 @@ impl KmsService {
             source_document_id,
             source_chunk_idx,
         };
-        repo::knowledge_create(self.storage.conn(), &knowledge)
+        repo::knowledge_create(&*self.storage.conn().await, &knowledge)
             .await
             .map_err(|e| e.to_string())?;
         Ok(knowledge)
@@ -550,7 +551,7 @@ impl KmsService {
         new_entities: Option<Vec<&str>>,
     ) -> Result<Knowledge, String> {
         let id = self.resolve_knowledge(title_ref).await?;
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let mut knowledge = repo::knowledge_get(conn, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -576,7 +577,7 @@ impl KmsService {
         new_title: &str,
     ) -> Result<Knowledge, String> {
         let id = self.resolve_knowledge(old_title).await?;
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let mut knowledge = repo::knowledge_get(conn, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -622,7 +623,7 @@ impl KmsService {
 
     pub async fn delete_knowledge(&self, title: &str) -> Result<(), String> {
         let id = self.resolve_knowledge(title).await?;
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
 
         let referencing_indexes = repo::index_find_by_target(conn, id)
             .await
@@ -650,7 +651,7 @@ impl KmsService {
             parent_id: None,
             position: 0,
         };
-        repo::index_create(self.storage.conn(), &entry)
+        repo::index_create(&*self.storage.conn().await, &entry)
             .await
             .map_err(|e| e.to_string())?;
         Ok(entry)
@@ -663,7 +664,7 @@ impl KmsService {
         target: Option<Uuid>,
         target_type: Option<TargetType>,
     ) -> Result<Index, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let parent = repo::index_get(conn, parent_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -757,7 +758,7 @@ impl KmsService {
     }
 
     pub async fn delete_index(&self, title: &str) -> Result<(), String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let idx = repo::index_find_by_title(conn, title)
             .await
             .map_err(|e| e.to_string())?
@@ -812,7 +813,7 @@ impl KmsService {
     }
 
     pub async fn detach_knowledge_index(&self, title: &str) -> Result<Uuid, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let idx = repo::index_find_by_title(conn, title)
             .await
             .map_err(|e| e.to_string())?
@@ -857,13 +858,13 @@ impl KmsService {
     }
 
     pub async fn get_index(&self, id: Uuid) -> Result<Index, String> {
-        repo::index_get(self.storage.conn(), id)
+        repo::index_get(&*self.storage.conn().await, id)
             .await
             .map_err(|e| e.to_string())
     }
 
     pub async fn get_children(&self, parent_id: Option<Uuid>) -> Result<Vec<Index>, String> {
-        repo::index_children_of(self.storage.conn(), parent_id)
+        repo::index_children_of(&*self.storage.conn().await, parent_id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -887,9 +888,10 @@ impl KmsService {
     ) -> Result<Vec<Knowledge>, String> {
         let index_id = self.resolve_index(index_title).await?;
         let entity_id = self.resolve(entity_name).await?;
-        let knowledge_ids = repo::index_subtree_knowledge_ids(self.storage.conn(), index_id)
-            .await
-            .map_err(|e| e.to_string())?;
+        let knowledge_ids =
+            repo::index_subtree_knowledge_ids(&*self.storage.conn().await, index_id)
+                .await
+                .map_err(|e| e.to_string())?;
 
         let mut results = Vec::new();
         for kid in knowledge_ids {
@@ -906,7 +908,7 @@ impl KmsService {
         &self,
         entity_id: Uuid,
     ) -> Result<Vec<Knowledge>, String> {
-        repo::knowledge_find_by_entity(self.storage.conn(), entity_id)
+        repo::knowledge_find_by_entity(&*self.storage.conn().await, entity_id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -1052,24 +1054,26 @@ impl KmsService {
             }
         };
 
-        let conn = self.storage.conn();
-        for (i, child) in child_indices.iter().enumerate() {
-            repo::index_reparent(conn, child.id, new_group_id, i as i64)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+        {
+            let conn = &*self.storage.conn().await;
+            for (i, child) in child_indices.iter().enumerate() {
+                repo::index_reparent(conn, child.id, new_group_id, i as i64)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
 
-        if source_id != remount_id {
-            repo::index_reindex_positions(conn, Some(source_id))
+            if source_id != remount_id {
+                repo::index_reindex_positions(conn, Some(source_id))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            repo::index_reindex_positions(conn, Some(remount_id))
+                .await
+                .map_err(|e| e.to_string())?;
+            repo::index_reindex_positions(conn, Some(new_group_id))
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        repo::index_reindex_positions(conn, Some(remount_id))
-            .await
-            .map_err(|e| e.to_string())?;
-        repo::index_reindex_positions(conn, Some(new_group_id))
-            .await
-            .map_err(|e| e.to_string())?;
 
         self.set_pointer(new_group_id).await;
         let location = self.render_location().await?;
@@ -1094,44 +1098,47 @@ impl KmsService {
             .await
             .map_err(|e| addressing_hint("new_parent_path", new_parent_path, &e))?;
 
-        let conn = self.storage.conn();
-        let idx = repo::index_get(conn, idx_id)
-            .await
-            .map_err(|e| e.to_string())?;
-        if idx.parent_id.is_none() {
-            return Err("cannot move the root index".into());
-        }
-        if idx.parent_id == Some(new_parent_id) {
-            return Err(format!(
-                "index at '{index_path}' is already under '{new_parent_path}'"
-            ));
-        }
-
-        let old_parent_id = idx.parent_id;
-        let target_children = repo::index_children_of(conn, Some(new_parent_id))
-            .await
-            .map_err(|e| e.to_string())?;
-        let new_position = target_children.len() as i64;
-
-        repo::index_reparent(conn, idx_id, new_parent_id, new_position)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if let Some(oid) = old_parent_id {
-            repo::index_reindex_positions(conn, Some(oid))
+        let new_parent_label;
+        {
+            let conn = &*self.storage.conn().await;
+            let idx = repo::index_get(conn, idx_id)
                 .await
                 .map_err(|e| e.to_string())?;
+            if idx.parent_id.is_none() {
+                return Err("cannot move the root index".into());
+            }
+            if idx.parent_id == Some(new_parent_id) {
+                return Err(format!(
+                    "index at '{index_path}' is already under '{new_parent_path}'"
+                ));
+            }
+
+            let old_parent_id = idx.parent_id;
+            let target_children = repo::index_children_of(conn, Some(new_parent_id))
+                .await
+                .map_err(|e| e.to_string())?;
+            let new_position = target_children.len() as i64;
+
+            repo::index_reparent(conn, idx_id, new_parent_id, new_position)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if let Some(oid) = old_parent_id {
+                repo::index_reindex_positions(conn, Some(oid))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            repo::index_reindex_positions(conn, Some(new_parent_id))
+                .await
+                .map_err(|e| e.to_string())?;
+            new_parent_label = repo::index_get(conn, new_parent_id)
+                .await
+                .map(|n| n.title.unwrap_or_else(|| new_parent_id.to_string()))
+                .unwrap_or_else(|_| new_parent_id.to_string());
         }
-        repo::index_reindex_positions(conn, Some(new_parent_id))
-            .await
-            .map_err(|e| e.to_string())?;
 
         self.set_pointer(idx_id).await;
         let location = self.render_location().await?;
-        let new_parent_label = repo::index_get(conn, new_parent_id)
-            .await
-            .map(|n| n.title.unwrap_or_else(|| new_parent_id.to_string()))
-            .unwrap_or_else(|_| new_parent_id.to_string());
         Ok(format!(
             "moved '{index_path}' under '{new_parent_label}'\n{location}"
         ))
@@ -1145,7 +1152,7 @@ impl KmsService {
         if sub_root_id == target_parent_id {
             return Err("sub_root and target_parent must differ".into());
         }
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
         let sub_root = repo::index_get(conn, sub_root_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -1321,7 +1328,7 @@ impl KmsService {
     // ── Local-view (stateless) API ──
 
     pub async fn get_local_view(&self, node_id: Uuid) -> Result<LocalView, String> {
-        let conn = self.storage.conn();
+        let conn = &*self.storage.conn().await;
 
         // 1) ancestor path
         let path_rows = repo::index_ancestor_path_rows(conn, node_id)
@@ -1396,7 +1403,7 @@ impl KmsService {
     }
 
     pub async fn get_subtree_knowledge(&self, node_id: Uuid) -> Result<Vec<Knowledge>, String> {
-        let ids = repo::index_subtree_knowledge_ids(self.storage.conn(), node_id)
+        let ids = repo::index_subtree_knowledge_ids(&*self.storage.conn().await, node_id)
             .await
             .map_err(|e| e.to_string())?;
         let mut out = Vec::with_capacity(ids.len());
@@ -1536,7 +1543,7 @@ impl KmsService {
 // ─────────────────────────── free functions ───────────────────────────
 
 async fn ensure_root_index(storage: &Storage) -> Result<Uuid, String> {
-    let conn = storage.conn();
+    let conn = &*storage.conn().await;
 
     let mut rows = conn
         .query(

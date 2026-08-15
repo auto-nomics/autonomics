@@ -121,6 +121,12 @@ pub const ENV_HTTP_REQUEST_TIMEOUT_SECS: &str = "AUTONOMICS_HTTP_REQUEST_TIMEOUT
 /// proxy (e.g. `http://proxy.corp:3128`).
 pub const ENV_HTTP_PROXY: &str = "AUTONOMICS_HTTP_PROXY";
 
+/// Env var enabling or disabling memory read/injection.
+pub const ENV_USE_MEMORY: &str = "AUTONOMICS_USE_MEMORY";
+
+/// Env var enabling or disabling startup memory generation.
+pub const ENV_GENERATE_MEMORY: &str = "AUTONOMICS_GENERATE_MEMORY";
+
 // ---------------------------------------------------------------------------
 // RuntimeConfig
 // ---------------------------------------------------------------------------
@@ -160,7 +166,6 @@ pub struct RuntimeConfig {
     /// registry, session logs (WAL), and memory snapshots for cross-process
     /// recovery.
     pub agent_db: PathBuf,
-
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
     /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
@@ -199,6 +204,15 @@ pub struct RuntimeConfig {
 
     /// Whether to enable GWAS Catalog tools.
     pub enable_gwascatalog: bool,
+    /// Inject persistent memory and expose memory read/search tools.
+    #[serde(default = "default_true")]
+    pub use_memory: bool,
+    /// Generate and consolidate persistent memory for root-level agents.
+    #[serde(default = "default_true")]
+    pub generate_memory: bool,
+    /// Expose KMS entity/knowledge/index tools backed by Turso.
+    #[serde(default)]
+    pub enable_kms: bool,
 
     // ── HTTP client (shared via `BibShared`) ─────────────────────────
     /// Configuration for the process-wide `reqwest::Client` used by
@@ -214,6 +228,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self::resolve(None)
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl RuntimeConfig {
@@ -264,7 +282,6 @@ impl RuntimeConfig {
         let agent_db = base
             .and_then(|b| b.agent_db.clone())
             .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
-
         let name = base
             .and_then(|b| b.name.clone())
             .unwrap_or_else(|| "default".to_string());
@@ -287,6 +304,17 @@ impl RuntimeConfig {
             |b: Option<&RuntimeConfigBuilder>,
              getter: fn(&RuntimeConfigBuilder) -> Option<bool>,
              default: bool| { b.and_then(getter).unwrap_or(default) };
+        let resolve_env_flag = |explicit: Option<bool>, env: &'static str| {
+            explicit.or_else(|| {
+                std::env::var(env)
+                    .ok()
+                    .and_then(|value| match value.as_str() {
+                        "1" | "true" | "yes" | "on" => Some(true),
+                        "0" | "false" | "no" | "off" => Some(false),
+                        _ => None,
+                    })
+            })
+        };
 
         Self {
             name,
@@ -307,6 +335,14 @@ impl RuntimeConfig {
             enable_opengwas: resolve_flag(base, |b| b.enable_opengwas, true),
             enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
+            use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
+                .unwrap_or(true),
+            generate_memory: resolve_env_flag(
+                base.and_then(|b| b.generate_memory),
+                ENV_GENERATE_MEMORY,
+            )
+            .unwrap_or(true),
+            enable_kms: resolve_flag(base, |b| b.enable_kms, false),
             bib_http: resolve_bib_http(base),
         }
     }
@@ -606,6 +642,9 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_opengwas: Option<bool>,
     pub(crate) enable_opentargets: Option<bool>,
     pub(crate) enable_gwascatalog: Option<bool>,
+    pub(crate) use_memory: Option<bool>,
+    pub(crate) generate_memory: Option<bool>,
+    pub(crate) enable_kms: Option<bool>,
     pub(crate) bib_http: Option<BibHttpOptions>,
 }
 
@@ -723,6 +762,24 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Enable or disable memory read/injection.
+    pub fn use_memory(mut self, enabled: bool) -> Self {
+        self.use_memory = Some(enabled);
+        self
+    }
+
+    /// Enable or disable startup memory generation.
+    pub fn generate_memory(mut self, enabled: bool) -> Self {
+        self.generate_memory = Some(enabled);
+        self
+    }
+
+    /// Enable KMS knowledge-graph tools.
+    pub fn enable_kms(mut self, enabled: bool) -> Self {
+        self.enable_kms = Some(enabled);
+        self
+    }
+
     /// Override the bibliography HTTP client configuration. Merged on
     /// top of any env-var defaults already resolved by
     /// [`RuntimeConfig::resolve`].
@@ -824,6 +881,9 @@ mod tests {
         assert!(cfg.enable_opengwas);
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
+        assert!(cfg.use_memory);
+        assert!(cfg.generate_memory);
+        assert!(!cfg.enable_kms);
 
         // Restore env vars.
         // SAFETY: single-threaded within this test fn.
@@ -851,6 +911,9 @@ mod tests {
             .system_prompt(Some("Custom prompt".to_string()))
             .enable_dag_history(false)
             .enable_opengwas(false)
+            .use_memory(false)
+            .generate_memory(true)
+            .enable_kms(true)
             .build();
 
         assert_eq!(cfg.name, "test-agent");
@@ -868,6 +931,9 @@ mod tests {
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
+        assert!(!cfg.use_memory);
+        assert!(cfg.generate_memory);
+        assert!(cfg.enable_kms);
     }
 
     #[test]
