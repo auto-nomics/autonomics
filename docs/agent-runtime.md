@@ -43,6 +43,11 @@ otherwise the generated entities, knowledge, and index mounts are rolled back
 and the observation is marked rejected with its reason. KMS tables live in the
 same `agent.db` Turso database and share its connection lock.
 
+KMS tool access follows the same boundary: task-facing agents receive only
+`kms_readonly_registrations`, while `kms_write_registrations` is reserved for
+the memory/KMS maintenance process (initially deterministic grounding, later a
+dedicated subconscious maintenance agent).
+
 ## Proc macros (`agentik-proc`)
 
 - **`#[derive(ToolInput)]`** — Generates `impl ToolInput` from a struct, including the `ToolBuilder` chain, required vs. optional fields (via `Option<T>` or `#[default = ...]`), and `#[desc = "..."]` per-field descriptions. Pair with `#[tool(name = "...", description = "...")]` on the struct.

@@ -447,7 +447,7 @@ impl SharedInfra {
         }
 
         if let Some(kms) = self.kms.clone() {
-            tools.extend(kms_tools::kms_registrations(kms));
+            tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)

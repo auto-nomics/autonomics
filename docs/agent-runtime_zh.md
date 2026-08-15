@@ -38,6 +38,10 @@ subject/object 会成为实体，关系会成为 Knowledge，并挂载到
 且保留原因。KMS 表存放在同一个 `agent.db` Turso 数据库中，并与 AgentStorage
 共享同一个连接锁。
 
+KMS 工具权限遵循同一边界：任务智能体只会获得
+`kms_readonly_registrations`；`kms_write_registrations` 保留给记忆 / KMS
+维护进程使用（初期是确定性 grounding，后续可以是专门的潜意识维护智能体）。
+
 ## 过程宏 (`agentik-proc`)
 
 - **`#[derive(ToolInput)]`** —— 从结构体生成 `impl ToolInput`，包括 `ToolBuilder` 链、必选与可选字段（通过 `Option<T>` 或 `#[default = ...]`），以及每字段的 `#[desc = "..."]` 描述。与结构体上的 `#[tool(name = "...", description = "...")]` 配合使用。

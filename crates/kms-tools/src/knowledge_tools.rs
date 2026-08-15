@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use agentik_core::tools::{ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
@@ -442,21 +442,4 @@ async fn resolve_entity_names(svc: &KmsService, entity_ids: &[uuid::Uuid]) -> Ve
         }
     }
     names
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Registration
-// ═══════════════════════════════════════════════════════════════════
-
-pub fn registrations(svc: Arc<KmsService>) -> Vec<ToolRegistration> {
-    vec![
-        KmsCreateKnowledgeTool { svc: svc.clone() }.into(),
-        KmsUpdateKnowledgeTool { svc: svc.clone() }.into(),
-        KmsDeleteKnowledgeTool { svc: svc.clone() }.into(),
-        KmsGetKnowledgeTool { svc: svc.clone() }.into(),
-        KmsGetKnowledgeBatchTool { svc: svc.clone() }.into(),
-        KmsGetEntityKnowledgeTool { svc: svc.clone() }.into(),
-        KmsRenameKnowledgeTool { svc: svc.clone() }.into(),
-        KmsSearchContentTool { svc }.into(),
-    ]
 }
