@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
@@ -35,7 +36,7 @@ use uuid::Uuid;
 use crate::agent::{AgentConfig, InternalEvent, TokenBudget};
 use agentik_sdk::model::sanitize::sanitize_messages;
 use crate::context::ContextProvider;
-use crate::error::{AgentError, Result};
+use crate::error::{AgentError, Result, Retryable};
 use crate::lifecycle::AgentLifecycle;
 use crate::message_ext::AgentMessageExt;
 use crate::prompt::compact;
@@ -60,6 +61,7 @@ const PRUNE_PROTECT_TOKENS: u64 = 40_000;
 const PRUNE_MINIMUM_TOKENS: u64 = 20_000;
 /// Chars per token heuristic (matching OpenCode's `Token.estimate()`).
 const CHARS_PER_TOKEN: usize = 4;
+const MAX_RETRY_BACKOFF_SECS: u64 = 30;
 
 // ── Error types (moved from memory/error.rs) ───────────────────────
 
@@ -1123,7 +1125,9 @@ impl Session {
 
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared.send_event(AgentEvent::Requesting);
-        let response_message = self.request(context, allowed.as_deref()).await?;
+        let response_message = self
+            .request_with_retries(context, allowed.as_deref())
+            .await?;
 
         let last_usage = response_message.usage.clone().unwrap_or_default();
 
@@ -1321,6 +1325,63 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    /// Retry retryable API failures without replaying tool side effects.
+    ///
+    /// The retry boundary is intentionally inside the workflow's model-request
+    /// phase. Retrying the whole workflow after a later failure could execute
+    /// tools twice, while retrying here only repeats the LLM request.
+    async fn request_with_retries(
+        &mut self,
+        mut context: Vec<Message>,
+        allowed: Option<&[String]>,
+    ) -> Result<Message> {
+        let max_retries: u32 = self
+            .shared
+            .config
+            .max_retries
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let mut attempts_used = 0u32;
+
+        loop {
+            match self.request(context, allowed).await {
+                Ok(response) => return Ok(response),
+                Err(e) if attempts_used < max_retries && is_retryable_api_request(&e) => {
+                    attempts_used += 1;
+                    let backoff_secs = 1u64
+                        .checked_shl((attempts_used - 1).min(u32::BITS - 1))
+                        .unwrap_or(u64::MAX)
+                        .min(MAX_RETRY_BACKOFF_SECS);
+
+                    tracing::warn!(
+                        error = %e,
+                        attempt = attempts_used,
+                        max_retries,
+                        backoff_secs,
+                        "retrying retryable API request error"
+                    );
+                    self.shared.send_event(AgentEvent::RetryableError {
+                        message: format!("{e}"),
+                        attempt: attempts_used,
+                        max_retries,
+                    });
+
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel_token.cancelled() => {
+                            return Err(AgentError::Cancelled);
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
+                    }
+
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
+                    context = self.build_context().await?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Background watcher for a non-blocking `wait_task`.
@@ -1677,6 +1738,10 @@ impl From<&Session> for SessionInfo {
             last_active: s.last_active,
         }
     }
+}
+
+fn is_retryable_api_request(error: &AgentError) -> bool {
+    matches!(error, AgentError::ApiRequestError(e) if e.is_retryable())
 }
 
 // Suppress unused import warning for ArcSwap (used in AgentShared.event_tx type).

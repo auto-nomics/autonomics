@@ -733,6 +733,7 @@ mod tests {
     use agentik_sdk::model::Model;
     use agentik_sdk::model::model_info::ModelInfo;
     use agentik_sdk::provider::client::MockApiClient;
+    use agentik_sdk::types::errors::AnthropicError;
     use agentik_sdk::types::messages::{ContentBlock, Message, Role};
     use agentik_sdk::types::shared::Usage;
 
@@ -815,6 +816,66 @@ mod tests {
             budget.should_compact(&msgs, context_length),
             "should_compact must fire for a 500K-char single-segment conversation"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_api_errors_are_retried() {
+        let mut mock = MockApiClient::new();
+        mock.expect_request_stream_with_system()
+            .times(2)
+            .returning(|_, _, _, _| {
+                Err(AnthropicError::StreamError(
+                    "transient stream failure".to_string(),
+                ))
+            });
+
+        let model = Model::with_client(test_model_info(), mock);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut agent = Agent::builder()
+            .with_model(Arc::new(ArcSwapOption::from_pointee(Some(model))))
+            .with_config(AgentConfig {
+                max_iterations: 5,
+                max_retries: 1,
+            })
+            .with_agent_event_tx(tx)
+            .build()
+            .await
+            .unwrap();
+
+        let internal_tx = agent.internal_event_tx();
+        internal_tx
+            .send(InternalEvent::MessageInject {
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+                from_user: true,
+            })
+            .unwrap();
+        let task = tokio::spawn(async move {
+            agent.run().await;
+        });
+
+        let mut saw_retryable_error = false;
+        let mut saw_terminal_error = false;
+        while let Some(event) = rx.recv().await {
+            match event {
+                AgentEvent::RetryableError { attempt, .. } => {
+                    saw_retryable_error = true;
+                    assert_eq!(attempt, 1);
+                }
+                AgentEvent::Error(message) => {
+                    assert!(message.contains("transient stream failure"));
+                    saw_terminal_error = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        internal_tx.send(InternalEvent::Shutdown).unwrap();
+        task.await.unwrap();
+
+        assert!(saw_retryable_error);
+        assert!(saw_terminal_error);
     }
 
     #[tokio::test]
