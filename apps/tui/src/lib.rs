@@ -8,3 +8,4 @@ pub mod xai_textarea;
 
 pub mod cli;
 pub mod commands;
+pub mod kms_tui;

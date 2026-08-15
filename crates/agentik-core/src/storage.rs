@@ -570,10 +570,8 @@ pub trait AgentStorage: Send + Sync {
         &self,
         scope_id: Uuid,
         session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>, StorageError>;
+    ) -> Result<Option<crate::memory::MemoryStage1Record>, StorageError>;
 
-    /// Atomically claim a Phase 1 job. Returns false when the same source is
-    /// already complete or another worker owns a fresh lease.
     async fn claim_memory_stage1(
         &self,
         scope_id: Uuid,
@@ -585,7 +583,7 @@ pub trait AgentStorage: Send + Sync {
     async fn complete_memory_stage1(
         &self,
         scope_id: Uuid,
-        output: MemoryStage1Record,
+        output: crate::memory::MemoryStage1Record,
     ) -> Result<(), StorageError>;
 
     async fn fail_memory_stage1(
@@ -600,22 +598,14 @@ pub trait AgentStorage: Send + Sync {
         &self,
         scope_id: Uuid,
         limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>, StorageError>;
+    ) -> Result<Vec<crate::memory::MemoryStage1Record>, StorageError>;
 
-    /// Atomically claim the singleton global Phase 2 lock. A successful job
-    /// with the same source hash is skipped.
     async fn claim_memory_phase2(
         &self,
         scope_id: Uuid,
         source_hash: &str,
         lease_until: i64,
     ) -> Result<bool, StorageError>;
-
-    async fn complete_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-    ) -> Result<(), StorageError>;
 
     async fn fail_memory_phase2(
         &self,
@@ -642,30 +632,6 @@ pub struct SessionRecord {
     pub started_at: i64,
     /// Last time the session was paused or closed. `None` means active.
     pub ended_at: Option<i64>,
-}
-
-/// Successful or failed Phase 1 memory output. Rows are globally scoped by
-/// [`crate::memory::MEMORY_SCOPE_ID`] so multiple root agents can coordinate.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MemoryStage1Record {
-    pub session_id: Uuid,
-    pub source_hash: String,
-    pub raw_memory: String,
-    pub rollout_summary: String,
-    pub rollout_slug: Option<String>,
-    pub status: String,
-    pub generated_at: i64,
-    pub lease_until: i64,
-}
-
-/// Persistent Phase 2 job bookkeeping.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MemoryJobRecord {
-    pub status: String,
-    pub source_hash: String,
-    pub lease_until: i64,
-    pub attempts: i64,
-    pub updated_at: i64,
 }
 
 // ═══════════════════════════════════════════════════════════════════════

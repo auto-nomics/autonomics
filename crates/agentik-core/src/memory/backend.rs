@@ -1,39 +1,51 @@
 //! Runtime read path and memory prompt injection.
 
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use super::MemoryConfig;
+use super::{MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, SemanticGrounding};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MemoryBackend {
     pub config: MemoryConfig,
+    pub store: Arc<dyn MemoryStore>,
+    pub grounding: Option<Arc<dyn SemanticGrounding>>,
 }
 
 impl MemoryBackend {
     #[must_use]
-    pub fn new(config: MemoryConfig) -> Self {
-        Self { config }
-    }
-
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.config.root
+    pub fn new(
+        config: MemoryConfig,
+        store: Arc<dyn MemoryStore>,
+        grounding: Option<Arc<dyn SemanticGrounding>>,
+    ) -> Self {
+        Self {
+            config,
+            store,
+            grounding,
+        }
     }
 
     pub async fn prompt_section(&self) -> Option<String> {
-        memory_prompt_section(&self.config.root, self.config.summary_max_bytes).await
+        memory_prompt_section(
+            self.store.as_ref(),
+            MEMORY_SCOPE_ID,
+            self.config.summary_max_bytes,
+        )
+        .await
     }
 }
 
-pub async fn memory_prompt_section(root: &Path, max_bytes: usize) -> Option<String> {
-    let summary = tokio::fs::read_to_string(root.join("memory_summary.md"))
-        .await
-        .ok()?;
-    let summary = summary.trim();
+pub async fn memory_prompt_section(
+    store: &dyn MemoryStore,
+    scope_id: uuid::Uuid,
+    max_bytes: usize,
+) -> Option<String> {
+    let summary = store.get_summary(scope_id).await.ok()?;
+    let summary = summary?.summary_md.trim().to_string();
     if summary.is_empty() {
         return None;
     }
-    let mut summary = summary.to_string();
+    let mut summary = summary;
     if summary.len() > max_bytes {
         let cut = summary
             .char_indices()
@@ -52,43 +64,4 @@ pub async fn memory_prompt_section(root: &Path, max_bytes: usize) -> Option<Stri
          be presented as current facts without verification.\n\n\
          ### MEMORY_SUMMARY\n\n{summary}\n"
     ))
-}
-
-pub(crate) fn safe_memory_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let relative_path = Path::new(relative);
-    if relative_path.is_absolute() {
-        return Err("memory paths must be relative".to_string());
-    }
-    let mut path = root.to_path_buf();
-    for component in relative_path.components() {
-        match component {
-            std::path::Component::Normal(part) => path.push(part),
-            std::path::Component::CurDir => {}
-            _ => return Err("invalid memory path".to_string()),
-        }
-    }
-    Ok(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[tokio::test]
-    async fn prompt_includes_summary_and_truncates() {
-        let root: PathBuf = std::env::temp_dir().join(format!(
-            "agentik-memory-backend-{}-{}",
-            std::process::id(),
-            crate::memory::now_ms()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        tokio::fs::write(root.join("memory_summary.md"), "v1\n\nfacts\n")
-            .await
-            .unwrap();
-        let section = memory_prompt_section(&root, 1024).await.unwrap();
-        assert!(section.contains("facts"));
-        assert!(safe_memory_path(&root, "../escape").is_err());
-        std::fs::remove_dir_all(root).ok();
-    }
 }

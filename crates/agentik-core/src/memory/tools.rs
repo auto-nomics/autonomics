@@ -1,17 +1,13 @@
-//! Dedicated memory read/search tools.
-//!
-//! Memory intentionally does not go through the general VFS: it may live in
-//! the runtime state directory rather than the agent's writable data root,
-//! and access is constrained to this memory tree.
+//! Dedicated database-backed memory tools.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
+use uuid::Uuid;
 
-use super::backend::{MemoryBackend, safe_memory_path};
+use super::{MEMORY_SCOPE_ID, MemoryBackend, artifacts::redact_secrets};
 use crate::tools::{ToolError, ToolFunction, ToolRegistration};
 
 const DEFAULT_READ_LINES: usize = 200;
@@ -23,28 +19,25 @@ const MAX_LIST_RESULTS: usize = 500;
 
 #[tool(
     name = "memory_search",
-    description = "Search persistent agent memory files. Queries are case-insensitive \
-                   substrings. Set match_mode to all to require every query on a line. \
-                   Paths are relative to the memory root."
+    description = "Search persistent agent memory stored in Turso. Queries are case-insensitive \
+                   substrings; match_mode=all requires every query in one record."
 )]
 pub struct MemorySearchInput {
     #[desc = "Substring queries matched by any or all, depending on match_mode."]
     pub queries: Vec<String>,
-    #[desc = "Optional relative file or directory to search."]
-    pub path: Option<String>,
-    #[desc = "Require any (default) or all queries to match a line."]
+    #[desc = "Require any (default) or all queries to match a record."]
     pub match_mode: Option<String>,
-    #[desc = "Maximum matching lines returned. Default 20; max 100."]
+    #[desc = "Maximum records returned. Default 20; max 100."]
     pub max_results: Option<usize>,
 }
 
 #[tool(
     name = "memory_read",
-    description = "Read a persistent memory file by relative path with 1-indexed paging."
+    description = "Read the current memory summary or one active memory entry by UUID."
 )]
 pub struct MemoryReadInput {
-    #[desc = "Relative path under the memory root, for example MEMORY.md."]
-    pub path: String,
+    #[desc = "'summary' for the compact summary, or an entry UUID returned by memory_search."]
+    pub target: String,
     #[desc = "Starting 1-indexed line. Default 1."]
     pub offset: Option<usize>,
     #[desc = "Maximum lines returned. Default 200; max 1000."]
@@ -53,27 +46,21 @@ pub struct MemoryReadInput {
 
 #[tool(
     name = "memory_list",
-    description = "List files in persistent agent memory, optionally recursively."
+    description = "List active persistent memory entries ordered by most recent update."
 )]
 pub struct MemoryListInput {
-    #[desc = "Optional relative directory. Default is the memory root."]
-    pub path: Option<String>,
-    #[desc = "List recursively. Default false."]
-    pub recursive: Option<bool>,
     #[desc = "Maximum entries returned. Default 100; max 500."]
     pub limit: Option<usize>,
 }
 
 #[tool(
     name = "memory_note",
-    description = "Create one small ad-hoc memory update note when the user explicitly asks \
-                   to remember, forget, or change persistent memory. Direct memory artifact \
-                   editing is not allowed."
+    description = "Queue one small user-requested memory update for the next consolidation run."
 )]
 pub struct MemoryNoteInput {
     #[desc = "Concise user-requested addition, deletion, or correction."]
     pub content: String,
-    #[desc = "Short filename slug used for the note."]
+    #[desc = "Short stable slug for the note."]
     pub slug: Option<String>,
 }
 
@@ -117,54 +104,54 @@ impl ToolFunction for MemorySearchTool {
         if input.queries.iter().any(String::is_empty) {
             return Ok(ToolResult::error("memory search queries must not be empty"));
         }
-        let root = self.backend.root();
-        let scope = match &input.path {
-            Some(path) => safe_memory_path(root, path).map_err(validation_error)?,
-            None => root.to_path_buf(),
-        };
-        if !scope.exists() {
-            return Ok(ToolResult::error(format!(
-                "memory path does not exist: {}",
-                input.path.unwrap_or_default()
-            )));
-        }
-        let mut files = Vec::new();
-        collect_markdown_files(&scope, &mut files).map_err(tool_error)?;
-        files.sort();
-
+        let entries = self
+            .backend
+            .store
+            .list_entries(MEMORY_SCOPE_ID, MAX_SEARCH_RESULTS * 10)
+            .await
+            .map_err(store_error)?;
+        let notes = self
+            .backend
+            .store
+            .list_pending_notes(MEMORY_SCOPE_ID)
+            .await
+            .map_err(store_error)?;
         let require_all = input.match_mode.as_deref().unwrap_or("any") == "all";
         let max_results = input
             .max_results
             .unwrap_or(DEFAULT_SEARCH_RESULTS)
             .clamp(1, MAX_SEARCH_RESULTS);
+
         let mut matches = Vec::new();
-        'files: for path in files {
-            let Ok(contents) = tokio::fs::read_to_string(&path).await else {
-                continue;
-            };
-            let relative = relative_name(root, &path);
-            for (index, line) in contents.lines().enumerate() {
-                let haystack = line.to_ascii_lowercase();
-                let matched = if require_all {
-                    !input.queries.is_empty()
-                        && input
-                            .queries
-                            .iter()
-                            .all(|query| haystack.contains(&query.to_ascii_lowercase()))
-                } else {
-                    input
-                        .queries
-                        .iter()
-                        .any(|query| haystack.contains(&query.to_ascii_lowercase()))
-                };
-                if matched {
+        for entry in entries {
+            let haystack = format!("{}\n{}", entry.title, entry.body_md).to_lowercase();
+            if matches_queries(&input.queries, &haystack, require_all) {
+                matches.push(serde_json::json!({
+                    "kind": "entry",
+                    "id": entry.id,
+                    "entry_type": entry.entry_type,
+                    "title": entry.title,
+                    "snippet": snippet(&entry.body_md, &input.queries),
+                    "updated_at": entry.updated_at,
+                }));
+                if matches.len() >= max_results {
+                    break;
+                }
+            }
+        }
+        if matches.len() < max_results {
+            for note in notes {
+                let haystack = format!("{}\n{}", note.slug, note.content).to_lowercase();
+                if matches_queries(&input.queries, &haystack, require_all) {
                     matches.push(serde_json::json!({
-                        "path": relative,
-                        "line": index + 1,
-                        "text": truncate_line(line),
+                        "kind": "pending_note",
+                        "id": note.id,
+                        "title": note.slug,
+                        "snippet": snippet(&note.content, &input.queries),
+                        "created_at": note.created_at,
                     }));
                     if matches.len() >= max_results {
-                        break 'files;
+                        break;
                     }
                 }
             }
@@ -183,24 +170,60 @@ impl ToolFunction for MemoryReadTool {
     type Input = MemoryReadInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let path = safe_memory_path(self.backend.root(), &input.path).map_err(validation_error)?;
-        let contents =
-            tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed {
-                    source: Box::new(std::io::Error::other(format!(
-                        "read memory file {}: {e}",
-                        input.path
-                    ))),
-                })?;
         let offset = input.offset.unwrap_or(1).max(1);
         let limit = input
             .limit
             .unwrap_or(DEFAULT_READ_LINES)
             .clamp(1, MAX_READ_LINES);
-        let lines: Vec<&str> = contents.lines().skip(offset - 1).take(limit).collect();
+
+        if input.target.eq_ignore_ascii_case("summary") {
+            let summary = self
+                .backend
+                .store
+                .get_summary(MEMORY_SCOPE_ID)
+                .await
+                .map_err(store_error)?;
+            let Some(summary) = summary else {
+                return Ok(ToolResult::error(
+                    "memory summary has not been generated yet",
+                ));
+            };
+            let lines: Vec<&str> = summary
+                .summary_md
+                .lines()
+                .skip(offset - 1)
+                .take(limit)
+                .collect();
+            return Ok(ToolResult::success_json(serde_json::json!({
+                "kind": "summary",
+                "schema_version": summary.schema_version,
+                "offset": offset,
+                "lines": lines,
+                "returned": lines.len(),
+            })));
+        }
+
+        let entry_id =
+            Uuid::parse_str(input.target.trim()).map_err(|e| ToolError::ValidationFailed {
+                message: format!("invalid memory entry UUID: {e}"),
+            })?;
+        let entry = self
+            .backend
+            .store
+            .get_entry(MEMORY_SCOPE_ID, entry_id)
+            .await
+            .map_err(store_error)?
+            .ok_or_else(|| ToolError::ValidationFailed {
+                message: format!("memory entry {entry_id} not found"),
+            })?;
+        let lines: Vec<&str> = entry.body_md.lines().skip(offset - 1).take(limit).collect();
         Ok(ToolResult::success_json(serde_json::json!({
-            "path": input.path,
+            "kind": "entry",
+            "id": entry.id,
+            "entry_type": entry.entry_type,
+            "title": entry.title,
+            "status": entry.status,
+            "confidence": entry.confidence,
             "offset": offset,
             "lines": lines,
             "returned": lines.len(),
@@ -213,42 +236,30 @@ impl ToolFunction for MemoryListTool {
     type Input = MemoryListInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let root = self.backend.root();
-        let scope = match &input.path {
-            Some(path) => safe_memory_path(root, path).map_err(validation_error)?,
-            None => root.to_path_buf(),
-        };
-        if !scope.is_dir() {
-            return Ok(ToolResult::error("memory list path is not a directory"));
-        }
-        let recursive = input.recursive.unwrap_or(false);
-        let mut paths = Vec::new();
-        if recursive {
-            collect_all_files(&scope, &mut paths).map_err(tool_error)?;
-        } else {
-            let mut read_dir = tokio::fs::read_dir(&scope).await.map_err(tool_error)?;
-            while let Some(entry) = read_dir.next_entry().await.map_err(tool_error)? {
-                paths.push(entry.path());
-            }
-        }
-        paths.sort();
         let limit = input
             .limit
             .unwrap_or(DEFAULT_LIST_RESULTS)
             .clamp(1, MAX_LIST_RESULTS);
-        let entries: Vec<serde_json::Value> = paths
-            .into_iter()
-            .take(limit)
-            .map(|path| {
+        let entries = self
+            .backend
+            .store
+            .list_entries(MEMORY_SCOPE_ID, limit)
+            .await
+            .map_err(store_error)?;
+        let values: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|entry| {
                 serde_json::json!({
-                    "path": relative_name(root, &path),
-                    "directory": path.is_dir(),
+                    "id": entry.id,
+                    "entry_type": entry.entry_type,
+                    "title": entry.title,
+                    "updated_at": entry.updated_at,
                 })
             })
             .collect();
         Ok(ToolResult::success_json(serde_json::json!({
-            "entries": entries,
-            "returned": entries.len(),
+            "entries": values,
+            "returned": values.len(),
         })))
     }
 }
@@ -258,83 +269,54 @@ impl ToolFunction for MemoryNoteTool {
     type Input = MemoryNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let content = input.content.trim();
+        let content = redact_secrets(input.content.trim());
         if content.is_empty() {
             return Ok(ToolResult::error("memory note content must not be empty"));
         }
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-        let slug = note_slug(input.slug.as_deref());
-        let relative = format!("extensions/ad_hoc/notes/{timestamp}-{slug}.md");
-        let path = safe_memory_path(self.backend.root(), &relative).map_err(validation_error)?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(tool_error)?;
-        }
-        let note = format!(
-            "# Ad-hoc memory update\n\nsource: user-requested\n\n{}\n",
-            crate::memory::artifacts::redact_secrets(content)
-        );
-        tokio::fs::write(&path, note).await.map_err(tool_error)?;
+        let note = self
+            .backend
+            .store
+            .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
+            .await
+            .map_err(store_error)?;
         Ok(ToolResult::success_json(serde_json::json!({
-            "path": relative,
-            "status": "queued_for_next_consolidation",
+            "id": note.id,
+            "slug": note.slug,
+            "status": "pending",
         })))
     }
 }
 
-fn collect_markdown_files(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_file() {
-        if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        {
-            output.push(path.to_path_buf());
-        }
-        return Ok(());
+fn matches_queries(queries: &[String], haystack: &str, require_all: bool) -> bool {
+    if require_all {
+        queries
+            .iter()
+            .all(|query| haystack.contains(&query.to_lowercase()))
+    } else {
+        queries
+            .iter()
+            .any(|query| haystack.contains(&query.to_lowercase()))
     }
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let child = entry.path();
-        if child.is_dir() {
-            collect_markdown_files(&child, output)?;
-        } else if child
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        {
-            output.push(child);
-        }
-    }
-    Ok(())
 }
 
-fn collect_all_files(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let child = entry.path();
-        if child.is_dir() {
-            output.push(child.clone());
-            collect_all_files(&child, output)?;
-        } else {
-            output.push(child);
-        }
-    }
-    Ok(())
-}
-
-fn relative_name(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn truncate_line(line: &str) -> String {
+fn snippet(content: &str, queries: &[String]) -> String {
+    let lower = content.to_lowercase();
+    let position = queries
+        .iter()
+        .filter_map(|query| lower.find(&query.to_lowercase()))
+        .min()
+        .unwrap_or(0);
+    let start = lower
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= position.saturating_sub(120))
+        .last()
+        .unwrap_or(0);
     let mut result = String::new();
-    for ch in line.chars().take(500) {
+    for ch in content[start..].chars().take(360) {
         result.push(ch);
     }
-    if line.chars().count() > 500 {
+    if content[start..].chars().count() > 360 {
         result.push_str("...");
     }
     result
@@ -358,11 +340,7 @@ fn note_slug(raw: Option<&str>) -> String {
     }
 }
 
-fn validation_error(message: String) -> ToolError {
-    ToolError::ValidationFailed { message }
-}
-
-fn tool_error(error: std::io::Error) -> ToolError {
+fn store_error(error: crate::storage::StorageError) -> ToolError {
     ToolError::ExecutionFailed {
         source: Box::new(error),
     }
@@ -371,61 +349,85 @@ fn tool_error(error: std::io::Error) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemoryConfig;
-
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "agentik-memory-{label}-{}-{}",
-            std::process::id(),
-            crate::memory::now_ms()
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
+    use crate::memory::{MemoryConfig, MemoryEntry};
 
     #[tokio::test]
-    async fn search_read_and_note_are_bounded_to_memory_root() {
-        let root = unique_temp_dir("tools");
-        let backend = Arc::new(MemoryBackend::new(MemoryConfig::new(root.clone())));
-        std::fs::write(root.join("MEMORY.md"), "alpha\nbeta\n").unwrap();
+    async fn search_read_list_and_note_use_turso() {
+        let store: Arc<dyn crate::memory::MemoryStore> =
+            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(MemoryBackend::new(
+            MemoryConfig::new(),
+            Arc::clone(&store),
+            None,
+        ));
+        let now = crate::memory::now_ms();
+        store
+            .complete_phase2(
+                MEMORY_SCOPE_ID,
+                "source",
+                vec![MemoryEntry {
+                    id: Uuid::new_v4(),
+                    scope_id: MEMORY_SCOPE_ID,
+                    entry_type: "workflow".into(),
+                    title: "Verification workflow".into(),
+                    body_md: "Always run targeted tests before cargo check.".into(),
+                    status: "active".into(),
+                    confidence: 0.9,
+                    created_at: now,
+                    updated_at: now,
+                }],
+                "v1\n\nRun tests.",
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
 
         let search = MemorySearchTool {
             backend: Arc::clone(&backend),
         };
         let result = search
             .run(MemorySearchInput {
-                queries: vec!["BETA".into()],
-                path: None,
+                queries: vec!["TARGETED".into()],
                 match_mode: None,
                 max_results: Some(1),
             })
             .await
             .unwrap();
-        assert!(result.text_content().contains("\"line\":2"));
+        assert!(result.text_content().contains("Verification workflow"));
 
+        let entries = store.list_entries(MEMORY_SCOPE_ID, 10).await.unwrap();
         let read = MemoryReadTool {
             backend: Arc::clone(&backend),
         };
         let result = read
             .run(MemoryReadInput {
-                path: "../escape".into(),
+                target: entries[0].id.to_string(),
                 offset: None,
                 limit: None,
             })
-            .await;
-        assert!(result.is_err());
+            .await
+            .unwrap();
+        assert!(result.text_content().contains("targeted tests"));
 
         let note = MemoryNoteTool {
-            backend: backend.clone(),
+            backend: Arc::clone(&backend),
         };
         let result = note
             .run(MemoryNoteInput {
-                content: "token=abc\nremember preferences".into(),
+                content: "token=abc\nPrefer concise summaries.".into(),
                 slug: Some("User Preference!".into()),
             })
             .await
             .unwrap();
         assert!(result.text_content().contains("user-preference"));
-        std::fs::remove_dir_all(root).ok();
+        assert!(
+            store
+                .list_pending_notes(MEMORY_SCOPE_ID)
+                .await
+                .unwrap()
+                .len()
+                == 1
+        );
     }
 }

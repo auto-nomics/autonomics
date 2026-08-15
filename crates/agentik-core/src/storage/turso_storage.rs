@@ -63,9 +63,10 @@ use uuid::Uuid;
 use agentik_sdk::types::messages::Message;
 use agentik_types::AgentPlan;
 
+use crate::memory::MemoryStage1Record;
 use crate::storage::{
     AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
-    MemoryStage1Record, PersistedAgentGraph, RelationKind, StorageError,
+    PersistedAgentGraph, RelationKind, StorageError,
 };
 
 /// Mutex-guarded wrapper around [`turso::Connection`].
@@ -181,6 +182,14 @@ impl TursoAgentStorage {
         Ok(storage)
     }
 
+    /// Return the shared, mutex-guarded Turso connection.
+    ///
+    /// This lets another storage facade (notably KMS) use the same physical
+    /// `agent.db` connection and coordinate with agent-storage queries.
+    pub fn shared_connection(&self) -> Arc<tokio::sync::Mutex<turso::Connection>> {
+        Arc::clone(&self.conn.0)
+    }
+
     async fn init_schema(&self) -> Result<(), StorageError> {
         self.conn
             .execute_batch(
@@ -289,6 +298,51 @@ impl TursoAgentStorage {
                     last_error   TEXT,
                     updated_at   INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS memory_entries (
+                    id          TEXT PRIMARY KEY,
+                    scope_id    TEXT NOT NULL,
+                    entry_type  TEXT NOT NULL,
+                    title       TEXT NOT NULL,
+                    body_md     TEXT NOT NULL,
+                    status      TEXT NOT NULL,
+                    confidence  REAL NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    updated_at  INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_status
+                    ON memory_entries(scope_id, status, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS memory_summaries (
+                    scope_id       TEXT PRIMARY KEY,
+                    schema_version TEXT NOT NULL,
+                    summary_md     TEXT NOT NULL,
+                    source_hash    TEXT NOT NULL,
+                    generated_at   INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS memory_notes (
+                    id         TEXT PRIMARY KEY,
+                    scope_id   TEXT NOT NULL,
+                    slug       TEXT NOT NULL,
+                    content    TEXT NOT NULL,
+                    status     TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_notes_scope_status
+                    ON memory_notes(scope_id, status, created_at);
+                CREATE TABLE IF NOT EXISTS memory_semantic_observations (
+                    id          TEXT PRIMARY KEY,
+                    scope_id    TEXT NOT NULL,
+                    subject     TEXT NOT NULL,
+                    predicate   TEXT NOT NULL,
+                    object      TEXT NOT NULL,
+                    content     TEXT NOT NULL,
+                    status      TEXT NOT NULL,
+                    confidence  REAL NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    last_error  TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_semantic_scope_status
+                    ON memory_semantic_observations(scope_id, status, created_at DESC);
                 ",
             )
             .await
@@ -304,6 +358,15 @@ impl TursoAgentStorage {
         let _ = self
             .conn
             .execute("ALTER TABLE snapshots ADD COLUMN session_id TEXT", ())
+            .await;
+        // Add diagnostic outcome column to observations created by earlier
+        // database-backed memory builds.
+        let _ = self
+            .conn
+            .execute(
+                "ALTER TABLE memory_semantic_observations ADD COLUMN last_error TEXT",
+                (),
+            )
             .await;
         // Create per-session snapshot index (safe now that column exists).
         let _ = self
@@ -949,6 +1012,7 @@ impl AgentStorage for TursoAgentStorage {
         }
         Ok(records)
     }
+    // ── Cross-session memories ─────────────────────────────
 
     async fn get_memory_stage1_output(
         &self,
@@ -1142,33 +1206,6 @@ impl AgentStorage for TursoAgentStorage {
         Ok(changed > 0)
     }
 
-    async fn complete_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-    ) -> Result<(), StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_jobs
-                    (scope_id, status, source_hash, lease_until, attempts, updated_at)
-                 VALUES (?1, 'succeeded', ?2, 0, 1, ?3)
-                 ON CONFLICT(scope_id) DO UPDATE SET
-                    status = 'succeeded',
-                    source_hash = excluded.source_hash,
-                    lease_until = 0,
-                    last_error = NULL,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(source_hash.to_string()),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
     async fn fail_memory_phase2(
         &self,
         scope_id: Uuid,
@@ -1199,7 +1236,6 @@ impl AgentStorage for TursoAgentStorage {
             .await?;
         Ok(())
     }
-
     async fn get_latest_snapshot_for_session(
         &self,
         _agent_id: Uuid,
@@ -2888,3 +2924,6 @@ mod wal_recovery_tests {
 #[cfg(test)]
 #[path = "turso_storage/memory_tests.rs"]
 mod memory_tests;
+
+#[path = "turso_storage/memory_store_impl.rs"]
+mod memory_store_impl;

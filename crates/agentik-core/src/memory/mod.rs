@@ -4,23 +4,29 @@
 //! runtime's model and Turso storage abstractions:
 //!
 //! - Phase 1 extracts a structured raw memory from an idle persisted session.
-//! - Phase 2 consolidates bounded raw memories into a shared file workspace.
+//! - Phase 2 consolidates bounded raw memories into durable database rows.
 //! - A compact summary is injected into the system prompt while detailed
 //!   memory remains available through read/search tools.
+//! - Candidate semantic observations are retained for later KMS grounding.
 
 mod artifacts;
 mod backend;
+mod grounding;
 mod pipeline;
+mod store;
 mod tools;
 
 pub use artifacts::{
-    MemoryArtifacts, MemoryConsolidation, MemoryExtraction, RawMemoryEntry, parse_json_object,
+    MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, SemanticObservationDraft,
+    parse_json_object,
 };
 pub use backend::{MemoryBackend, memory_prompt_section};
+pub use grounding::{SemanticGrounding, SemanticGroundingOutcome};
 pub use pipeline::{MEMORY_SCOPE_ID, run_memory_pipeline};
+pub use store::{
+    MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
+};
 pub use tools::memory_registrations;
-
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryConfig {
@@ -28,7 +34,6 @@ pub struct MemoryConfig {
     pub use_memory: bool,
     /// Run startup extraction and consolidation for root-level agents.
     pub generate_memory: bool,
-    pub root: PathBuf,
     /// Maximum number of most-recent idle sessions considered per startup.
     pub max_source_sessions: usize,
     /// Inputs older than this are ignored.
@@ -45,11 +50,10 @@ pub struct MemoryConfig {
 
 impl MemoryConfig {
     #[must_use]
-    pub fn new(root: impl Into<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
             use_memory: true,
             generate_memory: true,
-            root: root.into(),
             max_source_sessions: 20,
             max_age_days: 90,
             min_idle_hours: 12,
@@ -64,6 +68,12 @@ impl MemoryConfig {
         // `/root/name` is a root-level agent; delegated children have at
         // least one more path segment (`/root/name/child`).
         path.segments().len() <= 2
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -1,11 +1,9 @@
 //! File-backed memory artifacts and structured model-output helpers.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
-
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct MemoryExtraction {
@@ -26,27 +24,42 @@ impl MemoryExtraction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RawMemoryEntry {
-    pub session_id: uuid::Uuid,
-    pub raw_memory: String,
-    pub rollout_summary: String,
-    pub rollout_slug: Option<String>,
-    pub generated_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct MemoryConsolidation {
-    pub memory: String,
+    #[serde(default)]
+    pub entries: Vec<MemoryEntryDraft>,
+    #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub semantic_updates: Vec<SemanticObservationDraft>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MemoryArtifacts {
-    pub raw_memories: String,
-    pub memory: String,
-    pub summary: String,
-    pub changed: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryEntryDraft {
+    #[serde(default = "default_entry_type")]
+    pub entry_type: String,
+    pub title: String,
+    pub body_md: String,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SemanticObservationDraft {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub content: String,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_entry_type() -> String {
+    "workflow".to_string()
+}
+
+fn default_confidence() -> f64 {
+    0.7
 }
 
 pub fn parse_json_object<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
@@ -177,22 +190,6 @@ pub fn render_transcript(messages: &[Message], max_bytes: usize) -> String {
         }
     }
     output
-}
-
-pub fn ensure_memory_layout(root: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(root.join("rollout_summaries"))?;
-    std::fs::create_dir_all(root.join("extensions/ad_hoc/notes"))?;
-    Ok(())
-}
-
-pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::other(format!("memory path has no parent: {}", path.display()))
-    })?;
-    std::fs::create_dir_all(parent)?;
-    let temp = path.with_extension("tmp");
-    std::fs::write(&temp, contents)?;
-    std::fs::rename(&temp, path)
 }
 
 pub fn normalize_summary(summary: &str) -> String {

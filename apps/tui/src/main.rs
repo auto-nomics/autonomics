@@ -93,6 +93,7 @@ fn main() -> color_eyre::Result<()> {
         nocapture: false,
     })) {
         Command::Tui(args) => commands::tui::run_tui(args),
+        Command::Kms(args) => commands::kms::run_kms(args),
         Command::Cache(cache) => match cache.action {
             CacheAction::RefreshOpengwas(args) => commands::cache::run_refresh_opengwas(args),
             CacheAction::ClearOpengwas(args) => commands::cache::run_clear_opengwas(args),

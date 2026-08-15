@@ -8,7 +8,9 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
-use crate::memory::{MemoryBackend, MemoryConfig, memory_registrations};
+use crate::memory::{
+    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
+};
 use crate::session::AgentShared;
 use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
@@ -24,7 +26,7 @@ pub struct AgentBuilder {
     tools: Vec<ToolRegistration>,
     system_prompt_section: Option<String>,
     system_prompt_identity: Option<String>,
-    memory: Option<MemoryConfig>,
+    memory: Option<Arc<MemoryBackend>>,
     agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
     /// Stable agent UUID. If `None`, a fresh v4 UUID is generated at build time.
     id: Option<Uuid>,
@@ -129,8 +131,13 @@ impl AgentBuilder {
     ///
     /// Root-level agents generate and consolidate memory; all agents receive
     /// read/search tools and summary injection when `use_memory` is enabled.
-    pub fn with_memory(mut self, config: MemoryConfig) -> Self {
-        self.memory = Some(config);
+    pub fn with_memory(
+        mut self,
+        config: MemoryConfig,
+        store: Arc<dyn MemoryStore>,
+        grounding: Option<Arc<dyn SemanticGrounding>>,
+    ) -> Self {
+        self.memory = Some(Arc::new(MemoryBackend::new(config, store, grounding)));
         self
     }
 
@@ -206,9 +213,7 @@ impl AgentBuilder {
 
         let mut registry = ToolRegistry::new();
         registry.register_all(self.tools)?;
-        let memory = self
-            .memory
-            .map(|config| Arc::new(MemoryBackend::new(config)));
+        let memory = self.memory;
         if let Some(backend) = memory.as_ref().filter(|backend| backend.config.use_memory) {
             registry.register_all(memory_registrations(Arc::clone(backend)))?;
         }

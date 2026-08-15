@@ -2,9 +2,10 @@ use agentik_sdk::types::messages::Message;
 use uuid::Uuid;
 
 use super::TursoAgentStorage;
-use crate::memory::MEMORY_SCOPE_ID;
+use crate::memory::MemoryStage1Record;
+use crate::memory::{MEMORY_SCOPE_ID, MemoryStore};
 use crate::message_ext::AgentMessageExt;
-use crate::storage::{AgentStorage, MemoryStage1Record};
+use crate::storage::AgentStorage;
 
 fn stage1(session_id: Uuid, source_hash: &str, raw_memory: &str) -> MemoryStage1Record {
     MemoryStage1Record {
@@ -27,39 +28,39 @@ async fn memory_stage1_claims_are_lease_and_hash_idempotent() {
 
     assert!(
         store
-            .claim_memory_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         !store
-            .claim_memory_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     store
-        .complete_memory_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-a", "raw"))
+        .complete_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-a", "raw"))
         .await
         .unwrap();
     assert!(
         !store
-            .claim_memory_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         store
-            .claim_memory_stage1(MEMORY_SCOPE_ID, session_id, "hash-b", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-b", lease_until)
             .await
             .unwrap()
     );
     store
-        .complete_memory_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-b", "raw-b"))
+        .complete_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-b", "raw-b"))
         .await
         .unwrap();
 
     let rows = store
-        .list_memory_stage1_outputs(MEMORY_SCOPE_ID, 10)
+        .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -72,29 +73,36 @@ async fn memory_phase2_lock_is_singleton_and_source_idempotent() {
 
     assert!(
         store
-            .claim_memory_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         !store
-            .claim_memory_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
             .await
             .unwrap()
     );
     store
-        .complete_memory_phase2(MEMORY_SCOPE_ID, "input-a")
+        .complete_phase2(
+            MEMORY_SCOPE_ID,
+            "input-a",
+            Vec::new(),
+            "v1\n\ntest",
+            Vec::new(),
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert!(
         !store
-            .claim_memory_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         store
-            .claim_memory_phase2(MEMORY_SCOPE_ID, "input-b", lease_until)
+            .claim_phase2(MEMORY_SCOPE_ID, "input-b", lease_until)
             .await
             .unwrap()
     );

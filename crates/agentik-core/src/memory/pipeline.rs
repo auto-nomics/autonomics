@@ -1,6 +1,5 @@
-//! Two-phase memory extraction and consolidation pipeline.
+//! Two-phase memory extraction and consolidation backed by a memory repository.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use agentik_sdk::model::Model;
@@ -9,26 +8,29 @@ use arc_swap::ArcSwapOption;
 use chrono::Utc;
 use uuid::Uuid;
 
+use super::MemoryBackend;
 use super::artifacts::{
-    MemoryArtifacts, MemoryConsolidation, MemoryExtraction, RawMemoryEntry, ensure_memory_layout,
-    hash_source, normalize_slug, normalize_summary, parse_json_object, redact_secrets,
-    render_transcript, write_atomic,
+    MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, hash_source, normalize_slug,
+    normalize_summary, parse_json_object, redact_secrets, render_transcript,
 };
-use super::{MemoryConfig, now_ms};
+use super::store::{MemoryEntry, MemoryStage1Record, MemoryStore, SemanticObservation};
+use super::{MemoryConfig, SemanticGrounding, now_ms};
 use crate::message_ext::AgentMessageExt;
-use crate::storage::{AgentStorage, MemoryStage1Record};
+use crate::storage::AgentStorage;
 
-/// All root agents share one global memory workspace, matching Codex's
-/// global consolidation lock and shared memory folder.
+/// All root agents share one global memory scope. Scope partitioning can be
+/// introduced later without changing the repository contract.
 pub const MEMORY_SCOPE_ID: Uuid = Uuid::nil();
 
 pub async fn run_memory_pipeline(
     agent_id: Uuid,
     storage: Arc<dyn AgentStorage>,
+    memory: Arc<MemoryBackend>,
     model_handle: Arc<ArcSwapOption<Model>>,
-    config: MemoryConfig,
 ) {
-    if let Err(error) = run_pipeline(agent_id, &storage, &model_handle, &config).await {
+    if let Err(error) =
+        run_pipeline(agent_id, &storage, &memory, &model_handle, &memory.config).await
+    {
         tracing::warn!(agent_id = %agent_id, error = %error, "memory pipeline failed");
     }
 }
@@ -36,17 +38,63 @@ pub async fn run_memory_pipeline(
 async fn run_pipeline(
     agent_id: Uuid,
     storage: &Arc<dyn AgentStorage>,
+    memory: &Arc<MemoryBackend>,
     model_handle: &Arc<ArcSwapOption<Model>>,
     config: &MemoryConfig,
 ) -> Result<(), String> {
-    ensure_memory_layout(&config.root).map_err(|e| format!("create memory layout: {e}"))?;
-    run_phase1(agent_id, storage, model_handle, config).await?;
-    run_phase2(storage, model_handle, config).await
+    run_phase1(agent_id, storage, &memory.store, model_handle, config).await?;
+    run_phase2(&memory.store, model_handle, config).await?;
+    if let Some(grounding) = &memory.grounding {
+        run_grounding(memory, grounding).await?;
+    }
+    Ok(())
+}
+
+async fn run_grounding(
+    memory: &Arc<MemoryBackend>,
+    grounding: &Arc<dyn SemanticGrounding>,
+) -> Result<(), String> {
+    let observations = memory
+        .store
+        .list_observations(MEMORY_SCOPE_ID, "candidate", 1000)
+        .await
+        .map_err(|e| format!("list candidate semantic observations: {e}"))?;
+    for observation in observations {
+        match grounding.ground(&observation).await {
+            Ok(outcome) => {
+                let status = if outcome.accepted {
+                    "accepted"
+                } else {
+                    "rejected"
+                };
+                let reason = (!outcome.accepted).then_some(outcome.reason);
+                memory
+                    .store
+                    .set_observation_status(
+                        MEMORY_SCOPE_ID,
+                        observation.id,
+                        status,
+                        reason.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| format!("set observation status: {e}"))?;
+            }
+            Err(error) => {
+                memory
+                    .store
+                    .set_observation_status(MEMORY_SCOPE_ID, observation.id, "error", Some(&error))
+                    .await
+                    .map_err(|e| format!("set observation error status: {e}"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn run_phase1(
     agent_id: Uuid,
     storage: &Arc<dyn AgentStorage>,
+    memory: &Arc<dyn MemoryStore>,
     model_handle: &Arc<ArcSwapOption<Model>>,
     config: &MemoryConfig,
 ) -> Result<(), String> {
@@ -77,8 +125,8 @@ async fn run_phase1(
         }
         let serialized = serde_json::to_string(&messages).map_err(|e| e.to_string())?;
         let source_hash = hash_source(&serialized);
-        let previous = storage
-            .get_memory_stage1_output(MEMORY_SCOPE_ID, record.session_id)
+        let previous = memory
+            .get_stage1_output(MEMORY_SCOPE_ID, record.session_id)
             .await
             .map_err(|e| format!("load memory stage 1: {e}"))?;
         if previous.is_some_and(|row| {
@@ -89,8 +137,8 @@ async fn run_phase1(
             continue;
         }
         let lease_until = now_ms() + config.lease_seconds * 1000;
-        if !storage
-            .claim_memory_stage1(
+        if !memory
+            .claim_stage1(
                 MEMORY_SCOPE_ID,
                 record.session_id,
                 &source_hash,
@@ -127,14 +175,14 @@ async fn run_phase1(
                     generated_at: now_ms(),
                     lease_until: 0,
                 };
-                storage
-                    .complete_memory_stage1(MEMORY_SCOPE_ID, output)
+                memory
+                    .complete_stage1(MEMORY_SCOPE_ID, output)
                     .await
                     .map_err(|e| format!("save memory stage 1: {e}"))?;
             }
             Err(error) => {
-                storage
-                    .fail_memory_stage1(MEMORY_SCOPE_ID, record.session_id, &source_hash, &error)
+                memory
+                    .fail_stage1(MEMORY_SCOPE_ID, record.session_id, &source_hash, &error)
                     .await
                     .map_err(|e| format!("mark memory stage 1 failed: {e}"))?;
             }
@@ -144,35 +192,33 @@ async fn run_phase1(
 }
 
 async fn run_phase2(
-    storage: &Arc<dyn AgentStorage>,
+    memory: &Arc<dyn MemoryStore>,
     model_handle: &Arc<ArcSwapOption<Model>>,
     config: &MemoryConfig,
 ) -> Result<(), String> {
-    let mut rows = storage
-        .list_memory_stage1_outputs(MEMORY_SCOPE_ID, config.phase2_inputs)
+    let mut rows = memory
+        .list_stage1_outputs(MEMORY_SCOPE_ID, config.phase2_inputs)
         .await
         .map_err(|e| format!("select memory stage 1 outputs: {e}"))?;
     rows.retain(|row| !row.raw_memory.is_empty() || !row.rollout_summary.is_empty());
     rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
 
-    let selected: Vec<RawMemoryEntry> = rows
-        .into_iter()
-        .map(|row| RawMemoryEntry {
-            session_id: row.session_id,
-            raw_memory: row.raw_memory,
-            rollout_summary: row.rollout_summary,
-            rollout_slug: row.rollout_slug,
-            generated_at: row.generated_at,
-        })
-        .collect();
-    let artifacts = sync_artifacts(&config.root, &selected)
+    let notes = memory
+        .list_pending_notes(MEMORY_SCOPE_ID)
         .await
-        .map_err(|e| format!("sync memory artifacts: {e}"))?;
-    let notes = read_ad_hoc_notes(&config.root).await;
-    let source_hash = phase2_source_hash(&selected, &notes);
+        .map_err(|e| format!("list memory notes: {e}"))?;
+    let existing_entries = memory
+        .list_entries(MEMORY_SCOPE_ID, config.phase2_inputs)
+        .await
+        .map_err(|e| format!("list memory entries: {e}"))?;
+    let existing_summary = memory
+        .get_summary(MEMORY_SCOPE_ID)
+        .await
+        .map_err(|e| format!("load memory summary: {e}"))?;
+    let source_hash = phase2_source_hash(&rows, &notes);
     let lease_until = now_ms() + config.lease_seconds * 1000;
-    if !storage
-        .claim_memory_phase2(MEMORY_SCOPE_ID, &source_hash, lease_until)
+    if !memory
+        .claim_phase2(MEMORY_SCOPE_ID, &source_hash, lease_until)
         .await
         .map_err(|e| format!("claim memory phase 2: {e}"))?
     {
@@ -183,7 +229,15 @@ async fn run_phase2(
         tracing::debug!("memory phase 2 skipped: no active model");
         return Ok(());
     };
-    let prompt = build_phase2_prompt(&artifacts, &notes);
+    let prompt = build_phase2_prompt(
+        &rows,
+        &notes,
+        &existing_entries,
+        existing_summary
+            .as_ref()
+            .map(|summary| summary.summary_md.as_str())
+            .unwrap_or(""),
+    );
     let consolidation = model
         .request(vec![Message::user(prompt)], &[])
         .await
@@ -195,145 +249,102 @@ async fn run_phase2(
 
     match consolidation {
         Ok(output) => {
-            let memory = if output.memory.trim().is_empty() {
-                "# Memory\n\nNo durable memories yet.\n".to_string()
+            let now = now_ms();
+            let entries = normalized_entries(output.entries, now);
+            let summary = if output.summary.trim().is_empty() {
+                normalize_summary("No durable memories yet.")
             } else {
-                redact_secrets(output.memory.trim())
+                normalize_summary(&output.summary)
             };
-            let summary = normalize_summary(&output.summary);
-            write_atomic(&config.root.join("MEMORY.md"), &memory)
-                .map_err(|e| format!("write MEMORY.md: {e}"))?;
-            write_atomic(&config.root.join("memory_summary.md"), &summary)
-                .map_err(|e| format!("write memory_summary.md: {e}"))?;
-            storage
-                .complete_memory_phase2(MEMORY_SCOPE_ID, &source_hash)
+            let observations = output
+                .semantic_updates
+                .into_iter()
+                .map(|observation| SemanticObservation {
+                    id: Uuid::new_v4(),
+                    scope_id: MEMORY_SCOPE_ID,
+                    subject: redact_secrets(observation.subject.trim()),
+                    predicate: normalize_predicate(&observation.predicate),
+                    object: redact_secrets(observation.object.trim()),
+                    content: redact_secrets(observation.content.trim()),
+                    status: "candidate".to_string(),
+                    confidence: observation.confidence.clamp(0.0, 1.0),
+                    source_hash: source_hash.clone(),
+                    created_at: now,
+                    last_error: None,
+                })
+                .filter(|observation| {
+                    !observation.subject.is_empty()
+                        && !observation.predicate.is_empty()
+                        && !observation.object.is_empty()
+                })
+                .collect::<Vec<_>>();
+            let consumed_note_ids = notes.iter().map(|note| note.id).collect::<Vec<_>>();
+            memory
+                .complete_phase2(
+                    MEMORY_SCOPE_ID,
+                    &source_hash,
+                    entries,
+                    &summary,
+                    observations,
+                    consumed_note_ids,
+                )
                 .await
                 .map_err(|e| format!("complete memory phase 2: {e}"))
         }
-        Err(error) => storage
-            .fail_memory_phase2(MEMORY_SCOPE_ID, &source_hash, &error)
+        Err(error) => memory
+            .fail_phase2(MEMORY_SCOPE_ID, &source_hash, &error)
             .await
             .map_err(|e| format!("mark memory phase 2 failed: {e}")),
     }
 }
 
-async fn sync_artifacts(
-    root: &std::path::Path,
-    selected: &[RawMemoryEntry],
-) -> Result<MemoryArtifacts, String> {
-    let mut raw = String::new();
-    for entry in selected {
-        raw.push_str(&format!(
-            "## Session {}\n\nupdated_at: {}\nslug: {}\n\n### Raw memory\n\n{}\n\n### Rollout summary\n\n{}\n\n",
-            entry.session_id,
-            chrono::DateTime::from_timestamp_millis(entry.generated_at)
-                .map(|ts| ts.to_rfc3339())
-                .unwrap_or_default(),
-            entry.rollout_slug.as_deref().unwrap_or(""),
-            entry.raw_memory,
-            entry.rollout_summary
-        ));
-        let filename = format!(
-            "{}.md",
-            entry
-                .rollout_slug
-                .as_deref()
-                .unwrap_or(&entry.session_id.to_string())
-        );
-        let summary_path = root.join("rollout_summaries").join(filename);
-        let contents = format!(
-            "# Rollout {}\n\nsession_id: {}\nupdated_at: {}\n\n{}\n",
-            entry
-                .rollout_slug
-                .as_deref()
-                .unwrap_or(&entry.session_id.to_string()),
-            entry.session_id,
-            chrono::DateTime::from_timestamp_millis(entry.generated_at)
-                .map(|ts| ts.to_rfc3339())
-                .unwrap_or_default(),
-            entry.rollout_summary
-        );
-        let changed = tokio::fs::read_to_string(&summary_path)
-            .await
-            .map(|old| old != contents)
-            .unwrap_or(true);
-        if changed {
-            write_atomic(&summary_path, &contents).map_err(|e| e.to_string())?;
-        }
-    }
-
-    let summaries_dir = root.join("rollout_summaries");
-    let mut keep = selected
-        .iter()
-        .map(|entry| {
-            format!(
-                "{}.md",
-                entry
-                    .rollout_slug
-                    .as_deref()
-                    .unwrap_or(&entry.session_id.to_string())
-            )
-        })
-        .collect::<Vec<_>>();
-    keep.sort();
-    let mut entries = tokio::fs::read_dir(&summaries_dir)
-        .await
-        .map_err(|e| e.to_string())?;
-    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-        let filename = entry.file_name().to_string_lossy().to_string();
-        if filename.ends_with(".md") && !keep.contains(&filename) {
-            tokio::fs::remove_file(entry.path())
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
-    let old_raw = tokio::fs::read_to_string(root.join("raw_memories.md"))
-        .await
-        .unwrap_or_default();
-    if old_raw != raw {
-        write_atomic(&root.join("raw_memories.md"), &raw).map_err(|e| e.to_string())?;
-    }
-    let memory = tokio::fs::read_to_string(root.join("MEMORY.md"))
-        .await
-        .unwrap_or_default();
-    let summary = tokio::fs::read_to_string(root.join("memory_summary.md"))
-        .await
-        .unwrap_or_default();
-    Ok(MemoryArtifacts {
-        raw_memories: raw.clone(),
-        memory,
-        summary,
-        changed: old_raw != raw,
-    })
-}
-
-async fn read_ad_hoc_notes(root: &std::path::Path) -> Vec<(PathBuf, String)> {
-    let mut result = Vec::new();
-    let dir = root.join("extensions/ad_hoc/notes");
-    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
-        return result;
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        {
-            if let Ok(contents) = tokio::fs::read_to_string(entry.path()).await {
-                result.push((entry.path(), contents));
+fn normalized_entries(drafts: Vec<MemoryEntryDraft>, now: i64) -> Vec<MemoryEntry> {
+    drafts
+        .into_iter()
+        .filter_map(|draft| {
+            let title = draft.title.trim().to_string();
+            let body = redact_secrets(draft.body_md.trim());
+            if title.is_empty() || body.is_empty() {
+                return None;
             }
-        }
-    }
-    result.sort_by(|a, b| a.0.cmp(&b.0));
-    result
+            let entry_type = match draft.entry_type.trim() {
+                "preference" | "workflow" | "failure_shield" | "task_map" => {
+                    draft.entry_type.trim().to_string()
+                }
+                _ => "workflow".to_string(),
+            };
+            Some(MemoryEntry {
+                id: Uuid::new_v4(),
+                scope_id: MEMORY_SCOPE_ID,
+                entry_type,
+                title,
+                body_md: body,
+                status: "active".to_string(),
+                confidence: draft.confidence.clamp(0.0, 1.0),
+                created_at: now,
+                updated_at: now,
+            })
+        })
+        .collect()
 }
 
-fn phase2_source_hash(rows: &[RawMemoryEntry], notes: &[(PathBuf, String)]) -> String {
+fn normalize_predicate(raw: &str) -> String {
+    let mut result = String::new();
+    for ch in raw.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            result.push(ch.to_ascii_lowercase());
+        } else if !result.ends_with('_') && !result.is_empty() {
+            result.push('_');
+        }
+    }
+    result.trim_matches('_').to_string()
+}
+
+fn phase2_source_hash(rows: &[MemoryStage1Record], notes: &[super::MemoryNote]) -> String {
     #[derive(serde::Serialize)]
     struct Input<'a> {
-        rows: &'a [RawMemoryEntry],
-        notes: &'a [(PathBuf, String)],
+        rows: &'a [MemoryStage1Record],
+        notes: &'a [super::MemoryNote],
     }
     let input = Input { rows, notes };
     hash_source(&serde_json::to_string(&input).unwrap_or_default())
@@ -378,32 +389,51 @@ fn build_phase1_prompt(session_id: Uuid, title: Option<&str>, transcript: &str) 
     )
 }
 
-fn build_phase2_prompt(artifacts: &MemoryArtifacts, notes: &[(PathBuf, String)]) -> String {
-    let notes = notes
+fn build_phase2_prompt(
+    rows: &[MemoryStage1Record],
+    notes: &[super::MemoryNote],
+    entries: &[MemoryEntry],
+    summary: &str,
+) -> String {
+    let raw = rows
         .iter()
-        .map(|(path, contents)| {
+        .map(|row| {
             format!(
-                "### {}\n\n{}\n",
-                path.file_name()
-                    .map(|name| name.to_string_lossy())
+                "## Session {}\nupdated_at: {}\nslug: {}\n### Raw memory\n{}\n### Rollout summary\n{}\n",
+                row.session_id,
+                chrono::DateTime::from_timestamp_millis(row.generated_at)
+                    .map(|ts| ts.to_rfc3339())
                     .unwrap_or_default(),
-                contents
+                row.rollout_slug.as_deref().unwrap_or(""),
+                row.raw_memory,
+                row.rollout_summary
             )
         })
         .collect::<String>();
+    let notes = notes
+        .iter()
+        .map(|note| format!("## {}\n{}\n", note.slug, note.content))
+        .collect::<String>();
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "## {} ({})\n{}\n",
+                entry.title, entry.entry_type, entry.body_md
+            )
+        })
+        .collect::<String>();
+
     format!(
-        "Consolidate raw session memories and explicit user update notes into the durable memory \
-         workspace. Return ONLY minified JSON with fields memory and summary.\n\n\
-         Requirements: preserve durable user preferences and reusable, evidence-based \
-         procedures; merge duplicates; remove stale or contradicted guidance; keep project \
-         scope explicit; redact secrets; do not invent verification. MEMORY.md is the detailed \
-         searchable handbook. summary starts with v1, is compact, and indexes the most useful \
-         MEMORY.md topics. Existing artifacts may be empty on first run.\n\n\
-         AD HOC USER UPDATES\n{notes}\n\n\
-         RAW MEMORIES\n{}\n\n\
-         EXISTING MEMORY.MD\n{}\n\n\
-         EXISTING MEMORY_SUMMARY.MD\n{}\n",
-        artifacts.raw_memories, artifacts.memory, artifacts.summary
+        "Consolidate raw session memories and explicit user update notes into durable rows. \
+         Return ONLY minified JSON with fields entries, summary, and semantic_updates.\n\n\
+         Each entry has entry_type (preference|workflow|failure_shield|task_map), title, \
+         body_md, and confidence. summary starts with v1 and is compact. semantic_updates \
+         contain subject, predicate (snake_case), object, content, and confidence; emit them \
+         only for durable entity or workflow relationships. Merge duplicates, remove stale \
+         guidance, preserve scope, redact secrets, and do not invent verification.\n\n\
+         RAW MEMORIES\n{raw}\nUSER UPDATE NOTES\n{notes}\nEXISTING ENTRIES\n{entries}\n\
+         EXISTING SUMMARY\n{summary}\n"
     )
 }
 
@@ -416,11 +446,6 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_extracts_consolidates_and_skips_unchanged_sources() {
-        let root = std::env::temp_dir().join(format!(
-            "agentik-memory-pipeline-{}-{}",
-            std::process::id(),
-            now_ms()
-        ));
         let mut mock = MockApiClient::new();
         mock.expect_request()
             .times(1)
@@ -443,7 +468,7 @@ mod tests {
             })
             .returning(|_, _, _| {
                 Ok(Message::assistant_text(
-                    r##"{"memory":"# Task Group: Workflow\n\nRun tests.\n","summary":"v1\n\nRun tests for workflow changes.\n"}"##,
+                    r##"{"entries":[{"entry_type":"workflow","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
                 ))
             });
 
@@ -451,8 +476,13 @@ mod tests {
             dummy_model_info("memory-test"),
             mock,
         ))));
-        let storage: Arc<dyn AgentStorage> =
-            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let turso_store = Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let storage: Arc<dyn AgentStorage> = turso_store.clone();
+        let memory_store: Arc<dyn MemoryStore> = turso_store;
+        let mut config = MemoryConfig::new();
+        config.min_idle_hours = 0;
+        let memory = Arc::new(MemoryBackend::new(config, memory_store.clone(), None));
+
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
         storage.start_session(agent_id, session_id).await.unwrap();
@@ -462,26 +492,39 @@ mod tests {
             .unwrap();
         storage.end_session(session_id).await.unwrap();
 
-        let mut config = MemoryConfig::new(root.clone());
-        config.min_idle_hours = 0;
-        run_pipeline(agent_id, &storage, &model, &config)
+        run_pipeline(agent_id, &storage, &memory, &model, &memory.config)
             .await
             .unwrap();
-        run_pipeline(agent_id, &storage, &model, &config)
+        run_pipeline(agent_id, &storage, &memory, &model, &memory.config)
             .await
             .unwrap();
 
-        assert!(root.join("raw_memories.md").exists());
-        assert!(root.join("rollout_summaries/test-preference.md").exists());
-        let memory = std::fs::read_to_string(root.join("MEMORY.md")).unwrap();
-        let summary = std::fs::read_to_string(root.join("memory_summary.md")).unwrap();
-        assert!(memory.contains("Run tests."));
-        assert!(summary.starts_with("v1\n"));
-        let rows = storage
-            .list_memory_stage1_outputs(MEMORY_SCOPE_ID, 10)
+        let rows = memory
+            .store
+            .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
-        std::fs::remove_dir_all(root).ok();
+        let entries = memory
+            .store
+            .list_entries(MEMORY_SCOPE_ID, 10)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].body_md.contains("targeted tests"));
+        let summary = memory
+            .store
+            .get_summary(MEMORY_SCOPE_ID)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(summary.summary_md.starts_with("v1\n"));
+        let observations = memory
+            .store
+            .list_observations(MEMORY_SCOPE_ID, "candidate", 10)
+            .await
+            .unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].predicate, "uses");
     }
 }

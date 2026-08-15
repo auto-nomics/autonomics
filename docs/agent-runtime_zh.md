@@ -9,7 +9,7 @@
 - **统一的智能体循环** —— 所有智能体共用一个行为循环。智能体个性和工具配置_仅_通过工具集和系统提示完成；循环本身不含任何智能体特定的代码路径（见 `crates/agentik-core/src/agent.rs`）。
 - **响应式上下文** —— `AgentContext` trait：实现 `read()` / `write()`。循环在每个边界轮询版本号，并在其变化时向记忆注入 `[context-update]` 消息。内置 `InMemoryAgentContext` 用于测试。
 - **带压缩的记忆** —— `Memory` 维护一个滚动列表的摘要 `MemoryItem`。当 token 压力逼近模型的 `context_length` 时，最旧的段由 LLM 摘要为 `summary`，并开启新的段。
-- **跨会话持久记忆** —— 根级智能体从空闲的持久化会话提取高信号记忆，合并生成 `MEMORY.md` 与 `memory_summary.md`，将紧凑摘要注入系统提示，并提供受边界约束的 `memory_*` 读取 / 搜索工具。
+- **跨会话持久记忆** —— 根级智能体从空闲的持久化会话提取高信号记忆，在 Turso 中合并生成结构化 memory entries 与紧凑摘要，将摘要注入系统提示，并提供受边界约束的 `memory_*` 读取 / 搜索工具。
 - **工具集** —— `ToolRegistration` + `Toolset` 负责 schema 暴露、并行分发和每工具超时。每个 `T: ToolFunction` 自动擦除为 `DynToolFunction` 以支持异构存储。
 - **内置工具** —— `attempt_complete`、`abort_task`（生命周期），`bash`（子进程，kill-on-drop 和截尾输出）。
 - **生命周期** —— `AgentLifecycle`（IDLE / RUNNING / ABORTED）由内置生命周期工具驱动，智能体无需外部编排即可自行终止。
@@ -20,18 +20,23 @@
 
 ## 跨会话持久记忆
 
-运行时维护一个独立于单会话压缩的全局记忆目录（默认 `~/.autonomics/memories`）。
+运行时在 Turso 中维护一个独立于单会话压缩的全局记忆状态。
 根级智能体启动时执行 Codex 风格的两阶段管道：
 
 1. Phase 1 在智能体数据库中认领空闲持久会话，提取结构化 `raw_memory`、
    rollout 摘要和 slug，脱敏明显密钥行，并记录 source hash，未变化的会话会被跳过。
-2. Phase 2 获取全局单例合并锁，将有界的 stage-1 记录同步到
-   `raw_memories.md` 与 `rollout_summaries/`，结合现有记忆和用户显式更新说明，
-   生成 `MEMORY.md` 以及以 `v1` 开头的 `memory_summary.md`。
+2. Phase 2 获取全局单例合并锁，将有界的 stage-1 记录、现有 memory entries
+   和用户显式更新说明合并，并原子写入 active entries、`v1` 摘要以及候选
+   semantic observations。
 
 所有智能体都可以通过专用工具搜索或读取记忆；自动注入提示的只有紧凑摘要。
-可使用 `AUTONOMICS_MEMORY_DIR`、`AUTONOMICS_USE_MEMORY` 和
-`AUTONOMICS_GENERATE_MEMORY` 覆盖运行时默认值。
+可使用 `AUTONOMICS_USE_MEMORY` 和 `AUTONOMICS_GENERATE_MEMORY` 覆盖运行时默认值。
+开启 `enable_kms` 后，候选 semantic observations 会被 grounding 到 KMS：
+subject/object 会成为实体，关系会成为 Knowledge，并挂载到
+`/Semantic Memory/<subject>` 下。只有当写入没有引入新的 KMS Error 诊断时才提交；
+否则会回滚生成的实体、知识和索引挂载，并把 observation 标记为 rejected
+且保留原因。KMS 表存放在同一个 `agent.db` Turso 数据库中，并与 AgentStorage
+共享同一个连接锁。
 
 ## 过程宏 (`agentik-proc`)
 

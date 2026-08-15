@@ -20,6 +20,9 @@ bibliography library, all from a single `ratatui`-based binary.
   status, search the local library, and export to BibTeX / RIS / Markdown / CSL JSON.
 - **OpenGWAS cache** — `cache` subcommand: refresh or clear the on-disk SQLite
   snapshot of the OpenGWAS `gwasinfo` catalogue.
+- **KMS tree browser** — `kms` subcommand: dedicated ratatui workspace for the
+  Turso-backed knowledge tree in `agent.db`, with tree navigation,
+  knowledge/entity inspection, and live diagnostics.
 
 ## Build & run
 
@@ -46,6 +49,7 @@ autonomics-tui [OPTIONS] [COMMAND]
 
 Commands:
   tui     Launch the interactive TUI (default when no subcommand is given)
+  kms     Launch the dedicated KMS tree browser
   cache   Local cache management helpers (refresh, inspect, purge)
   bib     Bibliography management — upload full-text PDFs, list pending requests
   help    Print this message or the help of the given subcommand(s)
@@ -54,6 +58,35 @@ Options:
   -h, --help     Print help
   -V, --version  Print version
 ```
+
+## KMS TUI
+
+Launch the dedicated knowledge-tree browser using the runtime's default
+`agent.db`:
+
+```bash
+autonomics-tui kms
+autonomics-tui kms --agent-db /path/to/agent.db
+```
+
+Layout:
+
+```
+┌───────────────┬──────────────────────────────┐
+│ Tree          │ Knowledge / Entity           │
+├───────────────┼──────────────────────────────┤
+│ Diagnostics   │ status + keybindings         │
+└───────────────┴──────────────────────────────┘
+```
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Cycle Tree / Knowledge / Diagnostics focus |
+| `j` / `k` | Move selection or scroll focused panel |
+| `Space` / `Enter` | Expand or collapse the selected tree group |
+| `t` | Toggle Knowledge and Entity details |
+| `r` | Reload tree, knowledge, entities, and diagnostics |
+| `q` or `Esc` | Quit |
 
 ---
 

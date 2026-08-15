@@ -72,7 +72,7 @@ async fn run_index_diagnostics(
     let mut issues = Vec::new();
     let mut path_map = HashMap::new();
 
-    let conn = storage.conn();
+    let conn = &*storage.conn().await;
     let root = repo::index_find_root(conn)
         .await
         .map_err(|e| e.to_string())?;
@@ -143,7 +143,7 @@ async fn run_knowledge_diagnostics(
     ];
 
     let mut issues: Vec<Diagnostic> = Vec::new();
-    let conn = storage.conn();
+    let conn = &*storage.conn().await;
 
     let orphan_titles = repo::index_orphan_knowledge_titles(conn)
         .await
@@ -238,7 +238,7 @@ async fn run_entity_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>, St
     ];
 
     let mut issues = Vec::new();
-    let conn = storage.conn();
+    let conn = &*storage.conn().await;
 
     let all_entities = repo::entity_list_all(conn)
         .await

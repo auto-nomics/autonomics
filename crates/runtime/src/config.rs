@@ -61,9 +61,6 @@ const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
 /// Default agent persistence database filename (relative to `state_dir`).
 const DEFAULT_AGENT_DB: &str = "agent.db";
 
-/// Default persistent-memory directory (relative to `state_dir`).
-const DEFAULT_MEMORY_DIR: &str = "memories";
-
 /// Default bibliography database path.
 ///
 /// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
@@ -124,9 +121,6 @@ pub const ENV_HTTP_REQUEST_TIMEOUT_SECS: &str = "AUTONOMICS_HTTP_REQUEST_TIMEOUT
 /// proxy (e.g. `http://proxy.corp:3128`).
 pub const ENV_HTTP_PROXY: &str = "AUTONOMICS_HTTP_PROXY";
 
-/// Env var overriding the persistent-memory root.
-pub const ENV_MEMORY_DIR: &str = "AUTONOMICS_MEMORY_DIR";
-
 /// Env var enabling or disabling memory read/injection.
 pub const ENV_USE_MEMORY: &str = "AUTONOMICS_USE_MEMORY";
 
@@ -172,10 +166,6 @@ pub struct RuntimeConfig {
     /// registry, session logs (WAL), and memory snapshots for cross-process
     /// recovery.
     pub agent_db: PathBuf,
-    /// Optional persistent-memory root. Defaults to `state_dir/memories`.
-    #[serde(default)]
-    pub memory_dir: Option<PathBuf>,
-
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
     /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
@@ -220,6 +210,9 @@ pub struct RuntimeConfig {
     /// Generate and consolidate persistent memory for root-level agents.
     #[serde(default = "default_true")]
     pub generate_memory: bool,
+    /// Expose KMS entity/knowledge/index tools backed by Turso.
+    #[serde(default)]
+    pub enable_kms: bool,
 
     // ── HTTP client (shared via `BibShared`) ─────────────────────────
     /// Configuration for the process-wide `reqwest::Client` used by
@@ -289,11 +282,6 @@ impl RuntimeConfig {
         let agent_db = base
             .and_then(|b| b.agent_db.clone())
             .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
-        let memory_dir = base
-            .and_then(|b| b.memory_dir.clone())
-            .or_else(|| env_path(ENV_MEMORY_DIR))
-            .or_else(|| Some(state_dir.join(DEFAULT_MEMORY_DIR)));
-
         let name = base
             .and_then(|b| b.name.clone())
             .unwrap_or_else(|| "default".to_string());
@@ -337,7 +325,6 @@ impl RuntimeConfig {
             writing_db_path,
             app_db_path,
             agent_db,
-            memory_dir,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,
@@ -355,6 +342,7 @@ impl RuntimeConfig {
                 ENV_GENERATE_MEMORY,
             )
             .unwrap_or(true),
+            enable_kms: resolve_flag(base, |b| b.enable_kms, false),
             bib_http: resolve_bib_http(base),
         }
     }
@@ -644,7 +632,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
-    pub(crate) memory_dir: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -657,6 +644,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_gwascatalog: Option<bool>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
+    pub(crate) enable_kms: Option<bool>,
     pub(crate) bib_http: Option<BibHttpOptions>,
 }
 
@@ -711,12 +699,6 @@ impl RuntimeConfigBuilder {
     /// Path to the agent persistence database (Turso/SQLite).
     pub fn agent_db(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_db = Some(path.into());
-        self
-    }
-
-    /// Explicit persistent-memory root.
-    pub fn memory_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.memory_dir = Some(path.into());
         self
     }
 
@@ -789,6 +771,12 @@ impl RuntimeConfigBuilder {
     /// Enable or disable startup memory generation.
     pub fn generate_memory(mut self, enabled: bool) -> Self {
         self.generate_memory = Some(enabled);
+        self
+    }
+
+    /// Enable KMS knowledge-graph tools.
+    pub fn enable_kms(mut self, enabled: bool) -> Self {
+        self.enable_kms = Some(enabled);
         self
     }
 
@@ -886,10 +874,6 @@ mod tests {
         );
         assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
         assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
-        assert_eq!(
-            cfg.memory_dir,
-            Some(expected_state_dir.join(DEFAULT_MEMORY_DIR))
-        );
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
@@ -897,6 +881,7 @@ mod tests {
         assert!(cfg.enable_gwascatalog);
         assert!(cfg.use_memory);
         assert!(cfg.generate_memory);
+        assert!(!cfg.enable_kms);
 
         // Restore env vars.
         // SAFETY: single-threaded within this test fn.
@@ -919,7 +904,6 @@ mod tests {
             .dag_history_db("/tmp/custom-history.db")
             .bib_db_path("/tmp/custom-bib.db")
             .app_db_path("/tmp/custom-app.db")
-            .memory_dir("/tmp/custom-memories")
             .opengwas_token("secret-token")
             .agent_identity("Custom agent")
             .system_prompt(Some("Custom prompt".to_string()))
@@ -927,6 +911,7 @@ mod tests {
             .enable_opengwas(false)
             .use_memory(false)
             .generate_memory(true)
+            .enable_kms(true)
             .build();
 
         assert_eq!(cfg.name, "test-agent");
@@ -935,7 +920,6 @@ mod tests {
         assert_eq!(cfg.dag_history_db, PathBuf::from("/tmp/custom-history.db"));
         assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
         assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
-        assert_eq!(cfg.memory_dir, Some(PathBuf::from("/tmp/custom-memories")));
         assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
         assert_eq!(cfg.agent_identity, "Custom agent");
         assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
@@ -947,6 +931,7 @@ mod tests {
         assert!(cfg.enable_gwascatalog);
         assert!(!cfg.use_memory);
         assert!(cfg.generate_memory);
+        assert!(cfg.enable_kms);
     }
 
     #[test]

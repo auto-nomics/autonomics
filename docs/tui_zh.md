@@ -16,6 +16,8 @@ Autonomics 智能体平台的交互式终端界面——通过一个基于 `rata
   请求、查看文章状态、搜索本地文献库，以及导出为 BibTeX / RIS / Markdown / CSL JSON。
 - **OpenGWAS 缓存** — `cache` 子命令：刷新或清除 OpenGWAS `gwasinfo` 目录的本地
   SQLite 快照。
+- **KMS 树浏览器** — `kms` 子命令：专用 ratatui 工作区，直接浏览 `agent.db`
+  中的 Turso 知识树，支持树导航、Knowledge/Entity 检查和实时诊断。
 
 ## 构建与运行
 
@@ -42,6 +44,7 @@ autonomics-tui [OPTIONS] [COMMAND]
 
 Commands:
   tui     启动交互式 TUI（无子命令时的默认行为）
+  kms     启动 KMS 专用树浏览器
   cache   本地缓存管理（刷新、查看、清除）
   bib     文献管理——上传全文 PDF、列出待处理请求
   help    打印帮助信息
@@ -188,6 +191,36 @@ autonomics-tui cache clear-opengwas [-y]
 1. `$OPENGWAS_CACHE_DIR`（非空时）
 2. `$HOME/.cache/opengwas`
 3. `$TMPDIR/opengwas`（兜底）
+
+---
+
+## `kms` 子命令
+
+启动 KMS 专用树浏览器，默认读取 runtime 的 `agent.db`：
+
+```bash
+autonomics-tui kms
+autonomics-tui kms --agent-db /path/to/agent.db
+```
+
+布局：
+
+```
+┌───────────────┬──────────────────────────────┐
+│ Tree          │ Knowledge / Entity           │
+├───────────────┼──────────────────────────────┤
+│ Diagnostics   │ 状态与快捷键                  │
+└───────────────┴──────────────────────────────┘
+```
+
+| 按键 | 功能 |
+|-----|--------|
+| `Tab` | 在 Tree / Knowledge / Diagnostics 之间切换焦点 |
+| `j` / `k` | 移动选中项或滚动当前面板 |
+| `Space` / `Enter` | 展开 / 收起选中的树分组 |
+| `t` | 切换 Knowledge 与 Entity 详情 |
+| `r` | 重新加载树、知识、实体和诊断 |
+| `q` 或 `Esc` | 退出 |
 
 ---
 

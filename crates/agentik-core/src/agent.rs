@@ -302,11 +302,11 @@ impl Agent {
                 if memory.config.generate_memory && memory.config.is_root_agent(&self.shared.path) {
                     let agent_id = self.shared.id;
                     let storage = Arc::clone(&storage);
+                    let memory = Arc::clone(memory);
                     let model = Arc::clone(&self.shared.model);
-                    let config = memory.config.clone();
                     crate::supervise::spawn_safe_drop(
                         "memory_startup_pipeline",
-                        crate::memory::run_memory_pipeline(agent_id, storage, model, config),
+                        crate::memory::run_memory_pipeline(agent_id, storage, memory, model),
                     );
                 }
             }
@@ -414,7 +414,8 @@ impl Agent {
             // ── Auto-create a session on first message ──
             // If no session exists yet, create one before processing the
             // event so the message isn't lost.
-            if matches!(event, InternalEvent::MessageInject { .. }) && self.active_session_id.is_none()
+            if matches!(event, InternalEvent::MessageInject { .. })
+                && self.active_session_id.is_none()
             {
                 let id = Uuid::new_v4();
                 let mut s = Session::new(id, self.shared.clone());
@@ -728,9 +729,11 @@ async fn persist_worker(
                 agent_id,
                 session_id,
                 state,
-            } => storage
-                .replace_session_state(agent_id, session_id, &state)
-                .await,
+            } => {
+                storage
+                    .replace_session_state(agent_id, session_id, &state)
+                    .await
+            }
         };
         if let Err(e) = result {
             tracing::warn!("persist op failed (non-fatal): {e}");

@@ -25,6 +25,8 @@ datafusion.workspace = true
 vfs = { path = "../vfs" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
+kms = { path = "../kms" }
+kms-tools = { path = "../kms-tools" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }
@@ -34,6 +36,7 @@ arc-swap.workspace = true
 serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 futures = { workspace = true }
+turso.workspace = true
 
 schemars.workspace = true
 [lints]

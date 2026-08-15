@@ -33,7 +33,6 @@ use tracing::{Level, span};
 use uuid::Uuid;
 
 use crate::agent::{AgentConfig, InternalEvent, TokenBudget};
-use agentik_sdk::model::sanitize::sanitize_messages;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result};
 use crate::lifecycle::AgentLifecycle;
@@ -44,6 +43,7 @@ use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentSnapshot, AgentStorage, PersistOp};
 use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use crate::tools::{ToolRegistry, Toolset};
+use agentik_sdk::model::sanitize::sanitize_messages;
 
 // ── Compaction constants ───────────────────────────────────────────
 
@@ -729,8 +729,9 @@ impl Session {
             Some(m) => m,
             None => {
                 tracing::warn!("manual compact requested but no model is configured");
-                self.shared
-                    .send_event(AgentEvent::Error("No model configured for compaction".into()));
+                self.shared.send_event(AgentEvent::Error(
+                    "No model configured for compaction".into(),
+                ));
                 return;
             }
         };
@@ -2154,21 +2155,19 @@ mod tests {
             })
             .unwrap();
         // Push a non-user message between the tool_use and its result.
-        session
-            .messages
-            .push(Message {
-                id: "u_intermediate".into(),
-                type_: "message".into(),
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: "checkpoint summary".into(),
-                }],
-                model: None,
-                stop_reason: None,
-                stop_sequence: None,
-                usage: None,
-                request_id: None,
-            });
+        session.messages.push(Message {
+            id: "u_intermediate".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "checkpoint summary".into(),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        });
         session
             .remember(Message::tool_result("call_X", "alpha", false))
             .unwrap();
@@ -2353,7 +2352,9 @@ mod tests {
     fn add_message_allows_same_text_after_interleaving() {
         let mut session = make_test_session();
         session.remember(Message::user("hello")).unwrap();
-        session.remember(Message::assistant_text("hi there")).unwrap();
+        session
+            .remember(Message::assistant_text("hi there"))
+            .unwrap();
         // Now "hello" again is fine — not consecutive duplicate.
         session.remember(Message::user("hello")).unwrap();
         assert_eq!(
