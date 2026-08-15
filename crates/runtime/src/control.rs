@@ -8,11 +8,13 @@
 //! Commands that need a response (Spawn, Delegate, GetStatus) include a
 //! `oneshot` reply channel; the tool `await`s it.
 
+use agentik_core::tools::ProgressBuffer;
 use agentik_network::{EdgeTrigger, TerminationSpec};
 use agentik_sdk::model::Model;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 /// A clonable handle for sending commands to RuntimeHost.
 #[derive(Clone)]
@@ -92,9 +94,26 @@ impl HostControl {
     /// Delegate a task to a named agent and wait for its Done response.
     /// Returns the target agent's full response text.
     pub async fn delegate(&self, to: &str, message: impl Into<String>) -> Option<String> {
+        self.delegate_tracked(to, message, None, Uuid::new_v4(), None)
+            .await
+    }
+
+    /// Delegate with stable identity and an optional live progress sink.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn delegate_tracked(
+        &self,
+        to: &str,
+        message: impl Into<String>,
+        caller_path: Option<String>,
+        delegation_id: Uuid,
+        progress: Option<ProgressBuffer>,
+    ) -> Option<String> {
         self.ask(|tx| HostCommand::Delegate {
             to: to.into(),
             message: message.into(),
+            caller_path,
+            delegation_id,
+            progress,
             reply_tx: tx,
         })
         .await
@@ -334,6 +353,36 @@ impl HostControl {
         self.ask(|tx| HostCommand::ListPersistedAgents { reply_tx: tx })
             .await
     }
+
+    /// List delegation records, newest first.
+    pub async fn list_delegations(
+        &self,
+        caller_path: Option<&str>,
+        target_path: Option<&str>,
+        status: Option<&str>,
+    ) -> Option<Vec<DelegationSnapshot>> {
+        self.ask(|tx| HostCommand::ListDelegations {
+            caller_path: caller_path.map(str::to_string),
+            target_path: target_path.map(str::to_string),
+            status: status.map(str::to_string),
+            reply_tx: tx,
+        })
+        .await
+    }
+
+    /// Read the persisted execution history for a live agent.
+    pub async fn agent_history(
+        &self,
+        agent_name: &str,
+        limit: usize,
+    ) -> Option<AgentExecutionHistory> {
+        self.ask(|tx| HostCommand::GetAgentHistory {
+            agent_name: agent_name.into(),
+            limit,
+            reply_tx: tx,
+        })
+        .await
+    }
 }
 
 /// Commands sent from agent tools to RuntimeHost via [`HostControl`].
@@ -414,7 +463,25 @@ pub enum HostCommand {
     Delegate {
         to: String,
         message: String,
+        caller_path: Option<String>,
+        delegation_id: Uuid,
+        progress: Option<ProgressBuffer>,
         reply_tx: oneshot::Sender<String>,
+    },
+
+    /// Query first-class delegation records.
+    ListDelegations {
+        caller_path: Option<String>,
+        target_path: Option<String>,
+        status: Option<String>,
+        reply_tx: oneshot::Sender<Vec<DelegationSnapshot>>,
+    },
+
+    /// Read an agent's persisted conversation history.
+    GetAgentHistory {
+        agent_name: String,
+        limit: usize,
+        reply_tx: oneshot::Sender<AgentExecutionHistory>,
     },
 
     /// Query host + topology status.
@@ -529,6 +596,53 @@ pub struct HostStatus {
     pub termination: String,
 }
 
+/// Lifecycle status of a first-class delegation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationStatus {
+    Pending,
+    Running,
+    Completed,
+    Interrupted,
+    Failed,
+}
+
+impl DelegationStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Interrupted => "interrupted",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Queryable record for one agent-to-agent task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationSnapshot {
+    pub delegation_id: Uuid,
+    pub caller_path: Option<String>,
+    pub target_path: String,
+    pub task: String,
+    pub status: DelegationStatus,
+    pub turn_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub response: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Restored conversation history for a live agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentExecutionHistory {
+    pub agent_path: String,
+    pub agent_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub messages: Vec<agentik_sdk::types::messages::Message>,
+}
+
 /// Runtime lifecycle state of a registered agent.
 ///
 /// Derived from the [`agentik_sdk::AgentEvent`] stream by
@@ -588,6 +702,9 @@ pub struct AgentInfo {
     pub name: String,
     /// Full hierarchical path (e.g. `/root/researcher/worker`).
     pub path: String,
+    /// Runtime identity used to locate this agent's persisted history.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
     /// Human/LLM-readable capability summary.
     pub summary: String,
     /// Capability tags for quick filtering.

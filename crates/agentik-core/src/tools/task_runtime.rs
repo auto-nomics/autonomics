@@ -1,5 +1,5 @@
 use crate::agent::InternalEvent;
-use crate::tools::function::ProgressRecord;
+use crate::tools::function::{ProgressRecord, TaskMetadata};
 use agentik_sdk::ToolResult;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -106,6 +106,8 @@ pub struct TaskEntry {
     output: ProgressBuffer,
     /// Final output of tool result, only readable when tool execution has done.
     tool_result: watch::Receiver<Option<ToolResult>>,
+    /// Structured subject metadata for this invocation.
+    metadata: TaskMetadata,
 }
 
 impl TaskEntry {
@@ -129,6 +131,7 @@ impl TaskEntry {
             cancel_token,
             None,
             Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
+            Arc::new(Mutex::new(serde_json::Value::Null)),
         )
     }
 
@@ -151,6 +154,7 @@ impl TaskEntry {
         cancel_token: CancellationToken,
         notify_tx: Option<BgTaskNotifyTx>,
         output: ProgressBuffer,
+        metadata: TaskMetadata,
     ) -> Self {
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
@@ -208,6 +212,7 @@ impl TaskEntry {
             read_tx,
             output,
             tool_result,
+            metadata,
         }
     }
 
@@ -302,6 +307,14 @@ impl TaskEntry {
     /// the same live-output stream the tool is pushing to.
     pub fn output_buffer(&self) -> ProgressBuffer {
         Arc::clone(&self.output)
+    }
+
+    /// Snapshot structured task metadata.
+    pub fn metadata(&self) -> serde_json::Value {
+        self.metadata
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or(serde_json::Value::Null)
     }
 
     /// Clone the internal status watch receiver.

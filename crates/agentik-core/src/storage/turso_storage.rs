@@ -263,6 +263,38 @@ impl TursoAgentStorage {
                     ON agent_graph(parent_path);
                 CREATE INDEX IF NOT EXISTS idx_agent_graph_updated
                     ON agent_graph(updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS agent_turns (
+                    turn_id       TEXT PRIMARY KEY,
+                    agent_id      TEXT NOT NULL,
+                    session_id    TEXT NOT NULL,
+                    delegation_id TEXT,
+                    status        TEXT NOT NULL,
+                    started_at    INTEGER NOT NULL,
+                    completed_at  INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_turns_agent
+                    ON agent_turns(agent_id, started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_turns_delegation
+                    ON agent_turns(delegation_id);
+
+                CREATE TABLE IF NOT EXISTS agent_delegations (
+                    delegation_id TEXT PRIMARY KEY,
+                    caller_path   TEXT,
+                    target_path   TEXT NOT NULL,
+                    task          TEXT NOT NULL,
+                    status        TEXT NOT NULL,
+                    turn_id       TEXT,
+                    response      TEXT,
+                    created_at    INTEGER NOT NULL,
+                    updated_at    INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_delegations_caller
+                    ON agent_delegations(caller_path, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_delegations_target
+                    ON agent_delegations(target_path, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_delegations_status
+                    ON agent_delegations(status, updated_at DESC);
                 ",
             )
             .await
@@ -328,6 +360,50 @@ fn int_col(row: &turso::Row, idx: usize) -> Result<i64, turso::Error> {
             format!("expected INTEGER at column {idx}, got {other:?}").into(),
         )),
     }
+}
+
+fn parse_agent_delegation_row(
+    row: &turso::Row,
+) -> Result<crate::storage::AgentDelegationRecord, StorageError> {
+    let delegation_id = Uuid::parse_str(&text_col(row, 0)?)
+        .map_err(|e| StorageError::Other(format!("parse delegation_id: {e}").into()))?;
+    let caller_path = match row.get_value(1)? {
+        Value::Text(value) => Some(value),
+        _ => None,
+    };
+    let target_path = text_col(row, 2)?;
+    let task = text_col(row, 3)?;
+    let status = text_col(row, 4)?;
+    let turn_id =
+        match row.get_value(5)? {
+            Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
+                StorageError::Other(format!("parse delegation turn_id: {e}").into())
+            })?),
+            _ => None,
+        };
+    let response = match row.get_value(6)? {
+        Value::Text(value) => Some(value),
+        _ => None,
+    };
+    let session_id = match row.get_value(9)? {
+        Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
+            StorageError::Other(format!("parse delegation session_id: {e}").into())
+        })?),
+        _ => None,
+    };
+
+    Ok(crate::storage::AgentDelegationRecord {
+        delegation_id,
+        caller_path,
+        target_path,
+        task,
+        status,
+        turn_id,
+        session_id,
+        response,
+        created_at: int_col(row, 7)?,
+        updated_at: int_col(row, 8)?,
+    })
 }
 
 fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
@@ -893,6 +969,151 @@ impl AgentStorage for TursoAgentStorage {
                         started_at,
                     });
                 }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(records)
+    }
+
+    async fn start_agent_turn(
+        &self,
+        turn: crate::storage::AgentTurnRecord,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT INTO agent_turns
+                    (turn_id, agent_id, session_id, delegation_id, status,
+                     started_at, completed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(turn_id) DO UPDATE SET
+                    delegation_id = excluded.delegation_id,
+                    status = excluded.status",
+                params_from_iter([
+                    Value::Text(turn.turn_id.to_string()),
+                    Value::Text(turn.agent_id.to_string()),
+                    Value::Text(turn.session_id.to_string()),
+                    turn.delegation_id
+                        .map(|id| Value::Text(id.to_string()))
+                        .unwrap_or(Value::Null),
+                    Value::Text(turn.status),
+                    Value::Integer(turn.started_at),
+                    turn.completed_at.map(Value::Integer).unwrap_or(Value::Null),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn finish_agent_turn(
+        &self,
+        turn_id: Uuid,
+        status: &str,
+        completed_at: i64,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "UPDATE agent_turns
+                 SET status = ?1, completed_at = ?2
+                 WHERE turn_id = ?3",
+                params_from_iter([
+                    Value::Text(status.to_string()),
+                    Value::Integer(completed_at),
+                    Value::Text(turn_id.to_string()),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn upsert_agent_delegation(
+        &self,
+        delegation: crate::storage::AgentDelegationRecord,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT INTO agent_delegations
+                    (delegation_id, caller_path, target_path, task, status,
+                     turn_id, response, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(delegation_id) DO UPDATE SET
+                    caller_path = excluded.caller_path,
+                    target_path = excluded.target_path,
+                    task = excluded.task,
+                    status = excluded.status,
+                    turn_id = excluded.turn_id,
+                    response = excluded.response,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at",
+                params_from_iter([
+                    Value::Text(delegation.delegation_id.to_string()),
+                    delegation
+                        .caller_path
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                    Value::Text(delegation.target_path),
+                    Value::Text(delegation.task),
+                    Value::Text(delegation.status),
+                    delegation
+                        .turn_id
+                        .map(|id| Value::Text(id.to_string()))
+                        .unwrap_or(Value::Null),
+                    delegation.response.map(Value::Text).unwrap_or(Value::Null),
+                    Value::Integer(delegation.created_at),
+                    Value::Integer(delegation.updated_at),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_agent_delegations(
+        &self,
+        caller_path: Option<&str>,
+        target_path: Option<&str>,
+        status: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<crate::storage::AgentDelegationRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT delegations.delegation_id AS delegation_id,
+                        delegations.caller_path AS caller_path,
+                        delegations.target_path AS target_path,
+                        delegations.task AS task,
+                        delegations.status AS status,
+                        delegations.turn_id AS turn_id,
+                        delegations.response AS response,
+                        delegations.created_at AS created_at,
+                        delegations.updated_at AS updated_at,
+                        turns.session_id AS session_id
+                 FROM agent_delegations AS delegations
+                 LEFT JOIN agent_turns AS turns
+                    ON turns.turn_id = delegations.turn_id
+                 WHERE (?1 IS NULL OR delegations.caller_path = ?1)
+                   AND (?2 IS NULL OR delegations.target_path = ?2)
+                   AND (?3 IS NULL OR delegations.status = ?3)
+                 ORDER BY delegations.updated_at DESC, delegations.delegation_id DESC
+                 LIMIT ?4",
+                params_from_iter([
+                    caller_path
+                        .map(|value| Value::Text(value.to_string()))
+                        .unwrap_or(Value::Null),
+                    target_path
+                        .map(|value| Value::Text(value.to_string()))
+                        .unwrap_or(Value::Null),
+                    status
+                        .map(|value| Value::Text(value.to_string()))
+                        .unwrap_or(Value::Null),
+                    Value::Integer(limit as i64),
+                ]),
+            )
+            .await?;
+
+        let mut records = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => records.push(parse_agent_delegation_row(&row)?),
                 Ok(None) => break,
                 Err(e) => return Err(e.into()),
             }
@@ -1551,6 +1772,86 @@ mod tests {
 
         let msgs = store.get_messages_since(agent_id, 0).await.unwrap();
         assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_turn_and_delegation_ledger_persistence() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let delegation_id = Uuid::new_v4();
+        let now = now_ms();
+
+        store
+            .start_agent_turn(crate::storage::AgentTurnRecord {
+                turn_id,
+                agent_id,
+                session_id,
+                delegation_id: Some(delegation_id),
+                status: "running".into(),
+                started_at: now,
+                completed_at: None,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_agent_delegation(crate::storage::AgentDelegationRecord {
+                delegation_id,
+                caller_path: Some("/root/caller".into()),
+                target_path: "/root/researcher".into(),
+                task: "analyze dataset".into(),
+                status: "running".into(),
+                turn_id: Some(turn_id),
+                session_id: Some(session_id),
+                response: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+
+        let running = store
+            .list_agent_delegations(Some("/root/caller"), None, Some("running"), 10)
+            .await
+            .unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].turn_id, Some(turn_id));
+        assert_eq!(running[0].session_id, Some(session_id));
+
+        store
+            .finish_agent_turn(turn_id, "completed", now + 10)
+            .await
+            .unwrap();
+        store
+            .upsert_agent_delegation(crate::storage::AgentDelegationRecord {
+                delegation_id,
+                caller_path: Some("/root/caller".into()),
+                target_path: "/root/researcher".into(),
+                task: "analyze dataset".into(),
+                status: "completed".into(),
+                turn_id: Some(turn_id),
+                session_id: Some(session_id),
+                response: Some("analysis complete".into()),
+                created_at: now,
+                updated_at: now + 10,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .list_agent_delegations(Some("/root/caller"), None, Some("running"), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let completed = store
+            .list_agent_delegations(None, Some("/root/researcher"), Some("completed"), 10)
+            .await
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].response.as_deref(), Some("analysis complete"));
     }
 
     #[tokio::test]

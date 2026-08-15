@@ -10,7 +10,7 @@
 
 #![allow(dead_code)]
 
-use agentik_core::tools::{ToolFunction, ToolRegistration};
+use agentik_core::tools::{ToolContext, ToolFunction, ToolRegistration};
 use agentik_network::{EdgeTrigger, TerminationSpec};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
@@ -47,6 +47,7 @@ pub fn host_tools(
         }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
         }),
         ToolRegistration::from(SendMessageTool {
             control: ctrl.clone(),
@@ -61,6 +62,13 @@ pub fn host_tools(
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
             self_path: self_path.clone(),
+        }),
+        ToolRegistration::from(ListDelegationsTool {
+            control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
+        }),
+        ToolRegistration::from(GetAgentHistoryTool {
+            control: ctrl.clone(),
         }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
@@ -232,6 +240,7 @@ struct DelegateToInput {
 
 struct DelegateToTool {
     control: HostControl,
+    caller_path: String,
 }
 
 #[async_trait]
@@ -254,6 +263,44 @@ impl ToolFunction for DelegateToTool {
         input: DelegateToInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.delegate(&input.agent_name, input.task).await {
+            Some(response) => Ok(ToolResult::success(response)),
+            None => Ok(ToolResult::success(format!(
+                "Delegation to '{}' failed — agent not found or host channel closed.",
+                input.agent_name
+            ))),
+        }
+    }
+
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        let input: DelegateToInput = serde_json::from_value(input)?;
+        let delegation_id = uuid::Uuid::new_v4();
+        ctx.set_metadata(serde_json::json!({
+            "kind": "delegation",
+            "delegation_id": delegation_id,
+            "caller_agent": self.caller_path,
+            "target_agent": input.agent_name,
+            "task": input.task,
+        }));
+        ctx.emit(
+            agentik_core::tools::ProgressRecord::new("delegation")
+                .status("pending")
+                .message(format!("target={}", input.agent_name)),
+        );
+        match self
+            .control
+            .delegate_tracked(
+                &input.agent_name,
+                input.task,
+                Some(self.caller_path.clone()),
+                delegation_id,
+                ctx.output.clone(),
+            )
+            .await
+        {
             Some(response) => Ok(ToolResult::success(response)),
             None => Ok(ToolResult::success(format!(
                 "Delegation to '{}' failed — agent not found or host channel closed.",
@@ -440,6 +487,90 @@ impl ToolFunction for ListAgentsTool {
                 ))
             }
             None => Ok(ToolResult::success("Failed to get host status.")),
+        }
+    }
+}
+
+#[tool(
+    name = "list_delegations",
+    description = "List your agent-to-agent delegations with stable IDs, target \
+                   agent, turn ID, terminal status, and response. Filter by \
+                   target agent or status; omit filters to list all of your \
+                   delegations, newest first."
+)]
+struct ListDelegationsInput {
+    /// Full or short target-agent name.
+    target_agent: Option<String>,
+    /// `pending`, `running`, `completed`, `interrupted`, or `failed`.
+    status: Option<String>,
+}
+
+struct ListDelegationsTool {
+    control: HostControl,
+    caller_path: String,
+}
+
+#[async_trait]
+impl ToolFunction for ListDelegationsTool {
+    type Input = ListDelegationsInput;
+
+    async fn run(
+        &self,
+        input: ListDelegationsInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        match self
+            .control
+            .list_delegations(
+                Some(&self.caller_path),
+                input.target_agent.as_deref(),
+                input.status.as_deref(),
+            )
+            .await
+        {
+            Some(delegations) => Ok(ToolResult::success_json(
+                serde_json::to_value(delegations).unwrap_or_default(),
+            )),
+            None => Ok(ToolResult::success(
+                "Failed to query delegations — host unavailable.",
+            )),
+        }
+    }
+}
+
+#[tool(
+    name = "get_agent_history",
+    description = "Read an agent's persisted conversation history. Returns \
+                   the most recent messages for the agent, which can be used \
+                   to inspect what a delegated task actually did."
+)]
+struct GetAgentHistoryInput {
+    /// Full or short name of the target agent.
+    agent_name: String,
+    /// Maximum number of messages to return. Default 20; clamped to 100.
+    #[default = 20]
+    limit: Option<usize>,
+}
+
+struct GetAgentHistoryTool {
+    control: HostControl,
+}
+
+#[async_trait]
+impl ToolFunction for GetAgentHistoryTool {
+    type Input = GetAgentHistoryInput;
+
+    async fn run(
+        &self,
+        input: GetAgentHistoryInput,
+    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
+        let limit = input.limit.unwrap_or(20).clamp(1, 100);
+        match self.control.agent_history(&input.agent_name, limit).await {
+            Some(history) => Ok(ToolResult::success_json(
+                serde_json::to_value(history).unwrap_or_default(),
+            )),
+            None => Ok(ToolResult::success(
+                "Failed to read agent history — host unavailable.",
+            )),
         }
     }
 }
@@ -832,10 +963,52 @@ mod tests {
 
         let delegate = DelegateToTool {
             control: control.clone(),
+            caller_path: "/root/caller".into(),
         };
         let sender = SendMessageTool { control };
 
         assert_eq!(delegate.execution_mode(), ExecutionMode::Async);
         assert_eq!(sender.execution_mode(), ExecutionMode::Sync);
+    }
+
+    #[tokio::test]
+    async fn concurrent_delegation_commands_have_distinct_ids() {
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+        let first_control = control.clone();
+        let first = tokio::spawn(async move {
+            first_control
+                .delegate_tracked(
+                    "/root/researcher",
+                    "first",
+                    Some("/root/caller".into()),
+                    uuid::Uuid::new_v4(),
+                    None,
+                )
+                .await
+        });
+        let second = tokio::spawn(async move {
+            control
+                .delegate_tracked(
+                    "/root/researcher",
+                    "second",
+                    Some("/root/caller".into()),
+                    uuid::Uuid::new_v4(),
+                    None,
+                )
+                .await
+        });
+
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            match cmd_rx.recv().await.unwrap() {
+                HostCommand::Delegate { delegation_id, .. } => ids.push(delegation_id),
+                _ => panic!("expected delegate command"),
+            }
+        }
+        drop(cmd_rx);
+        let _ = tokio::join!(first, second);
+        assert_ne!(ids[0], ids[1]);
     }
 }

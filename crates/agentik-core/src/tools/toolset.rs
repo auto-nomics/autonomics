@@ -8,7 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::tools::task_runtime::TaskStore;
-use crate::tools::{ExecutionMode, ProgressBuffer, ProgressLog, ToolContext};
+use crate::tools::{ExecutionMode, ProgressBuffer, ProgressLog, TaskMetadata, ToolContext};
 
 use super::DynToolFunction;
 use super::error::ToolError;
@@ -269,8 +269,10 @@ impl Toolset {
             let cancel = cancel_token.clone();
 
             let output: ProgressBuffer = Arc::new(std::sync::Mutex::new(ProgressLog::new()));
+            let metadata: TaskMetadata = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
             let ctx = ToolContext {
                 output: Some(output.clone()),
+                metadata: metadata.clone(),
             };
 
             let task_handle = tokio::spawn(async move {
@@ -331,6 +333,7 @@ impl Toolset {
                         cancel_token,
                         None,
                         output,
+                        metadata,
                     );
                     new_entries.push(entry);
                 }
@@ -345,6 +348,7 @@ impl Toolset {
                         cancel_token,
                         notify_tx.clone(),
                         output,
+                        metadata,
                     );
                     new_entries.push(entry);
                 }

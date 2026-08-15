@@ -65,6 +65,24 @@ pub enum AgentEvent {
     /// Also emits `LifecycleChanged(Requesting)`.
     Requesting,
 
+    /// A conversation turn started. Unlike `Done`, this carries stable
+    /// identities that can be correlated with a caller's delegation request.
+    TurnStarted {
+        turn_id: Uuid,
+        session_id: Uuid,
+        delegation_id: Option<Uuid>,
+    },
+
+    /// A conversation turn reached a terminal state. This is emitted before
+    /// the compatibility `Done`/`Error` event so response buffers remain
+    /// available to the host.
+    TurnCompleted {
+        turn_id: Uuid,
+        session_id: Uuid,
+        delegation_id: Option<Uuid>,
+        status: TurnExecutionStatus,
+    },
+
     /// Agent is calling a tool. `input` carries the raw JSON arguments.
     ToolCall { name: String, input: Value },
 
@@ -143,6 +161,14 @@ pub struct SessionInfo {
 pub enum CompactEvent {
     CompactStart { ts: DateTime<Utc> },
     CompactFinish { ts: DateTime<Utc> },
+}
+
+/// Terminal status of an explicitly tracked conversation turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnExecutionStatus {
+    Completed,
+    Interrupted,
+    Failed,
 }
 
 /// Coarse-grained kind of a content block, sufficient for UI observation

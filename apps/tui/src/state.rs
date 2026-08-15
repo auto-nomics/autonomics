@@ -570,7 +570,9 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             }
         }
         // Streaming protocol events — not surfaced directly to the chat view
-        AgentEvent::StreamStart { .. }
+        AgentEvent::TurnStarted { .. }
+        | AgentEvent::TurnCompleted { .. }
+        | AgentEvent::StreamStart { .. }
         | AgentEvent::ContentBlockStart { .. }
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => {}

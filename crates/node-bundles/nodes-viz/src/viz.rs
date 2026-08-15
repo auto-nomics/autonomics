@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::common::HashMap;
-use vfs::OpendalFileStorage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use vfs::OpendalFileStorage;
 
 use dag_core::dag::DagError;
 use dag_core::dag::graph::PortOutputs;
@@ -323,6 +323,7 @@ mod tests {
     /// tempdir, render, then read the PNG back via the operator to confirm it
     /// landed in the virtual space. Requires `Rscript` + arrow/ggplot2 on PATH.
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_viz_node_renders_png_via_opendal() {
         let root = tempfile::tempdir().expect("tempdir for opendal root");
         let storage = Arc::new(OpendalFileStorage::new(root.path()));

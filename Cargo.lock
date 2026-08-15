@@ -6987,6 +6987,7 @@ dependencies = [
  "crossref",
  "dag-core",
  "datafusion",
+ "flate2",
  "mr",
  "openalex",
  "opentargets",

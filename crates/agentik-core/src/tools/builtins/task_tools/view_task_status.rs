@@ -32,8 +32,8 @@ const DEFAULT_LIMIT: usize = 50;
                   what remains."
 )]
 pub struct ViewTaskStatusInput {
-    #[desc = "Task number (#N) of the target background task, as shown when it was spawned"]
-    task: u64,
+    #[desc = "Task number (#N). Omit to list all background tasks."]
+    task: Option<u64>,
     #[desc = "Max records to return. Default 50; 0 = counts only (no records); \
               clamped to MAX_PROGRESS_RECORDS otherwise."]
     limit: Option<usize>,
@@ -102,10 +102,32 @@ impl ToolFunction for TaskStatusViewerTool {
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let tasks = self.tasks.read().await;
-        let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
+        let Some(requested_task) = input.task else {
+            let entries: Vec<_> = tasks
+                .iter()
+                .map(|task| {
+                    let status: &str = task.status().into();
+                    let mut value = serde_json::json!({
+                        "task": task.seq(),
+                        "name": task.name(),
+                        "status": status,
+                    });
+                    let metadata = task.metadata();
+                    if !metadata.is_null() {
+                        value["subject"] = metadata;
+                    }
+                    value
+                })
+                .collect();
+            return Ok(AgentToolResult::success_json(serde_json::json!({
+                "tasks": entries,
+                "total": entries.len(),
+            })));
+        };
+        let Some(task) = tasks.iter().find(|t| t.seq() == requested_task) else {
             return Ok(AgentToolResult::error(format!(
                 "no background task #{}, use `view_task_status` with no filter to list active tasks",
-                input.task
+                requested_task
             )));
         };
 
@@ -160,6 +182,10 @@ impl ToolFunction for TaskStatusViewerTool {
                 "limit": limit,
             },
         });
+        let metadata = task.metadata();
+        if !metadata.is_null() {
+            payload["subject"] = metadata;
+        }
         if !records.is_empty() {
             payload["log"]["records"] =
                 serde_json::to_value(&records).unwrap_or(serde_json::Value::Null);
@@ -172,6 +198,77 @@ impl ToolFunction for TaskStatusViewerTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn status_includes_delegation_subject_and_lists_tasks() {
+        use crate::tools::function::ProgressLog;
+        use crate::tools::task_runtime::TaskEntry;
+        use agentik_sdk::types::tools::ToolResultContent;
+
+        let output = std::sync::Arc::new(std::sync::Mutex::new(ProgressLog::new()));
+        let metadata = std::sync::Arc::new(std::sync::Mutex::new(serde_json::json!({
+            "kind": "delegation",
+            "delegation_id": "6f9619ff-8b86-d011-b42d-00cf4fc964ff",
+            "caller_agent": "/root/caller",
+            "target_agent": "/root/researcher",
+        })));
+        let entry = TaskEntry::with_notify(
+            1,
+            "delegate-1".into(),
+            "delegate_to".into(),
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(agentik_sdk::types::ToolResult::success("done"))
+            }),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            output,
+            metadata,
+        );
+        let mut tasks = TaskStore::new();
+        tasks.push(entry);
+        let tool = TaskStatusViewerTool::new(std::sync::Arc::new(tokio::sync::RwLock::new(tasks)));
+
+        let result = tool
+            .run(ViewTaskStatusInput {
+                task: Some(1),
+                limit: Some(10),
+                offset: None,
+                tail: None,
+                kind: None,
+            })
+            .await
+            .unwrap();
+        let AgentToolResult {
+            content: ToolResultContent::Json(value),
+            ..
+        } = result
+        else {
+            panic!("expected JSON tool result");
+        };
+        assert_eq!(value["subject"]["kind"], "delegation");
+        assert_eq!(value["subject"]["target_agent"], "/root/researcher");
+
+        let result = tool
+            .run(ViewTaskStatusInput {
+                task: None,
+                limit: None,
+                offset: None,
+                tail: None,
+                kind: None,
+            })
+            .await
+            .unwrap();
+        let AgentToolResult {
+            content: ToolResultContent::Json(value),
+            ..
+        } = result
+        else {
+            panic!("expected JSON tool result");
+        };
+        assert_eq!(value["total"], 1);
+        assert_eq!(value["tasks"][0]["subject"]["kind"], "delegation");
+    }
 
     #[test]
     fn window_tail_returns_most_recent() {

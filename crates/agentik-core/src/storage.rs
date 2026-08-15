@@ -564,6 +564,32 @@ pub trait AgentStorage: Send + Sync {
         agent_id: Uuid,
     ) -> Result<Vec<SessionRecord>, StorageError>;
 
+    /// Insert or reopen an explicit agent turn.
+    async fn start_agent_turn(&self, turn: AgentTurnRecord) -> Result<(), StorageError>;
+
+    /// Update a turn's terminal status and completion timestamp.
+    async fn finish_agent_turn(
+        &self,
+        turn_id: Uuid,
+        status: &str,
+        completed_at: i64,
+    ) -> Result<(), StorageError>;
+
+    /// Upsert the delegation ledger entry.
+    async fn upsert_agent_delegation(
+        &self,
+        delegation: AgentDelegationRecord,
+    ) -> Result<(), StorageError>;
+
+    /// List persisted delegations ordered newest first.
+    async fn list_agent_delegations(
+        &self,
+        caller_path: Option<&str>,
+        target_path: Option<&str>,
+        status: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<AgentDelegationRecord>, StorageError>;
+
     // ── Agent plan (first-class persistent task plan) ──────
 
     /// Persist the agent's current plan (full-snapshot upsert).
@@ -580,6 +606,33 @@ pub struct SessionRecord {
     pub session_id: Uuid,
     pub title: Option<String>,
     pub started_at: i64,
+}
+
+/// One explicitly tracked conversation turn.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentTurnRecord {
+    pub turn_id: Uuid,
+    pub agent_id: Uuid,
+    pub session_id: Uuid,
+    pub delegation_id: Option<Uuid>,
+    pub status: String,
+    pub started_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+/// Persisted agent-to-agent delegation ledger entry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentDelegationRecord {
+    pub delegation_id: Uuid,
+    pub caller_path: Option<String>,
+    pub target_path: String,
+    pub task: String,
+    pub status: String,
+    pub turn_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
+    pub response: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 // ═══════════════════════════════════════════════════════════════════════

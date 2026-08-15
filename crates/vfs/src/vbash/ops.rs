@@ -626,8 +626,8 @@ pub async fn op_ls(
     //
     // We collect entries from (a) the default-fs backend (after
     // dispatching through the mount table to find the covering mount
-    // if any), and (b) any direct-child mount points, into a single
-    // deduped, sorted, paginated list.
+    // if any), and (b) synthetic entries for mount descendants, into a
+    // single deduped, sorted, paginated list.
     //
     // The list returned has the form Vec<serde_json::Value> with one
     // entry per `name`, `is_dir`, `size`.
@@ -639,25 +639,35 @@ pub async fn op_ls(
         let ds = DsPath::parse(&vpath).ok()?;
         m.handle_for(&ds)
     });
+    let base = vpath.trim_end_matches('/');
     let child_mounts: Vec<String> = storage
         .mounts
         .as_ref()
         .map(|m| {
-            use datafusion::object_store::path::Path as DsPath;
             m.mount_paths()
                 .into_iter()
-                .filter(|p| {
-                    // Strict direct-child mount only.
-                    if let Ok(ds) = DsPath::parse(p) {
-                        if let Some(parent) = ds.parent() {
-                            let parent_str = parent.as_ref();
-                            let vp_trim = vpath.trim_end_matches('/');
-                            return parent_str == vp_trim
-                                || (vp_trim == "/" && !parent_str.is_empty());
-                        }
+                .filter_map(|mount| {
+                    let mount = mount.trim_end_matches('/');
+                    if mount == base {
+                        return None;
                     }
-                    false
+                    let suffix = if base == "/" {
+                        mount.strip_prefix('/')?
+                    } else {
+                        mount.strip_prefix(base)?.strip_prefix('/')?
+                    };
+                    let first = suffix.split('/').next()?;
+                    if first.is_empty() {
+                        return None;
+                    }
+                    Some(if base == "/" {
+                        format!("/{first}")
+                    } else {
+                        format!("{base}/{first}")
+                    })
                 })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect()
         })
         .unwrap_or_default();
@@ -811,17 +821,22 @@ pub async fn op_ls(
                 // Remap to virtual form (strip the mount's backend
                 // source prefix, re-attach the virtual prefix).
                 let display = storage.remap_entry_to_virtual(&vpath, &entry_path_raw);
+                if entry.metadata().is_dir()
+                    && child_mounts
+                        .iter()
+                        .any(|m| m.trim_end_matches('/') == display.trim_end_matches('/'))
+                {
+                    continue;
+                }
                 items.push(serde_json::json!({
                     "name": display,
                     "is_dir": is_dir,
                     "size": size,
                 }));
             }
-            // Append direct-child mount synthetic entries. This is the
-            // "root mount" case where the path equals the mount's
-            // virtual prefix — we want the listing to also surface
-            // sibling mounts at the same level.
-            if !truncated && handle.definition.path == vpath {
+            // Surface mounts even when their mount-point directory does
+            // not exist in the covering backend.
+            if !truncated {
                 for mp in &child_mounts {
                     idx += 1;
                     if idx <= skip {

@@ -429,6 +429,7 @@ mod tests {
     /// End-to-end: serialize batches, run ggplot2 via Rscript, check the PNG.
     /// Requires R + the `arrow`/`ggplot2` packages on PATH (the r45 conda env).
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_render_png_via_rscript() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let code = "p <- ggplot(df, aes(x = x, y = y)) + geom_point() + geom_line()";
@@ -471,6 +472,7 @@ mod tests {
     /// Plot code that does not assign `p` surfaces an RscriptFailed error with
     /// a structured `diagnostics.error`.
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_missing_p_assignment_fails() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let err = render_png(
@@ -502,6 +504,7 @@ mod tests {
     /// R `warning()` calls are captured as structured diagnostics even though
     /// the render succeeds. The PNG is still produced.
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_warning_captured_as_diagnostics() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let code = r#"
@@ -527,6 +530,7 @@ mod tests {
 
     /// R `message()` calls are captured as structured diagnostics.
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_message_captured_as_diagnostics() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let code = r#"
@@ -549,6 +553,7 @@ mod tests {
     /// A fatal R error inside the caller's code produces a structured error in
     /// diagnostics, plus a populated call_stack.
     #[tokio::test]
+    #[ignore = "requires an available local R/ggplot rendering environment"]
     async fn test_fatal_error_captured() {
         let out = tempfile::NamedTempFile::new().unwrap().keep().unwrap().1;
         let code = r#"

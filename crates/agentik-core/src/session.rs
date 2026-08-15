@@ -23,7 +23,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
 use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
-use agentik_types::{AgentPlan, CompactEvent, PlanUpdate, SessionInfo};
+use agentik_types::{AgentPlan, CompactEvent, PlanUpdate, SessionInfo, TurnExecutionStatus};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use chrono::Utc;
 use futures::StreamExt;
@@ -34,7 +34,6 @@ use tracing::{Level, span};
 use uuid::Uuid;
 
 use crate::agent::{AgentConfig, InternalEvent, TokenBudget};
-use agentik_sdk::model::sanitize::sanitize_messages;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result, Retryable};
 use crate::lifecycle::AgentLifecycle;
@@ -45,6 +44,7 @@ use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentSnapshot, AgentStorage, PersistOp};
 use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use crate::tools::{ToolRegistry, Toolset};
+use agentik_sdk::model::sanitize::sanitize_messages;
 
 // ── Compaction constants ───────────────────────────────────────────
 
@@ -244,6 +244,11 @@ pub struct Session {
     /// Kept separate from `messages` so the sanitizer never sees it
     /// and tool_use/tool_result indices are not shifted by coalescing.
     pub(crate) pending_system_prompt: Option<String>,
+    /// Identity of the currently open conversation turn. A turn remains open
+    /// across a `Waiting` pause (for example `wait_task`) and closes only on
+    /// completion, interruption, or failure.
+    pub(crate) active_turn_id: Option<Uuid>,
+    pub(crate) active_delegation_id: Option<Uuid>,
 
     /// Back-reference to shared agent resources.
     pub(crate) shared: Arc<AgentShared>,
@@ -282,6 +287,8 @@ impl Session {
             cancel_token: CancellationToken::new(),
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            active_turn_id: None,
+            active_delegation_id: None,
             shared,
         }
     }
@@ -315,6 +322,8 @@ impl Session {
             cancel_token,
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            active_turn_id: None,
+            active_delegation_id: None,
             shared,
         }
     }
@@ -346,6 +355,8 @@ impl Session {
             cancel_token: CancellationToken::new(),
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            active_turn_id: None,
+            active_delegation_id: None,
             shared,
         }
     }
@@ -729,8 +740,9 @@ impl Session {
             Some(m) => m,
             None => {
                 tracing::warn!("manual compact requested but no model is configured");
-                self.shared
-                    .send_event(AgentEvent::Error("No model configured for compaction".into()));
+                self.shared.send_event(AgentEvent::Error(
+                    "No model configured for compaction".into(),
+                ));
                 return;
             }
         };
@@ -843,7 +855,14 @@ impl Session {
     /// terminal control signals.
     pub(crate) async fn apply_internal_event(&mut self, event: InternalEvent) -> bool {
         match event {
-            InternalEvent::MessageInject { content, from_user } => {
+            InternalEvent::MessageInject {
+                content,
+                from_user,
+                delegation_id,
+            } => {
+                if delegation_id.is_some() {
+                    self.active_delegation_id = delegation_id;
+                }
                 let _ = self.inject_message(content, from_user);
                 true
             }
@@ -890,10 +909,12 @@ impl Session {
                 true
             }
             InternalEvent::Shutdown => {
+                self.finish_turn(TurnExecutionStatus::Interrupted);
                 self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
                 false
             }
             InternalEvent::Done => {
+                self.finish_turn(TurnExecutionStatus::Completed);
                 self.stop();
                 false
             }
@@ -907,6 +928,7 @@ impl Session {
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
                     self.shared.send_event(AgentEvent::TurnAborted);
                 }
+                self.finish_turn(TurnExecutionStatus::Interrupted);
                 self.cancel_token = token.clone();
                 // Wire the fresh cancel token into the toolset so that
                 // Ctrl+C also interrupts running tool tasks.
@@ -925,16 +947,46 @@ impl Session {
 
     // ── Session loop ──────────────────────────────────────
 
+    /// Open a turn, reusing an open turn after a background-task wait.
+    pub(crate) fn begin_turn(&mut self, delegation_id: Option<Uuid>) {
+        if self.active_turn_id.is_none() {
+            self.active_turn_id = Some(Uuid::new_v4());
+            self.active_delegation_id = delegation_id;
+        } else if delegation_id.is_some() {
+            self.active_delegation_id = delegation_id;
+        }
+
+        self.shared.send_event(AgentEvent::TurnStarted {
+            turn_id: self.active_turn_id.expect("turn id set above"),
+            session_id: self.id,
+            delegation_id: self.active_delegation_id,
+        });
+    }
+
+    /// Close the current turn and emit its terminal status.
+    pub(crate) fn finish_turn(&mut self, status: TurnExecutionStatus) {
+        let Some(turn_id) = self.active_turn_id.take() else {
+            return;
+        };
+        let delegation_id = self.active_delegation_id.take();
+        self.shared.send_event(AgentEvent::TurnCompleted {
+            turn_id,
+            session_id: self.id,
+            delegation_id,
+            status,
+        });
+    }
+
     /// Run one "session": a sequence of LLM round-trips until the agent
     /// goes idle, hits an error, or is cancelled.
     pub(crate) async fn run_session(
         &mut self,
         internal_event_tx: &UnboundedSender<InternalEvent>,
         rx: &mut UnboundedReceiver<InternalEvent>,
+        delegation_id: Option<Uuid>,
     ) {
+        self.begin_turn(delegation_id);
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
-        self.shared
-            .send_event(AgentEvent::LlmResponse("🤖 Agent started".into()));
 
         // Ensure the toolset is wired to the current cancel token so that
         // Ctrl+C interrupts running tools. ResetCancelToken updates this
@@ -987,6 +1039,7 @@ impl Session {
                         // The watcher will inject a message to resume.
                         if *self.lifecycle.status() != agentik_types::AgentLifecycleStatus::Waiting
                         {
+                            self.finish_turn(TurnExecutionStatus::Completed);
                             self.shared.send_event(AgentEvent::Done);
                         }
                         true
@@ -1007,6 +1060,7 @@ impl Session {
                     self.shared.send_event(AgentEvent::Error(format!("{e}")));
                     self.persist_snapshot().await;
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
+                    self.finish_turn(TurnExecutionStatus::Failed);
                     true
                 }
             };
@@ -1057,6 +1111,7 @@ impl Session {
                  Background tasks may still be running.",
             ));
             self.shared.send_event(AgentEvent::TurnAborted);
+            self.finish_turn(TurnExecutionStatus::Interrupted);
         } else if self.lifecycle.is_running() {
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         }
@@ -1441,6 +1496,7 @@ impl Session {
             let _ = tx.send(InternalEvent::MessageInject {
                 content: vec![ContentBlock::Text { text: message }],
                 from_user: false,
+                delegation_id: None,
             });
             return;
         };
@@ -1501,6 +1557,7 @@ impl Session {
         let _ = tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text: message }],
             from_user: false,
+            delegation_id: None,
         });
     }
 
@@ -2211,21 +2268,19 @@ mod tests {
             })
             .unwrap();
         // Push a non-user message between the tool_use and its result.
-        session
-            .messages
-            .push(Message {
-                id: "u_intermediate".into(),
-                type_: "message".into(),
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: "checkpoint summary".into(),
-                }],
-                model: None,
-                stop_reason: None,
-                stop_sequence: None,
-                usage: None,
-                request_id: None,
-            });
+        session.messages.push(Message {
+            id: "u_intermediate".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "checkpoint summary".into(),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        });
         session
             .remember(Message::tool_result("call_X", "alpha", false))
             .unwrap();
@@ -2410,7 +2465,9 @@ mod tests {
     fn add_message_allows_same_text_after_interleaving() {
         let mut session = make_test_session();
         session.remember(Message::user("hello")).unwrap();
-        session.remember(Message::assistant_text("hi there")).unwrap();
+        session
+            .remember(Message::assistant_text("hi there"))
+            .unwrap();
         // Now "hello" again is fine — not consecutive duplicate.
         session.remember(Message::user("hello")).unwrap();
         assert_eq!(

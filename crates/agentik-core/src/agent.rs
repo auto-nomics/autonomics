@@ -60,6 +60,7 @@ pub enum InternalEvent {
     MessageInject {
         content: Vec<ContentBlock>,
         from_user: bool,
+        delegation_id: Option<Uuid>,
     },
     /// A background tool task finished.
     /// `id` is the `tool_use_id`, `seq` is the short task number.
@@ -401,7 +402,8 @@ impl Agent {
             // ── Auto-create a session on first message ──
             // If no session exists yet, create one before processing the
             // event so the message isn't lost.
-            if matches!(event, InternalEvent::MessageInject { .. }) && self.active_session_id.is_none()
+            if matches!(event, InternalEvent::MessageInject { .. })
+                && self.active_session_id.is_none()
             {
                 let id = Uuid::new_v4();
                 let mut s = Session::new(id, self.shared.clone());
@@ -450,6 +452,11 @@ impl Agent {
                 _ => false,
             };
 
+            let delegation_id = match &event {
+                InternalEvent::MessageInject { delegation_id, .. } => *delegation_id,
+                _ => None,
+            };
+
             // Non-session-management events go through apply_event.
             if !matches!(
                 event,
@@ -469,7 +476,7 @@ impl Agent {
                 if let Some(id) = self.active_session_id {
                     let tx = self.internal_event_tx.clone();
                     if let Some(session) = self.sessions.get_mut(&id) {
-                        session.run_session(&tx, &mut rx).await;
+                        session.run_session(&tx, &mut rx, delegation_id).await;
                     }
                 }
             }
@@ -715,9 +722,11 @@ async fn persist_worker(
                 agent_id,
                 session_id,
                 state,
-            } => storage
-                .replace_session_state(agent_id, session_id, &state)
-                .await,
+            } => {
+                storage
+                    .replace_session_state(agent_id, session_id, &state)
+                    .await
+            }
         };
         if let Err(e) = result {
             tracing::warn!("persist op failed (non-fatal): {e}");
@@ -849,6 +858,7 @@ mod tests {
                     text: "hello".into(),
                 }],
                 from_user: true,
+                delegation_id: None,
             })
             .unwrap();
         let task = tokio::spawn(async move {

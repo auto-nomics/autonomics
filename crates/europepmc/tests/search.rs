@@ -10,6 +10,7 @@ use europepmc::{EuropePmcClient, query::to_europepmc, types::*};
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_basic_query() {
     let client = common::client();
     let resp = client
@@ -27,6 +28,7 @@ async fn search_basic_query() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_core_has_abstract_and_authors() {
     let client = common::client();
     let resp = client
@@ -54,6 +56,7 @@ async fn search_core_has_abstract_and_authors() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_with_cursor_pagination() {
     let client = common::client();
     let first = client
@@ -93,6 +96,7 @@ async fn search_with_cursor_pagination() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_structured_query() {
     let sq = StructuredSearch {
         keywords: Some(vec!["p53".into(), "cancer".into()]),
@@ -116,6 +120,7 @@ async fn search_structured_query() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_idlist_result_type() {
     let client = common::client();
     let resp = client
@@ -133,6 +138,7 @@ async fn search_idlist_result_type() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn search_sort_by_cited() {
     let client = common::client();
     let resp = client

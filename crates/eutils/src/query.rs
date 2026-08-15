@@ -30,7 +30,7 @@
 //! assert_eq!(
 //!     term,
 //!     r#"(CRISPR[Title/Abstract] OR "gene editing"[Title/Abstract]) "#.to_string()
-//!         + r#"AND Review[Publication Type] AND 2020:2024[Year]"#
+//!         + r#"AND Review[Publication Type] AND 2020/01/01:2024/12/31[dp]"#
 //! );
 //! ```
 

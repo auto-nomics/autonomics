@@ -790,6 +790,8 @@ fn resolve_bib_http(base: Option<&RuntimeConfigBuilder>) -> BibHttpOptions {
 mod tests {
     use super::*;
 
+    static BIB_HTTP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn defaults() {
         // Guard against env-var pollution from parallel tests like
@@ -941,6 +943,7 @@ mod tests {
 
     #[test]
     fn bib_http_defaults_to_all_none() {
+        let _guard = BIB_HTTP_ENV_LOCK.lock().unwrap();
         let cfg = RuntimeConfig::default();
         assert!(cfg.bib_http.user_agent.is_none());
         assert!(cfg.bib_http.connect_timeout.is_none());
@@ -964,7 +967,7 @@ mod tests {
 
     #[test]
     fn bib_http_env_user_agent_override() {
-        // SAFETY: single-threaded test, no concurrent env access.
+        let _guard = BIB_HTTP_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var(ENV_HTTP_USER_AGENT, "from-env");
         }

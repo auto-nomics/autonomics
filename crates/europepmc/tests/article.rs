@@ -8,6 +8,7 @@ use europepmc::{EuropePmcClient, types::*};
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn article_by_pmid() {
     let client = common::client();
     let resp = client
@@ -35,6 +36,7 @@ async fn article_by_pmid() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn article_by_doi_via_search() {
     // Europe PMC article endpoint uses source + id, not DOI directly.
     // We use search with DOI: prefix as a workaround.
@@ -49,6 +51,7 @@ async fn article_by_doi_via_search() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn references_retrieval() {
     let client = common::client();
     let resp = client
@@ -68,6 +71,7 @@ async fn references_retrieval() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn citations_retrieval() {
     let client = common::client();
     let resp = client
@@ -87,6 +91,7 @@ async fn citations_retrieval() {
 
 #[tokio::test]
 #[serial_test::serial]
+#[ignore = "live Europe PMC API test"]
 async fn profile_retrieval() {
     let client = common::client();
     let resp = client

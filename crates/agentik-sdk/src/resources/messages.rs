@@ -28,7 +28,7 @@ impl<'a> MessagesResource<'a> {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::{Anthropic, agentik_types::MessageCreateBuilder};
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let message = client.messages().create(
     ///     MessageCreateBuilder::new("claude-3-5-sonnet-latest", 1024)
@@ -87,7 +87,7 @@ impl<'a> MessagesResource<'a> {
     /// use agentik_sdk::{Anthropic, MessageCreateBuilder};
     /// use futures::StreamExt;
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let stream = client.messages().create_stream(
     ///     MessageCreateBuilder::new("claude-3-5-sonnet-latest", 1024)
@@ -222,7 +222,7 @@ impl<'a> MessagesResource<'a> {
     /// ```ignore
     /// use agentik_sdk::Anthropic;
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let final_message = client.messages()
     ///     .create_with_builder("claude-3-5-sonnet-latest", 1024)
@@ -249,7 +249,7 @@ impl<'a> MessagesResource<'a> {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::Anthropic;
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let message = client.messages()
     ///     .create_with_builder("claude-3-5-sonnet-latest", 1024)

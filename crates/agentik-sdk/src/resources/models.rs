@@ -19,11 +19,11 @@ impl<'a> ModelsResource<'a> {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use agentik_sdk::{Anthropic, ModelListParams};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// // List all models
     /// let models = client.models().list(None).await?;
@@ -80,11 +80,11 @@ impl<'a> ModelsResource<'a> {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use agentik_sdk::Anthropic;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// // Get specific model
     /// let model = client.models().get("claude-3-5-sonnet-latest").await?;
@@ -119,11 +119,11 @@ impl<'a> ModelsResource<'a> {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use agentik_sdk::Anthropic;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let claude35_models = client.models().list_by_family("claude-3-5").await?;
     /// println!("Found {} Claude 3.5 models", claude35_models.len());

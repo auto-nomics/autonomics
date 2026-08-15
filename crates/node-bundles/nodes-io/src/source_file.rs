@@ -387,6 +387,24 @@ async fn read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join("fixtures")
+            .join(name)
+    }
+
+    fn sample_vcf_bytes() -> Vec<u8> {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let compressed = std::fs::read(fixture("sample.vcf.gz")).unwrap();
+        let mut decoder = GzDecoder::new(&compressed[..]);
+        let mut plain = Vec::new();
+        decoder.read_to_end(&mut plain).unwrap();
+        plain
+    }
     use datafusion::execution::object_store::ObjectStoreUrl;
     use std::sync::Arc;
     use vfs::OpendalFileStorage;
@@ -395,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_vcf() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
-        let test_vcf = std::fs::read("test_datasets/sample.vcf").unwrap();
+        let test_vcf = sample_vcf_bytes();
         fs.op.write("/sample.vcf", test_vcf).await.unwrap();
 
         let res = ctx
@@ -413,7 +431,7 @@ mod tests {
     async fn test_load_vcf_gz() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
         dbg!("start copy data");
-        let test_vcf_gz = std::fs::read("test_datasets/sample.vcf.gz").unwrap();
+        let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
         fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
         dbg!("copy data finished");
 
@@ -439,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn test_vcf_info_column_is_literally_named_info() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
-        let test_vcf_gz = std::fs::read("test_datasets/sample.vcf.gz").unwrap();
+        let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
         fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
 
         let res = ctx
@@ -493,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_field_on_vcf_info_succeeds() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
-        let test_vcf_gz = std::fs::read("test_datasets/sample.vcf.gz").unwrap();
+        let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
         fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
 
         let res = ctx

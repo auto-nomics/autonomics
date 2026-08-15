@@ -146,6 +146,9 @@ impl Default for ProgressLog {
 /// [`TaskEntry::output`](super::task_runtime::TaskEntry::output).
 pub type ProgressBuffer = Arc<Mutex<ProgressLog>>;
 
+/// Mutable, per-task metadata shared by the executing tool and observers.
+pub type TaskMetadata = Arc<Mutex<Value>>;
+
 /// Per-invocation context handed to a tool's [`ToolFunction::execute_with_context`].
 ///
 /// Carries optional handles a tool may use to interact with its surrounding
@@ -155,11 +158,21 @@ pub type ProgressBuffer = Arc<Mutex<ProgressLog>>;
 /// that `view_task_status` surfaces. Tools that don't care about progress
 /// simply ignore the context (the default `execute_with_context` does so and
 /// delegates to [`ToolFunction::execute`]).
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ToolContext {
     /// Live-output buffer. `None` when the toolset did not wire one (e.g. in
     /// tests); the tool must treat it as optional.
     pub output: Option<ProgressBuffer>,
+    pub metadata: TaskMetadata,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            output: None,
+            metadata: Arc::new(Mutex::new(Value::Null)),
+        }
+    }
 }
 
 impl ToolContext {
@@ -179,6 +192,13 @@ impl ToolContext {
     /// for tools that only need free-form text progress.
     pub fn emit_line(&self, line: impl Into<String>) {
         self.emit(ProgressRecord::new("log").message(line));
+    }
+
+    /// Replace the task's structured metadata (for example delegation IDs).
+    pub fn set_metadata(&self, metadata: Value) {
+        if let Ok(mut target) = self.metadata.lock() {
+            *target = metadata;
+        }
     }
 }
 

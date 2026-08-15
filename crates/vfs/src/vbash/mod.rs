@@ -29,7 +29,7 @@ use crate::storage::OpendalFileStorage;
         Unsupported (will error): chmod, chown, ln, pipes, redirects."
 )]
 pub struct VfsBashInput {
-    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree"]
+    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree|mount_list"]
     pub op: String,
     #[desc = "Primary path (file or directory)."]
     pub path: Option<String>,
@@ -1315,6 +1315,45 @@ mod tests {
         (tool, backend_root, source_dir)
     }
 
+    /// Build a tool with a writable root mount plus a deeper read-only mount,
+    /// matching the common `vfs.toml` layout.
+    fn make_data_mounted_tool() -> (VfsBashTool, tempfile::TempDir, std::path::PathBuf) {
+        use crate::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
+
+        let backend_root = tempfile::tempdir().unwrap();
+        let source_dir = backend_root.path().join("source");
+        std::fs::create_dir_all(source_dir.join("nested")).unwrap();
+        std::fs::write(source_dir.join("panel.parquet"), b"panel").unwrap();
+        std::fs::write(source_dir.join("nested/data.csv"), b"data").unwrap();
+
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![
+                MountDefinition {
+                    path: "/".into(),
+                    backend: "default".into(),
+                    source: "/".into(),
+                    read_only: false,
+                },
+                MountDefinition {
+                    path: "/data/ldsc".into(),
+                    backend: "default".into(),
+                    source: "source".into(),
+                    read_only: true,
+                },
+            ],
+        };
+        let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            vfs,
+        ));
+        (VfsBashTool { storage }, backend_root, source_dir)
+    }
+
     #[tokio::test]
     async fn write_read_ls_through_mount_with_nonempty_source() {
         let (tool, _backend_root, source_dir) = make_mounted_tool();
@@ -1348,6 +1387,56 @@ mod tests {
         assert!(
             names.iter().any(|n| n.ends_with("hello.txt")),
             "expected hello.txt in listing, got: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ls_parent_of_mount_lists_mount_point_and_contents() {
+        let (tool, _backend_root, _source_dir) = make_data_mounted_tool();
+
+        let mut root = input("ls");
+        root.path = Some("/".into());
+        let result = tool.run(root).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<&str> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"/data"),
+            "expected synthetic ancestor for deep mount, got: {names:?}"
+        );
+
+        let mut ls = input("ls");
+        ls.path = Some("/data".into());
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<&str> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"/data/ldsc"),
+            "expected child mount point, got: {names:?}"
+        );
+
+        let mut mounted = input("ls");
+        mounted.path = Some("/data/ldsc".into());
+        let result = tool.run(mounted).await.unwrap();
+        let json = result_json(result);
+        let names: Vec<&str> = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"/data/ldsc/panel.parquet"),
+            "expected nested mounted file, got: {names:?}"
         );
     }
 

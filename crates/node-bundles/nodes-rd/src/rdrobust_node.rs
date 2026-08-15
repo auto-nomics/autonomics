@@ -373,6 +373,7 @@ mod tests {
         NodeCtx {
             runtime_env: SessionContext::new().runtime_env(),
             opendal: None,
+            global_sem: None,
         }
     }
 

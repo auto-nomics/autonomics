@@ -15,9 +15,16 @@ pub fn client() -> OpenAlexClient {
     OpenAlexClient::new(api_key().as_deref())
 }
 
-/// Whether to run live API tests. Defaults to true.
+/// Whether to run live API tests. Defaults to false so the workspace test
+/// suite remains deterministic; set `OPENALEX_RUN_LIVE=1` to include them.
 pub fn run_live() -> bool {
-    std::env::var("OPENALEX_SKIP_LIVE")
-        .map(|v| v != "1")
-        .unwrap_or(true)
+    if std::env::var("OPENALEX_SKIP_LIVE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    std::env::var("OPENALEX_RUN_LIVE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }

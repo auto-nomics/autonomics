@@ -10,7 +10,9 @@
 //! # #[tokio::main] async fn main() -> opentargets::Result<()> {
 //! let client = OpenTargetsClient::new();
 //! let brca1 = client.target("ENSG00000012048").await?;
-//! assert_eq!(brca1.approved_symbol, "BRCA1");
+//! if let Some(target) = brca1 {
+//!     assert_eq!(target.approved_symbol, "BRCA1");
+//! }
 //! # Ok(()) }
 //! ```
 

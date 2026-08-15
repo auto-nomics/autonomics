@@ -90,7 +90,7 @@ impl Anthropic {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::{Anthropic, agentik_types::MessageCreateBuilder};
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let message = client.messages().create(
     ///     MessageCreateBuilder::new("claude-3-5-sonnet-latest", 1024)
@@ -114,7 +114,7 @@ impl Anthropic {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::{Anthropic, agentik_types::{BatchRequest, BatchCreateParams}};
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let requests = vec![
     ///     BatchRequest::builder("req1", "claude-3-5-sonnet-latest", 1024)
@@ -142,7 +142,7 @@ impl Anthropic {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::{Anthropic, FileUploadParams, FilePurpose};
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// let upload_params = FileUploadParams::new(
     ///     std::fs::read("document.pdf")?,
@@ -168,7 +168,7 @@ impl Anthropic {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentik_sdk::{Anthropic, ModelListParams};
     ///
-    /// let client = Anthropic::from_env()?;
+    /// let client = Anthropic::new("test-api-key", "https://api.example.com")?;
     ///
     /// // List all models
     /// let models = client.models().list(None).await?;

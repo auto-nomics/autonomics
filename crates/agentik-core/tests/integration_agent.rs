@@ -65,6 +65,7 @@ async fn test_agent_basic_workflow_with_mimo() {
             text: "Say exactly: hello world".into(),
         }],
         from_user: false,
+        delegation_id: None,
     });
 
     let events = tokio::time::timeout(std::time::Duration::from_secs(60), async {
@@ -95,6 +96,23 @@ async fn test_agent_basic_workflow_with_mimo() {
             .iter()
             .map(|e| format!("{:?}", e))
             .collect::<Vec<_>>()
+    );
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TurnStarted { .. })),
+        "Expected explicit turn start event"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AgentEvent::TurnCompleted {
+                status: agentik_types::TurnExecutionStatus::Completed,
+                ..
+            }
+        )),
+        "Expected explicit completed turn event"
     );
 
     assert!(

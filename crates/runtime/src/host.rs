@@ -19,7 +19,9 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::error::AgentError;
-use agentik_core::storage::{AgentProfileRegistry, AgentStorage};
+use agentik_core::storage::{
+    AgentDelegationRecord, AgentProfileRegistry, AgentStorage, AgentTurnRecord,
+};
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
@@ -37,7 +39,7 @@ use vfs::{
 };
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
-use crate::control::AgentStatus;
+use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
 use crate::tools::DefaultToolSetError;
 
 // AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
@@ -537,6 +539,17 @@ impl AgentHandle {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text }],
             from_user: true,
+            delegation_id: None,
+        });
+    }
+
+    /// Send a tracked request and carry the delegation ID through the target
+    /// agent's turn lifecycle.
+    pub fn send_delegation(&self, text: String, delegation_id: uuid::Uuid) {
+        let _ = self.internal_tx.send(InternalEvent::MessageInject {
+            content: vec![ContentBlock::Text { text }],
+            from_user: false,
+            delegation_id: Some(delegation_id),
         });
     }
 
@@ -686,9 +699,9 @@ pub struct RuntimeHost {
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<crate::control::HostCommand>,
     /// Clonable control handle — passed to agent tools.
     control: crate::control::HostControl,
-    /// Pending tool-delegation reply channels: maps delegatee name → reply.
-    /// When the delegatee Dones, its response is sent through the channel.
-    tool_delegations: HashMap<String, tokio::sync::oneshot::Sender<String>>,
+    /// First-class delegation ledger. Keyed by stable delegation ID, so the
+    /// same target can safely process multiple queued requests.
+    delegations: HashMap<uuid::Uuid, HostDelegation>,
     /// Cached profiles (blueprints) loaded at startup. Used by GetStatus
     /// and route_task so agents can discover what they can spawn.
     profiles: Vec<agentik_core::AgentProfile>,
@@ -743,7 +756,10 @@ pub type TaggedEvent = (String, AgentEvent);
 
 /// Commands sent to a per-agent relay task.
 enum AgentCommand {
-    Message(String),
+    Message {
+        text: String,
+        delegation_id: Option<uuid::Uuid>,
+    },
     Shutdown,
     Cancel,
     ListSessions,
@@ -793,6 +809,12 @@ struct AgentEntry {
     model: Arc<ArcSwapOption<Model>>,
 }
 
+struct HostDelegation {
+    snapshot: DelegationSnapshot,
+    reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    progress: Option<agentik_core::tools::ProgressBuffer>,
+}
+
 impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
     pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
@@ -818,7 +840,7 @@ impl RuntimeHost {
             event_rx,
             cmd_rx,
             control,
-            tool_delegations: HashMap::new(),
+            delegations: HashMap::new(),
             profiles: Vec::new(),
             model: None,
             registration_rx,
@@ -1210,6 +1232,9 @@ impl RuntimeHost {
             HostCommand::Delegate {
                 to,
                 message,
+                caller_path,
+                delegation_id,
+                progress,
                 reply_tx,
             } => {
                 // Resolve target: full path or short name.
@@ -1224,10 +1249,126 @@ impl RuntimeHost {
                         return;
                     }
                 };
-                // Record the reply channel — when `to` Dones, its response
-                // is sent through reply_tx (handled in step()).
-                self.tool_delegations.insert(resolved.clone(), reply_tx);
-                self.send_to(&resolved, message);
+                let now = unix_epoch_ms();
+                let record = HostDelegation {
+                    snapshot: DelegationSnapshot {
+                        delegation_id,
+                        caller_path,
+                        target_path: resolved.clone(),
+                        task: message.clone(),
+                        status: DelegationStatus::Pending,
+                        turn_id: None,
+                        session_id: None,
+                        response: None,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    reply_tx: Some(reply_tx),
+                    progress: progress.clone(),
+                };
+                push_delegation_progress(
+                    &record.progress,
+                    "delegation",
+                    "pending",
+                    &format!("target={resolved}"),
+                );
+                self.delegations.insert(delegation_id, record);
+                self.persist_delegation(delegation_id);
+                self.send_delegation_to(&resolved, message, delegation_id);
+            }
+            HostCommand::ListDelegations {
+                caller_path,
+                target_path,
+                status,
+                reply_tx,
+            } => {
+                let target_path =
+                    target_path.map(|target| self.resolve_agent(&target).unwrap_or(target));
+                let live_records: Vec<_> = self
+                    .delegations
+                    .values()
+                    .map(|record| record.snapshot.clone())
+                    .filter(|record| {
+                        caller_path
+                            .as_deref()
+                            .is_none_or(|value| record.caller_path.as_deref() == Some(value))
+                            && target_path
+                                .as_deref()
+                                .is_none_or(|value| record.target_path == value)
+                            && status
+                                .as_deref()
+                                .is_none_or(|value| record.status.as_str() == value)
+                    })
+                    .collect();
+                let storage = self.infra.storage.clone();
+                agentik_core::supervise::spawn_safe_on(
+                    &self.infra.runtime_handle,
+                    "list_delegations",
+                    async move {
+                        let mut records = live_records;
+                        let live_ids: std::collections::HashSet<_> =
+                            records.iter().map(|record| record.delegation_id).collect();
+                        if let Ok(persisted) = storage
+                            .list_agent_delegations(
+                                caller_path.as_deref(),
+                                target_path.as_deref(),
+                                status.as_deref(),
+                                1000,
+                            )
+                            .await
+                        {
+                            records.extend(persisted.into_iter().filter_map(move |record| {
+                                let delegation_id = record.delegation_id;
+                                if live_ids.contains(&delegation_id) {
+                                    return None;
+                                }
+                                Some(DelegationSnapshot {
+                                    delegation_id,
+                                    caller_path: record.caller_path,
+                                    target_path: record.target_path,
+                                    task: record.task,
+                                    status: delegation_status_from_str(&record.status),
+                                    turn_id: record.turn_id,
+                                    session_id: record.session_id,
+                                    response: record.response,
+                                    created_at: record.created_at,
+                                    updated_at: record.updated_at,
+                                })
+                            }));
+                        }
+                        records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+                        let _ = reply_tx.send(records);
+                    },
+                );
+            }
+            HostCommand::GetAgentHistory {
+                agent_name,
+                limit,
+                reply_tx,
+            } => {
+                let storage = self.infra.storage.clone();
+                let requested_path = agent_name.clone();
+                let live = self.resolve_agent(&agent_name).and_then(|path| {
+                    self.agents
+                        .get(&path)
+                        .and_then(|entry| entry.info.agent_id)
+                        .map(|id| (path, id))
+                });
+                agentik_core::supervise::spawn_safe_on(
+                    &self.infra.runtime_handle,
+                    "get_agent_history",
+                    async move {
+                        let response = match live {
+                            Some((path, agent_id)) => {
+                                read_agent_history(storage, agent_id, path, limit).await
+                            }
+                            None => {
+                                read_persisted_agent_history(storage, requested_path, limit).await
+                            }
+                        };
+                        let _ = reply_tx.send(response);
+                    },
+                );
             }
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
@@ -1439,6 +1580,37 @@ impl RuntimeHost {
         });
     }
 
+    /// Resolve in-flight delegations when a target is unregistered.
+    fn fail_pending_delegations(&mut self, target: &str, reason: &str) {
+        for record in self.delegations.values_mut() {
+            if record.snapshot.target_path != target
+                || !matches!(
+                    record.snapshot.status,
+                    DelegationStatus::Pending | DelegationStatus::Running
+                )
+            {
+                continue;
+            }
+            record.snapshot.status = DelegationStatus::Failed;
+            record.snapshot.response = Some(reason.to_string());
+            record.snapshot.updated_at = unix_epoch_ms();
+            let progress = record.progress.clone();
+            push_delegation_progress(&progress, "delegation_failed", "failed", reason);
+            if let Some(reply_tx) = record.reply_tx.take() {
+                let _ = reply_tx.send(reason.to_string());
+            }
+        }
+        let affected: Vec<uuid::Uuid> = self
+            .delegations
+            .values()
+            .filter(|record| record.snapshot.target_path == target)
+            .map(|record| record.snapshot.delegation_id)
+            .collect();
+        for id in affected {
+            self.persist_delegation(id);
+        }
+    }
+
     /// Route a task description to the best-matching agent.
     /// Considers both running agents and available profiles (blueprints).
     /// Running agents get a small bonus score since they're immediately
@@ -1617,6 +1789,8 @@ impl RuntimeHost {
         let agent_id = handle.agent_id;
         let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
+        let mut info = info;
+        info.agent_id = Some(agent_id);
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
 
@@ -1747,6 +1921,94 @@ impl RuntimeHost {
         );
     }
 
+    fn persist_delegation(&self, delegation_id: uuid::Uuid) {
+        let Some(snapshot) = self
+            .delegations
+            .get(&delegation_id)
+            .map(|record| record.snapshot.clone())
+        else {
+            return;
+        };
+        let storage = self.infra.storage.clone();
+        let record = AgentDelegationRecord {
+            delegation_id: snapshot.delegation_id,
+            caller_path: snapshot.caller_path,
+            target_path: snapshot.target_path,
+            task: snapshot.task,
+            status: snapshot.status.as_str().to_string(),
+            turn_id: snapshot.turn_id,
+            session_id: snapshot.session_id,
+            response: snapshot.response,
+            created_at: snapshot.created_at,
+            updated_at: snapshot.updated_at,
+        };
+        agentik_core::supervise::spawn_safe_on(
+            &self.infra.runtime_handle,
+            &format!("persist_delegation::{delegation_id}"),
+            async move {
+                if let Err(error) = storage.upsert_agent_delegation(record).await {
+                    tracing::warn!(%delegation_id, %error, "failed to persist delegation");
+                }
+            },
+        );
+    }
+
+    fn persist_turn_start(
+        &self,
+        agent_path: &str,
+        turn_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        delegation_id: Option<uuid::Uuid>,
+    ) {
+        let Some(agent_id) = self
+            .agents
+            .get(agent_path)
+            .and_then(|entry| entry.info.agent_id)
+        else {
+            return;
+        };
+        let storage = self.infra.storage.clone();
+        let record = AgentTurnRecord {
+            turn_id,
+            agent_id,
+            session_id,
+            delegation_id,
+            status: "running".to_string(),
+            started_at: unix_epoch_ms(),
+            completed_at: None,
+        };
+        agentik_core::supervise::spawn_safe_on(
+            &self.infra.runtime_handle,
+            &format!("persist_turn_start::{turn_id}"),
+            async move {
+                if let Err(error) = storage.start_agent_turn(record).await {
+                    tracing::warn!(%turn_id, %error, "failed to persist turn start");
+                }
+            },
+        );
+    }
+
+    fn persist_turn_finish(&self, turn_id: uuid::Uuid, status: agentik_types::TurnExecutionStatus) {
+        let storage = self.infra.storage.clone();
+        let status = match status {
+            agentik_types::TurnExecutionStatus::Completed => "completed",
+            agentik_types::TurnExecutionStatus::Interrupted => "interrupted",
+            agentik_types::TurnExecutionStatus::Failed => "failed",
+        };
+        agentik_core::supervise::spawn_safe_on(
+            &self.infra.runtime_handle,
+            &format!("persist_turn_finish::{turn_id}"),
+            async move {
+                if let Err(error) = storage
+                    .finish_agent_turn(turn_id, status, unix_epoch_ms())
+                    .await
+                {
+                    tracing::warn!(%turn_id, %error, "failed to persist turn completion");
+                }
+            },
+        );
+    }
+
     /// Spawn a background task that removes the agent's persisted graph row.
     /// Called on shutdown. Fire-and-forget.
     fn persist_remove_agent_graph(&self, path: &str) {
@@ -1796,7 +2058,20 @@ impl RuntimeHost {
     /// first.
     pub fn send_to(&self, name: &str, message: String) {
         if let Some(entry) = self.agents.get(name) {
-            let _ = entry.cmd_tx.send(AgentCommand::Message(message));
+            let _ = entry.cmd_tx.send(AgentCommand::Message {
+                text: message,
+                delegation_id: None,
+            });
+        }
+    }
+
+    /// Send a tracked delegation request through the target relay.
+    fn send_delegation_to(&self, name: &str, message: String, delegation_id: uuid::Uuid) {
+        if let Some(entry) = self.agents.get(name) {
+            let _ = entry.cmd_tx.send(AgentCommand::Message {
+                text: message,
+                delegation_id: Some(delegation_id),
+            });
         }
     }
 
@@ -1820,6 +2095,7 @@ impl RuntimeHost {
 
     /// Shut down a named agent and remove it from the registry.
     pub fn shutdown_agent(&mut self, name: &str) {
+        self.fail_pending_delegations(name, "target agent shut down before completion");
         if let Some(entry) = self.agents.remove(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
@@ -1841,6 +2117,9 @@ impl RuntimeHost {
     /// await their completion.
     pub async fn shutdown_all_agents_and_wait(&mut self) {
         let names: Vec<String> = self.agents.keys().cloned().collect();
+        for name in &names {
+            self.fail_pending_delegations(name, "target agent shut down before completion");
+        }
         let mut relay_tasks = Vec::new();
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
@@ -1878,6 +2157,9 @@ impl RuntimeHost {
     /// where the caller cannot await (e.g. sync code paths).
     pub fn shutdown_all_agents(&mut self) {
         let names: Vec<String> = self.agents.keys().cloned().collect();
+        for name in &names {
+            self.fail_pending_delegations(name, "target agent shut down before completion");
+        }
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
@@ -1889,39 +2171,86 @@ impl RuntimeHost {
     /// Receive the next event from any registered agent.
     ///
     /// This also handles delegation plumbing:
-    /// - `LlmResponse` events are accumulated in the network's response
-    ///   buffer (so `accumulated_response` works when Done arrives).
-    /// - `Done` events trigger the tool delegation reply: the accumulated
-    ///   response is sent to the waiting `delegate_to` tool via its
-    ///   `reply_tx` channel.
+    /// - `TurnStarted` binds a delegation ID to a target turn/session.
+    /// - `TurnCompleted` captures the accumulated response before the
+    ///   compatibility `Done` event drains it, then resolves exactly the
+    ///   delegation associated with that turn.
     ///
     /// The raw event is still returned to the caller for UI rendering.
     pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
         let (name, event) = self.event_rx.recv().await?;
 
-        // For Done events: capture accumulated response BEFORE process_event
-        // (process_event drains the response buffer).
-        let delegation_response = if matches!(event, AgentEvent::Done) {
-            if self.tool_delegations.contains_key(&name) {
-                Some(self.network.accumulated_response(&name).to_string())
-            } else {
-                None
+        match &event {
+            AgentEvent::TurnStarted {
+                turn_id,
+                session_id,
+                delegation_id,
+                ..
+            } => {
+                if let Some(delegation_id) = delegation_id {
+                    if let Some(record) = self.delegations.get_mut(delegation_id) {
+                        record.snapshot.status = DelegationStatus::Running;
+                        record.snapshot.turn_id = Some(*turn_id);
+                        record.snapshot.session_id = Some(*session_id);
+                        record.snapshot.updated_at = unix_epoch_ms();
+                        let progress = record.progress.clone();
+                        self.persist_delegation(*delegation_id);
+                        self.persist_turn_start(&name, *turn_id, *session_id, Some(*delegation_id));
+                        push_delegation_progress(
+                            &progress,
+                            "turn_started",
+                            "running",
+                            &format!("turn={turn_id} session={session_id}"),
+                        );
+                    }
+                }
+                self.persist_turn_start(&name, *turn_id, *session_id, *delegation_id);
             }
-        } else {
-            None
-        };
+            AgentEvent::TurnCompleted {
+                turn_id,
+                delegation_id,
+                status,
+                ..
+            } => {
+                let response = self.network.accumulated_response(&name).to_string();
+                if let Some(delegation_id) = delegation_id {
+                    if let Some(record) = self.delegations.get_mut(delegation_id) {
+                        record.snapshot.status = match status {
+                            agentik_types::TurnExecutionStatus::Completed => {
+                                DelegationStatus::Completed
+                            }
+                            agentik_types::TurnExecutionStatus::Interrupted => {
+                                DelegationStatus::Interrupted
+                            }
+                            agentik_types::TurnExecutionStatus::Failed => DelegationStatus::Failed,
+                        };
+                        record.snapshot.turn_id = Some(*turn_id);
+                        record.snapshot.response = Some(response.clone());
+                        record.snapshot.updated_at = unix_epoch_ms();
+                        let progress = record.progress.clone();
+                        let completion_status = record.snapshot.status;
+                        let reply_tx = record.reply_tx.take();
+                        self.persist_delegation(*delegation_id);
+                        self.persist_turn_finish(*turn_id, *status);
+                        push_delegation_progress(
+                            &progress,
+                            "turn_completed",
+                            completion_status.as_str(),
+                            &truncate_preview(&response, 240),
+                        );
+                        if let Some(reply_tx) = reply_tx {
+                            let _ = reply_tx.send(response);
+                        }
+                    }
+                }
+                self.persist_turn_finish(*turn_id, *status);
+            }
+            _ => {}
+        }
 
         // Feed the event through the network (accumulates LlmResponse,
         // handles topology-edge delegation routing, termination checks).
         let actions = self.network.process_event(&name, &event);
-
-        // If we captured a delegation response, send it to the waiting tool.
-        if let Some(response) = delegation_response {
-            if let Some(reply_tx) = self.tool_delegations.remove(&name) {
-                let _ = reply_tx.send(response);
-                tracing::info!(agent = %name, "delegation response delivered to caller tool");
-            }
-        }
 
         // Execute any routing actions (topology-edge based forwarding).
         for action in &actions {
@@ -1936,6 +2265,22 @@ impl RuntimeHost {
         // turn (no later event will revert it back to Running unless a
         // fresh message arrives — which itself flips status again).
         self.observe_status(&name, &event);
+
+        let (status, last_event) = derive_agent_status(&event);
+        let status = status.tag();
+        for record in self.delegations.values_mut() {
+            if record.snapshot.target_path == name
+                && record.snapshot.status == DelegationStatus::Running
+                && record.snapshot.turn_id.is_some()
+            {
+                push_delegation_progress(
+                    &record.progress,
+                    "agent_event",
+                    status,
+                    last_event.as_deref().unwrap_or_default(),
+                );
+            }
+        }
 
         Some((name, event))
     }
@@ -2122,12 +2467,117 @@ fn capability_from_profile(
     crate::control::AgentInfo {
         name: name.into(),
         path: path.into(),
+        agent_id: None,
         summary: profile.description.clone(),
         tags,
         expertise,
         tools: Vec::new(), // populated at runtime if needed
         status: crate::control::AgentStatus::Idle,
         last_event: None,
+    }
+}
+
+fn unix_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn push_delegation_progress(
+    progress: &Option<agentik_core::tools::ProgressBuffer>,
+    kind: &str,
+    status: &str,
+    message: &str,
+) {
+    let Some(progress) = progress else {
+        return;
+    };
+    let mut record = agentik_core::tools::ProgressRecord::new(kind).status(status);
+    if !message.is_empty() {
+        record = record.message(message);
+    }
+    if let Ok(mut log) = progress.lock() {
+        log.push(record);
+    }
+}
+
+fn delegation_status_from_str(value: &str) -> DelegationStatus {
+    match value {
+        "pending" => DelegationStatus::Pending,
+        "running" => DelegationStatus::Running,
+        "completed" => DelegationStatus::Completed,
+        "interrupted" => DelegationStatus::Interrupted,
+        _ => DelegationStatus::Failed,
+    }
+}
+
+async fn read_agent_history(
+    storage: Arc<dyn AgentStorage>,
+    agent_id: uuid::Uuid,
+    agent_path: String,
+    limit: usize,
+) -> AgentExecutionHistory {
+    let mut session_id = None;
+    let mut messages = Vec::new();
+    if let Some(record) = storage
+        .list_session_records(agent_id)
+        .await
+        .ok()
+        .and_then(|records| records.into_iter().next_back())
+    {
+        session_id = Some(record.session_id);
+        if let Ok(state) =
+            agentik_core::storage::restore_session_state(&*storage, agent_id, record.session_id)
+                .await
+        {
+            let start = state.messages.len().saturating_sub(limit);
+            messages = state.messages[start..].to_vec();
+        }
+    }
+
+    AgentExecutionHistory {
+        agent_path,
+        agent_id,
+        session_id,
+        messages,
+    }
+}
+
+async fn read_persisted_agent_history(
+    storage: Arc<dyn AgentStorage>,
+    requested_path: String,
+    limit: usize,
+) -> AgentExecutionHistory {
+    let Ok(entries) = storage.list_persisted_agents().await else {
+        return AgentExecutionHistory {
+            agent_path: requested_path,
+            agent_id: uuid::Uuid::nil(),
+            session_id: None,
+            messages: Vec::new(),
+        };
+    };
+
+    let matches: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry.path == requested_path
+                || entry
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|segment| segment == requested_path)
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [entry] => read_agent_history(storage, entry.agent_id, entry.path.clone(), limit).await,
+        _ => AgentExecutionHistory {
+            agent_path: requested_path,
+            agent_id: uuid::Uuid::nil(),
+            session_id: None,
+            messages: Vec::new(),
+        },
     }
 }
 
@@ -2204,6 +2654,25 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
         // `Requesting` event; the latter carries no extra info. Either path
         // maps to Running.
         AgentEvent::Requesting => (AgentStatus::Running, None),
+        AgentEvent::TurnStarted { .. } => (AgentStatus::Running, None),
+
+        AgentEvent::TurnCompleted { status, .. } => match status {
+            agentik_types::TurnExecutionStatus::Completed => {
+                (AgentStatus::Completed, Some("turn completed".into()))
+            }
+            agentik_types::TurnExecutionStatus::Interrupted => (
+                AgentStatus::Failed {
+                    message: "turn interrupted".into(),
+                },
+                Some("turn interrupted".into()),
+            ),
+            agentik_types::TurnExecutionStatus::Failed => (
+                AgentStatus::Failed {
+                    message: "turn failed".into(),
+                },
+                Some("turn failed".into()),
+            ),
+        },
 
         // ── Tool-level signals (overwrite the lifecycle-derived status) ──
         AgentEvent::ToolCall { name, .. } | AgentEvent::ToolCallBackground { name, seq: _ } => (
@@ -2750,6 +3219,9 @@ mod send_message_tests {
         let delegate = HostCommand::Delegate {
             to: "worker".into(),
             message: "hello".into(),
+            caller_path: None,
+            delegation_id: uuid::Uuid::new_v4(),
+            progress: None,
             reply_tx: oneshot::channel().0,
         };
 
@@ -2897,8 +3369,12 @@ async fn relay_loop(
             biased;
 
             cmd = cmd_rx.recv() => match cmd {
-                Some(AgentCommand::Message(text)) => {
-                    handle.send_message(text);
+                Some(AgentCommand::Message {
+                    text,
+                    delegation_id,
+                }) => match delegation_id {
+                    Some(id) => handle.send_delegation(text, id),
+                    None => handle.send_message(text),
                 }
                 Some(AgentCommand::Cancel) => {
                     handle.cancel();

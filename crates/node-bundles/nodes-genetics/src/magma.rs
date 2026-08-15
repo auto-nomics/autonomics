@@ -442,8 +442,7 @@ impl DagNode for MagmaGeneNode {
 
         // Load PLINK + annotation
         let chroms: Vec<u32> = (1..=22).collect();
-        let ref_prefix =
-            REF_PREFIX_TEMPLATE.to_string();
+        let ref_prefix = REF_PREFIX_TEMPLATE.to_string();
         let mut bed = magma::plink::BedFile::open_template(&ref_prefix, &chroms)
             .map_err(MagmaNodeError::from)?;
         let annot =
@@ -1081,6 +1080,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_annotate_node() {
         let dir = magma_data_dir();
         let mut node = MagmaAnnotateNode::new(MagmaAnnotateConfig {
@@ -1162,6 +1162,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_set_node() {
         let dir = magma_data_dir();
         let mut node = MagmaSetNode::new(MagmaSetConfig {
@@ -1199,6 +1200,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_covar_node() {
         let dir = magma_data_dir();
         let mut node = MagmaSetNode::new(MagmaSetConfig {
@@ -1229,6 +1231,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_meta_node() {
         let dir = magma_data_dir();
         let raw_path = dir
