@@ -7,7 +7,8 @@
 //! metrics when fed to `ml_classification_metrics` or `epi_roc`.
 //!
 //! Supported `model_kind` values: `logistic`, `gaussian_nb`, `knn`,
-//! `svm`, `adaboost`, `decision_tree`.
+//! `svm`, `adaboost`, `decision_tree`. The `probability` output is
+//! `P(class=1)`, not the confidence of the predicted class.
 
 use std::sync::Arc;
 
@@ -145,10 +146,10 @@ impl NodeFactory for PredictFactory {
         NODE
     }
     fn desc(&self) -> &'static str {
-        "Train a classifier on port-0 data, predict on port-1 (hold-out) data."
+        "Train on port-0 data and predict on port-1 data; probability is P(class=1)."
     }
     fn doc(&self) -> &'static str {
-        "ml_predict: takes training data (port 0) and test data (port 1), trains the specified model on training data, then predicts on test data. Enables proper train:test separation for unbiased evaluation. Supported models: logistic, gaussian_nb, knn, svm, adaboost, decision_tree."
+        "ml_predict: takes training data (port 0) and test data (port 1), trains the specified model on training data, then predicts on test data. Enables proper train:test separation for unbiased evaluation. Supported models: logistic, gaussian_nb, knn, svm, adaboost, decision_tree. The probability output is P(class=1)."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(PredictSpec)

@@ -1,7 +1,7 @@
 //! Classification algorithms — logistic regression, naive Bayes, KNN, decision tree.
 //!
-//! Uses [`linfa-logistic`] for logistic regression, [`linfa-bayes`] for
-//! Gaussian/Multinomial/Bernoulli NB, [`linfa-trees`] for decision tree.
+//! Uses [`linfa-logistic`] for logistic regression and [`linfa-bayes`] for
+//! Gaussian/Multinomial/Bernoulli NB. Decision trees are implemented natively.
 //! KNN is implemented natively (simple distance-based voting).
 
 use faer::Mat;
@@ -235,7 +235,7 @@ pub fn knn_classify(
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Decision Tree (linfa-trees)
+// Decision Tree (CART)
 // ═══════════════════════════════════════════════════════════════════════
 
 pub struct DecisionTreeResult {
@@ -243,22 +243,227 @@ pub struct DecisionTreeResult {
     pub probabilities: Vec<f64>,
 }
 
-/// Traverse the tree to the leaf for a single sample.
-fn dt_traverse_to_leaf<'a>(
-    sample: &[f64],
-    node: &'a linfa_trees::TreeNode<f64, usize>,
-) -> &'a linfa_trees::TreeNode<f64, usize> {
-    if node.is_leaf() {
-        node
+#[derive(Debug)]
+enum DecisionTreeModel {
+    Leaf {
+        prediction: usize,
+        class_1_count: usize,
+        total: usize,
+    },
+    Split {
+        feature: usize,
+        threshold: f64,
+        left: Box<DecisionTreeModel>,
+        right: Box<DecisionTreeModel>,
+    },
+}
+
+#[derive(Debug)]
+struct LeafSummary {
+    prediction: usize,
+    class_1_count: usize,
+    total: usize,
+}
+
+fn count_labels(labels: &[usize], indices: &[usize]) -> std::collections::HashMap<usize, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for &index in indices {
+        *counts.entry(labels[index]).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn gini_impurity(counts: &std::collections::HashMap<usize, usize>) -> f64 {
+    let total: usize = counts.values().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let total = total as f64;
+    1.0 - counts
+        .values()
+        .map(|&count| {
+            let probability = count as f64 / total;
+            probability * probability
+        })
+        .sum::<f64>()
+}
+
+fn leaf_summary(labels: &[usize], indices: &[usize]) -> LeafSummary {
+    let counts = count_labels(labels, indices);
+    let prediction = counts
+        .iter()
+        .max_by(|(left_label, left_count), (right_label, right_count)| {
+            right_count
+                .cmp(left_count)
+                .then_with(|| left_label.cmp(right_label))
+        })
+        .map(|(&label, _)| label)
+        .unwrap_or(0);
+    LeafSummary {
+        prediction,
+        class_1_count: counts.get(&1).copied().unwrap_or(0),
+        total: indices.len(),
+    }
+}
+
+fn leaf_from_summary(summary: LeafSummary) -> DecisionTreeModel {
+    DecisionTreeModel::Leaf {
+        prediction: summary.prediction,
+        class_1_count: summary.class_1_count,
+        total: summary.total,
+    }
+}
+
+fn split_threshold(left_value: f64, right_value: f64) -> f64 {
+    let midpoint = left_value + (right_value - left_value) / 2.0;
+    if midpoint > left_value && midpoint < right_value {
+        midpoint
     } else {
-        let (feat, threshold, _) = node.split();
-        let children = node.children();
-        // linfa-trees convention: feature < threshold → left, else → right
-        if sample[feat] < threshold {
-            dt_traverse_to_leaf(sample, children[0].as_ref().unwrap())
-        } else {
-            dt_traverse_to_leaf(sample, children[1].as_ref().unwrap())
+        left_value
+    }
+}
+
+fn fit_decision_tree(
+    data: &Mat<f64>,
+    labels: &[usize],
+    indices: Vec<usize>,
+    depth: usize,
+    max_depth: usize,
+    min_samples_split: usize,
+    min_samples_leaf: usize,
+) -> DecisionTreeModel {
+    let parent_counts = count_labels(labels, &indices);
+    let parent_impurity = gini_impurity(&parent_counts);
+    let summary = leaf_summary(labels, &indices);
+    let min_samples_split = min_samples_split.max(2);
+    let min_samples_leaf = min_samples_leaf.max(1);
+
+    if indices.len() < min_samples_split || depth >= max_depth || parent_impurity <= f64::EPSILON {
+        return leaf_from_summary(summary);
+    }
+
+    let (_, n_features) = data.shape();
+    let mut best: Option<(usize, f64, f64)> = None;
+
+    for feature in 0..n_features {
+        let mut sorted_indices = indices.clone();
+        sorted_indices.sort_by(|&left, &right| {
+            data[(left, feature)]
+                .partial_cmp(&data[(right, feature)])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut left_counts = std::collections::HashMap::new();
+        let mut right_counts = parent_counts.clone();
+        let total = sorted_indices.len();
+
+        for boundary in 0..total - 1 {
+            let moved_index = sorted_indices[boundary];
+            let label = labels[moved_index];
+            *left_counts.entry(label).or_insert(0) += 1;
+
+            if let Some(count) = right_counts.get_mut(&label) {
+                *count -= 1;
+                if *count == 0 {
+                    right_counts.remove(&label);
+                }
+            }
+
+            let left_value = data[(moved_index, feature)];
+            let right_value = data[(sorted_indices[boundary + 1], feature)];
+            if left_value == right_value {
+                continue;
+            }
+
+            let left_n = boundary + 1;
+            let right_n = total - left_n;
+            if left_n < min_samples_leaf || right_n < min_samples_leaf {
+                continue;
+            }
+
+            let weighted_impurity = (left_n as f64 * gini_impurity(&left_counts)
+                + right_n as f64 * gini_impurity(&right_counts))
+                / total as f64;
+
+            best = match best {
+                Some((_, _, best_score)) if best_score <= weighted_impurity => best,
+                _ => Some((
+                    feature,
+                    split_threshold(left_value, right_value),
+                    weighted_impurity,
+                )),
+            };
         }
+    }
+
+    // Accept zero-gain splits; their children may expose a useful split that
+    // the root's immediate score cannot see (for example, XOR).
+    if let Some((_, _, weighted_impurity)) = best {
+        if weighted_impurity > parent_impurity + 1e-12 {
+            best = None;
+        }
+    }
+
+    let Some((feature, threshold, _)) = best else {
+        return leaf_from_summary(summary);
+    };
+
+    let left_indices: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&index| data[(index, feature)] <= threshold)
+        .collect();
+    let right_indices: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&index| data[(index, feature)] > threshold)
+        .collect();
+
+    DecisionTreeModel::Split {
+        feature,
+        threshold,
+        left: Box::new(fit_decision_tree(
+            data,
+            labels,
+            left_indices,
+            depth + 1,
+            max_depth,
+            min_samples_split,
+            min_samples_leaf,
+        )),
+        right: Box::new(fit_decision_tree(
+            data,
+            labels,
+            right_indices,
+            depth + 1,
+            max_depth,
+            min_samples_split,
+            min_samples_leaf,
+        )),
+    }
+}
+
+fn predict_decision_tree(model: &DecisionTreeModel, sample: &[f64]) -> (usize, f64) {
+    match model {
+        DecisionTreeModel::Leaf {
+            prediction,
+            class_1_count,
+            total,
+        } => {
+            let probability = if *total == 0 {
+                0.5
+            } else {
+                *class_1_count as f64 / *total as f64
+            };
+            (*prediction, probability)
+        }
+        DecisionTreeModel::Split {
+            feature,
+            threshold,
+            left,
+            right,
+        } if sample[*feature] <= *threshold => predict_decision_tree(left, sample),
+        DecisionTreeModel::Split { right, .. } => predict_decision_tree(right, sample),
     }
 }
 
@@ -287,15 +492,11 @@ pub fn decision_tree_fit_predict(
     train_labels: &[usize],
     test_data: &Mat<f64>,
     max_depth: usize,
-    _min_samples_split: usize,
-    _min_samples_leaf: usize,
+    min_samples_split: usize,
+    min_samples_leaf: usize,
 ) -> Result<DecisionTreeResult> {
-    use linfa::dataset::DatasetBase;
-    use linfa::traits::{Fit, Predict};
-    use linfa_trees::DecisionTree;
-
     let (n_train, n_cols) = train_data.shape();
-    let (n_test, _) = test_data.shape();
+    let (n_test, n_test_cols) = test_data.shape();
     if n_train == 0 {
         return Err(ClassifyError::Empty);
     }
@@ -305,50 +506,29 @@ pub fn decision_tree_fit_predict(
             rows: n_train,
         });
     }
-
-    let x = faer_to_ndarray(train_data);
-    let y = ndarray::Array1::from_vec(train_labels.to_vec());
-    let dataset = DatasetBase::new(x, y);
-
-    let params = DecisionTree::params().max_depth(Some(max_depth));
-    let model = params
-        .fit(&dataset)
-        .map_err(|e| ClassifyError::Linfa(e.to_string()))?;
-
-    let x_test = faer_to_ndarray(test_data);
-    let predicted = model.predict(&x_test);
-    let predictions: Vec<usize> = predicted.iter().copied().collect();
-
-    // Compute leaf-level class proportions from **training** data, then apply
-    // to test samples' leaves for probability estimates.
-    let mut leaf_stats: std::collections::HashMap<usize, (usize, usize)> =
-        std::collections::HashMap::new();
-    for i in 0..n_train {
-        let sample: Vec<f64> = (0..n_cols).map(|j| train_data[(i, j)]).collect();
-        let leaf = dt_traverse_to_leaf(&sample, model.root_node());
-        let key = leaf as *const _ as usize;
-        let entry = leaf_stats.entry(key).or_insert((0, 0));
-        if train_labels[i] != 0 {
-            entry.1 += 1;
-        } else {
-            entry.0 += 1;
-        }
+    if n_test_cols != n_cols {
+        return Err(ClassifyError::Other(format!(
+            "train and test feature counts differ: train={n_cols}, test={n_test_cols}"
+        )));
     }
 
-    let probabilities: Vec<f64> = (0..n_test)
-        .map(|i| {
-            let sample: Vec<f64> = (0..n_cols).map(|j| test_data[(i, j)]).collect();
-            let leaf = dt_traverse_to_leaf(&sample, model.root_node());
-            let key = leaf as *const _ as usize;
-            let (n_neg, n_pos) = leaf_stats.get(&key).copied().unwrap_or((0, 0));
-            let total = n_neg + n_pos;
-            if total == 0 {
-                0.5
-            } else {
-                n_pos as f64 / total as f64
-            }
-        })
-        .collect();
+    let model = fit_decision_tree(
+        train_data,
+        train_labels,
+        (0..n_train).collect(),
+        0,
+        max_depth,
+        min_samples_split,
+        min_samples_leaf,
+    );
+    let mut predictions = Vec::with_capacity(n_test);
+    let mut probabilities = Vec::with_capacity(n_test);
+    for row in 0..n_test {
+        let sample: Vec<f64> = (0..n_cols).map(|column| test_data[(row, column)]).collect();
+        let (prediction, probability) = predict_decision_tree(&model, &sample);
+        predictions.push(prediction);
+        probabilities.push(probability);
+    }
 
     Ok(DecisionTreeResult {
         predictions,
@@ -399,6 +579,31 @@ mod tests {
         let r = decision_tree_fit_predict(&train, &labels, &test, 10, 2, 1).unwrap();
         assert_eq!(r.predictions.len(), 2);
         assert_eq!(r.predictions, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_decision_tree_learns_xor() {
+        let train = mat_from_row_major(4, 2, &[0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+        let labels = vec![0, 1, 1, 0];
+        let test = mat_from_row_major(5, 2, &[0.2, 0.2, 0.2, 0.8, 0.8, 0.2, 0.8, 0.8, 2.0, 2.0]);
+
+        let result = decision_tree_fit_predict(&train, &labels, &test, 5, 2, 1).unwrap();
+        assert_eq!(result.predictions, vec![0, 1, 1, 0, 0]);
+        assert_eq!(result.probabilities, vec![0.0, 1.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_decision_tree_respects_min_samples_leaf() {
+        let train = mat_from_row_major(5, 1, &[0.0, 1.0, 2.0, 3.0, 4.0]);
+        let labels = vec![0, 0, 0, 0, 1];
+        let result = decision_tree_fit_predict(&train, &labels, &train, 5, 2, 2).unwrap();
+
+        assert_eq!(result.predictions, vec![0, 0, 0, 1, 1]);
+        assert_eq!(
+            result.probabilities,
+            vec![0.0, 0.0, 0.0, 0.5, 0.5],
+            "a mixed leaf with two samples cannot be split into one-sample leaves"
+        );
     }
 
     fn make_binary_data() -> (Mat<f64>, Vec<usize>) {
