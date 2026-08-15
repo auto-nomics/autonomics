@@ -110,6 +110,13 @@ impl WireProtocol for AnthropicWire {
         data: &str,
         _state: &mut StreamState,
     ) -> Result<Option<MessageStreamEvent>> {
+        // Some Anthropic-compatible gateways append OpenAI's terminal SSE
+        // sentinel after their Anthropic events. It is protocol metadata,
+        // not a JSON MessageStreamEvent.
+        if data.trim() == "[DONE]" {
+            return Ok(None);
+        }
+
         // Anthropic SSE events are self-describing: the `event:` field names
         // the message type and the `data:` payload is the typed JSON body.
         // State on `StreamState` is unused for this protocol.
@@ -210,8 +217,51 @@ impl WireProtocol for AnthropicWire {
 
             "message_stop" => Ok(Some(MessageStreamEvent::MessageStop)),
 
+            "error" => {
+                let value: serde_json::Value = serde_json::from_str(data).map_err(|e| {
+                    AnthropicError::StreamError(format!("Failed to parse error event: {e}"))
+                })?;
+                let error = value.get("error").cloned().unwrap_or(value);
+                let message = error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| error.to_string());
+                Err(AnthropicError::StreamError(message))
+            }
+
             // `ping` and any unknown event types are skipped silently.
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_openai_done_sentinel() {
+        let mut state = StreamState::default();
+        let event = AnthropicWire
+            .adapt_sse_event("message", "[DONE]", &mut state)
+            .unwrap();
+        assert_eq!(event, None);
+    }
+
+    #[test]
+    fn surfaces_sse_error_event() {
+        let mut state = StreamState::default();
+        let error = AnthropicWire
+            .adapt_sse_event(
+                "error",
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"upstream failed"}}"#,
+                &mut state,
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(error, AnthropicError::StreamError(ref message) if message == "upstream failed")
+        );
     }
 }
