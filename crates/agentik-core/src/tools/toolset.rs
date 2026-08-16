@@ -435,9 +435,9 @@ impl Toolset {
     /// Signal cancellation to every running background task.
     ///
     /// Called during agent shutdown so that long-running tool invocations
-    /// (e.g. `run_dag`, `run_bash`) exit promptly instead of outliving the
-    /// runtime. The spawned tasks check their `CancellationToken` in a
-    /// `select!` arm and break with `Err(ToolError::Cancel)`.
+    /// (e.g. `run_dag`, `run_bash`) stop delaying the agent. Cooperative
+    /// implementations observe their `CancellationToken`; non-yielding tasks
+    /// also receive a JoinHandle abort request.
     pub async fn cancel_all_tasks(&self) {
         let tasks = self.tasks.read().await;
         for task in tasks.iter() {

@@ -4,6 +4,7 @@ use agentik_sdk::ToolResult;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
+use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -97,6 +98,7 @@ pub struct TaskEntry {
     name: String,
     status: watch::Receiver<TaskStatus>,
     cancel_token: CancellationToken,
+    abort_handle: AbortHandle,
     read: watch::Receiver<bool>,
     read_tx: watch::Sender<bool>,
     /// Structured, append-only progress buffer shared with the executing tool
@@ -156,6 +158,7 @@ impl TaskEntry {
         output: ProgressBuffer,
         metadata: TaskMetadata,
     ) -> Self {
+        let abort_handle = handle.abort_handle();
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);
         let (tool_result_tx, tool_result) = watch::channel::<Option<ToolResult>>(None);
@@ -208,6 +211,7 @@ impl TaskEntry {
             name,
             status,
             cancel_token,
+            abort_handle,
             read,
             read_tx,
             output,
@@ -262,13 +266,27 @@ impl TaskEntry {
     /// Signal cancellation to the running task.
     pub fn cancel(&self) {
         self.cancel_token.cancel();
+        self.abort_handle.abort();
     }
 
     /// Wait for the task to complete (Done or Failed). No timeout —
     /// the caller is responsible for wrapping this in a `tokio::time::timeout`
     /// if needed (timeout is enforced inside the spawned task).
     pub async fn wait_for_result(&mut self) -> ToolResult {
-        self.status.changed().await.ok();
+        tokio::select! {
+            changed = self.status.changed() => {
+                if changed.is_err() {
+                    return ToolResult::error("task status channel closed").with_id(&self.id);
+                }
+            }
+            // Tool futures are cooperatively scheduled. If an implementation
+            // is stuck in non-yielding work, do not keep the agent's session
+            // loop blocked waiting for its JoinHandle.
+            _ = self.cancel_token.cancelled() => {
+                self.abort_handle.abort();
+                return ToolResult::error(ToolError::Cancel.to_string()).with_id(&self.id);
+            }
+        }
         let seq = self.seq;
         match self.status.borrow().clone() {
             TaskStatus::Done(result) => {
@@ -329,6 +347,7 @@ impl TaskEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_task_completion() {
@@ -345,5 +364,27 @@ mod tests {
         let result = task.wait_for_result().await;
         assert!(result.text_content().contains("done"));
         assert!(task.is_read());
+    }
+
+    #[tokio::test]
+    async fn cancelled_task_unblocks_wait_for_result() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut task = TaskEntry::new(
+            1,
+            "cancel-task-1".into(),
+            "test_tool".into(),
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(ToolResult::success("done"))
+            }),
+            cancel,
+        );
+
+        let result = tokio::time::timeout(Duration::from_millis(100), task.wait_for_result())
+            .await
+            .expect("wait_for_result should observe cancellation");
+
+        assert!(result.text_content().contains("cancelled"));
     }
 }

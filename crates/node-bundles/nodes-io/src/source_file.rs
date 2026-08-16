@@ -406,9 +406,91 @@ mod tests {
         plain
     }
     use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::prelude::SessionContext;
+    use parquet::arrow::ArrowWriter;
+    use std::fs::File;
     use std::sync::Arc;
     use vfs::OpendalFileStorage;
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
+
+    #[test]
+    fn promote_floats_preserves_camel_case_column_names() {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "Blood_weight",
+            arrow_schema::DataType::Float32,
+            true,
+        )]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(arrow_array::Float32Array::from(vec![1.0]))],
+        )
+        .unwrap();
+        let df = ctx.read_batch(batch).unwrap();
+
+        let df = promote_floats(df).unwrap();
+
+        let fields: Vec<&str> = df
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        assert_eq!(fields, ["Blood_weight"]);
+        assert_eq!(
+            df.schema().field(0).data_type(),
+            &arrow_schema::DataType::Float64
+        );
+    }
+
+    #[tokio::test]
+    async fn source_file_preserves_camel_case_parquet_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Blood.parquet");
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("ID", arrow_schema::DataType::Int32, true),
+            arrow_schema::Field::new("Blood_weight", arrow_schema::DataType::Float32, true),
+            arrow_schema::Field::new("Cystatin_c", arrow_schema::DataType::Float32, true),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow_array::Int32Array::from(vec![1])),
+                Arc::new(arrow_array::Float32Array::from(vec![2.0])),
+                Arc::new(arrow_array::Float32Array::from(vec![3.0])),
+            ],
+        )
+        .unwrap();
+        let file = File::create(&path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let ctx = SessionContext::new();
+        let df = read_file(&ctx, path.to_str().unwrap(), FileFormat::Parquet)
+            .await
+            .unwrap();
+        let df = promote_floats(df).unwrap();
+
+        let fields: Vec<&str> = df
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        assert_eq!(fields, ["ID", "Blood_weight", "Cystatin_c"]);
+        assert_eq!(
+            df.schema().field(1).data_type(),
+            &arrow_schema::DataType::Float64
+        );
+        assert_eq!(
+            df.schema().field(2).data_type(),
+            &arrow_schema::DataType::Float64
+        );
+
+        let batches = df.collect().await.unwrap();
+        assert_eq!(batches[0].column_by_name("Blood_weight").unwrap().len(), 1);
+    }
 
     #[tokio::test]
     async fn test_load_vcf() {
@@ -628,8 +710,9 @@ mod tests {
 /// Cast every Float32 column to Float64, leaving all other columns unchanged.
 fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {
     use arrow_schema::DataType;
+    use datafusion::common::Column;
+    use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::cast;
-    use datafusion::prelude::col;
 
     let float32_cols: Vec<String> = df
         .schema()
@@ -640,7 +723,13 @@ fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {
         .collect();
 
     for name in &float32_cols {
-        df = df.with_column(name, cast(col(name), DataType::Float64))?;
+        // `col(&str)` parses the value as an SQL identifier and lowercases it
+        // when identifier normalization is enabled. A raw Column keeps the
+        // exact Parquet field name.
+        df = df.with_column(
+            name,
+            cast(Expr::Column(Column::from_name(name)), DataType::Float64),
+        )?;
     }
     Ok(df)
 }

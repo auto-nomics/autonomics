@@ -932,6 +932,7 @@ impl Session {
                 }
                 self.finish_turn(TurnExecutionStatus::Interrupted);
                 self.cancel_token = token.clone();
+                self.toolset.cancel_all_tasks().await;
                 // Wire the fresh cancel token into the toolset so that
                 // Ctrl+C also interrupts running tool tasks.
                 self.toolset.set_cancel_token(token);

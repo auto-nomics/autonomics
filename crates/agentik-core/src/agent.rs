@@ -490,6 +490,10 @@ impl Agent {
                     let tx = self.internal_event_tx.clone();
                     if let Some(session) = self.sessions.get_mut(&id) {
                         session.run_session(&tx, &mut rx, delegation_id).await;
+                        // A cancel can replace the token while run_session owns
+                        // the receiver. Keep Agent-owned session creation in
+                        // sync with that fresh token.
+                        self.cancel_token = session.cancel_token.clone();
                     }
                 }
             }
@@ -629,6 +633,13 @@ impl Agent {
                     s.stop();
                 }
                 false
+            }
+            InternalEvent::ResetCancelToken(ref token) => {
+                self.cancel_token = token.clone();
+                match self.active_session_mut() {
+                    Some(session) => session.apply_internal_event(event).await,
+                    None => true,
+                }
             }
             _ => {
                 if let Some(session) = self.active_session_mut() {
