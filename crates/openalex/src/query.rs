@@ -82,20 +82,25 @@ pub fn to_openalex_filter(sq: &StructuredSearch) -> Result<String> {
     Ok(clauses.join(","))
 }
 
-/// Extract the keywords portion of a [`StructuredSearch`] as a search query
-/// string (space-joined). Returns `None` if keywords are absent.
+/// Extract the keywords portion of a [`StructuredSearch`] as a search query.
+///
+/// OpenAlex search treats whitespace as AND and `|` as OR. Returns `None` if
+/// keywords are absent.
 pub fn keywords_search(sq: &StructuredSearch) -> Option<String> {
     let terms = filtered(&sq.keywords)?;
     let op = sq.keywords_op.unwrap_or_default();
-    let joined = match op {
+    let quoted: Vec<String> = terms.iter().map(|t| quote_term(t)).collect();
+    Some(match op {
+        BoolOp::Or => quoted.join("|"),
+        BoolOp::And => quoted.join(" "),
         BoolOp::Not => {
-            // NOT doesn't translate to a search query; fall back to AND of negation
-            // filters. For simplicity, return AND of all terms.
-            terms.join(" ")
+            let mut query = quoted;
+            for term in query.iter_mut().skip(1) {
+                *term = format!("-{term}");
+            }
+            query.join(" ")
         }
-        _ => terms.join(" "),
-    };
-    Some(joined)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -205,13 +210,33 @@ mod tests {
     }
 
     #[test]
-    fn keywords_search_space_joined() {
+    fn keywords_search_and_is_space_joined() {
         let sq = StructuredSearch {
             keywords: kw(&["p53", "cancer"]),
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
         assert_eq!(keywords_search(&sq).unwrap(), "p53 cancer");
+    }
+
+    #[test]
+    fn keywords_search_or_uses_pipe() {
+        let sq = StructuredSearch {
+            keywords: kw(&["p53", "cancer"]),
+            keywords_op: Some(BoolOp::Or),
+            ..Default::default()
+        };
+        assert_eq!(keywords_search(&sq).unwrap(), "p53|cancer");
+    }
+
+    #[test]
+    fn keywords_search_quotes_phrases() {
+        let sq = StructuredSearch {
+            keywords: kw(&["lung cancer", "biomarker"]),
+            keywords_op: Some(BoolOp::And),
+            ..Default::default()
+        };
+        assert_eq!(keywords_search(&sq).unwrap(), "\"lung cancer\" biomarker");
     }
 
     #[test]

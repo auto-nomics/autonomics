@@ -21,7 +21,8 @@
 //!
 //! ## Translation rules
 //!
-//! - `keywords` → free-form `query` param (all fields).
+//! - `keywords` → free-form `query` param (all fields). Crossref's query is
+//!   relevance/loose matching rather than strict Boolean intersection.
 //! - `title` → `query.bibliographic`.
 //! - `authors` → `query.author`.
 //! - `journal` → `query.container-title`.
@@ -54,6 +55,12 @@ pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
     // keywords → free-form query (all fields)
     if let Some(t) = filtered(&sq.keywords) {
         let op = sq.keywords_op.unwrap_or_default();
+        if t.len() > 1 && matches!(op, BoolOp::And | BoolOp::Not) {
+            return Err(CrossrefError::Param(format!(
+                "Crossref works search does not support strict keywords_op={}; use OR/loose recall or another source",
+                op.keyword()
+            )));
+        }
         q = q.with_query(join_terms(&t, op));
     }
 
@@ -111,23 +118,16 @@ pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
 // Helpers
 // -----------------------------------------------------------------------
 
-/// Join terms with the given operator for Crossref's free-form query.
-/// Crossref uses `+` for AND and spaces for OR by default, but we use
-/// explicit boolean words which the API also supports in query params.
+/// Join terms for Crossref's free-form query.
+///
+/// Crossref does not parse Boolean operators here; `AND` and `OR` would be
+/// treated as ordinary query tokens. Multiple terms therefore remain a loose,
+/// relevance-ranked query.
 fn join_terms(terms: &[String], op: BoolOp) -> String {
     let parts: Vec<String> = terms.iter().map(|t| quote_if_needed(t)).collect();
     match op {
-        BoolOp::Not => {
-            // NOT doesn't make sense as a sole join; emit as AND-NOT.
-            let first = parts.first().cloned().unwrap_or_default();
-            let rest: Vec<String> = parts.iter().skip(1).map(|t| format!("NOT {t}")).collect();
-            [first]
-                .into_iter()
-                .chain(rest)
-                .collect::<Vec<_>>()
-                .join(" AND ")
-        }
-        _ => parts.join(&format!(" {} ", op.keyword())),
+        BoolOp::Or | BoolOp::And => parts.join(" "),
+        BoolOp::Not => parts.join(" "),
     }
 }
 
@@ -181,7 +181,7 @@ mod tests {
             ..Default::default()
         };
         let q = to_crossref_works_query(&sq).unwrap();
-        assert_eq!(q.query.as_deref(), Some("cancer OR tumor"));
+        assert_eq!(q.query.as_deref(), Some("cancer tumor"));
     }
 
     #[test]
@@ -191,8 +191,8 @@ mod tests {
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
-        let q = to_crossref_works_query(&sq).unwrap();
-        assert_eq!(q.query.as_deref(), Some("p53 AND cancer"));
+        let err = to_crossref_works_query(&sq).unwrap_err();
+        assert!(format!("{err}").contains("does not support strict keywords_op=AND"));
     }
 
     #[test]
@@ -222,7 +222,7 @@ mod tests {
             .iter()
             .find(|(f, _)| f == "query.author")
             .unwrap();
-        assert_eq!(v, "Smith OR Jones");
+        assert_eq!(v, "Smith Jones");
     }
 
     #[test]
@@ -298,9 +298,24 @@ mod tests {
     }
 
     #[test]
-    fn join_terms_not_operator() {
-        let terms = vec!["cancer".into(), "tumor".into()];
-        let joined = join_terms(&terms, BoolOp::Not);
-        assert!(joined.contains("NOT tumor"));
+    fn keywords_strict_and_errors() {
+        let sq = StructuredSearch {
+            keywords: Some(vec!["GWAS".into(), "cardiovascular".into()]),
+            keywords_op: Some(BoolOp::And),
+            ..Default::default()
+        };
+        let err = to_crossref_works_query(&sq).unwrap_err();
+        assert!(format!("{err}").contains("does not support strict keywords_op=AND"));
+    }
+
+    #[test]
+    fn keywords_strict_not_errors() {
+        let sq = StructuredSearch {
+            keywords: Some(vec!["GWAS".into(), "cardiovascular".into()]),
+            keywords_op: Some(BoolOp::Not),
+            ..Default::default()
+        };
+        let err = to_crossref_works_query(&sq).unwrap_err();
+        assert!(format!("{err}").contains("does not support strict keywords_op=NOT"));
     }
 }

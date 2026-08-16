@@ -35,6 +35,23 @@ pub struct SourceBatch {
     pub total: usize,
     /// Articles returned in this batch.
     pub articles: Vec<Article>,
+    /// Error encountered while searching this source, if any.
+    ///
+    /// A batch with an error must not be interpreted as a true zero-count
+    /// result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl SourceBatch {
+    fn failure(source: &str, error: String) -> Self {
+        Self {
+            source: source.to_owned(),
+            total: 0,
+            articles: Vec::new(),
+            error: Some(error),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +152,7 @@ impl LiteratureSource for PubmedSource {
                 source: self.name().into(),
                 total: 0,
                 articles: vec![],
+                error: None,
             });
         }
 
@@ -165,6 +183,7 @@ impl LiteratureSource for PubmedSource {
             source: self.name().into(),
             total,
             articles,
+            error: None,
         })
     }
 
@@ -264,6 +283,7 @@ impl LiteratureSource for ArxivSource {
             source: self.name().into(),
             total,
             articles,
+            error: None,
         })
     }
 
@@ -384,6 +404,7 @@ impl LiteratureSource for BiorxivSource {
             source: self.name().into(),
             total: 0,
             articles: vec![],
+            error: None,
         })
     }
 
@@ -568,9 +589,13 @@ impl LiteratureSource for OpenAlexSource {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let filter = openalex::query::to_openalex_filter(query)
             .map_err(|e| Error::Unknown(format!("openalex query translation: {e}")))?;
-        let params = openalex::ListParams::new()
-            .with_filter(&filter)
-            .with_per_page((limit as u32).clamp(1, 200));
+        let mut params = openalex::ListParams::new().with_per_page((limit as u32).clamp(1, 200));
+        if !filter.is_empty() {
+            params = params.with_filter(filter);
+        }
+        if let Some(search) = openalex::query::keywords_search(query) {
+            params = params.with_search(search);
+        }
         let resp = self
             .client
             .list_works(&params)
@@ -582,6 +607,7 @@ impl LiteratureSource for OpenAlexSource {
             source: self.name().into(),
             total,
             articles,
+            error: None,
         })
     }
 
@@ -656,6 +682,7 @@ impl LiteratureSource for CrossrefSource {
             source: self.name().into(),
             total,
             articles,
+            error: None,
         })
     }
 
@@ -680,9 +707,10 @@ impl LiteratureSource for CrossrefSource {
 /// https://api.semanticscholar.org).
 ///
 /// Maps [`StructuredSearch`] → an S2 query + filter set via
-/// [`semantic_scholar::query::to_s2`], calls `/paper/search`, and converts
-/// each [`semantic_scholar::Paper`] into a canonical [`Article`] via
-/// [`semantic_scholar::paper_to_article`].
+/// [`semantic_scholar::query::to_s2`], searches the appropriate paper-search
+/// endpoint, and converts each [`semantic_scholar::Paper`] into a canonical
+/// [`Article`] via [`semantic_scholar::paper_to_article`]. Keyword-only
+/// queries use the Boolean-capable bulk-search endpoint.
 ///
 /// S2 features that do not fit the [`LiteratureSource`] contract (citation
 /// graph traversal, recommendations, author lookup) are registered as
@@ -714,27 +742,37 @@ impl LiteratureSource for S2Source {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let parts = semantic_scholar::query::to_s2(query)
             .map_err(|e| Error::Unknown(format!("s2 query translation: {e}")))?;
-        let resp = self
-            .client
-            .search_paper_filtered(
-                &parts.query,
-                (limit as u32).clamp(1, 100),
-                0,
-                &parts.filter,
-                None,
-            )
-            .await
-            .map_err(|e| Error::Unknown(format!("s2 search: {e}")))?;
-        let total = resp.total.max(0) as usize;
-        let articles: Vec<Article> = resp
-            .data
+        let (total, papers) = if semantic_scholar::query::is_keywords_only(query) {
+            let resp = self
+                .client
+                .search_paper_bulk(&parts.query, None, None, None)
+                .await
+                .map_err(|e| Error::Unknown(format!("s2 bulk search: {e}")))?;
+            (resp.total.max(0) as usize, resp.data)
+        } else {
+            let resp = self
+                .client
+                .search_paper_filtered(
+                    &parts.query,
+                    (limit as u32).clamp(1, 100),
+                    0,
+                    &parts.filter,
+                    None,
+                )
+                .await
+                .map_err(|e| Error::Unknown(format!("s2 search: {e}")))?;
+            (resp.total.max(0) as usize, resp.data)
+        };
+        let articles: Vec<Article> = papers
             .iter()
+            .take(limit)
             .map(semantic_scholar::paper_to_article)
             .collect();
         Ok(SourceBatch {
             source: self.name().into(),
             total,
             articles,
+            error: None,
         })
     }
 
@@ -864,8 +902,8 @@ impl LiteratureGateway {
     /// Search across all registered sources concurrently.
     ///
     /// Each source's results are returned as a separate [`SourceBatch`].
-    /// Sources that error are logged and skipped — one failing source
-    /// does not abort the others.
+    /// Source errors are logged and returned as failed batches so one failing
+    /// source does not abort or conceal the others.
     pub async fn search(&self, query: &StructuredSearch, limit: usize) -> Vec<SourceBatch> {
         self.search_subset(&self.sources.iter().collect::<Vec<_>>(), query, limit)
             .await
@@ -888,23 +926,46 @@ impl LiteratureGateway {
 
     /// Search a **subset** of sources by name, concurrently.
     ///
-    /// Unrecognised names are silently skipped. If `names` is `None`,
-    /// searches all registered sources (equivalent to [`Self::search`]).
+    /// Unrecognised names are returned as failed batches so callers can see
+    /// every requested source. If `names` is `None`, searches all registered
+    /// sources (equivalent to [`Self::search`]).
     pub async fn search_named(
         &self,
         names: Option<&[String]>,
         query: &StructuredSearch,
         limit: usize,
     ) -> Vec<SourceBatch> {
-        let selected: Vec<_> = match names {
-            Some(names) => self
-                .sources
-                .iter()
-                .filter(|s| names.iter().any(|n| n == s.name()))
-                .collect(),
-            None => self.sources.iter().collect(),
+        let names = match names {
+            Some(names) => names,
+            None => {
+                return self
+                    .search_subset(&self.sources.iter().collect::<Vec<_>>(), query, limit)
+                    .await;
+            }
         };
-        self.search_subset(&selected, query, limit).await
+
+        let selected: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|s| names.iter().any(|n| n == s.name()))
+            .collect();
+        let mut batches = self.search_subset(&selected, query, limit).await;
+
+        let known: Vec<&str> = selected.iter().map(|s| s.name()).collect();
+        let mut seen: Vec<String> = Vec::new();
+        for name in names {
+            if seen.contains(name) {
+                continue;
+            }
+            seen.push(name.clone());
+            if !known.contains(&name.as_str()) {
+                batches.push(SourceBatch::failure(
+                    name,
+                    format!("source '{name}' not registered"),
+                ));
+            }
+        }
+        batches
     }
 
     /// Internal: dispatch search to a set of source references concurrently.
@@ -924,15 +985,15 @@ impl LiteratureGateway {
         results
             .into_iter()
             .enumerate()
-            .filter_map(|(i, res)| match res {
-                Ok(batch) => Some(batch),
+            .map(|(i, res)| match res {
+                Ok(batch) => batch,
                 Err(e) => {
                     tracing::warn!(
                         source = sources[i].name(),
                         error = %e,
                         "literature source search failed"
                     );
-                    None
+                    SourceBatch::failure(sources[i].name(), e.to_string())
                 }
             })
             .collect()
@@ -978,5 +1039,58 @@ impl LiteratureGateway {
 impl Default for LiteratureGateway {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingSource;
+
+    #[async_trait]
+    impl LiteratureSource for FailingSource {
+        fn name(&self) -> &'static str {
+            "failing"
+        }
+
+        async fn search(&self, _query: &StructuredSearch, _limit: usize) -> Result<SourceBatch> {
+            Err(Error::Unknown("request failed".into()))
+        }
+
+        async fn fetch(&self, _id: &Identifier) -> Result<Option<Article>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_sources_are_visible_in_batches() {
+        let gateway = LiteratureGateway::new().with_source(Arc::new(FailingSource));
+        let batches = gateway.search(&StructuredSearch::default(), 1).await;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].source, "failing");
+        assert_eq!(batches[0].total, 0);
+        assert!(batches[0].articles.is_empty());
+        assert_eq!(
+            batches[0].error.as_deref(),
+            Some("unknown error: request failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_requested_sources_are_visible_in_batches() {
+        let gateway = LiteratureGateway::new();
+        let names = vec!["missing".to_string()];
+        let batches = gateway
+            .search_named(Some(&names), &StructuredSearch::default(), 1)
+            .await;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].source, "missing");
+        assert_eq!(
+            batches[0].error.as_deref(),
+            Some("source 'missing' not registered")
+        );
     }
 }

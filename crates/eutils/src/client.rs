@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::error::{EutilsError, Result};
 use crate::types::*;
@@ -45,6 +47,7 @@ pub struct EutilsClient {
     tool: String,
     email: String,
     api_key: Option<String>,
+    last_request: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
 impl EutilsClient {
@@ -59,6 +62,7 @@ impl EutilsClient {
             tool: tool.to_owned(),
             email: email.to_owned(),
             api_key: api_key.map(str::to_owned),
+            last_request: std::sync::Arc::new(Mutex::new(None)),
         }
     }
 
@@ -75,6 +79,41 @@ impl EutilsClient {
 
     // ----- helpers -----
 
+    /// Minimum interval between request starts for the configured API tier.
+    fn request_interval(&self) -> Duration {
+        if self.api_key.is_some() {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(334)
+        }
+    }
+
+    /// Serialize request starts across all clones of this client.
+    ///
+    /// The timestamp is recorded before sleeping so a burst of callers reserves
+    /// distinct start times instead of all waking and racing again.
+    async fn enforce_rate_limit(&self) {
+        let interval = self.request_interval();
+        let delay = {
+            let mut last = self.last_request.lock().await;
+            let now = Instant::now();
+            match *last {
+                None => {
+                    *last = Some(now);
+                    None
+                }
+                Some(previous) => {
+                    let next = previous.checked_add(interval).unwrap_or(now);
+                    *last = Some(next);
+                    Some(next.saturating_duration_since(now)).filter(|delay| !delay.is_zero())
+                }
+            }
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+    }
+
     /// Inject the common `tool`, `email`, and optional `api_key` parameters.
     fn inject_common(&self, params: &mut Vec<(&str, String)>) {
         params.push(("tool", self.tool.clone()));
@@ -86,6 +125,7 @@ impl EutilsClient {
 
     /// Build a GET URL and fetch JSON.
     async fn get_json(&self, endpoint: &str, params: Vec<(&str, String)>) -> Result<Value> {
+        self.enforce_rate_limit().await;
         let mut p = params;
         self.inject_common(&mut p);
 
@@ -102,6 +142,7 @@ impl EutilsClient {
 
     /// Build a GET URL and fetch raw text.
     async fn get_text(&self, endpoint: &str, params: Vec<(&str, String)>) -> Result<String> {
+        self.enforce_rate_limit().await;
         let mut p = params;
         self.inject_common(&mut p);
 
@@ -118,6 +159,7 @@ impl EutilsClient {
 
     /// POST form-encoded params and fetch JSON.
     async fn post_json(&self, endpoint: &str, params: HashMap<&str, String>) -> Result<Value> {
+        self.enforce_rate_limit().await;
         let mut p = params;
         p.insert("tool", self.tool.clone());
         p.insert("email", self.email.clone());
@@ -138,6 +180,7 @@ impl EutilsClient {
 
     /// POST form-encoded params and fetch raw text (used for large ID lists).
     async fn post_text(&self, endpoint: &str, params: HashMap<&str, String>) -> Result<String> {
+        self.enforce_rate_limit().await;
         let mut p = params;
         p.insert("tool", self.tool.clone());
         p.insert("email", self.email.clone());
@@ -427,4 +470,29 @@ fn extract_xml_field(xml: &str, tag: &str) -> Option<String> {
     let start = xml.find(&open)? + open.len();
     let end = xml.find(&close)?;
     Some(xml[start..end].to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn request_interval_follows_api_key_tier() {
+        let unauthenticated = EutilsClient::new("tool", "email", None);
+        assert_eq!(
+            unauthenticated.request_interval(),
+            Duration::from_millis(334)
+        );
+
+        let authenticated = EutilsClient::new("tool", "email", Some("key"));
+        assert_eq!(authenticated.request_interval(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn clones_share_the_rate_limit_clock() {
+        let client = EutilsClient::new("tool", "email", None);
+        let clone = client.clone();
+        assert!(Arc::ptr_eq(&client.last_request, &clone.last_request));
+    }
 }

@@ -175,8 +175,21 @@ async fn kegg_ora_reproduces_validated_hypergeometric_result() {
         .unwrap()
         .value(0);
     let hit_genes = string_value(batch, 12, 0);
+    let query_input_n = batch
+        .column(13)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    let query_mapped_n = batch
+        .column(14)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
 
     assert_eq!((universe_n, query_n, hit_n, set_n), (8645, 107, 67, 67));
+    assert_eq!((query_input_n, query_mapped_n), (107, 107));
     let expected_raw = 3.350684888061157e-140;
     assert!(
         (p_raw - expected_raw).abs() / expected_raw < 1e-10,

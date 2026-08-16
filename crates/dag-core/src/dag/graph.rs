@@ -933,7 +933,9 @@ impl DAG {
     ///
     /// Checks (in order):
     /// 1. No cycles.
-    /// 2. Every edge references ports that exist on its endpoints.
+    /// 2. Every edge references an existing output port, and — for fixed-input
+    ///    nodes — an existing input port (variadic nodes accept undeclared
+    ///    input ports).
     /// 3. The default-port `add_edge` form was only used on single-port nodes.
     /// 4. Each input port has at most one incoming edge (strict 1:1).
     /// 5. Every declared input port has exactly one incoming edge.
@@ -1572,6 +1574,43 @@ mod tests {
         dag.add_edge("node_a_id", "node_c_id", 0, 0).unwrap();
 
         dag.validate_port_wiring().unwrap();
+    }
+
+    #[test]
+    fn variadic_node_allows_undeclared_optional_input_port() {
+        // Declared ports stay required even when the input is variadic; the
+        // undeclared extra port may be unwired, wired once, and is still
+        // subject to the strict 1:1 rule once connected.
+        let mut dag = DAG::default();
+        for name in ["s0", "s1", "s2", "s3", "s4"] {
+            dag.add_node(
+                name.into(),
+                Box::new(PortedNode(NodePorts::new().add_output_port(None))),
+            )
+            .unwrap();
+        }
+        let target_ports = NodePorts::new()
+            .add_input_port(None)
+            .add_input_port(None)
+            .add_input_port(None)
+            .set_fixed_input(false);
+        dag.add_node("t".into(), Box::new(PortedNode(target_ports)))
+            .unwrap();
+
+        for i in 0u8..3 {
+            dag.add_edge(format!("s{i}"), "t", 0, i).unwrap();
+        }
+        dag.validate_port_wiring().unwrap();
+
+        dag.add_edge("s3", "t", 0, 3).unwrap();
+        dag.validate_port_wiring().unwrap();
+
+        dag.add_edge("s4", "t", 0, 3).unwrap();
+        let err = dag.validate_port_wiring().unwrap_err();
+        assert_matches!(
+            err,
+            DagError::PortOverconnected { node, port } if node == "t" && port == 3
+        );
     }
 
     #[test]

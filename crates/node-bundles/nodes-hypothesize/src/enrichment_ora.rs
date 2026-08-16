@@ -102,11 +102,15 @@ impl NodeFactory for EnrichmentOraNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Input port 0 is a query gene table, port 1 is a gene_id/set_id mapping, \
-        port 2 is set metadata, and optional port 3 is a background gene table. \
-        Performs exact hypergeometric/Fisher or chi-square enrichment tests, \
-        applies multiple-testing correction, and reports hit genes. Background \
-        mode is annotation_all, given, or detected."
+        "Required inputs: port 0 = query gene table (gene ID column named by \
+        gene_col), port 1 = long-format gene_id/set_id annotation mapping, \
+        port 2 = gene-set metadata (set_id, set_name, optional set_class). \
+        Optional background: connect a one-column gene table to input port 3; \
+        it is required only when background_mode='given' and ignored otherwise. \
+        Port 3 is intentionally undeclared, so it may stay unwired. Performs \
+        exact hypergeometric/Fisher or chi-square enrichment tests, applies \
+        multiple-testing correction, and reports hit genes plus the QC counts \
+        query_input_n/query_mapped_n. set_class is null when metadata omits it."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -114,13 +118,15 @@ impl NodeFactory for EnrichmentOraNodeFactory {
     }
 
     fn ports(&self) -> NodePorts {
+        // Declared input ports are always required by DAG::validate, so only
+        // the three fixed inputs are declared. Keeping the input variadic
+        // lets an edge target undeclared port 3 (background) when needed;
+        // execute() enforces its per-background_mode requirement.
         NodePorts::new()
             .add_input_port(None)
             .add_input_port(None)
             .add_input_port(None)
-            .add_input_port(None)
             .add_output_port(Some(output_schema()))
-            // Port 3 is optional. Required ports are checked at execution time.
             .set_fixed_input(false)
     }
 
@@ -239,7 +245,12 @@ impl DagNode for EnrichmentOraNode {
 
         let annotation_genes: BTreeSet<_> = annotation.iter().map(|row| row.0.clone()).collect();
         let mapped_query_n = query.intersection(&annotation_genes).count();
+        let query_input_n = query.len();
         let mapping_rate = mapped_query_n as f64 / query.len() as f64;
+        reporter.info(format!(
+            "query mapping: {mapped_query_n}/{query_input_n} query genes occur in the annotation mapping ({:.1}%)",
+            mapping_rate * 100.0
+        ));
         if mapping_rate < 0.8 {
             reporter.warn(format!(
                 "only {:.1}% of query genes occur in the annotation mapping",
@@ -264,6 +275,12 @@ impl DagNode for EnrichmentOraNode {
             }
             _ => unreachable!("background mode validated at build time"),
         };
+        if ports.contains_key(&3) && self.spec.background_mode != "given" {
+            reporter.info(format!(
+                "input port 3 is connected but ignored because background_mode='{}'",
+                self.spec.background_mode
+            ));
+        }
 
         if universe.is_empty() {
             return Err(node_error("background universe is empty"));
@@ -278,6 +295,11 @@ impl DagNode for EnrichmentOraNode {
         let effective_query: BTreeSet<String> = query.intersection(&universe).cloned().collect();
         let query_n = effective_query.len();
         let universe_n = universe.len();
+        if query_n < query_input_n {
+            reporter.info(format!(
+                "background universe filter: {query_n}/{query_input_n} query genes enter the analysis"
+            ));
+        }
         if query_n == 0 {
             return Err(node_error(
                 "no query genes are present in the background universe",
@@ -373,6 +395,8 @@ impl DagNode for EnrichmentOraNode {
             &candidates,
             universe_n as i64,
             query_n as i64,
+            query_input_n as i64,
+            mapped_query_n as i64,
             self.spec.alpha,
         )?;
         let df = ctx
@@ -517,6 +541,8 @@ fn output_schema() -> SchemaRef {
         Field::new("p_adj", DataType::Float64, false),
         Field::new("reject", DataType::Int32, false),
         Field::new("hit_genes", DataType::Utf8, false),
+        Field::new("query_input_n", DataType::Int64, false),
+        Field::new("query_mapped_n", DataType::Int64, false),
     ]))
 }
 
@@ -524,6 +550,8 @@ fn build_output_batch(
     results: &[EnrichmentResult],
     universe_n: i64,
     query_n: i64,
+    query_input_n: i64,
+    query_mapped_n: i64,
     alpha: f64,
 ) -> Result<RecordBatch, DagError> {
     let set_ids: Vec<&str> = results.iter().map(|row| row.set_id.as_str()).collect();
@@ -555,6 +583,8 @@ fn build_output_batch(
             Arc::new(Float64Array::from(p_adj)),
             Arc::new(Int32Array::from(reject)),
             Arc::new(StringArray::from(hit_genes)),
+            Arc::new(Int64Array::from(vec![query_input_n; results.len()])),
+            Arc::new(Int64Array::from(vec![query_mapped_n; results.len()])),
         ],
     )
     .map_err(|e| node_error(format!("failed to build output batch: {e}")))
@@ -751,9 +781,11 @@ mod tests {
             false,
         )]));
         let genes: ArrayRef = if numeric {
-            Arc::new(arrow_array::Int64Array::from(vec![1, 2, 3, 4]))
+            // 999 never occurs in the mapping: it must show up in
+            // query_input_n but not in query_mapped_n.
+            Arc::new(arrow_array::Int64Array::from(vec![1, 2, 3, 4, 999]))
         } else {
-            Arc::new(StringArray::from(vec!["A", "B", "C", "D"]))
+            Arc::new(StringArray::from(vec!["A", "B", "C", "D", "Z"]))
         };
         RecordBatch::try_new(schema, vec![genes]).unwrap()
     }
@@ -869,6 +901,16 @@ mod tests {
     }
 
     #[test]
+    fn optional_background_port_is_not_required_by_layout() {
+        // Declared ports are always required by the engine; the optional
+        // background table must therefore stay undeclared (variadic input).
+        let ports = EnrichmentOraNodeFactory.ports();
+        assert_eq!(ports.input_ports().len(), 3);
+        assert!(!ports.is_fixed_input());
+        assert!(ports.input_port(3).is_none());
+    }
+
+    #[test]
     fn hypergeometric_p_value_is_exact() {
         let p = raw_p_value("hypergeometric", "greater", 10, 5, 4, 4).unwrap();
         assert!((p - 1.0 / 42.0).abs() < 1e-14, "p={p}");
@@ -936,12 +978,58 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
+        let query_ns = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let query_input_ns = batch
+            .column(13)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let query_mapped_ns = batch
+            .column(14)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
 
         assert_eq!(ids.value(0), "S1");
         assert_eq!(hits.value(0), 4);
         assert_eq!(set_sizes.value(0), 5);
         assert!((p_raw.value(0) - 1.0 / 42.0).abs() < 1e-14);
         assert_eq!(hit_genes.value(0), "A,B,C,D");
+        assert_eq!(
+            (
+                query_ns.value(0),
+                query_input_ns.value(0),
+                query_mapped_ns.value(0)
+            ),
+            (4, 5, 4)
+        );
+    }
+
+    #[tokio::test]
+    async fn extra_background_port_is_accepted_when_mode_is_not_given() {
+        // Port 3 wired while background_mode='annotation_all': the edge is
+        // accepted, the table is ignored, and the annotation universe wins.
+        let upstream = SessionContext::new();
+        let mut node = EnrichmentOraNode::new(spec("annotation_all"));
+        let outputs = node
+            .execute(
+                &node_ctx(),
+                &inputs(&upstream, true, false),
+                &NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let universe = batches[0]
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(universe.value(0), 10);
     }
 
     #[tokio::test]
@@ -963,6 +1051,25 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(universe.value(0), 9);
+    }
+
+    #[tokio::test]
+    async fn given_background_without_port_3_fails_loudly() {
+        let upstream = SessionContext::new();
+        let mut node = EnrichmentOraNode::new(spec("given"));
+        let err = node
+            .execute(
+                &node_ctx(),
+                &inputs(&upstream, false, false),
+                &NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("background_mode='given' requires input port 3"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

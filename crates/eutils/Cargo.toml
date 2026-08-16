@@ -16,6 +16,7 @@ reqwest = { version = "0.13", features = ["json", "form"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 schemars.workspace = true
 [dev-dependencies]

@@ -108,9 +108,9 @@ impl Serialize for Port {
 #[derive(Clone, Debug)]
 pub struct Ports {
     ports: HashMap<PortId, Port>,
-    /// Whether the number of ports is fixed. If `false`, the scheduler will not
-    /// validate `OverConnected` / `UnderConnected` edge situations — useful for
-    /// variadic nodes like `SqlNode` that accept any number of inputs.
+    /// Whether the declared input ports are exhaustive. If `false`, edges may
+    /// target additional, undeclared input ports (variadic inputs); declared
+    /// ports remain required, and strict 1:1 still applies to every wired port.
     is_fixed: bool,
 }
 impl Default for Ports {
@@ -205,9 +205,11 @@ impl NodePorts {
 
     /// Set whether the input port count is fixed (default `true`).
     ///
-    /// When `false`, the scheduler skips `OverConnected`/`UnderConnected`
-    /// validation on this node's input ports. This is useful for variadic nodes
-    /// that accept a dynamic number of inputs (e.g. `SqlNode`).
+    /// When `false`, the scheduler allows edges to additional, undeclared
+    /// input ports. This is useful for variadic nodes that accept a dynamic
+    /// number of inputs (e.g. `SqlNode`), and for nodes whose declared ports
+    /// are required while extra ports are optional. Declared ports remain
+    /// required, and every wired input port is still strict 1:1.
     pub fn set_fixed_input(mut self, is_fixed: bool) -> Self {
         self.input_ports.is_fixed = is_fixed;
         self

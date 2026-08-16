@@ -1,4 +1,8 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use reqwest::Client;
+use tokio::sync::Mutex;
 
 use crate::error::{Result, S2Error};
 use crate::types::*;
@@ -61,6 +65,7 @@ fn reco_base() -> String {
 pub struct S2Client {
     client: Client,
     api_key: Option<String>,
+    last_request: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Default for S2Client {
@@ -78,6 +83,7 @@ impl S2Client {
                 .build()
                 .expect("reqwest client builder"),
             api_key: None,
+            last_request: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -94,6 +100,7 @@ impl S2Client {
         Self {
             client,
             api_key: None,
+            last_request: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -107,6 +114,40 @@ impl S2Client {
     /// Initial backoff delay for 429 retries (milliseconds).
     const INITIAL_BACKOFF_MS: u64 = 2000;
 
+    /// Serialize request starts across all clones of this client.
+    async fn enforce_rate_limit(&self) {
+        const INTERVAL: Duration = Duration::from_millis(1050);
+        let delay = {
+            let mut last = self.last_request.lock().await;
+            let now = Instant::now();
+            match *last {
+                None => {
+                    *last = Some(now);
+                    None
+                }
+                Some(previous) => {
+                    let next = previous.checked_add(INTERVAL).unwrap_or(now);
+                    *last = Some(next);
+                    Some(next.saturating_duration_since(now)).filter(|delay| !delay.is_zero())
+                }
+            }
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    fn retry_after_ms(resp: &reqwest::Response) -> Option<u64> {
+        let seconds = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)?
+            .to_str()
+            .ok()?
+            .parse::<u64>()
+            .ok()?;
+        Some(seconds.saturating_mul(1000).min(30_000))
+    }
+
     /// Execute a GET request that returns JSON, with automatic retry on 429.
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
@@ -117,16 +158,19 @@ impl S2Client {
         let url = build_url(base, path, params);
         let mut backoff = Self::INITIAL_BACKOFF_MS;
         for attempt in 0..=Self::MAX_RETRIES {
+            self.enforce_rate_limit().await;
             let mut req = self.client.get(&url);
             if let Some(ref key) = self.api_key {
                 req = req.header("x-api-key", key);
             }
             let resp = req.send().await?;
             let status = resp.status().as_u16();
+            let retry_after = Self::retry_after_ms(&resp);
             let body = resp.text().await?;
             if status == 429 && attempt < Self::MAX_RETRIES {
-                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-                backoff *= 2;
+                let wait_ms = retry_after.unwrap_or(backoff).max(backoff).min(30_000);
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                backoff = backoff.saturating_mul(2);
                 continue;
             }
             if !(200..300).contains(&status) {
@@ -149,16 +193,19 @@ impl S2Client {
         let url = build_url(base, path, params);
         let mut backoff = Self::INITIAL_BACKOFF_MS;
         for attempt in 0..=Self::MAX_RETRIES {
+            self.enforce_rate_limit().await;
             let mut req = self.client.post(&url).json(body);
             if let Some(ref key) = self.api_key {
                 req = req.header("x-api-key", key);
             }
             let resp = req.send().await?;
             let status = resp.status().as_u16();
+            let retry_after = Self::retry_after_ms(&resp);
             let body_text = resp.text().await?;
             if status == 429 && attempt < Self::MAX_RETRIES {
-                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-                backoff *= 2;
+                let wait_ms = retry_after.unwrap_or(backoff).max(backoff).min(30_000);
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                backoff = backoff.saturating_mul(2);
                 continue;
             }
             if !(200..300).contains(&status) {

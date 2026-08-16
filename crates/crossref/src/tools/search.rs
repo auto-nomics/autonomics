@@ -19,7 +19,6 @@ use crate::format::format_works;
 ///
 ///    Example: {
 ///      "keywords": ["p53", "cancer"],
-///      "keywords_op": "AND",
 ///      "year_range": {"from": 2020, "to": 2024}
 ///    }
 ///
@@ -36,13 +35,13 @@ use crate::format::format_works;
                   \
                   TWO query modes (provide exactly one): \
                   \
-                  1. RECOMMENDED — `structured`: a typed query object with named fields \
-                     (keywords, title, authors, journal, affiliation, publication_types, \
-                     year_range). Fields are AND-ed; terms within a field are OR-ed. \
+                 1. RECOMMENDED — `structured`: a typed query object with named fields \
+                    (keywords, title, authors, journal, affiliation, publication_types, \
+                    year_range). Crossref queries are loose relevance recall: fields are \
+                    AND-ed, but strict keywords_op=AND/NOT is unsupported. \
                      \
                      Example: { \
                        \"keywords\": [\"p53\", \"cancer\"], \
-                       \"keywords_op\": \"AND\", \
                        \"year_range\": {\"from\": 2020, \"to\": 2024} \
                      } \
                   \
@@ -53,8 +52,8 @@ use crate::format::format_works;
 pub struct CrossrefSearchInput {
     #[desc = "Structured query object. Preferred over `query`. Populate any subset of \
              fields: keywords (all fields), title, authors, journal, affiliation, \
-             publication_types, year_range. Fields are AND-ed; terms within a field \
-             are OR-ed (use keywords_op to change keywords' join)."]
+             publication_types, year_range. Fields are AND-ed and keyword terms use loose \
+             OR/recall matching; strict AND/NOT is unsupported."]
     pub structured: Option<StructuredSearch>,
 
     #[desc = "Raw free-text search for the Crossref /works endpoint (expert mode). \

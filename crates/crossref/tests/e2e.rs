@@ -106,7 +106,7 @@ async fn sdk_structured_search_live() {
 
     let sq = StructuredSearch {
         keywords: Some(vec!["p53".into(), "cancer".into()]),
-        keywords_op: Some(BoolOp::And),
+        keywords_op: Some(BoolOp::Or),
         year_range: Some(YearRange {
             from: 2023,
             to: 2024,
@@ -121,7 +121,7 @@ async fn sdk_structured_search_live() {
     let resp = client.works(&query).await.expect("structured search");
 
     let msg = &resp.message;
-    assert!(msg.total_results > 0, "should find p53 AND cancer papers");
+    assert!(msg.total_results > 0, "should find p53/cancer papers");
 
     // Verify year filter is respected (all results should be 2023 or 2024).
     for work in &msg.items {

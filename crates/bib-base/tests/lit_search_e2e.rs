@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use bib_base::query::{LiteratureGateway, PubmedSource};
+use bib_base::query::{LiteratureGateway, OpenAlexSource, PubmedSource};
 use bib_types::query::{BoolOp, StructuredSearch, YearRange};
 use bib_types::{IdKind, Identifier};
 
@@ -18,6 +18,38 @@ fn pubmed_gateway() -> LiteratureGateway {
     LiteratureGateway::new().with_source(Arc::new(PubmedSource::new(Arc::new(
         eutils::EutilsClient::from_env(),
     ))))
+}
+
+fn openalex_gateway() -> LiteratureGateway {
+    let api_key = std::env::var("OPENALEX_API_KEY").ok();
+    LiteratureGateway::new().with_source(Arc::new(OpenAlexSource::new(Arc::new(
+        openalex::OpenAlexClient::new(api_key.as_deref()),
+    ))))
+}
+
+#[tokio::test]
+async fn openalex_keyword_and_search_returns_results() {
+    let gateway = openalex_gateway();
+    let query = StructuredSearch {
+        keywords: Some(vec![
+            "GWAS".into(),
+            "cardiovascular".into(),
+            "obesity".into(),
+        ]),
+        keywords_op: Some(BoolOp::And),
+        ..Default::default()
+    };
+
+    let batches = gateway.search(&query, 5).await;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.source, "openalex");
+    assert!(batch.error.is_none(), "openalex error: {:?}", batch.error);
+    assert!(batch.total > 0, "OpenAlex should have intersection results");
+    assert!(
+        !batch.articles.is_empty(),
+        "OpenAlex should return articles"
+    );
 }
 
 #[tokio::test]

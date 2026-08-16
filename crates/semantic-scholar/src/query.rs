@@ -51,7 +51,7 @@ pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
 
     // keywords → bare query terms
     if let Some(t) = filtered(&sq.keywords) {
-        let joined = join_terms(&t, sq.keywords_op.unwrap_or(BoolOp::And));
+        let joined = join_terms(&t, sq.keywords_op.unwrap_or_default());
         if !joined.is_empty() {
             terms.push(joined);
         }
@@ -121,6 +121,21 @@ pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
     Ok(S2QueryParts { query, filter })
 }
 
+/// Whether this query consists solely of keyword terms.
+///
+/// The bulk-search endpoint supports Boolean query syntax but not the relevance
+/// endpoint's field filters, so this lets callers select the correct endpoint.
+pub fn is_keywords_only(sq: &StructuredSearch) -> bool {
+    sq.keywords.is_some()
+        && sq.title.is_none()
+        && sq.authors.is_none()
+        && sq.mesh.is_none()
+        && sq.journal.is_none()
+        && sq.publication_types.is_none()
+        && sq.affiliation.is_none()
+        && sq.year_range.is_none()
+}
+
 /// Join terms with the given boolean operator. Terms with spaces are
 /// phrase-quoted.
 fn join_terms(terms: &[String], op: BoolOp) -> String {
@@ -181,13 +196,13 @@ mod tests {
     }
 
     #[test]
-    fn keywords_default_and() {
+    fn keywords_default_or() {
         let sq = StructuredSearch {
             keywords: kw(&["p53", "cancer"]),
             ..Default::default()
         };
         let parts = to_s2(&sq).unwrap();
-        assert_eq!(parts.query, "p53 cancer"); // default AND = space
+        assert_eq!(parts.query, "p53 | cancer");
     }
 
     #[test]
@@ -278,5 +293,24 @@ mod tests {
         };
         let parts = to_s2(&sq).unwrap();
         assert_eq!(parts.query, "cancer Smith");
+    }
+
+    #[test]
+    fn keywords_only_detection() {
+        let sq = StructuredSearch {
+            keywords: kw(&["p53", "cancer"]),
+            ..Default::default()
+        };
+        assert!(is_keywords_only(&sq));
+
+        let sq = StructuredSearch {
+            keywords: kw(&["p53"]),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
+            ..Default::default()
+        };
+        assert!(!is_keywords_only(&sq));
     }
 }

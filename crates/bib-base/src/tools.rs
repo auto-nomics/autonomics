@@ -26,13 +26,16 @@ use crate::query::LiteratureGateway;
     description = "Search for academic literature. By default searches ALL registered sources \
                   concurrently (PubMed, arXiv, bioRxiv, OpenAlex, Crossref, Semantic Scholar). \
                   Pass `sources` to restrict to specific sources only — those will be searched \
-                  concurrently and the rest skipped entirely. \
+                  concurrently and the rest skipped entirely. Every requested source appears in \
+                  `source_summary`; sources with status \"error\" did not complete and must not be \
+                  interpreted as zero matches. \
                   \
                   \
         **Sources**: \"pubmed\" (biomedical), \"arxiv\" (physics/CS/math preprints), \
         \"biorxiv\" (biology/medicine preprints — keyword search not supported, fetch only), \
-        \"openalex\" (270M+ works, all disciplines), \"crossref\" (DOI-registered works), \
-        \"semantic_scholar\" (AI-powered academic search). \
+        \"openalex\" (270M+ works, all disciplines), \"crossref\" (DOI-registered works; \
+        loose OR/recall search, strict AND is unsupported), \"semantic_scholar\" (AI-powered \
+        academic search). \
         \
         **Keywords** (CRITICAL — read carefully): each array element is ONE \
         distinct search term or phrase — NOT a full sentence. Split your query \
@@ -45,7 +48,7 @@ use crate::query::LiteratureGateway;
                      (entire sentence as one element — search will miss everything) \
         \
         **Examples**: \
-        • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\" — search all sources \
+        • keywords=[\"CRISPR\", \"off-target\"], keywords_op=\"AND\", sources=[\"pubmed\", \"arxiv\"] \
         • keywords=[\"transformer\"], sources=[\"arxiv\"] — only arXiv \
         • keywords=[\"GWAS\"], sources=[\"pubmed\", \"openalex\"] — PubMed + OpenAlex concurrently"
 )]
@@ -124,11 +127,17 @@ impl ToolFunction for LitSearchTool {
         let source_summary: Vec<serde_json::Value> = batches
             .iter()
             .map(|b| {
-                serde_json::json!({
+                let mut summary = serde_json::json!({
                     "source": b.source,
-                    "total_available": b.total,
+                    "status": if b.error.is_some() { "error" } else { "ok" },
                     "returned": b.articles.len(),
-                })
+                });
+                if let Some(error) = &b.error {
+                    summary["error"] = serde_json::Value::String(error.clone());
+                } else {
+                    summary["total_available"] = serde_json::Value::from(b.total);
+                }
+                summary
             })
             .collect();
 
@@ -155,8 +164,9 @@ impl ToolFunction for LitSearchTool {
             .collect();
 
         let result = serde_json::json!({
-            "sources_searched": self.gateway.source_names(),
+            "sources_searched": batches.iter().map(|b| b.source.clone()).collect::<Vec<_>>(),
             "source_summary": source_summary,
+            "failed_sources": batches.iter().filter(|b| b.error.is_some()).map(|b| b.source.clone()).collect::<Vec<_>>(),
             "total_returned": total_articles,
             "articles": articles_json,
         });
