@@ -1128,6 +1128,14 @@ impl App {
             return;
         }
 
+        // While the command palette is open it captures all remaining keys
+        // (navigation, filtering, execution, dismissal) — tab handlers never
+        // see them.
+        if self.state.command_palette.is_visible() {
+            self.handle_command_palette_key(key);
+            return;
+        }
+
         // Ctrl+W: close the active agent leaf (and terminate its background
         // process). Disabled when no agent is running.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
@@ -1135,14 +1143,6 @@ impl App {
                 return;
             }
             self.close_active_agent();
-            return;
-        }
-
-        // While the command palette is open it captures all remaining keys
-        // (navigation, filtering, execution, dismissal) — tab handlers never
-        // see them.
-        if self.state.command_palette.visible {
-            self.handle_command_palette_key(key);
             return;
         }
 
@@ -1966,27 +1966,15 @@ impl App {
     /// `handle_key`'s caller; the caller is responsible for closing on Esc
     /// (via [`CommandPaletteState::close`]).
     fn handle_command_palette_key(&mut self, key: &KeyEvent) {
-        use crate::widgets::command_palette::CommandAction;
+        use crate::widgets::command_palette::CommandPaletteKeyOutcome;
 
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            // Esc or Ctrl+P (handled above) — close without running anything.
-            KeyCode::Esc => {
+        match self.state.command_palette.handle_key(*key) {
+            CommandPaletteKeyOutcome::Consumed => {}
+            CommandPaletteKeyOutcome::Execute(action) => {
                 self.state.command_palette.close();
+                self.run_command_action(action);
             }
-            // Enter: run the selected action, then dismiss.
-            KeyCode::Enter => {
-                let action = self.state.command_palette.selected_action();
-                self.state.command_palette.close();
-                if let Some(action) = action {
-                    self.run_command_action(action);
-                }
-            }
-            KeyCode::Up => self.state.command_palette.move_up(),
-            KeyCode::Down => self.state.command_palette.move_down(),
-            KeyCode::Backspace => self.state.command_palette.pop_char(),
-            KeyCode::Char(c) if !ctrl => self.state.command_palette.push_char(c),
-            _ => {}
+            CommandPaletteKeyOutcome::Close => self.state.command_palette.close(),
         }
     }
 
@@ -2585,12 +2573,15 @@ impl App {
         }
 
         // ── Command palette overlay ──
-        if self.state.command_palette.visible {
+        if self.state.command_palette.is_visible() {
             crate::widgets::command_palette::render_command_palette(
                 frame.area(),
                 frame.buffer_mut(),
                 &mut self.state.command_palette,
             );
+            if let Some((cx, cy)) = self.state.command_palette.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+            }
         }
 
         // ── Delete-agent confirmation popup ──

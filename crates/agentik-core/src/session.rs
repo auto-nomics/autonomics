@@ -1109,50 +1109,50 @@ impl Session {
     }
 
     /// After a mid-workflow cancellation, patch orphaned tool_use blocks.
-    async fn patch_orphaned_tool_use(&mut self) {
-        let Some(last_msg) = self.messages.last() else {
-            return;
-        };
-
-        let unresolved: Vec<String> = last_msg
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
-                _ => None,
-            })
-            .collect();
-
-        if unresolved.is_empty() {
-            return;
-        }
-
-        let stub = Message {
-            id: Uuid::new_v4().to_string(),
-            type_: "message".to_string(),
-            role: Role::User,
-            content: unresolved
-                .into_iter()
-                .map(|tc_id| ContentBlock::ToolResult {
-                    tool_use_id: tc_id,
-                    content: Some("Tool execution has been interrupted".to_string()),
-                    is_error: Some(true),
-                })
-                .collect(),
-            model: None,
-            stop_reason: None,
-            stop_sequence: None,
-            usage: None,
-            request_id: None,
-        };
-
-        tracing::debug!(
-            "patching {} orphaned tool_use blocks after cancellation",
-            stub.content.len()
-        );
-        let _ = self.remember(stub);
-    }
-
+    // async fn patch_orphaned_tool_use(&mut self) {
+    //     let Some(last_msg) = self.messages.last() else {
+    //         return;
+    //     };
+    //
+    //     let unresolved: Vec<String> = last_msg
+    //         .content
+    //         .iter()
+    //         .filter_map(|c| match c {
+    //             ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+    //             _ => None,
+    //         })
+    //         .collect();
+    //
+    //     if unresolved.is_empty() {
+    //         return;
+    //     }
+    //
+    //     let stub = Message {
+    //         id: Uuid::new_v4().to_string(),
+    //         type_: "message".to_string(),
+    //         role: Role::User,
+    //         content: unresolved
+    //             .into_iter()
+    //             .map(|tc_id| ContentBlock::ToolResult {
+    //                 tool_use_id: tc_id,
+    //                 content: Some("Tool execution has been interrupted".to_string()),
+    //                 is_error: Some(true),
+    //             })
+    //             .collect(),
+    //         model: None,
+    //         stop_reason: None,
+    //         stop_sequence: None,
+    //         usage: None,
+    //         request_id: None,
+    //     };
+    //
+    //     tracing::debug!(
+    //         "patching {} orphaned tool_use blocks after cancellation",
+    //         stub.content.len()
+    //     );
+    //     let _ = self.remember(stub);
+    // }
+    //
     /// Core agent workflow: build context → request API → execute tools → remember.
     async fn agent_workflow(
         &mut self,

@@ -1,8 +1,6 @@
 //! Bibliography management commands.
 
-use crate::cli::{
-    BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, UploadArgs,
-};
+use crate::cli::{BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, UploadArgs};
 
 pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
     let db_path = bib.db.to_string_lossy().to_string();

@@ -270,9 +270,19 @@ impl<'a> SearchablePicker<'a> {
             buf,
         );
 
-        // ── List ──
-        let list_area = regions[1];
+        self.render_list_and_footer(regions[1], regions[2], buf, state);
+    }
 
+    /// Render the filtered list and footer for a picker whose search input is
+    /// owned by the caller.
+    pub fn render_list_and_footer<T: PickerItem>(
+        &self,
+        list_area: Rect,
+        footer_area: Rect,
+        buf: &mut Buffer,
+        state: &mut PickerState<T>,
+    ) {
+        // ── List ──
         if state.filtered.is_empty() {
             let line = Line::from(Span::styled(
                 "  No matches.",
@@ -345,6 +355,6 @@ impl<'a> SearchablePicker<'a> {
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
         );
-        Widget::render(p, regions[2], buf);
+        Widget::render(p, footer_area, buf);
     }
 }
