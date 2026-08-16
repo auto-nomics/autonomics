@@ -23,7 +23,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::tools::ToolUse;
 use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
-use agentik_types::{AgentPlan, CompactEvent, PlanUpdate, SessionInfo, TurnExecutionStatus};
+use agentik_types::{AgentPlan, CompactEvent, SessionInfo, TurnExecutionStatus};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use chrono::Utc;
 use futures::StreamExt;
@@ -181,18 +181,6 @@ impl AgentShared {
     /// Load a snapshot of the current plan.
     pub fn plan_snapshot(&self) -> AgentPlan {
         AgentPlan::clone(&self.plan.load())
-    }
-
-    /// Atomically replace the plan, bumping its revision.
-    ///
-    /// Returns the new revision. The caller is responsible for persisting
-    /// the update and emitting a [`AgentEvent::PlanUpdate`] event if needed.
-    pub fn replace_plan(&self, update: PlanUpdate) -> u64 {
-        let mut new_plan = AgentPlan::clone(&self.plan.load());
-        new_plan.replace(update);
-        let revision = new_plan.revision;
-        self.plan.store(Arc::new(new_plan));
-        revision
     }
 }
 
@@ -1178,14 +1166,11 @@ impl Session {
 
         self.poll_context_provider().await;
 
-        let context = self.build_context().await?;
         let allowed = self.current_allowed_tools().await;
 
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared.send_event(AgentEvent::Requesting);
-        let response_message = self
-            .request_with_retries(context, allowed.as_deref())
-            .await?;
+        let response_message = self.request_with_retries(allowed.as_deref()).await?;
 
         let last_usage = response_message.usage.clone().unwrap_or_default();
 
@@ -1390,11 +1375,8 @@ impl Session {
     /// The retry boundary is intentionally inside the workflow's model-request
     /// phase. Retrying the whole workflow after a later failure could execute
     /// tools twice, while retrying here only repeats the LLM request.
-    async fn request_with_retries(
-        &mut self,
-        mut context: Vec<Message>,
-        allowed: Option<&[String]>,
-    ) -> Result<Message> {
+    /// Each attempt rebuilds fresh state inside `request`.
+    async fn request_with_retries(&mut self, allowed: Option<&[String]>) -> Result<Message> {
         let max_retries: u32 = self
             .shared
             .config
@@ -1404,7 +1386,7 @@ impl Session {
         let mut attempts_used = 0u32;
 
         loop {
-            match self.request(context, allowed).await {
+            match self.request(allowed).await {
                 Ok(response) => return Ok(response),
                 Err(e) if attempts_used < max_retries && is_retryable_api_request(&e) => {
                     attempts_used += 1;
@@ -1435,7 +1417,6 @@ impl Session {
                     }
 
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
-                    context = self.build_context().await?;
                 }
                 Err(e) => return Err(e),
             }
@@ -1594,8 +1575,6 @@ impl Session {
     }
 
     async fn build_context(&mut self) -> Result<Vec<Message>> {
-        use crate::prompt::context::Context;
-
         let mut builder =
             system_prompt_builder::SystemPromptBuilder::default().build_tooluse_guidance();
 
@@ -1619,6 +1598,7 @@ impl Session {
             builder = builder.with_extra_section(extra);
         }
 
+        // Inject corss-session memory
         if let Some(memory) = &self.shared.memory {
             if let Some(section) = memory.prompt_section().await {
                 builder = builder.with_extra_section(section);
@@ -1647,11 +1627,7 @@ impl Session {
         Ok(context_messages)
     }
 
-    async fn request(
-        &mut self,
-        mut context: Vec<Message>,
-        allowed: Option<&[String]>,
-    ) -> Result<Message> {
+    async fn request(&mut self, allowed: Option<&[String]>) -> Result<Message> {
         let span = span!(Level::TRACE, "API Request");
         let _enter = span.enter();
 
@@ -1680,9 +1656,7 @@ impl Session {
                 event: CompactEvent::CompactFinish { ts: Utc::now() },
             });
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
-            if compacted {
-                context = self.build_context().await?;
-            } else {
+            if !compacted {
                 tracing::warn!(
                     "context pressure detected but nothing to compact; \
                      proceeding with request (current segment may overflow)"
@@ -1698,12 +1672,12 @@ impl Session {
         // sanitize_and_persist may have modified self.messages (dedup,
         // coalesce, adjacency repair). Rebuild context from the
         // repaired messages so the API receives the clean shape.
-        context = self.build_context().await?;
+        let built_context = self.build_context().await?;
 
         // Final defensive sanitize on the actual context (without
         // system prompt — it's stored separately now, so there's no
         // same-role coalescing risk).
-        context = sanitize_messages(context);
+        let context = sanitize_messages(built_context);
 
         // Race the initial HTTP request against cancellation so that
         // Ctrl+C interrupts even before the first stream event arrives.

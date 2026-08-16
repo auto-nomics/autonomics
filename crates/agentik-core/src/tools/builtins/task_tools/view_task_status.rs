@@ -202,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn status_includes_delegation_subject_and_lists_tasks() {
         use crate::tools::function::ProgressLog;
-        use crate::tools::task_runtime::TaskEntry;
+        use crate::tools::task_runtime::{TaskEntry, TaskEntryInit};
         use agentik_sdk::types::tools::ToolResultContent;
 
         let output = std::sync::Arc::new(std::sync::Mutex::new(ProgressLog::new()));
@@ -212,19 +212,19 @@ mod tests {
             "caller_agent": "/root/caller",
             "target_agent": "/root/researcher",
         })));
-        let entry = TaskEntry::with_notify(
-            1,
-            "delegate-1".into(),
-            "delegate_to".into(),
-            tokio::spawn(async {
+        let entry = TaskEntry::with_notify(TaskEntryInit {
+            seq: 1,
+            id: "delegate-1".into(),
+            name: "delegate_to".into(),
+            handle: tokio::spawn(async {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 Ok(agentik_sdk::types::ToolResult::success("done"))
             }),
-            tokio_util::sync::CancellationToken::new(),
-            None,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            notify_tx: None,
             output,
             metadata,
-        );
+        });
         let mut tasks = TaskStore::new();
         tasks.push(entry);
         let tool = TaskStatusViewerTool::new(std::sync::Arc::new(tokio::sync::RwLock::new(tasks)));

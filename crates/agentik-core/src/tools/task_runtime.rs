@@ -76,6 +76,18 @@ pub enum TaskStatus {
 /// Sender type for background task completion notifications.
 pub type BgTaskNotifyTx = tokio::sync::mpsc::UnboundedSender<InternalEvent>;
 
+/// Owned inputs needed to create one [`TaskEntry`].
+pub struct TaskEntryInit {
+    pub seq: u64,
+    pub id: TaskId,
+    pub name: String,
+    pub handle: JoinHandle<Result<ToolResult, ToolError>>,
+    pub cancel_token: CancellationToken,
+    pub notify_tx: Option<BgTaskNotifyTx>,
+    pub output: ProgressBuffer,
+    pub metadata: TaskMetadata,
+}
+
 /// A single tool invocation tracked by [`Toolset`](super::toolset::Toolset).
 ///
 /// Status is self-managed via a `watch` channel. A monitor task owns the
@@ -125,16 +137,16 @@ impl TaskEntry {
         handle: JoinHandle<Result<ToolResult, ToolError>>,
         cancel_token: CancellationToken,
     ) -> Self {
-        Self::with_notify(
+        Self::with_notify(TaskEntryInit {
             seq,
             id,
             name,
             handle,
             cancel_token,
-            None,
-            Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
-            Arc::new(Mutex::new(serde_json::Value::Null)),
-        )
+            notify_tx: None,
+            output: Arc::new(Mutex::new(crate::tools::function::ProgressLog::new())),
+            metadata: Arc::new(Mutex::new(serde_json::Value::Null)),
+        })
     }
 
     /// Create a `TaskEntry` with optional agent notification on completion.
@@ -148,16 +160,18 @@ impl TaskEntry {
     /// `output` is the shared progress buffer the executing tool pushes
     /// structured [`ProgressRecord`]s onto (so it must be created before the
     /// tool runs).
-    pub fn with_notify(
-        seq: u64,
-        id: TaskId,
-        name: String,
-        handle: JoinHandle<Result<ToolResult, ToolError>>,
-        cancel_token: CancellationToken,
-        notify_tx: Option<BgTaskNotifyTx>,
-        output: ProgressBuffer,
-        metadata: TaskMetadata,
-    ) -> Self {
+    pub fn with_notify(init: TaskEntryInit) -> Self {
+        let TaskEntryInit {
+            seq,
+            id,
+            name,
+            handle,
+            cancel_token,
+            notify_tx,
+            output,
+            metadata,
+        } = init;
+
         let abort_handle = handle.abort_handle();
         let (status_tx, status) = watch::channel(TaskStatus::Running);
         let (read_tx, read) = watch::channel(false);

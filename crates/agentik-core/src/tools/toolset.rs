@@ -12,7 +12,7 @@ use crate::tools::{ExecutionMode, ProgressBuffer, ProgressLog, TaskMetadata, Too
 
 use super::DynToolFunction;
 use super::error::ToolError;
-use super::task_runtime::TaskEntry;
+use super::task_runtime::{TaskEntry, TaskEntryInit};
 use agentik_sdk::types::ToolDefinition;
 use agentik_sdk::types::tools::{ToolResult, ToolUse};
 
@@ -291,7 +291,7 @@ impl Toolset {
                                 let msg = payload
                                     .downcast_ref::<&'static str>()
                                     .map(|s| (*s).to_string())
-                                    .or_else(|| payload.downcast_ref::<String>().map(|s| s.clone()))
+                                    .or_else(|| payload.downcast_ref::<String>().cloned())
                                     .unwrap_or_else(|| "<non-string panic>".to_string());
                                 let bt = std::backtrace::Backtrace::force_capture();
                                 tracing::error!(
@@ -322,37 +322,24 @@ impl Toolset {
                 }
             });
 
-            match mode {
-                ExecutionMode::Sync => {
-                    // Sync: no notify_tx (consumed inline by execute()).
-                    let entry = TaskEntry::with_notify(
-                        seq,
-                        tc.id.clone(),
-                        tc.name.clone(),
-                        task_handle,
-                        cancel_token,
-                        None,
-                        output,
-                        metadata,
-                    );
-                    new_entries.push(entry);
-                }
+            let notify_tx = match mode {
+                ExecutionMode::Sync => None,
                 ExecutionMode::Async => {
-                    // Async: pass notify_tx so BgTaskComplete fires on completion.
                     async_meta.push((seq, tc.id.clone(), tc.name.clone()));
-                    let entry = TaskEntry::with_notify(
-                        seq,
-                        tc.id.clone(),
-                        tc.name.clone(),
-                        task_handle,
-                        cancel_token,
-                        notify_tx.clone(),
-                        output,
-                        metadata,
-                    );
-                    new_entries.push(entry);
+                    notify_tx.clone()
                 }
-            }
+            };
+            let entry = TaskEntry::with_notify(TaskEntryInit {
+                seq,
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                handle: task_handle,
+                cancel_token,
+                notify_tx,
+                output,
+                metadata,
+            });
+            new_entries.push(entry);
         }
 
         // ---- Partition new entries: sync → wait inline, async → store ----
