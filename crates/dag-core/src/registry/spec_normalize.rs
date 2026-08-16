@@ -21,8 +21,8 @@ use serde_json::Value;
 ///   `[X]` (or `X` when it is already an array).
 /// - `array` field given as a numeric-keyed object `{"0": .., "1": ..}` → array
 ///   in index order.
-/// - `number` / `integer` field given as a numeric string (`"200"`) → number,
-///   preserving integer-ness so `usize`/integer targets still deserialize.
+/// - a non-strict `number` / `integer` field given as a numeric string (`"200"`)
+///   → number, preserving integer-ness so `usize`/integer targets still deserialize.
 /// - `boolean` field given as `"true"` / `"false"` → bool.
 ///
 /// `Option<T>` (`anyOf: [T, null]`) passes `null` through untouched. `$ref` is
@@ -35,6 +35,16 @@ pub fn normalize_against_schema(spec: Value, root_schema: &Value) -> Value {
 
 fn normalize(value: Value, schema: &Value, root: &Value) -> Value {
     let schema = resolve_ref(schema, root);
+
+    // Some node specs intentionally reject numeric strings even though the
+    // normalizer can repair them. Respect that opt-out before any coercion.
+    if schema
+        .get("x-strict-type")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return value;
+    }
 
     // anyOf / oneOf — overwhelmingly `Option<T>` in this codebase.
     if let Some(repaired) = normalize_union(&value, schema, root) {
@@ -288,6 +298,21 @@ mod tests {
         assert_eq!(out["n_blocks"], json!(200));
         assert!(out["n_blocks"].as_u64() == Some(200));
         assert!(out["n_blocks"].as_f64().is_some());
+    }
+
+    #[test]
+    fn strict_type_field_is_not_coerced() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "degree": {
+                    "type": "integer",
+                    "x-strict-type": true
+                }
+            }
+        });
+        let out = norm(json!({ "degree": "2" }), &schema);
+        assert_eq!(out["degree"], json!("2"));
     }
 
     #[test]

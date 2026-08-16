@@ -101,6 +101,8 @@ pub struct App {
     /// Handle for spawning background tasks from within the sync event loop.
     runtime_handle: tokio::runtime::Handle,
     conn: Connection,
+    /// Holds clipboard ownership on platforms where dropping it clears the clipboard.
+    clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
     /// Internal event channel for decoupled communication.
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::app_event::AppEvent>,
     /// Sender half exposed for subsystems (file search, plugins, etc.)
@@ -235,6 +237,7 @@ impl App {
             _runtime: Some(runtime),
             runtime_handle: runtime_handle.clone(),
             conn,
+            clipboard_lease: None,
             app_event_rx,
             app_event_tx: crate::app_event_sender::AppEventSender::new(app_event_tx),
             should_quit: false,
@@ -2239,7 +2242,8 @@ impl App {
                     let char_count = item.full_text.chars().count();
                     self.state.message_picker.close();
                     match crate::widgets::message_picker::copy_to_clipboard(&item.full_text) {
-                        Ok(()) => {
+                        Ok(lease) => {
+                            self.clipboard_lease = lease;
                             tracing::info!(
                                 role = role_tag,
                                 chars = char_count,

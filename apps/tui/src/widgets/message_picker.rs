@@ -1,7 +1,7 @@
 //! Message picker — fuzzy-filterable list of **text** chat messages
 //! (User + Assistant only) from the active session. Triggered via the
 //! command palette's "Copy message" action; selecting an entry copies
-//! that message's full text to the system clipboard via [`arboard`].
+//! that message's full text through the environment-aware clipboard backend.
 //!
 //! The search input is backed by [`TextArea`](crate::xai_textarea::TextArea)
 //! for a richer editing experience: cursor navigation (Left/Right/Home/End),
@@ -714,144 +714,11 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     result
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Clipboard — multi-strategy (OSC 52 → arboard → xclip/wl-copy)
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Copy `text` to the system clipboard.
-///
-/// Tries three strategies in order so the copy works across all
-/// environments the TUI might run in:
-///
-/// 1. **OSC 52** escape sequence — the terminal emulator itself sets the
-///    clipboard. Works over SSH, tmux, screen, and on headless servers
-///    without X11/Wayland. Supported by xterm, iTerm2, Alacritty,
-///    Kitty, WezTerm, Windows Terminal, and others.
-/// 2. **`arboard`** — direct X11/Wayland/macOS/Windows clipboard API.
-///    Works when a display server is available (`$DISPLAY` or
-///    `$WAYLAND_DISPLAY` is set).
-/// 3. **CLI tools** (`xclip`, `xsel`, `wl-copy`, `pbcopy`) — piped
-///    subprocess fallback for environments where neither OSC 52 nor
-///    arboard are available.
-pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    // 1. OSC 52 — always attempt; harmless if the terminal ignores it.
-    if let Ok(()) = osc52_copy(text) {
-        return Ok(());
-    }
-
-    // 2. arboard — works on macOS, Windows, and Linux with a display.
-    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-        if clipboard.set_text(text.to_string()).is_ok() {
-            return Ok(());
-        }
-    }
-
-    // 3. CLI tools — pipe text to the first available clipboard helper.
-    cli_copy(text)
-}
-
-/// Send an OSC 52 escape sequence to set the clipboard via the terminal
-/// emulator.
-///
-/// Tries `/dev/tty` first (so the sequence reaches the terminal even
-/// when stdout is buffered by ratatui's rendering loop). If `/dev/tty`
-/// is unavailable (e.g. headless container without a controlling
-/// terminal), falls back to `stdout` — which still works because the
-/// TUI's stdout is connected to the terminal emulator.
-///
-/// When running inside tmux (`$TMUX` is set), the sequence is wrapped
-/// in a DCS passthrough envelope so tmux forwards it to the outer
-/// terminal.
-fn osc52_copy(text: &str) -> Result<(), String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    use std::io::Write;
-
-    const OSC52_MAX_BYTES: usize = 100_000;
-    if text.len() > OSC52_MAX_BYTES {
-        return Err(format!(
-            "OSC 52 payload too large ({} bytes; max {OSC52_MAX_BYTES})",
-            text.len()
-        ));
-    }
-
-    let encoded = STANDARD.encode(text.as_bytes());
-    let in_tmux = std::env::var_os("TMUX").is_some();
-    let seq = if in_tmux {
-        // DCS passthrough: ESC P tmux ; ESC ESC ] 52 ; c ; <data> BEL ESC \
-        format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}\x07\x1b\\")
-    } else {
-        format!("\x1b]52;c;{encoded}\x07")
-    };
-
-    // Strategy 1: /dev/tty (preferred — independent of stdout buffering).
-    #[cfg(unix)]
-    {
-        match std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-            Ok(mut tty) => {
-                if let Err(e) = tty.write_all(seq.as_bytes()) {
-                    tracing::debug!("OSC 52 /dev/tty write failed: {e}; trying stdout");
-                } else if let Err(e) = tty.flush() {
-                    tracing::debug!("OSC 52 /dev/tty flush failed: {e}; trying stdout");
-                } else {
-                    return Ok(());
-                }
-            }
-            Err(e) => {
-                tracing::debug!("OSC 52 /dev/tty open failed: {e}; trying stdout");
-            }
-        }
-    }
-
-    // Strategy 2: stdout fallback (when /dev/tty is unavailable).
-    let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(seq.as_bytes())
-        .map_err(|e| format!("OSC 52 stdout write failed: {e}"))?;
-    stdout
-        .flush()
-        .map_err(|e| format!("OSC 52 stdout flush failed: {e}"))
-}
-
-/// Pipe `text` to the first available clipboard CLI tool.
-fn cli_copy(text: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    // (program, args)
-    let candidates: &[(&str, Vec<&str>)] = &[
-        ("xclip", vec!["-selection", "clipboard"]),
-        ("xsel", vec!["--clipboard", "--input"]),
-        ("wl-copy", vec![]),
-        ("pbcopy", vec![]),
-    ];
-
-    for (prog, args) in candidates {
-        let result = Command::new(prog)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-
-        let mut child = match result {
-            Ok(c) => c,
-            Err(_) => continue, // not installed — try next
-        };
-
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(text.as_bytes());
-            let _ = stdin.flush();
-        }
-        // Wait for the process to finish so the clipboard content is
-        // committed before we return.
-        let _ = child.wait();
-        return Ok(());
-    }
-
-    Err(
-        "no clipboard backend available (OSC 52, arboard, xclip/xsel/wl-copy/pbcopy all failed)"
-            .to_string(),
-    )
+/// Copy the selected message through the environment-aware clipboard backend.
+pub fn copy_to_clipboard(
+    text: &str,
+) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String> {
+    crate::clipboard_copy::copy_to_clipboard(text)
 }
 
 // ═══════════════════════════════════════════════════════════════════════
