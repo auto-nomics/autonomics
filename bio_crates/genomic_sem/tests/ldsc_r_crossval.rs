@@ -56,13 +56,7 @@ fn r_chisq_max(n_vals: &[f64]) -> f64 {
 }
 
 /// R-compatible h² IRWLS weights (ldsc.R L231-243).
-fn r_h2_weights(
-    l2: &[f64],
-    chi: &[f64],
-    wld: &[f64],
-    n: &[f64],
-    m: f64,
-) -> (Vec<f64>, f64) {
+fn r_h2_weights(l2: &[f64], chi: &[f64], wld: &[f64], n: &[f64], m: f64) -> (Vec<f64>, f64) {
     let ns = l2.len();
     let mean_chi: f64 = chi.iter().sum::<f64>() / ns as f64;
     let mean_l2_n: f64 = (0..ns).map(|i| l2[i] * n[i]).sum::<f64>() / ns as f64;
@@ -104,11 +98,19 @@ fn r_gencov_weights(
 
     let mc1: f64 = chi1.iter().sum::<f64>() / ns as f64;
     let ml1: f64 = (0..ns).map(|i| l2[i] * n1[i]).sum::<f64>() / ns as f64;
-    let ta1 = if ml1 > 0.0 { ((m * (mc1 - 1.0)) / ml1).clamp(0.0, 1.0) } else { 0.0 };
+    let ta1 = if ml1 > 0.0 {
+        ((m * (mc1 - 1.0)) / ml1).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
 
     let mc2: f64 = chi2.iter().sum::<f64>() / ns as f64;
     let ml2: f64 = (0..ns).map(|i| l2[i] * n2[i]).sum::<f64>() / ns as f64;
-    let ta2 = if ml2 > 0.0 { ((m * (mc2 - 1.0)) / ml2).clamp(0.0, 1.0) } else { 0.0 };
+    let ta2 = if ml2 > 0.0 {
+        ((m * (mc2 - 1.0)) / ml2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
 
     let mut iw1 = Vec::with_capacity(ns);
     let mut iw2 = Vec::with_capacity(ns);
@@ -122,9 +124,17 @@ fn r_gencov_weights(
     }
 
     let s1: f64 = iw1.iter().sum();
-    let w_ld = if s1 > 0.0 { iw1.iter().map(|v| v / s1).collect() } else { vec![1.0 / ns as f64; ns] };
+    let w_ld = if s1 > 0.0 {
+        iw1.iter().map(|v| v / s1).collect()
+    } else {
+        vec![1.0 / ns as f64; ns]
+    };
     let sb: f64 = (0..ns).map(|i| iw1[i] + iw2[i]).sum();
-    let w_chi = if sb > 0.0 { (0..ns).map(|i| (iw1[i] + iw2[i]) / sb).collect() } else { vec![1.0 / ns as f64; ns] };
+    let w_chi = if sb > 0.0 {
+        (0..ns).map(|i| (iw1[i] + iw2[i]) / sb).collect()
+    } else {
+        vec![1.0 / ns as f64; ns]
+    };
     let mn1 = n1.iter().sum::<f64>() / ns as f64;
     let mn2 = n2.iter().sum::<f64>() / ns as f64;
     (w_ld, w_chi, (mn1 * mn2).sqrt())
@@ -135,7 +145,9 @@ fn test_cross_validate_r_ldsc() {
     let input = match load_input() {
         Some(d) => d,
         None => {
-            eprintln!("Skipping R cross-validation: input.json not found. Run run_r_reference.R first.");
+            eprintln!(
+                "Skipping R cross-validation: input.json not found. Run run_r_reference.R first."
+            );
             return;
         }
     };
@@ -175,10 +187,7 @@ fn test_cross_validate_r_ldsc() {
     let n_2: Vec<f64> = idx2.iter().map(|&i| input.n2[i]).collect();
 
     // Cross-trait: intersection of idx1 and idx2
-    let idx12: Vec<usize> = idx1.iter()
-        .filter(|i| idx2.contains(i))
-        .copied()
-        .collect();
+    let idx12: Vec<usize> = idx1.iter().filter(|i| idx2.contains(i)).copied().collect();
     let l2_12: Vec<f64> = idx12.iter().map(|&i| input.l2[i]).collect();
     let zz: Vec<f64> = idx12.iter().map(|&i| input.z1[i] * input.z2[i]).collect();
     let wld_12: Vec<f64> = idx12.iter().map(|&i| input.wld[i]).collect();
@@ -205,9 +214,7 @@ fn test_cross_validate_r_ldsc() {
     // Pair 1: h² for trait 1
     // Pair 1: h² for trait 1
     let (w1, nbar1) = r_h2_weights(&l2_1, &chi1, &wld_1, &n_1, m);
-    let r_h2_1 = ldsc::block_jackknife_regression_r(
-        &l2_1, &chi1, &w1, &w1, n_blocks, nbar1, m,
-    );
+    let r_h2_1 = ldsc::block_jackknife_regression_r(&l2_1, &chi1, &w1, &w1, n_blocks, nbar1, m);
 
     // Pair 2: gencov — use R's exact data from the ldsc() dump.
     let gencov_actual_path = format!("{XVAL_DIR}/gencov_actual.json");
@@ -222,11 +229,16 @@ fn test_cross_validate_r_ldsc() {
         let w_ld_r: Vec<f64> = serde_json::from_value(gd["weights"].clone()).unwrap();
         let w_chi_r: Vec<f64> = serde_json::from_value(gd["weights_cov"].clone()).unwrap();
         let nbar_r: f64 = serde_json::from_value(gd["N_bar"].clone()).unwrap();
-        eprintln!("Using R's exact gencov data from ldsc() dump ({} SNPs)", l2_r.len());
+        eprintln!(
+            "Using R's exact gencov data from ldsc() dump ({} SNPs)",
+            l2_r.len()
+        );
         eprintln!("  weights[1:3]:    {:?}", &w_ld_r[..3.min(w_ld_r.len())]);
         eprintln!("  weights_cov[1:3]: {:?}", &w_chi_r[..3.min(w_chi_r.len())]);
         (
-            ldsc::block_jackknife_regression_r(&l2_r, &zz_r, &w_ld_r, &w_chi_r, n_blocks, nbar_r, m),
+            ldsc::block_jackknife_regression_r(
+                &l2_r, &zz_r, &w_ld_r, &w_chi_r, n_blocks, nbar_r, m,
+            ),
             nbar_r,
         )
     } else if let Some(ref gd) = gencov_debug {
@@ -235,9 +247,14 @@ fn test_cross_validate_r_ldsc() {
         let w_ld_r: Vec<f64> = serde_json::from_value(gd["weights_ld"].clone()).unwrap();
         let w_chi_r: Vec<f64> = serde_json::from_value(gd["weights_cov"].clone()).unwrap();
         let nbar_r: f64 = serde_json::from_value(gd["N_bar"].clone()).unwrap();
-        eprintln!("Using R's gencov data from debug replay ({} SNPs)", l2_r.len());
+        eprintln!(
+            "Using R's gencov data from debug replay ({} SNPs)",
+            l2_r.len()
+        );
         (
-            ldsc::block_jackknife_regression_r(&l2_r, &zz_r, &w_ld_r, &w_chi_r, n_blocks, nbar_r, m),
+            ldsc::block_jackknife_regression_r(
+                &l2_r, &zz_r, &w_ld_r, &w_chi_r, n_blocks, nbar_r, m,
+            ),
             nbar_r,
         )
     } else {
@@ -252,14 +269,12 @@ fn test_cross_validate_r_ldsc() {
 
     // Pair 3: h² for trait 2
     let (w2, nbar2) = r_h2_weights(&l2_2, &chi2, &wld_2, &n_2, m);
-    let r_h2_2 = ldsc::block_jackknife_regression_r(
-        &l2_2, &chi2, &w2, &w2, n_blocks, nbar2, m,
-    );
+    let r_h2_2 = ldsc::block_jackknife_regression_r(&l2_2, &chi2, &w2, &w2, n_blocks, nbar2, m);
 
     // ── Step 3: Assemble S, I, N (vech order: (0,0), (1,0), (1,1)) ──────
-    let rust_s = vec![r_h2_1.reg_tot, r_gc.reg_tot, r_h2_2.reg_tot];
-    let rust_i = vec![r_h2_1.intercept, r_gc.intercept, r_h2_2.intercept];
-    let rust_n = vec![nbar1, nbar_g, nbar2];
+    let rust_s = [r_h2_1.reg_tot, r_gc.reg_tot, r_h2_2.reg_tot];
+    let rust_i = [r_h2_1.intercept, r_gc.intercept, r_h2_2.intercept];
+    let rust_n = [nbar1, nbar_g, nbar2];
 
     // ── Step 4: V computation ───────────────────────────────────────────
     // R: v.out = cov(V.hold) / crossprod(N.vec * (sqrt(n.blocks) / m))
@@ -270,13 +285,19 @@ fn test_cross_validate_r_ldsc() {
     let n_b = pv1.len();
     let mut v_hold = vec![vec![0.0f64; 3]; n_b];
     for b in 0..n_b {
-        if b < pv1.len() { v_hold[b][0] = pv1[b]; }
-        if b < pv2.len() { v_hold[b][1] = pv2[b]; }
-        if b < pv3.len() { v_hold[b][2] = pv3[b]; }
+        if b < pv1.len() {
+            v_hold[b][0] = pv1[b];
+        }
+        if b < pv2.len() {
+            v_hold[b][1] = pv2[b];
+        }
+        if b < pv3.len() {
+            v_hold[b][2] = pv3[b];
+        }
     }
 
     // cov(V.hold): 3×3 using R's cov (divide by n-1)
-    let mut col_means = vec![0.0f64; 3];
+    let mut col_means = [0.0f64; 3];
     for j in 0..3 {
         let s: f64 = (0..n_b).map(|b| v_hold[b][j]).sum();
         col_means[j] = s / n_b as f64;
@@ -294,11 +315,15 @@ fn test_cross_validate_r_ldsc() {
     // R: v.out = cov(V.hold) / crossprod(N.vec * (sqrt(n.blocks) / m))
     // crossprod of a row vector = t(x) %*% x = outer product = N_i * N_j
     let sf = (n_blocks as f64).sqrt() / m;
-    let mut rust_v = vec![0.0f64; 9];
+    let mut rust_v = [0.0f64; 9];
     for i in 0..3 {
         for j in 0..3 {
             let denom = rust_n[i] * rust_n[j] * sf * sf;
-            rust_v[i * 3 + j] = if denom > 0.0 { v_raw[i][j] / denom } else { v_raw[i][j] };
+            rust_v[i * 3 + j] = if denom > 0.0 {
+                v_raw[i][j] / denom
+            } else {
+                v_raw[i][j]
+            };
         }
     }
 
@@ -323,14 +348,19 @@ fn test_cross_validate_r_ldsc() {
     // R column-major 2×2: [S00, S10, S01, S11] = [h²₁, gencov, gencov, h²₂]
     // Rust vech: [h²₁, gencov, h²₂]
     let comparisons = [
-        ("h²₁",    rust_s[0], r_s[0]),
+        ("h²₁", rust_s[0], r_s[0]),
         ("gencov", rust_s[1], r_s[1]),
-        ("h²₂",   rust_s[2], r_s[3]),
+        ("h²₂", rust_s[2], r_s[3]),
     ];
     for (name, rust_val, r_val) in &comparisons {
         let d = (rust_val - r_val).abs();
-        if d > max_s_diff { max_s_diff = d; }
-        eprintln!("  {:>8}:  Rust={:>14.8}  R={:>14.8}  diff={:.2e}", name, rust_val, r_val, d);
+        if d > max_s_diff {
+            max_s_diff = d;
+        }
+        eprintln!(
+            "  {:>8}:  Rust={:>14.8}  R={:>14.8}  diff={:.2e}",
+            name, rust_val, r_val, d
+        );
     }
     // Also check S[1,2] = S[2,1] in R (should equal gencov)
     let sym_diff = (r_s[1] - r_s[2]).abs();
@@ -344,29 +374,44 @@ fn test_cross_validate_r_ldsc() {
         let rust_val = rust_v[i * 3 + i];
         let r_val = r_v[i * 3 + i];
         let d = (rust_val - r_val).abs();
-        if d > max_v_diff { max_v_diff = d; }
-        eprintln!("  V[{i},{i}]  Rust={:.8e}  R={:.8e}  diff={:.2e}", rust_val, r_val, d);
+        if d > max_v_diff {
+            max_v_diff = d;
+        }
+        eprintln!(
+            "  V[{i},{i}]  Rust={:.8e}  R={:.8e}  diff={:.2e}",
+            rust_val, r_val, d
+        );
     }
 
     eprintln!("\n=== I comparison (vech: h²₁, gencov_int, h²₂) ===");
     let mut max_i_diff = 0.0f64;
     let i_comp = [
-        ("h²₁",    rust_i[0], r_i[0]),
+        ("h²₁", rust_i[0], r_i[0]),
         ("gencov", rust_i[1], r_i[1]),
-        ("h²₂",   rust_i[2], r_i[3]),
+        ("h²₂", rust_i[2], r_i[3]),
     ];
     for (name, rv, rv_r) in &i_comp {
         let d = (rv - rv_r).abs();
-        if d > max_i_diff { max_i_diff = d; }
-        eprintln!("  {:>8}:  Rust={:.8}  R={:.8}  diff={:.2e}", name, rv, rv_r, d);
+        if d > max_i_diff {
+            max_i_diff = d;
+        }
+        eprintln!(
+            "  {:>8}:  Rust={:.8}  R={:.8}  diff={:.2e}",
+            name, rv, rv_r, d
+        );
     }
 
     eprintln!("\n=== N comparison ===");
     let mut max_n_diff = 0.0f64;
     for i in 0..3 {
         let d = (rust_n[i] - r_n[i]).abs();
-        if d > max_n_diff { max_n_diff = d; }
-        eprintln!("  N[{i}]  Rust={:.4}  R={:.4}  diff={:.2e}", rust_n[i], r_n[i], d);
+        if d > max_n_diff {
+            max_n_diff = d;
+        }
+        eprintln!(
+            "  N[{i}]  Rust={:.4}  R={:.4}  diff={:.2e}",
+            rust_n[i], r_n[i], d
+        );
     }
 
     eprintln!("\nm: Rust={:.1}  R={:.1}", m, r_m);
@@ -380,21 +425,29 @@ fn test_cross_validate_r_ldsc() {
     let tol_i = 1e-8;
     let tol_n = 1e-4;
 
-    assert!(max_s_diff < tol_s,
-        "S max diff {max_s_diff:.2e} exceeds tolerance {tol_s:.0e}");
+    assert!(
+        max_s_diff < tol_s,
+        "S max diff {max_s_diff:.2e} exceeds tolerance {tol_s:.0e}"
+    );
 
-    assert!(max_i_diff < tol_i,
-        "I max diff {max_i_diff:.2e} exceeds tolerance {tol_i:.0e}");
+    assert!(
+        max_i_diff < tol_i,
+        "I max diff {max_i_diff:.2e} exceeds tolerance {tol_i:.0e}"
+    );
 
     // V[1,1] (gencov diagonal) should match to machine precision.
     let v11_diff = (rust_v[4] - r_v[4]).abs();
-    assert!(v11_diff < 1e-12,
-        "V[1,1] (gencov) diff {v11_diff:.2e} exceeds tolerance");
+    assert!(
+        v11_diff < 1e-12,
+        "V[1,1] (gencov) diff {v11_diff:.2e} exceeds tolerance"
+    );
 
     for i in 0..3 {
         let d = (rust_n[i] - r_n[i]).abs();
-        assert!(d < tol_n,
-            "N[{i}] diff {d:.2e} exceeds tolerance {tol_n:.0e}");
+        assert!(
+            d < tol_n,
+            "N[{i}] diff {d:.2e} exceeds tolerance {tol_n:.0e}"
+        );
     }
 
     assert!((m - r_m).abs() < 1e-6, "m mismatch: {m} vs {r_m}");

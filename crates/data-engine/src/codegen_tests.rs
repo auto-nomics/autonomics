@@ -1,8 +1,6 @@
 use crate::codegen::{CodegenError, CodegenTarget, DagCompiler};
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
 
-use std::sync::Arc;
-
 use datafusion::prelude::SessionContext;
 
 /// Minimal registry for codegen tests (no VFS storage needed).

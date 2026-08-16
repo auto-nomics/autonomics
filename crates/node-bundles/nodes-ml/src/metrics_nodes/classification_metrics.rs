@@ -59,6 +59,7 @@ impl NodeFactory for ClassificationMetricsFactory {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Retained in the node for future multi-class metric output.
 struct ClassificationMetricsNode {
     y_true: String,
     y_pred: String,

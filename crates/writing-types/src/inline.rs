@@ -163,10 +163,12 @@ impl CiteKey {
 /// Citation command style — maps to natbib / biblatex commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CitationStyle {
     /// `\cite{key}`
     Plain,
     /// `\citep{key}` — (Author, Year)
+    #[default]
     Parenthetical,
     /// `\citet{key}` — Author (Year)
     Textual,
@@ -176,12 +178,6 @@ pub enum CitationStyle {
     AuthorOnly,
     /// `\footcite{key}`
     Footnote,
-}
-
-impl Default for CitationStyle {
-    fn default() -> Self {
-        Self::Parenthetical
-    }
 }
 
 impl CitationStyle {
@@ -217,6 +213,7 @@ impl CitationStyle {
 /// Type of cross-reference target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RefKind {
     /// Equation.
     Eq,
@@ -227,13 +224,8 @@ pub enum RefKind {
     /// Section.
     Sec,
     /// Auto-detect (requires `cleveref`).
+    #[default]
     Auto,
-}
-
-impl Default for RefKind {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[cfg(test)]

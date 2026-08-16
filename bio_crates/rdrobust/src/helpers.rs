@@ -100,7 +100,7 @@ pub fn crossprod(a: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
 /// `t(a) %*% a` (R: `crossprod(a)`).
 pub fn self_crossprod(a: &Mat<f64>) -> Mat<f64> {
     let at = a.transpose();
-    &at * a
+    at * a
 }
 
 /// QR / XX inverse: `(t(x) %*% x)^{-1}` via Cholesky, with LU fallback.

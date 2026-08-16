@@ -103,19 +103,15 @@ pub struct DocumentAuthor {
 /// LaTeX `\documentclass` selector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DocumentClass {
+    #[default]
     Article,
     Report,
     Book,
     Beamer,
     /// Custom class name (e.g. `revtex4-2`, `elsarticle`, `ctexart`).
     Custom(String),
-}
-
-impl Default for DocumentClass {
-    fn default() -> Self {
-        Self::Article
-    }
 }
 
 impl DocumentClass {

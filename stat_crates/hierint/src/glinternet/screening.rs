@@ -188,7 +188,7 @@ pub fn check_kkt(
                 let already = expanded
                     .cat
                     .as_ref()
-                    .map_or(false, |av| av.iter().any(|a| a[0] == vi));
+                    .is_some_and(|av| av.iter().any(|a| a[0] == vi));
                 if !already {
                     match &mut expanded.cat {
                         Some(v) => v.push([vi]),
@@ -205,7 +205,7 @@ pub fn check_kkt(
                 let already = expanded
                     .cont
                     .as_ref()
-                    .map_or(false, |av| av.iter().any(|a| a[0] == vi));
+                    .is_some_and(|av| av.iter().any(|a| a[0] == vi));
                 if !already {
                     match &mut expanded.cont {
                         Some(v) => v.push([vi]),
@@ -221,7 +221,7 @@ pub fn check_kkt(
     if let Some(ref vars) = candidates.variables.catcat {
         for (i, pair) in vars.iter().enumerate() {
             if norms.catcat[i] > lambda {
-                let already = expanded.catcat.as_ref().map_or(false, |av| {
+                let already = expanded.catcat.as_ref().is_some_and(|av| {
                     av.iter().any(|a| {
                         (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0])
                     })
@@ -241,7 +241,7 @@ pub fn check_kkt(
     if let Some(ref vars) = candidates.variables.contcont {
         for (i, pair) in vars.iter().enumerate() {
             if norms.contcont[i] > lambda {
-                let already = expanded.contcont.as_ref().map_or(false, |av| {
+                let already = expanded.contcont.as_ref().is_some_and(|av| {
                     av.iter().any(|a| {
                         (a[0] == pair[0] && a[1] == pair[1]) || (a[0] == pair[1] && a[1] == pair[0])
                     })
@@ -261,9 +261,10 @@ pub fn check_kkt(
     if let Some(ref vars) = candidates.variables.catcont {
         for (i, pair) in vars.iter().enumerate() {
             if norms.catcont[i] > lambda {
-                let already = expanded.catcont.as_ref().map_or(false, |av| {
-                    av.iter().any(|a| a[0] == pair[0] && a[1] == pair[1])
-                });
+                let already = expanded
+                    .catcont
+                    .as_ref()
+                    .is_some_and(|av| av.iter().any(|a| a[0] == pair[0] && a[1] == pair[1]));
                 if !already {
                     match &mut expanded.catcont {
                         Some(v) => v.push(*pair),

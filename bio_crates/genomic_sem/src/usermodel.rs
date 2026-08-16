@@ -81,7 +81,7 @@ pub fn usermodel(covstruc: &Covstruc, config: &UserModelConfig) -> Result<UserMo
     let mut v_ld = covstruc.v.clone();
     let mut s_ld = covstruc.s.clone();
     let k = s_ld.nrows();
-    let z = k * (k + 1) / 2;
+    let _z = k * (k + 1) / 2;
 
     // Parse model
     let model = parse_model(&config.model)?;
@@ -101,8 +101,8 @@ pub fn usermodel(covstruc: &Covstruc, config: &UserModelConfig) -> Result<UserMo
     let z_sub = k_sub * (k_sub + 1) / 2;
 
     // Smooth S and V if needed
-    let (s_smooth, s_smoothed, s_diff) = smooth_if_needed(&s_sub);
-    let (v_smooth, v_smoothed, v_diff) = smooth_if_needed(&v_sub);
+    let (s_smooth, _s_smoothed, _s_diff) = smooth_if_needed(&s_sub);
+    let (v_smooth, v_smoothed, _v_diff) = smooth_if_needed(&v_sub);
     s_ld = s_smooth;
     v_ld = v_smooth;
 
@@ -228,7 +228,7 @@ fn subset_covstruc(
     for (j, &cj) in indices.iter().enumerate() {
         for (i, &ci) in indices.iter().enumerate() {
             if i >= j {
-                let orig_idx = if ci >= cj {
+                let _orig_idx = if ci >= cj {
                     ci * (ci + 1) / 2 + cj
                 } else {
                     cj * (cj + 1) / 2 + ci

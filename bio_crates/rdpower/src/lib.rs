@@ -79,7 +79,9 @@ fn powerfun_dot_tau(n: f64, tau: f64, stilde: f64, z: f64) -> f64 {
 /// Faithful port of `rdpower.powerNR`.
 struct NrResult {
     m: usize, // ceiling of solution
+    #[allow(dead_code)]
     iter: usize,
+    #[allow(dead_code)]
     powercheck: f64,
 }
 
@@ -185,7 +187,9 @@ fn power_nr_mde(n: f64, tau0: f64, stilde: f64, z: f64, beta: f64) -> NrMdeResul
 
 struct NrMdeResult {
     mde: f64,
+    #[allow(dead_code)]
     iter: usize,
+    #[allow(dead_code)]
     powercheck: f64,
 }
 
@@ -333,7 +337,7 @@ pub fn rdpower(cfg: &RdPowerConfig) -> Result<RdPowerResult, RdPowerError> {
     let (vl_rb, vr_rb, vl_cl, vr_cl) = match cfg.variance {
         Some(v) => (v[0], v[1], v[0], v[1]),
         None => {
-            let pos = 1 + deriv; // 1-based → 0-based index = deriv
+            let _pos = 1 + deriv; // 1-based → 0-based index = deriv
             let n = aux.n_l + aux.n_r;
             let vl_rb = n as f64 * h_l.powi((1 + 2 * deriv) as i32) * aux.v_rb_l[(deriv, deriv)];
             let vr_rb = n as f64 * h_r.powi((1 + 2 * deriv) as i32) * aux.v_rb_r[(deriv, deriv)];

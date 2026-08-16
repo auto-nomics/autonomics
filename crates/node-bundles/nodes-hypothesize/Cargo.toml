@@ -11,11 +11,17 @@ dag-core = { path = "../../dag-core" }
 hypothesize = { path = "../../../stat_crates/hypothesize" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
+arrow-cast.workspace = true
 async-trait.workspace = true
+statrs = "0.18"
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror.workspace = true
+
+[dev-dependencies]
+datafusion.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

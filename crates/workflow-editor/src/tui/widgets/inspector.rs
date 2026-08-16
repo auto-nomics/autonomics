@@ -10,8 +10,11 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::tui::state::AppState;
 
+/// Inspector pane for workflow and node details.
 pub struct InspectorWidget<'a> {
+    /// Editor state containing workflow and selection data.
     pub state: &'a AppState,
+    /// Whether the inspector currently owns keyboard focus.
     pub focus: bool,
 }
 
@@ -23,7 +26,7 @@ impl<'a> Widget for InspectorWidget<'a> {
             return;
         };
 
-        let mut lines: Vec<Line> = Vec::new();
+        let mut lines: Vec<Line<'_>> = Vec::new();
         lines.push(Line::from(Span::styled(
             format!("Workflow: {}", manifest.name),
             Style::default().add_modifier(Modifier::BOLD),

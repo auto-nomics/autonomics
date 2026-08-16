@@ -225,10 +225,10 @@ impl KmsTui {
             }
             let event = crossterm::event::read()?;
             if let crossterm::event::Event::Key(key) = event {
-                if key.kind == crossterm::event::KeyEventKind::Press {
-                    if self.handle_key(key).await == Handled::Quit {
-                        break Ok(());
-                    }
+                if key.kind == crossterm::event::KeyEventKind::Press
+                    && self.handle_key(key).await == Handled::Quit
+                {
+                    break Ok(());
                 }
             }
         }

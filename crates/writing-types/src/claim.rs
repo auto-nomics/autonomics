@@ -64,6 +64,7 @@ pub struct Claim {
 /// The epistemic category of a claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ClaimType {
     /// A testable hypothesis.
     Hypothesis,
@@ -72,6 +73,7 @@ pub enum ClaimType {
     /// Description of methodology.
     Method,
     /// Established background fact.
+    #[default]
     Background,
     /// Acknowledged limitation.
     Limitation,
@@ -81,12 +83,6 @@ pub enum ClaimType {
     Definition,
     /// An unstated assumption.
     Assumption,
-}
-
-impl Default for ClaimType {
-    fn default() -> Self {
-        Self::Background
-    }
 }
 
 // ---------------------------------------------------------------------------

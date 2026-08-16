@@ -93,6 +93,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
         // ── DAG execution & inspection ────────────────────────────────────
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),
+        ToolRegistration::from(compile_dag_tool::CompileDagTool::new(client.clone())),
         ToolRegistration::from(get_output_tool::GetOutputTool::new(client.clone())),
         ToolRegistration::from(view_dag_tool::ViewDagTool::new(client.clone())),
         // ── history / ref management ──────────────────────────────────────

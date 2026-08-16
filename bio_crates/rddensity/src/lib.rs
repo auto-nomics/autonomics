@@ -55,10 +55,10 @@ fn integrate<F: Fn(f64) -> f64>(low: f64, up: f64, f: F) -> f64 {
     const N8_X: [f64; 8] = [
         -0.9602898564975363,
         -0.7966664774136267,
-        -0.5255324099163290,
+        -0.525_532_409_916_329,
         -0.1834346424956498,
         0.1834346424956498,
-        0.5255324099163290,
+        0.525_532_409_916_329,
         0.7966664774136267,
         0.9602898564975363,
     ];
@@ -66,8 +66,8 @@ fn integrate<F: Fn(f64) -> f64>(low: f64, up: f64, f: F) -> f64 {
         0.1012285362903763,
         0.2223810344533745,
         0.3137066458778873,
-        0.3626837833783620,
-        0.3626837833783620,
+        0.362_683_783_378_362,
+        0.362_683_783_378_362,
         0.3137066458778873,
         0.2223810344533745,
         0.1012285362903763,
@@ -352,9 +352,9 @@ pub fn binomial_test(n_l: usize, n_r: usize, p_null: f64) -> f64 {
     let k = n_l.min(n_r);
     // P-value = 2 * P(X <= k) for the smaller tail
     let dist = statrs::distribution::Binomial::new(p_null, n as u64).unwrap();
-    let p_less = dist.cdf(k as u64) as f64;
-    let p_val = (2.0 * p_less).min(1.0_f64);
-    p_val
+    let p_less = dist.cdf(k as u64);
+
+    (2.0 * p_less).min(1.0_f64)
 }
 
 // =====================================================================
@@ -364,12 +364,12 @@ pub fn binomial_test(n_l: usize, n_r: usize, p_null: f64) -> f64 {
 /// Compute MSE-optimal bandwidth for density test.
 ///
 /// Uses pilot density estimates and the formula from Cattaneo, Jansson & Ma (2020).
-pub fn rdbwdensity(x_raw: &[f64], c: f64, p: usize, kernel: Kernel, vce: Vce) -> (f64, f64) {
+pub fn rdbwdensity(x_raw: &[f64], c: f64, p: usize, kernel: Kernel, _vce: Vce) -> (f64, f64) {
     let mut x: Vec<f64> = x_raw.iter().filter(|v| v.is_finite()).copied().collect();
     x.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = x.len();
     let nl = x.iter().filter(|xi| **xi < c).count();
-    let nr = n - nl;
+    let _nr = n - nl;
 
     // Pilot density estimate (using a simple histogram approach)
     let iqr = {
@@ -427,7 +427,7 @@ pub fn rdbwdensity(x_raw: &[f64], c: f64, p: usize, kernel: Kernel, vce: Vce) ->
     let e_sinv = &s_inv * &e;
     let e_sinv_g = e_sinv.transpose() * &g;
     let var_term = (&e_sinv_g * &s_inv * &e)[(0, 0)];
-    let bias_term = (&e.transpose() * &s_inv * &cp1)[(0, 0)].abs();
+    let bias_term = (e.transpose() * &s_inv * &cp1)[(0, 0)].abs();
 
     let fact_p1 = (1..=p + 1).product::<usize>() as f64;
 

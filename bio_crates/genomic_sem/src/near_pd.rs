@@ -40,8 +40,6 @@ pub fn near_pd(mat: &Mat<f64>) -> Mat<f64> {
     }
 
     // Higham's alternating projections algorithm
-    let mut y_s = x.clone();
-    let mut d_s = Mat::zeros(n, n);
     let mut y_old = x.clone();
     let mut d_old = Mat::zeros(n, n);
 
@@ -59,7 +57,7 @@ pub fn near_pd(mat: &Mat<f64>) -> Mat<f64> {
         let x_k = &eigvecs * &diag_vals * eigvecs.transpose();
 
         // D_k = X_k - R_k
-        d_s = &x_k - &r_k;
+        let d_s = &x_k - &r_k;
 
         // Y_k = X_k + D_k  (but actually Y_k = X_k + D_k from the paper —
         // this is the Dykstra correction: Y_k = R_k + D_k = X_k
@@ -81,7 +79,7 @@ pub fn near_pd(mat: &Mat<f64>) -> Mat<f64> {
         //     dS = x - r
         //     y = x               (for corr=FALSE, no unit-diagonal projection)
         //   until converged
-        y_s = x_k.clone();
+        let y_s = x_k;
 
         // Check convergence: ||Y_k - Y_{k-1}||_∞ / ||Y_k||_∞
         let diff = &y_s - &y_old;
@@ -93,8 +91,8 @@ pub fn near_pd(mat: &Mat<f64>) -> Mat<f64> {
             max_diff
         };
 
-        y_old = y_s.clone();
-        d_old = d_s.clone();
+        y_old = y_s;
+        d_old = d_s;
 
         if rel_diff < CONV_TOL {
             break;
@@ -178,10 +176,7 @@ mod tests {
 
     #[test]
     fn test_symmetric_input() {
-        let a = Mat::from_fn(3, 3, |i, j| {
-            let v = mat22_val(i, j);
-            v
-        });
+        let a = Mat::from_fn(3, 3, mat22_val);
         let _ = near_pd(&a);
     }
 

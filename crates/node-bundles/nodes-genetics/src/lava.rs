@@ -650,8 +650,7 @@ impl DagNode for LavaLocusNode {
             "locus: loading PLINK LD reference for chromosomes {:?}",
             chroms,
         ));
-        let ref_prefix =
-            REF_PREFIX_TEMPLATE.to_string();
+        let ref_prefix = REF_PREFIX_TEMPLATE.to_string();
         let reference = match lava::plink::load_reference_template(&ref_prefix, &chroms) {
             Ok(r) => r,
             Err(e) => {

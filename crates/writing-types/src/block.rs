@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn block_tag_serialization() {
-        let json = serde_json::to_value(&Block::PageBreak(PageBreak { id: "pb1".into() })).unwrap();
+        let json = serde_json::to_value(Block::PageBreak(PageBreak { id: "pb1".into() })).unwrap();
         assert_eq!(json["kind"], "page_break");
     }
 }

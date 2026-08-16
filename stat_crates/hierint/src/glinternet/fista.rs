@@ -69,9 +69,6 @@ pub fn group_lasso(
     let mut step_size = 1.0f64;
     let alpha = 0.1; // backtracking factor
 
-    let mut obj = 0.0;
-    let mut converged = false;
-
     for iter in 0..max_iter {
         // Save old gradient
         gradient_old.copy_from_slice(&gradient);
@@ -81,8 +78,7 @@ pub fn group_lasso(
         gradient.copy_from_slice(&transform::compute_gradient(data, active, &residual));
 
         // Check convergence via KKT
-        converged = transform::check_convergence(&beta, &gradient, &group_sizes, lambda, tol);
-        if converged {
+        if transform::check_convergence(&beta, &gradient, &group_sizes, lambda, tol) {
             break;
         }
 
@@ -143,7 +139,7 @@ pub fn group_lasso(
     }
 
     // Compute final objective
-    obj = transform::compute_objective(
+    let obj = transform::compute_objective(
         y,
         &residual,
         &linear,

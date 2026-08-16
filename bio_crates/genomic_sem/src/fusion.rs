@@ -14,23 +14,12 @@ pub struct FusionData {
 }
 
 /// Configuration for `read_fusion`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct FusionConfig {
     pub trait_names: Vec<String>,
     pub binary: Vec<bool>,
     pub n: Vec<f64>,
     pub perm: bool,
-}
-
-impl Default for FusionConfig {
-    fn default() -> Self {
-        Self {
-            trait_names: Vec::new(),
-            binary: Vec::new(),
-            n: Vec::new(),
-            perm: false,
-        }
-    }
 }
 
 /// Compute effect and SE from FUSION TWAS Z-score and HSQ.

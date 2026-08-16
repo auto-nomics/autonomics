@@ -42,7 +42,7 @@ pub fn hiernet_cv(
         }
 
         // Build train data
-        let n_train = train_idx.len();
+        let _n_train = train_idx.len();
         let x_train: Vec<f64> = (0..p)
             .flat_map(|j| train_idx.iter().map(move |&i| x[j * n + i]))
             .collect();

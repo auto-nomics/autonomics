@@ -5,8 +5,6 @@
 //!   1. Rscript tests/cross_validate.R linear_regression /tmp/autonomics_xval
 //!   2. DIFFTESTS=1 cargo test -p data-engine --lib codegen::xval_tests -- --ignored --nocapture
 
-use std::sync::Arc;
-
 use datafusion::prelude::SessionContext;
 
 use crate::codegen::{CodegenTarget, DagCompiler};
@@ -16,10 +14,7 @@ use crate::node_registry::NodeRegistry;
 fn test_registry() -> NodeRegistry {
     let ctx = SessionContext::new();
     let runtime_env = ctx.runtime_env();
-    crate::default_registry::build_default_registry(
-        runtime_env,
-        None,
-    )
+    crate::default_registry::build_default_registry(runtime_env, None)
 }
 
 const XVAL_DIR: &str = "/tmp/autonomics_xval";

@@ -23,8 +23,7 @@ pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
 ) -> NodeRegistry {
-    let mut registry =
-        NodeRegistry::new(dag_core::registry::NodeCtx::new(runtime_env, opendal));
+    let mut registry = NodeRegistry::new(dag_core::registry::NodeCtx::new(runtime_env, opendal));
 
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
     #[cfg(feature = "bundle-ldsc")]

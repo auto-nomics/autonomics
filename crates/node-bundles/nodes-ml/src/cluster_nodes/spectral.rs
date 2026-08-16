@@ -42,6 +42,7 @@ impl NodeFactory for SpectralClusteringFactory {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[allow(dead_code)] // Schema fields are accepted even though the node is not implemented.
 struct SpectralSpec {
     features: Vec<String>,
     k: usize,

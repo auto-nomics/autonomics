@@ -34,3 +34,6 @@ schemars.workspace = true
 [dev-dependencies]
 dotenvy = "0.15"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

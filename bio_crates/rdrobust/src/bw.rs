@@ -111,11 +111,7 @@ pub fn rdrobust_bw(
 
     // VCE: aux = rdrobust_vce(0, s, R_V*eW, res_V, eC, ...)
     let r_v_ew = scale_rows(&r_v, &e_w); // R_V * eW
-    let cidx_v: Option<Vec<Vec<usize>>> = if let Some(ec) = e_cluster_ref {
-        Some(cluster_idx(ec))
-    } else {
-        None
-    };
+    let cidx_v: Option<Vec<Vec<usize>>> = e_cluster_ref.map(cluster_idx);
 
     // For CRV2/CRV3: need sqrtRX and invG
     let sqrt_rx_v: Option<Mat<f64>> = if crv3 || crv2 {
@@ -156,11 +152,6 @@ pub fn rdrobust_bw(
     // Hp[j] = h_V^(j) for j=0..o  (0-based, R uses j-1 so Hp[1]=h^0=1)
     // BConst = sum_j Hp[j] * (invG_V %*% v)[j], then extract [nu]
     let inv_g_v_v = &inv_g_v * Mat::from_fn(o + 1, 1, |i, _| v_vec[i]);
-    let mut b_const = 0.0;
-    for j in 0..=o {
-        let hp = h_v.powi(j as i32);
-        b_const += hp * inv_g_v_v[(j, 0)];
-    }
     // R: (Hp*(invG_V%*%v))[nu+1] → 0-based index nu
     // Wait, the R code computes (Hp*(invG_V%*%v)) as an element-wise product
     // and then extracts element nu+1 (1-based).
@@ -172,7 +163,7 @@ pub fn rdrobust_bw(
     // invG_V%*%v is (o+1)×1.
     // (Hp*(invG_V%*%v)) is element-wise: Hp[i] * (invG_V%*%v)[i]
     // [nu+1] (1-based) = [nu] (0-based)
-    b_const = h_v.powi(nu as i32) * inv_g_v_v[(nu, 0)];
+    let b_const = h_v.powi(nu as i32) * inv_g_v_v[(nu, 0)];
 
     // ----- B-fit at bandwidth h_B -----
     let w_b = kernel_weight(x, c, h_b, kernel);
@@ -234,11 +225,7 @@ pub fn rdrobust_bw(
         );
 
         let r_b_ew = scale_rows(&r_b, &eb_w);
-        let cidx_b: Option<Vec<Vec<usize>>> = if let Some(ec) = eb_cluster_ref {
-            Some(cluster_idx(ec))
-        } else {
-            None
-        };
+        let cidx_b: Option<Vec<Vec<usize>>> = eb_cluster_ref.map(cluster_idx);
 
         let sqrt_rx_b: Option<Mat<f64>> = if crv3 || crv2 {
             Some(scale_rows(&r_b, &sqrt_ebw))

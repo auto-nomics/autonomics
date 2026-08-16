@@ -59,7 +59,7 @@ fn read_csv_vec(path: &PathBuf) -> Vec<f64> {
         .skip(1)
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
-            let v = l.split(',').last().expect("csv cell");
+            let v = l.split(',').next_back().expect("csv cell");
             unquote(v).trim().parse::<f64>().expect("f64 parse")
         })
         .collect()
@@ -137,7 +137,7 @@ fn assert_close(actual: &[f64], expected: &[f64], tol: f64, label: &str) {
         .iter()
         .zip(expected.iter())
         .filter(|(a, e)| a.signum() == e.signum() && **a != 0.0 && **e != 0.0)
-        .count() as usize;
+        .count();
     let total = actual.iter().filter(|a| **a != 0.0).count().max(1);
     let sign_agreement = same_sign as f64 / total as f64;
     assert!(
@@ -166,6 +166,7 @@ fn build_float_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
     vec![RecordBatch::try_new(schema, cols).unwrap()]
 }
 
+#[allow(dead_code)] // Shared helper for integer-column golden cases.
 fn build_int_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
     use arrow_schema::FieldRef;
     let fields: Vec<FieldRef> = names
@@ -224,7 +225,7 @@ fn xval_regression_forest() {
         })
         .collect();
     let batches = build_float_batches(&x_rows, &names);
-    let mut spec_batches = batches.clone();
+    let spec_batches;
     // The DAG-node spec needs Y to be a separate column — append it.
     {
         let mut combined = x_rows.clone();
@@ -541,7 +542,7 @@ fn xval_multi_regression_forest() {
     let y_mat = read_csv_mat(&dir.join("mr_Y.csv")); // 50 x 2
     let expected_oob = read_csv_mat(&dir.join("mr_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p)
+    let _x_names: Vec<&str> = (0..p)
         .map(|j| match j {
             0 => "c0",
             _ => "c1",
@@ -713,7 +714,7 @@ fn xval_lm_forest() {
     let w_mat = read_csv_mat(&dir.join("lm_W.csv"));
     let expected_oob = read_csv_mat(&dir.join("lm_oob.csv"));
     let p = x_rows[0].len();
-    let x_names: Vec<&str> = (0..p)
+    let _x_names: Vec<&str> = (0..p)
         .map(|j| match j {
             0 => "c0",
             _ => "c1",

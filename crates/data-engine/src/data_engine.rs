@@ -792,7 +792,7 @@ mod tests {
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::common::HashMap;
     use datafusion::prelude::CsvReadOptions;
-    use vfs::{MountedObjectStore, OpendalFileStorage};
+    use vfs::OpendalFileStorage;
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
@@ -1349,6 +1349,7 @@ mod tests {
             "linear_regression",
             "echo",
             "two_sample_mr",
+            "enrichment_ora",
         ] {
             assert!(
                 kinds.contains(&expected),

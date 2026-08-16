@@ -261,7 +261,8 @@ impl DagNode for TransformerTrainNode {
             event_column: None,
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,

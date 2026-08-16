@@ -255,7 +255,7 @@ pub fn compute_loglik(
             let d = y_or_res[i] - intercept - linear[i];
             result += d * d;
         }
-        result /= (2.0 * n as f64);
+        result /= 2.0 * n as f64;
     } else {
         for i in 0..n {
             let z = intercept + linear[i];

@@ -103,6 +103,7 @@ impl LdscOutput {
 // =====================================================================
 
 /// Per-trait / per-trait-pair regression data.
+#[allow(dead_code)] // Placeholder for the blocked jackknife regression API.
 struct MergedData {
     /// SNP, CHR, BP, N, Z, A1, L2 (LD score), wLD, intercept.
     pub n: Vec<f64>,
@@ -408,9 +409,9 @@ pub fn scale_to_liability(
     cov: &Mat<f64>,
     v_raw: &Mat<f64>,
     liab_s: &[f64],
-    n_vec: &Mat<f64>,
-    n_blocks: usize,
-    m: f64,
+    _n_vec: &Mat<f64>,
+    _n_blocks: usize,
+    _m: f64,
 ) -> (Mat<f64>, Mat<f64>) {
     let k = cov.nrows();
 

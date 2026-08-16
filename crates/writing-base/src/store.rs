@@ -297,8 +297,7 @@ mod tests {
     use writing_types::{Block, EditOp, EditScript, Inline, ParagraphBlock, Section, SectionLevel};
 
     async fn setup() -> WritingStore {
-        let store = WritingStore::open_in_memory().await.unwrap();
-        store
+        WritingStore::open_in_memory().await.unwrap()
     }
 
     #[tokio::test]

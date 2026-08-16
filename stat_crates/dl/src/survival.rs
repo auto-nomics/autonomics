@@ -27,10 +27,8 @@ pub fn c_index(risk_scores: &[f64], times: &[f64], events: &[usize]) -> f64 {
                 }
             } else if events[i] == 1 && events[j] == 1 {
                 true
-            } else if events[i] == 1 || events[j] == 1 {
-                true
             } else {
-                false
+                events[i] == 1 || events[j] == 1
             };
 
             if !comparable {

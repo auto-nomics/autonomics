@@ -868,8 +868,14 @@ impl SpecExecute for SvyCoxphSpec {
                 msg: format!("collect: {e}"),
             })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
-        let t = crate::survey_common::extract_variables(&batches, &[self.time_column.clone()])?;
-        let e = crate::survey_common::extract_variables(&batches, &[self.event_column.clone()])?;
+        let t = crate::survey_common::extract_variables(
+            &batches,
+            std::slice::from_ref(&self.time_column),
+        )?;
+        let e = crate::survey_common::extract_variables(
+            &batches,
+            std::slice::from_ref(&self.event_column),
+        )?;
         let x = crate::survey_common::extract_variables(&batches, &self.predictors)?;
         let fit =
             survey::svy_coxph(&t[0], &e[0], &x, &design).map_err(|e| DagError::NodeError {
@@ -936,8 +942,14 @@ impl SpecExecute for SvySurvregSpec {
                 msg: format!("collect: {e}"),
             })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
-        let t = crate::survey_common::extract_variables(&batches, &[self.time_column.clone()])?;
-        let e = crate::survey_common::extract_variables(&batches, &[self.event_column.clone()])?;
+        let t = crate::survey_common::extract_variables(
+            &batches,
+            std::slice::from_ref(&self.time_column),
+        )?;
+        let e = crate::survey_common::extract_variables(
+            &batches,
+            std::slice::from_ref(&self.event_column),
+        )?;
         let x = crate::survey_common::extract_variables(&batches, &self.predictors)?;
         let fit = survey::svy_survreg(&t[0], &e[0], &x, &design, true).map_err(|e| {
             DagError::NodeError {
@@ -1178,7 +1190,10 @@ impl SpecExecute for SvyIvregSpec {
                 msg: format!("collect: {e}"),
             })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
-        let y = crate::survey_common::extract_variables(&batches, &[self.response.clone()])?;
+        let y = crate::survey_common::extract_variables(
+            &batches,
+            std::slice::from_ref(&self.response),
+        )?;
         let endo = crate::survey_common::extract_variables(&batches, &self.endogenous)?;
         let instr = crate::survey_common::extract_variables(&batches, &self.instruments)?;
         let exo = if self.exogenous.is_empty() {

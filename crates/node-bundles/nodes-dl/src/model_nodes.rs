@@ -246,6 +246,7 @@ impl NodeFactory for ModelInfoFactory {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Parsed spec is retained to validate input during construction.
 struct ModelInfoNode {
     spec: ModelInfoSpec,
     meta: NodePorts,

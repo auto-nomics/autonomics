@@ -223,7 +223,7 @@ fn xval_rdpower_tau5() {
 
     // --- R reference ---
     let r_power_rbc = 0.8189905549293736;
-    let r_power_conv = 0.9646945482572080;
+    let r_power_conv = 0.964_694_548_257_208;
     let r_se_rbc = 1.741258539530723;
     let r_se_conv = 1.458716133447212;
 

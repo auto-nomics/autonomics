@@ -75,6 +75,7 @@ impl NodeFactory for PredictFactory {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Parsed spec is retained to validate input during construction.
 struct PredictNode {
     spec: PredictSpec,
     meta: NodePorts,
@@ -216,7 +217,10 @@ fn push_classification_or_regression(
             )));
             arrays.push(Arc::new(Float64Array::from(probs.clone())));
             // Also add discrete prediction column (threshold 0.5) for downstream nodes.
-            let class_preds: Vec<u32> = probs.iter().map(|&p| if p >= 0.5 { 1 } else { 0 }).collect();
+            let class_preds: Vec<u32> = probs
+                .iter()
+                .map(|&p| if p >= 0.5 { 1 } else { 0 })
+                .collect();
             fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
             arrays.push(Arc::new(UInt32Array::from(class_preds)));
         }

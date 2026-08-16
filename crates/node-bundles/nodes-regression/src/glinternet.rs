@@ -64,7 +64,7 @@ impl NodeFactory for GlinternetNodeFactory {
         Supports categorical and continuous predictors under Gaussian or logistic loss."
     }
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(GlinternetNodeSpec).into()
+        schema_for!(GlinternetNodeSpec)
     }
     fn ports(&self) -> NodePorts {
         port_layout()
@@ -129,8 +129,8 @@ impl DagNode for GlinternetNode {
                 msg: "empty input".into(),
             });
         }
-        let schema = batches[0].schema().clone();
-        let n = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        let _schema = batches[0].schema().clone();
+        let _n = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         // Extract outcome
         let y = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.spec.outcome_column)

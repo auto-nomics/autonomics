@@ -230,7 +230,7 @@ pub fn train_mlp(
     }
 
     let weights = model.to_weights();
-    let total_params = model.n_params();
+    let _total_params = model.n_params();
 
     let mlp_model = MlpModel {
         layers: weights,

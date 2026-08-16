@@ -25,8 +25,8 @@ use agentik_core::tools::{ProgressRecord, ToolContext, ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
-use vfs::OpendalFileStorage;
 use serde_json::Value;
+use vfs::OpendalFileStorage;
 
 use crate::client::GwasCatalogClient;
 

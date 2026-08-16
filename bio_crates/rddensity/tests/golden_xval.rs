@@ -18,6 +18,7 @@ fn load_density_data() -> Vec<f64> {
     x
 }
 
+#[allow(dead_code)] // Shared tolerance helper for optional golden assertions.
 fn rel_err(a: f64, b: f64) -> f64 {
     if a.abs() < 1e-30 && b.abs() < 1e-30 {
         return 0.0;
@@ -121,7 +122,7 @@ fn xval_rddensity_binomial() {
     // Binomial p-value should be computed and finite
     if let Some(bp) = result.bino_pval {
         assert!(
-            bp >= 0.0 && bp <= 1.0,
+            (0.0..=1.0).contains(&bp),
             "binomial p-value out of range: {}",
             bp
         );

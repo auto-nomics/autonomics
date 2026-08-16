@@ -157,11 +157,11 @@ fn gauss_strong_hierarchy_holds() {
                 let has_a = active
                     .cont
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[i]| i == a));
+                    .is_some_and(|v| v.iter().any(|&[i]| i == a));
                 let has_b = active
                     .cont
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[i]| i == b));
+                    .is_some_and(|v| v.iter().any(|&[i]| i == b));
                 if !has_a || !has_b {
                     total_violations += 1;
                 }
@@ -199,7 +199,7 @@ fn gauss_path_has_multiple_active_models() {
 #[test]
 fn gauss_fitted_values_first_lambda() {
     let fx = load();
-    let fit = run_fit(&fx);
+    let _fit = run_fit(&fx);
 
     // At lambda_max, fitted values should all be mean(Y)
     let mean_y = fx.y.iter().sum::<f64>() / fx.n as f64;

@@ -79,10 +79,10 @@ fn needs_sanitize(messages: &[Message]) -> bool {
     for m in messages {
         let mut seen_texts: HashSet<&str> = HashSet::new();
         for c in &m.content {
-            if let ContentBlock::Text { text } = c {
-                if !seen_texts.insert(text.as_str()) {
-                    return true;
-                }
+            if let ContentBlock::Text { text } = c
+                && !seen_texts.insert(text.as_str())
+            {
+                return true;
             }
         }
     }
@@ -97,10 +97,10 @@ fn needs_sanitize(messages: &[Message]) -> bool {
             collect_tool_use_ids(&w[0], &mut prev_assistant_tool_ids);
             let mut seen: HashSet<&str> = HashSet::new();
             for c in &w[1].content {
-                if let ContentBlock::ToolResult { tool_use_id, .. } = c {
-                    if !seen.insert(tool_use_id.as_str()) {
-                        return true;
-                    }
+                if let ContentBlock::ToolResult { tool_use_id, .. } = c
+                    && !seen.insert(tool_use_id.as_str())
+                {
+                    return true;
                 }
             }
         } else {
@@ -117,10 +117,10 @@ fn needs_sanitize(messages: &[Message]) -> bool {
         }
         let mut seen: HashSet<&str> = HashSet::new();
         for c in &m.content {
-            if let ContentBlock::ToolResult { tool_use_id, .. } = c {
-                if !seen.insert(tool_use_id.as_str()) {
-                    return true;
-                }
+            if let ContentBlock::ToolResult { tool_use_id, .. } = c
+                && !seen.insert(tool_use_id.as_str())
+            {
+                return true;
             }
         }
     }
@@ -183,10 +183,10 @@ fn has_unorphaned_tool_result(messages: &[Message]) -> bool {
             }
             Role::User => {
                 for c in &m.content {
-                    if let ContentBlock::ToolResult { tool_use_id, .. } = c {
-                        if !seen_tool_ids.contains(tool_use_id) {
-                            return true;
-                        }
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = c
+                        && !seen_tool_ids.contains(tool_use_id)
+                    {
+                        return true;
                     }
                 }
             }
@@ -262,10 +262,10 @@ fn has_orphan_tool_result(messages: &[Message]) -> bool {
             prev_is_assistant = true;
         } else if matches!(m.role, Role::User) {
             for c in &m.content {
-                if let ContentBlock::ToolResult { tool_use_id, .. } = c {
-                    if !prev_is_assistant || !prev_tool_ids.contains(tool_use_id.as_str()) {
-                        return true;
-                    }
+                if let ContentBlock::ToolResult { tool_use_id, .. } = c
+                    && (!prev_is_assistant || !prev_tool_ids.contains(tool_use_id.as_str()))
+                {
+                    return true;
                 }
             }
             prev_is_assistant = false;
@@ -290,13 +290,13 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
         }
 
         // Coalesce into the previous message if the role matches (Rule 5/6).
-        if let Some(prev) = out.last_mut() {
-            if matches_same_role(&prev.role, &msg.role) {
-                let mut merged_blocks = std::mem::take(&mut prev.content);
-                merged_blocks.extend(msg.content);
-                prev.content = dedup_content_blocks(merged_blocks);
-                continue;
-            }
+        if let Some(prev) = out.last_mut()
+            && matches_same_role(&prev.role, &msg.role)
+        {
+            let mut merged_blocks = std::mem::take(&mut prev.content);
+            merged_blocks.extend(msg.content);
+            prev.content = dedup_content_blocks(merged_blocks);
+            continue;
         }
 
         // Otherwise normalise this message: dedup tool_results within it,
@@ -310,12 +310,13 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
         // Rule 1: if the previous message contains a tool_use whose
         // tool_use_ids are not all covered by `normalised`'s tool_results,
         // insert a stub user message between them.
-        if let Some(prev) = out.last() {
-            if prev.has_tool_use() && matches!(normalised.role, Role::User) {
-                let missing = unmatched_tool_use_ids(prev, &normalised);
-                if !missing.is_empty() {
-                    out.push(stub_user_message(missing));
-                }
+        if let Some(prev) = out.last()
+            && prev.has_tool_use()
+            && matches!(normalised.role, Role::User)
+        {
+            let missing = unmatched_tool_use_ids(prev, &normalised);
+            if !missing.is_empty() {
+                out.push(stub_user_message(missing));
             }
         }
 
@@ -326,28 +327,28 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
     // tool_use blocks (no following user message with the matching
     // tool_results), append a synthetic user message carrying stub
     // tool_results so the conversation always ends with a user turn.
-    if let Some(last) = out.last() {
-        if last.has_tool_use() {
-            let last_ids: HashSet<String> = last
-                .tool_uses()
-                .iter()
-                .filter_map(|c| c.get_tool_call_id())
-                .collect();
-            let provided: HashSet<String> = out
-                .iter()
-                .rev()
-                .nth(1)
-                .map(|prev| {
-                    prev.tool_results()
-                        .iter()
-                        .filter_map(|c| c.get_tool_call_id())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let missing: Vec<String> = last_ids.difference(&provided).cloned().collect();
-            if !missing.is_empty() {
-                out.push(stub_user_message(missing));
-            }
+    if let Some(last) = out.last()
+        && last.has_tool_use()
+    {
+        let last_ids: HashSet<String> = last
+            .tool_uses()
+            .iter()
+            .filter_map(|c| c.get_tool_call_id())
+            .collect();
+        let provided: HashSet<String> = out
+            .iter()
+            .rev()
+            .nth(1)
+            .map(|prev| {
+                prev.tool_results()
+                    .iter()
+                    .filter_map(|c| c.get_tool_call_id())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let missing: Vec<String> = last_ids.difference(&provided).cloned().collect();
+        if !missing.is_empty() {
+            out.push(stub_user_message(missing));
         }
     }
 
@@ -376,23 +377,23 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
 
     // Rule 6 — head must be user. If the first surviving message is
     // assistant, prepend a placeholder.
-    if let Some(first) = out.first() {
-        if !matches!(first.role, Role::User) {
-            let placeholder = Message {
-                id: Uuid::new_v4().to_string(),
-                type_: "message".to_string(),
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: "[conversation resumed]".to_string(),
-                }],
-                model: None,
-                stop_reason: None,
-                stop_sequence: None,
-                usage: None,
-                request_id: None,
-            };
-            out.insert(0, placeholder);
-        }
+    if let Some(first) = out.first()
+        && !matches!(first.role, Role::User)
+    {
+        let placeholder = Message {
+            id: Uuid::new_v4().to_string(),
+            type_: "message".to_string(),
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "[conversation resumed]".to_string(),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        out.insert(0, placeholder);
     }
 
     out
@@ -493,15 +494,16 @@ fn repair_tool_use_adjacency(messages: Vec<Message>) -> Vec<Message> {
                 let mut non_result_blocks: Vec<ContentBlock> = Vec::new();
                 let mut next_msg = next_msg;
                 for c in std::mem::take(&mut next_msg.content).into_iter() {
-                    if let ContentBlock::ToolResult { ref tool_use_id, .. } = c {
+                    if let ContentBlock::ToolResult {
+                        ref tool_use_id, ..
+                    } = c
+                    {
                         // Anthropic rejects duplicate tool_results for
                         // the same id; keep the first occurrence and
                         // drop the rest. HashMap::insert would
                         // overwrite — entry().or_insert keeps the
                         // existing entry.
-                        provided
-                            .entry(tool_use_id.clone())
-                            .or_insert(c);
+                        provided.entry(tool_use_id.clone()).or_insert(c);
                     } else {
                         non_result_blocks.push(c);
                     }
@@ -518,9 +520,7 @@ fn repair_tool_use_adjacency(messages: Vec<Message>) -> Vec<Message> {
                     } else {
                         tool_results_in_order.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
-                            content: Some(
-                                "Tool execution has been interrupted".to_string(),
-                            ),
+                            content: Some("Tool execution has been interrupted".to_string()),
                             is_error: Some(true),
                         });
                         missing_any = true;
@@ -601,26 +601,6 @@ fn stub_user_message(tool_use_ids: Vec<String>) -> Message {
     }
 }
 
-/// Drop duplicate `tool_result` blocks within a single message's content,
-/// keeping the first occurrence of each `tool_use_id`.
-///
-/// Superseded by [`dedup_content_blocks`] which also handles text dedup.
-/// Kept for tests that want to verify tool_result-only dedup behaviour.
-#[cfg(test)]
-fn dedup_tool_results(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out = Vec::with_capacity(blocks.len());
-    for c in blocks {
-        if let ContentBlock::ToolResult { tool_use_id, .. } = &c {
-            if !seen.insert(tool_use_id.clone()) {
-                continue;
-            }
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// Drop duplicate content blocks within a single message's content list.
 ///
 /// This is a superset of [`dedup_tool_results`]: it also collapses
@@ -643,10 +623,8 @@ fn dedup_content_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
                     continue;
                 }
             }
-            ContentBlock::Text { text } => {
-                if !seen_texts.insert(text.clone()) {
-                    continue;
-                }
+            ContentBlock::Text { text } if !seen_texts.insert(text.clone()) => {
+                continue;
             }
             _ => {}
         }
@@ -709,10 +687,10 @@ pub fn diagnose(messages: &[Message]) -> HashMap<&'static str, usize> {
         }
         seen.clear();
         for c in &m.content {
-            if let ContentBlock::ToolResult { tool_use_id, .. } = c {
-                if !seen.insert(tool_use_id.as_str()) {
-                    dups += 1;
-                }
+            if let ContentBlock::ToolResult { tool_use_id, .. } = c
+                && !seen.insert(tool_use_id.as_str())
+            {
+                dups += 1;
             }
         }
     }
@@ -1282,12 +1260,12 @@ mod tests {
             .position(|m| m.has_tool_use())
             .expect("tool_use assistant must remain");
         let next = out.get(asst_idx + 1).expect("user message follows");
-        let has_a = next.content.iter().any(|c| {
-            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "a")
-        });
-        let has_b = next.content.iter().any(|c| {
-            matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "b")
-        });
+        let has_a = next.content.iter().any(
+            |c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "a"),
+        );
+        let has_b = next.content.iter().any(
+            |c| matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "b"),
+        );
         assert!(has_a, "tool_result for a must be in adjacent user");
         assert!(has_b, "tool_result for b must be in adjacent user");
     }
@@ -1340,7 +1318,10 @@ mod tests {
         let adjacent = next.content.iter().any(|c| {
             matches!(c, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "call_X")
         });
-        assert!(adjacent, "repair must place the tool_result adjacent to tool_use");
+        assert!(
+            adjacent,
+            "repair must place the tool_result adjacent to tool_use"
+        );
     }
 
     /// Anthropic requires that within a single user message, the
@@ -1520,9 +1501,9 @@ mod tests {
         let coalesced = out
             .iter()
             .find(|m| {
-                m.content.iter().any(|c| {
-                    matches!(c, ContentBlock::Text { text } if text == resume)
-                })
+                m.content
+                    .iter()
+                    .any(|c| matches!(c, ContentBlock::Text { text } if text == resume))
             })
             .expect("resume text must survive");
         let resume_count = coalesced

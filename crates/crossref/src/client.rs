@@ -83,7 +83,7 @@ impl CrossrefClientBuilder {
     /// Build the [`CrossrefClient`].
     pub fn build(self) -> CrossrefClient {
         let ua = self.user_agent.unwrap_or_else(|| {
-            format!("crossref-rs-sdk/0.1 (+https://github.com/wjixiang/autonomics)")
+            "crossref-rs-sdk/0.1 (+https://github.com/wjixiang/autonomics)".to_string()
         });
         let builder = if let Some(c) = self.client {
             return CrossrefClient {

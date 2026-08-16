@@ -253,7 +253,7 @@ fn build_tree(
             }
         };
 
-        if depth + 1 <= segs.len() {
+        if depth < segs.len() {
             seen[idx].2.push((item_idx, segs.clone()));
         }
     }

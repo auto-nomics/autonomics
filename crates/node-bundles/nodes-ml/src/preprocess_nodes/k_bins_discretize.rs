@@ -5,6 +5,7 @@ use super::*;
 // ═══════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[allow(dead_code)] // Accepted for schema compatibility; output remains ordinal.
 pub struct KBinsDiscretizeSpec {
     pub columns: Vec<String>,
     #[serde(default = "default_n_bins")]

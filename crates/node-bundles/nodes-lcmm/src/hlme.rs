@@ -1825,7 +1825,7 @@ mod cross_validation {
     use dag_core::dag::node_event::NodeReporter;
     use dag_core::registry::NodeCtx;
     use datafusion::prelude::SessionContext;
-    
+
     const TOL_LL: f64 = 1e-8;
 
     // ---- Path helpers --------------------------------------------------
@@ -2738,7 +2738,7 @@ mod cross_validation {
     /// datasets that store integer IDs as doubles).
     fn load_data_batch_float64_id() -> RecordBatch {
         let path = fixtures_dir().join("data_hlme.csv");
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|_e| {
             panic!(
                 "Failed to read {}: Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
                 path.display()

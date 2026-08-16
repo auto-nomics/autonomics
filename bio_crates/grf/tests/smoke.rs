@@ -732,8 +732,8 @@ fn causal_forest_ate_correctness() {
     .generate()
     .expect("gen");
 
-    let y_col = batch.column_by_name("y").unwrap();
-    let w_col = batch.column_by_name("w").unwrap();
+    let _y_col = batch.column_by_name("y").unwrap();
+    let _w_col = batch.column_by_name("w").unwrap();
     let tau_col = batch.column_by_name("true_tau").unwrap();
     let n = batch.num_rows();
     let true_tau: Vec<f64> = (0..n)

@@ -148,7 +148,7 @@ pub fn stratified_kfold(labels: &[usize], k: usize, shuffle: bool, seed: u64) ->
 
     // Shuffle within classes and distribute round-robin across folds.
     let mut fold_test: Vec<Vec<usize>> = vec![Vec::new(); k];
-    for (_, indices) in classes.iter_mut() {
+    for indices in classes.values_mut() {
         if shuffle {
             indices.shuffle(&mut rng);
         }

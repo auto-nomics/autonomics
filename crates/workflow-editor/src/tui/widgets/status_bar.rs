@@ -8,9 +8,13 @@ use ratatui::widgets::Widget;
 
 use crate::tui::mode::Mode;
 
+/// Bottom bar showing mode, status, and key hints.
 pub struct StatusBarWidget<'a> {
+    /// Current editor mode.
     pub mode: Mode,
+    /// Latest application status message.
     pub status: &'a str,
+    /// Key hints for the current mode.
     pub hint: &'a str,
 }
 

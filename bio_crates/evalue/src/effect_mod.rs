@@ -317,15 +317,6 @@ fn stratum_idx(s: &str) -> usize {
     }
 }
 
-/// Get field index: "RD" → 1, "lo" → 3.
-fn field_idx(s: &str) -> usize {
-    match s {
-        "RD" => 1,
-        "lo" => 3,
-        _ => 1,
-    }
-}
-
 /// Compute bias-corrected risk differences.
 ///
 /// Port of `RDt_bound()` in `effect_modification.R:44`.

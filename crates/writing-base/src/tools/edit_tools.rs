@@ -654,7 +654,7 @@ fn build_block_from_json(block_type: &str, json: &serde_json::Value) -> Result<B
                 .unwrap_or(false);
             let items_arr = json.get("items").and_then(|v| v.as_array());
             let items: Vec<ListItem> = items_arr
-                .unwrap_or(&serde_json::Value::Array(vec![]).as_array().unwrap())
+                .unwrap_or(serde_json::Value::Array(vec![]).as_array().unwrap())
                 .iter()
                 .filter_map(|v| v.as_str())
                 .map(|s| ListItem {

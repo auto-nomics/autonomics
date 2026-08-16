@@ -30,8 +30,8 @@ fn load_fixture(name: &str) -> Fixture {
 #[test]
 fn test_hiernet_weak_lambda_path() {
     let fx = load_fixture("weak");
-    let p = fx.p;
-    let n = fx.n;
+    let _p = fx.p;
+    let _n = fx.n;
 
     let config = hiernet::HierNetConfig {
         family: hiernet::HierNetFamily::Gaussian,

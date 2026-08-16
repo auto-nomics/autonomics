@@ -134,7 +134,7 @@ impl AverageTreatmentEffectSpec {
                     "treated" => w_orig[i] == 1.0,
                     "control" => w_orig[i] == 0.0,
                     "overlap" => w_hat[i] > 0.0 && w_hat[i] < 1.0,
-                    _ => return false, // unknown target → silently skip; grf R would error
+                    _ => false, // unknown target → silently skip; grf R would error
                 }
             })
             .collect();

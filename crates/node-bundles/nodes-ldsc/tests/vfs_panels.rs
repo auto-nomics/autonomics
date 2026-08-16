@@ -2,10 +2,10 @@
 //!
 //! Ignored by default because it reads machine-local reference datasets.
 
-use std::sync::Arc;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
-use vfs::{BackendConfig, BackendDefinition, MountedObjectStore, MountDefinition, VfsManifest};
+use std::sync::Arc;
+use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
 const LOCAL_PANEL_ROOT: &str =
     "/mnt/projects/autonomics_projects/autonomics/reference/ldsc_data/parquet";
@@ -59,7 +59,11 @@ async fn single_file_parquet_panels_resolve_through_vfs() {
             .await
             .expect("register panel");
         let schema = ctx.table(table).await.unwrap().schema().clone();
-        let names: Vec<_> = schema.fields().iter().map(|f| f.name().to_string()).collect();
+        let names: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
         println!("{table}: {names:?}");
     }
 
@@ -88,7 +92,10 @@ async fn ukbb_panel_resolves_through_vfs() {
     .await
     .unwrap();
 
-    let df = ctx.sql(r#"SELECT "rsid", "ld_score" FROM ukbb LIMIT 1"#).await.unwrap();
+    let df = ctx
+        .sql(r#"SELECT "rsid", "ld_score" FROM ukbb LIMIT 1"#)
+        .await
+        .unwrap();
     let batches = df.collect().await.unwrap();
     assert_eq!(batches[0].num_rows(), 1);
 }

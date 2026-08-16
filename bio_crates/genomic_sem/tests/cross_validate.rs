@@ -259,7 +259,7 @@ fn xval_scenario2_implied_covariance() {
 }
 
 /// Find a parameter in the golden set matching (lhs, op, rhs).
-fn find_golden<'a>(golden: &'a GoldenParams, lhs: &str, op: &str, rhs: &str) -> Option<(f64, f64)> {
+fn find_golden(golden: &GoldenParams, lhs: &str, op: &str, rhs: &str) -> Option<(f64, f64)> {
     for i in 0..golden.lhs.len() {
         if golden.lhs[i] == lhs && golden.op[i] == op && golden.rhs[i] == rhs {
             return Some((golden.est[i], golden.se[i]));
@@ -442,20 +442,17 @@ fn xval_scenario3_factor_loadings() {
             .results
             .iter()
             .find(|r| r.lhs == *var && r.op == "~~" && r.rhs == *var);
-        match (golden_est, rust_est) {
-            (Some((ge, _)), Some(re)) => {
-                // Residual variances are identified: θ_i = S[i,i] - Σ[i,i] + θ_i
-                // Machine precision expected since implied cov matches.
-                assert!(
-                    close(re.unstand_est, ge, 1e-6, 1e-8),
-                    "Resid {}~~{}: Rust={:.10} vs lavaan={:.10}",
-                    var,
-                    var,
-                    re.unstand_est,
-                    ge
-                );
-            }
-            _ => {}
+        if let (Some((ge, _)), Some(re)) = (golden_est, rust_est) {
+            // Residual variances are identified: θ_i = S[i,i] - Σ[i,i] + θ_i
+            // Machine precision expected since implied cov matches.
+            assert!(
+                close(re.unstand_est, ge, 1e-6, 1e-8),
+                "Resid {}~~{}: Rust={:.10} vs lavaan={:.10}",
+                var,
+                var,
+                re.unstand_est,
+                ge
+            );
         }
     }
 }

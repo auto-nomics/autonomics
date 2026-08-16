@@ -397,8 +397,7 @@ impl DagNode for HdlLNode {
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
         // ---- Resolve the per-chromosome PLINK reference prefix ----
-        let ref_template =
-            REF_PREFIX_TEMPLATE.to_string();
+        let ref_template = REF_PREFIX_TEMPLATE.to_string();
         let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
 
         // ---- Filter reference SNPs to the region [start, stop] ----
@@ -503,9 +502,7 @@ impl DagNode for HdlLNode {
         })?;
 
         // wrap into a PortOutputs via an isolated SessionContext (like lava nodes)
-        let ctx = dag_core::registry::new_isolated_ctx(
-            node_ctx.runtime_env.clone(),
-            );
+        let ctx = dag_core::registry::new_isolated_ctx(node_ctx.runtime_env.clone());
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: HDL_L_KIND.into(),
             msg: format!("read_batch: {e}"),

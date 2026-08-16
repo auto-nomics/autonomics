@@ -71,7 +71,7 @@ impl NodeFactory for HierNetNodeFactory {
         Supports weak and strong hierarchy, Gaussian and logistic loss. Continuous predictors only."
     }
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(HierNetNodeSpec).into()
+        schema_for!(HierNetNodeSpec)
     }
     fn ports(&self) -> NodePorts {
         port_layout()
@@ -136,7 +136,7 @@ impl DagNode for HierNetNode {
                 msg: "empty input".into(),
             });
         }
-        let schema = batches[0].schema().clone();
+        let _schema = batches[0].schema().clone();
         let n = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         let y = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.spec.outcome_column)
@@ -292,7 +292,7 @@ fn build_lambda_batch(path: &hiernet::HierNetPath, p: usize) -> RecordBatch {
                 }
             }
         }
-        n_inters.push(inter as i32);
+        n_inters.push(inter);
     }
 
     let schema = Arc::new(Schema::new(vec![

@@ -201,7 +201,7 @@ async fn run_phase2(
         .await
         .map_err(|e| format!("select memory stage 1 outputs: {e}"))?;
     rows.retain(|row| !row.raw_memory.is_empty() || !row.rollout_summary.is_empty());
-    rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    rows.sort_by_key(|a| a.session_id);
 
     let notes = memory
         .list_pending_notes(MEMORY_SCOPE_ID)

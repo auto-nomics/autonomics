@@ -15,7 +15,9 @@ pub struct PaneLayout {
     pub status: Rect,
     /// Body split into [palette, canvas, inspector].
     pub palette: Rect,
+    /// Canvas area between the palette and inspector.
     pub canvas: Rect,
+    /// Right-hand inspector area.
     pub inspector: Rect,
 }
 

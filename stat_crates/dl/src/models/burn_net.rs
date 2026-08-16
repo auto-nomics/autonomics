@@ -93,8 +93,8 @@ pub fn apply_activation<B: Backend>(x: Tensor<B, 2>, act: Activation) -> Tensor<
             pos.add(neg)
         }
         Activation::Selu => {
-            let scale: f32 = 1.0507009873554805;
-            let alpha: f32 = 1.6732632423543772;
+            let scale: f32 = 1.050_701;
+            let alpha: f32 = 1.673_263_2;
             let pos = x.clone().clamp_min(0.0).mul_scalar(scale);
             let neg = x
                 .clamp_max(0.0)

@@ -317,7 +317,8 @@ impl DagNode for MlpTrainNode {
             event_column: None,
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,
@@ -593,7 +594,8 @@ impl DagNode for DeepSurvTrainNode {
             event_column: Some(self.spec.event_column.clone()),
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,
@@ -664,9 +666,7 @@ pub fn build_training_log_batch(log: &[dl::mlp::EpochLog]) -> Result<RecordBatch
             Field::new("lr", DataType::Float64, false),
         ])),
         vec![
-            Arc::new(arrow_array::Int64Array::from(
-                epochs.iter().map(|&v| v).collect::<Vec<_>>(),
-            )),
+            Arc::new(arrow_array::Int64Array::from(epochs.to_vec())),
             Arc::new(Float64Array::from(train_loss)),
             Arc::new(Float64Array::from(val_loss)),
             Arc::new(Float64Array::from(val_metric)),

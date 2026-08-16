@@ -14,13 +14,7 @@ use faer::Mat;
 use genomic_sem::ldsc;
 
 /// Helper: compute h²-style IRWLS weights matching R ldsc.R lines 231-243.
-fn r_h2_weights(
-    l2: &[f64],
-    chi: &[f64],
-    wld: &[f64],
-    n: &[f64],
-    m: f64,
-) -> (Vec<f64>, f64) {
+fn r_h2_weights(l2: &[f64], chi: &[f64], wld: &[f64], n: &[f64], m: f64) -> (Vec<f64>, f64) {
     let n_snps = l2.len();
     let mean_chi: f64 = chi.iter().sum::<f64>() / n_snps as f64;
     let mean_l2_n: f64 = (0..n_snps).map(|i| l2[i] * n[i]).sum::<f64>() / n_snps as f64;
@@ -107,12 +101,18 @@ fn test_h2_weights_varying_l2() {
         assert!(
             w[i] < w[i - 1] || (w[i] - w[i - 1]).abs() < 1e-15,
             "weights should be non-increasing with L2: w[{}] = {}, w[{}] = {}",
-            i - 1, w[i - 1], i, w[i]
+            i - 1,
+            w[i - 1],
+            i,
+            w[i]
         );
     }
     // Weights sum to 1.
     let sum: f64 = w.iter().sum();
-    assert!((sum - 1.0).abs() < 1e-12, "weights sum to {sum}, expected 1.0");
+    assert!(
+        (sum - 1.0).abs() < 1e-12,
+        "weights sum to {sum}, expected 1.0"
+    );
 }
 
 // ── Block jackknife regression tests ───────────────────────────────────
@@ -127,9 +127,8 @@ fn test_jackknife_separate_weights() {
     let weights: Vec<f64> = vec![1.0 / n as f64; n];
 
     let r1 = ldsc::block_jackknife_regression(&l2, &chi, &weights, 20, n as f64, 1000.0);
-    let r2 = ldsc::block_jackknife_regression_r(
-        &l2, &chi, &weights, &weights, 20, n as f64, 1000.0,
-    );
+    let r2 =
+        ldsc::block_jackknife_regression_r(&l2, &chi, &weights, &weights, 20, n as f64, 1000.0);
 
     // With equal weights, results should be identical.
     assert!((r1.reg_tot - r2.reg_tot).abs() < 1e-10);
@@ -144,20 +143,19 @@ fn test_jackknife_different_xy_weights() {
     let l2: Vec<f64> = (0..n).map(|i| (i as f64) / 50.0 + 1.0).collect();
     let chi: Vec<f64> = l2.iter().map(|x| 2.0 * x + 1.0).collect();
     let w_x: Vec<f64> = vec![1.0 / n as f64; n];
-    let w_y: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0) / (n as f64 * (n as f64 + 1.0) / 2.0)).collect();
+    let w_y: Vec<f64> = (0..n)
+        .map(|i| (i as f64 + 1.0) / (n as f64 * (n as f64 + 1.0) / 2.0))
+        .collect();
 
-    let r_same = ldsc::block_jackknife_regression_r(
-        &l2, &chi, &w_x, &w_x, 20, n as f64, 1000.0,
-    );
-    let r_diff = ldsc::block_jackknife_regression_r(
-        &l2, &chi, &w_x, &w_y, 20, n as f64, 1000.0,
-    );
+    let r_same = ldsc::block_jackknife_regression_r(&l2, &chi, &w_x, &w_x, 20, n as f64, 1000.0);
+    let r_diff = ldsc::block_jackknife_regression_r(&l2, &chi, &w_x, &w_y, 20, n as f64, 1000.0);
 
     // reg_tot should differ because XtY changes.
     assert!(
         (r_same.reg_tot - r_diff.reg_tot).abs() > 1e-6,
         "reg_tot should differ with different y weights: {} vs {}",
-        r_same.reg_tot, r_diff.reg_tot
+        r_same.reg_tot,
+        r_diff.reg_tot
     );
     // Both results should be finite.
     assert!(r_same.reg_tot.is_finite());
@@ -190,7 +188,9 @@ fn test_jackknife_cov_division() {
     let expected_tot_se_sq = result.jackknife_cov[(0, 0)] / (n as f64).powi(2) * 1000.0_f64.powi(2);
     assert!(
         (result.tot_se.powi(2) - expected_tot_se_sq).abs() < 1e-8,
-        "tot_se² mismatch: {} vs {}", result.tot_se.powi(2), expected_tot_se_sq
+        "tot_se² mismatch: {} vs {}",
+        result.tot_se.powi(2),
+        expected_tot_se_sq
     );
 }
 
@@ -213,7 +213,10 @@ fn test_l2_clamping_in_weights() {
     // oc.w = 1/5 = 0.2
     // w = sqrt(0.1) ≈ 0.3162, normalized to 0.1
     for &wi in &w {
-        assert!((wi - 0.1).abs() < 1e-10, "expected 0.1 with clamped L2, got {wi}");
+        assert!(
+            (wi - 0.1).abs() < 1e-10,
+            "expected 0.1 with clamped L2, got {wi}"
+        );
     }
 }
 

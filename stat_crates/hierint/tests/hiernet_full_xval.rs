@@ -4,6 +4,7 @@ use hierint::hiernet;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct WeakFixture {
     n: usize,
     p: usize,
@@ -22,6 +23,7 @@ fn load_weak() -> WeakFixture {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct StrongFixture {
     n: usize,
     p: usize,

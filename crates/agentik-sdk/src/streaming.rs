@@ -793,7 +793,7 @@ impl MessageStream {
                         // object rather than a string — a string input is not
                         // a valid dictionary and causes API errors when the
                         // message is replayed to any provider.
-                        *input = serde_json::from_str(&accumulated)
+                        *input = serde_json::from_str(accumulated)
                             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
                     }
                 }

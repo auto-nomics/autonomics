@@ -84,11 +84,11 @@ fn node_e2e_glinternet_logistic_cat() {
                 let has_a = active
                     .cat
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[i]| i == a));
+                    .is_some_and(|v| v.iter().any(|&[i]| i == a));
                 let has_b = active
                     .cat
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[i]| i == b));
+                    .is_some_and(|v| v.iter().any(|&[i]| i == b));
                 assert!(has_a && has_b, "catcat hierarchy violated");
             }
         }
@@ -139,11 +139,11 @@ fn node_e2e_glinternet_mixed() {
                 let has_cat = active
                     .cat
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[i]| i == ci));
+                    .is_some_and(|v| v.iter().any(|&[i]| i == ci));
                 let has_cont = active
                     .cont
                     .as_ref()
-                    .map_or(false, |v| v.iter().any(|&[j]| j == cj));
+                    .is_some_and(|v| v.iter().any(|&[j]| j == cj));
                 assert!(has_cat && has_cont, "catcont hierarchy violated");
             }
         }
@@ -179,7 +179,7 @@ fn node_e2e_hiernet_weak() {
     assert!(path.fits[0].coefs.bp.iter().all(|&v| v.abs() < 1e-8));
 
     // Verify predictions
-    let preds = hiernet::predict(&path.fits.last().unwrap(), &x, n);
+    let preds = hiernet::predict(path.fits.last().unwrap(), &x, n);
     assert_eq!(preds.len(), n);
     for &p in &preds {
         assert!(p.is_finite());

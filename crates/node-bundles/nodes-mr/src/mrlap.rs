@@ -243,7 +243,8 @@ fn col_i32(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i32>>> {
             for i in 0..a.len() {
                 out.push(if a.is_null(i) { None } else { Some(a.value(i)) });
             }
-        } else if let Some(a) = col.as_any().downcast_ref::<I64>() {
+        } else {
+            let a = col.as_any().downcast_ref::<I64>()?;
             for i in 0..a.len() {
                 out.push(if a.is_null(i) {
                     None
@@ -251,8 +252,6 @@ fn col_i32(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i32>>> {
                     Some(a.value(i) as i32)
                 });
             }
-        } else {
-            return None;
         }
     }
     Some(out)
@@ -267,7 +266,8 @@ fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i64>>> {
             for i in 0..a.len() {
                 out.push(if a.is_null(i) { None } else { Some(a.value(i)) });
             }
-        } else if let Some(a) = col.as_any().downcast_ref::<Int32Array>() {
+        } else {
+            let a = col.as_any().downcast_ref::<Int32Array>()?;
             for i in 0..a.len() {
                 out.push(if a.is_null(i) {
                     None
@@ -275,8 +275,6 @@ fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i64>>> {
                     Some(a.value(i) as i64)
                 });
             }
-        } else {
-            return None;
         }
     }
     Some(out)

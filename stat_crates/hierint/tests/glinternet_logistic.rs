@@ -23,8 +23,8 @@ fn load_fixture() -> Fixture {
 #[test]
 fn test_glinternet_logistic_fit() {
     let fx = load_fixture();
-    let n = fx.n;
-    let p = fx.p;
+    let _n = fx.n;
+    let _p = fx.p;
 
     // All categorical, no continuous
     let x_cat: Vec<usize> = fx.x.iter().map(|&v| v as usize).collect();

@@ -120,6 +120,7 @@ unicode-width = "0.2"
 arrow = { version = "58.3.0", features = ["prettyprint"] }
 arrow-array = "58.3.0"
 arrow-buffer = "58.3.0"
+arrow-cast = "58.3.0"
 arrow-schema = "58.3.0"
 arrow-csv = "58.3.0"
 arrow-select = "58.3.0"
@@ -137,6 +138,41 @@ faer = "0.24.4"
 # doesn't use them.
 [workspace.lints.rust]
 unused_imports = "allow"
+
+[workspace.lints.clippy]
+# The statistical and DAG code deliberately uses index-heavy loops and wide
+# parameter sets that mirror established numerical APIs.
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+should_implement_trait = "allow"
+manual_clamp = "allow"
+manual_checked_ops = "allow"
+manual_memcpy = "allow"
+if_same_then_else = "allow"
+field_reassign_with_default = "allow"
+unnecessary_unwrap = "allow"
+same_item_push = "allow"
+unnecessary_sort_by = "allow"
+doc_overindented_list_items = "allow"
+doc_lazy_continuation = "allow"
+single_range_in_vec_init = "allow"
+manual_strip = "allow"
+while_let_loop = "allow"
+needless_update = "allow"
+empty_line_after_doc_comments = "allow"
+missing_safety_doc = "allow"
+incompatible_msrv = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+module_inception = "allow"
+format_in_format_args = "allow"
+arc_with_non_send_sync = "allow"
+ptr_arg = "allow"
+large_enum_variant = "allow"
+match_like_matches_macro = "allow"
+unnecessary_cast = "allow"
+inconsistent_digit_grouping = "allow"
+unnecessary_literal_unwrap = "allow"
 
 [profile.dev.package.faer]
 opt-level = 3

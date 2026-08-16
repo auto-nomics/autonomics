@@ -545,7 +545,7 @@ mod tests {
         let d = fpc_design();
         let x = FPC_X_TO_TEST.to_vec();
         let target = 200.0;
-        let d2 = calibrate_linear(&d, &[x.clone()], &[target]).unwrap();
+        let d2 = calibrate_linear(&d, std::slice::from_ref(&x), &[target]).unwrap();
         let w2 = d2.weights();
         let calibrated_total: f64 = x.iter().zip(&w2).map(|(&xi, &wi)| xi * wi).sum();
         assert!(

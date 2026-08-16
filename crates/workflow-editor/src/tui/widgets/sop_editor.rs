@@ -10,7 +10,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 
+/// Text widget for editing a workflow SOP.
 pub struct SopEditorWidget<'a> {
+    /// Current SOP text buffer.
     pub buffer: &'a str,
 }
 

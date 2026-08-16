@@ -1325,10 +1325,7 @@ mod tests {
     /// `DataEngine`; here a bare `RuntimeEnv` is sufficient.
     fn test_ctx() -> crate::registry::NodeCtx {
         use datafusion::prelude::SessionContext;
-        crate::registry::NodeCtx::new(
-            SessionContext::new().runtime_env(),
-            None,
-        )
+        crate::registry::NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     #[test]

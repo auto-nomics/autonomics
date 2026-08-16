@@ -104,7 +104,7 @@ impl Default for RdMcConfig {
 /// (X - C with cutoff 0) and per-cutoff subsets, then computes a
 /// sample-size-weighted average.
 pub fn rdmc(cfg: &RdMcConfig) -> Result<RdMcResult, RdMultiError> {
-    let mut clist: Vec<f64> = cfg.c.iter().copied().collect();
+    let mut clist: Vec<f64> = cfg.c.to_vec();
     clist.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     clist.dedup();
     let cnum = clist.len();

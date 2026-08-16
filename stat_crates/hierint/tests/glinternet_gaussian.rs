@@ -30,8 +30,8 @@ fn load_fixture() -> Fixture {
 #[test]
 fn test_glinternet_gaussian_lambda_path() {
     let fx = load_fixture();
-    let n = fx.n;
-    let p = fx.p;
+    let _n = fx.n;
+    let _p = fx.p;
 
     // Continuous-only data: no categorical
     let x_cat: Vec<usize> = Vec::new();

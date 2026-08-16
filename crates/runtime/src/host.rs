@@ -1054,9 +1054,7 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| {
-                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
-                                })
+                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1127,9 +1125,7 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| {
-                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
-                                })
+                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1199,9 +1195,7 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| {
-                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
-                                })
+                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "<panic in create_profile>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
@@ -1553,9 +1547,7 @@ impl RuntimeHost {
                             let msg = panic_payload
                                 .downcast_ref::<&'static str>()
                                 .map(|s| (*s).to_string())
-                                .or_else(|| {
-                                    panic_payload.downcast_ref::<String>().map(|s| s.clone())
-                                })
+                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "<panic in list_persisted_agents>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",

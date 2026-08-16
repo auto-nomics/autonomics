@@ -167,8 +167,10 @@ impl SectionLevel {
 /// Editorial status of a section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SectionStatus {
     /// First draft — content being written.
+    #[default]
     Draft,
     /// Under active revision.
     Revising,
@@ -176,12 +178,6 @@ pub enum SectionStatus {
     Review,
     /// Finalised.
     Final,
-}
-
-impl Default for SectionStatus {
-    fn default() -> Self {
-        Self::Draft
-    }
 }
 
 #[cfg(test)]

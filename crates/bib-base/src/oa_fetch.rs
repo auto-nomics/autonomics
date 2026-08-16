@@ -89,10 +89,9 @@ pub async fn try_fetch_fulltext_with(
 async fn resolve_pmc_id(client: &EuropePmcClient, article: &bib_types::Article) -> Option<String> {
     let query = if let Some(pmid) = article.pmid() {
         format!("PMID:{pmid}")
-    } else if let Some(doi) = article.doi() {
-        format!("DOI:{doi}")
     } else {
-        return None; // No identifier to search by.
+        let doi = article.doi()?;
+        format!("DOI:{doi}")
     };
 
     let resp = client

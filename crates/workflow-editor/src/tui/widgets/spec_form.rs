@@ -10,7 +10,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 
+/// JSON text widget for editing node parameters.
 pub struct SpecFormWidget<'a> {
+    /// Current parameter JSON buffer.
     pub buffer: &'a str,
 }
 

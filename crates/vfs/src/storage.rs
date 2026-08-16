@@ -161,7 +161,7 @@ impl OpendalFileStorage {
             (false, true) => prefix.to_string(),
             (false, false) => format!("{prefix}/{suffix}"),
         };
-        Path::parse(&joined).unwrap_or_else(|_| Path::ROOT)
+        Path::parse(&joined).unwrap_or(Path::ROOT)
     }
 
     /// Reject writes through read-only mounts. Internal helper; public
@@ -533,7 +533,7 @@ impl ObjectStore for OpendalFileStorage {
                         Ok(e) => {
                             if let Some(mut meta) = entry_to_meta(&e) {
                                 meta.location = Self::remap_to_virtual(
-                                    &Path::parse(e.path()).unwrap_or_else(|_| Path::ROOT),
+                                    &Path::parse(e.path()).unwrap_or(Path::ROOT),
                                     &handle,
                                 );
                                 yield Ok(meta);
@@ -578,7 +578,7 @@ impl ObjectStore for OpendalFileStorage {
             for (vp, handle) in child_mounts {
                 let key = mount_key(
                     &handle,
-                    &Path::parse(&vp).unwrap_or_else(|_| Path::ROOT),
+                    &Path::parse(&vp).unwrap_or(Path::ROOT),
                 );
                 let scan = if key.is_empty() {
                     "/".to_string()
@@ -598,7 +598,7 @@ impl ObjectStore for OpendalFileStorage {
                         Ok(e) => {
                             if let Some(mut meta) = entry_to_meta(&e) {
                                 meta.location = Self::remap_to_virtual(
-                                    &Path::parse(e.path()).unwrap_or_else(|_| Path::ROOT),
+                                    &Path::parse(e.path()).unwrap_or(Path::ROOT),
                                     &handle,
                                 );
                                 yield Ok(meta);
@@ -670,7 +670,7 @@ impl ObjectStore for OpendalFileStorage {
                         while let Some(entry) = lister.next().await {
                             let entry = entry.map_err(opendal_to_object_store_error)?;
                             let entry_path = entry.path().to_string();
-                            let entry_ds = Path::parse(&entry_path).unwrap_or_else(|_| Path::ROOT);
+                            let entry_ds = Path::parse(&entry_path).unwrap_or(Path::ROOT);
                             if entry.metadata().is_file() {
                                 let mut meta = entry_to_meta(&entry).unwrap_or_else(|| {
                                     opendal_meta_to_object_meta(&entry_path, entry.metadata())
@@ -749,7 +749,7 @@ impl ObjectStore for OpendalFileStorage {
             while let Some(entry) = lister.next().await {
                 let entry = entry.map_err(opendal_to_object_store_error)?;
                 let entry_path = entry.path().to_string();
-                let entry_ds = Path::parse(&entry_path).unwrap_or_else(|_| Path::ROOT);
+                let entry_ds = Path::parse(&entry_path).unwrap_or(Path::ROOT);
                 let virtual_entry = stream_root_mount
                     .as_ref()
                     .map(|h| Self::remap_to_virtual(&entry_ds, h))
@@ -963,7 +963,7 @@ impl MultipartUpload for OpendalMultipartUpload {
 /// (the agent-facing vfs ops) and callers that go through the
 /// `ObjectStore` trait see identical locations.
 fn mount_key(handle: &MountHandle, path: &Path) -> String {
-    let vp = Path::parse(&handle.definition.path).unwrap_or_else(|_| Path::ROOT);
+    let vp = Path::parse(&handle.definition.path).unwrap_or(Path::ROOT);
     let mut remote = String::new();
     if let Some(suffix_iter) = path.prefix_match(&vp) {
         for part in suffix_iter {
@@ -1260,7 +1260,7 @@ mod tests {
         let MountedStorageHarness {
             storage,
             data_dir: _data_dir,
-            source_dir: src,
+            source_dir: _src,
         } = make_mounted_storage(&[("panel.parquet", b"ldsc-data")]);
         let err = storage.check_writable("/data/panel.parquet").unwrap_err();
         assert!(matches!(err.kind(), opendal::ErrorKind::PermissionDenied));
@@ -1304,7 +1304,7 @@ mod tests {
         // Create a file in the default fs that should appear alongside
         // the mount's synthetic entry.
         std::fs::write(data_dir.path().join("scratch.txt"), b"hi").unwrap();
-        let result = (&*storage)
+        let result = (*storage)
             .list_with_delimiter(Some(&datafusion::object_store::path::Path::ROOT))
             .await
             .unwrap();
@@ -1488,7 +1488,7 @@ mod tests {
         } = make_sourced_mount();
         std::fs::write(source_dir.join("hello.txt"), b"mounted").unwrap();
 
-        let result = (&*storage)
+        let result = (*storage)
             .list_with_delimiter(Some(&datafusion::object_store::path::Path::ROOT))
             .await
             .unwrap();
@@ -1510,7 +1510,7 @@ mod tests {
             data_dir: _d,
             source_dir: _s,
         } = make_mounted_storage(&[("panel.parquet", b"ldsc-data")]);
-        let result = (&*storage)
+        let result = (*storage)
             .list_with_delimiter(Some(
                 &datafusion::object_store::path::Path::parse("/data").unwrap(),
             ))

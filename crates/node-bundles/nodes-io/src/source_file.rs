@@ -317,7 +317,7 @@ impl DagNode for FileSourceNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ctx = node_ctx.session();
-        let path = source_path(&node_ctx, &normalize_path(&self.path));
+        let path = source_path(node_ctx, &normalize_path(&self.path));
         let fmt = self
             .format
             .or_else(|| FileFormat::from_path(&path))
@@ -382,6 +382,33 @@ async fn read_file(
         }
         .into()
     })
+}
+
+/// Cast every Float32 column to Float64, leaving all other columns unchanged.
+fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {
+    use arrow_schema::DataType;
+    use datafusion::common::Column;
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_expr::cast;
+
+    let float32_cols: Vec<String> = df
+        .schema()
+        .fields()
+        .iter()
+        .filter(|f| matches!(f.data_type(), DataType::Float32))
+        .map(|f| f.name().to_string())
+        .collect();
+
+    for name in &float32_cols {
+        // `col(&str)` parses the value as an SQL identifier and lowercases it
+        // when identifier normalization is enabled. A raw Column keeps the
+        // exact Parquet field name.
+        df = df.with_column(
+            name,
+            cast(Expr::Column(Column::from_name(name)), DataType::Float64),
+        )?;
+    }
+    Ok(df)
 }
 
 #[cfg(test)]
@@ -705,31 +732,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Cast every Float32 column to Float64, leaving all other columns unchanged.
-fn promote_floats(mut df: DataFrame) -> Result<DataFrame, DagError> {
-    use arrow_schema::DataType;
-    use datafusion::common::Column;
-    use datafusion::logical_expr::Expr;
-    use datafusion::logical_expr::cast;
-
-    let float32_cols: Vec<String> = df
-        .schema()
-        .fields()
-        .iter()
-        .filter(|f| matches!(f.data_type(), DataType::Float32))
-        .map(|f| f.name().to_string())
-        .collect();
-
-    for name in &float32_cols {
-        // `col(&str)` parses the value as an SQL identifier and lowercases it
-        // when identifier normalization is enabled. A raw Column keeps the
-        // exact Parquet field name.
-        df = df.with_column(
-            name,
-            cast(Expr::Column(Column::from_name(name)), DataType::Float64),
-        )?;
-    }
-    Ok(df)
 }

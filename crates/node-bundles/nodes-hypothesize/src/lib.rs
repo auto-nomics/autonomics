@@ -6,6 +6,7 @@
 
 pub mod combine_nodes;
 pub mod common;
+pub mod enrichment_ora;
 pub mod gof_nodes;
 pub mod parametric;
 pub mod ranks;
@@ -58,5 +59,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(combine_nodes::CombineNodeFactory));
         registry.register(Box::new(combine_nodes::BooleanNodeFactory));
         registry.register(Box::new(combine_nodes::AdjustNodeFactory));
+        registry.register(Box::new(enrichment_ora::EnrichmentOraNodeFactory));
     }
 }

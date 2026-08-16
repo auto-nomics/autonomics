@@ -220,7 +220,7 @@ impl DagNode for CrossrefWorksNode {
         let mut all_works: Vec<Work> = Vec::new();
         let mut cursor: Option<String> = None;
         let pages = if rows_per_page > 0 {
-            (max_results + rows_per_page - 1) / rows_per_page
+            max_results.div_ceil(rows_per_page)
         } else {
             1
         };

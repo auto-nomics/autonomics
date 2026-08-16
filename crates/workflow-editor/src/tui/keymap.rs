@@ -11,37 +11,65 @@ use super::mode::Mode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     // ── Always-on ──
+    /// Exit the workflow editor.
     Quit,
+    /// Show the key-binding help overlay.
     ShowHelp,
+    /// Persist the active workflow.
     SaveWorkflow,
+    /// Execute the active workflow.
     RunWorkflow,
+    /// Undo the last editor operation.
     Undo,
+    /// Redo the most recently undone operation.
     Redo,
+    /// Open the command palette.
     OpenCommandPalette,
+    /// Open the snapshot-history panel.
     OpenHistory,
+    /// Open the node-picker palette.
     OpenNodePicker,
+    /// Move keyboard focus to the node palette.
     FocusPalette,
+    /// Move keyboard focus to the canvas.
     FocusCanvas,
+    /// Move keyboard focus to the inspector.
     FocusInspector,
 
     // ── Normal-mode (canvas) ──
+    /// Pan the canvas upward.
     PanUp,
+    /// Pan the canvas downward.
     PanDown,
+    /// Pan the canvas left.
     PanLeft,
+    /// Pan the canvas right.
     PanRight,
+    /// Zoom into the canvas.
     ZoomIn,
+    /// Zoom out of the canvas.
     ZoomOut,
+    /// Select the next node.
     SelectNextNode,
+    /// Select the previous node.
     SelectPrevNode,
+    /// Delete the selected node or edge.
     DeleteSelection,
+    /// Edit the selected node.
     EditSelection,
+    /// Begin drawing an edge from the selected output port.
     StartEdgeDraw,
+    /// Edit the workflow-level SOP.
     EditSop,
+    /// Enter insert mode.
     EnterInsertMode,
 
     // ── History panel ──
+    /// Select the next newer snapshot.
     SelectNextHistory,
+    /// Select the previous older snapshot.
     SelectPrevHistory,
+    /// Check out the selected snapshot.
     CheckoutSnapshot,
 }
 

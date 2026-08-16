@@ -140,9 +140,9 @@ fn test_sem_recovers_known_loadings_3trait() {
 #[test]
 fn test_sem_two_factor_recovery() {
     // Two-factor model with known structure
-    let loadings1 = vec![0.7, 0.6, 0.0, 0.0];
-    let loadings2 = vec![0.0, 0.0, 0.8, 0.5];
-    let resid = vec![0.3, 0.3, 0.2, 0.3];
+    let loadings1 = [0.7, 0.6, 0.0, 0.0];
+    let loadings2 = [0.0, 0.0, 0.8, 0.5];
+    let resid = [0.3, 0.3, 0.2, 0.3];
     let f1_var = 0.4;
     let f2_var = 0.5;
 
@@ -546,7 +546,7 @@ fn test_full_pipeline_ldsc_to_sem() {
         ..Default::default()
     };
     let um_result = usermodel::usermodel(&covstruc, &um_config).unwrap();
-    assert!(um_result.results.len() > 0);
+    assert!(!um_result.results.is_empty());
 
     // Step 3: Compute rgmodel
     let rg_result = rgmodel::rgmodel(&covstruc, false).unwrap();

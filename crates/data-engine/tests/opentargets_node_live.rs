@@ -11,7 +11,6 @@ use datafusion::prelude::SessionContext;
 use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };
-use std::sync::Arc;
 
 fn node_ctx() -> NodeCtx {
     NodeCtx {

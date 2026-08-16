@@ -43,7 +43,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let mut result = train_autoencoder(&x, None, &config).unwrap();
+        let result = train_autoencoder(&x, None, &config).unwrap();
         assert_eq!(result.latent.shape(), (n, 2));
         for i in 0..n {
             for j in 0..2 {
@@ -84,7 +84,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let mut result = train_autoencoder(&x, None, &config).unwrap();
+        let result = train_autoencoder(&x, None, &config).unwrap();
         assert_eq!(result.latent.shape(), (n, 3));
         let json = serde_json::to_string(&result.model).unwrap();
         let mut restored: AutoEncoderModel = serde_json::from_str(&json).unwrap();

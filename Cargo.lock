@@ -6964,14 +6964,18 @@ name = "nodes-hypothesize"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-cast",
  "arrow-schema",
  "async-trait",
  "dag-core",
+ "datafusion",
  "hypothesize",
  "schemars",
  "serde",
  "serde_json",
+ "statrs",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

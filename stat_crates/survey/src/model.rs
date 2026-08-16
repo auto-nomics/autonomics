@@ -1123,7 +1123,16 @@ mod tests {
             .unwrap();
 
         let spec = FamilySpec::canonical(crate::family::Family::Gaussian);
-        let fit = svyglm(&y, &[x.clone()], &design, true, None, &spec, None).unwrap();
+        let fit = svyglm(
+            &y,
+            std::slice::from_ref(&x),
+            &design,
+            true,
+            None,
+            &spec,
+            None,
+        )
+        .unwrap();
         let fit_lin = svyglm_linear(&y, &[x], &design, true, None).unwrap();
 
         for i in 0..2 {

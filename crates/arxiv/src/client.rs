@@ -94,7 +94,7 @@ impl ArxivClient {
             tokio::time::sleep(d).await;
         }
 
-        let resp = self.client.get(&base_url()).query(params).send().await?;
+        let resp = self.client.get(base_url()).query(params).send().await?;
 
         let status = resp.status().as_u16();
         let body = resp.text().await?;

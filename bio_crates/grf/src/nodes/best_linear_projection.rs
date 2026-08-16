@@ -118,7 +118,7 @@ impl BestLinearProjectionSpec {
         // Build the design: column-major with 1 (intercept) + a_columns.
         let mut x_buf: Vec<f64> = Vec::with_capacity((1 + p) * n);
         // intercept first column (all ones).
-        x_buf.extend(std::iter::repeat(1.0).take(n));
+        x_buf.extend(std::iter::repeat_n(1.0, n));
         for col in &a_columns {
             x_buf.extend_from_slice(col);
         }

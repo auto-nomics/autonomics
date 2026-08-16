@@ -434,8 +434,7 @@ impl DagNode for HdlLScanNode {
         ));
 
         // ---- Load PLINK reference ONCE ----
-        let ref_template =
-            REF_PREFIX_TEMPLATE.to_string();
+        let ref_template = REF_PREFIX_TEMPLATE.to_string();
         let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
         let plink_ref = lava::plink::load_reference(&ld_ref_prefix)
             .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;
@@ -530,9 +529,7 @@ impl DagNode for HdlLScanNode {
         ));
 
         let batch = build_result_batch(&outcomes, &self.spec)?;
-        let ctx = dag_core::registry::new_isolated_ctx(
-            node_ctx.runtime_env.clone(),
-            );
+        let ctx = dag_core::registry::new_isolated_ctx(node_ctx.runtime_env.clone());
         let df = ctx.read_batch(batch).map_err(|e| DagError::NodeError {
             node_type: HDL_L_SCAN_KIND.into(),
             msg: format!("read_batch: {e}"),

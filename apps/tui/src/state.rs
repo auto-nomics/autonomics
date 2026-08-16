@@ -904,7 +904,7 @@ impl AppState {
 
     /// Returns the status of the active session (or Idle if none).
     pub fn active_status(&self) -> AgentStatus {
-        self.active_tab_state().status.clone()
+        self.active_tab_state().status
     }
 }
 

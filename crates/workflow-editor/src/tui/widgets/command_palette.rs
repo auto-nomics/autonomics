@@ -6,8 +6,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Widget, Wrap};
 
+/// Modal command palette with filtered command suggestions.
 pub struct CommandPaletteWidget<'a> {
+    /// Text typed by the user.
     pub buffer: &'a str,
+    /// Suggestion names and descriptions to filter and render.
     pub suggestions: Vec<(&'a str, &'a str)>,
 }
 
@@ -38,10 +41,10 @@ impl<'a> Widget for CommandPaletteWidget<'a> {
 
         // Below: matching suggestions
         let q = self.buffer.to_lowercase();
-        let items: Vec<ListItem> = self
+        let items: Vec<ListItem<'_>> = self
             .suggestions
             .iter()
-            .filter(|(name, _)| q.is_empty() || name.contains(&q.as_str()))
+            .filter(|(name, _)| q.is_empty() || name.contains(q.as_str()))
             .map(|(name, desc)| {
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{:<14}", name), Style::default().fg(Color::Cyan)),

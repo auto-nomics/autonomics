@@ -200,8 +200,7 @@ pub fn fit(
 
     // Center Y (gaussian)
     let my = if config.family == HierNetFamily::Gaussian {
-        let m = y.iter().sum::<f64>() / n as f64;
-        m
+        y.iter().sum::<f64>() / n as f64
     } else {
         0.0
     };

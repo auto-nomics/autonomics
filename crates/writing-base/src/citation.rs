@@ -359,10 +359,8 @@ impl CitationResolver {
             // or if one is a prefix of the other.
             let close = if dist <= max_len / 3 {
                 true
-            } else if candidate.starts_with(unresolved) || unresolved.starts_with(candidate) {
-                true
             } else {
-                false
+                candidate.starts_with(unresolved) || unresolved.starts_with(candidate)
             };
             if close {
                 match &best {
@@ -615,7 +613,7 @@ mod tests {
 
         // Introduction paragraph should cite 2+ articles.
         assert!(!graph.is_empty());
-        for (_block_id, article_ids) in &graph {
+        for article_ids in graph.values() {
             assert!(!article_ids.is_empty());
         }
     }

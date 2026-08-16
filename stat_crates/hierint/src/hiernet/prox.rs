@@ -15,6 +15,7 @@ use super::interactions::{cross_prod, ut, utd};
 ///          + (alpha - something)^2 related to bp, bn constraint
 ///
 /// Port of `f()` in `hierNet.c`.
+#[allow(dead_code)] // Retained as a reference implementation from the Hiernet R port.
 fn f_onerow(alpha: f64, a: &[f64], q: usize, b: &[f64], c: f64, mu: f64) -> f64 {
     // a: a_k values for each k (interaction gradient + current th)
     // b: b_k = sign indicators

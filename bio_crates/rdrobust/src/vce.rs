@@ -475,7 +475,7 @@ fn crv2_cluster_score(
     }
 
     // F_sq = C_half * L_g * t(C_half)
-    let f_sq = c_half * &l_g * &t_c_half;
+    let f_sq = c_half * &l_g * t_c_half;
 
     // Eigen decomposition
     let (eigvals_asc, eigvecs) = sym_eigen(&f_sq).unwrap_or((vec![0.0; k], Mat::zeros(k, k)));

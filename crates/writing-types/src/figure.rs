@@ -12,6 +12,7 @@ use crate::inline::Inline;
 /// LaTeX float placement specifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Placement {
     /// `[h]` — here.
     Here,
@@ -24,6 +25,7 @@ pub enum Placement {
     /// `[H]` — exactly here (requires `float` package).
     ForceHere,
     /// Default (no specifier).
+    #[default]
     Default,
 }
 
@@ -37,12 +39,6 @@ impl Placement {
             Self::ForceHere => "H",
             Self::Default => "",
         }
-    }
-}
-
-impl Default for Placement {
-    fn default() -> Self {
-        Self::Default
     }
 }
 
@@ -188,19 +184,15 @@ impl ColumnAlign {
 /// Table rendering format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum TableFormat {
     /// `\begin{tabular}` with `\hline`.
     Plain,
     /// `booktabs` style with `\toprule` / `\midrule` / `\bottomrule`.
+    #[default]
     Booktabs,
     /// `\begin{longtable}` for multi-page tables.
     Longtable,
-}
-
-impl Default for TableFormat {
-    fn default() -> Self {
-        Self::Booktabs
-    }
 }
 
 /// A single table cell.

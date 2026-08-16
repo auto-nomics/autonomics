@@ -20,16 +20,12 @@ use crate::near_pd;
 /// `"conserv"` uses `I_LD` directly, and `"none"` applies no correction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum GcMode {
+    #[default]
     Standard,
     Conserv,
     None,
-}
-
-impl Default for GcMode {
-    fn default() -> Self {
-        GcMode::Standard
-    }
 }
 
 impl std::str::FromStr for GcMode {
@@ -184,8 +180,8 @@ pub fn get_s_full(
     s_ld: &Mat<f64>,
     var_snp_i: f64,
     beta_snp_row: &[f64],
-    snp_label: &str,
-    trait_names: &[String],
+    _snp_label: &str,
+    _trait_names: &[String],
 ) -> Mat<f64> {
     let k = n_phenotypes;
     let dim = k + 1;

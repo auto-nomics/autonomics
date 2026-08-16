@@ -9,8 +9,11 @@ use uuid::Uuid;
 
 use crate::model::SnapshotInfo;
 
+/// Snapshot list for the active workflow.
 pub struct HistoryPanelWidget<'a> {
+    /// Snapshots ordered newest first.
     pub history: &'a [SnapshotInfo],
+    /// Identifier of the snapshot currently selected.
     pub selected: Option<Uuid>,
 }
 

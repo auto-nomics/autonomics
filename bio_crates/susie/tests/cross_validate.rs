@@ -84,6 +84,7 @@ fn flex_vec2_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<f64>>, D::Er
 // ─── JSON deserialization types ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Golden JSON contains fields not asserted by every case.
 struct GoldenPayload {
     name: String,
     args: serde_json::Value,
@@ -92,6 +93,7 @@ struct GoldenPayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GoldenInput {
     z: Vec<f64>,
     #[serde(rename = "R")]
@@ -105,6 +107,7 @@ struct GoldenInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GoldenFit {
     #[serde(deserialize_with = "flex_vec2_f64")]
     alpha: Vec<Vec<f64>>,

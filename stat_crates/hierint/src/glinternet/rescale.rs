@@ -109,8 +109,8 @@ pub fn rescale_betahat(
                     1.0
                 };
 
-                result[offset] /= (factor * norm);
-                result[offset + 1] /= (factor * norm_z);
+                result[offset] /= factor * norm;
+                result[offset + 1] /= factor * norm_z;
                 result[0] -= mean * result[offset] + mean_z * result[offset + 1];
 
                 // Product term normalization
@@ -127,7 +127,7 @@ pub fn rescale_betahat(
                 } else {
                     1.0
                 };
-                result[offset + 2] /= (factor * norm_prod);
+                result[offset + 2] /= factor * norm_prod;
                 result[0] -= mean_prod * result[offset + 2];
                 result[offset + 2] /= norm * norm_z;
                 result[offset] -= mean_z * result[offset + 2];
@@ -160,7 +160,7 @@ pub fn rescale_betahat(
                     1.0
                 };
                 for i in 0..size {
-                    result[offset + size + i] /= (factor * norm);
+                    result[offset + size + i] /= factor * norm;
                     result[offset + i] =
                         result[offset + i] / factor1 - mean * result[offset + size + i];
                 }
@@ -221,7 +221,6 @@ pub fn initialize_betahat(
 
     // Build old group lists for matching
     let mut old_groups: Vec<(usize, Vec<usize>)> = Vec::new(); // (type, indices)
-    let mut old_grp_offset = 0usize;
     for group_type in 0..5 {
         let n_type = old_nv[group_type];
         for g in 0..n_type {
@@ -254,7 +253,6 @@ pub fn initialize_betahat(
                 _ => unreachable!(),
             };
             old_groups.push((group_type, indices));
-            old_grp_offset += 1;
         }
     }
 

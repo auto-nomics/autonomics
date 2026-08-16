@@ -63,7 +63,7 @@ impl GetForestWeightsSpec {
                 test_x.n_cols,
                 nt,
             )
-            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+            .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
         Ok(ForestWeightsOutput {
             weights: buf,
             n_train: train_x.n_rows,
@@ -99,7 +99,7 @@ impl SplitFrequenciesSpec {
     pub fn compute(&self, forest: &ForestBlob) -> Result<SplitFrequenciesOutput> {
         let raw = forest
             .compute_split_frequencies(self.max_depth)
-            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+            .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
         Ok(SplitFrequenciesOutput {
             depths_x_features: raw,
         })
@@ -139,7 +139,7 @@ impl VariableImportanceSpec {
     pub fn compute(&self, forest: &ForestBlob) -> Result<VariableImportanceOutput> {
         let raw = forest
             .compute_split_frequencies(self.max_depth)
-            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+            .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
         let n_features = raw.first().map(|r| r.len()).unwrap_or(0);
         let max_depth = raw.len();
         // Per-row total (so each row sums to 1).
@@ -199,7 +199,7 @@ impl GetTreeSpec {
         let serialized = forest
             .inner()
             .get_tree(self.index)
-            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+            .ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
         Ok(GetTreeOutput {
             serialized,
             index: self.index,
@@ -249,8 +249,8 @@ impl MergeForestsSpec {
             inner.push(sys::Forest::deserialize(bytes).map_err(GrfError::from)?);
         }
         let refs: Vec<&sys::Forest> = inner.iter().collect();
-        let merged = sys::Forest::merge_forests(&refs)
-            .ok_or_else(|| GrfError::Sys(sys::GrfError::NullHandle))?;
+        let merged =
+            sys::Forest::merge_forests(&refs).ok_or(GrfError::Sys(sys::GrfError::NullHandle))?;
         let forest = ForestBlob::from_sys(merged, kind, self.n_features);
         let stats = ForestStats {
             kind,

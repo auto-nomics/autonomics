@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use vfs::OpendalFileStorage;
 use gwascatalog_sdk::client::GwasCatalogClient;
+use vfs::OpendalFileStorage;
 
 #[tokio::test]
 #[ignore]

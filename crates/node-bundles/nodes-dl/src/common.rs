@@ -169,6 +169,6 @@ pub fn err(node_type: &str, msg: impl Into<String>) -> DagError {
 /// Extract the best epoch (by val_metric) from a training log.
 /// Returns (best_epoch, best_val_metric), or (None, None) if no val_metric.
 pub fn best_epoch_from_log(log: &[EpochLog]) -> (Option<usize>, Option<f64>) {
-    let best = log.iter().filter(|l| l.val_metric.is_some()).last();
+    let best = log.iter().rfind(|l| l.val_metric.is_some());
     (best.map(|l| l.epoch), best.and_then(|l| l.val_metric))
 }

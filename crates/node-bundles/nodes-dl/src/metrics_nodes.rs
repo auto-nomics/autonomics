@@ -269,7 +269,7 @@ impl DagNode for CalibrationNode {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
 
-                    let group_size = (n + self.spec.n_bins - 1) / self.spec.n_bins;
+                    let group_size = n.div_ceil(self.spec.n_bins);
                     let mut chi_sq = 0.0f64;
                     let mut df: usize = 0;
                     for g in 0..self.spec.n_bins {
@@ -309,7 +309,7 @@ impl DagNode for CalibrationNode {
                             .partial_cmp(&scores[b])
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
-                    let group_size = (n + self.spec.n_bins - 1) / self.spec.n_bins;
+                    let group_size = n.div_ceil(self.spec.n_bins);
                     let mut cal_error = 0.0;
                     for g in 0..self.spec.n_bins {
                         let start = g * group_size;

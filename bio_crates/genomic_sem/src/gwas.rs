@@ -281,7 +281,7 @@ mod tests {
         let results = user_gwas(&covstruc, &sumstats, &config).unwrap();
         assert_eq!(results.len(), 5);
         // Each SNP should produce some results
-        assert!(results[0].params.len() >= 1 || results[0].chisq.is_nan());
+        assert!(!results[0].params.is_empty() || results[0].chisq.is_nan());
     }
 
     #[test]

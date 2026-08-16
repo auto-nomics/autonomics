@@ -13,14 +13,16 @@ use crate::registry::NodeRegistry;
 
 /// Node palette widget.
 pub struct NodePaletteWidget<'a> {
+    /// Registry providing available node kinds.
     pub registry: &'a Arc<NodeRegistry>,
+    /// Whether the palette currently owns keyboard focus.
     pub focus: bool,
 }
 
 impl<'a> Widget for NodePaletteWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let kinds = self.registry.list();
-        let mut items: Vec<ListItem> = Vec::new();
+        let mut items: Vec<ListItem<'_>> = Vec::new();
         let mut last_cat = String::new();
         for k in &kinds {
             if k.category != last_cat {

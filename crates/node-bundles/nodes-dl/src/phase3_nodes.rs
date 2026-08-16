@@ -246,7 +246,8 @@ impl DagNode for AutoEncoderTrainNode {
             event_column: None,
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,
@@ -479,7 +480,8 @@ impl DagNode for DeepHitTrainNode {
             event_column: Some(self.spec.event_column.clone()),
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,
@@ -736,7 +738,8 @@ impl DagNode for RnnTrainNode {
             event_column: None,
             scaler_json: None,
             training_meta: {
-                let (best_epoch, best_val_metric) = common::best_epoch_from_log(&result.training_log);
+                let (best_epoch, best_val_metric) =
+                    common::best_epoch_from_log(&result.training_log);
                 TrainingMeta {
                     n_epochs_run: result.training_log.len(),
                     best_epoch,
@@ -808,6 +811,7 @@ impl NodeFactory for EmbedFactory {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Parsed spec is retained to validate input during construction.
 struct EmbedNode {
     spec: EmbedSpec,
     meta: NodePorts,
@@ -873,9 +877,10 @@ impl DagNode for EmbedNode {
                 push_embed_columns(&h, &mut fields, &mut arrays);
             }
             Architecture::Transformer => {
-                let mut model: TransformerModel =
-                    serde_json::from_str(&artifact.checkpoint_json)
-                        .map_err(|e| common::err("dl_embed", format!("deserialize Transformer: {e}")))?;
+                let mut model: TransformerModel = serde_json::from_str(&artifact.checkpoint_json)
+                    .map_err(|e| {
+                    common::err("dl_embed", format!("deserialize Transformer: {e}"))
+                })?;
                 let h = dl::embed_transformer(&mut model, &x);
                 push_embed_columns(&h, &mut fields, &mut arrays);
             }

@@ -27,6 +27,7 @@ use crate::error::{MiceError, Result};
 struct IrlsFit {
     coef: Vec<f64>,
     cov_unscaled: Vec<f64>,
+    #[allow(dead_code)]
     n_iter: usize,
     converged: bool,
 }

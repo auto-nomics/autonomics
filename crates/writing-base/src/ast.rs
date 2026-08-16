@@ -515,10 +515,8 @@ impl ClaimTag for writing_types::Block {
                     b.meta.tags.push(tag.to_string());
                 }
             }
-            writing_types::Block::Table(b) => {
-                if !b.meta.tags.contains(&tag.to_string()) {
-                    b.meta.tags.push(tag.to_string());
-                }
+            writing_types::Block::Table(b) if !b.meta.tags.contains(&tag.to_string()) => {
+                b.meta.tags.push(tag.to_string());
             }
             _ => {}
         }

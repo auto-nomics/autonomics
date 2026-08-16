@@ -424,7 +424,7 @@ impl OpenAiChatWire {
         }
 
         // Close tool-call blocks that haven't been stopped.
-        for (_, slot) in state.tool_calls.iter() {
+        for slot in state.tool_calls.values() {
             if slot.block_started && !slot.block_stopped {
                 // Same rationale as above — collapse to MessageStop.
                 break;

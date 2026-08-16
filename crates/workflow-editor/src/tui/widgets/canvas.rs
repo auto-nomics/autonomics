@@ -20,8 +20,11 @@ const NODE_HEIGHT: i32 = 3;
 
 /// The canvas widget.
 pub struct CanvasWidget<'a> {
+    /// Editor state containing the active workflow and selection.
     pub state: &'a AppState,
+    /// Whether the canvas currently owns keyboard focus.
     pub focus: bool,
+    /// Source node and output port when an edge is being drawn.
     pub edge_draw_source: Option<(Uuid, String)>,
 }
 
@@ -87,8 +90,8 @@ fn node_anchor(
 }
 
 fn node_origin(area: Rect, manifest: &WorkflowManifest, n: &NodeEntry) -> (u16, u16) {
-    let pan_x = manifest.viewport.pan.0 as i32;
-    let pan_y = manifest.viewport.pan.1 as i32;
+    let pan_x = manifest.viewport.pan.0;
+    let pan_y = manifest.viewport.pan.1;
     let gs = manifest.viewport.grid_step.max(1) as i32;
     let x = area.left() as i32 + (n.position.0 - pan_x) * gs;
     let y = area.top() as i32 + (n.position.1 - pan_y) * gs;

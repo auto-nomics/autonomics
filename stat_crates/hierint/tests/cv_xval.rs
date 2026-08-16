@@ -4,6 +4,7 @@ use hierint::glinternet;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct CvFixture {
     n: usize,
     #[allow(dead_code)]

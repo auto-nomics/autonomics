@@ -252,7 +252,6 @@ impl App {
                     .state
                     .picker_filter(&self.node_registry)
                     .into_iter()
-                    .map(String::from)
                     .collect();
                 f.render_widget(
                     NodePaletteWidget {
@@ -280,16 +279,16 @@ impl App {
 
     fn handle_event(&mut self, ev: AppEvent) {
         // Text input modes always consume the character first.
-        if self.state.mode.is_text_input() {
-            if !matches!(
+        if self.state.mode.is_text_input()
+            && !matches!(
                 ev,
                 AppEvent::Key(KeyEvent {
                     code: KeyCode::Esc,
                     ..
                 })
-            ) {
-                self.state.apply_text_event(&ev);
-            }
+            )
+        {
+            self.state.apply_text_event(&ev);
         }
 
         if let Some(action) = action_for(self.state.mode, &ev) {
@@ -536,7 +535,7 @@ impl App {
                         self.state.mode = Mode::Normal;
                         self.state.dirty = true;
                         self.state
-                            .flash(format!("checked out {}", &snap.commit_message));
+                            .flash(format!("checked out {}", snap.commit_message));
                     }
                     Err(e) => self.state.flash_err(e.to_string()),
                 }

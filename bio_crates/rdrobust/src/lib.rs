@@ -177,16 +177,16 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         .map(|i| {
             cfg.x[i].is_finite()
                 && cfg.y[i].is_finite()
-                && cfg.cluster.as_ref().map_or(true, |c| c[i].is_finite())
-                && cfg.fuzzy.as_ref().map_or(true, |f| f[i].is_finite())
+                && cfg.cluster.as_ref().is_none_or(|c| c[i].is_finite())
+                && cfg.fuzzy.as_ref().is_none_or(|f| f[i].is_finite())
                 && cfg
                     .weights
                     .as_ref()
-                    .map_or(true, |w| w[i].is_finite() && w[i] >= 0.0)
+                    .is_none_or(|w| w[i].is_finite() && w[i] >= 0.0)
                 && cfg
                     .covs
                     .as_ref()
-                    .map_or(true, |cv| (0..cv.ncols()).all(|j| cv[(i, j)].is_finite()))
+                    .is_none_or(|cv| (0..cv.ncols()).all(|j| cv[(i, j)].is_finite()))
         })
         .collect();
 
@@ -226,9 +226,9 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     x = order.iter().map(|&i| x[i]).collect();
     y = order.iter().map(|&i| y[i]).collect();
     let cluster = cluster.map(|c| order.iter().map(|&i| c[i]).collect::<Vec<_>>());
-    let fuzzy = fuzzy.map(|f| order.iter().map(|&i| f[i]).collect::<Vec<_>>());
+    let _fuzzy = fuzzy.map(|f| order.iter().map(|&i| f[i]).collect::<Vec<_>>());
     let weights = weights.map(|w| order.iter().map(|&i| w[i]).collect::<Vec<_>>());
-    let covs = covs.map(|cv| Mat::from_fn(cv.nrows(), cv.ncols(), |i, j| cv[(order[i], j)]));
+    let _covs = covs.map(|cv| Mat::from_fn(cv.nrows(), cv.ncols(), |i, j| cv[(order[i], j)]));
 
     let c = cfg.c;
 
@@ -326,7 +326,7 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
     };
 
     // Weights split
-    let (fw_l, fw_r): (Option<Vec<f64>>, Option<Vec<f64>>) = if let Some(w) = &weights {
+    let (_fw_l, _fw_r): (Option<Vec<f64>>, Option<Vec<f64>>) = if let Some(w) = &weights {
         let wl: Vec<f64> = x
             .iter()
             .zip(w)
@@ -432,7 +432,7 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
         }
 
         // bwcheck adjustment
-        let (bw_min_l, bw_min_r) = if let Some(bc) = bwcheck {
+        let (_bw_min_l, _bw_min_r) = if let Some(bc) = bwcheck {
             let x_uniq_l_sorted: Vec<f64> = {
                 let mut v = x_l.clone();
                 v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -614,12 +614,12 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
             );
             h_bw_l = (c_h_l.v / (c_h_l.b.powi(2) + scaleregul * c_h_l.r)).powf(c_h_l.rate);
             h_bw_r_val = (c_h_r.v / (c_h_r.b.powi(2) + scaleregul * c_h_r.r)).powf(c_h_r.rate);
-            let h_bw_l = if cfg.bwrestrict {
+            let _h_bw_l = if cfg.bwrestrict {
                 h_bw_l.min(bw_max_l)
             } else {
                 h_bw_l
             };
-            let h_bw_r_val = if cfg.bwrestrict {
+            let _h_bw_r_val = if cfg.bwrestrict {
                 h_bw_r_val.min(bw_max_r)
             } else {
                 h_bw_r_val
@@ -714,7 +714,7 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
             h_bw_s = ((c_h_l.v + c_h_r.v)
                 / ((c_h_r.b + c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r)))
                 .powf(c_h_l.rate);
-            let h_bw_s = if cfg.bwrestrict {
+            let _h_bw_s = if cfg.bwrestrict {
                 h_bw_s.min(bw_max)
             } else {
                 h_bw_s
@@ -809,7 +809,7 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
             h_bw_d = ((c_h_l.v + c_h_r.v)
                 / ((c_h_r.b - c_h_l.b).powi(2) + scaleregul * (c_h_r.r + c_h_l.r)))
                 .powf(c_h_l.rate);
-            let h_bw_d = if cfg.bwrestrict {
+            let _h_bw_d = if cfg.bwrestrict {
                 h_bw_d.min(bw_max)
             } else {
                 h_bw_d
@@ -918,8 +918,8 @@ pub fn rdrobust(cfg: &RdRobustConfig) -> Result<RdRobustOutput, RdRobustError> {
             }
         };
 
-        let mut h_l = h_bw_final_l;
-        let mut h_r = h_bw_final_r;
+        let h_l = h_bw_final_l;
+        let h_r = h_bw_final_r;
         let mut b_l = b_bw_final_l;
         let mut b_r = b_bw_final_r;
 

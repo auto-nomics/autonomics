@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 
+/// Full-screen key-binding help overlay.
 pub struct HelpOverlayWidget;
 
 impl Widget for HelpOverlayWidget {
@@ -57,7 +58,7 @@ impl Widget for HelpOverlayWidget {
             Line::from(" Ctrl+C / q    quit"),
         ];
 
-        Paragraph::new(lines.drain(..).collect::<Vec<_>>())
+        Paragraph::new(std::mem::take(&mut lines))
             .wrap(Wrap { trim: false })
             .render(inner, buf);
     }

@@ -960,7 +960,7 @@ impl DagNode for GsemLdscNode {
         let extracted = extract_arrays(&batches, k)?;
 
         // ── 6. Read M_5_50 ──
-        let m_sql = format!(r#"SELECT "m_5_50" FROM ld_panel_m"#);
+        let m_sql = r#"SELECT "m_5_50" FROM ld_panel_m"#.to_string();
         let m_df = session.sql(&m_sql).await.map_err(|e| DagError::NodeError {
             node_type: GSEM_LDSC_NODE_KIND.into(),
             msg: format!("M table query failed: {e}"),

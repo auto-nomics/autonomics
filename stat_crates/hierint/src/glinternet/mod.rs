@@ -402,8 +402,8 @@ pub fn fit(
     if n == 0 {
         return Err(crate::HierIntError::Empty);
     }
-    let p_cat = num_levels.iter().filter(|&&l| l > 1).count();
-    let p_cont = num_levels.iter().filter(|&&l| l == 1).count();
+    let _p_cat = num_levels.iter().filter(|&&l| l > 1).count();
+    let _p_cont = num_levels.iter().filter(|&&l| l == 1).count();
 
     let data = GlinternetData::new(x_cat_raw, z_raw, num_levels, n);
 
@@ -456,7 +456,7 @@ pub fn fit(
         let strong_set = screening::strong_rules(&candidates, lambda[i], lambda[i - 1]);
 
         // Initialize betahat via warm start
-        let group_sizes = strong_set.group_sizes(&data.levels);
+        let _group_sizes = strong_set.group_sizes(&data.levels);
         let mut beta = rescale::initialize_betahat(
             &strong_set,
             &active_sets[i - 1],
@@ -487,7 +487,7 @@ pub fn fit(
                 break;
             }
 
-            let (intercept, beta_fit, res_fit, obj, group_sizes_fit) = fista::group_lasso(
+            let (intercept, beta_fit, res_fit, obj, _group_sizes_fit) = fista::group_lasso(
                 &data,
                 y,
                 &active,

@@ -231,5 +231,5 @@ fn edge_two_vars_interaction_possible() {
         assert_eq!(active.n_vars()[0], 0, "no catcat possible"); // index 0 = cat
         assert_eq!(active.n_vars()[4], 0, "no catcont possible"); // index 4 = catcont
     }
-    assert!(fit.lambda.len() > 0);
+    assert!(!fit.lambda.is_empty());
 }

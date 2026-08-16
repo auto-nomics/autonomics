@@ -2523,7 +2523,7 @@ impl App {
                 status: s
                     .sub_sessions
                     .get(s.active_sub_session_idx)
-                    .map(|sub| sub.tab_state.status.clone())
+                    .map(|sub| sub.tab_state.status)
                     .unwrap_or_default(),
             })
             .collect();

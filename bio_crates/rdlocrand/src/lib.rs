@@ -312,7 +312,7 @@ pub struct WindowResult {
 pub fn rdwinselect(cfg: &RdWinSelectConfig) -> Result<RdWinSelectResult, RdLocRandError> {
     let cutoff = cfg.cutoff;
     let r_sorted: Vec<f64> = {
-        let mut v: Vec<f64> = cfg.r.iter().copied().collect();
+        let mut v: Vec<f64> = cfg.r.to_vec();
         v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         v
     };
@@ -466,16 +466,16 @@ pub fn rdrbounds(
     n_treat: usize,
     n_ctrl: usize,
     gamma: f64,
-    reps: usize,
-    seed: u64,
+    _reps: usize,
+    _seed: u64,
 ) -> (f64, f64) {
-    let n = n_treat + n_ctrl;
+    let _n = n_treat + n_ctrl;
     let normal = Normal::new(0.0, 1.0).unwrap();
 
     // Under Gamma, the treatment probability pi_i is bounded:
     // 1/(1+Gamma) <= pi_i <= Gamma/(1+Gamma)
-    let p_lo = 1.0 / (1.0 + gamma);
-    let p_hi = gamma / (1.0 + gamma);
+    let _p_lo = 1.0 / (1.0 + gamma);
+    let _p_hi = gamma / (1.0 + gamma);
 
     // Upper bound: treatment assignment favors units with extreme outcomes
     // Lower bound: treatment assignment favors units with less extreme outcomes

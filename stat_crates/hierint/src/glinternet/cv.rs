@@ -51,7 +51,7 @@ pub fn glinternet_cv(
         // Build train data
         let p_cat = num_levels.iter().filter(|&&l| l > 1).count();
         let p_cont = num_levels.iter().filter(|&&l| l == 1).count();
-        let n_train = train_idx.len();
+        let _n_train = train_idx.len();
 
         let x_cat_train: Vec<usize> = if p_cat > 0 {
             (0..p_cat)

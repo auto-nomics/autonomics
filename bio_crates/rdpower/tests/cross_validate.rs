@@ -457,10 +457,10 @@ mod codegen_tests {
     #[test]
     fn test_codegen_r_structure() {
         // Verify that the R package names are correct.
-        let rd_packages = vec!["rdrobust".to_string()];
+        let rd_packages = ["rdrobust".to_string()];
         assert!(rd_packages.contains(&"rdrobust".to_string()));
 
-        let power_packages = vec!["rdpower".to_string()];
+        let power_packages = ["rdpower".to_string()];
         assert!(power_packages.contains(&"rdpower".to_string()));
     }
 }
