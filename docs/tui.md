@@ -176,11 +176,13 @@ A **tree view** of the built-in provider catalogue (from
 
 | Key | Action |
 |-----|--------|
+| Type / paste | Edit the filter query with cursor motion and clipboard paste |
 | `↑` / `↓` (or `k` / `j`) | Move cursor |
 | `→` / `←` (or `l` / `h`, `Tab` / `BackTab`) | Expand / collapse provider node |
 | `Enter` | Activate the model under the cursor |
-| `e` | Edit the provider's API key (opens credential panel) |
-| `r` | Reload the catalogue from DB + SDK registry |
+| `Ctrl+D` | Set the model under the cursor as the default for new agents |
+| `Ctrl+E` | Add or edit the provider's API key (opens credential panel) |
+| `Ctrl+R` | Reload the catalogue from DB + SDK registry |
 
 In the **credential panel** (right side), type the API key into the textarea:
 

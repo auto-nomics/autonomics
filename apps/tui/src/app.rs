@@ -1041,6 +1041,11 @@ impl App {
             Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => 0,
             Event::Mouse(mouse) => self.handle_mouse(mouse),
             Event::Paste(s) => {
+                if self.state.model_config_visible {
+                    self.state.model_config_state.insert_paste(s);
+                    return 0;
+                }
+
                 // Insert paste into the agent chat input area when in input mode.
                 if true {
                     let ts = self.state.active_tab_state_mut();
@@ -2652,7 +2657,11 @@ impl App {
         // ── Model config popup ──
         if self.state.model_config_visible {
             use ratatui::widgets::StatefulWidgetRef as _;
+            let popup_width = frame.area().width * 9 / 10;
+            let popup_height = frame.area().height * 9 / 10;
             let popup = crate::widgets::popup::Popup::new(" Model Config ")
+                .width(popup_width)
+                .height(popup_height)
                 .accent(ratatui::style::Color::Magenta);
             let inner = popup.render(frame.area(), frame.buffer_mut());
             let widget = crate::widgets::model_config_widget::ModelConfigWidget;
@@ -2661,6 +2670,9 @@ impl App {
                 frame.buffer_mut(),
                 &mut self.state.model_config_state,
             );
+            if let Some((x, y)) = self.state.model_config_state.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x, y });
+            }
         }
 
         // ── Toast notifications (top-most overlay, bottom-right corner) ──
@@ -2745,8 +2757,52 @@ impl App {
                 }
                 self.state.model_config_visible = false;
             }
+            ConfigCommand::SetDefaultModel {
+                provider_name,
+                model_name,
+            } => {
+                self.set_default_model_for_new_agents(&provider_name, &model_name);
+            }
+            ConfigCommand::ReloadCatalog => {
+                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+            }
             ConfigCommand::None => {}
         }
+    }
+
+    /// Persist and activate the model used when creating agents without a
+    /// profile-specific override.
+    fn set_default_model_for_new_agents(&mut self, provider_name: &str, model_name: &str) {
+        let spec = format!("{provider_name}:{model_name}");
+        let Some(model) = Self::build_model_from_spec(&self.conn, &spec) else {
+            tracing::warn!(model = %spec, "cannot set default model: model unavailable");
+            self.state
+                .toasts
+                .error("Invalid model", Some("Configure its provider first".into()));
+            return;
+        };
+
+        if let Err(e) = self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_model', ?1)",
+            rusqlite::params![spec],
+        ) {
+            tracing::error!(model = %spec, error = %e, "failed to persist default model");
+            self.state.toasts.error(
+                "Save failed",
+                Some("Could not update the default model".into()),
+            );
+            return;
+        }
+
+        // RuntimeHost shares this ArcSwapOption with AppState. New agents
+        // spawned without a profile override read the updated value.
+        self.state.active_model.store(Some(Arc::new(model)));
+        self.state.model_config_state.active_model_name = Some(model_name.to_string());
+        tracing::info!(model = %spec, "default model for new agents updated");
+        self.state.toasts.success(
+            "Default model set",
+            Some(format!("{provider_name}:{model_name}")),
+        );
     }
 
     /// Insert or update a provider's api_key and base_url in the database.

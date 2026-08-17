@@ -14,7 +14,7 @@
 //! ── minimax ✗                ← unconfigured (bottom, not expandable)
 //! ```
 //!
-//! **Config panel**: when the user presses `e` on a provider row, a
+//! **Config panel**: when the user presses `Ctrl+E` on a provider row, a
 //! credential editor opens on the right pane with two fields —
 //! **API Key** and **Base URL** — switchable via `Tab`. Within the Base URL
 //! field, `Up`/`Down` cycle through the provider's preset endpoints (leaving
@@ -25,6 +25,7 @@
 
 use agentik_sdk::model::{ModelInfo, ProviderType};
 use agentik_sdk::provider::registry;
+use crossterm::event::KeyModifiers;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -54,6 +55,13 @@ pub enum ConfigCommand {
         provider_name: String,
         model_name: String,
     },
+    /// Persist the model as the default for subsequently created agents.
+    SetDefaultModel {
+        provider_name: String,
+        model_name: String,
+    },
+    /// Reload the provider catalogue from the DB and SDK registry.
+    ReloadCatalog,
     /// Close the model config popup.
     Close,
     /// Nothing to do.
@@ -121,7 +129,6 @@ pub enum ProviderPanelState {
 }
 
 /// In-memory state for the model config widget.
-#[derive(Default)]
 pub struct ModelConfigState {
     /// Providers sorted: configured first, then alphabetical.
     pub providers: Vec<CatalogProvider>,
@@ -132,9 +139,32 @@ pub struct ModelConfigState {
     pub provider_panel_state: ProviderPanelState,
     /// Quick-filter search query. When non-empty, the tree auto-expands to
     /// show only providers/models whose names match (case-insensitive
-    /// substring).  Typing any character pushes to the query; Backspace
-    /// pops; Esc clears (press Esc again to close).
+    /// substring). Editing is backed by `xai_textarea`; Esc clears the query
+    /// (press Esc again to close).
     pub query: String,
+    /// Editor for the search query. `query` is kept as a filtered mirror so
+    /// tree filtering and tests can continue to use a plain string.
+    search_textarea: TextArea,
+    search_textarea_state: TextAreaState,
+    /// Hardware cursor position recorded by the most recent render.
+    pub cursor_pos: Option<(u16, u16)>,
+}
+
+impl Default for ModelConfigState {
+    fn default() -> Self {
+        let mut search_textarea = TextArea::new();
+        search_textarea.show_scrollbar = false;
+        Self {
+            providers: Vec::new(),
+            cursor: 0,
+            active_model_name: None,
+            provider_panel_state: Default::default(),
+            query: String::new(),
+            search_textarea,
+            search_textarea_state: Default::default(),
+            cursor_pos: None,
+        }
+    }
 }
 
 impl ModelConfigState {
@@ -186,16 +216,35 @@ impl ModelConfigState {
         items
     }
 
-    /// Push a character onto the search query and re-clamp the cursor.
-    fn push_char(&mut self, c: char) {
-        self.query.push(c);
+    /// Mirror the textarea contents into the filter query and clamp the list.
+    fn sync_search_query(&mut self) {
+        self.query = self.search_textarea.text().to_string();
         self.clamp_cursor();
     }
 
-    /// Pop the last character from the search query.
-    fn pop_char(&mut self) {
-        self.query.pop();
-        self.clamp_cursor();
+    /// Insert a terminal bracketed paste into the currently focused model
+    /// config field: the search editor in preview mode, or the credential
+    /// editor when provider configuration is open.
+    pub fn insert_paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        if let ProviderPanelState::Config {
+            api_key,
+            base_url,
+            focused_field,
+            ..
+        } = &mut self.provider_panel_state
+        {
+            match *focused_field {
+                ConfigField::ApiKey => api_key.insert_str(text),
+                ConfigField::BaseUrl => base_url.insert_str(text),
+            }
+        } else {
+            self.search_textarea.insert_str(text);
+            self.sync_search_query();
+        }
     }
 
     /// Clamp cursor into the valid range of the current flat list.
@@ -246,17 +295,20 @@ impl ModelConfigState {
 
     /// Handle keys and return any command the App should execute.
     ///
-    /// - **Preview mode**: navigation, expand/collapse, select model, `e` to edit.
+    /// - **Preview mode**: navigation, expand/collapse, select model, `Ctrl+E`
+    ///   to add or edit provider credentials, `Ctrl+R` to reload the catalogue,
+    ///   and `Ctrl+D` to set the default model for new agents.
     /// - **Config mode**: typing into the focused field (API Key or Base URL),
     ///   `Tab` to switch focus, `Up`/`Down` on the Base URL field to cycle
     ///   through preset endpoints, Esc to cancel, Enter to confirm (returns
     ///   `SaveProvider` command for DB persistence).
     ///
-    /// Returns `ConfigCommand::None` for unrecognized keys so the caller
-    /// (App) can handle keys like `r` (reload) that need DB access.
+    /// Returns `ConfigCommand::None` for unrecognized keys so the caller can
+    /// perform any additional handling.
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> ConfigCommand {
         use crossterm::event::{KeyCode, KeyEvent};
         let key: KeyEvent = key;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let consumed = |cc: ConfigCommand| {
             // Mark as consumed by not returning None.
@@ -367,8 +419,10 @@ impl ModelConfigState {
         match key.code {
             KeyCode::Esc => {
                 if !self.query.is_empty() {
-                    self.query.clear();
-                    self.clamp_cursor();
+                    self.search_textarea.set_text("");
+                    self.search_textarea.clear_history();
+                    self.search_textarea_state = Default::default();
+                    self.sync_search_query();
                     consumed(ConfigCommand::None)
                 } else {
                     consumed(ConfigCommand::Close)
@@ -392,11 +446,11 @@ impl ModelConfigState {
                 self.move_cursor(-1);
                 consumed(ConfigCommand::None)
             }
-            KeyCode::Right | KeyCode::Tab if self.query.is_empty() => {
+            KeyCode::Right | KeyCode::Tab if !ctrl && self.query.is_empty() => {
                 self.toggle_expand_at_cursor();
                 consumed(ConfigCommand::None)
             }
-            KeyCode::Left | KeyCode::BackTab if self.query.is_empty() => {
+            KeyCode::Left | KeyCode::BackTab if !ctrl && self.query.is_empty() => {
                 self.toggle_expand_at_cursor();
                 consumed(ConfigCommand::None)
             }
@@ -406,11 +460,6 @@ impl ModelConfigState {
             }
             KeyCode::Char('h') if self.query.is_empty() => {
                 self.toggle_expand_at_cursor();
-                consumed(ConfigCommand::None)
-            }
-            // Backspace pops from the search query.
-            KeyCode::Backspace => {
-                self.pop_char();
                 consumed(ConfigCommand::None)
             }
             KeyCode::Enter => {
@@ -431,9 +480,25 @@ impl ModelConfigState {
                     consumed(ConfigCommand::None)
                 }
             }
+            // Set the selected model as the default used when creating new
+            // agents. This deliberately does not hot-swap an active agent.
+            KeyCode::Char('d') if ctrl => {
+                let flat = self.flat_items();
+                if let Some(FlatItem::Model(pi, mi)) = flat.get(self.cursor).copied() {
+                    let provider = &self.providers[pi];
+                    if provider.configured {
+                        let model = &provider.models[mi];
+                        return consumed(ConfigCommand::SetDefaultModel {
+                            provider_name: provider.name.clone(),
+                            model_name: model.model_name.clone(),
+                        });
+                    }
+                }
+                consumed(ConfigCommand::None)
+            }
             // Enter provider config mode when cursor is on a provider row
-            // (only when not filtering).
-            KeyCode::Char('e') if self.query.is_empty() => {
+            // (`Ctrl+E` also remains available while filtering).
+            KeyCode::Char('e') if ctrl => {
                 let flat = self.flat_items();
                 if let Some(FlatItem::Provider(pi)) = flat.get(self.cursor) {
                     let pi = *pi;
@@ -456,12 +521,16 @@ impl ModelConfigState {
                 }
                 consumed(ConfigCommand::None)
             }
-            // Any other printable character is appended to the search query.
-            KeyCode::Char(c) => {
-                self.push_char(c);
+            // Reload provider/config data from external storage and the SDK
+            // registry. Unlike plain characters, Ctrl shortcuts do not filter.
+            KeyCode::Char('r') if ctrl => consumed(ConfigCommand::ReloadCatalog),
+            // All remaining keys, including Ctrl+V and cursor-editing keys,
+            // belong to the xai_textarea search editor.
+            _ => {
+                self.search_textarea.input(key);
+                self.sync_search_query();
                 consumed(ConfigCommand::None)
             }
-            _ => ConfigCommand::None,
         }
     }
 }
@@ -525,6 +594,7 @@ impl StatefulWidgetRef for ModelConfigWidget {
                     base_url_state,
                     base_url_presets,
                     *focused_field,
+                    &mut state.cursor_pos,
                 );
             }
         }
@@ -533,30 +603,44 @@ impl StatefulWidgetRef for ModelConfigWidget {
 
 // ── Search bar ─────────────────────────────────────────
 
-fn render_search_bar(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
-    let line = if state.query.is_empty() {
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                " search models…  (type to filter, Enter to select, Esc to clear)",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ),
-        ])
+const SEARCH_PROMPT_GUTTER: u16 = 2;
+
+fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState) {
+    let prompt_style = if state.search_textarea.is_empty() {
+        Style::default().fg(Color::DarkGray)
     } else {
-        let filtered_count = state.flat_items().len();
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Magenta)),
-            Span::styled(state.query.clone(), Style::default().fg(Color::White)),
-            Span::styled("▏", Style::default().fg(Color::Magenta)),
-            Span::styled(
-                format!("  {} items", filtered_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     };
-    Widget::render(Paragraph::new(line), area, buf);
+    buf.set_string(area.x, area.y, ">", prompt_style);
+
+    let textarea_area = if area.width > SEARCH_PROMPT_GUTTER {
+        Rect {
+            x: area.x + SEARCH_PROMPT_GUTTER,
+            width: area.width - SEARCH_PROMPT_GUTTER,
+            ..area
+        }
+    } else {
+        area
+    };
+
+    if state.search_textarea.is_empty() {
+        let placeholder_style = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM);
+        let placeholder = "search…  Ctrl+D default  Ctrl+E configure provider  Ctrl+R reload";
+        let truncated = placeholder.chars().take(textarea_area.width as usize);
+        let text: String = truncated.collect();
+        buf.set_string(textarea_area.x, textarea_area.y, text, placeholder_style);
+        state.cursor_pos = Some((textarea_area.x, textarea_area.y));
+    } else {
+        let textarea: &TextArea = &state.search_textarea;
+        textarea.render_ref(textarea_area, buf, &mut state.search_textarea_state);
+        state.cursor_pos = state
+            .search_textarea
+            .cursor_pos_with_state(textarea_area, state.search_textarea_state);
+    }
 }
 
 // ── Tree list ──────────────────────────────────────────
@@ -775,6 +859,7 @@ fn render_config_panel(
     base_url_state: &mut TextAreaState,
     base_url_presets: &[String],
     focused_field: ConfigField,
+    cursor_pos: &mut Option<(u16, u16)>,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -898,6 +983,11 @@ fn render_config_panel(
     if url_inner.width > 0 && url_inner.height > 0 {
         base_url.render_ref(url_inner, buf, base_url_state);
     }
+
+    *cursor_pos = match focused_field {
+        ConfigField::ApiKey => api_key.cursor_pos_with_state(api_inner, *api_key_state),
+        ConfigField::BaseUrl => base_url.cursor_pos_with_state(url_inner, *base_url_state),
+    };
 }
 
 fn yn(b: bool) -> String {
@@ -985,9 +1075,114 @@ pub fn build_catalog(
 
     ModelConfigState {
         providers,
-        cursor: 0,
-        active_model_name: None,
-        provider_panel_state: Default::default(),
-        query: String::new(),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(c: char, ctrl: bool) -> KeyEvent {
+        KeyEvent::new(
+            KeyCode::Char(c),
+            if ctrl {
+                KeyModifiers::CONTROL
+            } else {
+                KeyModifiers::NONE
+            },
+        )
+    }
+
+    #[test]
+    fn provider_edit_uses_ctrl_e_even_while_filtering() {
+        let mut state = build_catalog(&[]);
+        state.handle_key(key('e', false));
+
+        assert!(matches!(
+            state.provider_panel_state,
+            ProviderPanelState::Preview
+        ));
+        assert_eq!(state.query, "e");
+
+        state.handle_key(key('e', true));
+
+        let ProviderPanelState::Config { provider_name, .. } = &state.provider_panel_state else {
+            panic!("Ctrl+E should open the provider credential editor");
+        };
+        assert_eq!(*provider_name, state.providers[state.cursor].name);
+        assert_eq!(state.query, "e");
+    }
+
+    #[test]
+    fn provider_reload_uses_ctrl_r() {
+        let mut state = build_catalog(&[]);
+        state.handle_key(key('r', false));
+
+        assert!(matches!(
+            state.provider_panel_state,
+            ProviderPanelState::Preview
+        ));
+        assert_eq!(state.query, "r");
+
+        assert!(matches!(
+            state.handle_key(key('r', true)),
+            ConfigCommand::ReloadCatalog
+        ));
+    }
+
+    #[test]
+    fn default_model_uses_ctrl_d() {
+        let mut state = build_catalog(&[]);
+        state.providers[0].configured = true;
+        state.providers[0].expanded = true;
+
+        state.handle_key(key('d', false));
+        assert_eq!(state.query, "d");
+
+        state.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert!(matches!(
+            state.handle_key(key('d', true)),
+            ConfigCommand::SetDefaultModel { .. }
+        ));
+    }
+
+    #[test]
+    fn default_model_ctrl_d_ignores_unconfigured_models() {
+        let mut state = build_catalog(&[]);
+        assert!(matches!(
+            state.handle_key(key('d', true)),
+            ConfigCommand::None
+        ));
+    }
+
+    #[test]
+    fn search_textarea_supports_cursor_editing_and_paste() {
+        let mut state = build_catalog(&[]);
+
+        state.handle_key(key('b', false));
+        state.handle_key(key('a', false));
+        state.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        state.handle_key(key('c', false));
+        state.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(state.query, "ba");
+
+        state.insert_paste("model");
+        assert_eq!(state.query, "bmodela");
+    }
+
+    #[test]
+    fn bracketed_paste_targets_focused_credential_field() {
+        let mut state = build_catalog(&[]);
+        state.handle_key(key('e', true));
+
+        state.insert_paste("secret");
+        let ProviderPanelState::Config { api_key, .. } = &state.provider_panel_state else {
+            panic!("credential editor should be open");
+        };
+        assert_eq!(api_key.text(), "secret");
     }
 }
