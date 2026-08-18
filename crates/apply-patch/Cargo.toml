@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 similar = "2"
 thiserror = { workspace = true }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4"

@@ -4,6 +4,8 @@
 //! (a sequence of lines) within a file's lines using four progressively
 //! more lenient matching passes.
 
+use unicode_normalization::UnicodeNormalization;
+
 /// Attempt to find the sequence of `pattern` lines within `lines` beginning at
 /// or after `start`.
 ///
@@ -96,23 +98,58 @@ pub fn seek_sequence(
 
 /// Normalise common Unicode punctuation to ASCII equivalents, then trim.
 pub fn normalise(s: &str) -> String {
-    s.trim()
-        .chars()
-        .map(|c| match c {
+    normalised_spans(s).into_iter().map(|(c, _, _)| c).collect()
+}
+
+/// Produce NFKC-normalised characters while retaining the byte range in the
+/// original line that produced each character. The ranges let substring edits
+/// recover and preserve the unmatched prefix and suffix.
+pub(crate) fn normalised_spans(s: &str) -> Vec<(char, usize, usize)> {
+    let trimmed = s.trim();
+    let start_boundary = trimmed.as_ptr() as usize - s.as_ptr() as usize;
+    let end_boundary = start_boundary + trimmed.len();
+    let mut spans = Vec::with_capacity(trimmed.len());
+
+    for (start, c) in trimmed.char_indices() {
+        let end = start + c.len_utf8();
+        let start = start + start_boundary;
+        let end = end + start_boundary;
+        debug_assert!(end <= end_boundary);
+        let mapped = match c {
             // Various dash / hyphen code-points → ASCII '-'
             '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
-            | '\u{2212}' => '-',
+            | '\u{2212}' => "-".to_string(),
             // Fancy single quotes → '\''
-            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => "'".to_string(),
             // Fancy double quotes → '"'
-            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => "\"".to_string(),
             // Non-breaking space and other odd spaces → normal space
             '\u{00A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}' | '\u{2006}'
             | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200A}' | '\u{202F}' | '\u{205F}'
-            | '\u{3000}' => ' ',
-            other => other,
-        })
-        .collect::<String>()
+            | '\u{3000}' => " ".to_string(),
+            other => replacement(other),
+        };
+
+        for normalised in mapped.chars().flat_map(|c| c.nfkc()) {
+            spans.push((normalised, start, end));
+        }
+    }
+
+    spans
+}
+
+fn replacement(c: char) -> String {
+    match c {
+        '\u{00D7}' => "x".to_string(),
+        '\u{00F7}' => "/".to_string(),
+        '\u{0394}' => "Delta".to_string(),
+        '\u{03BC}' | '\u{00B5}' => "mu".to_string(),
+        '\u{2190}' => "<-".to_string(),
+        '\u{2192}' => "->".to_string(),
+        '\u{2191}' => "^".to_string(),
+        '\u{2193}' => "v".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Check whether `pattern` matches `lines` starting at `pos`, using any of

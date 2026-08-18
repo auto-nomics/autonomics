@@ -316,6 +316,8 @@ pub async fn op_write(
 /// 2. **rstrip** — ignore trailing whitespace.
 /// 3. **trim** — ignore leading and trailing whitespace.
 /// 4. **Unicode-normalised** — map smart quotes, en-dashes, NBSP, … to ASCII.
+/// If a one-line pattern has no whole-line match, it is also tried as a
+/// substring within each physical line.
 ///
 /// All error paths return `Ok(ToolResult::error(...))` (never `Err`) so the
 /// LLM always receives a structured result.

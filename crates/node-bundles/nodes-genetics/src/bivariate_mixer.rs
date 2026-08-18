@@ -112,6 +112,9 @@ fn output_schema() -> SchemaRef {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BivariateMixerNodeSpec {
     /// gsa-mixer 引擎根目录（包含 `precimed/mixer.py` 和 `libbgmg.so`）。
+    ///
+    /// The subprocess uses `<mixer_home>/.venv/bin/python` by default;
+    /// set `MIXER_PYTHON` to use another interpreter.
     pub mixer_home: String,
 
     /// `.bim` 文件模板（`@` 为染色体占位符）。
@@ -238,7 +241,11 @@ impl NodeFactory for BivariateMixerNodeFactory {
         let out = ctx.output_var.to_string();
         let code = vec![
             format!("# MiXeR bivariate analysis (gsa-mixer subprocess)"),
-            format!("system2('python', c("),
+            format!(
+                "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='{}/.venv/bin/python')",
+                s.mixer_home
+            ),
+            format!("system2(mixer_python, c("),
             format!("  '{h}/precimed/mixer.py', 'fit2',", h = s.mixer_home),
             format!("  '--lib', '{h}/libbgmg.so',", h = s.mixer_home),
             format!("  '--out', '{out}'"),
@@ -377,7 +384,7 @@ impl DagNode for BivariateMixerNode {
         let lib_path = format!("{}/libbgmg.so", self.spec.mixer_home);
         let out_prefix = tmp_dir.join("result");
 
-        let mut cmd = std::process::Command::new("python");
+        let mut cmd = std::process::Command::new(mixer_python_executable(&self.spec.mixer_home));
         cmd.arg(&mixer_py)
             .arg("fit2")
             .arg("--bim-file")
@@ -575,7 +582,15 @@ async fn write_sumstats(
         .select(
             col_map
                 .iter()
-                .map(|(src, _)| datafusion::prelude::col(*src))
+                .map(|(src, dst)| {
+                    datafusion::prelude::cast(
+                        datafusion::prelude::Expr::Column(datafusion::common::Column::from_name(
+                            *src,
+                        )),
+                        DataType::Utf8,
+                    )
+                    .alias(*dst)
+                })
                 .collect::<Vec<_>>(),
         )
         .map_err(|e| BivariateMixerError::Step {
@@ -616,6 +631,15 @@ async fn write_sumstats(
                 if i > 0 {
                     write!(w, "\t")?;
                 }
+                if col.is_null(row) {
+                    return Err(BivariateMixerError::Step {
+                        context: "write sumstats".into(),
+                        detail: format!(
+                            "null in output column '{}' at batch row {row}",
+                            col_map[i].1
+                        ),
+                    });
+                }
                 let val = arrow_array::cast::as_string_array(*col);
                 write!(w, "{}", val.value(row))?;
             }
@@ -626,6 +650,10 @@ async fn write_sumstats(
     w.flush()?;
     info!("wrote {} sumstats rows to {}", n_rows, path.display());
     Ok(())
+}
+
+fn mixer_python_executable(mixer_home: &str) -> String {
+    std::env::var("MIXER_PYTHON").unwrap_or_else(|_| format!("{mixer_home}/.venv/bin/python"))
 }
 
 // =====================================================================
@@ -778,6 +806,48 @@ mod tests {
         assert_eq!(node.kind(), "bivariate_mixer");
         assert_eq!(node.ports().input_ports().len(), 4);
         assert_eq!(node.ports().output_ports().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_sumstats_renames_and_stringifies_columns() {
+        let ctx = datafusion::prelude::SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new(INPUT_RSID_COL, DataType::Utf8, false),
+                Field::new(INPUT_A1_COL, DataType::Utf8, true),
+                Field::new(INPUT_A2_COL, DataType::Utf8, true),
+                Field::new(INPUT_N_COL, DataType::Float64, true),
+                Field::new(INPUT_Z_COL, DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec!["rs1"])),
+                Arc::new(arrow_array::StringArray::from(vec!["A"])),
+                Arc::new(arrow_array::StringArray::from(vec!["G"])),
+                Arc::new(Float64Array::from(vec![1000.0])),
+                Arc::new(Float64Array::from(vec![1.5])),
+            ],
+        )
+        .unwrap();
+        let df = ctx.read_batch(batch).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trait1.sumstats");
+
+        write_sumstats(
+            &df,
+            &[
+                (INPUT_RSID_COL, "SNP"),
+                (INPUT_A1_COL, "A1"),
+                (INPUT_A2_COL, "A2"),
+                (INPUT_N_COL, "N"),
+                (INPUT_Z_COL, "Z"),
+            ],
+            &path,
+        )
+        .await
+        .unwrap();
+
+        let output = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(output, "SNP\tA1\tA2\tN\tZ\nrs1\tA\tG\t1000.0\t1.5\n");
     }
 
     #[test]

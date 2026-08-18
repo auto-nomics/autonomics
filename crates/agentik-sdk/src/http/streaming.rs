@@ -217,6 +217,10 @@ impl Stream for HttpStreamClient {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
 
+        if *this.ended {
+            return Poll::Ready(None);
+        }
+
         match this.event_stream.poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 let is_stop = matches!(event, MessageStreamEvent::MessageStop);
@@ -232,6 +236,7 @@ impl Stream for HttpStreamClient {
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(Err(e))) => {
+                *this.ended = true;
                 tracing::warn!(error = %e, "HttpStreamClient: SSE error");
                 Poll::Ready(Some(Err(e)))
             }

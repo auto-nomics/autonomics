@@ -216,7 +216,10 @@ pub fn cox_loss(
     }
 
     if n_events == 0 {
-        return Tensor::<BurnBackend, 1>::from_data(TensorData::new(vec![0.0_f32], [1]), &device);
+        // Keep the loss attached to the autodiff graph. A detached constant
+        // makes `loss.backward()` panic ("Node should have a step registered").
+        // Zero events means zero partial likelihood, hence zero gradient.
+        return risk_scores.clone().sum().mul_scalar(0.0);
     }
 
     total_loss.div_scalar(n_events as f32)

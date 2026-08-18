@@ -455,22 +455,7 @@ impl MessageStream {
             // to consume any remaining data from the HTTP response body
             // so that hyper/h2 doesn't cancel the stream on drop.
             tracing::info!("background task: entering drain loop");
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(
-                        std::time::Duration::from_secs(5),
-                    ) => {
-                        tracing::warn!("HTTP body drain timed out after 5s");
-                        break;
-                    }
-                    result = http_stream.next() => {
-                        if result.is_none() {
-                            tracing::info!("background task: drain loop — stream returned None, fully consumed");
-                            break;
-                        }
-                    }
-                }
-            }
+            drain_http_body(http_stream).await;
             // Fallback: deliver whatever was accumulated even if the stream
             // ended without a MessageStop (e.g. non-conforming server), so
             // that final_message() does not hang forever.
@@ -1008,6 +993,40 @@ impl MessageStream {
     }
 }
 
+/// Drain the remaining HTTP body without allowing a non-conforming stream
+/// to keep the background task alive indefinitely.
+///
+/// The timeout wraps the entire drain future. Recreating a timer inside the
+/// poll loop would restart the deadline every time a malformed stream became
+/// ready, defeating the timeout.
+async fn drain_http_body<S>(mut http_stream: S)
+where
+    S: futures::Stream<Item = Result<MessageStreamEvent>> + Unpin,
+{
+    use futures::StreamExt;
+
+    let drain = async {
+        let mut saw_error = false;
+        while let Some(result) = http_stream.next().await {
+            if result.is_err() {
+                saw_error = true;
+                tracing::warn!("background task: HTTP body drain ended after stream error");
+                break;
+            }
+        }
+        if !saw_error {
+            tracing::info!("background task: drain loop — stream returned None, fully consumed");
+        }
+    };
+
+    if tokio::time::timeout(std::time::Duration::from_secs(5), drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!("HTTP body drain timed out after 5s");
+    }
+}
+
 impl Stream for MessageStream {
     type Item = Result<MessageStreamEvent>;
 
@@ -1086,6 +1105,43 @@ impl Stream for MessageStream {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use futures::Stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    struct InfiniteErrorStream {
+        polls: usize,
+    }
+
+    impl Stream for InfiniteErrorStream {
+        type Item = Result<MessageStreamEvent>;
+
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.polls += 1;
+            Poll::Ready(Some(Err(AnthropicError::StreamError(
+                "persistent stream error".to_string(),
+            ))))
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_http_body_stops_after_first_error() {
+        let mut stream = InfiniteErrorStream { polls: 0 };
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            drain_http_body(&mut stream),
+        )
+        .await
+        .expect("drain must stop after the first stream error");
+
+        assert_eq!(stream.polls, 1);
     }
 }
 

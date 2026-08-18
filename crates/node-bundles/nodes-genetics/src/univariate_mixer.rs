@@ -103,6 +103,9 @@ fn output_schema() -> SchemaRef {
 pub struct UnivariateMixerNodeSpec {
     /// gsa-mixer 引擎根目录（包含 `precimed/mixer.py` 和 `libbgmg.so`）。
     /// 典型值：`"reference/mixer_data/engine"`
+    ///
+    /// The subprocess uses `<mixer_home>/.venv/bin/python` by default;
+    /// set `MIXER_PYTHON` to use another interpreter.
     pub mixer_home: String,
 
     /// `.bim` 文件模板（`@` 为染色体占位符）。
@@ -240,7 +243,11 @@ impl NodeFactory for UnivariateMixerNodeFactory {
             "# MiXeR univariate analysis (gsa-mixer subprocess)".to_string(),
             "tmp_sumstats <- tempfile(fileext = '.sumstats.gz')".to_string(),
             format!("data.table::fwrite({input}, tmp_sumstats, sep = '\\t')"),
-            "system2('python', c(".to_string(),
+            format!(
+                "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='{}/.venv/bin/python')",
+                s.mixer_home
+            ),
+            "system2(mixer_python, c(".to_string(),
             format!("  '{}/precimed/mixer.py', 'fit1',", s.mixer_home),
             format!(
                 "  '--bim-file', '{}', '--ld-file', '{}',",
@@ -342,7 +349,7 @@ impl DagNode for UnivariateMixerNode {
         let lib_path = format!("{}/libbgmg.so", self.spec.mixer_home);
         let out_prefix = tmp_dir.join("result");
 
-        let mut cmd = std::process::Command::new("python");
+        let mut cmd = std::process::Command::new(mixer_python_executable(&self.spec.mixer_home));
         cmd.arg(&mixer_py)
             .arg("fit1")
             .arg("--bim-file")
@@ -547,13 +554,19 @@ fn parse_fit1_json(json: &serde_json::Value) -> Result<FitResult, UnivariateMixe
         .unwrap_or(0.0);
     let n_snp = json
         .get("options")
-        .and_then(|o| o.get("n_snp"))
+        .and_then(|o| o.get("num_snp").or_else(|| o.get("n_snp")))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0) as usize;
+    let ci_point = |key: &str| {
+        json.get("ci")
+            .and_then(|ci| ci.get(key))
+            .and_then(|value| value.get("point_estimate"))
+            .and_then(|value| value.as_f64())
+    };
 
-    let h2 = sig2_beta * pi * totalhet;
-    let nc = pi * n_snp as f64;
-    let nc_p9 = nc * 0.319;
+    let h2 = ci_point("h2").unwrap_or(sig2_beta * pi * totalhet);
+    let nc = ci_point("nc").unwrap_or(pi * n_snp as f64);
+    let nc_p9 = ci_point("nc@p9").unwrap_or(nc * 0.319);
 
     // Try to get exact AIC/BIC from the optimize steps
     // Each step is ["fit_type", { ..., "AIC": ..., "BIC": ... }]
@@ -628,7 +641,15 @@ async fn write_sumstats(
         .select(
             col_map
                 .iter()
-                .map(|(src, _)| datafusion::prelude::col(*src))
+                .map(|(src, dst)| {
+                    datafusion::prelude::cast(
+                        datafusion::prelude::Expr::Column(datafusion::common::Column::from_name(
+                            *src,
+                        )),
+                        DataType::Utf8,
+                    )
+                    .alias(*dst)
+                })
                 .collect::<Vec<_>>(),
         )
         .map_err(|e| UnivariateMixerError::Step {
@@ -672,6 +693,15 @@ async fn write_sumstats(
                 if i > 0 {
                     write!(w, "\t")?;
                 }
+                if col.is_null(row) {
+                    return Err(UnivariateMixerError::Step {
+                        context: "write sumstats".into(),
+                        detail: format!(
+                            "null in output column '{}' at batch row {row}",
+                            col_map[i].1
+                        ),
+                    });
+                }
                 let val = arrow_array::cast::as_string_array(*col);
                 write!(w, "{}", val.value(row))?;
             }
@@ -682,6 +712,10 @@ async fn write_sumstats(
     w.flush()?;
     info!("wrote {} sumstats rows to {}", n_rows, path.display());
     Ok(())
+}
+
+fn mixer_python_executable(mixer_home: &str) -> String {
+    std::env::var("MIXER_PYTHON").unwrap_or_else(|_| format!("{mixer_home}/.venv/bin/python"))
 }
 
 /// Count lines in a plain file (for reporting).
@@ -726,6 +760,48 @@ mod tests {
         assert_eq!(node.ports().output_ports().len(), 1);
     }
 
+    #[tokio::test]
+    async fn write_sumstats_renames_and_stringifies_columns() {
+        let ctx = datafusion::prelude::SessionContext::new();
+        let batch = RecordBatch::try_new(
+            std::sync::Arc::new(Schema::new(vec![
+                Field::new(INPUT_RSID_COL, DataType::Utf8, false),
+                Field::new(INPUT_A1_COL, DataType::Utf8, true),
+                Field::new(INPUT_A2_COL, DataType::Utf8, true),
+                Field::new(INPUT_N_COL, DataType::Float64, true),
+                Field::new(INPUT_Z_COL, DataType::Float64, true),
+            ])),
+            vec![
+                std::sync::Arc::new(arrow_array::StringArray::from(vec!["rs1"])),
+                std::sync::Arc::new(arrow_array::StringArray::from(vec!["A"])),
+                std::sync::Arc::new(arrow_array::StringArray::from(vec!["G"])),
+                std::sync::Arc::new(Float64Array::from(vec![1000.0])),
+                std::sync::Arc::new(Float64Array::from(vec![1.5])),
+            ],
+        )
+        .unwrap();
+        let df = ctx.read_batch(batch).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trait1.sumstats");
+
+        write_sumstats(
+            &df,
+            &[
+                (INPUT_RSID_COL, "SNP"),
+                (INPUT_A1_COL, "A1"),
+                (INPUT_A2_COL, "A2"),
+                (INPUT_N_COL, "N"),
+                (INPUT_Z_COL, "Z"),
+            ],
+            &path,
+        )
+        .await
+        .unwrap();
+
+        let output = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(output, "SNP\tA1\tA2\tN\tZ\nrs1\tA\tG\t1000.0\t1.5\n");
+    }
+
     #[test]
     fn parse_typical_fit1_json() {
         let json_str = r#"{
@@ -733,12 +809,19 @@ mod tests {
             "optimize": [
                 ["diffevo-fast", {"fun": 3837.5, "AIC": 7681.0, "BIC": 7698.0}]
             ],
-            "options": {"totalhet": 50000.0, "n_snp": 9588757}
+            "ci": {
+                "h2": {"point_estimate": 2.1},
+                "nc": {"point_estimate": 9588.0},
+                "nc@p9": {"point_estimate": 1234.0}
+            },
+            "options": {"totalhet": 50000.0, "num_snp": 9588757}
         }"#;
         let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
         let result = parse_fit1_json(&json).unwrap();
         assert!((result.params.pi - 0.001).abs() < 1e-10);
         assert!((result.loglike - 3837.5).abs() < 1e-6);
-        assert!((result.h2 - 0.04 * 0.001 * 50000.0).abs() < 1e-6);
+        assert!((result.h2 - 2.1).abs() < 1e-10);
+        assert!((result.nc - 9588.0).abs() < 1e-10);
+        assert!((result.nc_p9 - 1234.0).abs() < 1e-10);
     }
 }

@@ -32,6 +32,8 @@ use dag_core::{
 pub enum MagmaNodeError {
     #[error("MAGMA computation failed: {0}")]
     Magma(#[from] magma::MagmaError),
+    #[error("MAGMA VFS read failed for {path}: {message}")]
+    Vfs { path: String, message: String },
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("DataFusion error: {0}")]
@@ -103,9 +105,9 @@ fn gwas_input_schema() -> SchemaRef {
 /// Config for the annotation node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaAnnotateConfig {
-    /// Path to gene location file (gene_id chr start end [strand]).
+    /// VFS path to gene location file (gene_id chr start end [strand]).
     pub gene_loc: String,
-    /// Path to SNP location file (.bim or rsid chr pos).
+    /// VFS path to SNP location file (.bim or rsid chr pos).
     pub snp_loc: String,
     /// Annotation window in kb (upstream and downstream). Default: 35.
     #[serde(default = "default_window")]
@@ -211,10 +213,12 @@ impl DagNode for MagmaAnnotateNode {
         _inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let genes = magma::annotation::read_gene_loc(std::path::Path::new(&self.config.gene_loc))
-            .map_err(MagmaNodeError::from)?;
-        let snps = magma::annotation::read_snp_loc(std::path::Path::new(&self.config.snp_loc))
-            .map_err(MagmaNodeError::from)?;
+        let gene_path = stage_vfs_file(node_ctx, &self.config.gene_loc).await?;
+        let snp_path = stage_vfs_file(node_ctx, &self.config.snp_loc).await?;
+        let genes =
+            magma::annotation::read_gene_loc(gene_path.as_ref()).map_err(MagmaNodeError::from)?;
+        let snps =
+            magma::annotation::read_snp_loc(snp_path.as_ref()).map_err(MagmaNodeError::from)?;
         let window_bp = (self.config.window_kb * 1000.0) as i64;
         let annot = magma::annotation::annotate(&genes, &snps, window_bp, window_bp)
             .map_err(MagmaNodeError::from)?;
@@ -271,8 +275,11 @@ fn build_annot_batch(
 /// Config for the gene analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaGeneConfig {
-    /// Path to .genes.annot file.
+    /// VFS path to .genes.annot file.
     pub gene_annot: String,
+    /// VFS prefix for a PLINK .bed/.bim/.fam reference panel.
+    #[serde(default = "default_reference_prefix")]
+    pub reference_prefix: String,
     /// SNP ID column name in the input GWAS DataFrame. Default: "rsid".
     #[serde(default = "default_rsid_col")]
     pub snp_col: String,
@@ -297,12 +304,133 @@ fn default_n_col() -> String {
     "n".to_string()
 }
 
+fn default_reference_prefix() -> String {
+    DEFAULT_REFERENCE_PREFIX.to_string()
+}
+
+const VFS_PREFIX: &str = "vfs://";
+
+/// Read a file through the runtime's configured VFS mount catalog.
+async fn read_vfs_bytes(node_ctx: &NodeCtx, raw_path: &str) -> Result<Vec<u8>, MagmaNodeError> {
+    let Some(rest) = raw_path.strip_prefix(VFS_PREFIX) else {
+        return Err(MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: "expected a vfs:// path".into(),
+        });
+    };
+    let path = vfs::OpendalFileStorage::normalize_path(rest);
+    let storage = node_ctx
+        .opendal
+        .as_ref()
+        .ok_or_else(|| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: "no VFS storage is configured".into(),
+        })?;
+    if !storage.is_mounted(&path) {
+        return Err(MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: "path is not covered by a VFS mount".into(),
+        });
+    }
+
+    let op = storage.resolve(&path);
+    let key = storage.resolve_path(&path);
+    let size = op
+        .stat(&key)
+        .await
+        .map_err(|e| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: e.to_string(),
+        })?
+        .content_length();
+    let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    let mut reader = op
+        .reader_with(&key)
+        .concurrent(8)
+        .chunk(8 * 1024 * 1024)
+        .await
+        .map_err(|e| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: e.to_string(),
+        })?
+        .into_futures_async_read(..)
+        .await
+        .map_err(|e| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: e.to_string(),
+        })?;
+    futures::io::AsyncReadExt::read_to_end(&mut reader, &mut bytes)
+        .await
+        .map_err(|e| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(bytes)
+}
+
+/// Stage a text input for the existing synchronous MAGMA parsers.
+///
+/// The bytes still originate from VFS; this only isolates parser I/O from the
+/// backend and removes the staging directory when execution finishes.
+struct VfsStagedFile {
+    _guard: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl AsRef<std::path::Path> for VfsStagedFile {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+async fn stage_vfs_file(
+    node_ctx: &NodeCtx,
+    raw_path: &str,
+) -> Result<VfsStagedFile, MagmaNodeError> {
+    let bytes = read_vfs_bytes(node_ctx, raw_path).await?;
+    let name = raw_path
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| MagmaNodeError::Vfs {
+            path: raw_path.to_string(),
+            message: "path has no file name".into(),
+        })?;
+    let dir = tempfile::tempdir().map_err(|e| MagmaNodeError::Vfs {
+        path: raw_path.to_string(),
+        message: format!("create staging directory: {e}"),
+    })?;
+    let staged = dir.path().join(name);
+    std::fs::write(&staged, bytes).map_err(|e| MagmaNodeError::Vfs {
+        path: raw_path.to_string(),
+        message: format!("stage file: {e}"),
+    })?;
+    Ok(VfsStagedFile {
+        path: staged,
+        _guard: dir,
+    })
+}
+
+/// Read all three PLINK files through VFS and build an in-memory BED reader.
+async fn open_plink_vfs(
+    node_ctx: &NodeCtx,
+    prefix: &str,
+) -> Result<magma::plink::BedFile, MagmaNodeError> {
+    let (bed, bim, fam) = futures::future::try_join3(
+        read_vfs_bytes(node_ctx, &format!("{prefix}.bed")),
+        read_vfs_bytes(node_ctx, &format!("{prefix}.bim")),
+        read_vfs_bytes(node_ctx, &format!("{prefix}.fam")),
+    )
+    .await?;
+    let bim = String::from_utf8_lossy(&bim).into_owned();
+    let fam = String::from_utf8_lossy(&fam).into_owned();
+    magma::plink::BedFile::from_bytes(bed, &bim, &fam).map_err(MagmaNodeError::from)
+}
+
 const GENE_KIND: &str = "magma_gene";
 
-/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one
-/// `.bed/.bim/.fam` per chromosome). `{N}` is resolved to each chromosome
-/// number at execution time. Same panel as lava / hdl_l nodes.
-const REF_PREFIX_TEMPLATE: &str = "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
+/// Default 1000 Genomes East Asian panel deployed under `/mnt/data/magma`.
+const DEFAULT_REFERENCE_PREFIX: &str = "vfs:///data/magma/references/g1000_eas/g1000_eas";
 
 fn gene_ports() -> NodePorts {
     NodePorts::new()
@@ -441,13 +569,10 @@ impl DagNode for MagmaGeneNode {
         let pval_data = magma::geneinput::SnpPvalData { snps: snp_pvals };
 
         // Load PLINK + annotation
-        let chroms: Vec<u32> = (1..=22).collect();
-        let ref_prefix = REF_PREFIX_TEMPLATE.to_string();
-        let mut bed = magma::plink::BedFile::open_template(&ref_prefix, &chroms)
-            .map_err(MagmaNodeError::from)?;
+        let mut bed = open_plink_vfs(node_ctx, &self.config.reference_prefix).await?;
+        let annot_path = stage_vfs_file(node_ctx, &self.config.gene_annot).await?;
         let annot =
-            magma::geneinput::GeneAnnot::read(std::path::Path::new(&self.config.gene_annot))
-                .map_err(MagmaNodeError::from)?;
+            magma::geneinput::GeneAnnot::read(annot_path.as_ref()).map_err(MagmaNodeError::from)?;
 
         // Run gene analysis
         let config = magma::geneanalysis::PvalAnalysisConfig {
@@ -509,11 +634,11 @@ pub struct MagmaSetConfig {
     /// Analysis type: "set" for gene-set, "covar" for gene-property.
     #[serde(default = "default_analysis_type")]
     pub analysis_type: String,
-    /// Path to gene-set annotation file (for analysis_type="set").
+    /// VFS path to gene-set annotation file (for analysis_type="set").
     pub set_annot: Option<String>,
-    /// Path to gene covariate file (for analysis_type="covar").
+    /// VFS path to gene covariate file (for analysis_type="covar").
     pub gene_covar: Option<String>,
-    /// Path to .genes.raw file (alternative to DataFrame input).
+    /// VFS path to .genes.raw file (alternative to DataFrame input).
     pub gene_raw: Option<String>,
     /// Column index for gene ID in set file (0-based). Default: 1.
     #[serde(default = "default_col_gene")]
@@ -633,8 +758,8 @@ impl DagNode for MagmaSetNode {
     ) -> Result<PortOutputs, DagError> {
         // Load gene data from .genes.raw file or construct from DataFrame
         let gene_data = if let Some(ref raw_path) = self.config.gene_raw {
-            magma::setanalysis::GeneRawData::read(std::path::Path::new(raw_path))
-                .map_err(MagmaNodeError::from)?
+            let staged = stage_vfs_file(node_ctx, raw_path).await?;
+            magma::setanalysis::GeneRawData::read(staged.as_ref()).map_err(MagmaNodeError::from)?
         } else if !inputs.is_empty() {
             gene_results_to_raw(&inputs[0].data).await?
         } else {
@@ -652,8 +777,9 @@ impl DagNode for MagmaSetNode {
                         "set_annot path required for analysis_type='set'".into(),
                     ))
                 })?;
+                let staged = stage_vfs_file(node_ctx, set_path).await?;
                 let set_data = magma::setanalysis::GeneSetData::read(
-                    std::path::Path::new(set_path),
+                    staged.as_ref(),
                     &gene_data,
                     self.config.col_gene,
                     self.config.col_set,
@@ -668,11 +794,10 @@ impl DagNode for MagmaSetNode {
                         "gene_covar path required for analysis_type='covar'".into(),
                     ))
                 })?;
-                let covar_data = magma::setanalysis::GeneCovarData::read(
-                    std::path::Path::new(covar_path),
-                    &gene_data,
-                )
-                .map_err(MagmaNodeError::from)?;
+                let staged = stage_vfs_file(node_ctx, covar_path).await?;
+                let covar_data =
+                    magma::setanalysis::GeneCovarData::read(staged.as_ref(), &gene_data)
+                        .map_err(MagmaNodeError::from)?;
                 magma::setanalysis::analyze_gene_covar(&gene_data, &covar_data)
                     .map_err(MagmaNodeError::from)?
             }
@@ -768,7 +893,7 @@ fn build_set_results_batch(
 /// Config for the meta-analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaMetaConfig {
-    /// Paths to .genes.raw files for each cohort.
+    /// VFS paths to .genes.raw files for each cohort.
     pub cohort_files: Vec<String>,
     /// Optional weights (one per cohort). Default: √N.
     #[serde(default)]
@@ -881,13 +1006,18 @@ impl DagNode for MagmaMetaNode {
             .into());
         }
 
-        let cohorts: Vec<magma::setanalysis::GeneRawData> = self
-            .config
-            .cohort_files
+        let staged_cohorts = futures::future::try_join_all(
+            self.config
+                .cohort_files
+                .iter()
+                .map(|path| stage_vfs_file(node_ctx, path)),
+        )
+        .await?;
+        let cohorts: Vec<magma::setanalysis::GeneRawData> = staged_cohorts
             .iter()
-            .map(|p| magma::setanalysis::GeneRawData::read(std::path::Path::new(p)))
+            .map(|path| magma::setanalysis::GeneRawData::read(path.as_ref()))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e: magma::MagmaError| MagmaNodeError::from(e))?;
+            .map_err(MagmaNodeError::from)?;
 
         let meta = magma::meta::meta_analyze(&cohorts, self.config.weights.as_deref(), None)
             .map_err(MagmaNodeError::from)?;
@@ -1047,18 +1177,43 @@ fn extract_i32_col(batches: &[RecordBatch], name: &str) -> Result<Vec<i32>, Magm
 mod tests {
     use super::*;
     use datafusion::prelude::SessionContext;
+    use vfs::{BackendDefinition, MountDefinition, VfsManifest};
 
     fn node_ctx() -> NodeCtx {
+        let source_root = magma_data_dir();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "magma-test".into(),
+                config: vfs::BackendConfig::local("/"),
+            }],
+            mount: vec![MountDefinition {
+                path: "/data/magma".into(),
+                backend: "magma-test".into(),
+                source: source_root.to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let mounts =
+            std::sync::Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let scratch = tempfile::tempdir().unwrap();
+        let opendal =
+            std::sync::Arc::new(vfs::OpendalFileStorage::with_mounts(scratch.path(), mounts));
         NodeCtx {
             runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
+            opendal: Some(opendal),
             global_sem: None,
         }
     }
 
     fn magma_data_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../bio_crates/magma/tests/data")
+            .join("../../../bio_crates/magma/tests/data")
+            .canonicalize()
+            .expect("MAGMA fixture directory should exist")
+    }
+
+    fn vpath(name: &str) -> String {
+        format!("vfs:///data/magma/{name}")
     }
 
     fn gwas_batch(rsids: Vec<String>, pvals: Vec<f64>, n: i64) -> RecordBatch {
@@ -1080,12 +1235,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_annotate_node() {
-        let dir = magma_data_dir();
         let mut node = MagmaAnnotateNode::new(MagmaAnnotateConfig {
-            gene_loc: dir.join("gene_loc.txt").to_string_lossy().to_string(),
-            snp_loc: dir.join("sim_geno.bim").to_string_lossy().to_string(),
+            gene_loc: vpath("gene_loc.txt"),
+            snp_loc: vpath("sim_geno.bim"),
             window_kb: 35.0,
         });
         let res = node
@@ -1103,7 +1256,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
     async fn e2e_gene_node() {
         let dir = magma_data_dir();
 
@@ -1127,7 +1279,8 @@ mod tests {
         let input = vec![NodeInput { port: 0, data: df }];
 
         let mut node = MagmaGeneNode::new(MagmaGeneConfig {
-            gene_annot: dir.join("annot.genes.annot").to_string_lossy().to_string(),
+            gene_annot: vpath("annot.genes.annot"),
+            reference_prefix: vpath("sim_geno"),
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
             n_col: "n".into(),
@@ -1162,18 +1315,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_set_node() {
-        let dir = magma_data_dir();
         let mut node = MagmaSetNode::new(MagmaSetConfig {
             analysis_type: "set".into(),
-            set_annot: Some(dir.join("gene_sets.txt").to_string_lossy().to_string()),
+            set_annot: Some(vpath("gene_sets.txt")),
             gene_covar: None,
-            gene_raw: Some(
-                dir.join("gene_pval.genes.raw")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            gene_raw: Some(vpath("gene_pval.genes.raw")),
             col_gene: 1,
             col_set: 0,
         });
@@ -1200,18 +1347,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_covar_node() {
-        let dir = magma_data_dir();
         let mut node = MagmaSetNode::new(MagmaSetConfig {
             analysis_type: "covar".into(),
             set_annot: None,
-            gene_covar: Some(dir.join("gene_covar.txt").to_string_lossy().to_string()),
-            gene_raw: Some(
-                dir.join("gene_pval.genes.raw")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            gene_covar: Some(vpath("gene_covar.txt")),
+            gene_raw: Some(vpath("gene_pval.genes.raw")),
             col_gene: 1,
             col_set: 0,
         });
@@ -1231,13 +1372,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the local MAGMA executable and fixture data"]
     async fn e2e_meta_node() {
-        let dir = magma_data_dir();
-        let raw_path = dir
-            .join("gene_pval.genes.raw")
-            .to_string_lossy()
-            .to_string();
+        let raw_path = vpath("gene_pval.genes.raw");
         let mut node = MagmaMetaNode::new(MagmaMetaConfig {
             cohort_files: vec![raw_path.clone(), raw_path],
             weights: None,
@@ -1258,16 +1394,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
     async fn e2e_full_pipeline() {
         // Full pipeline: annotate → gene → set
-        let dir = magma_data_dir();
         let ctx = node_ctx();
 
         // Step 1: Annotation
         let mut annotate = MagmaAnnotateNode::new(MagmaAnnotateConfig {
-            gene_loc: dir.join("gene_loc.txt").to_string_lossy().to_string(),
-            snp_loc: dir.join("sim_geno.bim").to_string_lossy().to_string(),
+            gene_loc: vpath("gene_loc.txt"),
+            snp_loc: vpath("sim_geno.bim"),
             window_kb: 35.0,
         });
         let _annot_res = annotate
@@ -1277,7 +1411,7 @@ mod tests {
 
         // Step 2: Gene analysis (using pre-computed annot.genes.annot)
         let pval_data = magma::geneinput::SnpPvalData::read(
-            &dir.join("gwas_pval.txt"),
+            &magma_data_dir().join("gwas_pval.txt"),
             "SNP",
             "P",
             Some("N"),
@@ -1293,7 +1427,8 @@ mod tests {
         let df = ctx.session().read_batch(batch).unwrap();
 
         let mut gene_node = MagmaGeneNode::new(MagmaGeneConfig {
-            gene_annot: dir.join("annot.genes.annot").to_string_lossy().to_string(),
+            gene_annot: vpath("annot.genes.annot"),
+            reference_prefix: vpath("sim_geno"),
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
             n_col: "n".into(),
@@ -1316,13 +1451,9 @@ mod tests {
         // Step 3: Set analysis (using .genes.raw from golden for correlation matrix)
         let mut set_node = MagmaSetNode::new(MagmaSetConfig {
             analysis_type: "set".into(),
-            set_annot: Some(dir.join("gene_sets.txt").to_string_lossy().to_string()),
+            set_annot: Some(vpath("gene_sets.txt")),
             gene_covar: None,
-            gene_raw: Some(
-                dir.join("gene_pval.genes.raw")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            gene_raw: Some(vpath("gene_pval.genes.raw")),
             col_gene: 1,
             col_set: 0,
         });
@@ -1335,6 +1466,6 @@ mod tests {
         let set_count = set_df.clone().count().await.unwrap();
         assert_eq!(set_count, 6);
 
-        eprintln!("✅ Full pipeline: annotate → gene → set completed successfully");
+        eprintln!("Full pipeline: annotate -> gene -> set completed successfully");
     }
 }

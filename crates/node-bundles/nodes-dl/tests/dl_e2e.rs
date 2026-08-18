@@ -121,6 +121,47 @@ mod tests {
     }
 
     #[test]
+    fn test_deepsurv_sparse_events_constant_time_trains() {
+        // Regression for the "Node should have a step registered" panic:
+        // mini-batches with zero events used to return a detached constant
+        // loss, and loss.backward() then panicked inside Burn autodiff.
+        // Mirror the production data shape: constant time, ~1% events,
+        // default batch size 32 (13 batches -> several zero-event batches).
+        let n = 400;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut x = Vec::with_capacity(n * 4);
+        for _ in 0..n {
+            for _ in 0..4 {
+                x.push(rng.random::<f64>() * 2.0 - 1.0);
+            }
+        }
+        let times = vec![12.0; n];
+        let events: Vec<usize> = (0..n).map(|i| if i % 100 == 0 { 1 } else { 0 }).collect();
+
+        let config = DeepSurvConfig {
+            hidden_sizes: vec![16, 8],
+            activation: Activation::Relu,
+            dropout: 0.0,
+            train: TrainConfig {
+                optimizer: OptimizerConfig {
+                    kind: OptimizerKind::Adam,
+                    lr: 0.001,
+                    ..Default::default()
+                },
+                n_epochs: 3,
+                batch_size: 32,
+                ..Default::default()
+            },
+        };
+        let result =
+            train_deepsurv(&Tensor::from_rows(n, 4, &x), &times, &events, None, &config).unwrap();
+        assert_eq!(result.risk_scores.nrows(), n);
+        for i in 0..n {
+            assert!(result.risk_scores.at(i, 0).is_finite());
+        }
+    }
+
+    #[test]
     fn test_train_save_load_predict() {
         let (x, y) = make_classification_data(40, 42);
         let config = MlpConfig {

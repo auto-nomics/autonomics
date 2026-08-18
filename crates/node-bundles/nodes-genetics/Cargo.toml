@@ -8,6 +8,7 @@ description = "Statistical genetics DAG node bundle (LAVA, HDL-L, MTAG, CPASSOC,
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
+vfs = { path = "../../vfs" }
 lava = { path = "../../../bio_crates/lava" }
 hdl = { path = "../../../bio_crates/hdl" }
 mtag = { path = "../../../bio_crates/mtag" }
@@ -31,6 +32,7 @@ faer.workspace = true
 tracing.workspace = true
 futures.workspace = true
 nanoid = "0.5.0"
+tempfile = "3.27.0"
 tokio = { workspace = true }
 
 [dev-dependencies]

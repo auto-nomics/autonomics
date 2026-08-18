@@ -101,3 +101,111 @@ vfs:///data/ldsc/baselineLD_v2_2_eur.parquet
 vfs:///data/ldsc/baselineLD_v2_2_eur_m.parquet
 vfs:///data/ukbb/UKBB.EUR.ldscore.parquet/
 ```
+
+## Current MAGMA data mounts
+
+Only MAGMA data directories are mounted. The executable, source tree, manual,
+downloads, logs, and generated results remain outside VFS:
+
+```toml
+[[backend]]
+id = "magma-local"
+type = "local"
+root = "/"
+
+[[mount]]
+path = "/data/magma/inputs"
+backend = "magma-local"
+source = "/mnt/data/magma/data"
+read_only = true
+
+[[mount]]
+path = "/data/magma/genes"
+backend = "magma-local"
+source = "/mnt/data/magma/resources/genes"
+read_only = true
+
+[[mount]]
+path = "/data/magma/references/g1000_eas"
+backend = "magma-local"
+source = "/mnt/data/magma/resources/references/g1000_eas"
+read_only = true
+```
+
+MAGMA nodes address their inputs through that virtual namespace. The deployed
+1000 Genomes East Asian reference uses:
+
+```text
+vfs:///data/magma/genes/NCBI37.3.gene.loc
+vfs:///data/magma/references/g1000_eas/g1000_eas
+```
+
+The second path is a PLINK prefix; `.bed`, `.bim`, and `.fam` are resolved and
+read through the same VFS mount.
+
+The converted gene-location tables are also available under the MAGMA gene
+mount:
+
+```text
+vfs:///data/magma/genes/parquet/NCBI37.3.gene_loc.parquet
+vfs:///data/magma/genes/parquet/NCBI38.gene_loc.parquet
+```
+
+## KEGG data mount
+
+The local KEGG Parquet export is mounted read-only:
+
+```toml
+[[backend]]
+id = "kegg-local"
+type = "local"
+root = "/"
+
+[[mount]]
+path = "/data/kegg_data"
+backend = "kegg-local"
+source = "/mnt/disk3/kegg_scraper/data/kegg_data"
+read_only = true
+```
+
+`magma_kegg_align` reads the NCBI gene-location Parquet plus these KEGG tables:
+
+```text
+vfs:///data/kegg_data/entity_gene.parquet
+vfs:///data/kegg_data/link_pathway_ko.parquet
+vfs:///data/kegg_data/entity_pathway.parquet
+vfs:///data/kegg_data/link_genome_pathway.parquet
+```
+
+## GO data mount
+
+The GO graph, GAF/GPI tables, and NCBI human `gene2go` mapping are mounted
+read-only under `/data/go_data`:
+
+```toml
+[[backend]]
+id = "go-local"
+type = "local"
+root = "/"
+
+[[mount]]
+path = "/data/go_data"
+backend = "go-local"
+source = "/mnt/data/go_data"
+read_only = true
+```
+
+Important tables and MAGMA-ready gene-set files include:
+
+```text
+vfs:///data/go_data/gene2go_human.parquet
+vfs:///data/go_data/ontology_nodes.parquet
+vfs:///data/go_data/ontology_edges.parquet
+vfs:///data/go_data/magma_go_sets.NCBI37.3.propagated.10_1000.txt
+vfs:///data/go_data/magma_go_sets.NCBI38.propagated.10_1000.txt
+```
+
+The `gene2go_human.parquet` table contains 446,675 human NCBI GeneID-to-GO rows.
+The MAGMA-ready files remove `NOT` qualifiers, propagate annotations through GO
+`is_a` and `part_of` edges, intersect with each MAGMA gene universe, and retain
+sets containing 10-1000 genes.

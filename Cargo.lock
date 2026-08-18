@@ -315,6 +315,7 @@ dependencies = [
  "pretty_assertions",
  "similar",
  "thiserror 2.0.20",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -6937,9 +6938,11 @@ dependencies = [
  "serde_json",
  "statrs",
  "susie",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "vfs",
 ]
 
 [[package]]

@@ -131,6 +131,8 @@ pub enum FuzzyEditOutcome {
 /// Both `old` and `new` are treated as sequences of complete lines. A single
 /// trailing newline in either argument is stripped (so `"bar\n"` and `"bar"`
 /// are equivalent patterns for a one-line replacement).
+/// If a one-line `old` value has no whole-line match, it is also tried as a
+/// substring within each physical line.
 ///
 /// When `replace_all` is `false`, exactly one match location is required;
 /// multiple matches return [`FuzzyEditOutcome::Ambiguous`].
@@ -152,33 +154,57 @@ pub fn fuzzy_edit(original: &str, old: &str, new: &str, replace_all: bool) -> Fu
     }
 
     let positions = seek_sequence::find_all_matches(&orig_lines, &pattern_lines);
+    let substring_matches = if positions.is_empty() && pattern_lines.len() == 1 {
+        find_substring_matches(&orig_lines, &pattern_lines[0])
+    } else {
+        Vec::new()
+    };
 
-    if positions.is_empty() {
+    if positions.is_empty() && substring_matches.is_empty() {
         return FuzzyEditOutcome::NotFound;
     }
 
-    if positions.len() > 1 && !replace_all {
-        return FuzzyEditOutcome::Ambiguous {
-            count: positions.len(),
-        };
+    let match_count = positions.len() + substring_matches.len();
+    if match_count > 1 && !replace_all {
+        return FuzzyEditOutcome::Ambiguous { count: match_count };
     }
 
-    let fuzzy = positions
-        .iter()
-        .any(|&pos| orig_lines[pos..pos + pattern_lines.len()] != pattern_lines[..]);
+    let fuzzy = if substring_matches.is_empty() {
+        positions
+            .iter()
+            .any(|&pos| orig_lines[pos..pos + pattern_lines.len()] != pattern_lines[..])
+    } else {
+        substring_matches.iter().any(|matched| matched.fuzzy)
+    };
 
     // Apply replacements in descending position order so earlier replacements
     // don't shift indices of later ones.
     let mut result = orig_lines.clone();
-    let pattern_len = pattern_lines.len();
-    for &pos in positions.iter().rev() {
-        for _ in 0..pattern_len {
-            if pos < result.len() {
-                result.remove(pos);
+    if substring_matches.is_empty() {
+        let pattern_len = pattern_lines.len();
+        for &pos in positions.iter().rev() {
+            for _ in 0..pattern_len {
+                if pos < result.len() {
+                    result.remove(pos);
+                }
+            }
+            for (offset, line) in new_lines.iter().enumerate() {
+                result.insert(pos + offset, line.clone());
             }
         }
-        for (offset, line) in new_lines.iter().enumerate() {
-            result.insert(pos + offset, line.clone());
+    } else {
+        let mut by_line: Vec<Vec<SubstringMatch>> = vec![Vec::new(); result.len()];
+        for matched in substring_matches {
+            by_line[matched.line_index].push(matched);
+        }
+
+        for (line_index, matches) in by_line.into_iter().enumerate().rev() {
+            if matches.is_empty() {
+                continue;
+            }
+            let line = result[line_index].clone();
+            let replacement = splice_substring(&line, &new_lines, &matches);
+            result.splice(line_index..line_index + 1, replacement);
         }
     }
 
@@ -188,9 +214,109 @@ pub fn fuzzy_edit(original: &str, old: &str, new: &str, replace_all: bool) -> Fu
 
     FuzzyEditOutcome::Replaced {
         new_content: result.join("\n"),
-        count: positions.len(),
+        count: match_count,
         fuzzy,
     }
+}
+
+#[derive(Clone, Copy)]
+struct SubstringMatch {
+    line_index: usize,
+    start: usize,
+    end: usize,
+    fuzzy: bool,
+}
+
+fn find_substring_matches(lines: &[String], pattern: &str) -> Vec<SubstringMatch> {
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        let mut search_from = 0;
+        while let Some(offset) = line[search_from..].find(pattern) {
+            let start = search_from + offset;
+            let end = start + pattern.len();
+            matches.push(SubstringMatch {
+                line_index,
+                start,
+                end,
+                fuzzy: false,
+            });
+            search_from = end;
+        }
+    }
+
+    if !matches.is_empty() {
+        return matches;
+    }
+
+    let needle = seek_sequence::normalised_spans(pattern);
+    if needle.is_empty() {
+        return matches;
+    }
+
+    for (line_index, line) in lines.iter().enumerate() {
+        let haystack = seek_sequence::normalised_spans(line);
+        if haystack.len() < needle.len() {
+            continue;
+        }
+
+        let mut start = 0;
+        while start + needle.len() <= haystack.len() {
+            let candidate = &haystack[start..start + needle.len()];
+            if candidate
+                .iter()
+                .zip(needle.iter())
+                .all(|(actual, expected)| actual.0 == expected.0)
+            {
+                matches.push(SubstringMatch {
+                    line_index,
+                    start: candidate[0].1,
+                    end: candidate[needle.len() - 1].2,
+                    fuzzy: true,
+                });
+                start += needle.len().max(1);
+            } else {
+                start += 1;
+            }
+        }
+    }
+
+    matches
+}
+
+fn splice_substring(line: &str, new_lines: &[String], matches: &[SubstringMatch]) -> Vec<String> {
+    let mut result = vec![String::new()];
+    let mut cursor = 0;
+
+    for matched in matches {
+        result
+            .last_mut()
+            .expect("replacement starts with one line")
+            .push_str(&line[cursor..matched.start]);
+        cursor = matched.end;
+
+        // An empty replacement still leaves one (possibly empty) line so the
+        // unmatched prefix and suffix remain joined on the same physical line.
+        let replacement: Vec<&str> = if new_lines.is_empty() {
+            vec![""]
+        } else {
+            new_lines.iter().map(String::as_str).collect()
+        };
+        result
+            .last_mut()
+            .expect("replacement starts with one line")
+            .push_str(replacement[0]);
+        result.extend(replacement[1..].iter().map(|line| (*line).to_string()));
+    }
+
+    result
+        .last_mut()
+        .expect("replacement starts with one line")
+        .push_str(&line[cursor..]);
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +626,55 @@ mod tests {
         let original = "import x  # local \u{2013} fast\n";
         let outcome = fuzzy_edit(original, "import x  # local - fast", "import y", false);
         assert!(matches!(outcome, FuzzyEditOutcome::Replaced { .. }));
+    }
+
+    #[test]
+    fn test_fuzzy_edit_unicode_substring_in_long_line() {
+        let original = format!(
+            "{} z = \u{2212}1.96, \u{0394} = 2 \u{00D7} 3, path A \u{2192} B, x\u{2080} \u{2014} y. {}",
+            "x".repeat(600),
+            "z".repeat(600)
+        );
+        let old = "z = -1.96, Delta = 2 x 3, path A -> B, x0 - y.";
+        let outcome = fuzzy_edit(&original, old, "sensitivity confirmed", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced {
+                new_content,
+                count,
+                fuzzy,
+            } => {
+                assert!(fuzzy);
+                assert_eq!(count, 1);
+                assert!(new_content.starts_with(&"x".repeat(600)));
+                assert!(new_content.contains("sensitivity confirmed"));
+                assert!(new_content.ends_with(&format!("{}\n", "z".repeat(600))));
+            }
+            other => panic!("expected Replaced, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_edit_ascii_substring_in_long_line() {
+        let original = format!(
+            "{} are confirmed correct. {}",
+            "a".repeat(800),
+            "b".repeat(800)
+        );
+        let outcome = fuzzy_edit(&original, "are confirmed correct.", "were verified.", false);
+        match outcome {
+            FuzzyEditOutcome::Replaced {
+                new_content,
+                count,
+                fuzzy,
+            } => {
+                assert_eq!(fuzzy, false);
+                assert_eq!(count, 1);
+                assert!(new_content.contains("were verified."));
+                assert!(new_content.starts_with(&"a".repeat(800)));
+                assert!(new_content.ends_with(&format!("{}\n", "b".repeat(800))));
+            }
+            other => panic!("expected Replaced, got {other:?}"),
+        }
     }
 
     #[test]

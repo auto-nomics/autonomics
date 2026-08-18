@@ -39,8 +39,9 @@ pub struct VfsBashInput {
     pub dst: Option<String>,
     #[desc = "Content to write (for write op)."]
     pub content: Option<String>,
-    #[desc = "Text to find (for edit op). Matched as whole lines with \
-        fuzzy tolerance: exact, whitespace-trim, and Unicode-normalised."]
+    #[desc = "Text to find (for edit op). Matched as whole lines, or as a \
+        substring when it occurs within one long line, with fuzzy tolerance: \
+        exact, whitespace-trim, and Unicode-normalised."]
     pub old_string: Option<String>,
     #[desc = "Replacement text (for edit op)."]
     pub new_string: Option<String>,
@@ -1388,6 +1389,34 @@ mod tests {
             names.iter().any(|n| n.ends_with("hello.txt")),
             "expected hello.txt in listing, got: {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn patch_through_mount_preserves_repeated_path_component() {
+        let (tool, _backend_root, source_dir) = make_mounted_tool();
+        let virtual_path = "/ic_cvd_ml/outputs/patched.md";
+
+        let mut w = input("write");
+        w.path = Some(virtual_path.into());
+        w.content = Some("old\n".into());
+        let result = tool.run(w).await.unwrap();
+        assert_ne!(result.is_error, Some(true), "write failed: {result:?}");
+
+        let mut p = input("patch");
+        p.patch = Some(
+            "*** Begin Patch\n\
+             *** Update File: /ic_cvd_ml/outputs/patched.md\n\
+             @@\n\
+             -old\n\
+             +new\n\
+             *** End Patch"
+                .into(),
+        );
+        let result = tool.run(p).await.unwrap();
+        assert_ne!(result.is_error, Some(true), "patch failed: {result:?}");
+
+        let on_disk = source_dir.join("ic_cvd_ml/outputs/patched.md");
+        assert_eq!(std::fs::read_to_string(on_disk).unwrap(), "new\n");
     }
 
     #[tokio::test]

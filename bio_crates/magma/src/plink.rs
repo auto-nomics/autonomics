@@ -51,7 +51,7 @@ pub struct IndivInfo {
 /// For performance with large files, call [`BedFile::cache_all`] to load the
 /// entire `.bed` into memory, eliminating per-SNP seek overhead.
 pub struct BedFile {
-    bed: File,
+    bed: Option<File>,
     /// In-memory cache of the entire .bed file (optional). When present,
     /// `read_snp` reads from this buffer instead of seeking the file handle.
     bed_cache: Option<Vec<u8>>,
@@ -115,8 +115,58 @@ impl BedFile {
             .collect();
 
         Ok(Self {
-            bed,
+            bed: Some(bed),
             bed_cache: None,
+            snps,
+            indivs,
+            snp_index,
+            indiv_index,
+            block_count,
+        })
+    }
+
+    /// Build a PLINK fileset from bytes read from a virtualized storage layer.
+    ///
+    /// VFS object stores do not expose synchronous seekable file handles, so
+    /// the BED contents are retained in memory as an already-loaded cache.
+    pub fn from_bytes(bed: Vec<u8>, bim: &str, fam: &str) -> Result<Self> {
+        let indivs = parse_fam(fam, "<vfs>.fam")?;
+        let n_indiv = indivs.len();
+        let snps = parse_bim(bim, "<vfs>.bim")?;
+        let n_snp = snps.len();
+        let block_count = n_indiv.div_ceil(4);
+        let exp_size = 3 + block_count * n_snp;
+        if bed.len() != exp_size {
+            return Err(MagmaError::Input(format!(
+                ".bed size ({}) inconsistent with .bim ({n_snp} SNPs) and .fam ({n_indiv} indivs); expected {exp_size}",
+                bed.len()
+            )));
+        }
+        if bed[0] != 0x6c || bed[1] != 0x1b {
+            return Err(MagmaError::Input(
+                ".bed file is not a valid PLINK binary file".into(),
+            ));
+        }
+        if bed[2] != 0x01 {
+            return Err(MagmaError::Input(
+                ".bed file is not in SNP-major format".into(),
+            ));
+        }
+
+        let snp_index: HashMap<String, usize> = snps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.rsid.clone(), i))
+            .collect();
+        let indiv_index: HashMap<String, usize> = indivs
+            .iter()
+            .enumerate()
+            .map(|(i, ind)| (format!("{} {}", ind.fid, ind.iid), i))
+            .collect();
+
+        Ok(Self {
+            bed: None,
+            bed_cache: Some(bed),
             snps,
             indivs,
             snp_index,
@@ -185,15 +235,15 @@ impl BedFile {
                 snps.push(s);
             }
 
-            // Retain the first file handle (struct requires a valid File, but
-            // it is never read when bed_cache is set).
+            // Retain the first seekable handle for callers that have not
+            // requested BED caching; merged files are always cached below.
             if bed_handle.is_none() {
-                bed_handle = Some(bf.bed);
+                bed_handle = bf.bed.take();
             }
         }
 
         Ok(Self {
-            bed: bed_handle.unwrap(),
+            bed: bed_handle,
             bed_cache: Some(bed_data),
             snps,
             indivs,
@@ -208,9 +258,12 @@ impl BedFile {
     /// This dramatically improves performance for analyses that read many SNPs.
     pub fn cache_all(&mut self) -> Result<()> {
         use std::io::Read;
-        self.bed.seek(SeekFrom::Start(0)).map_err(MagmaError::Io)?;
+        let Some(bed) = self.bed.as_mut() else {
+            return Ok(());
+        };
+        bed.seek(SeekFrom::Start(0)).map_err(MagmaError::Io)?;
         let mut buf = Vec::new();
-        self.bed.read_to_end(&mut buf).map_err(MagmaError::Io)?;
+        bed.read_to_end(&mut buf).map_err(MagmaError::Io)?;
         self.bed_cache = Some(buf);
         Ok(())
     }
@@ -223,11 +276,15 @@ impl BedFile {
             &cache[offset..offset + self.block_count]
         } else {
             // Fall back to file seek
-            self.bed
-                .seek(SeekFrom::Start(offset as u64))
+            let Some(bed) = self.bed.as_mut() else {
+                return Err(MagmaError::Input(
+                    "PLINK reader has no seekable BED backend".into(),
+                ));
+            };
+            bed.seek(SeekFrom::Start(offset as u64))
                 .map_err(MagmaError::Io)?;
             let mut tmp = vec![0u8; self.block_count];
-            self.bed.read_exact(&mut tmp).map_err(MagmaError::Io)?;
+            bed.read_exact(&mut tmp).map_err(MagmaError::Io)?;
             // Can't return reference to local, so decode directly
             return Ok(decode_block(&tmp, self.n_indiv()));
         };
@@ -261,13 +318,15 @@ impl BedFile {
             let buf: &[u8] = if let Some(ref cache) = self.bed_cache {
                 &cache[offset..offset + self.block_count]
             } else {
-                self.bed
-                    .seek(SeekFrom::Start(offset as u64))
+                let Some(bed) = self.bed.as_mut() else {
+                    return Err(MagmaError::Input(
+                        "PLINK reader has no seekable BED backend".into(),
+                    ));
+                };
+                bed.seek(SeekFrom::Start(offset as u64))
                     .map_err(MagmaError::Io)?;
                 buf_owned = vec![0u8; self.block_count];
-                self.bed
-                    .read_exact(&mut buf_owned)
-                    .map_err(MagmaError::Io)?;
+                bed.read_exact(&mut buf_owned).map_err(MagmaError::Io)?;
                 &buf_owned
             };
             for (j, &code) in buf.iter().enumerate() {
@@ -312,12 +371,16 @@ fn decode_block(buf: &[u8], n_indiv: usize) -> Vec<f64> {
 /// Read a `.fam` file: `FID IID Father Mother Sex Pheno` (whitespace-separated).
 fn read_fam(path: &Path) -> Result<Vec<IndivInfo>> {
     let content = std::fs::read_to_string(path).map_err(MagmaError::Io)?;
+    parse_fam(&content, &path.to_string_lossy())
+}
+
+fn parse_fam(content: &str, source: &str) -> Result<Vec<IndivInfo>> {
     let mut indivs = Vec::new();
     for (lineno, line) in content.lines().enumerate() {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() < 6 {
             return Err(MagmaError::Input(format!(
-                "{path:?}: line {} has fewer than 6 fields",
+                "{source}: line {} has fewer than 6 fields",
                 lineno + 1
             )));
         }
@@ -342,7 +405,7 @@ fn read_fam(path: &Path) -> Result<Vec<IndivInfo>> {
     }
     if indivs.is_empty() {
         return Err(MagmaError::Input(format!(
-            "{path:?}: no individuals in file"
+            "{source}: no individuals in file"
         )));
     }
     Ok(indivs)
@@ -352,6 +415,10 @@ fn read_fam(path: &Path) -> Result<Vec<IndivInfo>> {
 /// Also handles MAGMA's own .bim format which may have a different column 3.
 fn read_bim(path: &Path) -> Result<Vec<SnpInfo>> {
     let content = std::fs::read_to_string(path).map_err(MagmaError::Io)?;
+    parse_bim(&content, &path.to_string_lossy())
+}
+
+fn parse_bim(content: &str, source: &str) -> Result<Vec<SnpInfo>> {
     let mut snps = Vec::new();
     for (lineno, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -360,20 +427,20 @@ fn read_bim(path: &Path) -> Result<Vec<SnpInfo>> {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() < 6 {
             return Err(MagmaError::Input(format!(
-                "{path:?}: line {} has fewer than 6 fields",
+                "{source}: line {} has fewer than 6 fields",
                 lineno + 1
             )));
         }
         let chr: i32 = fields[0].parse().map_err(|_| {
             MagmaError::Input(format!(
-                "{path:?}: line {}: chromosome '{}' not a valid integer",
+                "{source}: line {}: chromosome '{}' not a valid integer",
                 lineno + 1,
                 fields[0]
             ))
         })?;
         let pos: u64 = fields[3].parse().map_err(|_| {
             MagmaError::Input(format!(
-                "{path:?}: line {}: position '{}' not a valid integer",
+                "{source}: line {}: position '{}' not a valid integer",
                 lineno + 1,
                 fields[3]
             ))
@@ -387,7 +454,7 @@ fn read_bim(path: &Path) -> Result<Vec<SnpInfo>> {
         });
     }
     if snps.is_empty() {
-        return Err(MagmaError::Input(format!("{path:?}: no SNPs in file")));
+        return Err(MagmaError::Input(format!("{source}: no SNPs in file")));
     }
     Ok(snps)
 }
