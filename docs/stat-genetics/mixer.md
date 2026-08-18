@@ -1,25 +1,34 @@
-# MiXeR — Causal Mixture Model (`mixer`)
+# MiXeR
 
-[English](mixer.md) | [中文](mixer_zh.md)
+MiXeR fits univariate (`fit1`) and bivariate (`fit2`) spike-and-slab causal
+mixture models to GWAS summary statistics. Autonomics uses the original
+gsa-MiXeR v2.2.1 Python/C++ engine for numerical fidelity rather than
+reimplementing its optimizer and cost function in Rust.
 
-A pure-Rust reimplementation of the MiXeR model (Holland et al. 2020, _PLoS Genetics_): univariate (`fit1`) and bivariate (`fit2`) spike-and-slab causal mixture for GWAS summary statistics.
+## Nodes
 
-## Univariate (`fit1`)
+`univariate_mixer` accepts one summary-statistics table with `rsid`, `A1`, `A2`,
+`N`, and `Z` columns. It runs `mixer.py fit1` and returns one row containing
+`pi`, `sig2_beta`, `sig2_zero`, `h2`, causal-variant counts, AIC, BIC, and cost.
 
-Fits three parameters (π polygenicity, σ²_β discoverability, σ²_zero intercept) via Gaussian moment-matching cost function. Optimization: differential evolution × N repeats → Nelder-Mead refinement. Cross-validated against the original C++ implementation's gold standard to < 0.2% across all parameters.
+`bivariate_mixer` accepts trait1 and trait2 summary statistics plus their fit1
+parameters. It runs `mixer.py fit2` and returns shared/specific polygenicity,
+genetic correlation, Dice similarity, both h2 estimates, and cost.
 
-## Sufficient statistics compression
+## Reference Bundle
 
-The LD matrix is folded into two per-SNP scalars (`m1`/`m2`) pre-fit, collapsing O(nnz) CSR to O(n_snp). Cost evaluation is O(1) per tag thereafter, enabling ~10^4 cost evaluations during optimization without touching LD.
+Both nodes resolve a semantic `reference` ID; the default is `g1000_eur`. The
+bundle lives at:
 
-## Two weighting modes
+```text
+/mnt/data/mixer/resources/g1000_eur/bundle.json
+```
 
-- **LdScore** — single-pass, `1/(1+Σr²)`, no CSR needed
-- **Randprune** — bit-exact with original C++ `std::mt19937_64`
+It pins the gsa-MiXeR source revision, GRCh37/EUR metadata, paths to the
+per-chromosome `.bim`, LD, and tag-SNP templates, and the SHA-256 checksum of
+`libbgmg.so`. Engine and panel paths are not exposed through DAG specs.
 
-## DAG node
-
-Exposed as `univariate_mixer` and `bivariate_mixer` node kinds (`data-engine/nodes/univariate_mixer.rs`). Two-phase pipeline:
-
-1. Offline `precompute_tags` produces a VFS table (`eur_tagsuff`) containing per-tag sufficient statistics
-2. The runtime node loads sumstats, joins with tagsuff by rsid, and invokes `fit1`
+The container mounts the resource root at the same host path and uses a managed
+Python runtime with the required NumPy, SciPy, pandas, Boost, and OpenMP
+libraries. `MIXER_RESOURCE_ROOT` and `MIXER_PYTHON` can override the defaults
+for a different deployment.

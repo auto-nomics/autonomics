@@ -24,20 +24,27 @@ RUN --mount=type=cache,target=/src/target \
     cp target/release/tui /usr/local/bin/autonomics-tui
 
 ########## runtime ##########
-FROM debian:bookworm-slim AS runtime
+FROM archlinux:base AS runtime
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+RUN pacman -Sy --noconfirm --needed \
       ca-certificates \
       tzdata \
-      libstdc++6 \
-  && rm -rf /var/lib/apt/lists/* \
+      gcc-libs \
+      libgomp \
+      boost-libs \
+      python \
+      python-numpy \
+      python-scipy \
+      python-pandas \
+  && pacman -Scc --noconfirm \
   && groupadd --gid 1000 autonomics \
-  && useradd --uid 1000 --gid autonomics --create-home  autonomics
+  && useradd --uid 1000 --gid autonomics --create-home autonomics
 
 ENV HOME=/data/home \
     AUTONOMICS_DATA_DIR=/data/files \
     AUTONOMICS_STATE_DIR=/data/state \
+    MIXER_RESOURCE_ROOT=/mnt/data/mixer/resources \
+    MIXER_PYTHON=/usr/bin/python3 \
     TZ=Asia/Shanghai
 
 COPY --from=builder /usr/local/bin/autonomics-tui /usr/local/bin/autonomics-tui

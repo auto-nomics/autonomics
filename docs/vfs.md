@@ -102,10 +102,10 @@ vfs:///data/ldsc/baselineLD_v2_2_eur_m.parquet
 vfs:///data/ukbb/UKBB.EUR.ldscore.parquet/
 ```
 
-## Current MAGMA data mounts
+## Current MAGMA and MiXeR data mounts
 
-Only MAGMA data directories are mounted. The executable, source tree, manual,
-downloads, logs, and generated results remain outside VFS:
+Reference-data directories are mounted, while downloads, logs, and generated
+results remain outside VFS:
 
 ```toml
 [[backend]]
@@ -129,6 +129,12 @@ read_only = true
 path = "/data/magma/references"
 backend = "magma-local"
 source = "/mnt/data/magma/resources/references"
+read_only = true
+
+[[mount]]
+path = "/data/mixer/resources"
+backend = "magma-local"
+source = "/mnt/data/mixer/resources"
 read_only = true
 ```
 
@@ -173,6 +179,19 @@ mount:
 vfs:///data/magma/genes/parquet/NCBI37.3.gene_loc.parquet
 vfs:///data/magma/genes/parquet/NCBI38.gene_loc.parquet
 ```
+
+MiXeR consumes the same resource layout directly from
+`/mnt/data/mixer/resources`. The deployed bundle is:
+
+```text
+vfs:///data/mixer/resources/g1000_eur/bundle.json
+vfs:///data/mixer/resources/g1000_eur/engine/precimed/mixer.py
+vfs:///data/mixer/resources/g1000_eur/ld_mixer/1000G.EUR.chr@
+```
+The bundle records the gsa-MiXeR source revision, EUR/GRCh37 metadata,
+`.bim`, LD, and tag-SNP templates, and the `libbgmg.so` checksum. The host uses
+the bundled Python environment; the container uses its managed `/usr/bin/python3`
+with NumPy, SciPy, pandas, Boost, and OpenMP runtime packages.
 
 ## KEGG data mount
 

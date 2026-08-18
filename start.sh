@@ -80,6 +80,9 @@ add_volume /mnt/data/magma/resources/genes /mnt/data/magma/resources/genes ro
 add_volume \
     /mnt/data/magma/resources/references \
     /mnt/data/magma/resources/references ro
+add_volume \
+    /mnt/data/mixer/resources \
+    /mnt/data/mixer/resources ro
 
 if podman container exists "$CONTAINER_NAME"; then
     echo "Removing stale container: $CONTAINER_NAME" >&2
@@ -95,6 +98,8 @@ exec podman run \
     --user "$(id -u):$(id -g)" \
     --userns=keep-id \
     --env HOME=/data/home \
+    --env MIXER_RESOURCE_ROOT=/mnt/data/mixer/resources \
+    --env MIXER_PYTHON=/usr/bin/python3 \
     --env "TERM=${TERM:-xterm-256color}" \
     "${volumes[@]}" \
     "$IMAGE" \

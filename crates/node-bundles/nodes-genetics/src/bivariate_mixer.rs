@@ -51,6 +51,9 @@ pub enum BivariateMixerError {
 
     #[error("bivariate_mixer json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("bivariate_mixer reference bundle error: {0}")]
+    ReferenceBundle(String),
 }
 
 impl ::dag_core::dag::NodeError for BivariateMixerError {
@@ -110,21 +113,11 @@ fn output_schema() -> SchemaRef {
 // =====================================================================
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BivariateMixerNodeSpec {
-    /// gsa-mixer 引擎根目录（包含 `precimed/mixer.py` 和 `libbgmg.so`）。
-    ///
-    /// The subprocess uses `<mixer_home>/.venv/bin/python` by default;
-    /// set `MIXER_PYTHON` to use another interpreter.
-    pub mixer_home: String,
-
-    /// `.bim` 文件模板（`@` 为染色体占位符）。
-    pub bim_file: String,
-
-    /// `.ld` 文件模板（`@` 为染色体占位符）。
-    pub ld_file: String,
-
-    /// `.snps` extract 文件模板（`@` 为染色体占位符）。
-    pub extract_file: String,
+    /// Deployed MiXeR reference bundle ID. Defaults to `g1000_eur`.
+    #[serde(default = "crate::mixer_common::default_reference")]
+    pub reference: String,
 
     /// 参与拟合的染色体范围。
     #[serde(default = "default_chr2use")]
@@ -238,16 +231,14 @@ impl NodeFactory for BivariateMixerNodeFactory {
     ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
         use dag_core::codegen::helpers::*;
         let s = parse_spec::<BivariateMixerNodeSpec>(spec, "bivariate_mixer")?;
+        let reference = s.reference;
         let out = ctx.output_var.to_string();
         let code = vec![
             format!("# MiXeR bivariate analysis (gsa-mixer subprocess)"),
-            format!(
-                "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='{}/.venv/bin/python')",
-                s.mixer_home
-            ),
+            "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='<mixer_bundle_python>')".to_string(),
             format!("system2(mixer_python, c("),
-            format!("  '{h}/precimed/mixer.py', 'fit2',", h = s.mixer_home),
-            format!("  '--lib', '{h}/libbgmg.so',", h = s.mixer_home),
+            format!("  '<mixer_bundle:{reference}>/precimed/mixer.py>', 'fit2',"),
+            "  '--lib', '<mixer_bundle_home>/libbgmg.so',".to_string(),
             format!("  '--out', '{out}'"),
             format!("))"),
         ];
@@ -380,28 +371,31 @@ impl DagNode for BivariateMixerNode {
         write_minimal_fit1_json(pi2, sb2, sz2, &params2_path)?;
 
         // ── 4. Build mixer.py fit2 command ─────────────────────────────
-        let mixer_py = format!("{}/precimed/mixer.py", self.spec.mixer_home);
-        let lib_path = format!("{}/libbgmg.so", self.spec.mixer_home);
+        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
+            .map_err(BivariateMixerError::ReferenceBundle)?;
+        let mixer_py = bundle.mixer_home.join("precimed").join("mixer.py");
+        let lib_path = bundle.mixer_home.join("libbgmg.so");
         let out_prefix = tmp_dir.join("result");
 
-        let mut cmd = std::process::Command::new(mixer_python_executable(&self.spec.mixer_home));
+        let mut cmd =
+            std::process::Command::new(crate::mixer_common::python_executable(&bundle.mixer_home));
         cmd.arg(&mixer_py)
             .arg("fit2")
             .arg("--bim-file")
-            .arg(&self.spec.bim_file)
+            .arg(&bundle.bim_template)
             .arg("--ld-file")
-            .arg(&self.spec.ld_file)
+            .arg(&bundle.ld_template)
             .arg("--lib")
             .arg(&lib_path)
             .arg("--extract")
-            .arg(&self.spec.extract_file)
+            .arg(&bundle.extract_template)
             .arg("--trait1-file")
             .arg(&ss1_path)
             .arg("--trait2-file")
             .arg(&ss2_path)
-            .arg("--trait1-params")
+            .arg("--trait1-params-file")
             .arg(&params1_path)
-            .arg("--trait2-params")
+            .arg("--trait2-params-file")
             .arg(&params2_path)
             .arg("--chr2use")
             .arg(&self.spec.chr2use)
@@ -652,10 +646,6 @@ async fn write_sumstats(
     Ok(())
 }
 
-fn mixer_python_executable(mixer_home: &str) -> String {
-    std::env::var("MIXER_PYTHON").unwrap_or_else(|_| format!("{mixer_home}/.venv/bin/python"))
-}
-
 // =====================================================================
 // JSON parsing
 // =====================================================================
@@ -694,26 +684,24 @@ fn parse_fit2_json(json: &serde_json::Value) -> Result<BivariateResult, Bivariat
     let rho_beta = p["rho_beta"].as_f64().unwrap_or(0.0);
     let rho_zero = p["rho_zero"].as_f64().unwrap_or(0.0);
 
-    // rg from top-level or compute from params
-    let rg = json.get("rg").and_then(|v| v.as_f64()).unwrap_or_else(|| {
-        // Approximate rg from rho_beta and pi values
-        let sig2_beta = p["sig2_beta"]
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        if pi1 + pi12 > 0.0 && pi2 + pi12 > 0.0 {
-            rho_beta * pi12 * sig2_beta / ((pi1 + pi12).sqrt() * (pi2 + pi12).sqrt() * sig2_beta)
-        } else {
-            0.0
-        }
-    });
+    let ci_point = |key: &str| {
+        json.get("ci")
+            .and_then(|ci| ci.get(key))
+            .and_then(|value| value.get("point_estimate"))
+            .and_then(|value| value.as_f64())
+    };
 
-    // Dice coefficient
     let denom = pi1 + pi2 + 2.0 * pi12;
-    let dice = if denom > 0.0 { 2.0 * pi12 / denom } else { 0.0 };
+    let pi1 = ci_point("pi1").unwrap_or(pi1);
+    let pi2 = ci_point("pi2").unwrap_or(pi2);
+    let pi12 = ci_point("pi12").unwrap_or(pi12);
+    let rho_beta = ci_point("rho_beta").unwrap_or(rho_beta);
+    let rho_zero = ci_point("rho_zero").unwrap_or(rho_zero);
+    let rg = ci_point("rg").unwrap_or(0.0);
+    let dice =
+        ci_point("dice").unwrap_or_else(|| if denom > 0.0 { 2.0 * pi12 / denom } else { 0.0 });
 
-    // h2 from sig2_beta * pi * totalhet (approximate)
+    // Keep the documented deterministic fallback for older/custom JSON output.
     let sig2_beta_arr = p["sig2_beta"].as_array();
     let sb1 = sig2_beta_arr
         .and_then(|a| a.first())
@@ -728,8 +716,8 @@ fn parse_fit2_json(json: &serde_json::Value) -> Result<BivariateResult, Bivariat
         .and_then(|o| o.get("totalhet"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let h2_t1 = sb1 * (pi1 + pi12) * totalhet;
-    let h2_t2 = sb2 * (pi2 + pi12) * totalhet;
+    let h2_t1 = ci_point("h2_T1").unwrap_or(sb1 * (pi1 + pi12) * totalhet);
+    let h2_t2 = ci_point("h2_T2").unwrap_or(sb2 * (pi2 + pi12) * totalhet);
 
     // loglike from last optimize step
     let optimize = json.get("optimize").and_then(|v| v.as_array());
@@ -782,6 +770,7 @@ fn build_result_batch(r: &BivariateResult) -> Result<RecordBatch, BivariateMixer
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::prelude::CsvReadOptions;
 
     #[test]
     fn node_type_is_stable() {
@@ -790,18 +779,12 @@ mod tests {
 
     #[test]
     fn spec_defaults() {
-        let spec = BivariateMixerNodeSpec {
-            mixer_home: "reference/mixer_data/engine".into(),
-            bim_file: "reference/mixer_data/stage/chr@/1000G.EUR.chr@.qc.bim".into(),
-            ld_file: "reference/mixer_data/ld_mixer/1000G.EUR.chr@".into(),
-            extract_file: "reference/mixer_data/snps/g1000_eur_chr@.snps".into(),
-            chr2use: default_chr2use(),
-            seed: default_seed(),
-            diffevo_fast_repeats: default_diffevo_repeats(),
-            fast_run: default_fast_run(),
-            kmax_pdf: default_kmax_pdf(),
-            downsample_factor: default_downsample_factor(),
-        };
+        let spec: BivariateMixerNodeSpec = serde_json::from_str("{}").unwrap();
+        assert_eq!(spec.reference, "g1000_eur");
+        let error =
+            serde_json::from_str::<BivariateMixerNodeSpec>(r#"{"bim_file":"x"}"#).unwrap_err();
+        assert!(error.to_string().contains("unknown field `bim_file`"));
+
         let node = BivariateMixerNode::new(spec);
         assert_eq!(node.kind(), "bivariate_mixer");
         assert_eq!(node.ports().input_ports().len(), 4);
@@ -868,5 +851,80 @@ mod tests {
         assert!((r.pi12 - 0.0003).abs() < 1e-10);
         assert!((r.rho_beta - 0.85).abs() < 1e-6);
         assert!((r.dice - 2.0 * 0.0003 / (0.001 + 0.005 + 2.0 * 0.0003)).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn fit2_runs_against_deployed_reference_bundle() {
+        let fixture_root = std::path::Path::new("/mnt/disk3/gsa-mixer/precimed/mixer-test/data");
+        if !fixture_root.join("trait1.sumstats.gz").is_file()
+            || !fixture_root.join("trait2.sumstats.gz").is_file()
+            || !crate::mixer_common::resolve_reference("g1000_eur").is_ok()
+        {
+            return;
+        }
+
+        let ctx = datafusion::prelude::SessionContext::new();
+        let options = || CsvReadOptions::new().has_header(true).delimiter(b'\t');
+        let trait1 = ctx
+            .read_csv(
+                fixture_root.join("trait1.sumstats.gz").to_str().unwrap(),
+                options(),
+            )
+            .await
+            .unwrap();
+        let trait2 = ctx
+            .read_csv(
+                fixture_root.join("trait2.sumstats.gz").to_str().unwrap(),
+                options(),
+            )
+            .await
+            .unwrap();
+
+        let fit1 = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new(PARAM_PI, DataType::Float64, false),
+                Field::new(PARAM_SB, DataType::Float64, false),
+                Field::new(PARAM_SZ, DataType::Float64, false),
+            ])),
+            vec![
+                Arc::new(Float64Array::from(vec![0.000786])),
+                Arc::new(Float64Array::from(vec![0.08354])),
+                Arc::new(Float64Array::from(vec![1.07528])),
+            ],
+        )
+        .unwrap();
+        let fit1_1 = ctx.read_batch(fit1.clone()).unwrap();
+        let fit1_2 = ctx.read_batch(fit1).unwrap();
+
+        let mut node = BivariateMixerNode::new(BivariateMixerNodeSpec {
+            reference: "g1000_eur".into(),
+            chr2use: "21-22".into(),
+            seed: 123,
+            diffevo_fast_repeats: 2,
+            fast_run: true,
+            kmax_pdf: 10,
+            downsample_factor: 1000,
+        });
+        let outputs = node
+            .execute(
+                &NodeCtx {
+                    runtime_env: ctx.runtime_env(),
+                    opendal: None,
+                    global_sem: None,
+                },
+                &[
+                    NodeInput::new_dataframe(0, trait1),
+                    NodeInput::new_dataframe(1, trait2),
+                    NodeInput::new_dataframe(2, fit1_1),
+                    NodeInput::new_dataframe(3, fit1_2),
+                ],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
+            1
+        );
     }
 }

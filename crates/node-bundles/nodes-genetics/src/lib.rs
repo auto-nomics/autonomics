@@ -8,6 +8,7 @@ pub mod hdl_l_scan;
 pub mod lava;
 pub mod magma;
 pub mod magma_kegg;
+pub(crate) mod mixer_common;
 pub mod mtag;
 pub mod susie_rss;
 pub mod univariate_mixer;

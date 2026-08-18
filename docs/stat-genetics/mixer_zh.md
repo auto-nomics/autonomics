@@ -1,25 +1,30 @@
-# MiXeR —— 因果混合模型 (`mixer`)
+# MiXeR
 
-[English](mixer.md) | [中文](mixer_zh.md)
+MiXeR 对 GWAS 汇总统计拟合单变量（`fit1`）和双变量（`fit2`）
+spike-and-slab 因果混合模型。Autonomics 直接使用原始 gsa-MiXeR v2.2.1
+Python/C++ 引擎，以保证数值保真，而不是在 Rust 中重新实现优化器和代价函数。
 
-MiXeR 模型（Holland et al. 2020, _PLoS Genetics_）的纯 Rust 重新实现：面向 GWAS 汇总统计的单变量（`fit1`）和双变量（`fit2`）spike-and-slab 因果混合模型。
+## 节点
 
-## 单变量（`fit1`）
+`univariate_mixer` 接收一个包含 `rsid`、`A1`、`A2`、`N`、`Z` 列的汇总统计表，
+运行 `mixer.py fit1`，返回包含 `pi`、`sig2_beta`、`sig2_zero`、`h2`、因果变异
+数量、AIC、BIC 和 cost 的单行结果。
 
-通过高斯矩匹配代价函数拟合三个参数（π 多基因性、σ²_β 可发现性、σ²_zero 截距）。优化策略：差分进化 × N 次重复 → Nelder-Mead 精修。与原始 C++ 实现的金标准交叉验证，所有参数偏差 < 0.2%。
+`bivariate_mixer` 接收两个 trait 的汇总统计以及各自 fit1 参数，运行
+`mixer.py fit2`，返回共享/特异多基因性、遗传相关、Dice、两个 h2 和 cost。
 
-## 充分统计量压缩
+## Reference Bundle
 
-LD 矩阵在拟合前被折叠为两个每 SNP 标量（`m1`/`m2`），将 O(nnz) 的 CSR 压缩为 O(n_snp)。此后每次代价评估为 O(1)，使优化过程中约 10^4 次代价评估无需触碰 LD。
+两个节点都使用语义化 `reference` ID，默认为 `g1000_eur`：
 
-## 两种加权模式
+```text
+/mnt/data/mixer/resources/g1000_eur/bundle.json
+```
 
-- **LdScore** —— 单遍，`1/(1+Σr²)`，无需 CSR
-- **Randprune** —— 与原始 C++ `std::mt19937_64` 位精确一致
+bundle 记录 gsa-MiXeR 源码 revision、GRCh37/EUR 元数据、逐染色体 `.bim`、
+LD 和 tag-SNP 模板路径，以及 `libbgmg.so` 的 SHA-256。DAG spec 不暴露裸
+engine 和 panel 路径。
 
-## DAG 节点
-
-作为 `univariate_mixer` 和 `bivariate_mixer` 节点类型暴露（`data-engine/nodes/univariate_mixer.rs`）。两阶段流水线：
-
-1. 离线 `precompute_tags` 生成包含每 tag 充分统计量的 VFS 表（`eur_tagsuff`）
-2. 运行时节点加载汇总统计，按 rsid 与 tagsuff 连接，并调用 `fit1`
+容器将资源根目录挂载到相同主机路径，并使用带 NumPy、SciPy、pandas、Boost
+和 OpenMP 运行库的管理式 Python。部署可通过 `MIXER_RESOURCE_ROOT` 和
+`MIXER_PYTHON` 覆盖默认值。

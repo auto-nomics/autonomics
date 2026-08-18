@@ -46,6 +46,9 @@ pub enum UnivariateMixerError {
 
     #[error("univariate_mixer json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("univariate_mixer reference bundle error: {0}")]
+    ReferenceBundle(String),
 }
 
 impl ::dag_core::dag::NodeError for UnivariateMixerError {
@@ -100,25 +103,11 @@ fn output_schema() -> SchemaRef {
 /// 忠实移植版：通过 subprocess 调用原版 `mixer.py fit1`。
 /// 所有路径参数指向 `reference/mixer_data/` 下的预计算文件。
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UnivariateMixerNodeSpec {
-    /// gsa-mixer 引擎根目录（包含 `precimed/mixer.py` 和 `libbgmg.so`）。
-    /// 典型值：`"reference/mixer_data/engine"`
-    ///
-    /// The subprocess uses `<mixer_home>/.venv/bin/python` by default;
-    /// set `MIXER_PYTHON` to use another interpreter.
-    pub mixer_home: String,
-
-    /// `.bim` 文件模板（`@` 为染色体占位符）。
-    /// 典型值：`"reference/mixer_data/stage/chr@/1000G.EUR.chr@.qc.bim"`
-    pub bim_file: String,
-
-    /// `.ld` 文件模板（`@` 为染色体占位符）。
-    /// 典型值：`"reference/mixer_data/ld_mixer/1000G.EUR.chr@"`
-    pub ld_file: String,
-
-    /// `.snps` extract 文件模板（`@` 为染色体占位符）。
-    /// 典型值：`"reference/mixer_data/snps/g1000_eur_chr@.snps"`
-    pub extract_file: String,
+    /// Deployed MiXeR reference bundle ID. Defaults to `g1000_eur`.
+    #[serde(default = "crate::mixer_common::default_reference")]
+    pub reference: String,
 
     /// 参与拟合的染色体范围，传给 `--chr2use`。
     /// 典型值：`"1-22"` 或 `"21-22"`
@@ -243,18 +232,16 @@ impl NodeFactory for UnivariateMixerNodeFactory {
             "# MiXeR univariate analysis (gsa-mixer subprocess)".to_string(),
             "tmp_sumstats <- tempfile(fileext = '.sumstats.gz')".to_string(),
             format!("data.table::fwrite({input}, tmp_sumstats, sep = '\\t')"),
-            format!(
-                "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='{}/.venv/bin/python')",
-                s.mixer_home
-            ),
+            "mixer_python <- Sys.getenv('MIXER_PYTHON', unset='<mixer_bundle_python>')".to_string(),
             "system2(mixer_python, c(".to_string(),
-            format!("  '{}/precimed/mixer.py', 'fit1',", s.mixer_home),
+            "  '<mixer_bundle_home>/precimed/mixer.py', 'fit1',".to_string(),
             format!(
-                "  '--bim-file', '{}', '--ld-file', '{}',",
-                s.bim_file, s.ld_file
+                "  '--bim-file', '<mixer_bundle:{}>/bim_template>',",
+                s.reference
             ),
-            format!("  '--lib', '{}/libbgmg.so',", s.mixer_home),
-            format!("  '--extract', '{}',", s.extract_file),
+            "  '--ld-file', '<mixer_bundle:ld_template>',".to_string(),
+            "  '--lib', '<mixer_bundle_home>/libbgmg.so',".to_string(),
+            "  '--extract', '<mixer_bundle:extract_template>',".to_string(),
             "  '--trait1-file', tmp_sumstats,".to_string(),
             format!("  '--chr2use', '{}',", s.chr2use),
             format!("  '--seed', '{}',", s.seed),
@@ -345,21 +332,24 @@ impl DagNode for UnivariateMixerNode {
         reporter.info(format!("wrote {n_snp} SNPs to {}", sumstats_path.display()));
 
         // ── 3. Build mixer.py command line ─────────────────────────────
-        let mixer_py = format!("{}/precimed/mixer.py", self.spec.mixer_home);
-        let lib_path = format!("{}/libbgmg.so", self.spec.mixer_home);
+        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
+            .map_err(UnivariateMixerError::ReferenceBundle)?;
+        let mixer_py = bundle.mixer_home.join("precimed").join("mixer.py");
+        let lib_path = bundle.mixer_home.join("libbgmg.so");
         let out_prefix = tmp_dir.join("result");
 
-        let mut cmd = std::process::Command::new(mixer_python_executable(&self.spec.mixer_home));
+        let mut cmd =
+            std::process::Command::new(crate::mixer_common::python_executable(&bundle.mixer_home));
         cmd.arg(&mixer_py)
             .arg("fit1")
             .arg("--bim-file")
-            .arg(&self.spec.bim_file)
+            .arg(&bundle.bim_template)
             .arg("--ld-file")
-            .arg(&self.spec.ld_file)
+            .arg(&bundle.ld_template)
             .arg("--lib")
             .arg(&lib_path)
             .arg("--extract")
-            .arg(&self.spec.extract_file)
+            .arg(&bundle.extract_template)
             .arg("--trait1-file")
             .arg(&sumstats_path)
             .arg("--chr2use")
@@ -423,7 +413,7 @@ impl DagNode for UnivariateMixerNode {
         ));
 
         // ── 5. Parse result JSON ───────────────────────────────────────
-        let json_path = format!("{}.json", out_prefix.display());
+        let json_path = format!("{}.fit1.json", out_prefix.display());
         let json_str =
             std::fs::read_to_string(&json_path).map_err(|e| UnivariateMixerError::Step {
                 context: format!("read result json ({})", json_path),
@@ -714,10 +704,6 @@ async fn write_sumstats(
     Ok(())
 }
 
-fn mixer_python_executable(mixer_home: &str) -> String {
-    std::env::var("MIXER_PYTHON").unwrap_or_else(|_| format!("{mixer_home}/.venv/bin/python"))
-}
-
 /// Count lines in a plain file (for reporting).
 fn count_lines(path: &std::path::Path) -> usize {
     let content = match std::fs::read_to_string(path) {
@@ -734,6 +720,7 @@ fn count_lines(path: &std::path::Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::prelude::CsvReadOptions;
 
     #[test]
     fn node_type_is_stable() {
@@ -742,18 +729,13 @@ mod tests {
 
     #[test]
     fn spec_defaults() {
-        let spec = UnivariateMixerNodeSpec {
-            mixer_home: "reference/mixer_data/engine".into(),
-            bim_file: "reference/mixer_data/stage/chr@/1000G.EUR.chr@.qc.bim".into(),
-            ld_file: "reference/mixer_data/ld_mixer/1000G.EUR.chr@".into(),
-            extract_file: "reference/mixer_data/snps/g1000_eur_chr@.snps".into(),
-            chr2use: default_chr2use(),
-            seed: default_seed(),
-            diffevo_fast_repeats: default_diffevo_repeats(),
-            fast_run: default_fast_run(),
-            kmax_pdf: default_kmax_pdf(),
-            downsample_factor: default_downsample_factor(),
-        };
+        let spec: UnivariateMixerNodeSpec = serde_json::from_str("{}").unwrap();
+        assert_eq!(spec.reference, "g1000_eur");
+        assert_eq!(spec.chr2use, "1-22");
+        let error =
+            serde_json::from_str::<UnivariateMixerNodeSpec>(r#"{"mixer_home":"x"}"#).unwrap_err();
+        assert!(error.to_string().contains("unknown field `mixer_home`"));
+
         let node = UnivariateMixerNode::new(spec);
         assert_eq!(node.kind(), "univariate_mixer");
         assert_eq!(node.ports().input_ports().len(), 1);
@@ -823,5 +805,49 @@ mod tests {
         assert!((result.h2 - 2.1).abs() < 1e-10);
         assert!((result.nc - 9588.0).abs() < 1e-10);
         assert!((result.nc_p9 - 1234.0).abs() < 1e-10);
+    }
+
+    #[tokio::test]
+    async fn fit1_runs_against_deployed_reference_bundle() {
+        let fixture = std::path::Path::new(
+            "/mnt/disk3/gsa-mixer/precimed/mixer-test/data/trait1.sumstats.gz",
+        );
+        if !fixture.is_file() || !crate::mixer_common::resolve_reference("g1000_eur").is_ok() {
+            return;
+        }
+
+        let ctx = datafusion::prelude::SessionContext::new();
+        let df = ctx
+            .read_csv(
+                fixture.to_str().unwrap(),
+                CsvReadOptions::new().has_header(true).delimiter(b'\t'),
+            )
+            .await
+            .unwrap();
+        let mut node = UnivariateMixerNode::new(UnivariateMixerNodeSpec {
+            reference: "g1000_eur".into(),
+            chr2use: "21-22".into(),
+            seed: 123,
+            diffevo_fast_repeats: 2,
+            fast_run: true,
+            kmax_pdf: 10,
+            downsample_factor: 1000,
+        });
+        let outputs = node
+            .execute(
+                &NodeCtx {
+                    runtime_env: ctx.runtime_env(),
+                    opendal: None,
+                    global_sem: None,
+                },
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
+            1
+        );
     }
 }
