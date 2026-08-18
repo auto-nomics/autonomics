@@ -193,6 +193,10 @@ The bundle records the gsa-MiXeR source revision, EUR/GRCh37 metadata,
 the bundled Python environment; the container uses its managed `/usr/bin/python3`
 with NumPy, SciPy, pandas, Boost, and OpenMP runtime packages.
 
+`susie_rss` reuses the same bundle for signed Pearson-r LD lookup. It selects the
+reference by semantic ID and does not expose raw engine or panel paths in DAG
+specs.
+
 ## KEGG data mount
 
 The local KEGG Parquet export is mounted read-only:

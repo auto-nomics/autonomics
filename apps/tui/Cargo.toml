@@ -24,6 +24,7 @@ kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
+tui-http = { path = "../../crates/tui-http" }
 chrono = { workspace = true }
 rusqlite = "0.40.1"
 pulldown-cmark = "0.13"

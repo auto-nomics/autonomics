@@ -8,6 +8,9 @@ bibliography library, all from a single `ratatui`-based binary.
 
 ## Features
 
+- **Local HTTP API** — starts with the TUI and exposes the versioned `/api/v1`
+  backend; bibliography management is the first module. See
+  [TUI HTTP API](tui-http-api_zh.md) (Chinese).
 - **Agent chat** — Streaming conversation with tool-calling agents built on
   `agentik-core`. Live Markdown rendering (with syntax highlighting via `syntect`),
   thinking deltas, per-turn token usage, background tool tasks, and a scrollable

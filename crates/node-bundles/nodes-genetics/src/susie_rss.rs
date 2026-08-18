@@ -1,8 +1,8 @@
-//! SuSiE-RSS DAG node — Bayesian fine-mappinging from GWAS summary statistics.
+//! SuSiE-RSS DAG node — Bayesian fine-mapping from GWAS summary statistics.
 //!
-//! Consumes GWAS z-scores (or bhat/shat) from the upstream port, reads the LD
-//! correlation matrix from the VFS `ld_matrix.eur_chr{N}` panel tables,
-//! runs [`susie::susie_rss`], and emits per-variant posterior inclusion
+//! Consumes GWAS z-scores (or bhat/shat) from the upstream port, resolves signed
+//! LD correlations from a versioned gsa-MiXeR reference panel, runs
+//! [`susie::susie_rss`], and emits per-variant posterior inclusion
 //! probabilities (PIPs), credible-set membership, and posterior moments.
 //!
 //! ```text
@@ -10,9 +10,8 @@
 //!   (snp, z, n, chrom)
 //! ```
 //!
-//! The LD matrix in VFS stores `unphased_r2` (squared correlations).
-//! Signed correlations are reconstructed as `sign(z_j × z_k) × √(r²_jk)`,
-//! the standard approximation when only r² is available from PLINK `--r2`.
+//! The reference stores signed Pearson correlations. LD direction is never
+//! inferred from GWAS z-score signs.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,6 +47,10 @@ pub enum SusieNodeError {
     EmptyInput,
     #[error("no SNPs overlapped between sumstats and LD panel")]
     NoLdOverlap,
+    #[error("SuSiE reference bundle error: {0}")]
+    ReferenceBundle(String),
+    #[error("signed LD query failed: {0}")]
+    LdQuery(String),
 }
 
 impl ::dag_core::dag::NodeError for SusieNodeError {
@@ -91,7 +94,11 @@ fn output_schema() -> SchemaRef {
 
 /// Spec for [`SusieRssNode`].
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SusieRssSpec {
+    /// Deployed signed-LD reference bundle ID. Defaults to `g1000_eur`.
+    #[serde(default = "default_reference")]
+    pub reference: String,
     /// Maximum number of non-zero effects (SuSiE L parameter). Default 10.
     #[serde(default = "default_l")]
     pub l: usize,
@@ -116,7 +123,7 @@ pub struct SusieRssSpec {
     /// z-score method: "wald" (PVE-adjusted) or "score" (already on σ²=1 scale).
     #[serde(default = "default_z_method")]
     pub z_method: String,
-    /// Minimum r² threshold for LD pairs from the VFS panel. Default 0.0
+    /// Minimum r² threshold for signed LD pairs. Default 0.0
     /// (all pairs used). Set higher (e.g. 0.05) to sparsify large regions.
     #[serde(default = "default_r2_min")]
     pub r2_min: f64,
@@ -133,6 +140,9 @@ pub struct SusieRssSpec {
 
 fn default_l() -> usize {
     10
+}
+fn default_reference() -> String {
+    crate::mixer_common::default_reference()
 }
 fn default_method() -> String {
     "optim".into()
@@ -192,11 +202,11 @@ impl NodeFactory for SusieRssNodeFactory {
         NODE_KIND
     }
     fn desc(&self) -> &'static str {
-        "SuSiE-RSS: Bayesian fine-mappinging from GWAS z-scores + VFS LD panel."
+        "SuSiE-RSS: Bayesian fine-mapping from GWAS z-scores + signed LD panel."
     }
     fn doc(&self) -> &'static str {
-        "Reads LD correlations from vfs.ld_matrix.eur_chr{N}, runs susie_rss, \
-         and outputs PIPs, credible-set membership, and posterior moments."
+        "Resolves a semantic signed-LD reference bundle, runs susie_rss, and \
+         outputs PIPs, credible-set membership, and posterior moments."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(SusieRssSpec)
@@ -229,8 +239,10 @@ impl NodeFactory for SusieRssNodeFactory {
         let code = vec![
             format!("# SuSiE fine-mapping via summary statistics"),
             format!("{z} <- {input}$z"),
-            format!("# NOTE: ref LD matrix R must be provided separately"),
-            format!("# {r_mat} <- <load LD correlation matrix for this region>"),
+            format!(
+                "# {r_mat} <- signed LD from MiXeR reference '{reference}'",
+                reference = s.reference
+            ),
             format!(
                 "{out} <- susie_rss(z = {z}, R = {r_mat}, L = {}, estimate_prior_method = \"{}\", estimate_residual_variance = {}, estimate_prior_variance = {}, coverage = {}, min_abs_corr = {}, scaled_prior_variance = {}, z_method = \"{}\"{n_arg}, max_iter = {})",
                 s.l,
@@ -344,104 +356,140 @@ async fn collect_input_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, Da
     Ok(batches)
 }
 
-// ─── LD matrix loading from VFS ──────────────────────────────────────────
+// ─── Signed LD lookup ────────────────────────────────────────────────────────
 
-/// LD pair from the VFS `ld_matrix` table.
 struct LdPair {
     id_a: String,
     id_b: String,
-    r2: f64,
+    r: f64,
 }
 
-/// Query the VFS LD matrix for one chromosome and return all pairs with
-/// r² ≥ `r2_min` that involve at least one SNP in `snp_set`.
-async fn load_ld_pairs(
-    ctx: &datafusion::prelude::SessionContext,
+const SUSIE_LD_QUERY_PY: &str = include_str!("susie_ld_query.py");
+
+fn allele_from_variant_id(snp: &str, allele_index: usize) -> Option<&str> {
+    let fields = snp.split(':').collect::<Vec<_>>();
+    if fields.len() < 4 {
+        return None;
+    }
+    fields.iter().rev().nth(1 - allele_index).copied()
+}
+
+/// Query signed Pearson-r pairs from the gsa-MiXeR engine.
+async fn load_signed_ld_pairs(
+    bundle: &crate::mixer_common::MixerReferenceBundle,
     chrom: i64,
     r2_min: f64,
-    snp_set: &std::collections::HashSet<String>,
-    ld_base: Option<&str>,
+    snps: &[String],
+    z: &[f64],
+    a1: Option<&[String]>,
+    a2: Option<&[String]>,
+    n: Option<f64>,
 ) -> Result<Vec<LdPair>, SusieNodeError> {
-    let table_sql = match ld_base {
-        Some(base) => format!("{base}{chrom}"),
-        None => {
-            let table_name = format!("ld_matrix_eur_chr{chrom}");
-            nodes_ldsc::ldsc_common::register_listing_table(
-                ctx,
-                &table_name,
-                &format!("vfs:///data/oss/ld_matrix/eur_chr{chrom}/"),
-            )
-            .await
-            .map_err(|e| {
-                SusieNodeError::Df(datafusion::error::DataFusionError::External(
-                    e.to_string().into(),
-                ))
-            })?;
-            table_name
-        }
-    };
-    let sql = format!(
-        "SELECT id_a, id_b, unphased_r2 \
-         FROM {table_sql} \
-         WHERE unphased_r2 >= {r2_min}"
-    );
-    let df = ctx.sql(&sql).await.map_err(|e| {
-        SusieNodeError::Df(datafusion::error::DataFusionError::External(
-            e.to_string().into(),
-        ))
-    })?;
-    let batches = df.collect().await.map_err(|e| {
-        SusieNodeError::Df(datafusion::error::DataFusionError::External(
-            e.to_string().into(),
-        ))
-    })?;
+    let work = tempfile::tempdir()
+        .map_err(|e| SusieNodeError::LdQuery(format!("create LD query directory: {e}")))?;
+    let script_path = work.path().join("susie_ld_query.py");
+    let query_path = work.path().join("locus.sumstats");
+    std::fs::write(&script_path, SUSIE_LD_QUERY_PY)
+        .map_err(|e| SusieNodeError::LdQuery(format!("write embedded LD query: {e}")))?;
 
+    let mut query = String::from("SNP\tA1\tA2\tN\tZ\n");
+    for (i, (snp, z_value)) in snps.iter().zip(z).enumerate() {
+        let sample_n = n.unwrap_or(500.0);
+        let allele1 = a1
+            .and_then(|values| values.get(i))
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| allele_from_variant_id(snp, 0));
+        let allele2 = a2
+            .and_then(|values| values.get(i))
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| allele_from_variant_id(snp, 1));
+        let (Some(allele1), Some(allele2)) = (allele1, allele2) else {
+            return Err(SusieNodeError::LdQuery(format!(
+                "missing a1/a2 for SNP '{snp}'; provide allele columns or a chr:pos:a1:a2 ID"
+            )));
+        };
+        query.push_str(&format!(
+            "{snp}\t{allele1}\t{allele2}\t{sample_n:.9}\t{z_value:.17}\n"
+        ));
+    }
+    std::fs::write(&query_path, query)
+        .map_err(|e| SusieNodeError::LdQuery(format!("write locus query: {e}")))?;
+
+    let mut cmd =
+        std::process::Command::new(crate::mixer_common::python_executable(&bundle.mixer_home));
+    cmd.arg(&script_path)
+        .arg("--engine-home")
+        .arg(&bundle.mixer_home)
+        .arg("--lib")
+        .arg(bundle.mixer_home.join("libbgmg.so"))
+        .arg("--bim-file")
+        .arg(&bundle.bim_template)
+        .arg("--ld-file")
+        .arg(&bundle.ld_template)
+        .arg("--chrom")
+        .arg(chrom.to_string())
+        .arg("--trait1-file")
+        .arg(&query_path)
+        .arg("--r2-min")
+        .arg(r2_min.to_string())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::task::spawn_blocking(move || cmd.output())
+        .await
+        .map_err(|e| SusieNodeError::LdQuery(format!("join LD query: {e}")))?
+        .map_err(|e| SusieNodeError::LdQuery(format!("run LD query: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(SusieNodeError::LdQuery(format!(
+            "exit {}: {}",
+            output.status.code().unwrap_or(-1),
+            stderr.trim_end()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut pairs = Vec::new();
-    for batch in &batches {
-        let a_ids = batch
-            .column_by_name("id_a")
-            .ok_or_else(|| missing("id_a"))?;
-        let b_ids = batch
-            .column_by_name("id_b")
-            .ok_or_else(|| missing("id_b"))?;
-        let r2s = batch
-            .column_by_name("unphased_r2")
-            .ok_or_else(|| missing("unphased_r2"))?;
-
-        for i in 0..batch.num_rows() {
-            if r2s.is_null(i) {
-                continue;
-            }
-            let r2 = arr_f64(r2s.as_ref(), i);
-            let a = dag_core::node::string_opt_values(a_ids.as_ref())
-                .and_then(|v| v.get(i).cloned().flatten())
-                .unwrap_or_default();
-            let b = dag_core::node::string_opt_values(b_ids.as_ref())
-                .and_then(|v| v.get(i).cloned().flatten())
-                .unwrap_or_default();
-            // Only keep pairs where at least one endpoint is in our SNP set.
-            // The other endpoint may or may not be in the set.
-            if snp_set.contains(&a) || snp_set.contains(&b) {
-                pairs.push(LdPair {
-                    id_a: a,
-                    id_b: b,
-                    r2,
-                });
-            }
+    let mut matched = std::collections::HashSet::new();
+    for line in stdout.lines() {
+        if let Some(id) = line.strip_prefix("#matched\t") {
+            matched.insert(id.to_string());
+            continue;
         }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 3 {
+            return Err(SusieNodeError::LdQuery(format!(
+                "invalid LD query row: {line}"
+            )));
+        }
+        let r = fields[2]
+            .parse::<f64>()
+            .map_err(|e| SusieNodeError::LdQuery(format!("parse LD r '{line}': {e}")))?;
+        pairs.push(LdPair {
+            id_a: fields[0].to_string(),
+            id_b: fields[1].to_string(),
+            r,
+        });
+    }
+    let missing: Vec<&String> = snps.iter().filter(|snp| !matched.contains(*snp)).collect();
+    if !missing.is_empty() {
+        return Err(SusieNodeError::LdQuery(format!(
+            "{} input SNP(s) did not align to the signed-LD reference (first: {}); \
+             check SNP ID and A1/A2 orientation",
+            missing.len(),
+            missing.first().map(|value| value.as_str()).unwrap_or("")
+        )));
     }
     Ok(pairs)
 }
 
-/// Build a p×p correlation matrix R from LD r² pairs and z-scores.
+/// Build a p×p correlation matrix R from signed LD pairs.
 ///
 /// R[j,j] = 1.0 for all variants.
-/// R[j,k] = sign(z_j × z_k) × √(r²_jk) for off-diagonal entries.
-///
-/// The sign approximation uses z-score concordance: if two variants have the
-/// same z-score sign, they are positively correlated; opposite signs imply
-/// negative correlation.
-fn build_corr_matrix(snps: &[String], z: &[f64], pairs: &[LdPair]) -> Mat<f64> {
+/// R[j,k] is the signed Pearson correlation stored by the reference.
+fn build_corr_matrix(snps: &[String], pairs: &[LdPair]) -> Mat<f64> {
     let p = snps.len();
     let mut r = Mat::zeros(p, p);
 
@@ -460,18 +508,7 @@ fn build_corr_matrix(snps: &[String], z: &[f64], pairs: &[LdPair]) -> Mat<f64> {
         if a == b {
             continue;
         }
-        let abs_r = pair.r2.sqrt();
-        // Sign from z-score concordance
-        let za = z[a];
-        let zb = z[b];
-        let sign = if za == 0.0 || zb == 0.0 {
-            1.0 // neutral → positive
-        } else if (za > 0.0) == (zb > 0.0) {
-            1.0
-        } else {
-            -1.0
-        };
-        let val = sign * abs_r;
+        let val = pair.r;
         r[(a, b)] = val;
         r[(b, a)] = val;
     }
@@ -521,6 +558,8 @@ impl DagNode for SusieRssNode {
             reporter.error("susie_rss: abort — missing 'z' column");
             missing("z")
         })?;
+        let a1_col = col_str(&batches, "a1");
+        let a2_col = col_str(&batches, "a2");
         let n_col = col_f64(&batches, "n");
         let chrom_col = col_i64(&batches, "chrom");
 
@@ -564,19 +603,44 @@ impl DagNode for SusieRssNode {
         let p = keep.len();
         let snps_filt: Vec<String> = keep.iter().map(|&i| snp[i].clone()).collect();
         let z_filt: Vec<f64> = keep.iter().map(|&i| z[i]).collect();
+        let unique_snps = snps_filt.iter().collect::<std::collections::HashSet<_>>();
+        if unique_snps.len() != p {
+            return Err(SusieNodeError::Susie(format!(
+                "duplicate SNP IDs in input ({unique_snps_len} unique of {p})",
+                unique_snps_len = unique_snps.len()
+            ))
+            .into());
+        }
+        let a1_filt = a1_col
+            .as_ref()
+            .map(|values| keep.iter().map(|&i| values[i].clone()).collect::<Vec<_>>());
+        let a2_filt = a2_col
+            .as_ref()
+            .map(|values| keep.iter().map(|&i| values[i].clone()).collect::<Vec<_>>());
         reporter.info(format!("susie_rss: {p} variants with valid z-scores"));
 
-        // ── load LD from VFS and build correlation matrix ──
+        // ── load signed LD from the reference bundle ──
         let ctx = node_ctx.session();
-        let snp_set: std::collections::HashSet<String> = snps_filt.iter().cloned().collect();
+        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
+            .map_err(SusieNodeError::ReferenceBundle)?;
         reporter.info(format!(
-            "susie_rss: querying LD matrix vfs.ld_matrix.eur_chr{chrom} (r² ≥ {})…",
-            self.spec.r2_min
+            "susie_rss: querying signed LD reference '{}' for chromosome {chrom} (r² ≥ {})…",
+            self.spec.reference, self.spec.r2_min
         ));
-        let ld_pairs = load_ld_pairs(&ctx, chrom, self.spec.r2_min, &snp_set, None).await?;
+        let ld_pairs = load_signed_ld_pairs(
+            &bundle,
+            chrom,
+            self.spec.r2_min,
+            &snps_filt,
+            &z_filt,
+            a1_filt.as_deref(),
+            a2_filt.as_deref(),
+            n,
+        )
+        .await?;
         reporter.info(format!("susie_rss: loaded {} LD pairs", ld_pairs.len()));
 
-        let r = build_corr_matrix(&snps_filt, &z_filt, &ld_pairs);
+        let r = build_corr_matrix(&snps_filt, &ld_pairs);
 
         // Check LD overlap
         let n_offdiag: usize = (0..p)
@@ -584,7 +648,7 @@ impl DagNode for SusieRssNode {
             .filter(|&(i, j)| i != j && r[(i, j)] != 0.0)
             .count();
         if p > 1 && n_offdiag == 0 {
-            reporter.warn("susie_rss: no LD pairs overlapped with input SNPs — R is diagonal");
+            return Err(SusieNodeError::NoLdOverlap.into());
         }
 
         // ── build susie input and run ──
@@ -716,6 +780,7 @@ mod tests {
     #[test]
     fn node_constructs() {
         let spec = SusieRssSpec {
+            reference: default_reference(),
             l: 10,
             estimate_prior_method: "optim".into(),
             estimate_residual_variance: false,
@@ -738,25 +803,96 @@ mod tests {
     #[test]
     fn build_corr_matrix_signs() {
         let snps = vec!["rs1".into(), "rs2".into(), "rs3".into()];
-        let z = vec![5.0, 4.0, -3.0];
         let pairs = vec![
             LdPair {
                 id_a: "rs1".into(),
                 id_b: "rs2".into(),
-                r2: 0.81,
+                r: 0.9,
             },
             LdPair {
                 id_a: "rs1".into(),
                 id_b: "rs3".into(),
-                r2: 0.64,
+                r: -0.8,
             },
         ];
-        let r = build_corr_matrix(&snps, &z, &pairs);
-        // rs1-rs2: same sign → positive correlation
+        let r = build_corr_matrix(&snps, &pairs);
+        // Signed reference correlations are preserved exactly.
         assert!((r[(0, 1)] - 0.9).abs() < 1e-10);
-        // rs1-rs3: opposite sign → negative correlation
         assert!((r[(0, 2)] - (-0.8)).abs() < 1e-10);
         // diagonal = 1
         assert!((r[(1, 1)] - 1.0).abs() < 1e-10);
+    }
+
+    #[tokio::test]
+    async fn runs_against_signed_reference_bundle() {
+        let bundle = match crate::mixer_common::resolve_reference(&default_reference()) {
+            Ok(bundle) => bundle,
+            Err(_) => return,
+        };
+        let bim_path = bundle.bim_template.replace('@', "21");
+        let content = std::fs::read_to_string(&bim_path).unwrap();
+        let variants = content
+            .lines()
+            .take(50)
+            .map(|line| line.split_whitespace().nth(1).unwrap().to_string())
+            .collect::<Vec<_>>();
+        let z = variants
+            .iter()
+            .enumerate()
+            .map(|(i, _)| (i as f64 / 7.0).sin() * 4.0)
+            .collect::<Vec<_>>();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("snp", DataType::Utf8, false),
+            Field::new("chrom", DataType::Int64, true),
+            Field::new("z", DataType::Float64, true),
+            Field::new("n", DataType::Float64, true),
+        ]));
+        let chrom = vec![21_i64; variants.len()];
+        let sample_n = vec![503.0; variants.len()];
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(variants)),
+                Arc::new(Int64Array::from(chrom)),
+                Arc::new(Float64Array::from(z)),
+                Arc::new(Float64Array::from(sample_n)),
+            ],
+        )
+        .unwrap();
+        let ctx = datafusion::prelude::SessionContext::new();
+        let input = ctx.read_batch(batch).unwrap();
+
+        let mut node = SusieRssNode::new(SusieRssSpec {
+            reference: default_reference(),
+            l: 5,
+            estimate_prior_method: "optim".into(),
+            estimate_residual_variance: false,
+            estimate_prior_variance: true,
+            coverage: 0.95,
+            min_abs_corr: 0.5,
+            scaled_prior_variance: 0.2,
+            z_method: "wald".into(),
+            r2_min: 0.01,
+            n: Some(503.0),
+            check_null_threshold: 0.0,
+            max_iter: 20,
+        });
+        let outputs = node
+            .execute(
+                &NodeCtx {
+                    runtime_env: ctx.runtime_env(),
+                    opendal: None,
+                    global_sem: None,
+                },
+                &[NodeInput::new_dataframe(0, input)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
+            50
+        );
     }
 }

@@ -100,6 +100,8 @@ pub struct App {
     _runtime: Option<tokio::runtime::Runtime>,
     /// Handle for spawning background tasks from within the sync event loop.
     runtime_handle: tokio::runtime::Handle,
+    /// Local HTTP API backend, shut down with the TUI process.
+    http_server: Option<tui_http::HttpServerHandle>,
     conn: Connection,
     /// Holds clipboard ownership on platforms where dropping it clears the clipboard.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
@@ -229,6 +231,18 @@ impl App {
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();
+        let http_server = Self::start_http_server(&runtime, host.as_ref());
+        if let Some(ref server) = http_server {
+            state.toasts.info(
+                "HTTP API started",
+                Some(format!("http://{}", server.addr())),
+            );
+        } else {
+            state.toasts.error(
+                "HTTP API unavailable",
+                Some("See logs for the bind or runtime error".to_owned()),
+            );
+        }
 
         Self {
             state,
@@ -236,6 +250,7 @@ impl App {
             handles: Vec::new(),
             _runtime: Some(runtime),
             runtime_handle: runtime_handle.clone(),
+            http_server,
             conn,
             clipboard_lease: None,
             app_event_rx,
@@ -430,6 +445,14 @@ impl App {
         let runtime = self._runtime.take().expect("runtime already consumed");
         let result = runtime.block_on(self.run_loop(&mut terminal));
 
+        // Stop accepting external API requests before agents and shared
+        // infrastructure begin shutdown.
+        if let Some(server) = self.http_server.take() {
+            if let Err(error) = runtime.block_on(server.shutdown()) {
+                tracing::warn!(error = %error, "failed to shut down HTTP API server");
+            }
+        }
+
         // Gracefully shut down all agents: pause sessions, persist
         // snapshots, flush WAL. Must be inside `block_on` so the agent
         // tasks can run to completion before the runtime is dropped.
@@ -442,6 +465,42 @@ impl App {
 
         result?;
         Ok(())
+    }
+
+    fn start_http_server(
+        runtime: &tokio::runtime::Runtime,
+        host: Option<&RuntimeHost>,
+    ) -> Option<tui_http::HttpServerHandle> {
+        let Some(host) = host else {
+            tracing::warn!("HTTP API disabled: runtime host unavailable");
+            return None;
+        };
+
+        let addr = std::env::var("AUTONOMICS_HTTP_API_ADDR")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| tui_http::DEFAULT_HTTP_API_ADDR.to_owned());
+        let shared = host.infra().bib.as_ref().clone();
+
+        match runtime.block_on(async { tui_http::start(tui_http::api_router(shared), &addr).await })
+        {
+            Ok(server) => {
+                tracing::info!(
+                    addr = %server.addr(),
+                    "TUI HTTP API started at http://{}",
+                    server.addr()
+                );
+                Some(server)
+            }
+            Err(error) => {
+                tracing::error!(
+                    addr = %addr,
+                    error = %error,
+                    "failed to start TUI HTTP API"
+                );
+                None
+            }
+        }
     }
 
     /// Async main loop driven by `tokio::select!` with a fixed-rate render tick.
