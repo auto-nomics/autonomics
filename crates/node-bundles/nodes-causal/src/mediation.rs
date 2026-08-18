@@ -237,7 +237,7 @@ impl DagNode for MediationNode {
             .first()
             .ok_or(MediationError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

@@ -14,6 +14,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::dag::{DagError, graph::PortOutputs};
+use crate::value::{FileRef, NodeValue, PortType};
 
 /// Unique identifier for a node in the DAG.
 pub type NodeId = String;
@@ -38,12 +39,19 @@ pub const DEFAULT_PORT: &str = "default";
 pub struct Port {
     pub index: PortId,
     pub schema: Option<SchemaRef>,
+    pub data_type: PortType,
+    pub required: bool,
 }
 
 impl Port {
     /// An untyped port (schema discovered at runtime).
     pub fn new(index: PortId, schema: Option<SchemaRef>) -> Self {
-        Self { index, schema }
+        Self {
+            index,
+            schema,
+            data_type: PortType::DataFrame,
+            required: true,
+        }
     }
 
     /// A port with a known schema.
@@ -51,7 +59,19 @@ impl Port {
         Self {
             index,
             schema: Some(schema),
+            data_type: PortType::DataFrame,
+            required: true,
         }
+    }
+
+    pub fn with_data_type(mut self, data_type: PortType) -> Self {
+        self.data_type = data_type;
+        self
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.required = false;
+        self
     }
 
     // /// Convenience: the unnamed default port.
@@ -81,6 +101,8 @@ impl Serialize for Port {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("index", &self.index)?;
+        map.serialize_entry("data_type", &self.data_type)?;
+        map.serialize_entry("required", &self.required)?;
         match &self.schema {
             // A typed port: emit its columns so consumers can validate edge
             // compatibility without instantiating the node.
@@ -128,6 +150,24 @@ impl Ports {
         let length = self.ports.len();
         self.ports
             .insert(length as PortId, Port::new(length as PortId, schema));
+    }
+
+    pub fn add_port_of_type(&mut self, schema: Option<SchemaRef>, data_type: PortType) {
+        let length = self.ports.len();
+        self.ports.insert(
+            length as PortId,
+            Port::new(length as PortId, schema).with_data_type(data_type),
+        );
+    }
+
+    pub fn add_optional_port_of_type(&mut self, data_type: PortType) {
+        let length = self.ports.len();
+        self.ports.insert(
+            length as PortId,
+            Port::new(length as PortId, None)
+                .with_data_type(data_type)
+                .optional(),
+        );
     }
 
     /// Look up a port by its numeric index.
@@ -183,7 +223,35 @@ pub struct NodeInput {
     /// looks up its inputs by this index to identify which slot each DataFrame
     /// belongs to.
     pub port: PortId,
-    pub data: DataFrame,
+    pub data: NodeValue,
+}
+
+impl NodeInput {
+    pub fn new_dataframe(port: PortId, df: DataFrame) -> Self {
+        Self {
+            port,
+            data: NodeValue::DataFrame(df),
+        }
+    }
+
+    pub fn file(port: PortId, file: FileRef) -> Self {
+        Self {
+            port,
+            data: NodeValue::File(file),
+        }
+    }
+
+    pub fn dataframe(&self) -> Result<&DataFrame, DagError> {
+        self.data.as_dataframe()
+    }
+
+    pub fn dataframe_value(&self) -> Result<&DataFrame, DagError> {
+        self.dataframe()
+    }
+
+    pub fn file_value(&self) -> Result<&FileRef, DagError> {
+        self.data.as_file()
+    }
 }
 
 /// Static per-node port layout: declared input/output ports.
@@ -221,9 +289,32 @@ impl NodePorts {
         self
     }
 
+    pub fn add_output_port_of_type(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+    ) -> Self {
+        self.output_ports.add_port_of_type(schema, data_type);
+        self
+    }
+
     /// Append an input port with the given schema (builder-style).
     pub fn add_input_port(mut self, schema: Option<SchemaRef>) -> Self {
         self.input_ports.add_port(schema);
+        self
+    }
+
+    pub fn add_input_port_of_type(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+    ) -> Self {
+        self.input_ports.add_port_of_type(schema, data_type);
+        self
+    }
+
+    pub fn add_optional_input_port_of_type(mut self, data_type: PortType) -> Self {
+        self.input_ports.add_optional_port_of_type(data_type);
         self
     }
 

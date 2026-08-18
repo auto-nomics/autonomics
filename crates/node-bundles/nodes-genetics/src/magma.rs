@@ -546,7 +546,7 @@ impl DagNode for MagmaGeneNode {
         }
 
         // Collect the GWAS DataFrame into batches
-        let df = &inputs[0].data;
+        let df = inputs[0].dataframe()?;
         let batches = df.clone().collect().await.map_err(MagmaNodeError::from)?;
 
         // Extract rsid, pval, n from the batches
@@ -761,7 +761,7 @@ impl DagNode for MagmaSetNode {
             let staged = stage_vfs_file(node_ctx, raw_path).await?;
             magma::setanalysis::GeneRawData::read(staged.as_ref()).map_err(MagmaNodeError::from)?
         } else if !inputs.is_empty() {
-            gene_results_to_raw(&inputs[0].data).await?
+            gene_results_to_raw(inputs[0].dataframe()?).await?
         } else {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
                 "magma_set requires either gene_raw path or DataFrame input".into(),
@@ -1250,7 +1250,7 @@ mod tests {
             .await
             .expect("annotate should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 20, "should have 20 genes");
     }
@@ -1276,7 +1276,7 @@ mod tests {
 
         let batch = gwas_batch(rsids, pvals, 50000);
         let df = node_ctx().session().read_batch(batch).unwrap();
-        let input = vec![NodeInput { port: 0, data: df }];
+        let input = vec![NodeInput::new_dataframe(0, df)];
 
         let mut node = MagmaGeneNode::new(MagmaGeneConfig {
             gene_annot: vpath("annot.genes.annot"),
@@ -1296,7 +1296,7 @@ mod tests {
             .await
             .expect("gene analysis should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 20, "should have 20 genes");
 
@@ -1334,7 +1334,7 @@ mod tests {
             .await
             .expect("set analysis should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         // Should have 6 sets (SetAllGenes discarded as it contains all genes)
         assert_eq!(count, 6, "should have 6 gene sets");
@@ -1366,7 +1366,7 @@ mod tests {
             .await
             .expect("covar analysis should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 3, "should have 3 covariates");
     }
@@ -1388,7 +1388,7 @@ mod tests {
             .await
             .expect("meta analysis should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 20, "should have 20 genes");
     }
@@ -1437,14 +1437,14 @@ mod tests {
         let gene_res = gene_node
             .execute(
                 &ctx,
-                &[NodeInput { port: 0, data: df }],
+                &[NodeInput::new_dataframe(0, df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .expect("gene analysis should succeed");
 
         // Verify gene output
-        let gene_df = &gene_res[&0];
+        let gene_df = gene_res.dataframe(0).unwrap();
         let gene_count = gene_df.clone().count().await.unwrap();
         assert_eq!(gene_count, 20);
 
@@ -1462,7 +1462,7 @@ mod tests {
             .await
             .expect("set analysis should succeed");
 
-        let set_df = &set_res[&0];
+        let set_df = set_res.dataframe(0).unwrap();
         let set_count = set_df.clone().count().await.unwrap();
         assert_eq!(set_count, 6);
 

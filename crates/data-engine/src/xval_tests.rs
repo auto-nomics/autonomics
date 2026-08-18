@@ -1289,7 +1289,7 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
             .build(spec, node_ctx.clone())
             .expect("build fine_gray node");
 
-        let input = crate::nodes::meta::NodeInput { port: 0, data: df };
+        let input = crate::nodes::meta::NodeInput::new_dataframe(0, df);
         let outputs = node
             .execute(
                 &node_ctx,
@@ -1301,8 +1301,8 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
 
         // Write both ports to CSV for comparison (stem-isolated filenames so
         // parallel `#[ignore]` tests don't clobber each other).
-        let port0 = outputs.get(&0).cloned().unwrap();
-        let port1 = outputs.get(&1).cloned().unwrap();
+        let port0 = outputs.dataframe(0).cloned().unwrap();
+        let port1 = outputs.dataframe(1).cloned().unwrap();
         write_df_csv(port0, &format!("{XVAL_DIR}/_node_{stem}_0.csv")).await;
         write_df_csv(port1, &format!("{XVAL_DIR}/_node_{stem}_1.csv")).await;
     });
@@ -1346,7 +1346,7 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             .build(spec, node_ctx.clone())
             .expect("build cuminc node");
 
-        let input = crate::nodes::meta::NodeInput { port: 0, data: df };
+        let input = crate::nodes::meta::NodeInput::new_dataframe(0, df);
         let outputs = node
             .execute(
                 &node_ctx,
@@ -1356,8 +1356,8 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             .await
             .expect("cuminc execute");
 
-        let port0 = outputs.get(&0).cloned().unwrap();
-        let port1 = outputs.get(&1).cloned().unwrap();
+        let port0 = outputs.dataframe(0).cloned().unwrap();
+        let port1 = outputs.dataframe(1).cloned().unwrap();
         write_df_csv(port0, &format!("{XVAL_DIR}/_node_ci_0.csv")).await;
         write_df_csv(port1, &format!("{XVAL_DIR}/_node_ci_1.csv")).await;
     });

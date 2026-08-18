@@ -71,7 +71,7 @@ async fn run_node(
     spec: serde_json::Value,
 ) -> datafusion::common::Result<Vec<arrow_array::RecordBatch>> {
     let mut node = build_node(kind, spec);
-    let mut outputs = node
+    let outputs = node
         .execute(
             &node_ctx(),
             &[],
@@ -79,7 +79,7 @@ async fn run_node(
         )
         .await
         .expect("node execute failed");
-    let df = outputs.remove(&0).expect("missing output port 0");
+    let df = outputs.dataframe(0).expect("missing output port 0").clone();
     df.collect().await
 }
 

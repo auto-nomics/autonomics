@@ -200,7 +200,7 @@ impl DagNode for RdSampsiNode {
         let input = inputs.first().ok_or(RdNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await

@@ -90,7 +90,7 @@ pub async fn collect_port(
             msg: format!("input port {port} not connected"),
         })?;
     input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await

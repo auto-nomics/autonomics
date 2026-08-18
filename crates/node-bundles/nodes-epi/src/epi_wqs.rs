@@ -232,7 +232,7 @@ impl DagNode for EpiWqsNode {
             .first()
             .ok_or(EpiWqsError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

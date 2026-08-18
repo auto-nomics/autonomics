@@ -243,7 +243,7 @@ impl DagNode for OpentargetsAssociationsNode {
         };
 
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }
@@ -543,7 +543,7 @@ impl DagNode for OpentargetsSearchNode {
         let session = ctx.session();
         let batch = build_search_batch(results.hits)?;
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

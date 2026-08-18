@@ -289,7 +289,7 @@ fn err(msg: impl Into<String>) -> DagError {
 
 async fn collect_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, DagError> {
     let batches: Vec<RecordBatch> = input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await
@@ -376,9 +376,9 @@ impl DagNode for MrlapNode {
 
         // ---- LDSC stage: 3-way join via the VFS LD panel ----
         let ctx = node_ctx.session();
-        ctx.register_table("sumstats1", in0.data.clone().into_view())
+        ctx.register_table("sumstats1", in0.dataframe()?.clone().into_view())
             .map_err(|e| err(format!("register sumstats1: {e}")))?;
-        ctx.register_table("sumstats2", in1.data.clone().into_view())
+        ctx.register_table("sumstats2", in1.dataframe()?.clone().into_view())
             .map_err(|e| err(format!("register sumstats2: {e}")))?;
 
         nodes_ldsc::ldsc_common::register_listing_table(

@@ -170,7 +170,7 @@ impl DagNode for MiceImputeNormNode {
                 msg: e.to_string(),
             })?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -265,12 +265,12 @@ mod tests {
             spec,
         };
 
-        let input = dag_core::node::NodeInput {
-            port: 0,
-            data: datafusion::prelude::SessionContext::new()
+        let input = dag_core::node::NodeInput::new_dataframe(
+            0,
+            datafusion::prelude::SessionContext::new()
                 .read_batch(batch)
                 .unwrap(),
-        };
+        );
         let outs = node
             .execute(
                 &test_node_ctx(),
@@ -280,7 +280,7 @@ mod tests {
             .await
             .unwrap();
 
-        let df = outs[&0].clone();
+        let df = outs.dataframe(0).unwrap().clone();
         let batches = df.collect().await.unwrap();
         let imputed: Vec<f64> = batches
             .iter()

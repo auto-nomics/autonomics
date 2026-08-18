@@ -801,6 +801,26 @@ pub async fn op_ls(
                 .await
                 .map_err(|e| e.to_string())?;
             let mut idx = 0usize;
+
+            // Mount points are namespace boundaries, not merely entries that
+            // happen to exist in the covering backend. Emit them first so a
+            // truncated listing still exposes the mounted branch.
+            for mp in &child_mounts {
+                idx += 1;
+                if idx <= skip {
+                    continue;
+                }
+                if items.len() >= max {
+                    truncated = true;
+                    break;
+                }
+                items.push(serde_json::json!({
+                    "name": mp,
+                    "is_dir": true,
+                    "size": 0,
+                }));
+            }
+
             while let Some(entry) = lister.next().await {
                 let entry = entry.map_err(|e| e.to_string())?;
                 let entry_path_raw = entry.path().to_string();
@@ -836,25 +856,6 @@ pub async fn op_ls(
                     "size": size,
                 }));
             }
-            // Surface mounts even when their mount-point directory does
-            // not exist in the covering backend.
-            if !truncated {
-                for mp in &child_mounts {
-                    idx += 1;
-                    if idx <= skip {
-                        continue;
-                    }
-                    if items.len() >= max {
-                        truncated = true;
-                        break;
-                    }
-                    items.push(serde_json::json!({
-                        "name": mp,
-                        "is_dir": true,
-                        "size": 0,
-                    }));
-                }
-            }
         } else {
             // Default-fs non-recursive + synthetic direct-child mounts.
             let op = storage.resolve(&vpath);
@@ -870,6 +871,23 @@ pub async fn op_ls(
                 .map_err(|e| e.to_string())?;
             let scan_root = vpath.trim_end_matches('/').to_string();
             let mut idx = 0usize;
+
+            for mp in &child_mounts {
+                idx += 1;
+                if idx <= skip {
+                    continue;
+                }
+                if items.len() >= max {
+                    truncated = true;
+                    break;
+                }
+                items.push(serde_json::json!({
+                    "name": mp,
+                    "is_dir": true,
+                    "size": 0,
+                }));
+            }
+
             while let Some(entry) = lister.next().await {
                 let entry = entry.map_err(|e| e.to_string())?;
                 let entry_path_raw = entry.path().to_string();
@@ -902,30 +920,12 @@ pub async fn op_ls(
                     "size": size,
                 }));
             }
-            // Inject child mount points as synthetic directory entries.
-            if !truncated {
-                for mp in &child_mounts {
-                    idx += 1;
-                    if idx <= skip {
-                        continue;
-                    }
-                    if items.len() >= max {
-                        truncated = true;
-                        break;
-                    }
-                    items.push(serde_json::json!({
-                        "name": mp,
-                        "is_dir": true,
-                        "size": 0,
-                    }));
-                }
-            }
         }
     }
 
     let returned = items.len();
     let next_offset = if truncated {
-        Some(skip + returned + 1)
+        Some(skip + returned)
     } else {
         None
     };

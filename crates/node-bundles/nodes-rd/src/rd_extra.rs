@@ -172,7 +172,7 @@ impl DagNode for RdMcNode {
         let input = inputs.first().ok_or(RdNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -415,7 +415,7 @@ impl DagNode for RdDensityNode {
         let input = inputs.first().ok_or(RdNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -635,7 +635,7 @@ impl DagNode for RdRandInfNode {
         let input = inputs.first().ok_or(RdNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await

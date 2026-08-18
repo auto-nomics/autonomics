@@ -338,7 +338,7 @@ impl DagNode for BkmrNode {
         let input = inputs.first().ok_or(BkmrNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -584,7 +584,7 @@ mod tests {
         let df = datafusion::prelude::SessionContext::new()
             .read_batch(batch)
             .unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let res = node
             .execute(
@@ -595,7 +595,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outputs = res.get(&0).unwrap().clone();
+        let outputs = res.dataframe(0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         // 4 beta (1 covariate + sigsq + lambda) = actually nk=1, plus sigsq, lambda, 3 r, 3 PIPs = 9
         assert_eq!(batch.num_rows(), 9);
@@ -617,7 +617,7 @@ mod tests {
         let df = datafusion::prelude::SessionContext::new()
             .read_batch(batch)
             .unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let res = node
             .execute(
@@ -628,7 +628,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outputs = res.get(&0).unwrap().clone();
+        let outputs = res.dataframe(0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         // X is empty: sigsq.eps, lambda, r1, r2, r3 = 5 rows (no PIPs)
         assert_eq!(batch.num_rows(), 5);

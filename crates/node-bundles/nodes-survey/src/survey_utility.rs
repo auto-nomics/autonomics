@@ -93,15 +93,16 @@ impl DagNode for SvyByNode {
             node_type: "svyby".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyby".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyby".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         // Extract the grouping variable (single grouping variable supported).
         let by_col = &self.spec.by[0];
@@ -490,15 +491,16 @@ impl DagNode for SvyContrastNode {
             node_type: "svycontrast".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svycontrast".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svycontrast".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         // Base statistic: svymean over the variables.
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
@@ -683,15 +685,16 @@ impl DagNode for SvyStandardizeNode {
             node_type: "svystandardize".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svystandardize".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svystandardize".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let by_col = &self.spec.by[0];
@@ -905,15 +908,16 @@ impl DagNode for RegTermTestNode {
             node_type: "reg_term_test".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "reg_term_test".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
@@ -1133,7 +1137,7 @@ mod tests {
         };
 
         let mut node = SvyByNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1143,7 +1147,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
         // Two groups (stratum 1, stratum 2), one variable each.
         assert_eq!(total_rows, 2);
@@ -1232,7 +1236,7 @@ mod tests {
         };
 
         let mut node = SvyContrastNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1242,7 +1246,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let value: f64 = result[0]
             .column(1)
             .as_any()

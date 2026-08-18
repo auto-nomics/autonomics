@@ -414,8 +414,8 @@ impl DagNode for LdscRgNode {
         .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
         let (rg, n_snp) = Self::run_with_ctx(
             &ctx,
-            &input1.data,
-            &input2.data,
+            input1.dataframe()?,
+            input2.dataframe()?,
             "ld_panel",
             "ld_panel_m",
             &self.ldsc_rg,
@@ -1077,7 +1077,7 @@ mod tests {
             1000.0,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![dag_core::node::NodeInput { port: 0, data: df }];
+        let one_input = vec![dag_core::node::NodeInput::new_dataframe(0, df)];
         let res = node
             .execute(
                 &node_ctx(),

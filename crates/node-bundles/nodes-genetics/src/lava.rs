@@ -363,7 +363,7 @@ async fn collect_input_batches(
 ) -> Result<Vec<RecordBatch>, DagError> {
     let batches: Vec<RecordBatch> =
         input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

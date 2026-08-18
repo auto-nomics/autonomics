@@ -410,8 +410,14 @@ impl DagNode for MtagNode {
         .map_err(|e| MtagNodeError::ReferenceData(e.to_string()))?;
 
         // Run the full pipeline.
-        let (batch1, batch2) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ld_panel", &self.config).await?;
+        let (batch1, batch2) = Self::run_with_ctx(
+            &ctx,
+            input1.dataframe()?,
+            input2.dataframe()?,
+            "ld_panel",
+            &self.config,
+        )
+        .await?;
 
         let df1 = ctx.read_batch(batch1).map_err(MtagNodeError::ReadBatch)?;
         let df2 = ctx.read_batch(batch2).map_err(MtagNodeError::ReadBatch)?;
@@ -958,7 +964,7 @@ mod tests {
             0.3,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![dag_core::node::NodeInput { port: 0, data: df }];
+        let one_input = vec![dag_core::node::NodeInput::new_dataframe(0, df)];
         let res = node
             .execute(
                 &node_ctx(),

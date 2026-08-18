@@ -415,15 +415,16 @@ impl DagNode for SvyRatioNode {
             node_type: "svyratio".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyratio".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyratio".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let num =
@@ -554,15 +555,16 @@ impl DagNode for SvyTableNode {
             node_type: "svytable".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svytable".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svytable".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
 
@@ -806,15 +808,16 @@ impl DagNode for SvyQuantileNode {
             node_type: "svyquantile".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyquantile".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyquantile".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let x = crate::survey_common::extract_variables(&batches, &self.spec.variables)?;
@@ -1033,7 +1036,7 @@ mod tests {
         };
 
         let mut node = SvyMeanNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1043,7 +1046,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 1);
 
@@ -1095,7 +1098,7 @@ mod tests {
         };
 
         let mut node = SvyMeanNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1105,7 +1108,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let mean: f64 = result[0]
             .column(1)
             .as_any()
@@ -1168,7 +1171,7 @@ mod tests {
         };
 
         let mut node = SvyTableNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1178,7 +1181,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2); // two strata
 

@@ -573,7 +573,7 @@ pub async fn execute_describe(
         msg: "no input data".into(),
     })?;
     let batches = input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await
@@ -623,7 +623,7 @@ where
         msg: "no input data".into(),
     })?;
     let batches = input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await
@@ -721,6 +721,18 @@ pub fn normal_cdf(x: f64) -> f64 {
     Normal::new(0.0, 1.0).unwrap().cdf(x)
 }
 
+/// Two-sided p-value from Student's t with survey design degrees of freedom.
+pub fn student_t_two_sided_p(t: f64, df: f64) -> f64 {
+    use statrs::distribution::{ContinuousCDF, StudentsT};
+
+    if !t.is_finite() || !df.is_finite() || df <= 0.0 {
+        return f64::NAN;
+    }
+    StudentsT::new(0.0, 1.0, df)
+        .map(|dist| 2.0 * dist.cdf(-t.abs()))
+        .unwrap_or(f64::NAN)
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -770,5 +782,12 @@ mod tests {
         assert!(spec.strata.is_empty());
         assert!(spec.weights.is_none());
         assert!(!spec.nest);
+    }
+
+    #[test]
+    fn student_t_two_sided_p_matches_reference() {
+        // qt(-0.414, df=7): two-sided p is approximately 0.691.
+        let p = student_t_two_sided_p(-0.414, 7.0);
+        assert!((p - 0.691).abs() < 0.001, "p={p}");
     }
 }

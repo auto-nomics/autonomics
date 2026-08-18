@@ -77,15 +77,16 @@ impl DagNode for SvyKmNode {
             node_type: "svykm".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svykm".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svykm".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let t =
@@ -243,15 +244,16 @@ impl DagNode for SvyLogrankNode {
             node_type: "svylogrank".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svylogrank".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svylogrank".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let t =
             crate::survey_common::extract_variables(&batches, &[self.spec.time_column.clone()])?;

@@ -380,12 +380,12 @@ async fn dag_node_works_dataframe() {
     let inputs: &[NodeInput] = &[];
     let reporter = dag_core::dag::node_event::NodeReporter::noop();
 
-    let mut outputs = node
+    let outputs = node
         .execute(&ctx, inputs, &reporter)
         .await
         .expect("node execute");
 
-    let df = outputs.remove(&0).expect("output port 0");
+    let df = outputs.dataframe(0).expect("output port 0").clone();
     let batches: Vec<RecordBatch> = df.collect().await.expect("collect dataframe");
 
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

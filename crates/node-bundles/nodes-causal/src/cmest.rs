@@ -329,7 +329,7 @@ impl DagNode for CmestNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -503,7 +503,7 @@ impl DagNode for CmestMultiNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -657,7 +657,7 @@ impl DagNode for CmestBinaryYNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -808,7 +808,7 @@ impl DagNode for CmestBinaryMNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -970,7 +970,7 @@ impl DagNode for CmestWeightingNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -1125,7 +1125,7 @@ impl DagNode for CmestGformulaNode {
             .first()
             .ok_or(CmestNodeError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

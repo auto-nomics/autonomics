@@ -1,8 +1,8 @@
 //! File sink node: consumes an upstream `DataFrame` and writes it to a file
 //! (CSV or Parquet).
 //!
-//! One untyped input port; no output ports. Symmetric to [`crate::source_file::FileSourceNode`]
-//! for the file case.
+//! One DataFrame input port and one File output port. Symmetric to
+//! [`crate::source_file::FileSourceNode`] across the DataFrame/file boundary.
 
 use async_trait::async_trait;
 use datafusion::{
@@ -22,6 +22,7 @@ use dag_core::{
     dag::DagError,
     dag::graph::PortOutputs,
     registry::{NodeCtx, NodeFactory},
+    value::{FileRef, PortType},
 };
 
 /// Supported on-disk write formats.
@@ -30,6 +31,15 @@ use dag_core::{
 pub enum WriteFormat {
     Csv,
     Parquet,
+}
+
+impl WriteFormat {
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Parquet => "parquet",
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -150,10 +160,12 @@ pub struct FileSinkNodeSpec {
 
 pub struct FileSinkNodeFactory {}
 
-/// Static port layout for every [`FileSinkNode`]: a single untyped input port
-/// and no outputs.
+/// Static port layout for every [`FileSinkNode`]: one DataFrame input and one
+/// File output.
 fn port_layout() -> NodePorts {
-    NodePorts::new().add_input_port(None)
+    NodePorts::new()
+        .add_input_port(None)
+        .add_output_port_of_type(None, PortType::File)
 }
 
 impl NodeFactory for FileSinkNodeFactory {
@@ -166,9 +178,9 @@ impl NodeFactory for FileSinkNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "A file sink node that consumes an upstream DataFrame and writes it to \
+        "A file bridge node that consumes an upstream DataFrame and writes it to \
         a local/remote file in CSV or Parquet format. Supports both append and \
-        overwrite modes. One untyped input port; no output ports."
+        overwrite modes, and emits the written file on its output port."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -210,11 +222,12 @@ impl NodeFactory for FileSinkNodeFactory {
             WriteFormat::Csv => format!(r#"fwrite({input}, "{path}")"#),
             WriteFormat::Parquet => format!(r#"write_parquet({input}, "{path}")"#),
         };
+        let output_var = ctx.output_var.to_string();
+        let code = vec![write_call, format!(r#"{output_var} <- "{path}""#)];
 
-        // Sink has no output ports — return empty output_vars.
         Ok(NodeCodegen {
-            code: vec![write_call],
-            output_vars: vec![],
+            code,
+            output_vars: vec![output_var],
             extra_packages: vec![],
         })
     }
@@ -265,7 +278,12 @@ impl DagNode for FileSinkNode {
 
         let path = normalize_path(&self.path);
         let format = self.format;
-        let df = input.data.clone();
+        let df = input
+            .dataframe_value()
+            .map_err(|e| FileSinkError::InvalidInput {
+                message: e.to_string(),
+            })?
+            .clone();
 
         // Resolve the DataFrame to actually write. DataFusion's
         // `write_csv`/`write_parquet` do not implement
@@ -296,7 +314,12 @@ impl DagNode for FileSinkNode {
             source: e,
         })?;
 
-        Ok(HashMap::new())
+        let format_label = format.as_label().to_string();
+        let file = FileRef::local(&path, Some(format_label.clone()))
+            .unwrap_or_else(|_| FileRef::new(path.clone(), Some(format_label)));
+        let mut outputs = PortOutputs::new();
+        outputs.insert_file(0, file);
+        Ok(outputs)
     }
 }
 
@@ -408,7 +431,7 @@ mod tests {
             async move {
                 node.execute(
                     &node_ctx(),
-                    &[NodeInput { port: 0, data: df }],
+                    &[NodeInput::new_dataframe(0, df)],
                     &dag_core::dag::node_event::NodeReporter::noop(),
                 )
                 .await
@@ -438,7 +461,7 @@ mod tests {
             async move {
                 node.execute(
                     &node_ctx(),
-                    &[NodeInput { port: 0, data: df }],
+                    &[NodeInput::new_dataframe(0, df)],
                     &dag_core::dag::node_event::NodeReporter::noop(),
                 )
                 .await

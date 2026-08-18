@@ -395,8 +395,14 @@ impl DagNode for LdscHsqNode {
         .await
         .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
 
-        let result =
-            Self::run_with_ctx(&ctx, &input.data, "ld_panel", "ld_panel_m", &self.ldsc_hsq).await?;
+        let result = Self::run_with_ctx(
+            &ctx,
+            input.dataframe()?,
+            "ld_panel",
+            "ld_panel_m",
+            &self.ldsc_hsq,
+        )
+        .await?;
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&result)?;

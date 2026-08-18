@@ -224,7 +224,7 @@ impl DagNode for CausalNode {
             .first()
             .ok_or(CausalError::Column("no input".into()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

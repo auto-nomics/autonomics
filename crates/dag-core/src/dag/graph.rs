@@ -24,9 +24,62 @@ use super::runtime::{
 };
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
+use crate::value::{FileFingerprint, FileRef, NodeValue, PortType};
 
-/// Output DataFrames keyed by output port index.
-pub type PortOutputs = HashMap<u8, DataFrame>;
+/// Output values keyed by output port index.
+#[derive(Debug, Clone, Default)]
+pub struct PortOutputs {
+    values: HashMap<u8, NodeValue>,
+}
+
+impl PortOutputs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert<V: Into<NodeValue>>(&mut self, port: u8, value: V) -> Option<NodeValue> {
+        self.values.insert(port, value.into())
+    }
+
+    pub fn insert_file(&mut self, port: u8, file: FileRef) -> Option<NodeValue> {
+        self.values.insert(port, NodeValue::File(file))
+    }
+
+    pub fn get(&self, port: &u8) -> Option<&NodeValue> {
+        self.values.get(port)
+    }
+
+    pub fn dataframe(&self, port: u8) -> std::result::Result<&DataFrame, DagError> {
+        self.values
+            .get(&port)
+            .ok_or_else(|| DagError::Schedule(format!("output port {port} has no value")))?
+            .as_dataframe()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&u8, &NodeValue)> {
+        self.values.iter()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &NodeValue> {
+        self.values.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+impl std::ops::Index<&u8> for PortOutputs {
+    type Output = NodeValue;
+
+    fn index(&self, index: &u8) -> &Self::Output {
+        &self.values[index]
+    }
+}
 
 pub struct DagEdge {
     pub from_node: NodeId,
@@ -135,6 +188,27 @@ impl DAG {
         self.dirty.insert(id.to_string(), DirtyState::Clean);
     }
 
+    /// Mark clean file-producing nodes dirty when cached local artifacts no
+    /// longer match their recorded fingerprints.
+    fn invalidate_stale_file_outputs(&mut self) {
+        let stale: Vec<NodeId> = self
+            .outputs
+            .iter()
+            .filter(|(_, outputs)| {
+                outputs.values().any(|value| match value {
+                    NodeValue::File(file) => cached_file_changed(file),
+                    NodeValue::FileSet(files) => files.iter().any(cached_file_changed),
+                    NodeValue::DataFrame(_) => false,
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in stale {
+            self.mark_dirty(&id);
+        }
+    }
+
     /// Remove all nodes, edges, statuses, outputs, and errors — a full reset.
     pub fn clear(&mut self) {
         self.nodes.clear();
@@ -190,6 +264,9 @@ impl DAG {
         // In incremental mode, keep cached outputs + statuses for clean nodes.
         // Only dirty nodes will be re-executed; clean nodes retain their
         // `Success` status and cached `outputs` from the previous run.
+        if incremental {
+            self.invalidate_stale_file_outputs();
+        }
 
         self.validate()?;
         // Topological order is computed mainly to validate the graph and to seed a
@@ -269,7 +346,6 @@ impl DAG {
                     // Already skipped/finished by a cascade — don't dispatch.
                     continue;
                 }
-                let inputs = build_inputs(&id, &incoming, &self.outputs);
                 // Borrow the node payload, then clone it into an owned Box so it
                 // can be moved into the 'static future. The original stays in
                 // `self` for re-runs / iterative optimisation.
@@ -277,6 +353,24 @@ impl DAG {
                     warn!(node = %id, "scheduler: node payload missing");
                     continue;
                 };
+                let inputs = build_inputs(&id, &incoming, &self.outputs);
+                if let Some(node) = self.nodes.get(&id) {
+                    for input in &inputs {
+                        let Some(port) = node.ports().input_port(input.port) else {
+                            continue;
+                        };
+                        if !port.data_type.accepts(input.data.data_type()) {
+                            return Err(DagError::PortTypeMismatch {
+                                from_node: id.clone(),
+                                from_port: input.port,
+                                to_node: id.clone(),
+                                to_port: input.port,
+                                expected: port.data_type.to_string(),
+                                actual: input.data.data_type().to_string(),
+                            });
+                        }
+                    }
+                }
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
                 let tx = tx.clone();
@@ -386,35 +480,63 @@ impl DAG {
                     outputs: outs,
                     duration,
                 } => {
-                    self.outputs.insert(id.clone(), outs);
-                    self.statuses.insert(id.clone(), RuntimeStatus::Success);
-                    self.mark_clean(&id);
-                    self.errors.remove(&id);
-                    durations.insert(id.clone(), duration);
-                    debug!(node = %id, "node succeeded");
-                    // External terminal observation (no DataFrame payload).
-                    if let Some(sink) = &event_sink {
-                        let _ = sink.try_send(NodeEvent::new(
+                    let output_type_error = self.nodes.get(&id).and_then(|node| {
+                        outs.iter().find_map(|(port, value)| {
+                            let declared = node.ports().output_port(*port)?;
+                            (!declared.data_type.accepts(value.data_type())).then(|| {
+                                DagError::PortTypeMismatch {
+                                    from_node: id.clone(),
+                                    from_port: *port,
+                                    to_node: id.clone(),
+                                    to_port: *port,
+                                    expected: declared.data_type.to_string(),
+                                    actual: value.data_type().to_string(),
+                                }
+                            })
+                        })
+                    });
+                    if let Some(error) = output_type_error {
+                        self.statuses.insert(id.clone(), RuntimeStatus::Failed);
+                        self.errors.insert(id.clone(), error);
+                        durations.insert(id.clone(), duration);
+                        cascade_skip(
                             &id,
-                            NodeEventKind::Finished {
-                                status: RuntimeStatus::Success,
-                                elapsed_ms: duration.as_millis() as u64,
-                            },
-                        ));
-                    }
-                    for succ in &successors[&id] {
-                        // In incremental mode, clean successors are never
-                        // dispatched — only decrement pending for dirty ones.
-                        if incremental && !self.is_dirty(succ) {
-                            continue;
+                            &successors,
+                            &mut self.statuses,
+                            &mut ready,
+                            &mut skipped_because,
+                        );
+                    } else {
+                        self.outputs.insert(id.clone(), outs);
+                        self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                        self.mark_clean(&id);
+                        self.errors.remove(&id);
+                        durations.insert(id.clone(), duration);
+                        debug!(node = %id, "node succeeded");
+                        // External terminal observation (no DataFrame payload).
+                        if let Some(sink) = &event_sink {
+                            let _ = sink.try_send(NodeEvent::new(
+                                &id,
+                                NodeEventKind::Finished {
+                                    status: RuntimeStatus::Success,
+                                    elapsed_ms: duration.as_millis() as u64,
+                                },
+                            ));
                         }
-                        let left = {
-                            let c = pending.entry(succ.clone()).or_insert(0);
-                            *c = c.saturating_sub(1);
-                            *c
-                        };
-                        if left == 0 && self.statuses[succ] == RuntimeStatus::Pending {
-                            ready.push_back(succ.clone());
+                        for succ in &successors[&id] {
+                            // In incremental mode, clean successors are never
+                            // dispatched — only decrement pending for dirty ones.
+                            if incremental && !self.is_dirty(succ) {
+                                continue;
+                            }
+                            let left = {
+                                let c = pending.entry(succ.clone()).or_insert(0);
+                                *c = c.saturating_sub(1);
+                                *c
+                            };
+                            if left == 0 && self.statuses[succ] == RuntimeStatus::Pending {
+                                ready.push_back(succ.clone());
+                            }
                         }
                     }
                 }
@@ -512,6 +634,25 @@ impl DAG {
                     .map(|n| n.kind())
                     .unwrap_or("unknown")
                     .to_string();
+                let output_type = self
+                    .outputs
+                    .get(id)
+                    .and_then(|outputs| outputs.values().next())
+                    .map(|value| value.data_type().to_string());
+                let output_files = self
+                    .outputs
+                    .get(id)
+                    .map(|outputs| {
+                        outputs
+                            .values()
+                            .flat_map(|value| match value {
+                                NodeValue::File(file) => vec![file.clone()],
+                                NodeValue::FileSet(files) => files.clone(),
+                                NodeValue::DataFrame(_) => Vec::new(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
                 // Extract output schema from the first output port's DataFrame.
                 // `schema()` only inspects the LogicalPlan — it does NOT trigger
@@ -521,7 +662,9 @@ impl DAG {
                 let output_schema = self
                     .outputs
                     .get(id)
-                    .and_then(|dfs| dfs.values().next())
+                    .and_then(|outputs| {
+                        outputs.values().find_map(|value| value.as_dataframe().ok())
+                    })
                     .map(|df| SchemaReport::from_fields(df.schema().fields()));
 
                 let output_rows = counts.get(id).copied();
@@ -545,6 +688,8 @@ impl DAG {
                     id: id.clone(),
                     status,
                     node_type,
+                    output_type,
+                    output_files,
                     output_schema,
                     output_rows,
                     elapsed_ms,
@@ -580,7 +725,7 @@ impl DAG {
             let Some(dfs) = self.outputs.get(id) else {
                 continue;
             };
-            let Some(df) = dfs.values().next() else {
+            let Some(df) = dfs.values().find_map(|value| value.as_dataframe().ok()) else {
                 continue;
             };
             let owned = df.clone();
@@ -929,7 +1074,7 @@ impl DAG {
             .collect()
     }
 
-    /// Validate the graph: cycles, port wiring, and schema compatibility.
+    /// Validate the graph: cycles, port wiring, payload types, and schemas.
     ///
     /// Checks (in order):
     /// 1. No cycles.
@@ -939,8 +1084,9 @@ impl DAG {
     /// 3. The default-port `add_edge` form was only used on single-port nodes.
     /// 4. Each input port has at most one incoming edge (strict 1:1).
     /// 5. Every declared input port has exactly one incoming edge.
-    /// 6. Where both endpoints declare a schema, the output schema covers the
-    ///    input schema's required fields with compatible types.
+    /// 6. Connected payload types are compatible.
+    /// 7. Where both endpoints are DataFrame ports with schemas, the output
+    ///    schema covers the input schema's required fields with compatible types.
     pub fn validate(&self) -> Result<()> {
         if is_cyclic_directed(&self.graph) {
             return Err(DagError::Cycle(self.cycle_node_names()));
@@ -989,11 +1135,11 @@ impl DAG {
             }
         }
 
-        // Completeness: every declared input port must have exactly one edge.
+        // Completeness: every required declared input port must have an edge.
         for id in self.nodes.keys() {
             let meta = self.nodes[id].ports();
             for port in meta.input_ports().iter() {
-                if !connected.contains(&((*id).clone(), port.index)) {
+                if port.required && !connected.contains(&((*id).clone(), port.index)) {
                     return Err(DagError::PortDisconnected {
                         node: id.clone(),
                         port: port.index,
@@ -1017,11 +1163,7 @@ impl DAG {
         Ok(())
     }
 
-    /// Validate schema compatibility for a single edge: the output port's schema
-    /// must cover every field required by the input port's schema, with matching
-    /// types. Skipped (returns `Ok`) when either port has no declared schema —
-    /// shared by [`Self::add_edge`] (early check) and [`Self::validate_schemas`]
-    /// (bulk pass).
+    /// Validate payload-type and schema compatibility for a single edge.
     fn validate_edge_schema(&self, from: &str, from_port: u8, to: &str, to_port: u8) -> Result<()> {
         let (Some(from_node), Some(to_node)) = (self.nodes.get(from), self.nodes.get(to)) else {
             return Ok(());
@@ -1031,8 +1173,23 @@ impl DAG {
         let (Some(fp), Some(tp)) = (from_port_field, to_port_field) else {
             return Ok(());
         };
-        let (Some(out_schema), Some(in_schema)) = (fp.schema.as_ref(), tp.schema.as_ref()) else {
-            return Ok(()); // unknown on either side → skip
+        if !fp.data_type.accepts(tp.data_type) {
+            return Err(DagError::PortTypeMismatch {
+                from_node: from.to_string(),
+                from_port,
+                to_node: to.to_string(),
+                to_port,
+                expected: tp.data_type.to_string(),
+                actual: fp.data_type.to_string(),
+            });
+        }
+        let (PortType::DataFrame, PortType::DataFrame, Some(out_schema), Some(in_schema)) = (
+            fp.data_type,
+            tp.data_type,
+            fp.schema.as_ref(),
+            tp.schema.as_ref(),
+        ) else {
+            return Ok(());
         };
         if let Err(reason) = schema_compatible(out_schema, in_schema) {
             return Err(DagError::SchemaMismatch {
@@ -1243,9 +1400,17 @@ fn schema_compatible(
     Ok(())
 }
 
+fn cached_file_changed(file: &FileRef) -> bool {
+    let Some(expected) = file.fingerprint.as_ref() else {
+        return false;
+    };
+    FileFingerprint::from_path(&file.path).as_ref() != Some(expected)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::dag::{NodeInput, NodePorts};
+    use crate::value::{FileRef, PortType};
     use std::assert_matches;
 
     use super::*;
@@ -1464,7 +1629,7 @@ mod tests {
             _inputs: &[NodeInput],
             _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, super::DagError> {
-            Ok(HashMap::new())
+            Ok(PortOutputs::new())
         }
     }
 
@@ -1474,6 +1639,167 @@ mod tests {
                 .map(|(n, t)| arrow_schema::Field::new(*n, t.clone(), true))
                 .collect::<Vec<_>>(),
         ))
+    }
+
+    #[test]
+    fn port_payload_type_mismatch_rejected() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "file".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_output_port_of_type(None, PortType::File),
+            )),
+        )
+        .unwrap();
+        dag.add_node(
+            "df".into(),
+            Box::new(PortedNode(NodePorts::new().add_input_port(None))),
+        )
+        .unwrap();
+
+        let err = dag.add_edge("file", "df", 0, 0).unwrap_err();
+        assert_matches!(err, DagError::PortTypeMismatch { .. });
+    }
+
+    #[derive(Clone)]
+    struct MisdeclaredOutputNode {
+        ports: NodePorts,
+    }
+
+    impl Default for MisdeclaredOutputNode {
+        fn default() -> Self {
+            Self {
+                ports: NodePorts::new().add_output_port(None),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for MisdeclaredOutputNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            outputs.insert_file(0, FileRef::new("/tmp/runtime-type-mismatch", None));
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "misdeclared_output"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_output_type_mismatch_fails_node() {
+        let mut dag = DAG::default();
+        dag.add_node("bad".into(), Box::new(MisdeclaredOutputNode::default()))
+            .unwrap();
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+
+        assert!(!report.ok);
+        assert_eq!(dag.status("bad"), Some(RuntimeStatus::Failed));
+        assert_matches!(
+            report.errors.get("bad"),
+            Some(DagError::PortTypeMismatch { .. })
+        );
+    }
+
+    #[derive(Clone)]
+    struct FileOutputNode {
+        path: std::path::PathBuf,
+        runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ports: NodePorts,
+    }
+
+    impl FileOutputNode {
+        fn new(path: std::path::PathBuf) -> Self {
+            Self {
+                path,
+                runs: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for FileOutputNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            std::fs::write(&self.path, format!("run {run}"))
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
+            let file =
+                FileRef::local(&self.path, None).map_err(|e| DagError::Schedule(e.to_string()))?;
+            let mut outputs = PortOutputs::new();
+            outputs.insert_file(0, file);
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "file_output"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn incremental_run_detects_changed_file_output() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "dag-core-file-output-{}-{nanos}.txt",
+            std::process::id()
+        ));
+        let node = FileOutputNode::new(path.clone());
+        let runs = node.runs.clone();
+        let mut dag = DAG::default();
+        dag.add_node("writer".into(), Box::new(node)).unwrap();
+
+        let mut cfg = SchedulerConfig::default();
+        cfg.incremental = true;
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        std::fs::write(&path, "externally changed").unwrap();
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1706,7 +2032,7 @@ mod tests {
         let mut dag = DAG::default();
         add(&mut dag, "x");
         // Insert a fake output.
-        dag.outputs.insert("x".to_string(), HashMap::new());
+        dag.outputs.insert("x".to_string(), PortOutputs::new());
         assert!(dag.output("x").is_some());
 
         dag.replace_node("x", Box::new(EchoNode::default()))
@@ -2013,7 +2339,7 @@ mod tests {
         ) -> std::result::Result<PortOutputs, DagError> {
             self.counter
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut out: PortOutputs = HashMap::new();
+            let mut out: PortOutputs = PortOutputs::new();
             for inp in inputs {
                 out.insert(inp.port, inp.data.clone());
             }

@@ -342,6 +342,63 @@ fn golden_sink_file_r() {
 }
 
 #[test]
+fn golden_file_bridge_r() {
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": "/tmp/in.csv"}),
+            },
+            NodeEntry {
+                id: "out".into(),
+                kind: "sink_file".into(),
+                spec: serde_json::json!({"path": "/tmp/out.csv", "format": "csv"}),
+            },
+            NodeEntry {
+                id: "reader".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": null, "format": "csv"}),
+            },
+        ],
+        edges: vec![
+            EdgeEntry {
+                from: "src".into(),
+                from_port: 0,
+                to: "out".into(),
+                to_port: 0,
+            },
+            EdgeEntry {
+                from: "out".into(),
+                from_port: 0,
+                to: "reader".into(),
+                to_port: 0,
+            },
+        ],
+    };
+    let registry = test_registry();
+    let compiler = DagCompiler {
+        registry: &registry,
+    };
+    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
+
+    assert!(script.source.contains(r#"src <- fread("/tmp/in.csv")"#));
+    assert!(script.source.contains(r#"out <- "/tmp/out.csv""#));
+    assert!(
+        script.source.contains("reader <- fread(out)"),
+        "file bridge should pass sink_file's path variable to source_file"
+    );
+    assert!(
+        !script.source.contains(r#"fwrite(out, "_edge_out_0.csv")"#),
+        "file outputs must not be written as edge CSVs"
+    );
+    assert!(
+        !script.source.contains(r#"out <- fread("_edge_out_0.csv")"#),
+        "file inputs must be passed by path"
+    );
+}
+
+#[test]
 fn golden_sql_node_r() {
     let manifest = DagManifest {
         nodes: vec![

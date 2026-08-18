@@ -399,7 +399,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outputs = res.get(&0).unwrap().clone();
+        let outputs = res.dataframe(0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 7);
@@ -438,7 +438,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outputs = res.get(&0).unwrap().clone();
+        let outputs = res.dataframe(0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         let evalue_point = batch
             .column(4)
@@ -470,7 +470,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outputs = res.get(&0).unwrap().clone();
+        let outputs = res.dataframe(0).unwrap().clone();
         let batch = outputs.collect().await.unwrap().into_iter().next().unwrap();
         let evalue_point = batch
             .column(4)

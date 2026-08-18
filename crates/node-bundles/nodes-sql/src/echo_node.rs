@@ -110,9 +110,9 @@ impl DagNode for EchoNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let mut out: PortOutputs = HashMap::new();
+        let mut out: PortOutputs = PortOutputs::new();
         for inp in inputs {
-            out.insert(inp.port, inp.data.clone());
+            out.insert(inp.port, inp.dataframe()?.clone());
         }
         Ok(out)
     }
@@ -149,16 +149,19 @@ mod tests {
         let outputs = node
             .execute(
                 &node_ctx(),
-                &[NodeInput {
-                    port: 0,
-                    data: df.clone(),
-                }],
+                &[NodeInput::new_dataframe(0, df.clone())],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
 
-        let result = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let result = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         assert_eq!(result[0].num_rows(), 3);
     }
 
@@ -186,8 +189,8 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[
-                    NodeInput { port: 0, data: df1 },
-                    NodeInput { port: 1, data: df2 },
+                    NodeInput::new_dataframe(0, df1),
+                    NodeInput::new_dataframe(1, df2),
                 ],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
@@ -195,9 +198,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(outputs.len(), 2);
-        let r0 = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let r0 = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         assert_eq!(r0[0].num_rows(), 1);
-        let r1 = outputs.get(&1).unwrap().clone().collect().await.unwrap();
+        let r1 = outputs
+            .dataframe(1)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         assert_eq!(r1[0].num_rows(), 2);
     }
 }

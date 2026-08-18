@@ -152,7 +152,7 @@ impl DagNode for FigureEmbedNode {
             msg: format!("read_batch failed: {e}"),
         })?;
 
-        let mut out: PortOutputs = HashMap::new();
+        let mut out: PortOutputs = PortOutputs::new();
         out.insert(0, out_df);
         Ok(out)
     }

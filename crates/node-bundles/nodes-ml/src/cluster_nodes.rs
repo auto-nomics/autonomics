@@ -31,7 +31,7 @@ async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagEr
         msg: "no input port connected".into(),
     })?;
     input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await

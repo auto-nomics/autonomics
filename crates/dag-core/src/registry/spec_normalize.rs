@@ -19,6 +19,8 @@ use serde_json::Value;
 /// Repairs:
 /// - `array` field given as `{"item": X}` / `{"items": X}` / `{"value": X}` →
 ///   `[X]` (or `X` when it is already an array).
+/// - an `array` field given as the empty string `""` → `[]` (some clients
+///   serialize an omitted list argument this way).
 /// - `array` field given as a numeric-keyed object `{"0": .., "1": ..}` → array
 ///   in index order.
 /// - a non-strict `number` / `integer` field given as a numeric string (`"200"`)
@@ -139,6 +141,7 @@ fn normalize_array(value: Value, schema: &Value, root: &Value) -> Value {
             }
             value
         }
+        Value::String(s) if s.is_empty() => Value::Array(Vec::new()),
         _ => value,
     }
 }
@@ -269,6 +272,14 @@ mod tests {
         let spec = json!({ "m": { "item": "23960350" } });
         let out = norm(spec, &schema);
         assert_num_array(&out["m"], &[23960350.0]);
+    }
+
+    #[test]
+    fn empty_string_for_array_becomes_empty_array() {
+        let schema = array_number_schema();
+        let spec = json!({ "m": "" });
+        let out = norm(spec, &schema);
+        assert!(out["m"].as_array().unwrap().is_empty());
     }
 
     #[test]

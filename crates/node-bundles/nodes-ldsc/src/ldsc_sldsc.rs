@@ -336,7 +336,7 @@ impl DagNode for LdscSldscNode {
 
         let result = Self::run_with_ctx(
             &session,
-            &input.data,
+            input.dataframe()?,
             "ld_panel",
             "ld_panel_m",
             &self.config,

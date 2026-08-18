@@ -1,5 +1,6 @@
 //! Source and sink DAG node bundle.
 
+pub mod run_command;
 pub mod sink_file;
 pub mod source_file;
 pub mod source_openalex;
@@ -17,6 +18,7 @@ impl NodePlugin for Plugin {
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
+        registry.register(Box::new(run_command::RunCommandNodeFactory {}));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
         ));

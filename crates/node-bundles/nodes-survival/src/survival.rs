@@ -175,7 +175,7 @@ impl DagNode for SurvivalNode {
             .first()
             .ok_or(SurvivalError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

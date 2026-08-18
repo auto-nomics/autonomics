@@ -315,7 +315,32 @@ impl ToolFunction for GetOutputTool {
         let limit_clamped = requested_limit == 0 || requested_limit > MAX_LIMIT;
 
         let mut outputs_info = Vec::with_capacity(dfs.len());
-        for (name, df) in dfs.iter() {
+        for (name, value) in dfs.iter() {
+            let Some(df) = value.as_dataframe().ok() else {
+                outputs_info.push(match value {
+                    data_engine::NodeValue::File(file) => serde_json::json!({
+                        "name": name,
+                        "type": "file",
+                        "path": file.path,
+                        "format": file.format,
+                        "size": file.fingerprint.as_ref().map(|fp| fp.size),
+                        "fingerprint": file.fingerprint,
+                    }),
+                    data_engine::NodeValue::FileSet(files) => serde_json::json!({
+                        "name": name,
+                        "type": "file_set",
+                        "files": files.iter().map(|file| serde_json::json!({
+                            "path": file.path,
+                            "format": file.format,
+                            "size": file.fingerprint.as_ref().map(|fp| fp.size),
+                            "fingerprint": file.fingerprint,
+                        })).collect::<Vec<_>>(),
+                    }),
+                    data_engine::NodeValue::DataFrame(_) => unreachable!("DataFrame handled above"),
+                });
+                continue;
+            };
+
             let fields: Vec<serde_json::Value> = df
                 .schema()
                 .fields()

@@ -790,7 +790,6 @@ mod tests {
     use crate::dag::{DagError, RuntimeStatus, SchedulerConfig};
     use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
-    use datafusion::common::HashMap;
     use datafusion::prelude::CsvReadOptions;
     use vfs::OpendalFileStorage;
 
@@ -1294,7 +1293,7 @@ mod tests {
             _reporter: &crate::dag::node_event::NodeReporter,
         ) -> Result<PortOutputs, DagError> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            Ok(HashMap::new())
+            Ok(PortOutputs::new())
         }
     }
 
@@ -1411,14 +1410,15 @@ mod tests {
             "sql with empty spec should fail deserialization; got: {msg}"
         );
 
-        // source_file requires { path }; omitting it fails.
-        let err = engine
+        // A path-less source_file is buildable so it can be wired to an
+        // upstream File value; running it disconnected remains an error.
+        engine
             .add_node_from_registry("n", "source_file", serde_json::json!({"type": "ftp"}))
-            .unwrap_err();
-        let msg = format!("{err}");
+            .expect("path-less source_file can be wired to a file output");
+        let report = engine.run().await.expect("scheduler should return report");
         assert!(
-            msg.contains("path") || msg.contains("missing field"),
-            "source_file without a `path` should fail deserialization; got: {msg}"
+            !report.ok && report.errors.contains_key("n"),
+            "disconnected path-less source_file should fail at execution"
         );
     }
 

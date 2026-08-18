@@ -176,6 +176,10 @@ pub struct NodeReport {
     pub id: String,
     pub status: RuntimeStatus,
     pub node_type: String,
+    /// Payload type of the first output value, when the node produced output.
+    pub output_type: Option<String>,
+    /// File outputs carried by File and FileSet values.
+    pub output_files: Vec<crate::value::FileRef>,
     /// Output column schema. Narrow schemas list every column; wide schemas
     /// are folded to a leading-column sample + type distribution (see
     /// [`SchemaReport`]).

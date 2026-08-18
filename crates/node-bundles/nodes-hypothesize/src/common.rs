@@ -120,7 +120,8 @@ pub async fn collect_input(
         .first()
         .ok_or_else(|| HypoNodeError::Insufficient("no input connected".into()))?;
     input
-        .data
+        .dataframe()
+        .map_err(|e| HypoNodeError::Collect(e.to_string()))?
         .clone()
         .collect()
         .await

@@ -312,7 +312,7 @@ impl DagNode for BivariateMixerNode {
 
         // ── 1. Validate sumstats columns ───────────────────────────────
         for (i, inp) in [sumstats1, sumstats2].iter().enumerate() {
-            let sch = inp.data.schema();
+            let sch = inp.dataframe()?.schema();
             for needed in [
                 INPUT_Z_COL,
                 INPUT_N_COL,
@@ -332,8 +332,8 @@ impl DagNode for BivariateMixerNode {
         }
 
         // ── 2. Read fit1 constraints from port 2/3 ─────────────────────
-        let (pi1, sb1, sz1) = read_fit1_constraint(&fit1_t1.data).await?;
-        let (pi2, sb2, sz2) = read_fit1_constraint(&fit1_t2.data).await?;
+        let (pi1, sb1, sz1) = read_fit1_constraint(fit1_t1.dataframe()?).await?;
+        let (pi2, sb2, sz2) = read_fit1_constraint(fit1_t2.dataframe()?).await?;
         reporter.info(format!(
             "constraints: t1(pi={:.5}, sb={:.6}, sz={:.4})  t2(pi={:.5}, sb={:.6}, sz={:.4})",
             pi1, sb1, sz1, pi2, sb2, sz2
@@ -351,7 +351,7 @@ impl DagNode for BivariateMixerNode {
 
         reporter.info("writing temp files...");
         write_sumstats(
-            &sumstats1.data,
+            sumstats1.dataframe()?,
             &[
                 (INPUT_RSID_COL, "SNP"),
                 (INPUT_A1_COL, "A1"),
@@ -363,7 +363,7 @@ impl DagNode for BivariateMixerNode {
         )
         .await?;
         write_sumstats(
-            &sumstats2.data,
+            sumstats2.dataframe()?,
             &[
                 (INPUT_RSID_COL, "SNP"),
                 (INPUT_A1_COL, "A1"),

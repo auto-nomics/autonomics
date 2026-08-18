@@ -269,7 +269,7 @@ impl DagNode for CrossrefWorksNode {
         let df = session
             .read_batch(batch)
             .map_err(|e| DagError::Schedule(format!("failed to read Crossref batch: {e}")))?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

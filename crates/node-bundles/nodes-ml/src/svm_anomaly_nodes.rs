@@ -19,7 +19,7 @@ async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagEr
         msg: "no input".into(),
     })?;
     input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await

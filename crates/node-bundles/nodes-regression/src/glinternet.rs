@@ -114,15 +114,16 @@ impl DagNode for GlinternetNode {
             node_type: "glinternet".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "glinternet".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "glinternet".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
         if batches.is_empty() {
             return Err(DagError::NodeError {
                 node_type: "glinternet".into(),

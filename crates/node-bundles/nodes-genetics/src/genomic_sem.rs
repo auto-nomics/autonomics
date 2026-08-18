@@ -314,7 +314,7 @@ impl DagNode for GsemMungeNode {
 
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -856,7 +856,7 @@ impl DagNode for GsemLdscNode {
         {
             let schema_batches =
                 input
-                    .data
+                    .dataframe()?
                     .clone()
                     .collect()
                     .await
@@ -913,7 +913,7 @@ impl DagNode for GsemLdscNode {
 
         // ── 2. Register the input sumstats as a temp table ──
         session
-            .register_table("gsem_sumstats", input.data.clone().into_view())
+            .register_table("gsem_sumstats", input.dataframe()?.clone().into_view())
             .map_err(|e| DagError::NodeError {
                 node_type: GSEM_LDSC_NODE_KIND.into(),
                 msg: format!("register_table failed: {e}"),
@@ -937,7 +937,7 @@ impl DagNode for GsemLdscNode {
         }
 
         if trait_names.len() > 1 {
-            let input_schema = input.data.schema();
+            let input_schema = input.dataframe()?.schema();
             let has_a1 = input_schema.fields().iter().any(|f| f.name() == "a1");
             let has_a2 = input_schema.fields().iter().any(|f| f.name() == "a2");
             if !has_a1 || !has_a2 {
@@ -1950,7 +1950,7 @@ impl DagNode for GsemUsermodelNode {
         })?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -2099,7 +2099,7 @@ impl DagNode for GsemCommonfactorNode {
         })?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -2249,7 +2249,7 @@ impl DagNode for GsemRgmodelNode {
         })?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await

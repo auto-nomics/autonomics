@@ -316,7 +316,7 @@ pub(crate) async fn json_to_output(
     let df = session
         .read_batch(batch)
         .map_err(|e| DagError::Schedule(format!("failed to read OpenGWAS batch: {e}")))?;
-    let mut res: PortOutputs = HashMap::new();
+    let mut res: PortOutputs = PortOutputs::new();
     res.insert(0, df);
     Ok(res)
 }
@@ -333,7 +333,7 @@ pub(crate) async fn gwasinfo_to_output(
     let df = session
         .read_batch(batch)
         .map_err(|e| DagError::Schedule(format!("failed to read gwasinfo batch: {e}")))?;
-    let mut res: PortOutputs = HashMap::new();
+    let mut res: PortOutputs = PortOutputs::new();
     res.insert(0, df);
     Ok(res)
 }

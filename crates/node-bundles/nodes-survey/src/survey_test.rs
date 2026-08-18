@@ -81,15 +81,16 @@ impl DagNode for SvyTtestNode {
             node_type: "svyttest".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyttest".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyttest".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
@@ -290,15 +291,16 @@ impl DagNode for SvyRankTestNode {
             node_type: "svyranktest".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyranktest".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyranktest".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
@@ -490,15 +492,16 @@ impl DagNode for SvyChisqNode {
             node_type: "svychisq".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svychisq".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svychisq".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let row = crate::survey_common::extract_string_column_pub(&batches, &self.spec.row_var)
@@ -664,15 +667,16 @@ impl DagNode for SvyCiPropNode {
             node_type: "svyciprop".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyciprop".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyciprop".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = crate::survey_common::extract_variables(&batches, &[self.spec.variable.clone()])?;
@@ -863,7 +867,7 @@ mod tests {
         };
 
         let mut node = SvyTtestNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -873,7 +877,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let t: f64 = result[0]
             .column(0)
             .as_any()

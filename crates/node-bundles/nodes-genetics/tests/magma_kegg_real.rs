@@ -73,7 +73,7 @@ async fn normalizes_real_kegg_data_to_magma_gene_ids() {
         .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
         .await
         .unwrap();
-    let df = &output[&0];
+    let df = output.dataframe(0).unwrap();
     let total_rows = df.clone().count().await.unwrap();
     assert!(total_rows > 10_000, "expected broad KEGG coverage");
 

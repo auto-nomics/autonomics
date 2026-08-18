@@ -60,6 +60,19 @@ pub enum DagError {
         reason: String,
     },
 
+    /// Connected ports declare incompatible edge payload types.
+    #[error(
+        "port type mismatch on edge {from_node}.{from_port} -> {to_node}.{to_port}: expected {expected}, got {actual}"
+    )]
+    PortTypeMismatch {
+        from_node: String,
+        from_port: u8,
+        to_node: String,
+        to_port: u8,
+        expected: String,
+        actual: String,
+    },
+
     /// A scheduler invariant was violated (e.g. a job result arrived for a node
     /// the scheduler did not dispatch).
     #[error("scheduler: {0}")]
@@ -171,6 +184,19 @@ impl DagError {
                 format!("edge {from_node}.{from_port} -> {to_node}.{to_port}: {reason}"),
             ),
             Self::Schedule(s) => ("schedule", s.clone()),
+            Self::PortTypeMismatch {
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+                expected,
+                actual,
+            } => (
+                "port_type_mismatch",
+                format!(
+                    "edge {from_node}.{from_port} -> {to_node}.{to_port}: expected {expected}, got {actual}"
+                ),
+            ),
             Self::NodeError { node_type, msg } => {
                 ("node_error", format!("node `{node_type}` failed: {msg}"))
             }

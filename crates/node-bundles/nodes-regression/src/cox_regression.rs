@@ -194,7 +194,7 @@ impl DagNode for CoxRegressionNode {
             .first()
             .ok_or(CoxRegressionError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

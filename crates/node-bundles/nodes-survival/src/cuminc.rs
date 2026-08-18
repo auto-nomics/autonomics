@@ -380,7 +380,7 @@ impl DagNode for CumincNode {
             .first()
             .ok_or(CumincError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

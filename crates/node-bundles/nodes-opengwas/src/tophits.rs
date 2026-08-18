@@ -202,7 +202,7 @@ impl DagNode for OpengwasTophitsNode {
             .read_batch(batch)
             .map_err(|e| DagError::Schedule(format!("failed to read tophits batch: {e}")))?;
 
-        let mut res: PortOutputs = datafusion::common::HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

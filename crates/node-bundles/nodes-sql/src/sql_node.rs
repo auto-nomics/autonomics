@@ -195,12 +195,12 @@ impl DagNode for SqlNode {
 
         for inp in inputs {
             // Register each upstream DataFrame under `port_{port}`.
-            let view = inp.data.clone().into_view();
+            let view = inp.dataframe()?.clone().into_view();
             ctx.register_table(format!("port_{}", inp.port), view)
                 .map_err(SqlNodeError::RegisterView)?;
         }
         let out = ctx.sql(&self.sql_query).await?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, out);
         Ok(res)
     }
@@ -255,7 +255,7 @@ mod tests {
     #[tokio::test]
     async fn test_data_intake() {
         let (_ctx, mut node, df) = setup_test_node("SELECT * FROM port_0 WHERE x > 1");
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         // Verify SQL node input mapping: it should use 'port_0' to reference data.
         let output = node
@@ -358,7 +358,7 @@ mod tests {
                    WHERE info['age'] > 28 \
                    ORDER BY id";
         let mut node = SqlNode::new(sql.into());
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outputs = node
             .execute(
                 &node_ctx(),
@@ -367,7 +367,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
 
         assert_eq!(batches.len(), 1, "expected a single RecordBatch");
         let rb = &batches[0];
@@ -409,15 +415,12 @@ mod tests {
         let a_out = node_a
             .execute(
                 &node_ctx(),
-                &[NodeInput {
-                    port: 0,
-                    data: a_df,
-                }],
+                &[NodeInput::new_dataframe(0, a_df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
-        let a_result: DataFrame = a_out.get(&0).unwrap().clone();
+        let a_result: DataFrame = a_out.dataframe(0).unwrap().clone();
 
         // --- upstream node B: produces an `id, score` table ---
         let b_schema = Arc::new(Schema::new(vec![
@@ -438,15 +441,12 @@ mod tests {
         let b_out = node_b
             .execute(
                 &node_ctx(),
-                &[NodeInput {
-                    port: 0,
-                    data: b_df,
-                }],
+                &[NodeInput::new_dataframe(0, b_df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
-        let b_result: DataFrame = b_out.get(&0).unwrap().clone();
+        let b_result: DataFrame = b_out.dataframe(0).unwrap().clone();
 
         // --- downstream node C: JOINs both outputs ---
         let mut node_c = SqlNode::new(
@@ -459,21 +459,15 @@ mod tests {
             .execute(
                 &node_ctx(),
                 &[
-                    NodeInput {
-                        port: 0,
-                        data: a_result,
-                    },
-                    NodeInput {
-                        port: 1,
-                        data: b_result,
-                    },
+                    NodeInput::new_dataframe(0, a_result),
+                    NodeInput::new_dataframe(1, b_result),
                 ],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
 
-        let batches = c_out.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = c_out.dataframe(0).unwrap().clone().collect().await.unwrap();
         assert_eq!(batches.len(), 1);
 
         let rb = &batches[0];

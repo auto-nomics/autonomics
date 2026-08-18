@@ -354,8 +354,14 @@ impl DagNode for LcvNode {
         )
         .await
         .map_err(|e| LcvNodeError::ReferenceData(e.to_string()))?;
-        let (out, n_snp) =
-            Self::run_with_ctx(&ctx, &input1.data, &input2.data, "ld_panel", &self.config).await?;
+        let (out, n_snp) = Self::run_with_ctx(
+            &ctx,
+            input1.dataframe()?,
+            input2.dataframe()?,
+            "ld_panel",
+            &self.config,
+        )
+        .await?;
 
         let batch = build_result_batch(&out, n_snp)?;
         let df = ctx.read_batch(batch).map_err(LcvNodeError::ReadBatch)?;
@@ -794,7 +800,7 @@ mod tests {
             1000.0,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![dag_core::node::NodeInput { port: 0, data: df }];
+        let one_input = vec![dag_core::node::NodeInput::new_dataframe(0, df)];
         let res = node
             .execute(
                 &node_ctx(),

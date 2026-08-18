@@ -1103,7 +1103,7 @@ impl DagNode for TwoSampleMrNode {
 
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await

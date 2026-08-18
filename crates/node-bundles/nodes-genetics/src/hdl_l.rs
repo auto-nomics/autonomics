@@ -333,7 +333,7 @@ pub(crate) async fn collect_input_batches(
 ) -> Result<Vec<RecordBatch>, DagError> {
     let batches: Vec<RecordBatch> =
         input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
@@ -636,15 +636,15 @@ mod tests {
             .execute(
                 &ctx,
                 &[
-                    NodeInput { port: 0, data: df1 },
-                    NodeInput { port: 0, data: df2 },
+                    NodeInput::new_dataframe(0, df1),
+                    NodeInput::new_dataframe(0, df2),
                 ],
                 &reporter,
             )
             .await
             .expect("HDL-L execute should succeed");
 
-        let df = &res[&0];
+        let df = res.dataframe(0).unwrap();
         let batches = df.clone().collect().await.unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 1);

@@ -883,7 +883,7 @@ impl DagNode for HlmeNode {
         let input = inputs.first().ok_or(HlmeNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -1329,7 +1329,7 @@ impl DagNode for HlmePredictNode {
         let input = inputs.first().ok_or(HlmeNodeError::EmptyInput)?;
         let batches: Vec<RecordBatch> =
             input
-                .data
+                .dataframe()?
                 .clone()
                 .collect()
                 .await
@@ -2389,7 +2389,7 @@ mod cross_validation {
         });
 
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let res = node
             .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
@@ -2397,7 +2397,7 @@ mod cross_validation {
             .expect("node execute should succeed");
 
         // Check port 0 (summary).
-        let summary_df = res.get(&0).unwrap().clone();
+        let summary_df = res.dataframe(0).unwrap().clone();
         let summary = summary_df
             .collect()
             .await
@@ -2445,7 +2445,7 @@ mod cross_validation {
         assert!(rel_bic < TOL_LL, "BIC mismatch: Node={bic}, R={golden_bic}");
 
         // Verify port 1 (params) has the right number of rows.
-        let params_df = res.get(&1).unwrap().clone();
+        let params_df = res.dataframe(1).unwrap().clone();
         let params = params_df
             .collect()
             .await
@@ -2519,7 +2519,7 @@ mod cross_validation {
         });
 
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let res = node
             .execute(&test_node_ctx(), &[input], &NodeReporter::noop())
@@ -2527,7 +2527,7 @@ mod cross_validation {
             .expect("node execute should succeed");
 
         // Verify loglik from port 0.
-        let summary_df = res.get(&0).unwrap().clone();
+        let summary_df = res.dataframe(0).unwrap().clone();
         let summary = summary_df
             .collect()
             .await
@@ -2551,7 +2551,7 @@ mod cross_validation {
         eprintln!("PASS node_execute_gbtm2: loglik={loglik:.6} R={golden_ll:.6} rel={rel:.2e}");
 
         // With maxiter=0, posterior is None → port 2 should be an empty batch.
-        let posterior_df = res.get(&2).unwrap().clone();
+        let posterior_df = res.dataframe(2).unwrap().clone();
         let posterior = posterior_df
             .collect()
             .await
@@ -2578,7 +2578,7 @@ mod cross_validation {
     async fn run_full_opt(cfg: HlmeConfig) -> (f64, i32, String, usize, usize) {
         let batch = load_data_batch();
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let mut node = HlmeNode::new(cfg);
         let res = node
@@ -2586,7 +2586,7 @@ mod cross_validation {
             .await
             .expect("node execute should succeed");
 
-        let summary_df = res.get(&0).unwrap().clone();
+        let summary_df = res.dataframe(0).unwrap().clone();
         let summary = summary_df
             .collect()
             .await
@@ -2626,7 +2626,7 @@ mod cross_validation {
             .value(0) as usize;
 
         // Count posterior rows.
-        let posterior_df = res.get(&2).unwrap().clone();
+        let posterior_df = res.dataframe(2).unwrap().clone();
         let posterior = posterior_df
             .collect()
             .await
@@ -2801,7 +2801,7 @@ mod cross_validation {
 
         let batch = load_data_batch_float64_id();
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
 
         let mut node = HlmeNode::new(HlmeConfig {
             subject: "ID".into(),
@@ -2824,7 +2824,7 @@ mod cross_validation {
             .expect("node execute with Float64 ID should succeed");
 
         let summary = res
-            .get(&0)
+            .dataframe(0)
             .unwrap()
             .clone()
             .collect()

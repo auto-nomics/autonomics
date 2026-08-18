@@ -701,7 +701,7 @@ mod tests {
         let json = result_json(result);
         assert_eq!(json["returned"].as_u64().unwrap(), 10);
         assert_eq!(json["truncated"], true);
-        assert_eq!(json["next_offset"].as_u64().unwrap(), 11);
+        assert_eq!(json["next_offset"].as_u64().unwrap(), 10);
         let entries = json["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 10);
     }
@@ -776,6 +776,35 @@ mod tests {
         let page3 = result_json(tool.run(ls).await.unwrap());
         assert_eq!(page3["returned"].as_u64().unwrap(), 10);
         assert_eq!(page3["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn ls_offset_returns_final_entry() {
+        let tool = make_tool();
+        for name in ["one.txt", "two.txt", "three.txt"] {
+            let mut w = input("write");
+            w.path = Some(format!("/{name}"));
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        let mut first = input("ls");
+        first.path = Some("/".into());
+        first.recursive = Some(false);
+        first.limit = Some(2);
+        let first = result_json(tool.run(first).await.unwrap());
+        assert_eq!(first["returned"].as_u64().unwrap(), 2);
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"].as_u64().unwrap(), 2);
+
+        let mut second = input("ls");
+        second.path = Some("/".into());
+        second.recursive = Some(false);
+        second.limit = Some(2);
+        second.offset = Some(2);
+        let second = result_json(tool.run(second).await.unwrap());
+        assert_eq!(second["returned"].as_u64().unwrap(), 1);
+        assert_eq!(second["truncated"], false);
     }
 
     #[tokio::test]
@@ -1467,6 +1496,22 @@ mod tests {
             names.contains(&"/data/ldsc/panel.parquet"),
             "expected nested mounted file, got: {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn ls_prioritizes_mount_points_when_truncated() {
+        let (tool, _backend_root, _source_dir) = make_data_mounted_tool();
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        ls.recursive = Some(false);
+        ls.limit = Some(1);
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let entries = json["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "/data");
+        assert_eq!(json["truncated"], true);
     }
 
     #[tokio::test]

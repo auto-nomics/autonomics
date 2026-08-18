@@ -113,15 +113,16 @@ impl DagNode for SvyGlmNode {
             node_type: "svyglm".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "svyglm".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "svyglm".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
         let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
@@ -269,6 +270,7 @@ impl NodeFactory for SvyGlmFactory {
 // =====================================================================
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SvyCoxphSpec {
     pub design: SurveyDesignSpec,
     /// Response: a survival outcome column name. In R this must be a
@@ -276,8 +278,6 @@ pub struct SvyCoxphSpec {
     pub time_column: String,
     pub event_column: String,
     pub predictors: Vec<String>,
-    #[serde(default = "default_intercept_true")]
-    pub intercept: bool,
 }
 
 pub struct SvyCoxphFactory;
@@ -304,10 +304,19 @@ impl NodeFactory for SvyCoxphFactory {
         spec: serde_json::Value,
         _node_ctx: dag_core::registry::NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
-        {
-            let s: SvyCoxphSpec = serde_json::from_value(spec)?;
-            Ok(Box::new(SvyCoxphNode::new(s)))
+        let schema = self.spec_schema();
+        let schema_json = serde_json::to_value(schema).unwrap_or_default();
+        let s: SvyCoxphSpec = serde_json::from_value(spec).map_err(|source| {
+            dag_core::registry::error::Error::spec_rejection_from(self.kind(), &schema_json, source)
+        })?;
+        if s.predictors.is_empty() {
+            return Err(dag_core::registry::error::Error::SpecRejection {
+                kind: self.kind().to_string(),
+                reason: "predictors must be a non-empty array".to_string(),
+                schema_pretty: serde_json::to_string_pretty(&schema_json).unwrap_or_default(),
+            });
         }
+        Ok(Box::new(SvyCoxphNode::new(s)))
     }
     fn codegen_r(
         &self,
@@ -324,7 +333,7 @@ impl NodeFactory for SvyCoxphFactory {
             s.predictors.join(" + ")
         };
         code.push(format!(
-            "{out} <- svycoxph(Surv({t}, {e}) ~ {rhs}, {des})",
+            "{out} <- svycoxph(Surv({t}, {e}) ~ {rhs}, {des}, ties = \"breslow\")",
             t = s.time_column,
             e = s.event_column
         ));
@@ -858,15 +867,16 @@ impl SpecExecute for SvyCoxphSpec {
             node_type: kind.into(),
             msg: "no input".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: kind.into(),
-                msg: format!("collect: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("collect: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
         let t = crate::survey_common::extract_variables(
             &batches,
@@ -884,17 +894,29 @@ impl SpecExecute for SvyCoxphSpec {
             })?;
         let se = fit.se();
         let terms = self.predictors.clone();
+        let t_stats: Vec<f64> = fit
+            .coefficients
+            .iter()
+            .zip(&se)
+            .map(|(coef, stderr)| {
+                if *stderr > 0.0 {
+                    coef / stderr
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect();
+        let p_values: Vec<f64> = t_stats
+            .iter()
+            .map(|&t| crate::survey_common::student_t_two_sided_p(t, fit.df as f64))
+            .collect();
 
         crate::survey_common::build_model_output_batch(
             &terms,
             &fit.coefficients,
             &se,
-            &fit.coefficients
-                .iter()
-                .zip(&se)
-                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
-                .collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()],
+            &t_stats,
+            &p_values,
             &vec![fit.df as f64; fit.coefficients.len()],
         )
         .map(|b| {
@@ -932,15 +954,16 @@ impl SpecExecute for SvySurvregSpec {
             node_type: kind.into(),
             msg: "no input".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: kind.into(),
-                msg: format!("collect: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("collect: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
         let t = crate::survey_common::extract_variables(
             &batches,
@@ -1008,15 +1031,16 @@ impl SpecExecute for SvyOlrSpec {
             node_type: kind.into(),
             msg: "no input".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: kind.into(),
-                msg: format!("collect: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("collect: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
         let y_raw = crate::survey_common::extract_string_column_pub(&batches, &self.response)
             .map_err(|e| DagError::NodeError {
@@ -1095,15 +1119,16 @@ impl SpecExecute for SvyLoglinSpec {
             node_type: kind.into(),
             msg: "no input".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: kind.into(),
-                msg: format!("collect: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("collect: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
         let row = crate::survey_common::extract_string_column_pub(&batches, &self.variables[0])
             .map_err(|e| DagError::NodeError {
@@ -1180,15 +1205,16 @@ impl SpecExecute for SvyIvregSpec {
             node_type: kind.into(),
             msg: "no input".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: kind.into(),
-                msg: format!("collect: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: kind.into(),
+                    msg: format!("collect: {e}"),
+                })?;
         let design = crate::survey_common::build_survey_design(&self.design, &batches)?;
         let y = crate::survey_common::extract_variables(
             &batches,
@@ -1361,7 +1387,7 @@ mod tests {
         };
 
         let mut node = SvyGlmNode::new(spec);
-        let input = NodeInput { port: 0, data: df2 };
+        let input = NodeInput::new_dataframe(0, df2);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1371,7 +1397,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
 
@@ -1432,7 +1458,7 @@ mod tests {
     #[test]
     fn svycoxph_spec() {
         let json = serde_json::json!({
-            "design": {"ids": ["psu"]},
+            "design": {"ids": []},
             "time_column": "time",
             "event_column": "event",
             "predictors": ["x1"]
@@ -1440,5 +1466,95 @@ mod tests {
         let s: SvyCoxphSpec = serde_json::from_value(json).unwrap();
         assert_eq!(s.time_column, "time");
         assert_eq!(s.event_column, "event");
+        assert!(s.design.ids.is_empty());
+    }
+
+    #[test]
+    fn svycoxph_schema_has_no_intercept() {
+        let schema = serde_json::to_value(SvyCoxphFactory.spec_schema()).unwrap();
+        assert!(schema["properties"].get("intercept").is_none());
+    }
+
+    #[test]
+    fn svycoxph_rejects_removed_intercept_field() {
+        let json = serde_json::json!({
+            "design": {"ids": []},
+            "time_column": "time",
+            "event_column": "event",
+            "predictors": ["x"],
+            "intercept": false
+        });
+        assert!(serde_json::from_value::<SvyCoxphSpec>(json).is_err());
+    }
+
+    #[tokio::test]
+    async fn svycoxph_node_reports_nonzero_t_p_value() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("time", DataType::Float64, false),
+            Field::new("event", DataType::Float64, false),
+            Field::new("x", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 5.0, 6.0, 1.5])),
+                Arc::new(Float64Array::from(vec![1.0, 1.0, 1.0, 0.0, 1.0, 0.0])),
+                Arc::new(Float64Array::from(vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0])),
+            ],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+
+        let spec = SvyCoxphSpec {
+            design: crate::survey_common::SurveyDesignSpec {
+                ids: vec![],
+                strata: vec![],
+                probs: vec![],
+                weights: None,
+                fpc: vec![],
+                nest: false,
+                pps: "none".into(),
+                variance: "HT".into(),
+                lonely_psu: None,
+            },
+            time_column: "time".into(),
+            event_column: "event".into(),
+            predictors: vec!["x".into()],
+        };
+        let mut node = SvyCoxphNode::new(spec);
+        let outs = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+
+        let estimate = result[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+        let stderr = result[0]
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+        let p_value = result[0]
+            .column(4)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
+
+        assert!((estimate - 0.8216793853198499).abs() < 1e-8);
+        assert!(stderr.is_finite() && stderr > 0.0);
+        assert!(p_value.is_finite() && p_value > 0.0 && p_value <= 1.0);
     }
 }

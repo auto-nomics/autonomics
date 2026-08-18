@@ -115,6 +115,9 @@ pub fn svy_coxph(
     x: &[Vec<f64>],
     design: &SurveyDesign,
 ) -> Result<SvyCoxphFit> {
+    const MAX_ITER: usize = 50;
+    const TOL: f64 = 1e-8;
+
     let n = design.n_obs;
     let p = x.len();
     if time.len() != n || event.len() != n {
@@ -124,185 +127,147 @@ pub fn svy_coxph(
             b: n,
         });
     }
+    if n == 0 || p == 0 {
+        return Err(SurveyError::InvalidInput(
+            "at least one observation and predictor are required".into(),
+        ));
+    }
+    for &t in time {
+        if !t.is_finite() {
+            return Err(SurveyError::InvalidInput(
+                "survival times must be finite".into(),
+            ));
+        }
+    }
+    for &e in event {
+        if e != 0.0 && e != 1.0 {
+            return Err(SurveyError::InvalidInput(format!(
+                "event indicator must be 0 or 1, got {e}"
+            )));
+        }
+    }
+    for col in x {
+        if col.len() != n {
+            return Err(SurveyError::LengthMismatch {
+                context: "predictor vs design".into(),
+                a: col.len(),
+                b: n,
+            });
+        }
+        for &v in col {
+            if !v.is_finite() {
+                return Err(SurveyError::InvalidInput(
+                    "predictors must be finite".into(),
+                ));
+            }
+        }
+    }
+    if !event.contains(&1.0) {
+        return Err(SurveyError::InvalidInput("no events in Cox model".into()));
+    }
+
     let w = design.weights();
-    let w_mean: f64 = w.iter().sum::<f64>() / n as f64;
+    let w_mean = w.iter().sum::<f64>() / n as f64;
     let ws: Vec<f64> = w.iter().map(|wi| wi / w_mean).collect();
 
-    // Sort by time (descending for risk set computation).
+    // Descending order gives a growing prefix risk set. Events precede
+    // censorings within a tie so one pass consumes the complete tie group.
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| time[b].total_cmp(&time[a]));
+    order.sort_by(|&a, &b| {
+        time[b]
+            .total_cmp(&time[a])
+            .then(event[b].total_cmp(&event[a]))
+    });
 
-    // Newton-Raphson for partial likelihood.
     let mut beta = vec![0.0_f64; p];
-    for _iter in 0..25 {
-        let mut score = vec![0.0_f64; p];
-        let mut info = vec![vec![0.0_f64; p]; p];
-        // Iterate through sorted times; at each position, the risk set
-        // is all observations at or before this position in `order`.
-        // Since we sorted descending, risk set = order[0..=current_idx].
-        let mut idx = 0;
-        while idx < n {
-            let i = order[idx];
-            if event[i] == 0.0 {
-                idx += 1;
-                continue;
-            }
-            // Find the group of tied events at this time.
-            let t = time[i];
-            let mut tie_end = idx;
-            let mut d = 0.0; // weighted number of events
-            while tie_end < n && time[order[tie_end]] == t && event[order[tie_end]] == 1.0 {
-                d += ws[order[tie_end]];
-                tie_end += 1;
-            }
-            // Risk set: all obs from idx to end (since sorted descending).
-            // S0 = sum_{j in R} w_j exp(eta_j)
-            // S1 = sum_{j in R} w_j X_j exp(eta_j)
-            let mut s0 = 0.0_f64;
-            let mut s1 = vec![0.0_f64; p];
-            let mut s2 = vec![vec![0.0_f64; p]; p];
-            for k in idx..n {
-                let j = order[k];
-                let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-                let exp_eta = eta.exp();
-                let wj = ws[j] * exp_eta;
-                s0 += wj;
-                for a in 0..p {
-                    s1[a] += wj * x[a][j];
-                    for b in 0..p {
-                        s2[a][b] += wj * x[a][j] * x[b][j];
-                    }
-                }
-            }
-            // Score contribution: sum of event X - d * S1/S0
-            for k in idx..tie_end {
-                let j = order[k];
-                for a in 0..p {
-                    score[a] += ws[j] * x[a][j];
-                }
-            }
-            for a in 0..p {
-                score[a] -= d * s1[a] / s0;
-            }
-            // Info: d * (S2/S0 - (S1/S0)^2)
-            for a in 0..p {
-                for b in 0..p {
-                    info[a][b] += d * (s2[a][b] / s0 - s1[a] * s1[b] / (s0 * s0));
-                }
-            }
-            idx = tie_end;
-        }
-        // Newton step.
+    let mut converged = false;
+    for _ in 0..MAX_ITER {
+        let (score, info, ll_current) = cox_moments(time, event, x, &beta, &ws, &order);
+
         let info_m = Mat::from_fn(p, p, |a, b| info[a][b]);
         let score_m = Mat::from_fn(p, 1, |a, _| score[a]);
-        let llt = match Llt::new(info_m.as_ref(), faer::Side::Lower) {
-            Ok(l) => l,
-            Err(_) => break,
-        };
+        let llt = Llt::new(info_m.as_ref(), faer::Side::Lower)
+            .ok()
+            .ok_or_else(|| SurveyError::InvalidInput("singular Cox information".into()))?;
         let delta = llt.solve(&score_m);
-        let max_d = (0..p).map(|a| delta[(a, 0)].abs()).fold(0.0_f64, f64::max);
-        for a in 0..p {
-            beta[a] += delta[(a, 0)];
-        }
-        if max_d < 1e-8 {
+
+        let mut step = 1.0_f64;
+        let beta_trial = loop {
+            let trial: Vec<f64> = (0..p).map(|a| beta[a] + delta[(a, 0)] * step).collect();
+            let (_, _, ll_trial) = cox_moments(time, event, x, &trial, &ws, &order);
+            if ll_trial >= ll_current || step < 1e-6 {
+                break trial;
+            }
+            step *= 0.5;
+        };
+
+        let max_delta = (0..p)
+            .map(|a| (delta[(a, 0)] * step).abs())
+            .fold(0.0_f64, f64::max);
+        beta = beta_trial;
+        if max_delta < TOL {
+            converged = true;
             break;
         }
     }
+    if !converged {
+        return Err(SurveyError::InvalidInput(
+            "Cox model failed to converge".into(),
+        ));
+    }
 
-    // Compute dfbeta residuals: per-observation score contributions.
-    let n_events = event.iter().filter(|&&e| e == 1.0).count();
+    let (_, info_final, _) = cox_moments(time, event, x, &beta, &ws, &order);
+    let info_m = Mat::from_fn(p, p, |a, b| info_final[a][b]);
+    let inv_info = Llt::new(info_m.as_ref(), faer::Side::Lower)
+        .ok()
+        .ok_or_else(|| SurveyError::InvalidInput("singular Cox information".into()))?
+        .inverse();
+
+    // Decompose the estimating function into per-observation dfbeta values.
+    // Events carry their observed covariate; risk members carry the hazard-
+    // weighted expected covariate for the full tied-event weight.
     let mut dbeta = vec![vec![0.0_f64; p]; n];
     let mut idx = 0;
     while idx < n {
-        let i = order[idx];
-        if event[i] == 0.0 {
-            idx += 1;
-            continue;
+        let t = time[order[idx]];
+        let mut group_end = idx;
+        while group_end < n && time[order[group_end]] == t {
+            group_end += 1;
         }
-        let t = time[i];
-        let mut tie_end = idx;
-        while tie_end < n && time[order[tie_end]] == t && event[order[tie_end]] == 1.0 {
-            tie_end += 1;
-        }
-        // Risk set.
-        let mut s0 = 0.0;
-        let mut s1 = vec![0.0_f64; p];
-        for k in idx..n {
-            let j = order[k];
-            let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-            let wj = ws[j] * eta.exp();
-            s0 += wj;
-            for a in 0..p {
-                s1[a] += wj * x[a][j];
+        let events: Vec<usize> = order[idx..group_end]
+            .iter()
+            .copied()
+            .filter(|&j| event[j] == 1.0)
+            .collect();
+        if !events.is_empty() {
+            let mut s0 = 0.0_f64;
+            let mut s1 = vec![0.0_f64; p];
+            for &j in &order[..group_end] {
+                let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
+                let weighted_risk = ws[j] * eta.exp();
+                s0 += weighted_risk;
+                for a in 0..p {
+                    s1[a] += weighted_risk * x[a][j];
+                }
             }
-        }
-        // For each subject in risk set, their score contribution at this time.
-        for k in idx..n {
-            let j = order[k];
-            let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-            let wj = ws[j] * eta.exp();
-            for a in 0..p {
-                let contribution = wj * (x[a][j] - s1[a] / s0);
-                dbeta[j][a] += contribution;
+            let x_bar: Vec<f64> = s1.iter().map(|s| s / s0).collect();
+            let event_weight: f64 = events.iter().map(|&j| ws[j]).sum();
+            for &j in &order[..group_end] {
+                let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
+                let hazard_share = ws[j] * eta.exp() / s0;
+                for a in 0..p {
+                    dbeta[j][a] -= hazard_share * event_weight * x_bar[a];
+                }
             }
-        }
-        // For event subjects, add their X.
-        for k in idx..tie_end {
-            let j = order[k];
-            for a in 0..p {
-                dbeta[j][a] -= ws[j] * x[a][j];
-            }
-        }
-        idx = tie_end;
-    }
-
-    // Scale by inverse information.
-    let mut info_final = vec![vec![0.0_f64; p]; p];
-    idx = 0;
-    while idx < n {
-        let i = order[idx];
-        if event[i] == 0.0 {
-            idx += 1;
-            continue;
-        }
-        let t = time[i];
-        let mut tie_end = idx;
-        let mut d = 0.0;
-        while tie_end < n && time[order[tie_end]] == t && event[order[tie_end]] == 1.0 {
-            d += ws[order[tie_end]];
-            tie_end += 1;
-        }
-        let mut s0 = 0.0;
-        let mut s1 = vec![0.0_f64; p];
-        let mut s2 = vec![vec![0.0_f64; p]; p];
-        for k in idx..n {
-            let j = order[k];
-            let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-            let wj = ws[j] * eta.exp();
-            s0 += wj;
-            for a in 0..p {
-                s1[a] += wj * x[a][j];
-                for b in 0..p {
-                    s2[a][b] += wj * x[a][j] * x[b][j];
+            for &j in &events {
+                for a in 0..p {
+                    dbeta[j][a] += ws[j] * x[a][j];
                 }
             }
         }
-        for a in 0..p {
-            for b in 0..p {
-                info_final[a][b] += d * (s2[a][b] / s0 - s1[a] * s1[b] / (s0 * s0));
-            }
-        }
-        idx = tie_end;
+        idx = group_end;
     }
-    let info_m = Mat::from_fn(p, p, |a, b| info_final[a][b]);
-    let inv_info = match Llt::new(info_m.as_ref(), faer::Side::Lower) {
-        Ok(l) => l.inverse(),
-        Err(_) => {
-            return Err(SurveyError::InvalidInput("singular Cox info".into()));
-        }
-    };
 
-    // influence = dbeta * inv_info.
     let mut influence = vec![vec![0.0_f64; p]; n];
     for i in 0..n {
         for a in 0..p {
@@ -316,15 +281,86 @@ pub fn svy_coxph(
         .collect();
     let design_cov = svy_cprod_matrix(&zs, design)?;
     let hazard_ratios = beta.iter().map(|&b| b.exp()).collect();
+    let n_events = event.iter().filter(|&&e| e == 1.0).count();
 
     Ok(SvyCoxphFit {
         coefficients: beta,
         design_cov,
         hazard_ratios,
-        df: design.degf(),
+        df: design.degf().saturating_sub(p - 1),
         n,
         n_events,
     })
+}
+
+fn cox_moments(
+    time: &[f64],
+    event: &[f64],
+    x: &[Vec<f64>],
+    beta: &[f64],
+    ws: &[f64],
+    order: &[usize],
+) -> (Vec<f64>, Vec<Vec<f64>>, f64) {
+    let n = time.len();
+    let p = x.len();
+    let eta: Vec<f64> = (0..n)
+        .map(|j| (0..p).map(|a| beta[a] * x[a][j]).sum())
+        .collect();
+    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp().min(1e300)).collect();
+
+    let mut score = vec![0.0_f64; p];
+    let mut info = vec![vec![0.0_f64; p]; p];
+    let mut ll = 0.0_f64;
+    let mut idx = 0;
+
+    while idx < n {
+        let t = time[order[idx]];
+        let mut group_end = idx;
+        while group_end < n && time[order[group_end]] == t {
+            group_end += 1;
+        }
+        let events: Vec<usize> = order[idx..group_end]
+            .iter()
+            .copied()
+            .filter(|&j| event[j] == 1.0)
+            .collect();
+
+        if !events.is_empty() {
+            let mut s0 = 0.0_f64;
+            let mut s1 = vec![0.0_f64; p];
+            let mut s2 = vec![vec![0.0_f64; p]; p];
+            for &j in &order[..group_end] {
+                let weighted_risk = ws[j] * exp_eta[j];
+                s0 += weighted_risk;
+                for a in 0..p {
+                    s1[a] += weighted_risk * x[a][j];
+                    for b in 0..p {
+                        s2[a][b] += weighted_risk * x[a][j] * x[b][j];
+                    }
+                }
+            }
+
+            let inv_s0 = 1.0 / s0;
+            let x_bar: Vec<f64> = s1.iter().map(|s| s * inv_s0).collect();
+            let event_weight: f64 = events.iter().map(|&j| ws[j]).sum();
+            for &j in &events {
+                for a in 0..p {
+                    score[a] += ws[j] * x[a][j];
+                    ll += ws[j] * eta[j];
+                }
+            }
+            for a in 0..p {
+                score[a] -= event_weight * x_bar[a];
+                for b in 0..p {
+                    info[a][b] += event_weight * (s2[a][b] * inv_s0 - x_bar[a] * x_bar[b]);
+                }
+            }
+            ll -= event_weight * s0.ln();
+        }
+        idx = group_end;
+    }
+
+    (score, info, ll)
 }
 
 // =====================================================================
@@ -498,6 +534,7 @@ pub fn svy_survreg(
 mod tests {
     use super::*;
     use crate::design::SurveyDesignBuilder;
+    use statkit::regression::cox;
 
     #[test]
     fn svy_km_matches_r() {
@@ -543,5 +580,54 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn svy_coxph_unweighted_matches_cox_partial_likelihood() {
+        let time = vec![4.0, 3.0, 2.0, 5.0, 6.0, 1.5];
+        let event = vec![1.0, 1.0, 1.0, 0.0, 1.0, 0.0];
+        let x = vec![vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0]];
+        let d = SurveyDesignBuilder::new()
+            .strata(vec!["1".into(); time.len()])
+            .cluster((0..time.len()).map(|i| i.to_string()).collect())
+            .build()
+            .unwrap();
+
+        let fit = svy_coxph(&time, &event, &x, &d).unwrap();
+        let pred_refs: Vec<&[f64]> = x.iter().map(|v| v.as_slice()).collect();
+        let expected = cox(&time, &event, &pred_refs).unwrap();
+
+        assert_eq!(fit.coefficients.len(), expected.coefficients.len());
+        for (got, want) in fit.coefficients.iter().zip(&expected.coefficients) {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "coefficient: got {got}, expected {want}"
+            );
+        }
+        assert!(fit.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn svy_coxph_breslow_ties_include_censored_records() {
+        // The censored subject at time 2 must remain in the risk set even
+        // though events and censorings are interleaved within the tie group.
+        let time = vec![2.0, 2.0, 2.0, 1.0, 1.0];
+        let event = vec![1.0, 0.0, 1.0, 0.0, 0.0];
+        let x = vec![vec![1.0, 0.0, 0.0, 1.0, 0.0]];
+        let d = SurveyDesignBuilder::new()
+            .strata(vec!["1".into(); time.len()])
+            .cluster((0..time.len()).map(|i| i.to_string()).collect())
+            .build()
+            .unwrap();
+
+        let fit = svy_coxph(&time, &event, &x, &d).unwrap();
+        let pred_refs: Vec<&[f64]> = x.iter().map(|v| v.as_slice()).collect();
+        let expected = cox(&time, &event, &pred_refs).unwrap();
+        assert!(
+            (fit.coefficients[0] - expected.coefficients[0]).abs() < 1e-8,
+            "coefficient: got {}, expected {}",
+            fit.coefficients[0],
+            expected.coefficients[0]
+        );
     }
 }

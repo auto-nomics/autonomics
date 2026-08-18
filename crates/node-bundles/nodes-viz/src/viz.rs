@@ -238,15 +238,16 @@ impl DagNode for VizNode {
         // Collect the upstream DataFrame to concrete RecordBatches for the
         // renderer. This is the eager materialization point — visualization
         // needs all rows in memory to draw them.
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "visualization".to_string(),
-                msg: format!("collecting input failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "visualization".to_string(),
+                    msg: format!("collecting input failed: {e}"),
+                })?;
 
         // Render the PNG to bytes in a private tempdir (R writes to scratch,
         // never to the caller's filesystem), then upload the bytes into the
@@ -281,7 +282,7 @@ impl DagNode for VizNode {
             .map_err(|e| VizError::OpendalWrite(e.to_string()))?;
 
         // No DataFrame output — like SinkNode.
-        Ok(HashMap::new())
+        Ok(PortOutputs::new())
     }
 }
 
@@ -345,7 +346,7 @@ mod tests {
         let res = node
             .execute(
                 &node_ctx(),
-                &[NodeInput { port: 0, data: df }],
+                &[NodeInput::new_dataframe(0, df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await

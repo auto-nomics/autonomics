@@ -92,15 +92,16 @@ impl DagNode for PostStratifyNode {
             node_type: "post_stratify".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "post_stratify".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "post_stratify".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = build_survey_design(&self.spec.design, &batches)?;
         let strata_vec =
@@ -323,15 +324,16 @@ impl DagNode for RakeNode {
             node_type: "rake".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "rake".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "rake".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = build_survey_design(&self.spec.design, &batches)?;
 
@@ -582,15 +584,16 @@ impl DagNode for CalibrateNode {
             node_type: "calibrate".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "calibrate".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "calibrate".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = build_survey_design(&self.spec.design, &batches)?;
         let aux = crate::survey_common::extract_variables(&batches, &self.spec.variables)?;
@@ -783,15 +786,16 @@ impl DagNode for TrimWeightsNode {
             node_type: "trim_weights".into(),
             msg: "no input data".into(),
         })?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "trim_weights".into(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "trim_weights".into(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         let design = build_survey_design(&self.spec.design, &batches)?;
         let upper = self.spec.upper.unwrap_or(f64::INFINITY);
@@ -976,7 +980,7 @@ mod tests {
         };
 
         let mut node = PostStratifyNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -986,7 +990,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 8);
 
@@ -1074,7 +1078,7 @@ mod tests {
         };
 
         let mut node = RakeNode::new(spec);
-        let input = NodeInput { port: 0, data: df };
+        let input = NodeInput::new_dataframe(0, df);
         let outs = node
             .execute(
                 &node_ctx(),
@@ -1084,7 +1088,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = outs[&0].clone().collect().await.unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         let schema = result[0].schema();
         let idx = schema
             .index_of("raked_weight")

@@ -319,7 +319,7 @@ impl DagNode for LiabilityNode {
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LiabilityNodeError::NoInput)?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

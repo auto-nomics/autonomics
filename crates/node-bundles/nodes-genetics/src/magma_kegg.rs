@@ -490,7 +490,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let df = &output[&0];
+        let df = output.dataframe(0).unwrap();
         let results = df.clone().collect().await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].num_rows(), 2);

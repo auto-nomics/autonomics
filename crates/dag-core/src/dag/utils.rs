@@ -8,8 +8,8 @@ use crate::dag::{
 };
 
 /// Gather a node's predecessor outputs into [`NodeInput`]s, one per connected
-/// input port, in declared edge order. Cloning the [`DataFrame`] handles is
-/// cheap (they are `Arc` internally).
+/// input port, in declared edge order. DataFrame handles remain cheap to clone;
+/// file values are path references.
 ///
 /// Each edge routes exactly the DataFrame produced on its `from_port`. The
 /// injected `NodeInput.port` is the edge's `to_port`, and `df_name` is a
@@ -27,7 +27,7 @@ pub fn build_inputs(
                 continue;
             };
             // Pull exactly the DataFrame produced on this edge's output port.
-            let Some(df) = pred_outputs.get(&edge.from_port) else {
+            let Some(value) = pred_outputs.get(&edge.from_port) else {
                 continue;
             };
             inputs.push(NodeInput {
@@ -36,7 +36,7 @@ pub fn build_inputs(
                 // identifies an edge under strict 1:1, so this never collides in
                 // the shared SessionContext.
                 // df_name: edge.to_port.clone(),
-                data: df.clone(),
+                data: value.clone(),
             });
         }
     }

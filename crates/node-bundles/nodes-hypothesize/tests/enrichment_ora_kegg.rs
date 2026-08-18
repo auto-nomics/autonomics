@@ -113,18 +113,9 @@ async fn kegg_ora_reproduces_validated_hypergeometric_result() {
         .build(spec, node_ctx.clone())
         .unwrap();
     let inputs = vec![
-        NodeInput {
-            port: 0,
-            data: query,
-        },
-        NodeInput {
-            port: 1,
-            data: mapping,
-        },
-        NodeInput {
-            port: 2,
-            data: metadata,
-        },
+        NodeInput::new_dataframe(0, query),
+        NodeInput::new_dataframe(1, mapping),
+        NodeInput::new_dataframe(2, metadata),
     ];
 
     let started = Instant::now();
@@ -132,7 +123,13 @@ async fn kegg_ora_reproduces_validated_hypergeometric_result() {
         .execute(&node_ctx, &inputs, &NodeReporter::noop())
         .await
         .unwrap();
-    let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+    let batches = outputs
+        .dataframe(0)
+        .unwrap()
+        .clone()
+        .collect()
+        .await
+        .unwrap();
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
     assert!(batch.num_rows() >= 70);

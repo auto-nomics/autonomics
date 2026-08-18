@@ -330,7 +330,7 @@ fn arr_i64(arr: &dyn Array, i: usize) -> i64 {
 async fn collect_input_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, DagError> {
     let batches: Vec<RecordBatch> =
         input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

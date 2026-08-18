@@ -601,7 +601,7 @@ async fn collect_ports(inputs: &[NodeInput]) -> Result<BTreeMap<u8, Vec<RecordBa
     let mut ports = BTreeMap::new();
     for input in inputs {
         let collected =
-            input.data.clone().collect().await.map_err(|e| {
+            input.dataframe()?.clone().collect().await.map_err(|e| {
                 node_error(format!("failed to collect input port {}: {e}", input.port))
             })?;
         ports
@@ -857,30 +857,23 @@ mod tests {
 
     fn inputs(ctx: &SessionContext, with_background: bool, numeric_ids: bool) -> Vec<NodeInput> {
         let mut inputs = vec![
-            NodeInput {
-                port: 0,
-                data: ctx.read_batch(query_batch(numeric_ids)).unwrap(),
-            },
-            NodeInput {
-                port: 1,
-                data: ctx
-                    .read_batch(mapping_batch(if numeric_ids {
-                        DataType::Int64
-                    } else {
-                        DataType::Utf8
-                    }))
-                    .unwrap(),
-            },
-            NodeInput {
-                port: 2,
-                data: ctx.read_batch(metadata_batch()).unwrap(),
-            },
+            NodeInput::new_dataframe(0, ctx.read_batch(query_batch(numeric_ids)).unwrap()),
+            NodeInput::new_dataframe(
+                1,
+                ctx.read_batch(mapping_batch(if numeric_ids {
+                    DataType::Int64
+                } else {
+                    DataType::Utf8
+                }))
+                .unwrap(),
+            ),
+            NodeInput::new_dataframe(2, ctx.read_batch(metadata_batch()).unwrap()),
         ];
         if with_background {
-            inputs.push(NodeInput {
-                port: 3,
-                data: ctx.read_batch(background_batch()).unwrap(),
-            });
+            inputs.push(NodeInput::new_dataframe(
+                3,
+                ctx.read_batch(background_batch()).unwrap(),
+            ));
         }
         inputs
     }
@@ -947,7 +940,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         assert_eq!(batch.num_rows(), 2);
@@ -1023,7 +1022,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         let universe = batches[0]
             .column(3)
             .as_any()
@@ -1044,7 +1049,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         let universe = batches[0]
             .column(3)
             .as_any()
@@ -1084,7 +1095,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let batches = outputs.get(&0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         let ids = batches[0]
             .column(0)
             .as_any()

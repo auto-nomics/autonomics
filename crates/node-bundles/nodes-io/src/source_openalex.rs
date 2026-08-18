@@ -191,7 +191,7 @@ impl DagNode for OpenAlexWorksNode {
         let session = ctx.session();
         let batch = build_works_batch(works)?;
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }
@@ -487,7 +487,7 @@ impl DagNode for OpenAlexGroupByNode {
         .map_err(|e| DagError::Schedule(format!("failed to build group_by batch: {e}")))?;
 
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

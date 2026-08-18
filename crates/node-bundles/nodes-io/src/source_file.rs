@@ -1,8 +1,9 @@
 //! File source node: brings a file (local or registered object store) into the
 //! DAG as a `DataFrame`.
 //!
-//! A [`FileSourceNode`] has no inputs and produces exactly one output. The
-//! format is auto-detected from the extension, or explicitly given. Tabular
+//! A [`FileSourceNode`] can either read an external path or consume an upstream
+//! file reference, and produces exactly one DataFrame output. The format is
+//! auto-detected from the extension or explicitly given. Tabular
 //! formats (CSV, Parquet) go through DataFusion natively; bioinformatics
 //! formats (VCF, BAM, BED, …) go through `biofusion`, which already exposes
 //! them as DataFusion tables. Symmetric to [`crate::nodes::FileSinkNode`] for
@@ -21,9 +22,11 @@ use thiserror::Error;
 
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
+    codegen::CodegenTarget,
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
+    value::PortType,
 };
 
 /// Supported file formats. Tabular formats go through DataFusion natively;
@@ -94,6 +97,47 @@ impl FileFormat {
             .find(|(s, _)| lower.ends_with(s))
             .map(|(_, f)| *f)
     }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.to_ascii_lowercase().as_str() {
+            "csv" => Some(Self::Csv),
+            "tsv" => Some(Self::Tsv),
+            "parquet" => Some(Self::Parquet),
+            "vcf" => Some(Self::Vcf),
+            "bcf" => Some(Self::Bcf),
+            "fasta" => Some(Self::Fasta),
+            "fastq" => Some(Self::Fastq),
+            "bed" => Some(Self::Bed),
+            "gtf" => Some(Self::Gtf),
+            "gff" => Some(Self::Gff),
+            "sam" => Some(Self::Sam),
+            "bam" => Some(Self::Bam),
+            "cram" => Some(Self::Cram),
+            "bigwig" | "bw" => Some(Self::BigWig),
+            "bigbed" | "bb" => Some(Self::BigBed),
+            _ => None,
+        }
+    }
+
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+            Self::Parquet => "parquet",
+            Self::Vcf => "vcf",
+            Self::Bcf => "bcf",
+            Self::Fasta => "fasta",
+            Self::Fastq => "fastq",
+            Self::Bed => "bed",
+            Self::Gtf => "gtf",
+            Self::Gff => "gff",
+            Self::Sam => "sam",
+            Self::Bam => "bam",
+            Self::Cram => "cram",
+            Self::BigWig => "bigwig",
+            Self::BigBed => "bigbed",
+        }
+    }
 }
 
 /// Errors specific to [`FileSourceNode`].
@@ -127,12 +171,12 @@ impl ::dag_core::dag::NodeError for FileSourceError {
 #[derive(Clone)]
 pub struct FileSourceNode {
     meta: NodePorts,
-    path: String,
+    path: Option<String>,
     format: Option<FileFormat>,
 }
 
 impl FileSourceNode {
-    pub fn new(path: String, format: Option<FileFormat>) -> Self {
+    pub fn new(path: Option<String>, format: Option<FileFormat>) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
@@ -146,16 +190,18 @@ impl FileSourceNode {
 pub struct FileSourceNodeSpec {
     /// A file path or URL. When `format` is `None`, it is inferred from the
     /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
-    pub path: String,
+    pub path: Option<String>,
     pub format: Option<FileFormat>,
 }
 
 pub struct FileSourceNodeFactory {}
 
-/// Static port layout for every [`FileSourceNode`]: no inputs, a single
-/// untyped output port (schema discovered from the source at runtime).
+/// Static port layout for every [`FileSourceNode`]: an optional file input and
+/// a single DataFrame output (schema discovered from the source at runtime).
 fn port_layout() -> NodePorts {
-    NodePorts::new().add_output_port(None)
+    NodePorts::new()
+        .add_optional_input_port_of_type(PortType::File)
+        .add_output_port(None)
 }
 
 impl NodeFactory for FileSourceNodeFactory {
@@ -168,11 +214,12 @@ impl NodeFactory for FileSourceNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "A file data source node that reads external files into the DAG as a \
-        DataFrame. Supports local/remote files: tabular formats (CSV, Parquet) \
-        via DataFusion, and bioinformatics formats (VCF, BAM, BED, GTF, FASTA, \
-        etc.) via biofusion. Format is inferred from the extension when not \
-        given explicitly. No input ports; one untyped output port."
+        "A file source node that reads an external path or an upstream file \
+        reference into the DAG as a DataFrame. Supports local/remote files: \
+        tabular formats (CSV, Parquet) via DataFusion, and bioinformatics \
+        formats (VCF, BAM, BED, GTF, FASTA, etc.) via biofusion. Format is \
+        inferred from the extension when not given explicitly. Optional file \
+        input; one DataFrame output."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -204,28 +251,46 @@ impl NodeFactory for FileSourceNodeFactory {
                 source: e,
             })?;
 
-        let path = &node_spec.path;
+        let connected_input = ctx
+            .input_vars
+            .first()
+            .is_some_and(|input| !input.starts_with("__missing_input"));
+        let literal_path = node_spec.path.as_deref();
+        if literal_path.is_none() && !connected_input {
+            return Err(CodegenError::NotSupported {
+                kind: "source_file".into(),
+                target: CodegenTarget::R,
+            });
+        }
         let fmt = node_spec
             .format
-            .or_else(|| FileFormat::from_path(path))
+            .or_else(|| literal_path.and_then(FileFormat::from_path))
             .unwrap_or(FileFormat::Csv);
+        let path = if connected_input {
+            ctx.input_vars
+                .first()
+                .expect("checked input presence")
+                .clone()
+        } else {
+            format!(r#""{}""#, literal_path.unwrap_or_default())
+        };
 
         let out = ctx.output_var.to_string();
         let read_call = match fmt {
             FileFormat::Csv | FileFormat::Tsv => {
-                format!(r#"{out} <- fread("{path}")"#)
+                format!(r#"{out} <- fread({path})"#)
             }
             FileFormat::Parquet => {
-                format!(r#"{out} <- read_parquet("{path}")"#)
+                format!(r#"{out} <- read_parquet({path})"#)
             }
             FileFormat::Vcf => {
                 format!(
                     r#"# NOTE: R codegen for VCF uses vcfR::read.vcfR
-{out} <- vcfR::read.vcfR("{path}", verbose = FALSE)"#
+{out} <- vcfR::read.vcfR({path}, verbose = FALSE)"#
                 )
             }
             FileFormat::Bed => {
-                format!(r#"{out} <- read.table("{path}", sep = "\t", header = FALSE)"#)
+                format!(r#"{out} <- read.table({path}, sep = "\t", header = FALSE)"#)
             }
             _ => {
                 // Fallback: comment + placeholder
@@ -313,13 +378,27 @@ impl DagNode for FileSourceNode {
     async fn execute(
         &mut self,
         node_ctx: &dag_core::registry::NodeCtx,
-        _inputs: &[NodeInput],
+        inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ctx = node_ctx.session();
-        let path = source_path(node_ctx, &normalize_path(&self.path));
+        let upstream = inputs.first().and_then(|input| input.file_value().ok());
+        let path = upstream
+            .map(|file| file.path.clone())
+            .or_else(|| self.path.clone())
+            .ok_or_else(|| {
+                FileSourceError::UnknownFormat(
+                    "source_file requires an upstream file or a fallback path".into(),
+                )
+            })?;
+        let path = source_path(node_ctx, &normalize_path(&path));
         let fmt = self
             .format
+            .or_else(|| {
+                upstream
+                    .and_then(|file| file.format.as_deref())
+                    .and_then(FileFormat::from_label)
+            })
             .or_else(|| FileFormat::from_path(&path))
             .ok_or_else(|| FileSourceError::UnknownFormat(path.clone()))?;
         let df = read_file(&ctx, &path, fmt).await?;
@@ -329,7 +408,7 @@ impl DagNode for FileSourceNode {
         // DataFusion type-coercion failures during collect().
         let df = promote_floats(df)?;
 
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }
@@ -715,7 +794,7 @@ mod tests {
             "file:///mount/data.csv",
             "/mount/data.csv",
         ] {
-            let mut node = FileSourceNode::new(path.into(), None);
+            let mut node = FileSourceNode::new(Some(path.into()), None);
             let outputs = node
                 .execute(
                     &node_ctx,
@@ -724,7 +803,7 @@ mod tests {
                 )
                 .await
                 .unwrap_or_else(|e| panic!("read {path} failed: {e}"));
-            let df = outputs.get(&0).expect("source output port");
+            let df = outputs.dataframe(0).expect("source output port");
             assert_eq!(
                 df.clone().count().await.unwrap(),
                 2,

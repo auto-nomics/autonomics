@@ -250,7 +250,7 @@ impl DagNode for EpiLassoNode {
             .first()
             .ok_or(EpiLassoError::Column("no input connected".to_string()))?;
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await

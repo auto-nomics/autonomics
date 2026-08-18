@@ -231,7 +231,7 @@ impl DagNode for S2PaperSearchNode {
         let session = ctx.session();
         let batch = build_paper_batch(resp.data)?;
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }
@@ -474,7 +474,7 @@ impl DagNode for S2AuthorSearchNode {
         let session = ctx.session();
         let batch = build_author_batch(resp.data)?;
         let df = batch_to_df(&session, batch)?;
-        let mut res: PortOutputs = HashMap::new();
+        let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
     }

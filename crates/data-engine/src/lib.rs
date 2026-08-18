@@ -17,6 +17,7 @@ pub use dag_core::sink;
 // Registry under its original `node_registry` path for backward compat.
 pub use dag_core::registry as node_registry;
 pub use dag_core::types;
+pub use dag_core::value;
 
 pub mod data_engine;
 pub mod default_registry;
@@ -24,7 +25,9 @@ pub mod nodes;
 pub mod runtime;
 
 // Convenience re-exports (backward compat with existing `use data_engine::*`).
-pub use dag_core::{DagNode, NodeCtx, NodeFactory, NodeId, NodeInput, NodePorts, NodeRegistry};
+pub use dag_core::{
+    DagNode, FileRef, NodeCtx, NodeFactory, NodeId, NodeInput, NodePorts, NodeRegistry, NodeValue,
+};
 
 // Codegen tests require concrete node types, so they live here not in dag-core.
 #[cfg(test)]

@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dag::graph::DAG;
 use crate::dag::history::{DagManifest, EdgeEntry, NodeEntry};
 use crate::registry::NodeRegistry;
+use crate::value::PortType;
 
 use super::context::{CodegenError, CodegenTarget, make_ctx, sanitize_var_name, topo_sort};
 
@@ -74,6 +75,14 @@ impl DagCompiler<'_> {
         // Index nodes by id for quick lookup
         let nodes_by_id: HashMap<&str, &NodeEntry> =
             manifest.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let mut factory_ports: HashMap<&str, crate::node::NodePorts> = HashMap::new();
+        for node in &manifest.nodes {
+            let factory = self
+                .registry
+                .get_factory(&node.kind)
+                .map_err(|e| CodegenError::Topology(e.to_string()))?;
+            factory_ports.insert(node.id.as_str(), factory.ports());
+        }
 
         // 3. Walk in topo order
         //
@@ -104,8 +113,9 @@ impl DagCompiler<'_> {
             // ── resolve input variable names + their edge CSV files ──────
             let ports = factory.ports();
 
-            // Each element: (input_var_name, Option<edge_csv_path>)
-            // When the edge exists, the compiler will prepend a fread() for it.
+            // Each element: (input_var_name, Option<edge_csv_path>). A
+            // DataFrame edge materialises an inspectable CSV; a File edge is
+            // passed directly as a path-bearing variable.
             let input_specs: Vec<(String, Option<String>)> = if ports.is_fixed_input() {
                 let n_inputs = ports.input_ports().len();
                 (0..n_inputs as u8)
@@ -113,8 +123,16 @@ impl DagCompiler<'_> {
                         |port_idx| match incoming.get(&(entry.id.as_str(), port_idx)) {
                             Some((from_node, from_port)) => {
                                 let var = sanitize_var_name(from_node);
-                                let csv = edge_file(from_node, *from_port);
-                                (var, Some(csv))
+                                let uses_csv = factory_ports[from_node]
+                                    .output_port(*from_port)
+                                    .is_some_and(|port| {
+                                        matches!(
+                                            port.data_type,
+                                            PortType::DataFrame | PortType::Any
+                                        )
+                                    });
+                                let csv = uses_csv.then(|| edge_file(from_node, *from_port));
+                                (var, csv)
                             }
                             None => (format!("__missing_input_{port_idx}"), None),
                         },
@@ -128,8 +146,13 @@ impl DagCompiler<'_> {
                     .filter(|e| e.to == entry.id)
                     .map(|e| {
                         let var = sanitize_var_name(&e.from);
-                        let csv = edge_file(&e.from, e.from_port);
-                        (var, Some(csv))
+                        let uses_csv = factory_ports[e.from.as_str()]
+                            .output_port(e.from_port)
+                            .is_some_and(|port| {
+                                matches!(port.data_type, PortType::DataFrame | PortType::Any)
+                            });
+                        let csv = uses_csv.then(|| edge_file(&e.from, e.from_port));
+                        (var, csv)
                     })
                     .collect()
             };
@@ -197,8 +220,19 @@ impl DagCompiler<'_> {
                     }
                     body.extend(node_cg.code);
 
-                    // Inject fwrite() for each output port
+                    // Inject fwrite() for each DataFrame output port. File
+                    // outputs already carry a path and pass by reference.
                     for (port_idx, out_var) in node_cg.output_vars.iter().enumerate() {
+                        let is_dataframe_output = ports
+                            .output_ports()
+                            .iter()
+                            .nth(port_idx)
+                            .is_some_and(|port| {
+                                matches!(port.data_type, PortType::DataFrame | PortType::Any)
+                            });
+                        if !is_dataframe_output {
+                            continue;
+                        }
                         let csv = edge_file(&entry.id, port_idx as u8);
                         match target {
                             CodegenTarget::R => {

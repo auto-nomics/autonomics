@@ -323,15 +323,16 @@ impl DagNode for LinearRegressionNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let input = inputs.first().ok_or(LinearRegressionError::EmptyInput)?;
-        let batches = input
-            .data
-            .clone()
-            .collect()
-            .await
-            .map_err(|e| DagError::NodeError {
-                node_type: "linear_regression".to_string(),
-                msg: format!("collect failed: {e}"),
-            })?;
+        let batches =
+            input
+                .dataframe()?
+                .clone()
+                .collect()
+                .await
+                .map_err(|e| DagError::NodeError {
+                    node_type: "linear_regression".to_string(),
+                    msg: format!("collect failed: {e}"),
+                })?;
 
         // Extract Y column.
         let y = extract_column(&batches, &self.y_column)?;
@@ -401,13 +402,12 @@ mod tests {
         let batch = make_batch(vec![("x", x), ("y", y)]);
 
         let mut node = LinearRegressionNode::new(vec!["x".to_string()], "y".to_string(), true);
-        let input = dag_core::node::NodeInput {
-            port: 0,
-            // df_name: "src".to_string(),
-            data: datafusion::prelude::SessionContext::new()
+        let input = dag_core::node::NodeInput::new_dataframe(
+            0,
+            datafusion::prelude::SessionContext::new()
                 .read_batch(batch)
                 .unwrap(),
-        };
+        );
         let outs = node
             .execute(
                 &node_ctx(),
@@ -417,7 +417,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outs.len(), 1);
-        let df = outs[&0].clone();
+        let df = outs.dataframe(0).unwrap().clone();
         let rows = df.collect().await.unwrap();
         let total: usize = rows.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 2); // intercept + x1
@@ -468,13 +468,12 @@ mod tests {
         let batch = make_batch(vec![("x", x), ("y", y)]);
 
         let mut node = LinearRegressionNode::new(vec!["x".to_string()], "y".to_string(), false);
-        let input = dag_core::node::NodeInput {
-            port: 0,
-            // df_name: "src".to_string(),
-            data: datafusion::prelude::SessionContext::new()
+        let input = dag_core::node::NodeInput::new_dataframe(
+            0,
+            datafusion::prelude::SessionContext::new()
                 .read_batch(batch)
                 .unwrap(),
-        };
+        );
         let outs = node
             .execute(
                 &node_ctx(),
@@ -483,7 +482,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let rows = outs[&0].clone().collect().await.unwrap();
+        let rows = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
         assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 1); // only slope
     }
 }

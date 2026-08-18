@@ -36,7 +36,7 @@ async fn collect_port(inputs: &[NodeInput], port: u8) -> Result<Vec<RecordBatch>
             msg: format!("input port {port} not connected"),
         })?;
     input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await

@@ -302,7 +302,7 @@ impl DagNode for UnivariateMixerNode {
         ))?;
 
         // ── 1. Validate input columns ──────────────────────────────────
-        let schema = input.data.schema();
+        let schema = input.dataframe()?.schema();
         for needed in [
             INPUT_Z_COL,
             INPUT_N_COL,
@@ -329,7 +329,7 @@ impl DagNode for UnivariateMixerNode {
 
         reporter.info("writing sumstats to temp file...");
         write_sumstats(
-            &input.data,
+            input.dataframe()?,
             &[
                 (INPUT_RSID_COL, "SNP"),
                 (INPUT_A1_COL, "A1"),

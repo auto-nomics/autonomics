@@ -342,8 +342,11 @@ impl CpassocNode {
 
         // 1. Register each input as a temp table.
         for (i, input) in inputs.iter().enumerate() {
-            ctx.register_table(format!("sumstats_{i}"), input.data.clone().into_view())
-                .map_err(CpassocNodeError::ReadBatch)?;
+            ctx.register_table(
+                format!("sumstats_{i}"),
+                input.dataframe()?.clone().into_view(),
+            )
+            .map_err(CpassocNodeError::ReadBatch)?;
         }
 
         // 2. Build the join SQL: progressively inner-join all traits on rsid.
@@ -695,8 +698,8 @@ mod tests {
         };
 
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
             .await
@@ -778,9 +781,9 @@ mod tests {
         };
 
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
-            NodeInput { port: 2, data: df3 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
+            NodeInput::new_dataframe(2, df3),
         ];
         let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
             .await
@@ -814,7 +817,7 @@ mod tests {
         let df = ctx.read_batch(sumstats_batch(&z, &rsids, 1000.0)).unwrap();
 
         let cfg = CpassocConfig::default();
-        let inputs = vec![NodeInput { port: 0, data: df }];
+        let inputs = vec![NodeInput::new_dataframe(0, df)];
         let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
         assert!(result.is_err(), "single-trait input must error");
     }
@@ -828,7 +831,7 @@ mod tests {
             1000.0,
         );
         let df = SessionContext::new().read_batch(batch).unwrap();
-        let one_input = vec![NodeInput { port: 0, data: df }];
+        let one_input = vec![NodeInput::new_dataframe(0, df)];
         let res = node
             .execute(
                 &node_ctx(),
@@ -897,8 +900,8 @@ mod tests {
             ..Default::default()
         };
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
             .await
@@ -966,8 +969,8 @@ mod tests {
 
         let cfg = CpassocConfig::default();
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
         assert!(result.is_err(), "all-NaN input must error after filtering");
@@ -1016,8 +1019,8 @@ mod tests {
             ..Default::default()
         };
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let batch = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg)
             .await
@@ -1057,8 +1060,8 @@ mod tests {
 
         let cfg = CpassocConfig::default();
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
         assert!(result.is_err(), "all-null n should error");
@@ -1088,8 +1091,8 @@ mod tests {
 
         let cfg = CpassocConfig::default();
         let inputs = vec![
-            NodeInput { port: 0, data: df1 },
-            NodeInput { port: 1, data: df2 },
+            NodeInput::new_dataframe(0, df1),
+            NodeInput::new_dataframe(1, df2),
         ];
         let result = CpassocNode::run_with_ctx(&ctx, &inputs, &cfg).await;
         assert!(result.is_err(), "zero n should error");

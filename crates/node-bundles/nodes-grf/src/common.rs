@@ -118,7 +118,7 @@ pub async fn collect_port(
         .find(|i| i.port == port)
         .ok_or_else(|| dag_err(node, &format!("input port {port} not connected")))?;
     input
-        .data
+        .dataframe()?
         .clone()
         .collect()
         .await
@@ -130,7 +130,7 @@ pub async fn collect_all(node: &str, inputs: &[NodeInput]) -> Result<Vec<RecordB
     let mut out = Vec::new();
     for input in inputs {
         let batches = input
-            .data
+            .dataframe()?
             .clone()
             .collect()
             .await
