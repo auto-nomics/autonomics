@@ -806,6 +806,7 @@ impl App {
                     // mis-attach to a later, unrelated registration.
                     self.state.pending_focus_agent_name = None;
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
+                    self.state.toasts.error("Agent creation failed", Some(e));
                 }
             },
         }
@@ -1311,10 +1312,18 @@ impl App {
 
         let Some(host) = self.host.as_ref() else {
             tracing::warn!("no runtime host available");
+            self.state.toasts.error(
+                "Agent creation failed",
+                Some("Runtime host is unavailable".into()),
+            );
             return;
         };
         if self.state.active_model.load_full().is_none() {
             tracing::warn!("no model configured — configure one in Config tab first");
+            self.state.toasts.error(
+                "Agent creation failed",
+                Some("Configure a model before creating agents".into()),
+            );
             return;
         }
 

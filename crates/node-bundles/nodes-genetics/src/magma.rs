@@ -5,7 +5,7 @@
 //! | Node | Kind | Input | Output |
 //! |------|------|-------|--------|
 //! | [`MagmaAnnotateNode`] | `magma_annotate` | gene-loc + snp-loc files | gene annotation DataFrame |
-//! | [`MagmaGeneNode`] | `magma_gene` | GWAS pval DataFrame + PLINK ref + annot | gene results DataFrame |
+//! | [`MagmaGeneNode`] | `magma_gene` | GWAS pval DataFrame + panel bundle | gene results DataFrame |
 //! | [`MagmaSetNode`] | `magma_set` | gene results DataFrame + set/covar file | set analysis DataFrame |
 //! | [`MagmaMetaNode`] | `magma_meta` | ≥2 gene results DataFrames | combined gene results |
 
@@ -16,6 +16,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -34,6 +35,8 @@ pub enum MagmaNodeError {
     Magma(#[from] magma::MagmaError),
     #[error("MAGMA VFS read failed for {path}: {message}")]
     Vfs { path: String, message: String },
+    #[error("MAGMA reference bundle error for {reference}: {message}")]
+    ReferenceBundle { reference: String, message: String },
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
     #[error("DataFusion error: {0}")]
@@ -274,12 +277,26 @@ fn build_annot_batch(
 
 /// Config for the gene analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MagmaGeneConfig {
-    /// VFS path to .genes.annot file.
-    pub gene_annot: String,
-    /// VFS prefix for a PLINK .bed/.bim/.fam reference panel.
-    #[serde(default = "default_reference_prefix")]
-    pub reference_prefix: String,
+    /// Semantic ID of a deployed panel bundle, such as `g1000_eas`.
+    ///
+    /// If omitted, the node derives `g1000_<population>` from the population.
+    #[serde(default)]
+    pub reference: Option<String>,
+    /// Genome build required from the reference bundle.
+    #[serde(default = "default_genome_build")]
+    pub genome_build: String,
+    /// Population ancestry required from the reference bundle. Implicit
+    /// references support `AFR`, `AMR`, `EAS`, `EUR`, and `SAS`.
+    #[serde(default = "default_population")]
+    pub population: String,
+    /// NCBI gene-location release bundled with the reference panel.
+    #[serde(default = "default_gene_release")]
+    pub gene_release: String,
+    /// Gene annotation window in kb. It must match the precomputed annotation.
+    #[serde(default = "default_window")]
+    pub window_kb: f64,
     /// SNP ID column name in the input GWAS DataFrame. Default: "rsid".
     #[serde(default = "default_rsid_col")]
     pub snp_col: String,
@@ -304,11 +321,49 @@ fn default_n_col() -> String {
     "n".to_string()
 }
 
-fn default_reference_prefix() -> String {
-    DEFAULT_REFERENCE_PREFIX.to_string()
+fn default_gene_release() -> String {
+    "NCBI37.3".to_string()
+}
+
+fn default_genome_build() -> String {
+    "GRCh37".to_string()
+}
+
+fn default_population() -> String {
+    "EAS".to_string()
 }
 
 const VFS_PREFIX: &str = "vfs://";
+const REFERENCE_ROOT_VPATH: &str = "/data/magma/references";
+const BUNDLE_MANIFEST: &str = "bundle.json";
+const SUPPORTED_IMPLICIT_POPULATIONS: [&str; 5] = ["AFR", "AMR", "EAS", "EUR", "SAS"];
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MagmaPanelBundle {
+    schema_version: u8,
+    id: String,
+    genome_build: String,
+    population: String,
+    plink_prefix: String,
+    gene_annotation: MagmaPanelGeneAnnotation,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MagmaPanelGeneAnnotation {
+    release: String,
+    window_kb: f64,
+    path: String,
+    sha256: String,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedMagmaReference {
+    prefix_vpath: String,
+    annotation_vpath: String,
+    expected_sha256: String,
+}
 
 /// Read a file through the runtime's configured VFS mount catalog.
 async fn read_vfs_bytes(node_ctx: &NodeCtx, raw_path: &str) -> Result<Vec<u8>, MagmaNodeError> {
@@ -377,6 +432,211 @@ struct VfsStagedFile {
     path: std::path::PathBuf,
 }
 
+fn bundle_error(reference: &str, message: impl Into<String>) -> MagmaNodeError {
+    MagmaNodeError::ReferenceBundle {
+        reference: reference.to_string(),
+        message: message.into(),
+    }
+}
+
+fn valid_reference_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn resolve_requested_reference(
+    reference: Option<&str>,
+    population: &str,
+) -> Result<(String, String), MagmaNodeError> {
+    let population = population.trim().to_ascii_uppercase();
+    let Some(reference) = reference.map(str::trim).filter(|value| !value.is_empty()) else {
+        if !SUPPORTED_IMPLICIT_POPULATIONS.contains(&population.as_str()) {
+            return Err(MagmaNodeError::ReferenceBundle {
+                reference: population.clone(),
+                message: format!(
+                    "implicit references support only {}",
+                    SUPPORTED_IMPLICIT_POPULATIONS.join(", ")
+                ),
+            });
+        }
+        return Ok((
+            format!("g1000_{}", population.to_ascii_lowercase()),
+            population,
+        ));
+    };
+
+    if !valid_reference_id(reference) {
+        return Err(MagmaNodeError::ReferenceBundle {
+            reference: reference.to_string(),
+            message: "reference IDs may contain only ASCII letters, digits, '_', '-', and '.', and must start with a letter or digit".into(),
+        });
+    }
+    Ok((reference.to_string(), population))
+}
+
+fn join_bundle_path(reference: &str, root: &str, relative: &str) -> Result<String, MagmaNodeError> {
+    if relative.is_empty()
+        || relative.starts_with('/')
+        || relative.starts_with("vfs://")
+        || relative.contains('\\')
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(bundle_error(
+            reference,
+            format!("bundle path '{relative}' must be relative to the bundle and cannot escape it"),
+        ));
+    }
+    Ok(format!("{root}/{relative}"))
+}
+
+async fn resolve_reference_bundle(
+    node_ctx: &NodeCtx,
+    reference: &str,
+    genome_build: &str,
+    population: &str,
+    gene_release: &str,
+    window_kb: f64,
+) -> Result<(MagmaPanelBundle, ResolvedMagmaReference), MagmaNodeError> {
+    if !valid_reference_id(reference) {
+        return Err(bundle_error(
+            reference,
+            "reference IDs may contain only ASCII letters, digits, '_', '-', and '.', and must start with a letter or digit",
+        ));
+    }
+
+    let root = format!("{REFERENCE_ROOT_VPATH}/{reference}");
+    let manifest_path = format!("vfs://{root}/{BUNDLE_MANIFEST}");
+    let manifest_bytes = read_vfs_bytes(node_ctx, &manifest_path).await?;
+    let bundle: MagmaPanelBundle = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| bundle_error(reference, format!("invalid {BUNDLE_MANIFEST}: {e}")))?;
+
+    if bundle.schema_version != 1 {
+        return Err(bundle_error(
+            reference,
+            format!("unsupported schema_version {}", bundle.schema_version),
+        ));
+    }
+    if bundle.id != reference {
+        return Err(bundle_error(
+            reference,
+            format!(
+                "manifest ID '{}' does not match requested reference",
+                bundle.id
+            ),
+        ));
+    }
+    if bundle.plink_prefix.is_empty() {
+        return Err(bundle_error(reference, "plink_prefix cannot be empty"));
+    }
+    if bundle.genome_build.trim().is_empty() {
+        return Err(bundle_error(reference, "genome_build cannot be empty"));
+    }
+    if bundle.population.trim().is_empty() {
+        return Err(bundle_error(reference, "population cannot be empty"));
+    }
+    if bundle.genome_build != genome_build {
+        return Err(bundle_error(
+            reference,
+            format!(
+                "bundle uses genome build '{}', but '{}' was requested",
+                bundle.genome_build, genome_build
+            ),
+        ));
+    }
+    if bundle.population != population {
+        return Err(bundle_error(
+            reference,
+            format!(
+                "bundle is for population '{}', but '{}' was requested",
+                bundle.population, population
+            ),
+        ));
+    }
+
+    let annotation = &bundle.gene_annotation;
+    if annotation.release.trim().is_empty() {
+        return Err(bundle_error(
+            reference,
+            "gene annotation release cannot be empty",
+        ));
+    }
+    if !(annotation.window_kb.is_finite() && annotation.window_kb > 0.0) {
+        return Err(bundle_error(
+            reference,
+            "gene annotation window_kb must be finite and positive",
+        ));
+    }
+    if annotation.release != gene_release {
+        return Err(bundle_error(
+            reference,
+            format!(
+                "bundle provides gene release '{}', but '{}' was requested",
+                annotation.release, gene_release
+            ),
+        ));
+    }
+    if (annotation.window_kb - window_kb).abs() > f64::EPSILON {
+        return Err(bundle_error(
+            reference,
+            format!(
+                "bundle provides a {:.1} kb annotation, but {:.1} kb was requested",
+                annotation.window_kb, window_kb
+            ),
+        ));
+    }
+
+    let prefix_vpath = format!(
+        "vfs://{}",
+        join_bundle_path(reference, &root, &bundle.plink_prefix)?
+    );
+    let annotation_vpath = format!(
+        "vfs://{}",
+        join_bundle_path(reference, &root, &annotation.path)?
+    );
+    let expected_sha256 = annotation.sha256.clone();
+    if expected_sha256.len() != 64
+        || expected_sha256
+            .bytes()
+            .any(|byte| !byte.is_ascii_hexdigit())
+    {
+        return Err(bundle_error(
+            reference,
+            "gene annotation sha256 must be 64 hex characters",
+        ));
+    }
+
+    Ok((
+        bundle,
+        ResolvedMagmaReference {
+            prefix_vpath,
+            annotation_vpath,
+            expected_sha256,
+        },
+    ))
+}
+
+fn validate_annotation_checksum(
+    reference: &str,
+    expected: &str,
+    bytes: &[u8],
+) -> Result<(), MagmaNodeError> {
+    let actual = Sha256::digest(bytes);
+    let actual = actual
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(bundle_error(
+            reference,
+            format!("gene annotation checksum mismatch: expected {expected}, got {actual}"),
+        ));
+    }
+    Ok(())
+}
+
 impl AsRef<std::path::Path> for VfsStagedFile {
     fn as_ref(&self) -> &std::path::Path {
         &self.path
@@ -388,6 +648,10 @@ async fn stage_vfs_file(
     raw_path: &str,
 ) -> Result<VfsStagedFile, MagmaNodeError> {
     let bytes = read_vfs_bytes(node_ctx, raw_path).await?;
+    stage_vfs_bytes(raw_path, bytes).await
+}
+
+async fn stage_vfs_bytes(raw_path: &str, bytes: Vec<u8>) -> Result<VfsStagedFile, MagmaNodeError> {
     let name = raw_path
         .rsplit('/')
         .next()
@@ -429,9 +693,6 @@ async fn open_plink_vfs(
 
 const GENE_KIND: &str = "magma_gene";
 
-/// Default 1000 Genomes East Asian panel deployed under `/mnt/data/magma`.
-const DEFAULT_REFERENCE_PREFIX: &str = "vfs:///data/magma/references/g1000_eas/g1000_eas";
-
 fn gene_ports() -> NodePorts {
     NodePorts::new()
         .add_input_port(Some(gwas_input_schema()))
@@ -456,8 +717,9 @@ impl NodeFactory for MagmaGeneNodeFactory {
     }
     fn doc(&self) -> &'static str {
         "Takes a GWAS summary statistics DataFrame (rsid, pval, optional n), \
-        loads the PLINK reference panel for LD estimation, and computes \
-        gene-level test statistics using the SNP-wise mean model (Imhof). \
+        resolves a versioned panel bundle (PLINK LD reference plus matching \
+        gene annotation), and computes gene-level test statistics using the \
+        SNP-wise mean model (Imhof). \
         Outputs gene_id, chr, start, end, n_snps, n_param, n, zstat, pval."
     }
     fn spec_schema(&self) -> schemars::Schema {
@@ -484,6 +746,11 @@ impl NodeFactory for MagmaGeneNodeFactory {
         let s = parse_spec::<MagmaGeneConfig>(spec, "magma_gene")?;
         let input = input_0(ctx).to_string();
         let out = ctx.output_var.to_string();
+        let reference = s
+            .reference
+            .clone()
+            .unwrap_or_else(|| format!("g1000_{}", s.population.to_ascii_lowercase()));
+        let annotation = format!("\"<magma_bundle_gene_annotation:{reference}>\"");
         let n_args = match &s.fixed_n {
             Some(n) => format!(" --sample-n {}", n),
             None => format!(" --n-col {}", s.n_col),
@@ -494,13 +761,16 @@ impl NodeFactory for MagmaGeneNodeFactory {
             format!("tmp_sumstats <- tempfile(fileext = \".sumstats\")"),
             format!("data.table::fwrite({input}, tmp_sumstats, sep = \"\\t\")"),
             format!("system2(\"magma\", c("),
-            format!("  \"--gene-results\", \"{}\",", s.gene_annot),
-            format!("  \"--bfile\", \"<plink_bed_prefix>\","),
+            format!(
+                "  \"--bfile\", \"<magma_bundle_dir:{}>/plink_prefix\",",
+                reference
+            ),
             format!(
                 "  \"--pval\", tmp_sumstats, usecols=\"{} {}\",",
                 s.snp_col, s.pval_col
             ),
             format!("  \"{n_args}\","),
+            format!("  \"--gene-annot\", {annotation},"),
             format!("  \"--out\", \"{out}\""),
             format!("))"),
             format!("# NOTE: Output in {out}.genes.raw and {out}.genes.out"),
@@ -568,9 +838,22 @@ impl DagNode for MagmaGeneNode {
         }
         let pval_data = magma::geneinput::SnpPvalData { snps: snp_pvals };
 
-        // Load PLINK + annotation
-        let mut bed = open_plink_vfs(node_ctx, &self.config.reference_prefix).await?;
-        let annot_path = stage_vfs_file(node_ctx, &self.config.gene_annot).await?;
+        // The panel and its gene annotation are resolved as one versioned bundle.
+        let (reference, population) =
+            resolve_requested_reference(self.config.reference.as_deref(), &self.config.population)?;
+        let (_bundle, resolved) = resolve_reference_bundle(
+            node_ctx,
+            &reference,
+            &self.config.genome_build,
+            &population,
+            &self.config.gene_release,
+            self.config.window_kb,
+        )
+        .await?;
+        let mut bed = open_plink_vfs(node_ctx, &resolved.prefix_vpath).await?;
+        let annot_bytes = read_vfs_bytes(node_ctx, &resolved.annotation_vpath).await?;
+        validate_annotation_checksum(&reference, &resolved.expected_sha256, &annot_bytes)?;
+        let annot_path = stage_vfs_bytes(&resolved.annotation_vpath, annot_bytes).await?;
         let annot =
             magma::geneinput::GeneAnnot::read(annot_path.as_ref()).map_err(MagmaNodeError::from)?;
 
@@ -1180,7 +1463,10 @@ mod tests {
     use vfs::{BackendDefinition, MountDefinition, VfsManifest};
 
     fn node_ctx() -> NodeCtx {
-        let source_root = magma_data_dir();
+        node_ctx_with_root(magma_data_dir()).0
+    }
+
+    fn node_ctx_with_root(source_root: std::path::PathBuf) -> (NodeCtx, tempfile::TempDir) {
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
                 id: "magma-test".into(),
@@ -1198,11 +1484,12 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let opendal =
             std::sync::Arc::new(vfs::OpendalFileStorage::with_mounts(scratch.path(), mounts));
-        NodeCtx {
+        let ctx = NodeCtx {
             runtime_env: SessionContext::new().runtime_env(),
             opendal: Some(opendal),
             global_sem: None,
-        }
+        };
+        (ctx, scratch)
     }
 
     fn magma_data_dir() -> std::path::PathBuf {
@@ -1214,6 +1501,134 @@ mod tests {
 
     fn vpath(name: &str) -> String {
         format!("vfs:///data/magma/{name}")
+    }
+
+    fn panel_bundle_ctx() -> (NodeCtx, tempfile::TempDir, String) {
+        let bundle_mount = tempfile::tempdir().unwrap();
+        let (ctx, _scratch) = node_ctx_with_root(bundle_mount.path().to_path_buf());
+        let source = magma_data_dir();
+        let reference = "sim_panel".to_string();
+        let bundle_root = bundle_mount.path().join("references").join(&reference);
+        let annotation_dir = bundle_root.join("annotations");
+        std::fs::create_dir_all(&annotation_dir).unwrap();
+        for extension in ["bed", "bim", "fam"] {
+            std::fs::copy(
+                source.join(format!("sim_geno.{extension}")),
+                bundle_root.join(format!("sim_panel.{extension}")),
+            )
+            .unwrap();
+        }
+        let annotation_path = annotation_dir.join("sim_panel.NCBI37.3.window35.genes.annot");
+        std::fs::copy(source.join("annot.genes.annot"), &annotation_path).unwrap();
+        let annotation_bytes = std::fs::read(&annotation_path).unwrap();
+        let checksum = Sha256::digest(&annotation_bytes);
+        let checksum = checksum
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        std::fs::write(
+            bundle_root.join(BUNDLE_MANIFEST),
+            format!(
+                r#"{{
+                  "schema_version": 1,
+                  "id": "{reference}",
+                  "genome_build": "GRCh37",
+                  "population": "SIM",
+                  "plink_prefix": "sim_panel",
+                  "gene_annotation": {{
+                    "release": "NCBI37.3",
+                    "window_kb": 35,
+                    "path": "annotations/sim_panel.NCBI37.3.window35.genes.annot",
+                    "sha256": "{checksum}"
+                  }}
+                }}"#
+            ),
+        )
+        .unwrap();
+
+        (ctx, bundle_mount, reference)
+    }
+
+    #[test]
+    fn magma_gene_config_uses_reference_defaults() {
+        let config: MagmaGeneConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.reference, None);
+        assert_eq!(config.genome_build, "GRCh37");
+        assert_eq!(config.population, "EAS");
+        assert_eq!(config.gene_release, "NCBI37.3");
+        assert_eq!(config.window_kb, 35.0);
+
+        let error =
+            serde_json::from_str::<MagmaGeneConfig>(r#"{ "gene_annot": "vfs:///external.annot" }"#)
+                .unwrap_err();
+        assert!(error.to_string().contains("unknown field `gene_annot`"));
+    }
+
+    #[test]
+    fn magma_gene_switches_implicit_reference_by_population() {
+        let (reference, population) =
+            resolve_requested_reference(None, "eur").expect("EUR should resolve");
+        assert_eq!(reference, "g1000_eur");
+        assert_eq!(population, "EUR");
+
+        let (reference, population) =
+            resolve_requested_reference(None, "AFR").expect("AFR should resolve");
+        assert_eq!(reference, "g1000_afr");
+        assert_eq!(population, "AFR");
+
+        let (reference, population) = resolve_requested_reference(Some("ukb_eur "), "EUR")
+            .expect("explicit references should remain supported");
+        assert_eq!(reference, "ukb_eur");
+        assert_eq!(population, "EUR");
+
+        let error = resolve_requested_reference(None, "FIN").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("implicit references support only")
+        );
+    }
+
+    #[test]
+    fn magma_gene_rejects_annotation_checksum_mismatch() {
+        let error = validate_annotation_checksum(
+            "test_panel",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            b"annotation",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+    }
+
+    #[tokio::test]
+    async fn resolves_deployed_1000g_population_bundles() {
+        let source_root = std::path::Path::new("/mnt/data/magma/resources");
+        if !source_root
+            .join("references/g1000_sas/bundle.json")
+            .exists()
+        {
+            return;
+        }
+
+        let (ctx, _scratch) = node_ctx_with_root(source_root.to_path_buf());
+        for population in SUPPORTED_IMPLICIT_POPULATIONS {
+            let (reference, normalized_population) =
+                resolve_requested_reference(None, population).unwrap();
+            let (_bundle, resolved) = resolve_reference_bundle(
+                &ctx,
+                &reference,
+                "GRCh37",
+                &normalized_population,
+                "NCBI37.3",
+                35.0,
+            )
+            .await
+            .unwrap();
+            let bytes = read_vfs_bytes(&ctx, &resolved.annotation_vpath)
+                .await
+                .unwrap();
+            validate_annotation_checksum(&reference, &resolved.expected_sha256, &bytes).unwrap();
+        }
     }
 
     fn gwas_batch(rsids: Vec<String>, pvals: Vec<f64>, n: i64) -> RecordBatch {
@@ -1278,9 +1693,13 @@ mod tests {
         let df = node_ctx().session().read_batch(batch).unwrap();
         let input = vec![NodeInput::new_dataframe(0, df)];
 
+        let (ctx, _bundle, reference) = panel_bundle_ctx();
         let mut node = MagmaGeneNode::new(MagmaGeneConfig {
-            gene_annot: vpath("annot.genes.annot"),
-            reference_prefix: vpath("sim_geno"),
+            reference: Some(reference),
+            genome_build: "GRCh37".into(),
+            population: "SIM".into(),
+            gene_release: "NCBI37.3".into(),
+            window_kb: 35.0,
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
             n_col: "n".into(),
@@ -1289,7 +1708,7 @@ mod tests {
 
         let res = node
             .execute(
-                &node_ctx(),
+                &ctx,
                 &input,
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
@@ -1396,6 +1815,7 @@ mod tests {
     #[tokio::test]
     async fn e2e_full_pipeline() {
         // Full pipeline: annotate → gene → set
+        let (bundle_ctx, _bundle, reference) = panel_bundle_ctx();
         let ctx = node_ctx();
 
         // Step 1: Annotation
@@ -1427,8 +1847,11 @@ mod tests {
         let df = ctx.session().read_batch(batch).unwrap();
 
         let mut gene_node = MagmaGeneNode::new(MagmaGeneConfig {
-            gene_annot: vpath("annot.genes.annot"),
-            reference_prefix: vpath("sim_geno"),
+            reference: Some(reference),
+            genome_build: "GRCh37".into(),
+            population: "SIM".into(),
+            gene_release: "NCBI37.3".into(),
+            window_kb: 35.0,
             snp_col: "rsid".into(),
             pval_col: "pval".into(),
             n_col: "n".into(),
@@ -1436,7 +1859,7 @@ mod tests {
         });
         let gene_res = gene_node
             .execute(
-                &ctx,
+                &bundle_ctx,
                 &[NodeInput::new_dataframe(0, df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )

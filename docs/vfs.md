@@ -126,22 +126,45 @@ source = "/mnt/data/magma/resources/genes"
 read_only = true
 
 [[mount]]
-path = "/data/magma/references/g1000_eas"
+path = "/data/magma/references"
 backend = "magma-local"
-source = "/mnt/data/magma/resources/references/g1000_eas"
+source = "/mnt/data/magma/resources/references"
 read_only = true
 ```
 
-MAGMA nodes address their inputs through that virtual namespace. The deployed
-1000 Genomes East Asian reference uses:
+MAGMA nodes address their inputs through that virtual namespace. The reference
+root contains prebuilt 1000 Genomes bundles for AFR, AMR, EAS, EUR, and SAS:
 
 ```text
-vfs:///data/magma/genes/NCBI37.3.gene.loc
-vfs:///data/magma/references/g1000_eas/g1000_eas
+vfs:///data/magma/references/g1000_<population>/bundle.json
+vfs:///data/magma/references/g1000_<population>/g1000_<population>
 ```
 
 The second path is a PLINK prefix; `.bed`, `.bim`, and `.fam` are resolved and
-read through the same VFS mount.
+read through the same VFS mount. `<population>` accepts `AFR`, `AMR`, `EAS`,
+`EUR`, and `SAS`.
+
+`magma_gene` consumes reference panels as versioned panel bundles. A bundle
+directory contains `bundle.json`, the PLINK prefix, and a precomputed gene
+annotation generated from that exact panel:
+
+```text
+vfs:///data/magma/references/g1000_eas/bundle.json
+vfs:///data/magma/references/g1000_eas/annotations/g1000_eas.NCBI37.3.window35.genes.annot
+```
+
+The node derives `g1000_<population>` automatically (`EAS` remains the default),
+or uses an explicit `reference` ID for a custom panel bundle. It checks
+genome-build/population metadata, verifies the required annotation checksum,
+and reads both the PLINK files and annotation from that same bundle. For
+example, `{"population":"EUR"}` selects the deployed `g1000_eur` bundle.
+New bundles can be prepared with:
+
+```bash
+scripts/build_magma_panel_bundle.sh \
+  /mnt/data/magma/resources/references/g1000_eas \
+  /mnt/data/magma/resources/genes/NCBI37.3.gene.loc
+```
 
 The converted gene-location tables are also available under the MAGMA gene
 mount:
