@@ -155,9 +155,7 @@ impl ToolFunction for LitSearchTool {
                         "doi": a.doi(),
                         "pmid": a.pmid(),
                         "identifier": first_id(a),
-                        "abstract": a.abstract_text.as_deref().map(|s| {
-                            if s.len() > 500 { format!("{}…", &s[..500]) } else { s.to_owned() }
-                        }),
+                        "abstract": a.abstract_text.as_deref().map(truncate_abstract),
                     })
                 })
             })
@@ -365,4 +363,40 @@ fn first_id(article: &bib_types::Article) -> Option<String> {
         .iter()
         .find(|i| !matches!(i.kind, bib_types::IdKind::Doi | bib_types::IdKind::Pmid))
         .map(|i| i.value.clone())
+}
+
+fn truncate_abstract(text: &str) -> String {
+    const MAX_BYTES: usize = 500;
+
+    if text.len() <= MAX_BYTES {
+        return text.to_owned();
+    }
+
+    let mut end = MAX_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_abstract_accepts_exact_byte_limit() {
+        let text = "x".repeat(500);
+        assert_eq!(truncate_abstract(&text), text);
+    }
+
+    #[test]
+    fn truncate_abstract_stops_on_utf8_boundary() {
+        let mut text = "x".repeat(499);
+        text.push('≥');
+        text.push_str(" trailing text");
+
+        let truncated = truncate_abstract(&text);
+
+        assert_eq!(truncated, format!("{}…", "x".repeat(499)));
+    }
 }

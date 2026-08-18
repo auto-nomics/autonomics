@@ -244,6 +244,25 @@ pub struct Session {
     pub(crate) shared: Arc<AgentShared>,
 }
 
+/// Insert a `tool_result` into a user message so that all `tool_result`
+/// blocks precede any text blocks.
+///
+/// The Anthropic invariant only requires the `tool_result` to live in the
+/// user message immediately after the `tool_use`; however gateways that
+/// translate to OpenAI Chat (e.g. MiniMax's Anthropic-compatible endpoint)
+/// split a `text + tool_result` user message in block order. If text came
+/// first it would sit between the assistant's `tool_use` and its
+/// `tool_result`, producing a 400 `messages.N: tool_use ids were found
+/// without tool_result blocks immediately after`. Keeping tool_results
+/// grouped at the front preserves adjacency under that translation.
+fn insert_tool_result_before_text(content: &mut Vec<ContentBlock>, block: ContentBlock) {
+    let insert_at = content
+        .iter()
+        .position(|c| !matches!(c, ContentBlock::ToolResult { .. }))
+        .unwrap_or(content.len());
+    content.insert(insert_at, block);
+}
+
 impl Session {
     /// Build a Session wired to a freshly-constructed `AgentShared`. Used
     /// only by unit tests that exercise `remember` / `add_message` without a
@@ -534,13 +553,22 @@ impl Session {
             if tc_msg_index + 1 < self.messages.len() {
                 // Need to move tool_result to the next message of tool_use
                 if matches!(self.messages[tc_msg_index + 1].role, Role::User) {
-                    self.messages[tc_msg_index + 1]
-                        .content
-                        .push(ContentBlock::ToolResult {
+                    // Insert the tool_result *before* any text already in the
+                    // message (e.g. a wait_task timeout notification that was
+                    // injected ahead of the result). Some Anthropic-compatible
+                    // gateways split a text+tool_result user message in block
+                    // order; text-first would land a plain user message between
+                    // this tool_use and its tool_result and be rejected with
+                    // `messages.N: tool_use ids were found without tool_result
+                    // blocks immediately after`.
+                    insert_tool_result_before_text(
+                        &mut self.messages[tc_msg_index + 1].content,
+                        ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             is_error,
-                        });
+                        },
+                    );
                 } else {
                     // Slot at tc_msg_index + 1 is non-User (e.g. another
                     // assistant turn, or a checkpoint summary message).
@@ -2206,6 +2234,64 @@ mod tests {
         let b = count_tool_results(&session.messages, "call_b");
         assert_eq!(a, 1);
         assert_eq!(b, 1);
+    }
+
+    /// Regression for `messages.N: tool_use ids were found without
+    /// tool_result blocks immediately after` on MiniMax's Anthropic-compatible
+    /// gateway: when a tool_result arrives after a notification/user text was
+    /// already placed in the message following the tool_use (e.g. a wait_task
+    /// timeout), `add_message` must insert the tool_result *before* that text.
+    /// Gateway translation splits a text+tool_result user message in block
+    /// order; text-first would put a plain user message between the tool_use
+    /// and its tool_result.
+    #[test]
+    fn add_message_inserts_tool_result_before_existing_text() {
+        let mut session = make_test_session();
+        session.remember(Message::user("hi")).unwrap();
+        session
+            .remember(Message::assistant_tool_use(
+                "call_wait",
+                "wait_task",
+                serde_json::json!({"task": 96}),
+            ))
+            .unwrap();
+        // A notification text lands immediately after the tool_use (injected
+        // by the wait_task watcher before the tool_result was delivered).
+        session
+            .remember(Message::user(
+                "Background task 'delegate_to' (#96) did not complete within 240 seconds.",
+            ))
+            .unwrap();
+        // The tool_result arrives late — must be inserted BEFORE the text.
+        session
+            .remember(Message::tool_result(
+                "call_wait",
+                "{\"status\":\"waiting\"}",
+                false,
+            ))
+            .unwrap();
+
+        let asst_idx = session
+            .messages
+            .iter()
+            .position(|m| m.has_tool_use())
+            .unwrap();
+        let next = &session.messages[asst_idx + 1];
+        assert!(matches!(next.role, Role::User));
+        let kinds: Vec<&str> = next
+            .content
+            .iter()
+            .map(|c| match c {
+                ContentBlock::ToolResult { .. } => "tool_result",
+                ContentBlock::Text { .. } => "text",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["tool_result", "text"],
+            "tool_result must be inserted before the notification text"
+        );
     }
 
     fn count_tool_results(msgs: &[Message], tool_use_id: &str) -> usize {

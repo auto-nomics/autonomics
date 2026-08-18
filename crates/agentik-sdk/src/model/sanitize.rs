@@ -29,6 +29,13 @@
 //! 6. **First message must be a user turn** → if the head is assistant, merge
 //!    with the next user message; if the list starts with assistant only,
 //!    prepend a placeholder user message.
+//! 7. **Text before `tool_result` in a user message** → reorder so all
+//!    `tool_result` blocks precede any text. Gateways that translate to
+//!    OpenAI Chat split a mixed user message *in block order*; text-first
+//!    would insert a plain `user` message between the assistant's `tool_use`
+//!    and its `tool_result`, which the API rejects as `messages.N: tool_use
+//!    ids were found without tool_result blocks immediately after` (e.g.
+//!    MiniMax's Anthropic-compatible endpoint).
 //!
 //! In the common case (no repairs needed) the original `Vec` is returned
 //! untouched — zero allocation, one read-only pass.
@@ -162,6 +169,13 @@ fn needs_sanitize(messages: &[Message]) -> bool {
     // any tool_result without a matching tool_use earlier in the list is
     // an orphan.
 
+    // Rule 10 — user message mixes text before tool_result. Gateways that
+    // translate to OpenAI Chat split the mixed message in block order, so
+    // text-first would break tool_use → tool_result adjacency.
+    if user_text_precedes_tool_result(messages) {
+        return true;
+    }
+
     false
 }
 
@@ -189,6 +203,34 @@ fn has_unorphaned_tool_result(messages: &[Message]) -> bool {
                         return true;
                     }
                 }
+            }
+        }
+    }
+    false
+}
+
+/// True when any user message mixes `Text` blocks *before* `ToolResult`
+/// blocks.
+///
+/// Anthropic-compatible gateways that translate to OpenAI Chat split a
+/// `text + tool_result` user message into a `user` message and a `tool`
+/// message **in block order**. If the text comes first it lands between the
+/// assistant's `tool_use` and its `tool_result`, breaking the adjacency
+/// invariant — the API responds with a 400 `messages.N: tool_use ids were
+/// found without tool_result blocks immediately after`. Normalising to
+/// `tool_result(s) first, text after` keeps the `tool` message immediately
+/// after the assistant's `tool_calls`.
+fn user_text_precedes_tool_result(messages: &[Message]) -> bool {
+    for m in messages {
+        if !matches!(m.role, Role::User) {
+            continue;
+        }
+        let mut saw_text = false;
+        for c in &m.content {
+            match c {
+                ContentBlock::Text { .. } => saw_text = true,
+                ContentBlock::ToolResult { .. } if saw_text => return true,
+                _ => {}
             }
         }
     }
@@ -295,7 +337,15 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
         {
             let mut merged_blocks = std::mem::take(&mut prev.content);
             merged_blocks.extend(msg.content);
-            prev.content = dedup_content_blocks(merged_blocks);
+            let merged_blocks = dedup_content_blocks(merged_blocks);
+            // Rule 10 — keep tool_results before text even after coalescing
+            // two user messages (e.g. a tool_result message followed by a
+            // wait_task notification).
+            prev.content = if matches!(prev.role, Role::User) {
+                tool_results_first(merged_blocks)
+            } else {
+                merged_blocks
+            };
             continue;
         }
 
@@ -305,6 +355,15 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
         let normalised = Message {
             content: dedup_content_blocks(msg.content),
             ..msg
+        };
+        // Rule 10 — reorder mixed user messages so tool_results precede text.
+        let normalised = if matches!(normalised.role, Role::User) {
+            Message {
+                content: tool_results_first(normalised.content),
+                ..normalised
+            }
+        } else {
+            normalised
         };
 
         // Rule 1: if the previous message contains a tool_use whose
@@ -527,10 +586,16 @@ fn repair_tool_use_adjacency(messages: Vec<Message>) -> Vec<Message> {
                     }
                 }
 
-                // Compose the final user content: non-result blocks
-                // first, then tool_results in tool_use order.
-                let mut merged = non_result_blocks;
-                merged.extend(tool_results_in_order);
+                // Compose the final user content: tool_results first (in
+                // tool_use order), then any non-result blocks (text/thinking).
+                // Some Anthropic-compatible gateways translate a user message
+                // that mixes text + tool_result into separate user/tool
+                // messages *in block order*; putting text first would insert a
+                // plain user message between the assistant's tool_use and its
+                // tool_result, which they reject as `messages.N: tool_use ids
+                // were found without tool_result blocks immediately after`.
+                let mut merged = tool_results_in_order;
+                merged.extend(non_result_blocks);
                 let mut rebuilt = next_msg;
                 rebuilt.content = merged;
                 if missing_any {
@@ -599,6 +664,28 @@ fn stub_user_message(tool_use_ids: Vec<String>) -> Message {
         usage: None,
         request_id: None,
     }
+}
+
+/// Reorder a user message's content so all `tool_result` blocks come first,
+/// followed by any other blocks (text/thinking/image), preserving relative
+/// order within each group.
+///
+/// See [`user_text_precedes_tool_result`] for why this matters: gateways that
+/// split a mixed user message in block order must see the `tool_result`
+/// before any text so the `tool` message stays immediately after the
+/// assistant's `tool_calls`.
+fn tool_results_first(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
+    let mut results = Vec::with_capacity(blocks.len());
+    let mut others = Vec::with_capacity(blocks.len());
+    for c in blocks {
+        if matches!(c, ContentBlock::ToolResult { .. }) {
+            results.push(c);
+        } else {
+            others.push(c);
+        }
+    }
+    results.extend(others);
+    results
 }
 
 /// Drop duplicate content blocks within a single message's content list.
@@ -703,6 +790,9 @@ pub fn diagnose(messages: &[Message]) -> HashMap<&'static str, usize> {
     }
     if has_orphan_tool_result(messages) {
         *out.entry("orphan_tool_result").or_insert(0) += 1;
+    }
+    if user_text_precedes_tool_result(messages) {
+        *out.entry("text_before_tool_result").or_insert(0) += 1;
     }
     *out.entry("same_role_neighbors").or_insert(0) += messages
         .windows(2)
@@ -1514,6 +1604,90 @@ mod tests {
         assert_eq!(
             resume_count, 1,
             "duplicate text blocks must be collapsed to 1"
+        );
+    }
+
+    /// Regression for `messages.N: tool_use ids were found without
+    /// tool_result blocks immediately after` on MiniMax's Anthropic-compatible
+    /// gateway: a user message that mixes a text notification (e.g. a
+    /// wait_task timeout) *before* its `tool_result` must be reordered so the
+    /// `tool_result` comes first. The gateway splits a mixed user message in
+    /// block order, so text-first would insert a plain `user` message between
+    /// the assistant's `tool_use` and its `tool_result`.
+    #[test]
+    fn mixed_user_message_reorders_tool_results_first() {
+        let assistant = assistant_tool_use("call_00_wait");
+        let mixed_user = Message {
+            id: "u".into(),
+            type_: "message".into(),
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Background task 'delegate_to' (#96) did not complete within 240 seconds."
+                        .into(),
+                },
+                tool_result("call_00_wait", "{\"status\":\"waiting\"}"),
+            ],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        let msgs = vec![text_user("hi"), assistant, mixed_user];
+
+        // The violation must be detected so sanitise actually runs.
+        assert!(
+            needs_sanitize(&msgs),
+            "text-before-tool_result must trigger sanitisation"
+        );
+
+        let out = sanitize_messages(msgs);
+        let asst_idx = out.iter().position(|m| m.has_tool_use()).unwrap();
+        let next = &out[asst_idx + 1];
+        let kinds: Vec<&str> = next
+            .content
+            .iter()
+            .map(|c| match c {
+                ContentBlock::ToolResult { .. } => "tool_result",
+                ContentBlock::Text { .. } => "text",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["tool_result", "text"],
+            "tool_result must precede text in the adjacent user message"
+        );
+    }
+
+    /// The same reorder must apply when two consecutive user messages are
+    /// coalesced — e.g. a tool_result-only message followed by a wait_task
+    /// notification text. After coalescing the tool_result must still come
+    /// before the text.
+    #[test]
+    fn coalesced_user_messages_keep_tool_results_first() {
+        let assistant = assistant_tool_use("call_00_wait");
+        let result_user = user_with_tool_results(&["call_00_wait"]);
+        let notif_user = text_user("Background task #96 is still running.");
+        let msgs = vec![text_user("hi"), assistant, result_user, notif_user];
+
+        let out = sanitize_messages(msgs);
+        let asst_idx = out.iter().position(|m| m.has_tool_use()).unwrap();
+        let next = &out[asst_idx + 1];
+        let kinds: Vec<&str> = next
+            .content
+            .iter()
+            .map(|c| match c {
+                ContentBlock::ToolResult { .. } => "tool_result",
+                ContentBlock::Text { .. } => "text",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["tool_result", "text"],
+            "coalesced user messages must keep tool_result before text"
         );
     }
 }
