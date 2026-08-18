@@ -12,11 +12,17 @@ use crate::ExecError;
     name = "get_node_ports",
     description = "Get the input/output port layout of a specific node kind. \
                   Returns declared ports needed to wire edges via add_edge. \
-                  Call this before add_edge to know which ports are available."
+                  Call this before add_edge to know which ports are available. \
+                  For dynamic-port kinds (notably run_command), pass the exact \
+                  `spec` you plan to add so the returned output ports match the \
+                  spec's declared outputs."
 )]
 pub struct GetNodePortsInput {
     /// The node kind to query (e.g. "sql", "source_file", "sink_file", "ldsc", "linear_regression", "mock").
     pub kind: String,
+    /// Optional concrete node spec. Provide this for dynamic-port kinds.
+    #[serde(default)]
+    pub spec: Option<serde_json::Value>,
 }
 
 pub struct GetNodePortsTool {
@@ -34,10 +40,16 @@ impl ToolFunction for GetNodePortsTool {
     type Input = GetNodePortsInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let ports = self
-            .client
-            .get_node_ports(&input.kind)
-            .map_err(ExecError::from)?;
+        let ports = match input.spec {
+            Some(spec) => self
+                .client
+                .get_node_ports_for_spec(&input.kind, spec)
+                .map_err(ExecError::from)?,
+            None => self
+                .client
+                .get_node_ports(&input.kind)
+                .map_err(ExecError::from)?,
+        };
 
         let content = serde_json::to_value(&ports).map_err(|e| ToolError::ExecutionFailed {
             source: Box::new(e),

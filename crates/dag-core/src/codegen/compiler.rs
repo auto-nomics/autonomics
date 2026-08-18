@@ -77,11 +77,11 @@ impl DagCompiler<'_> {
             manifest.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let mut factory_ports: HashMap<&str, crate::node::NodePorts> = HashMap::new();
         for node in &manifest.nodes {
-            let factory = self
+            let ports = self
                 .registry
-                .get_factory(&node.kind)
+                .get_node_ports_for_spec(&node.kind, node.spec.clone())
                 .map_err(|e| CodegenError::Topology(e.to_string()))?;
-            factory_ports.insert(node.id.as_str(), factory.ports());
+            factory_ports.insert(node.id.as_str(), ports);
         }
 
         // 3. Walk in topo order
@@ -111,7 +111,7 @@ impl DagCompiler<'_> {
                 .map_err(|e| CodegenError::Topology(e.to_string()))?;
 
             // ── resolve input variable names + their edge CSV files ──────
-            let ports = factory.ports();
+            let ports = factory_ports[entry.id.as_str()].clone();
 
             // Each element: (input_var_name, Option<edge_csv_path>). A
             // DataFrame edge materialises an inspectable CSV; a File edge is

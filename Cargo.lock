@@ -2547,6 +2547,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "vfs",
 ]
@@ -6995,6 +6996,7 @@ dependencies = [
  "dag-core",
  "datafusion",
  "flate2",
+ "libc",
  "mr",
  "openalex",
  "opentargets",

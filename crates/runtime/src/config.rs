@@ -416,7 +416,8 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 - **Inspect ports before wiring**: every node kind declares typed input/output ports. \
   `list_node_factories` returns lightweight metadata (kind + short description) only. \
   To see the full port layout (port count, variadic flag, per-port column schema), \
-  call `get_node_ports` with the chosen `kind`. Read the downstream node's input \
+  call `get_node_ports` with the chosen `kind`. For dynamic-port kinds such as \
+  `run_command`, pass the exact `spec` so declared outputs are included. Read the downstream node's input \
   port schema BEFORE writing the transform that feeds it. The downstream port's \
   required columns and types are a contract, not a suggestion. \
   Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
@@ -433,6 +434,21 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   \"z\" = beta / se and selecting exactly `rsid, \"z\", \"n\"`. A VCF emits an `info` Struct column; \
   extract subfields with `get_field(info, 'ES')` in the transform, never rely on a List \
   column where a Struct is required. Reserve exactly the required column names and types.";
+
+const PROMPT_DAG_SCRIPTS: &str = "\n\
+### Custom Scripts (run_command)\n\
+- `run_command` is the generic custom-script node. Set `program` to `bash` and \
+put the complete script in the inline `script` field. \
+Put helper Python/R files in inline `files`; they are materialized under \
+`AUTONOMICS_FILES_DIR`.\n\
+- Do not interpolate file paths into shell commands. Use `AUTONOMICS_INPUT0`, \
+`AUTONOMICS_OUTPUT0`, `AUTONOMICS_WORKDIR`, and helper paths from \
+`AUTONOMICS_FILES_DIR`. Always start Bash scripts with \
+`set -Eeuo pipefail`.\n\
+- DataFrame values must cross the file boundary explicitly: \
+`sink_file -> run_command -> source_file`. Declare every output in \
+`outputs`; missing files fail the node. After `run_dag`, use `output_files` \
+to locate artifacts.";
 
 const PROMPT_DAG_HISTORY: &str = "\n\
 ### DAG Version Control (History & Refs)\n\
@@ -533,6 +549,7 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
         s.push_str(PROMPT_DAG_HISTORY);
     }
 
+    s.push_str(PROMPT_DAG_SCRIPTS);
     s.push_str(PROMPT_SQL_CONVENTIONS);
 
     s.push_str(PROMPT_GENERAL);

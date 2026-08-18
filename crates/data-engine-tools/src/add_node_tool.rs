@@ -26,6 +26,7 @@ use crate::ExecError;
                   - \"sql\":            {\"sql_query\": \"SELECT * FROM port_0\"} \
                   - \"source_file\": {\"path\": \"/data/sample.vcf.gz\", \"format\": null} \
                   - \"sink_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
+                  - \"run_command\": {\"program\": \"bash\", \"script\": \"...\", \"outputs\": [{\"path\": \"result.csv\", \"format\": \"csv\"}]} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
                   - \"ldsc\":           {\"n_blocks\": 200, \"intercept\": null} \
                   - \"mock\":           {} \

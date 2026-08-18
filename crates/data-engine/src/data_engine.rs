@@ -135,6 +135,15 @@ impl DataEngine {
         Ok(self.node_registry.get_node_ports(kind)?)
     }
 
+    /// Query the concrete port layout induced by a node spec.
+    pub fn get_node_ports_for_spec(
+        &self,
+        kind: &str,
+        spec: serde_json::Value,
+    ) -> Result<crate::nodes::meta::NodePorts> {
+        Ok(self.node_registry.get_node_ports_for_spec(kind, spec)?)
+    }
+
     /// Query the documentation string of a registered node kind.
     pub fn get_node_doc(&self, kind: &str) -> Result<String> {
         Ok(self.node_registry.get_node_doc(kind)?)

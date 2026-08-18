@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agentik_core::tools::Toolset;
-use agentik_sdk::types::tools::{ToolResult, ToolUse};
+use agentik_sdk::types::tools::{ToolResult, ToolResultContent, ToolUse};
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
 use serde_json::json;
@@ -21,6 +21,13 @@ fn check_ok(result: &ToolResult, label: &str) {
         "{label} failed: {:?}",
         result.content
     );
+}
+
+fn result_json(result: &ToolResult) -> serde_json::Value {
+    match &result.content {
+        ToolResultContent::Json(value) => value.clone(),
+        other => panic!("expected JSON tool result, got: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -132,6 +139,140 @@ async fn test_add_source_sql_run_dag() {
         .unwrap();
     assert_eq!(results.len(), 1);
     check_ok(&results[0], "add_edge sql->sink");
+}
+
+#[tokio::test]
+async fn test_run_command_script_reports_dynamic_ports_and_files() {
+    let file_storage = Arc::new(OpendalFileStorage::new_temp());
+    file_storage
+        .op
+        .write("/input.csv", "id,value\n1,10\n2,20\n")
+        .await
+        .unwrap();
+    let workdir = tempfile::tempdir().unwrap();
+
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())
+        .unwrap()
+        .build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    let command_spec = json!({
+        "program": "bash",
+        "script": "cp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"; cp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT1\"",
+        "outputs": [
+            {"path": "/result.csv", "format": "csv"},
+            {"path": "/copy.tsv", "format": "tsv"}
+        ],
+        "workdir": workdir.path().to_string_lossy(),
+        "timeout_secs": 10
+    });
+
+    let ports = toolset
+        .execute(
+            &[build_tooluse(
+                "ports",
+                "get_node_ports",
+                json!({"kind": "run_command", "spec": command_spec}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&ports[0], "get run_command ports");
+    let ports_json = result_json(&ports[0]);
+    assert_eq!(
+        ports_json["output_ports"]["ports"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let added = toolset
+        .execute(
+            &[
+                build_tooluse(
+                    "add-source",
+                    "add_node",
+                    json!({
+                        "id": "src",
+                        "kind": "source_file",
+                        "spec": {"path": "/input.csv"}
+                    }),
+                ),
+                build_tooluse(
+                    "add-sink",
+                    "add_node",
+                    json!({
+                        "id": "sink",
+                        "kind": "sink_file",
+                        "spec": {
+                            "path": "/intermediate.csv",
+                            "format": "csv",
+                            "mode": "overwrite"
+                        }
+                    }),
+                ),
+                build_tooluse(
+                    "add-command",
+                    "add_node",
+                    json!({"id": "command", "kind": "run_command", "spec": command_spec}),
+                ),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(added.len(), 3);
+    for result in &added {
+        check_ok(result, "add script DAG node");
+    }
+
+    let wired = toolset
+        .execute(
+            &[
+                build_tooluse(
+                    "wire-src-sink",
+                    "add_edge",
+                    json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
+                ),
+                build_tooluse(
+                    "wire-sink-command",
+                    "add_edge",
+                    json!({"from": "sink", "from_port": 0, "to": "command", "to_port": 0}),
+                ),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(wired.len(), 2);
+    for result in &wired {
+        check_ok(result, "wire script DAG edge");
+    }
+
+    let run = toolset
+        .execute(&[build_tooluse("run", "run_dag", json!({}))], None)
+        .await
+        .unwrap();
+    check_ok(&run[0], "run script DAG");
+    let report = result_json(&run[0]);
+    let command = report["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "command")
+        .unwrap();
+    assert_eq!(command["output_type"], "file", "run report: {report}");
+    assert_eq!(command["output_files"].as_array().unwrap().len(), 2);
+    assert!(command["output_files"][0]["path"].as_str().unwrap() == "/result.csv");
+    let uploaded = file_storage.op.read("/result.csv").await.unwrap();
+    assert_eq!(uploaded.to_vec(), b"id,value\n1,10\n2,20\n");
 }
 
 /// Regression: when a SqlNode output contains a Struct-typed column,

@@ -36,6 +36,11 @@ pub trait NodeFactory: Send + Sync {
     /// every instance of this kind will declare. Queryable without
     /// instantiating a node (mirrors [`NodeFactory::spec_schema`]).
     fn ports(&self) -> NodePorts;
+    /// Resolve the actual port layout for a concrete spec. Defaults to the
+    /// static layout for kinds whose ports do not depend on configuration.
+    fn ports_for_spec(&self, _spec: serde_json::Value) -> Result<NodePorts> {
+        Ok(self.ports())
+    }
     fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> Result<Box<dyn DagNode>>;
 
     // ── reverse-compilation (codegen) ────────────────────────────────────
@@ -238,6 +243,17 @@ impl NodeRegistry {
 
     pub fn get_node_ports(&self, node_kind: &str) -> Result<NodePorts> {
         Ok(self.get_node_factory(node_kind)?.ports())
+    }
+
+    /// Resolve the concrete port layout for a node spec. This is the metadata
+    /// contract used by agent wiring and DAG code generation for dynamic-port
+    /// node kinds such as `run_command`.
+    pub fn get_node_ports_for_spec(
+        &self,
+        node_kind: &str,
+        spec: serde_json::Value,
+    ) -> Result<NodePorts> {
+        self.get_node_factory(node_kind)?.ports_for_spec(spec)
     }
 
     pub fn get_node_doc(&self, node_kind: &str) -> Result<String> {

@@ -528,6 +528,18 @@ impl DataEngineClient {
             .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
     }
 
+    /// Get the concrete port layout for a node kind and spec. Pass a spec for
+    /// dynamic-port kinds such as `run_command`.
+    pub fn get_node_ports_for_spec(
+        &self,
+        kind: &str,
+        spec: serde_json::Value,
+    ) -> Result<crate::nodes::meta::NodePorts> {
+        self.node_registry
+            .get_node_ports_for_spec(kind, spec)
+            .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
+    }
+
     /// Get the documentation string for a node kind. Synchronous, never blocks.
     pub fn get_node_doc(&self, kind: &str) -> Result<String> {
         self.node_registry

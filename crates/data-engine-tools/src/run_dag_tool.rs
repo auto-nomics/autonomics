@@ -90,6 +90,12 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             obj.insert("id".into(), serde_json::json!(nr.id));
             obj.insert("status".into(), serde_json::json!(nr.status));
             obj.insert("node_type".into(), serde_json::json!(nr.node_type));
+            if let Some(output_type) = nr.output_type {
+                obj.insert("output_type".into(), serde_json::json!(output_type));
+            }
+            if !nr.output_files.is_empty() {
+                obj.insert("output_files".into(), serde_json::json!(nr.output_files));
+            }
 
             if let Some(schema) = nr.output_schema {
                 obj.insert("output_schema".into(), serde_json::json!(schema));

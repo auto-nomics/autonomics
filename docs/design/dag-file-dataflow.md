@@ -85,11 +85,51 @@ Bindings are replaced only inside individual argv tokens:
 - `$output0`, `$output1`, ...: resolved declared output paths.
 - `$workdir`: resolved working directory.
 
+The node also exports the resolved paths as environment variables, which is the
+preferred interface for inline scripts:
+
+- `AUTONOMICS_INPUT0`, `AUTONOMICS_INPUT1`, ...
+- `AUTONOMICS_OUTPUT0`, `AUTONOMICS_OUTPUT1`, ...
+- `AUTONOMICS_WORKDIR`
+- `AUTONOMICS_INPUT_COUNT`, `AUTONOMICS_OUTPUT_COUNT`
+
+Inline script mode is enabled with `script`. The node writes the source to a
+private file under its workspace and invokes the configured interpreter with
+that file as its first argument. Extra inline assets can be declared in `files`
+and are materialized under `AUTONOMICS_FILES_DIR`; their keys must be safe
+relative paths. This makes the complete script source part of the DAG manifest
+and therefore part of its content hash.
+
+```json
+{
+  "program": "bash",
+  "script": "set -Eeuo pipefail\npython \"$AUTONOMICS_FILES_DIR/clean.py\" --input \"$AUTONOMICS_INPUT0\" --output \"$AUTONOMICS_OUTPUT0\"",
+  "files": {
+    "clean.py": "import shutil\nshutil.copyfile(__import__('os').environ['AUTONOMICS_INPUT0'], __import__('os').environ['AUTONOMICS_OUTPUT0'])"
+  },
+  "outputs": [{ "path": "cleaned.csv", "format": "csv" }],
+  "timeout_secs": 600
+}
+```
+
+Bash is launched with `--noprofile --norc` when `program` resolves to `bash`.
+On Unix, each child gets its own process group; timeout, cancellation, and
+normal completion clean up processes left in that group.
+
+Values in `env` may add or override non-reserved environment variables. The
+`AUTONOMICS_INPUT*`, `AUTONOMICS_OUTPUT*`, `AUTONOMICS_WORKDIR`,
+`AUTONOMICS_SCRIPT`, and `AUTONOMICS_FILES_DIR` names are reserved.
+
 Relative output paths resolve against `workdir`. When `workdir` is omitted, the
 node creates a unique process-local scratch directory. The command must exit
 successfully before `timeout_secs`, and every declared output must exist as a
 regular file after execution. stdout and stderr are capped at 64 KiB each and
 forwarded through the node event stream.
+
+When an OpenDAL filesystem is registered with the engine, absolute File input
+paths are staged into the node workspace before the process starts, and absolute
+declared outputs are uploaded back to the same virtual path after the process
+succeeds. Relative outputs remain local artifacts under the node workspace.
 
 Set `AUTONOMICS_ALLOWED_PROGRAMS` to a comma-separated allowlist to restrict
 the executable name, for example:
@@ -132,9 +172,9 @@ Output construction remains `PortOutputs::insert(port, df)` for DataFrames and
 
 The first release has three deliberate boundaries:
 
-1. `run_command` accepts local filesystem paths; VFS staging is not yet
-   automatic.
-2. Program filtering is by executable name and environment variables are
-   inherited from the engine process.
+1. `run_command` stages absolute paths through the registered OpenDAL
+   filesystem; relative paths remain local to the node workspace.
+2. Program filtering is by executable name. The child inherits the engine
+   environment; `env` entries add to or override individual variables.
 3. Incremental fingerprinting covers cached local outputs; external source-file
    invalidation still uses the existing manual dirty-mark API.

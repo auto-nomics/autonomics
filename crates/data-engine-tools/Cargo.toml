@@ -22,5 +22,6 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 vfs = { path = "../vfs" }
+tempfile = "3.27.0"
 [lints]
 workspace = true
