@@ -23,7 +23,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -182,6 +182,7 @@ const LCV_NODE_KIND: &str = "lcv";
 pub struct LcvNode {
     meta: NodePorts,
     config: LcvConfig,
+    ld_panel: DataBundle,
 }
 
 pub struct LcvNodeFactory {}
@@ -224,6 +225,13 @@ impl NodeFactory for LcvNodeFactory {
         schema_for!(LcvConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "ld_panel",
+            crate::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+        )]
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -231,10 +239,10 @@ impl NodeFactory for LcvNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LcvConfig = serde_json::from_value(spec)?;
-        let node = LcvNode::new(config);
+        let node = LcvNode::new(config, node_ctx.bound_data_bundle("ld_panel")?.clone());
         Ok(Box::new(node))
     }
 
@@ -288,10 +296,11 @@ impl NodeFactory for LcvNodeFactory {
 }
 
 impl LcvNode {
-    pub fn new(config: LcvConfig) -> Self {
+    pub fn new(config: LcvConfig, ld_panel: DataBundle) -> Self {
         Self {
             meta: port_layout(),
             config,
+            ld_panel,
         }
     }
 }
@@ -350,7 +359,7 @@ impl DagNode for LcvNode {
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            &crate::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| LcvNodeError::ReferenceData(e.to_string()))?;
@@ -566,6 +575,10 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 
 #[cfg(test)]
 mod tests {
+    fn bundle(vpath: &str) -> DataBundle {
+        DataBundle::new(vpath, vpath, vpath)
+    }
+
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
@@ -583,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lcv_node_structure() {
-        let node = LcvNode::new(LcvConfig::default());
+        let node = LcvNode::new(LcvConfig::default(), bundle("/panels/ld.parquet"));
         assert_eq!(node.kind(), "lcv");
         assert_eq!(node.ports().input_ports().len(), 2);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -792,7 +805,7 @@ mod tests {
     /// Missing input port must error.
     #[tokio::test]
     async fn e2e_missing_input_yields_error() {
-        let mut node = LcvNode::new(LcvConfig::default());
+        let mut node = LcvNode::new(LcvConfig::default(), bundle("/panels/ld.parquet"));
         let batch = sumstats_batch(
             &[1.0, 2.0, 3.0],
             &["rs1".into(), "rs2".into(), "rs3".into()],

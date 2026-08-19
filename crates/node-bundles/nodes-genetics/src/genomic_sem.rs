@@ -23,7 +23,7 @@ use faer::Mat;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -762,6 +762,8 @@ fn build_covstruc_batch(
 pub struct GsemLdscNode {
     meta: NodePorts,
     config: GsemLdscConfig,
+    ld_panel: DataBundle,
+    m_panel: DataBundle,
 }
 
 pub struct GsemLdscNodeFactory;
@@ -795,6 +797,19 @@ impl NodeFactory for GsemLdscNodeFactory {
         schema_for!(GsemLdscConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![
+            DataBundleBinding::new(
+                "ld_panel",
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+            ),
+            DataBundleBinding::new(
+                "m_panel",
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M,
+            ),
+        ]
+    }
+
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(Some(ldsc_input_schema())) // long-format munged sumstats
@@ -804,13 +819,18 @@ impl NodeFactory for GsemLdscNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: GsemLdscConfig = serde_json::from_value(spec)?;
         let meta = NodePorts::new()
             .add_input_port(Some(ldsc_input_schema()))
             .add_output_port(Some(ldsc_output_schema(config.n_traits)));
-        Ok(Box::new(GsemLdscNode { meta, config }))
+        Ok(Box::new(GsemLdscNode {
+            meta,
+            config,
+            ld_panel: node_ctx.bound_data_bundle("ld_panel")?.clone(),
+            m_panel: node_ctx.bound_data_bundle("m_panel")?.clone(),
+        }))
     }
 
     fn r_packages(&self) -> Vec<String> {
@@ -893,7 +913,7 @@ impl DagNode for GsemLdscNode {
         nodes_ldsc::ldsc_common::register_listing_table(
             &session,
             "ld_panel",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            &nodes_ldsc::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| DagError::NodeError {
@@ -903,7 +923,7 @@ impl DagNode for GsemLdscNode {
         nodes_ldsc::ldsc_common::register_listing_table(
             &session,
             "ld_panel_m",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            &nodes_ldsc::ldsc_common::storage_url(&self.m_panel),
         )
         .await
         .map_err(|e| DagError::NodeError {

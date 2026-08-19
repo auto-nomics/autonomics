@@ -1,11 +1,12 @@
 //! Shared helpers for LDSC nodes.
 //!
-//! Nodes resolve a built-in VFS URL and register its Parquet file as a
-//! `ListingTable` on their isolated DataFusion session.
+//! Nodes receive a runtime-resolved `DataBundle` and register its Parquet file
+//! as a `ListingTable` on their isolated DataFusion session.
 
 use std::sync::Arc;
 
 use arrow_array::Float64Array;
+use dag_core::node::DataBundle;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -13,13 +14,17 @@ use datafusion::datasource::listing::{
 };
 use datafusion::prelude::SessionContext;
 
-/// VFS paths for the built-in reference panels.
-pub const VFS_LDSCORE_1000G_EUR: &str = "vfs:///data/ldsc/1000g_eur.parquet";
-pub const VFS_LDSCORE_1000G_EUR_M: &str = "vfs:///data/ldsc/1000g_eur_m.parquet";
-pub const VFS_LDSCORE_BASELINELD_V2_2_EUR: &str = "vfs:///data/ldsc/baselineLD_v2_2_eur.parquet";
-pub const VFS_LDSCORE_BASELINELD_V2_2_EUR_M: &str =
-    "vfs:///data/ldsc/baselineLD_v2_2_eur_m.parquet";
-pub const VFS_LDSCORE_UKBB_EUR: &str = "vfs:///data/ukbb/UKBB.EUR.ldscore.parquet/";
+/// Stable bundle IDs resolved by the runtime `DataBundleCatalog`.
+pub const BUNDLE_LDSCORE_1000G_EUR: &str = "ldscore.1000g_eur";
+pub const BUNDLE_LDSCORE_1000G_EUR_M: &str = "ldscore.1000g_eur_m";
+pub const BUNDLE_LDSCORE_BASELINELD_V2_2_EUR: &str = "ldscore.baselineLD_v2_2_eur";
+pub const BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M: &str = "ldscore.baselineLD_v2_2_eur_m";
+pub const BUNDLE_LDSCORE_UKBB_EUR: &str = "ldscore.ukbb_eur";
+
+/// Convert a catalog-resolved virtual path to the engine's DataFusion URL.
+pub fn storage_url(bundle: &DataBundle) -> String {
+    format!("vfs://{}", bundle.vpath)
+}
 
 /// Quote a DataFusion table name for SQL interpolation.
 ///

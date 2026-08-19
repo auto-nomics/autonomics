@@ -26,7 +26,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::NodeFactory,
@@ -192,6 +192,8 @@ impl Default for LdscSldscConfig {
 pub struct LdscSldscNode {
     meta: NodePorts,
     config: LdscSldscConfig,
+    ld_panel: DataBundle,
+    m_panel: DataBundle,
 }
 
 pub struct LdscSldscNodeFactory {}
@@ -224,6 +226,19 @@ impl NodeFactory for LdscSldscNodeFactory {
         schema_for!(LdscSldscConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![
+            DataBundleBinding::new(
+                "ld_panel",
+                crate::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR,
+            ),
+            DataBundleBinding::new(
+                "m_panel",
+                crate::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M,
+            ),
+        ]
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -234,8 +249,11 @@ impl NodeFactory for LdscSldscNodeFactory {
         node_ctx: dag_core::registry::NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscSldscConfig = serde_json::from_value(spec)?;
-        let _ = &node_ctx; // ctx injected at execute() time
-        let node = LdscSldscNode::new(config);
+        let node = LdscSldscNode::new(
+            config,
+            node_ctx.bound_data_bundle("ld_panel")?.clone(),
+            node_ctx.bound_data_bundle("m_panel")?.clone(),
+        );
         Ok(Box::new(node))
     }
 
@@ -278,10 +296,12 @@ impl NodeFactory for LdscSldscNodeFactory {
 
 impl LdscSldscNode {
     /// Construct an [`LdscSldscNode`].
-    pub fn new(config: LdscSldscConfig) -> Self {
+    pub fn new(config: LdscSldscConfig, ld_panel: DataBundle, m_panel: DataBundle) -> Self {
         Self {
             meta: port_layout(),
             config,
+            ld_panel,
+            m_panel,
         }
     }
 }
@@ -322,14 +342,14 @@ impl DagNode for LdscSldscNode {
         crate::ldsc_common::register_listing_table(
             &session,
             "ld_panel",
-            crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR,
+            &crate::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| LdscSldscNodeError::ReferenceData(e.to_string()))?;
         crate::ldsc_common::register_listing_table(
             &session,
             "ld_panel_m",
-            crate::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR_M,
+            &crate::ldsc_common::storage_url(&self.m_panel),
         )
         .await
         .map_err(|e| LdscSldscNodeError::ReferenceData(e.to_string()))?;
@@ -482,12 +502,43 @@ impl LdscSldscNode {
 
 #[cfg(test)]
 mod tests {
+    fn bundle(vpath: &str) -> DataBundle {
+        DataBundle::new(vpath, vpath, vpath)
+    }
+
+    #[tokio::test]
+    async fn e2e_missing_input_yields_error() {
+        let mut node = LdscSldscNode::new(
+            LdscSldscConfig::new(),
+            bundle("/panels/baseline.parquet"),
+            bundle("/panels/baseline_m.parquet"),
+        );
+
+        let error = node
+            .execute(
+                &dag_core::registry::NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no input DataFrame"));
+    }
+
     use super::*;
 
     /// Construct the node and assert its kind and topology.
     #[tokio::test]
     async fn test_sldsc_node_structure() {
-        let node = LdscSldscNode::new(LdscSldscConfig::new());
+        let node = LdscSldscNode::new(
+            LdscSldscConfig::new(),
+            bundle("/panels/baseline.parquet"),
+            bundle("/panels/baseline_m.parquet"),
+        );
         assert_eq!(node.kind(), "sldsc");
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);

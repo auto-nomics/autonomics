@@ -53,6 +53,7 @@ impl DataEngine {
         opendal: Option<Arc<OpendalFileStorage>>,
         data_bundles: Arc<DataBundleCatalog>,
     ) -> Self {
+        let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
         // Global concurrency limiter shared across all agent sessions.
         // Sized to leave ≥ 2 worker threads for SessionServer actors +
         // tool execution, preventing CPU-bound node work from starving

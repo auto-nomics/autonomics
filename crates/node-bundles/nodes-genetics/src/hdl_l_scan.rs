@@ -40,7 +40,7 @@ use tokio::sync::Semaphore;
 use crate::hdl_l::{MAX_REGION_WIDTH, collect_input_batches, parse_sumstats, result_schema};
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_SCAN_KIND: &str = "hdl_l_scan";
@@ -264,16 +264,18 @@ fn process_window(
 pub struct HdlLScanNode {
     meta: NodePorts,
     spec: HdlLScanSpec,
+    plink_bundle: DataBundle,
 }
 
 impl HdlLScanNode {
-    pub fn new(spec: HdlLScanSpec) -> Self {
+    pub fn new(spec: HdlLScanSpec, plink_bundle: DataBundle) -> Self {
         Self {
             meta: NodePorts::new()
                 .add_input_port(None)
                 .add_input_port(None)
                 .add_output_port(Some(scan_result_schema())),
             spec,
+            plink_bundle,
         }
     }
 }
@@ -298,6 +300,12 @@ impl NodeFactory for HdlLScanNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(HdlLScanSpec)
     }
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "plink",
+            crate::plink_reference::PLINK_BUNDLE,
+        )]
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -307,9 +315,12 @@ impl NodeFactory for HdlLScanNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _ctx: NodeCtx,
+        ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        Ok(Box::new(HdlLScanNode::new(serde_json::from_value(spec)?)))
+        Ok(Box::new(HdlLScanNode::new(
+            serde_json::from_value(spec)?,
+            ctx.bound_data_bundle("plink")?.clone(),
+        )))
     }
     fn codegen_r(
         &self,
@@ -431,11 +442,20 @@ impl DagNode for HdlLScanNode {
             self.spec.skip_ranges.len(),
         ));
 
-        // ---- Load PLINK reference ONCE ----
-        let ref_template = crate::plink_reference::hdl_l_prefix_template(self.spec.chr);
-        let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
-        let plink_ref = lava::plink::load_reference(&ld_ref_prefix)
-            .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;
+        // ---- Validate inputs before performing reference I/O ----
+        let in0 = inputs.first().ok_or_else(|| err("no GWAS1 input".into()))?;
+        let in1 = inputs.get(1).ok_or_else(|| err("no GWAS2 input".into()))?;
+
+        // ---- Load PLINK reference ONCE through OpenDAL ----
+        let loaded = crate::plink_reference::load_lava_reference(
+            node_ctx,
+            &self.plink_bundle,
+            &[self.spec.chr],
+        )
+        .await
+        .map_err(|e| err(format!("loading PLINK reference: {e}")))?;
+        let ld_ref_prefix = loaded.local_prefix;
+        let plink_ref = loaded.reference;
         let plink_ref = Arc::new(plink_ref);
         reporter.info(format!(
             "hdl_l_scan: loaded {} SNPs from {}",
@@ -444,8 +464,6 @@ impl DagNode for HdlLScanNode {
         ));
 
         // ---- Collect + parse sumstats ONCE ----
-        let in0 = inputs.first().ok_or_else(|| err("no GWAS1 input".into()))?;
-        let in1 = inputs.get(1).ok_or_else(|| err("no GWAS2 input".into()))?;
         let b1 = collect_input_batches(in0, HDL_L_SCAN_KIND).await?;
         let b2 = collect_input_batches(in1, HDL_L_SCAN_KIND).await?;
         let rows1 = parse_sumstats(&b1)?;
@@ -657,4 +675,40 @@ fn build_result_batch(
         node_type: HDL_L_SCAN_KIND.into(),
         msg: format!("arrow: {e}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hdl_l_scan_missing_input_yields_error() {
+        let mut node = HdlLScanNode::new(
+            serde_json::from_value::<HdlLScanSpec>(serde_json::json!({
+                "chr": 1,
+                "scan_start": 1,
+                "scan_stop": 1000,
+                "window_size": 500,
+                "step": 500,
+                "trait1_name": "a",
+                "trait2_name": "b"
+            }))
+            .unwrap(),
+            DataBundle::new("plink", "PLINK", "/bundles/plink/chr{N}/panel"),
+        );
+
+        let error = node
+            .execute(
+                &NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no GWAS1 input"));
+    }
 }

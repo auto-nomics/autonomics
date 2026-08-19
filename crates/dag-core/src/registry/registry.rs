@@ -217,6 +217,7 @@ pub struct NodeInfo {
     pub kind: String,
     pub desc: String,
     pub deprecated: bool,
+    pub data_bundles: Vec<DataBundleBinding>,
 }
 
 /// The single source of truth of "which node kinds exist and how to build one from spec."
@@ -342,6 +343,7 @@ impl NodeRegistry {
                 kind: kind.clone(),
                 desc: factory.desc().to_string(),
                 deprecated: factory.deprecated(),
+                data_bundles: factory.data_bundles(),
             })
             .collect()
     }

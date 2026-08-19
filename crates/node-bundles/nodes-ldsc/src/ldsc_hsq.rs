@@ -15,7 +15,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
@@ -143,6 +143,8 @@ pub struct LdscHsqNode {
     /// (per-annotation M, jackknife blocks, optional fixed intercept).
     /// See [`LdscHsqConfig`].
     ldsc_hsq: LdscHsqConfig,
+    ld_panel: DataBundle,
+    m_panel: DataBundle,
 }
 
 /// Configuration for the LDSC h² estimation algorithm.
@@ -219,6 +221,13 @@ impl NodeFactory for LdscHsqNodeFactory {
         schema_for!(LdscHsqConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![
+            DataBundleBinding::new("ld_panel", crate::ldsc_common::BUNDLE_LDSCORE_1000G_EUR),
+            DataBundleBinding::new("m_panel", crate::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M),
+        ]
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -226,10 +235,14 @@ impl NodeFactory for LdscHsqNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscHsqConfig = serde_json::from_value(spec)?;
-        let node = LdscHsqNode::new(config);
+        let node = LdscHsqNode::new(
+            config,
+            node_ctx.bound_data_bundle("ld_panel")?.clone(),
+            node_ctx.bound_data_bundle("m_panel")?.clone(),
+        );
         Ok(Box::new(node))
     }
 
@@ -323,7 +336,7 @@ impl LdscHsqNode {
     /// holds only its algorithm configuration. The upstream `DataFrame` must
     /// expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
     /// enforced by the input port schema.
-    pub fn new(ldsc_hsq: LdscHsqConfig) -> Self {
+    pub fn new(ldsc_hsq: LdscHsqConfig, ld_panel: DataBundle, m_panel: DataBundle) -> Self {
         // Fixed, typed ports: a single input carrying GWAS sumstats (z, n,
         // rsid) and a single output with the fixed h² summary schema.
         // Declaring the schemas lets the DAG validate edge compatibility
@@ -331,6 +344,8 @@ impl LdscHsqNode {
         Self {
             meta: port_layout(),
             ldsc_hsq,
+            ld_panel,
+            m_panel,
         }
     }
 }
@@ -385,20 +400,20 @@ impl DagNode for LdscHsqNode {
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            &crate::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel_m",
-            crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            &crate::ldsc_common::storage_url(&self.m_panel),
         )
         .await
         .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
         tracing::debug!(
-            panel = crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
-            m_table = crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            panel = %self.ld_panel.vpath,
+            m_table = %self.m_panel.vpath,
             "ldsc_hsq reference panels registered"
         );
 
@@ -511,6 +526,10 @@ impl LdscHsqNode {
 
 #[cfg(test)]
 mod tests {
+    fn bundle(vpath: &str) -> DataBundle {
+        DataBundle::new(vpath, vpath, vpath)
+    }
+
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
@@ -531,7 +550,11 @@ mod tests {
     /// Construct the node and assert its kind and single-in/single-out topology.
     #[tokio::test]
     async fn test_ldsc_hsq_node_structure() {
-        let node = LdscHsqNode::new(LdscHsqConfig::new(5, None));
+        let node = LdscHsqNode::new(
+            LdscHsqConfig::new(5, None),
+            bundle("/panels/ld.parquet"),
+            bundle("/panels/ld_m.parquet"),
+        );
         assert_eq!(node.kind(), "ldsc");
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -825,7 +848,11 @@ mod tests {
     /// A missing input must surface a clear error before any catalog work.
     #[tokio::test]
     async fn e2e_missing_input_yields_error() {
-        let mut node = LdscHsqNode::new(LdscHsqConfig::new(5, None));
+        let mut node = LdscHsqNode::new(
+            LdscHsqConfig::new(5, None),
+            bundle("/panels/ld.parquet"),
+            bundle("/panels/ld_m.parquet"),
+        );
         let res = node
             .execute(
                 &node_ctx(),

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -165,6 +165,7 @@ const UNIVARIATE_MIXER_NODE_KIND: &str = "univariate_mixer";
 pub struct UnivariateMixerNode {
     meta: NodePorts,
     spec: UnivariateMixerNodeSpec,
+    reference_bundle: DataBundle,
 }
 
 fn port_layout() -> NodePorts {
@@ -174,10 +175,11 @@ fn port_layout() -> NodePorts {
 }
 
 impl UnivariateMixerNode {
-    pub fn new(spec: UnivariateMixerNodeSpec) -> Self {
+    pub fn new(spec: UnivariateMixerNodeSpec, reference_bundle: DataBundle) -> Self {
         Self {
             meta: port_layout(),
             spec,
+            reference_bundle,
         }
     }
 }
@@ -207,6 +209,17 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         schema_for!(UnivariateMixerNodeSpec)
     }
 
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let spec: UnivariateMixerNodeSpec = serde_json::from_value(spec)?;
+        Ok(vec![DataBundleBinding::new(
+            "reference",
+            format!("mixer.{}", spec.reference),
+        )])
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -214,10 +227,11 @@ impl NodeFactory for UnivariateMixerNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: UnivariateMixerNodeSpec = serde_json::from_value(spec)?;
-        let node = UnivariateMixerNode::new(config);
+        let node =
+            UnivariateMixerNode::new(config, node_ctx.bound_data_bundle("reference")?.clone());
         Ok(Box::new(node))
     }
 
@@ -339,8 +353,13 @@ impl DagNode for UnivariateMixerNode {
         reporter.info(format!("wrote {n_snp} SNPs to {}", sumstats_path.display()));
 
         // ── 3. Build mixer.py command line ─────────────────────────────
-        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
-            .map_err(UnivariateMixerError::ReferenceBundle)?;
+        let bundle = crate::mixer_common::resolve_reference(
+            node_ctx,
+            &self.reference_bundle,
+            &self.spec.reference,
+        )
+        .await
+        .map_err(UnivariateMixerError::ReferenceBundle)?;
         let mixer_py = bundle.mixer_home.join("precimed").join("mixer.py");
         let lib_path = bundle.mixer_home.join("libbgmg.so");
         let out_prefix = tmp_dir.join("result");
@@ -726,6 +745,14 @@ fn count_lines(path: &std::path::Path) -> usize {
 
 #[cfg(test)]
 mod tests {
+    fn reference_bundle() -> DataBundle {
+        DataBundle::new(
+            "mixer.g1000_eur",
+            "MiXeR reference",
+            "/bundles/mixer/g1000_eur",
+        )
+    }
+
     use super::*;
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::prelude::CsvReadOptions;
@@ -744,7 +771,7 @@ mod tests {
             serde_json::from_str::<UnivariateMixerNodeSpec>(r#"{"mixer_home":"x"}"#).unwrap_err();
         assert!(error.to_string().contains("unknown field `mixer_home`"));
 
-        let node = UnivariateMixerNode::new(spec);
+        let node = UnivariateMixerNode::new(spec, reference_bundle());
         assert_eq!(node.kind(), "univariate_mixer");
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -820,9 +847,11 @@ mod tests {
         let fixture = std::path::Path::new(
             "/mnt/disk3/gsa-mixer/precimed/mixer-test/data/trait1.sumstats.gz",
         );
-        if !fixture.is_file() || !crate::mixer_common::resolve_reference("g1000_eur").is_ok() {
+        let engine_root = std::path::Path::new("/data/mixer/resources/g1000_eur");
+        if !fixture.is_file() || !engine_root.join("bundle.json").is_file() {
             return;
         }
+        let (node_ctx, _vfs_scratch) = crate::mixer_common::tests::vfs_ctx(engine_root);
 
         let ctx = datafusion::prelude::SessionContext::new();
         let df = ctx
@@ -841,18 +870,21 @@ mod tests {
             .sql(r#"SELECT CONCAT("CHR", ':', "BP", ':', "A1", ':', "A2") AS "rsid", "A1", "A2", "N", "Z" FROM mixer_input"#)
             .await
             .unwrap();
-        let mut node = UnivariateMixerNode::new(UnivariateMixerNodeSpec {
-            reference: "g1000_eur".into(),
-            chr2use: "21-22".into(),
-            seed: 123,
-            diffevo_fast_repeats: 2,
-            fast_run: true,
-            kmax_pdf: 10,
-            downsample_factor: 100,
-        });
+        let mut node = UnivariateMixerNode::new(
+            UnivariateMixerNodeSpec {
+                reference: "g1000_eur".into(),
+                chr2use: "21-22".into(),
+                seed: 123,
+                diffevo_fast_repeats: 2,
+                fast_run: true,
+                kmax_pdf: 10,
+                downsample_factor: 100,
+            },
+            reference_bundle(),
+        );
         let outputs = node
             .execute(
-                &NodeCtx::new(ctx.runtime_env(), None),
+                &node_ctx,
                 &[NodeInput::new_dataframe(0, df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )

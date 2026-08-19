@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use dag_core::dag::{DagError, graph::PortOutputs, node_event::NodeReporter};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const KIND: &str = "magma_kegg_align";
@@ -49,16 +49,6 @@ fn default_exclude_pathways() -> Vec<String> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaKeggAlignConfig {
-    /// VFS path to an NCBI37.3/NCBI38 gene-loc Parquet table.
-    pub gene_loc: String,
-    /// VFS path to KEGG `entity_gene.parquet`.
-    pub kegg_genes: String,
-    /// VFS path to KEGG `link_pathway_ko.parquet`.
-    pub kegg_pathway_ko: String,
-    /// VFS path to KEGG `entity_pathway.parquet`.
-    pub kegg_pathways: String,
-    /// VFS path to KEGG `link_genome_pathway.parquet`.
-    pub kegg_genome_pathways: String,
     /// KEGG organism prefix. Currently tested for the human `hsa` export.
     #[serde(default = "default_organism")]
     pub organism: String,
@@ -108,6 +98,16 @@ fn node_ports() -> NodePorts {
 
 pub struct MagmaKeggAlignNodeFactory;
 
+pub const GENE_LOC_BUNDLE: &str = "magma.gene_loc";
+pub const KEGG_GENES_BUNDLE: &str = "kegg.genes";
+pub const KEGG_PATHWAY_KO_BUNDLE: &str = "kegg.pathway_ko";
+pub const KEGG_PATHWAYS_BUNDLE: &str = "kegg.pathways";
+pub const KEGG_GENOME_PATHWAYS_BUNDLE: &str = "kegg.genome_pathways";
+
+fn storage_url(bundle: &DataBundle) -> String {
+    format!("vfs://{}", bundle.vpath)
+}
+
 impl NodeFactory for MagmaKeggAlignNodeFactory {
     fn kind(&self) -> &'static str {
         KIND
@@ -130,6 +130,16 @@ impl NodeFactory for MagmaKeggAlignNodeFactory {
         schema_for!(MagmaKeggAlignConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![
+            DataBundleBinding::new("gene_loc", GENE_LOC_BUNDLE),
+            DataBundleBinding::new("kegg_genes", KEGG_GENES_BUNDLE),
+            DataBundleBinding::new("kegg_pathway_ko", KEGG_PATHWAY_KO_BUNDLE),
+            DataBundleBinding::new("kegg_pathways", KEGG_PATHWAYS_BUNDLE),
+            DataBundleBinding::new("kegg_genome_pathways", KEGG_GENOME_PATHWAYS_BUNDLE),
+        ]
+    }
+
     fn ports(&self) -> NodePorts {
         NodePorts::new().add_output_port(Some(output_schema()))
     }
@@ -137,7 +147,7 @@ impl NodeFactory for MagmaKeggAlignNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: MagmaKeggAlignConfig = serde_json::from_value(spec)?;
         if config.min_set_size == 0 {
@@ -153,6 +163,11 @@ impl NodeFactory for MagmaKeggAlignNodeFactory {
         Ok(Box::new(MagmaKeggAlignNode {
             meta: node_ports(),
             config,
+            gene_loc: node_ctx.bound_data_bundle("gene_loc")?.clone(),
+            kegg_genes: node_ctx.bound_data_bundle("kegg_genes")?.clone(),
+            kegg_pathway_ko: node_ctx.bound_data_bundle("kegg_pathway_ko")?.clone(),
+            kegg_pathways: node_ctx.bound_data_bundle("kegg_pathways")?.clone(),
+            kegg_genome_pathways: node_ctx.bound_data_bundle("kegg_genome_pathways")?.clone(),
         }))
     }
 }
@@ -161,13 +176,30 @@ impl NodeFactory for MagmaKeggAlignNodeFactory {
 pub struct MagmaKeggAlignNode {
     meta: NodePorts,
     config: MagmaKeggAlignConfig,
+    gene_loc: DataBundle,
+    kegg_genes: DataBundle,
+    kegg_pathway_ko: DataBundle,
+    kegg_pathways: DataBundle,
+    kegg_genome_pathways: DataBundle,
 }
 
 impl MagmaKeggAlignNode {
-    pub fn new(config: MagmaKeggAlignConfig) -> Self {
+    pub fn new(
+        config: MagmaKeggAlignConfig,
+        gene_loc: DataBundle,
+        kegg_genes: DataBundle,
+        kegg_pathway_ko: DataBundle,
+        kegg_pathways: DataBundle,
+        kegg_genome_pathways: DataBundle,
+    ) -> Self {
         Self {
             meta: node_ports(),
             config,
+            gene_loc,
+            kegg_genes,
+            kegg_pathway_ko,
+            kegg_pathways,
+            kegg_genome_pathways,
         }
     }
 
@@ -176,21 +208,33 @@ impl MagmaKeggAlignNode {
         ctx: &datafusion::prelude::SessionContext,
     ) -> Result<datafusion::dataframe::DataFrame, MagmaKeggAlignError> {
         let parquet = datafusion::prelude::ParquetReadOptions::default();
-        ctx.register_parquet("magma_gene_loc", &self.config.gene_loc, parquet.clone())
-            .await?;
-        ctx.register_parquet("kegg_genes", &self.config.kegg_genes, parquet.clone())
-            .await?;
         ctx.register_parquet(
-            "kegg_pathway_ko",
-            &self.config.kegg_pathway_ko,
+            "magma_gene_loc",
+            &storage_url(&self.gene_loc),
             parquet.clone(),
         )
         .await?;
-        ctx.register_parquet("kegg_pathways", &self.config.kegg_pathways, parquet.clone())
-            .await?;
+        ctx.register_parquet(
+            "kegg_genes",
+            &storage_url(&self.kegg_genes),
+            parquet.clone(),
+        )
+        .await?;
+        ctx.register_parquet(
+            "kegg_pathway_ko",
+            &storage_url(&self.kegg_pathway_ko),
+            parquet.clone(),
+        )
+        .await?;
+        ctx.register_parquet(
+            "kegg_pathways",
+            &storage_url(&self.kegg_pathways),
+            parquet.clone(),
+        )
+        .await?;
         ctx.register_parquet(
             "kegg_genome_pathways",
-            &self.config.kegg_genome_pathways,
+            &storage_url(&self.kegg_genome_pathways),
             parquet,
         )
         .await?;
@@ -323,6 +367,10 @@ impl DagNode for MagmaKeggAlignNode {
 
 #[cfg(test)]
 mod tests {
+    fn bundle(id: &str, vpath: &str) -> DataBundle {
+        DataBundle::new(id, id, vpath)
+    }
+
     use super::*;
     use arrow_array::RecordBatch;
     use arrow_array::{Int64Array, StringArray, UInt64Array};
@@ -468,20 +516,30 @@ mod tests {
         );
         let node_ctx = NodeCtx::new(ctx.runtime_env(), None);
 
-        let p = |name: &str| format!("vfs:///data/kegg-test/{name}");
-        let mut node = MagmaKeggAlignNode::new(MagmaKeggAlignConfig {
-            gene_loc: p("gene_loc.parquet"),
-            kegg_genes: p("entity_gene.parquet"),
-            kegg_pathway_ko: p("link_pathway_ko.parquet"),
-            kegg_pathways: p("entity_pathway.parquet"),
-            kegg_genome_pathways: p("link_genome_pathway.parquet"),
-            organism: "hsa".into(),
-            genome_id: "T01001".into(),
-            gene_type: "CDS".into(),
-            min_set_size: 1,
-            max_set_size: 10,
-            exclude_pathways: vec![],
-        });
+        let mut node = MagmaKeggAlignNode::new(
+            MagmaKeggAlignConfig {
+                organism: "hsa".into(),
+                genome_id: "T01001".into(),
+                gene_type: "CDS".into(),
+                min_set_size: 1,
+                max_set_size: 10,
+                exclude_pathways: vec![],
+            },
+            bundle(GENE_LOC_BUNDLE, "/data/kegg-test/gene_loc.parquet"),
+            bundle(KEGG_GENES_BUNDLE, "/data/kegg-test/entity_gene.parquet"),
+            bundle(
+                KEGG_PATHWAY_KO_BUNDLE,
+                "/data/kegg-test/link_pathway_ko.parquet",
+            ),
+            bundle(
+                KEGG_PATHWAYS_BUNDLE,
+                "/data/kegg-test/entity_pathway.parquet",
+            ),
+            bundle(
+                KEGG_GENOME_PATHWAYS_BUNDLE,
+                "/data/kegg-test/link_genome_pathway.parquet",
+            ),
+        );
         let output = node
             .execute(
                 &node_ctx,

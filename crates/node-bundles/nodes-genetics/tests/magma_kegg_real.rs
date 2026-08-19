@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::StringArray;
+use dag_core::DataBundle;
 use dag_core::node::DagNode;
 use dag_core::registry::NodeCtx;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -55,12 +56,8 @@ async fn normalizes_real_kegg_data_to_magma_gene_ids() {
         return;
     }
     let (ctx, _mounted) = mounted_ctx();
+    let bundle = |id: &str, vpath: &str| DataBundle::new(id, id, vpath);
     let config = nodes_genetics::magma_kegg::MagmaKeggAlignConfig {
-        gene_loc: "vfs:///data/magma/genes/parquet/NCBI37.3.gene_loc.parquet".into(),
-        kegg_genes: "vfs:///data/kegg_data/entity_gene.parquet".into(),
-        kegg_pathway_ko: "vfs:///data/kegg_data/link_pathway_ko.parquet".into(),
-        kegg_pathways: "vfs:///data/kegg_data/entity_pathway.parquet".into(),
-        kegg_genome_pathways: "vfs:///data/kegg_data/link_genome_pathway.parquet".into(),
         organism: "hsa".into(),
         genome_id: "T01001".into(),
         gene_type: "CDS".into(),
@@ -68,7 +65,29 @@ async fn normalizes_real_kegg_data_to_magma_gene_ids() {
         max_set_size: 1000,
         exclude_pathways: vec!["map01100".into(), "map01110".into(), "map01120".into()],
     };
-    let mut node = nodes_genetics::magma_kegg::MagmaKeggAlignNode::new(config);
+    let mut node = nodes_genetics::magma_kegg::MagmaKeggAlignNode::new(
+        config,
+        bundle(
+            nodes_genetics::magma_kegg::GENE_LOC_BUNDLE,
+            "/data/magma/genes/parquet/NCBI37.3.gene_loc.parquet",
+        ),
+        bundle(
+            nodes_genetics::magma_kegg::KEGG_GENES_BUNDLE,
+            "/data/kegg_data/entity_gene.parquet",
+        ),
+        bundle(
+            nodes_genetics::magma_kegg::KEGG_PATHWAY_KO_BUNDLE,
+            "/data/kegg_data/link_pathway_ko.parquet",
+        ),
+        bundle(
+            nodes_genetics::magma_kegg::KEGG_PATHWAYS_BUNDLE,
+            "/data/kegg_data/entity_pathway.parquet",
+        ),
+        bundle(
+            nodes_genetics::magma_kegg::KEGG_GENOME_PATHWAYS_BUNDLE,
+            "/data/kegg_data/link_genome_pathway.parquet",
+        ),
+    );
     let output = node
         .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
         .await

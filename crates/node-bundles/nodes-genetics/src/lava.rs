@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use dag_core::dag::runtime::RuntimeStatus;
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -431,14 +431,16 @@ const LOCUS_KIND: &str = "lava_locus";
 pub struct LavaLocusNode {
     meta: NodePorts,
     spec: LavaLocusSpec,
+    plink_bundle: DataBundle,
 }
 impl LavaLocusNode {
-    pub fn new(spec: LavaLocusSpec) -> Self {
+    pub fn new(spec: LavaLocusSpec, plink_bundle: DataBundle) -> Self {
         Self {
             meta: NodePorts::new()
                 .add_input_port(Some(gwas_input_schema()))
                 .add_output_port(Some(locus_params_schema())),
             spec,
+            plink_bundle,
         }
     }
 }
@@ -457,6 +459,12 @@ impl NodeFactory for LavaLocusNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(LavaLocusSpec)
     }
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "plink",
+            crate::plink_reference::PLINK_BUNDLE,
+        )]
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(Some(gwas_input_schema()))
@@ -465,9 +473,12 @@ impl NodeFactory for LavaLocusNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _ctx: NodeCtx,
+        ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        Ok(Box::new(LavaLocusNode::new(serde_json::from_value(spec)?)))
+        Ok(Box::new(LavaLocusNode::new(
+            serde_json::from_value(spec)?,
+            ctx.bound_data_bundle("plink")?.clone(),
+        )))
     }
     fn codegen_r(
         &self,
@@ -650,15 +661,20 @@ impl DagNode for LavaLocusNode {
             "locus: loading PLINK LD reference for chromosomes {:?}",
             chroms,
         ));
-        let loaded_reference =
-            match crate::plink_reference::load_lava_reference(node_ctx, &chroms).await {
-                Ok(r) => r,
-                Err(e) => {
-                    let msg = e.to_string();
-                    reporter.error(format!("locus: abort — LD reference load failed: {msg}"));
-                    return Err(LavaNodeError::Lava(msg).into());
-                }
-            };
+        let loaded_reference = match crate::plink_reference::load_lava_reference(
+            node_ctx,
+            &self.plink_bundle,
+            &chroms,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = e.to_string();
+                reporter.error(format!("locus: abort — LD reference load failed: {msg}"));
+                return Err(LavaNodeError::Lava(msg).into());
+            }
+        };
         let reference = loaded_reference.reference;
         reporter.info("locus: LD reference loaded — assembling input object");
         let input_obj = match lava::input::finish_input_with_ref(
@@ -1537,6 +1553,28 @@ impl DagNode for LavaMultiregNode {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn lava_locus_missing_input_yields_error() {
+        let mut node = LavaLocusNode::new(
+            serde_json::from_value::<LavaLocusSpec>(serde_json::json!({})).unwrap(),
+            DataBundle::new("plink", "PLINK", "/bundles/plink/chr{N}/panel"),
+        );
+
+        let error = node
+            .execute(
+                &NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no input"));
+    }
+
     #[test]
     fn factories_metadata() {
         for (f, kind) in [
@@ -1598,13 +1636,8 @@ mod tests {
         assert!((b.h2_obs[0] - 0.01).abs() < 1e-12);
     }
 
-    /// Smoke test for the direct-host fallback. The normal VFS path is covered in
-    /// [`crate::plink_reference`]. Ignored by default because CI has no deployed
-    /// 1000G EUR panel.
-    /// Run with: `cargo test -p nodes-genetics -- --ignored load_reference`
-    #[tokio::test]
-    #[ignore = "needs a local 1000G EUR PLINK panel"]
-    async fn load_reference() {
+    #[test]
+    fn locus_node_uses_catalog_plink_template() {
         let spec = LavaLocusSpec {
             loci: vec![LavaLocus {
                 loc: "1:1-1000000".into(),
@@ -1618,23 +1651,19 @@ mod tests {
             max_prop_k: d_max_prop_k(),
             min_k: d_min_k(),
         };
-        let node = LavaLocusNode::new(spec);
+        let bundle = DataBundle::new(
+            crate::plink_reference::PLINK_BUNDLE,
+            "1000G PLINK reference",
+            "/references/plink/chr{N}/panel",
+        );
+        let node = LavaLocusNode::new(spec, bundle.clone());
         assert_eq!(node.kind(), LOCUS_KIND);
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
 
-        // The reference template must resolve + load chr1.
-        let template = crate::plink_reference::default_prefix_template(&[1]);
-        let reference = lava::plink::load_reference_template(&template, &[1])
-            .expect("1000G EUR chr1 reference loads");
-        assert!(reference.sample_size > 0, "non-empty .fam sample size");
-        assert!(
-            !reference.snp_info.snp.is_empty(),
-            "chr1 .bim contributed SNPs"
-        );
         assert_eq!(
-            reference.chr_prefix.get(&1).map(|p| p.to_path_buf()),
-            Some(std::path::PathBuf::from(template.replace("{N}", "1")))
+            crate::plink_reference::storage_template(&bundle).unwrap(),
+            "vfs:///references/plink/chr{N}/panel"
         );
     }
 }

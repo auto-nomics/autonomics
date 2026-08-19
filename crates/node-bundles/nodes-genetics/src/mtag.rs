@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use statrs::distribution::ContinuousCDF;
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -230,6 +230,7 @@ const MTAG_NODE_KIND: &str = "mtag";
 pub struct MtagNode {
     meta: NodePorts,
     config: MtagConfig,
+    ld_panel: DataBundle,
 }
 
 pub struct MtagNodeFactory {}
@@ -268,6 +269,13 @@ impl NodeFactory for MtagNodeFactory {
         schema_for!(MtagConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "ld_panel",
+            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
+        )]
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -275,10 +283,10 @@ impl NodeFactory for MtagNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: MtagConfig = serde_json::from_value(spec)?;
-        let node = MtagNode::new(config);
+        let node = MtagNode::new(config, node_ctx.bound_data_bundle("ld_panel")?.clone());
         Ok(Box::new(node))
     }
 
@@ -335,10 +343,11 @@ impl NodeFactory for MtagNodeFactory {
 }
 
 impl MtagNode {
-    pub fn new(config: MtagConfig) -> Self {
+    pub fn new(config: MtagConfig, ld_panel: DataBundle) -> Self {
         Self {
             meta: port_layout(),
             config,
+            ld_panel,
         }
     }
 }
@@ -404,7 +413,7 @@ impl DagNode for MtagNode {
         nodes_ldsc::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_UKBB_EUR,
+            &nodes_ldsc::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| MtagNodeError::ReferenceData(e.to_string()))?;
@@ -749,6 +758,10 @@ async fn count_panel_snp(
 
 #[cfg(test)]
 mod tests {
+    fn bundle() -> DataBundle {
+        DataBundle::new("ukbb", "UKBB LD panel", "/panels/ukbb.parquet")
+    }
+
     use super::*;
     use arrow_array::{Array, Int64Array, StringArray, StructArray};
     use datafusion::catalog::{
@@ -762,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_mtag_node_structure() {
-        let node = MtagNode::new(MtagConfig::default());
+        let node = MtagNode::new(MtagConfig::default(), bundle());
         assert_eq!(node.kind(), "mtag");
         assert_eq!(node.ports().input_ports().len(), 2);
         assert_eq!(node.ports().output_ports().len(), 2);
@@ -952,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn e2e_mtag_missing_input_yields_error() {
-        let mut node = MtagNode::new(MtagConfig::default());
+        let mut node = MtagNode::new(MtagConfig::default(), bundle());
         let batch = sumstats_batch(
             &[1.0, 2.0, 3.0],
             &["rs1".into(), "rs2".into(), "rs3".into()],

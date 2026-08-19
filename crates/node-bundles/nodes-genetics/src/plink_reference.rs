@@ -5,77 +5,26 @@ use std::sync::Arc;
 use futures::io::AsyncReadExt;
 use lava::input::PlinkRef;
 
+use dag_core::node::DataBundle;
 use dag_core::registry::NodeCtx;
 
-const DEFAULT_VFS_PREFIX_TEMPLATE: &str =
-    "vfs:///data/mixer/resources/g1000_eur/stage/chr{N}/1000G.EUR.chr{N}.qc";
-const DEFAULT_PREFIX_ROOTS: [&str; 4] = [
-    "/data/mixer/resources/g1000_eur/stage",
-    "/mnt/data/mixer/resources/g1000_eur/stage",
-    "/mnt/disk3/mixer/reference/mixer_data/stage",
-    "/mnt/disk2/dataset/1000g_plink/eur",
-];
+pub(crate) const PLINK_BUNDLE: &str = "plink.1000g_eur";
 
-fn configured_prefix(shared: Option<&str>, specific: Option<&str>) -> Option<String> {
-    if let Some(value) = specific.filter(|value| !value.trim().is_empty()) {
-        return Some(value.trim().to_string());
+pub(crate) fn storage_template(bundle: &DataBundle) -> Result<String, String> {
+    if !bundle.vpath.contains("{N}") {
+        return Err(format!(
+            "PLINK bundle vpath must contain '{{N}}': got {}",
+            bundle.vpath
+        ));
     }
-    if let Some(value) = shared.filter(|value| !value.trim().is_empty()) {
-        return Some(value.trim().to_string());
-    }
-    None
-}
-
-fn prefix_for_root(root: &str, chrom: i64) -> String {
-    format!("{root}/chr{chrom}/1000G.EUR.chr{chrom}.qc")
-}
-
-fn prefix_template_for_root(root: &str) -> String {
-    format!("{root}/chr{{N}}/1000G.EUR.chr{{N}}.qc")
-}
-
-fn complete_prefix_exists(root: &str, chrom: i64) -> bool {
-    let prefix = prefix_for_root(root, chrom);
-    ["bed", "bim", "fam"]
-        .iter()
-        .all(|extension| Path::new(&format!("{prefix}.{extension}")).is_file())
-}
-
-pub(crate) fn default_prefix_template(chroms: &[i64]) -> String {
-    for root in DEFAULT_PREFIX_ROOTS {
-        if chroms
-            .iter()
-            .all(|chrom| complete_prefix_exists(root, *chrom))
-        {
-            return prefix_template_for_root(root);
-        }
-    }
-    prefix_template_for_root(DEFAULT_PREFIX_ROOTS[0])
-}
-
-pub(crate) fn hdl_l_prefix_template(chrom: i64) -> String {
-    configured_prefix(
-        std::env::var("PLINK_REF_PREFIX_TEMPLATE").ok().as_deref(),
-        std::env::var("HDL_L_PLINK_REF_PREFIX_TEMPLATE")
-            .ok()
-            .as_deref(),
-    )
-    .unwrap_or_else(|| default_prefix_template(&[chrom]))
+    Ok(format!("vfs://{}", bundle.vpath))
 }
 
 #[derive(Debug)]
 pub(crate) struct LavaReference {
     pub(crate) reference: PlinkRef,
+    pub(crate) local_prefix: PathBuf,
     _staging: Option<tempfile::TempDir>,
-}
-
-fn lava_configured_prefix() -> Option<String> {
-    configured_prefix(
-        std::env::var("PLINK_REF_PREFIX_TEMPLATE").ok().as_deref(),
-        std::env::var("LAVA_PLINK_REF_PREFIX_TEMPLATE")
-            .ok()
-            .as_deref(),
-    )
 }
 
 fn vfs_path(raw_path: &str) -> Result<String, String> {
@@ -162,7 +111,7 @@ async fn load_vfs_reference_template(
         }
     }
 
-    let local_template = staging
+    let local_prefix = staging
         .path()
         .join(
             relative_template
@@ -172,38 +121,22 @@ async fn load_vfs_reference_template(
         .to_string_lossy()
         .into_owned();
     let reference =
-        lava::plink::load_reference_template(&local_template, chroms).map_err(|e| e.to_string())?;
+        lava::plink::load_reference_template(&local_prefix, chroms).map_err(|e| e.to_string())?;
     Ok(LavaReference {
         reference,
+        local_prefix: PathBuf::from(local_prefix),
         _staging: Some(staging),
     })
 }
 
-/// Resolve the LAVA PLINK reference through VFS first, while retaining the
-/// direct-host template behavior for deployments that set an explicit override.
+/// Resolve and stage a PLINK reference bundle through OpenDAL.
 pub(crate) async fn load_lava_reference(
     node_ctx: &NodeCtx,
+    bundle: &DataBundle,
     chroms: &[i64],
 ) -> Result<LavaReference, String> {
-    if let Some(template) = lava_configured_prefix() {
-        let reference =
-            lava::plink::load_reference_template(&template, chroms).map_err(|e| e.to_string())?;
-        return Ok(LavaReference {
-            reference,
-            _staging: None,
-        });
-    }
-    if node_ctx.opendal.is_some() {
-        return load_vfs_reference_template(node_ctx, DEFAULT_VFS_PREFIX_TEMPLATE, chroms).await;
-    }
-
-    let template = default_prefix_template(chroms);
-    let reference =
-        lava::plink::load_reference_template(&template, chroms).map_err(|e| e.to_string())?;
-    Ok(LavaReference {
-        reference,
-        _staging: None,
-    })
+    let template = storage_template(bundle)?;
+    load_vfs_reference_template(node_ctx, &template, chroms).await
 }
 
 #[cfg(test)]
@@ -212,20 +145,12 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use vfs::{BackendDefinition, MountDefinition, VfsManifest};
 
-    #[test]
-    fn plink_specific_override_wins_over_shared_override() {
-        assert_eq!(
-            configured_prefix(
-                Some(" /shared/chr{N}/panel "),
-                Some(" /specific/chr{N}/panel "),
-            ),
-            Some("/specific/chr{N}/panel".to_string())
-        );
-    }
-
-    #[test]
-    fn plink_blank_overrides_fall_back_to_defaults() {
-        assert_eq!(configured_prefix(Some("  "), Some("")), None);
+    fn bundle() -> DataBundle {
+        DataBundle::new(
+            PLINK_BUNDLE,
+            "1000G EUR PLINK reference",
+            "/data/mixer/resources/g1000_eur/stage/chr{N}/1000G.EUR.chr{N}.qc",
+        )
     }
 
     fn write_prefix(root: &Path, prefix: &str, marker: &str) {
@@ -272,7 +197,7 @@ mod tests {
             "panel",
         );
 
-        let loaded = load_lava_reference(&vfs_ctx(source.path()), &[1])
+        let loaded = load_lava_reference(&vfs_ctx(source.path()), &bundle(), &[1])
             .await
             .expect("VFS PLINK reference should load");
         assert_eq!(loaded.reference.sample_size, 1);
@@ -288,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn lava_reference_reports_missing_vfs_panel() {
         let source = tempfile::tempdir().unwrap();
-        let error = load_lava_reference(&vfs_ctx(source.path()), &[1])
+        let error = load_lava_reference(&vfs_ctx(source.path()), &bundle(), &[1])
             .await
             .unwrap_err();
         assert!(error.contains("vfs:///data/mixer/resources"), "{error}");
@@ -302,7 +227,7 @@ mod tests {
             return;
         }
 
-        let loaded = load_lava_reference(&vfs_ctx(source), &[22])
+        let loaded = load_lava_reference(&vfs_ctx(source), &bundle(), &[22])
             .await
             .expect("deployed VFS panel should load");
         assert!(loaded.reference.sample_size > 0);

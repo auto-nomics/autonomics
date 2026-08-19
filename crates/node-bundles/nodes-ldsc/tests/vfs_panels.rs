@@ -5,6 +5,8 @@
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
 use std::sync::Arc;
+
+use dag_core::node::DataBundle;
 use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
 const LOCAL_PANEL_ROOT: &str =
@@ -44,15 +46,37 @@ async fn single_file_parquet_panels_resolve_through_vfs() {
     );
 
     for (table, url) in [
-        ("p1000", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR),
-        ("p1000_m", nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR_M),
+        (
+            "p1000",
+            &nodes_ldsc::ldsc_common::storage_url(&DataBundle::new(
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+                "1000G EUR LD Scores",
+                "/data/ldsc/1000g_eur.parquet",
+            )),
+        ),
+        (
+            "p1000_m",
+            &nodes_ldsc::ldsc_common::storage_url(&DataBundle::new(
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M,
+                "1000G EUR LD Scores M",
+                "/data/ldsc/1000g_eur_m.parquet",
+            )),
+        ),
         (
             "baseline",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR,
+            &nodes_ldsc::ldsc_common::storage_url(&DataBundle::new(
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR,
+                "baselineLD EUR LD Scores",
+                "/data/ldsc/baselineLD_v2_2_eur.parquet",
+            )),
         ),
         (
             "baseline_m",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_BASELINELD_V2_2_EUR_M,
+            &nodes_ldsc::ldsc_common::storage_url(&DataBundle::new(
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M,
+                "baselineLD EUR LD Scores M",
+                "/data/ldsc/baselineLD_v2_2_eur_m.parquet",
+            )),
         ),
     ] {
         nodes_ldsc::ldsc_common::register_listing_table(&ctx, table, url)
@@ -87,7 +111,11 @@ async fn ukbb_panel_resolves_through_vfs() {
     nodes_ldsc::ldsc_common::register_listing_table(
         &ctx,
         "ukbb",
-        nodes_ldsc::ldsc_common::VFS_LDSCORE_UKBB_EUR,
+        &nodes_ldsc::ldsc_common::storage_url(&DataBundle::new(
+            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
+            "UKBB EUR LD Scores",
+            "/data/ukbb/UKBB.EUR.ldscore.parquet/",
+        )),
     )
     .await
     .unwrap();

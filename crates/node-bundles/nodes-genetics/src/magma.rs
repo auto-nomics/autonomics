@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -334,7 +334,6 @@ fn default_population() -> String {
 }
 
 const VFS_PREFIX: &str = "vfs://";
-const REFERENCE_ROOT_VPATH: &str = "/data/magma/references";
 const BUNDLE_MANIFEST: &str = "bundle.json";
 const SUPPORTED_IMPLICIT_POPULATIONS: [&str; 5] = ["AFR", "AMR", "EAS", "EUR", "SAS"];
 
@@ -494,6 +493,7 @@ fn join_bundle_path(reference: &str, root: &str, relative: &str) -> Result<Strin
 
 async fn resolve_reference_bundle(
     node_ctx: &NodeCtx,
+    runtime_bundle: &DataBundle,
     reference: &str,
     genome_build: &str,
     population: &str,
@@ -507,7 +507,7 @@ async fn resolve_reference_bundle(
         ));
     }
 
-    let root = format!("{REFERENCE_ROOT_VPATH}/{reference}");
+    let root = runtime_bundle.vpath.trim_end_matches('/').to_string();
     let manifest_path = format!("vfs://{root}/{BUNDLE_MANIFEST}");
     let manifest_bytes = read_vfs_bytes(node_ctx, &manifest_path).await?;
     let bundle: MagmaPanelBundle = serde_json::from_slice(&manifest_bytes)
@@ -704,6 +704,7 @@ fn gene_ports() -> NodePorts {
 pub struct MagmaGeneNode {
     meta: NodePorts,
     config: MagmaGeneConfig,
+    reference_bundle: DataBundle,
 }
 
 pub struct MagmaGeneNodeFactory;
@@ -725,16 +726,29 @@ impl NodeFactory for MagmaGeneNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MagmaGeneConfig)
     }
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let config: MagmaGeneConfig = serde_json::from_value(spec)?;
+        let (reference, _) =
+            resolve_requested_reference(config.reference.as_deref(), &config.population)
+                .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        Ok(vec![DataBundleBinding::new("reference", reference)])
+    }
     fn ports(&self) -> NodePorts {
         gene_ports()
     }
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
-        Ok(Box::new(MagmaGeneNode::new(config)))
+        Ok(Box::new(MagmaGeneNode::new(
+            config,
+            node_ctx.bound_data_bundle("reference")?.clone(),
+        )))
     }
 
     fn codegen_r(
@@ -780,10 +794,11 @@ impl NodeFactory for MagmaGeneNodeFactory {
 }
 
 impl MagmaGeneNode {
-    pub fn new(config: MagmaGeneConfig) -> Self {
+    pub fn new(config: MagmaGeneConfig, reference_bundle: DataBundle) -> Self {
         Self {
             meta: gene_ports(),
             config,
+            reference_bundle,
         }
     }
 }
@@ -843,6 +858,7 @@ impl DagNode for MagmaGeneNode {
             resolve_requested_reference(self.config.reference.as_deref(), &self.config.population)?;
         let (_bundle, resolved) = resolve_reference_bundle(
             node_ctx,
+            &self.reference_bundle,
             &reference,
             &self.config.genome_build,
             &population,
@@ -1612,6 +1628,11 @@ mod tests {
                 resolve_requested_reference(None, population).unwrap();
             let (_bundle, resolved) = resolve_reference_bundle(
                 &ctx,
+                &DataBundle::new(
+                    reference.clone(),
+                    reference.clone(),
+                    format!("/data/magma/references/{reference}"),
+                ),
                 &reference,
                 "GRCh37",
                 &normalized_population,
@@ -1694,17 +1715,25 @@ mod tests {
         let input = vec![NodeInput::new_dataframe(0, df)];
 
         let (ctx, _bundle, reference) = panel_bundle_ctx();
-        let mut node = MagmaGeneNode::new(MagmaGeneConfig {
-            reference: Some(reference),
-            genome_build: "GRCh37".into(),
-            population: "SIM".into(),
-            gene_release: "NCBI37.3".into(),
-            window_kb: 35.0,
-            snp_col: "rsid".into(),
-            pval_col: "pval".into(),
-            n_col: "n".into(),
-            fixed_n: Some(50000),
-        });
+        let runtime_bundle = DataBundle::new(
+            reference.clone(),
+            reference.clone(),
+            format!("/data/magma/references/{reference}"),
+        );
+        let mut node = MagmaGeneNode::new(
+            MagmaGeneConfig {
+                reference: Some(reference.clone()),
+                genome_build: "GRCh37".into(),
+                population: "SIM".into(),
+                gene_release: "NCBI37.3".into(),
+                window_kb: 35.0,
+                snp_col: "rsid".into(),
+                pval_col: "pval".into(),
+                n_col: "n".into(),
+                fixed_n: Some(50000),
+            },
+            runtime_bundle,
+        );
 
         let res = node
             .execute(
@@ -1846,17 +1875,24 @@ mod tests {
         let batch = gwas_batch(rsids, pvals, 50000);
         let df = ctx.session().read_batch(batch).unwrap();
 
-        let mut gene_node = MagmaGeneNode::new(MagmaGeneConfig {
-            reference: Some(reference),
-            genome_build: "GRCh37".into(),
-            population: "SIM".into(),
-            gene_release: "NCBI37.3".into(),
-            window_kb: 35.0,
-            snp_col: "rsid".into(),
-            pval_col: "pval".into(),
-            n_col: "n".into(),
-            fixed_n: Some(50000),
-        });
+        let mut gene_node = MagmaGeneNode::new(
+            MagmaGeneConfig {
+                reference: Some(reference.clone()),
+                genome_build: "GRCh37".into(),
+                population: "SIM".into(),
+                gene_release: "NCBI37.3".into(),
+                window_kb: 35.0,
+                snp_col: "rsid".into(),
+                pval_col: "pval".into(),
+                n_col: "n".into(),
+                fixed_n: Some(50000),
+            },
+            DataBundle::new(
+                reference.clone(),
+                reference.clone(),
+                format!("/data/magma/references/{reference}"),
+            ),
+        );
         let gene_res = gene_node
             .execute(
                 &bundle_ctx,

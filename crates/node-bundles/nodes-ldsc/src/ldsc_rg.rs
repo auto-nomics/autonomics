@@ -28,7 +28,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -206,6 +206,8 @@ pub struct LdscRgNode {
     meta: NodePorts,
     /// Algorithm configuration; see [`LdscRgConfig`].
     ldsc_rg: LdscRgConfig,
+    ld_panel: DataBundle,
+    m_panel: DataBundle,
 }
 
 pub struct LdscRgNodeFactory {}
@@ -242,6 +244,13 @@ impl NodeFactory for LdscRgNodeFactory {
         schema_for!(LdscRgConfig)
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![
+            DataBundleBinding::new("ld_panel", crate::ldsc_common::BUNDLE_LDSCORE_1000G_EUR),
+            DataBundleBinding::new("m_panel", crate::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M),
+        ]
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -249,10 +258,14 @@ impl NodeFactory for LdscRgNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: LdscRgConfig = serde_json::from_value(spec)?;
-        let node = LdscRgNode::new(config);
+        let node = LdscRgNode::new(
+            config,
+            node_ctx.bound_data_bundle("ld_panel")?.clone(),
+            node_ctx.bound_data_bundle("m_panel")?.clone(),
+        );
         Ok(Box::new(node))
     }
 
@@ -318,7 +331,7 @@ impl LdscRgNode {
     /// holds only its algorithm configuration. Both upstream `DataFrame`s
     /// must expose columns `z` (Float64), `n` (Float64), and `rsid` (Utf8) —
     /// enforced by the input port schemas.
-    pub fn new(ldsc_rg: LdscRgConfig) -> Self {
+    pub fn new(ldsc_rg: LdscRgConfig, ld_panel: DataBundle, m_panel: DataBundle) -> Self {
         // Fixed, typed ports: two inputs (trait 1, trait 2) carrying GWAS
         // sumstats, and one output with the fixed rg summary schema. Declaring
         // the schemas lets the DAG validate edge compatibility at
@@ -326,6 +339,8 @@ impl LdscRgNode {
         Self {
             meta: port_layout(),
             ldsc_rg,
+            ld_panel,
+            m_panel,
         }
     }
 }
@@ -403,20 +418,20 @@ impl DagNode for LdscRgNode {
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            &crate::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
         crate::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel_m",
-            crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            &crate::ldsc_common::storage_url(&self.m_panel),
         )
         .await
         .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
         tracing::info!(
-            panel = crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
-            m_table = crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            panel = %self.ld_panel.vpath,
+            m_table = %self.m_panel.vpath,
             "ldsc_rg reference panels registered"
         );
         let (rg, n_snp) = Self::run_with_ctx(
@@ -910,6 +925,10 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 
 #[cfg(test)]
 mod tests {
+    fn bundle(vpath: &str) -> DataBundle {
+        DataBundle::new(vpath, vpath, vpath)
+    }
+
     fn node_ctx() -> dag_core::registry::NodeCtx {
         dag_core::registry::NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
@@ -931,7 +950,11 @@ mod tests {
     /// topology.
     #[tokio::test]
     async fn test_ldsc_rg_node_structure() {
-        let node = LdscRgNode::new(LdscRgConfig::new(5));
+        let node = LdscRgNode::new(
+            LdscRgConfig::new(5),
+            bundle("/panels/ld.parquet"),
+            bundle("/panels/ld_m.parquet"),
+        );
         assert_eq!(node.kind(), "ldsc_rg");
         assert_eq!(node.ports().input_ports().len(), 2);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -1329,7 +1352,11 @@ mod tests {
     /// A missing input port must surface a clear error before any catalog work.
     #[tokio::test]
     async fn e2e_missing_input_yields_error() {
-        let mut node = LdscRgNode::new(constrained_cfg());
+        let mut node = LdscRgNode::new(
+            constrained_cfg(),
+            bundle("/panels/ld.parquet"),
+            bundle("/panels/ld_m.parquet"),
+        );
         let batch = sumstats_batch(
             &[1.0, 2.0, 3.0],
             &["rs1".into(), "rs2".into(), "rs3".into()],

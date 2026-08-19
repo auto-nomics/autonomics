@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const MRLAP_KIND: &str = "mrlap";
@@ -105,16 +105,18 @@ fn default_seed() -> u64 {
 pub struct MrlapNode {
     meta: NodePorts,
     spec: MrlapSpec,
+    ld_panel: DataBundle,
 }
 
 impl MrlapNode {
-    pub fn new(spec: MrlapSpec) -> Self {
+    pub fn new(spec: MrlapSpec, ld_panel: DataBundle) -> Self {
         Self {
             meta: NodePorts::new()
                 .add_input_port(None)
                 .add_input_port(None)
                 .add_output_port(Some(result_schema())),
             spec,
+            ld_panel,
         }
     }
 }
@@ -137,6 +139,12 @@ impl NodeFactory for MrlapNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MrlapSpec)
     }
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "ld_panel",
+            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+        )]
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -146,9 +154,12 @@ impl NodeFactory for MrlapNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _ctx: NodeCtx,
+        ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        Ok(Box::new(MrlapNode::new(serde_json::from_value(spec)?)))
+        Ok(Box::new(MrlapNode::new(
+            serde_json::from_value(spec)?,
+            ctx.bound_data_bundle("ld_panel")?.clone(),
+        )))
     }
 
     fn codegen_r(
@@ -384,7 +395,7 @@ impl DagNode for MrlapNode {
         nodes_ldsc::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            nodes_ldsc::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            &nodes_ldsc::ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| err(format!("register ld panel: {e}")))?;
@@ -573,4 +584,39 @@ async fn count_panel_snp(
         DataType::Int64 => col.as_any().downcast_ref::<Int64Array>().unwrap().value(0) as usize,
         _ => return Err(err("count_panel: unexpected count type")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_inputs_yield_clear_error() {
+        let mut node = MrlapNode::new(
+            serde_json::from_value::<MrlapSpec>(serde_json::json!({
+                "exposure_name": "exposure",
+                "outcome_name": "outcome"
+            }))
+            .unwrap(),
+            DataBundle::new(
+                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+                "1000G LD Scores",
+                "/bundles/ldsc/1000g.parquet",
+            ),
+        );
+
+        let error = node
+            .execute(
+                &NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no exposure input"));
+    }
 }

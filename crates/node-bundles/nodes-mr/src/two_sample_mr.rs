@@ -35,7 +35,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
@@ -746,21 +746,16 @@ async fn clump_local_ld(
     let mut r2_map: HashMap<(String, String), f64> = HashMap::new();
     let mut skipped_chroms: Vec<u32> = Vec::new();
     for chrom in 1..=22 {
-        // Resolve per-chromosome LD-matrix table SQL from the catalog, or
-        // fall back to the VFS directory `vfs:///data/oss/ld_matrix/eur_chr{N}/`.
-        let table_sql = match ld_base {
-            Some(base) => format!("{base}{chrom}"),
-            None => {
-                let table_name = format!("ld_matrix_eur_chr{chrom}");
-                nodes_ldsc::ldsc_common::register_listing_table(
-                    session,
-                    &table_name,
-                    &format!("vfs:///data/oss/ld_matrix/eur_chr{chrom}/"),
-                )
-                .await
-                .map_err(|e| TwoSampleMrNodeError::Clump(format!("register LD matrix: {e}")))?;
-                table_name
-            }
+        // Resolve the per-chromosome table from the catalog template.
+        let Some(base) = ld_base else {
+            return Err(TwoSampleMrNodeError::Clump(
+                "local LD clumping requires an LD-matrix data bundle".into(),
+            ));
+        };
+        let table_sql = if base.contains("{N}") {
+            base.replace("{N}", &chrom.to_string())
+        } else {
+            format!("{base}{chrom}")
         };
         let sql = format!(
             "SELECT id_a, id_b, unphased_r2 \
@@ -902,14 +897,16 @@ const TWO_SAMPLE_MR_NODE_KIND: &str = "two_sample_mr";
 pub struct TwoSampleMrNode {
     meta: NodePorts,
     spec: TwoSampleMrNodeSpec,
+    ld_matrix: Option<DataBundle>,
 }
 
 impl TwoSampleMrNode {
     /// Construct an [`TwoSampleMrNode`] from a fully-specified [`TwoSampleMrNodeSpec`].
-    pub fn new(spec: TwoSampleMrNodeSpec) -> Self {
+    pub fn new(spec: TwoSampleMrNodeSpec, ld_matrix: Option<DataBundle>) -> Self {
         Self {
             meta: port_layout(),
             spec,
+            ld_matrix,
         }
     }
 }
@@ -945,6 +942,17 @@ impl NodeFactory for TwoSampleMrNodeFactory {
         schema_for!(TwoSampleMrNodeSpec)
     }
 
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let spec: TwoSampleMrNodeSpec = serde_json::from_value(spec)?;
+        Ok(match spec.clump.mode {
+            ClumpMode::LocalLd => vec![DataBundleBinding::new("ld_matrix", "ldmatrix.1000g_eur")],
+            ClumpMode::Opengwas => Vec::new(),
+        })
+    }
+
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -952,10 +960,13 @@ impl NodeFactory for TwoSampleMrNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: TwoSampleMrNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(TwoSampleMrNode::new(spec)))
+        Ok(Box::new(TwoSampleMrNode::new(
+            spec,
+            node_ctx.bound_data_bundle("ld_matrix").ok().cloned(),
+        )))
     }
 
     fn codegen_r(
@@ -1173,9 +1184,15 @@ impl DagNode for TwoSampleMrNode {
 
         // ---- LD clumping ----
         let session = node_ctx.session();
-        // Resolve the LD-matrix base table from the catalog (falls back to
-        // VFS directory when no explicit table base is provided).
-        let hinputs = clump_instruments(hinputs, &self.spec.clump, &session, None).await?;
+        let ld_base = self.ld_matrix.as_ref().map(|bundle| {
+            let mut url = nodes_ldsc::ldsc_common::storage_url(bundle);
+            if !url.ends_with('/') {
+                url.push('/');
+            }
+            url
+        });
+        let hinputs =
+            clump_instruments(hinputs, &self.spec.clump, &session, ld_base.as_deref()).await?;
 
         // ---- harmonise ----
         let harmonised =

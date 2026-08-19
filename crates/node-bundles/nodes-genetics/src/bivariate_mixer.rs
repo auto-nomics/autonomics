@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info;
 
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -173,6 +173,7 @@ const BIVARIATE_MIXER_NODE_KIND: &str = "bivariate_mixer";
 pub struct BivariateMixerNode {
     meta: NodePorts,
     spec: BivariateMixerNodeSpec,
+    reference_bundle: DataBundle,
 }
 
 fn port_layout() -> NodePorts {
@@ -185,10 +186,11 @@ fn port_layout() -> NodePorts {
 }
 
 impl BivariateMixerNode {
-    pub fn new(spec: BivariateMixerNodeSpec) -> Self {
+    pub fn new(spec: BivariateMixerNodeSpec, reference_bundle: DataBundle) -> Self {
         Self {
             meta: port_layout(),
             spec,
+            reference_bundle,
         }
     }
 }
@@ -212,6 +214,16 @@ impl NodeFactory for BivariateMixerNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(BivariateMixerNodeSpec)
     }
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let spec: BivariateMixerNodeSpec = serde_json::from_value(spec)?;
+        Ok(vec![DataBundleBinding::new(
+            "reference",
+            format!("mixer.{}", spec.reference),
+        )])
+    }
     fn ports(&self) -> NodePorts {
         port_layout()
     }
@@ -219,10 +231,13 @@ impl NodeFactory for BivariateMixerNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: BivariateMixerNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(BivariateMixerNode::new(config)))
+        Ok(Box::new(BivariateMixerNode::new(
+            config,
+            node_ctx.bound_data_bundle("reference")?.clone(),
+        )))
     }
 
     fn codegen_r(
@@ -374,8 +389,13 @@ impl DagNode for BivariateMixerNode {
         write_minimal_fit1_json(pi2, sb2, sz2, &params2_path)?;
 
         // ── 4. Build mixer.py fit2 command ─────────────────────────────
-        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
-            .map_err(BivariateMixerError::ReferenceBundle)?;
+        let bundle = crate::mixer_common::resolve_reference(
+            node_ctx,
+            &self.reference_bundle,
+            &self.spec.reference,
+        )
+        .await
+        .map_err(BivariateMixerError::ReferenceBundle)?;
         let mixer_py = bundle.mixer_home.join("precimed").join("mixer.py");
         let lib_path = bundle.mixer_home.join("libbgmg.so");
         let out_prefix = tmp_dir.join("result");
@@ -776,6 +796,14 @@ mod tests {
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::prelude::CsvReadOptions;
 
+    fn reference_bundle() -> DataBundle {
+        DataBundle::new(
+            "mixer.g1000_eur",
+            "MiXeR reference",
+            "/bundles/mixer/g1000_eur",
+        )
+    }
+
     #[test]
     fn node_type_is_stable() {
         assert_eq!(BIVARIATE_MIXER_NODE_KIND, "bivariate_mixer");
@@ -789,7 +817,7 @@ mod tests {
             serde_json::from_str::<BivariateMixerNodeSpec>(r#"{"bim_file":"x"}"#).unwrap_err();
         assert!(error.to_string().contains("unknown field `bim_file`"));
 
-        let node = BivariateMixerNode::new(spec);
+        let node = BivariateMixerNode::new(spec, reference_bundle());
         assert_eq!(node.kind(), "bivariate_mixer");
         assert_eq!(node.ports().input_ports().len(), 4);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -860,12 +888,14 @@ mod tests {
     #[tokio::test]
     async fn fit2_runs_against_deployed_reference_bundle() {
         let fixture_root = std::path::Path::new("/mnt/disk3/gsa-mixer/precimed/mixer-test/data");
+        let engine_root = std::path::Path::new("/data/mixer/resources/g1000_eur");
         if !fixture_root.join("trait1.sumstats.gz").is_file()
             || !fixture_root.join("trait2.sumstats.gz").is_file()
-            || !crate::mixer_common::resolve_reference("g1000_eur").is_ok()
+            || !engine_root.join("bundle.json").is_file()
         {
             return;
         }
+        let (node_ctx, _vfs_scratch) = crate::mixer_common::tests::vfs_ctx(engine_root);
 
         let ctx = datafusion::prelude::SessionContext::new();
         let options = || {
@@ -918,18 +948,21 @@ mod tests {
         let fit1_1 = ctx.read_batch(fit1.clone()).unwrap();
         let fit1_2 = ctx.read_batch(fit1).unwrap();
 
-        let mut node = BivariateMixerNode::new(BivariateMixerNodeSpec {
-            reference: "g1000_eur".into(),
-            chr2use: "21-22".into(),
-            seed: 123,
-            diffevo_fast_repeats: 2,
-            fast_run: true,
-            kmax_pdf: 10,
-            downsample_factor: 1000,
-        });
+        let mut node = BivariateMixerNode::new(
+            BivariateMixerNodeSpec {
+                reference: "g1000_eur".into(),
+                chr2use: "21-22".into(),
+                seed: 123,
+                diffevo_fast_repeats: 2,
+                fast_run: true,
+                kmax_pdf: 10,
+                downsample_factor: 1000,
+            },
+            reference_bundle(),
+        );
         let outputs = node
             .execute(
-                &NodeCtx::new(ctx.runtime_env(), None),
+                &node_ctx,
                 &[
                     NodeInput::new_dataframe(0, trait1),
                     NodeInput::new_dataframe(1, trait2),

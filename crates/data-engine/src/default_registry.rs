@@ -24,6 +24,7 @@ pub fn build_default_registry(
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
     data_bundles: Arc<DataBundleCatalog>,
 ) -> NodeRegistry {
+    let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
     let mut registry = NodeRegistry::new(
         dag_core::registry::NodeCtx::new(runtime_env, opendal)
             .with_data_bundle_catalog(data_bundles),

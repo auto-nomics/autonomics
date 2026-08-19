@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use dag_core::dag::runtime::RuntimeStatus;
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
@@ -183,15 +183,17 @@ const NODE_KIND: &str = "susie_rss";
 pub struct SusieRssNode {
     meta: NodePorts,
     spec: SusieRssSpec,
+    reference_bundle: DataBundle,
 }
 
 impl SusieRssNode {
-    pub fn new(spec: SusieRssSpec) -> Self {
+    pub fn new(spec: SusieRssSpec, reference_bundle: DataBundle) -> Self {
         Self {
             meta: NodePorts::new()
                 .add_input_port(Some(input_schema()))
                 .add_output_port(Some(output_schema())),
             spec,
+            reference_bundle,
         }
     }
 }
@@ -211,6 +213,16 @@ impl NodeFactory for SusieRssNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(SusieRssSpec)
     }
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let spec: SusieRssSpec = serde_json::from_value(spec)?;
+        Ok(vec![DataBundleBinding::new(
+            "reference",
+            format!("mixer.{}", spec.reference),
+        )])
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(Some(input_schema()))
@@ -219,9 +231,12 @@ impl NodeFactory for SusieRssNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _ctx: NodeCtx,
+        ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        Ok(Box::new(SusieRssNode::new(serde_json::from_value(spec)?)))
+        Ok(Box::new(SusieRssNode::new(
+            serde_json::from_value(spec)?,
+            ctx.bound_data_bundle("reference")?.clone(),
+        )))
     }
 
     fn codegen_r(
@@ -621,8 +636,13 @@ impl DagNode for SusieRssNode {
 
         // ── load signed LD from the reference bundle ──
         let ctx = node_ctx.session();
-        let bundle = crate::mixer_common::resolve_reference(&self.spec.reference)
-            .map_err(SusieNodeError::ReferenceBundle)?;
+        let bundle = crate::mixer_common::resolve_reference(
+            node_ctx,
+            &self.reference_bundle,
+            &self.spec.reference,
+        )
+        .await
+        .map_err(SusieNodeError::ReferenceBundle)?;
         reporter.info(format!(
             "susie_rss: querying signed LD reference '{}' for chromosome {chrom} (r² ≥ {})…",
             self.spec.reference, self.spec.r2_min
@@ -767,6 +787,14 @@ impl DagNode for SusieRssNode {
 mod tests {
     use super::*;
 
+    fn reference_bundle() -> DataBundle {
+        DataBundle::new(
+            "mixer.g1000_eur",
+            "Signed LD reference",
+            "/bundles/mixer/g1000_eur",
+        )
+    }
+
     #[test]
     fn factory_metadata() {
         let f = SusieRssNodeFactory {};
@@ -794,7 +822,7 @@ mod tests {
             check_null_threshold: 0.0,
             max_iter: 100,
         };
-        let node = SusieRssNode::new(spec);
+        let node = SusieRssNode::new(spec, reference_bundle());
         assert_eq!(node.kind(), NODE_KIND);
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
@@ -825,10 +853,18 @@ mod tests {
 
     #[tokio::test]
     async fn runs_against_signed_reference_bundle() {
-        let bundle = match crate::mixer_common::resolve_reference(&default_reference()) {
-            Ok(bundle) => bundle,
-            Err(_) => return,
-        };
+        let engine_root = std::path::Path::new("/data/mixer/resources/g1000_eur");
+        if !engine_root.join("bundle.json").is_file() {
+            return;
+        }
+        let (node_ctx, _vfs_scratch) = crate::mixer_common::tests::vfs_ctx(engine_root);
+        let bundle = crate::mixer_common::resolve_reference(
+            &node_ctx,
+            &reference_bundle(),
+            &default_reference(),
+        )
+        .await
+        .expect("MiXeR reference should resolve through VFS");
         let bim_path = bundle.bim_template.replace('@', "21");
         let content = std::fs::read_to_string(&bim_path).unwrap();
         let variants = content
@@ -863,24 +899,27 @@ mod tests {
         let ctx = datafusion::prelude::SessionContext::new();
         let input = ctx.read_batch(batch).unwrap();
 
-        let mut node = SusieRssNode::new(SusieRssSpec {
-            reference: default_reference(),
-            l: 5,
-            estimate_prior_method: "optim".into(),
-            estimate_residual_variance: false,
-            estimate_prior_variance: true,
-            coverage: 0.95,
-            min_abs_corr: 0.5,
-            scaled_prior_variance: 0.2,
-            z_method: "wald".into(),
-            r2_min: 0.01,
-            n: Some(503.0),
-            check_null_threshold: 0.0,
-            max_iter: 20,
-        });
+        let mut node = SusieRssNode::new(
+            SusieRssSpec {
+                reference: default_reference(),
+                l: 5,
+                estimate_prior_method: "optim".into(),
+                estimate_residual_variance: false,
+                estimate_prior_variance: true,
+                coverage: 0.95,
+                min_abs_corr: 0.5,
+                scaled_prior_variance: 0.2,
+                z_method: "wald".into(),
+                r2_min: 0.01,
+                n: Some(503.0),
+                check_null_threshold: 0.0,
+                max_iter: 20,
+            },
+            reference_bundle(),
+        );
         let outputs = node
             .execute(
-                &NodeCtx::new(ctx.runtime_env(), None),
+                &node_ctx,
                 &[NodeInput::new_dataframe(0, input)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )

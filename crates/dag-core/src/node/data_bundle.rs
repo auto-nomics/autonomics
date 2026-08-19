@@ -42,6 +42,28 @@ impl DataBundleCatalog {
         Ok(catalog)
     }
 
+    /// Overlay entries on top of this catalog.
+    ///
+    /// Later entries override earlier ones. Runtime-provided bundles use this
+    /// path to replace engine defaults without editing factory declarations.
+    pub fn with_overriding_bundles(
+        mut self,
+        bundles: impl IntoIterator<Item = DataBundle>,
+    ) -> Result<Self, DataBundleCatalogError> {
+        for bundle in bundles {
+            if bundle.ident.trim().is_empty() {
+                return Err(DataBundleCatalogError::InvalidIdentifier(
+                    bundle.ident.clone(),
+                ));
+            }
+            if !bundle.vpath.starts_with('/') {
+                return Err(DataBundleCatalogError::InvalidPath(bundle.vpath));
+            }
+            self.bundles.insert(bundle.ident.clone(), bundle);
+        }
+        Ok(self)
+    }
+
     pub fn register(&mut self, bundle: DataBundle) -> Result<(), DataBundleCatalogError> {
         if bundle.ident.trim().is_empty() {
             return Err(DataBundleCatalogError::InvalidIdentifier(

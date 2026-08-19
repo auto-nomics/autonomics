@@ -14,9 +14,11 @@ pub fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<Stri
         Some(
             (0..values.len())
                 .map(|index| {
-                    values
-                        .is_null(index)
-                        .then(|| values.value(index).to_string())
+                    if values.is_null(index) {
+                        None
+                    } else {
+                        Some(values.value(index).to_string())
+                    }
                 })
                 .collect(),
         )
@@ -26,9 +28,11 @@ pub fn string_opt_values(arr: &dyn arrow_array::Array) -> Option<Vec<Option<Stri
             .map(|values| {
                 (0..values.len())
                     .map(|index| {
-                        values
-                            .is_null(index)
-                            .then(|| values.value(index).to_string())
+                        if values.is_null(index) {
+                            None
+                        } else {
+                            Some(values.value(index).to_string())
+                        }
                     })
                     .collect()
             })

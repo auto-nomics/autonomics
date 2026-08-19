@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
 const HDL_L_KIND: &str = "hdl_l";
@@ -113,16 +113,18 @@ fn default_alpha() -> f64 {
 pub struct HdlLNode {
     meta: NodePorts,
     spec: HdlLSpec,
+    plink_bundle: DataBundle,
 }
 
 impl HdlLNode {
-    pub fn new(spec: HdlLSpec) -> Self {
+    pub fn new(spec: HdlLSpec, plink_bundle: DataBundle) -> Self {
         Self {
             meta: NodePorts::new()
                 .add_input_port(None)
                 .add_input_port(None)
                 .add_output_port(Some(result_schema())),
             spec,
+            plink_bundle,
         }
     }
 }
@@ -144,6 +146,12 @@ impl NodeFactory for HdlLNodeFactory {
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(HdlLSpec)
     }
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new(
+            "plink",
+            crate::plink_reference::PLINK_BUNDLE,
+        )]
+    }
     fn ports(&self) -> NodePorts {
         NodePorts::new()
             .add_input_port(None)
@@ -153,9 +161,12 @@ impl NodeFactory for HdlLNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _ctx: NodeCtx,
+        ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        Ok(Box::new(HdlLNode::new(serde_json::from_value(spec)?)))
+        Ok(Box::new(HdlLNode::new(
+            serde_json::from_value(spec)?,
+            ctx.bound_data_bundle("plink")?.clone(),
+        )))
     }
     fn codegen_r(
         &self,
@@ -394,17 +405,22 @@ impl DagNode for HdlLNode {
         let b1 = collect_input_batches(in0, HDL_L_KIND).await?;
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
-        // ---- Resolve the per-chromosome PLINK reference prefix ----
-        let ref_template = crate::plink_reference::hdl_l_prefix_template(self.spec.chr);
-        let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
+        // ---- Resolve and stage the per-chromosome PLINK reference ----
+        let loaded = crate::plink_reference::load_lava_reference(
+            node_ctx,
+            &self.plink_bundle,
+            &[self.spec.chr],
+        )
+        .await
+        .map_err(|e| err(format!("loading PLINK reference: {e}")))?;
+        let ld_ref_prefix = loaded.local_prefix;
 
         // ---- Filter reference SNPs to the region [start, stop] ----
         // Load the .bim to get SNP ids + positions, keep only those within the
         // region window, then build the LD reference from that subset. This
         // mirrors how LAVA's process.locus extracts a locus from the per-chrom
         // panel — same reference, region-level slice.
-        let refr = lava::plink::load_reference(&ld_ref_prefix)
-            .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;
+        let refr = loaded.reference;
         let si = &refr.snp_info;
         let region_snps: Vec<String> = (0..si.snp.len())
             .filter(|&i| {
@@ -523,6 +539,36 @@ mod tests {
     use super::*;
     use datafusion::prelude::SessionContext;
 
+    fn plink_bundle() -> DataBundle {
+        DataBundle::new("plink", "PLINK", "/bundles/plink/chr{N}/panel")
+    }
+
+    #[tokio::test]
+    async fn hdl_l_missing_input_yields_error() {
+        let mut node = HdlLNode::new(
+            serde_json::from_value::<HdlLSpec>(serde_json::json!({
+                "chr": 1,
+                "start": 1,
+                "stop": 1000,
+                "trait1_name": "a",
+                "trait2_name": "b"
+            }))
+            .unwrap(),
+            plink_bundle(),
+        );
+
+        let error = node
+            .execute(
+                &NodeCtx::new(SessionContext::new().runtime_env(), None),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no GWAS1 input"));
+    }
+
     fn node_ctx() -> NodeCtx {
         NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
@@ -595,7 +641,7 @@ mod tests {
         let start = 17_000_000i64;
         let stop = 17_100_000i64;
         let prefix =
-            crate::plink_reference::hdl_l_prefix_template(chr).replace("{N}", &chr.to_string());
+            format!("/data/mixer/resources/g1000_eur/stage/chr{chr}/1000G.EUR.chr{chr}.qc");
 
         // Read region SNPs from the .bim
         let snps = read_region_bim(&prefix, chr, start, stop);
@@ -614,17 +660,24 @@ mod tests {
         let df1 = sess.read_batch(batch1).unwrap();
         let df2 = sess.read_batch(batch2).unwrap();
 
-        let mut node = HdlLNode::new(HdlLSpec {
-            chr,
-            start,
-            stop,
-            trait1_name: "traitA".into(),
-            trait2_name: "traitB".into(),
-            n0: 0.0,
-            nref: default_nref(),
-            eigen_cut: default_eigen_cut(),
-            alpha: default_alpha(),
-        });
+        let mut node = HdlLNode::new(
+            HdlLSpec {
+                chr,
+                start,
+                stop,
+                trait1_name: "traitA".into(),
+                trait2_name: "traitB".into(),
+                n0: 0.0,
+                nref: default_nref(),
+                eigen_cut: default_eigen_cut(),
+                alpha: default_alpha(),
+            },
+            DataBundle::new(
+                crate::plink_reference::PLINK_BUNDLE,
+                "1000G PLINK",
+                "/references/plink/chr{N}/panel",
+            ),
+        );
 
         let reporter = dag_core::dag::node_event::NodeReporter::noop();
         let res = node
