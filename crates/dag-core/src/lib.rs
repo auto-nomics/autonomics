@@ -16,7 +16,10 @@ pub mod sink;
 pub mod types;
 pub mod value;
 
-pub use node::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port, PortId};
+pub use node::{
+    DEFAULT_PORT, DagNode, DataBundle, NodeId, NodeInput, NodePorts, Port, PortId,
+    ResolvedDataBundle,
+};
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};
 pub use sink::SinkMode;

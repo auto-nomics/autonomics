@@ -14,7 +14,7 @@ use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{debug, warn};
+use tracing::{debug, info_span, warn};
 
 use super::utils::{build_inputs, cascade_skip};
 
@@ -245,6 +245,7 @@ impl DAG {
         engine_ctx: &crate::registry::NodeCtx,
         event_sink: Option<mpsc::Sender<NodeEvent>>,
     ) -> Result<RunReport> {
+        let span = info_span!("dag_execution");
         // The immutable engine ingredients, wrapped in an Arc so each spawned
         // task can hold a cheap reference for the lifetime of its `execute`
         // call. `NodeCtx` is all-`Arc` fields, so this clone is just a few ref
@@ -260,12 +261,14 @@ impl DAG {
             self.outputs.clear();
             self.statuses.clear();
             self.mark_all_dirty();
+            tracing::info!("Full re-run");
         }
         // In incremental mode, keep cached outputs + statuses for clean nodes.
         // Only dirty nodes will be re-executed; clean nodes retain their
         // `Success` status and cached `outputs` from the previous run.
         if incremental {
             self.invalidate_stale_file_outputs();
+            tracing::info!("Incremental execution");
         }
 
         self.validate()?;
