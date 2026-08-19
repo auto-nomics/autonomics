@@ -7,15 +7,18 @@
 //!
 //! # Tool inventory
 //!
-//! | Tool                   | Purpose                                         |
-//! |------------------------|--------------------------------------------------|
-//! | `bib_save`             | Fetch + store an article in the local library.   |
-//! | `bib_create_collection`| Create a new collection.                         |
-//! | `bib_add_to_collection`| Add one or more articles to a collection + roles. |
-//! | `bib_list_collection`  | List collections or articles within one.         |
-//! | `bib_search_library`   | LIKE search across local library (multi-query).  |
-//! | `bib_get_article`      | Batch fetch metadata + full text (concurrent).   |
-//! | `bib_request_fulltext` | Mark an article as needing full-text upload.     |
+//! | Tool                   | Purpose                                                |
+//! |------------------------|--------------------------------------------------------|
+//! | `bib_save`             | Fetch + store an article in the local library.          |
+//! | `bib_delete`           | Remove articles (id- or identifier-based; dry-run safe). |
+//! | `bib_create_collection`| Create a new collection.                                |
+//! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
+//! | `bib_list_collection`  | List collections or articles within one.                |
+//! | `bib_search_library`   | LIKE search across local library (multi-query).         |
+//! | `bib_get_article`      | Batch fetch metadata + full text (concurrent).          |
+//! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
+//! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
+//! | `bib_export`           | Render citation formats (BibTeX / RIS / Markdown / CSL). |
 
 use std::sync::Arc;
 
@@ -1457,6 +1460,239 @@ impl ToolFunction for BibAddNoteTool {
 }
 
 // ===========================================================================
+// bib_delete — remove articles from the local library
+// ===========================================================================
+
+/// Per-article result row for [`BibDeleteTool`].
+#[derive(serde::Serialize)]
+struct DeleteResult {
+    article_id: String,
+    /// `true` only when a row was actually removed from `articles` during
+    /// this call. Always `false` in dry-run mode (`confirm=false`) and
+    /// `false` when the id did not match any row in commit mode.
+    deleted: bool,
+    /// `true` if the article row existed at lookup time — useful to
+    /// distinguish "id not found" from "id found and removed".
+    found: bool,
+    title: Option<String>,
+    /// Non-null only when the row could not be deleted (storage error or
+    /// id-not-found in commit mode). Not used in dry-run.
+    error: Option<String>,
+}
+
+/// Input for [`BibDeleteTool`] — the only path that physically removes
+/// rows from the library. `bib_save` is idempotent (matched identifiers
+/// return as `cached` and cannot overwrite or replace) and `bib_add_note`
+/// can only append annotations, so neither can be used to evict a
+/// placeholder or mis-saved entry.
+///
+/// # Safety model
+///
+/// Deletion cascades through every FK constraint on the `articles` table:
+/// `authors`, `identifiers`, `annotations`, `collection_articles`
+/// memberships, and `fulltexts` pointer rows are removed automatically.
+/// Stored full-text *files* on disk are NOT touched — the caller's
+/// responsibility.
+///
+/// Pass `confirm=true` to actually delete. The default `confirm=false`
+/// runs a **dry-run**: the same response shape is returned (with
+/// `deleted=false` on every row) and the database is untouched. Use the
+/// dry-run to preview what would be removed before committing.
+///
+/// # Input modes (at least one must be non-empty)
+///
+/// 1. **`article_ids`** — internal IDs (from `bib_search_library` or
+///    `bib_get_article`). Direct delete.
+/// 2. **`ids`** — typed external identifiers (`{ id_type, id }`).
+///    Each is resolved via `find_by_identifier` to its internal id
+///    before deletion; unresolved identifiers are reported as
+///    `resolve_errors` rather than failing the whole batch.
+#[tool(
+    name = "bib_delete",
+    description = "Delete one or more articles from the local bibliography library. \
+                  This is the only path that physically removes an article: `bib_save` \
+                  cannot overwrite or replace an existing row (matched identifiers are \
+                  returned as `cached`), and `bib_add_note` can only append annotations. \
+                  Use this tool to clean up placeholder rows, mis-saved entries (e.g. \
+                  wrong PMID recall), or any article you no longer want in the library. \
+                  Two input modes (at least one must be non-empty): (1) `article_ids` -- \
+                  internal IDs from `bib_search_library` or `bib_get_article` (direct delete). \
+                  (2) `ids` -- typed external identifiers `{ id_type, id }` resolved via \
+                  `find_by_identifier` to internal ID; unresolved entries are returned in \
+                  `resolve_errors` without failing the batch. Deletion cascades through FK \
+                  constraints: `authors`, `identifiers`, `annotations`, `collection_articles` \
+                  memberships, and `fulltexts` pointer rows are removed automatically. \
+                  Stored full-text files on disk are NOT touched. Safety: pass \
+                  `confirm=true` to actually delete; the default `confirm=false` runs as a \
+                  dry-run that returns the same response shape without modifying the database."
+)]
+pub struct BibDeleteInput {
+    #[desc = "Internal article IDs to delete. Discover via `bib_search_library` or \n             `bib_get_article`. Each id is deduplicated and processed at most once."]
+    pub article_ids: Option<Vec<String>>,
+
+    #[desc = "Typed external identifiers (`doi` / `pmid` / `arxiv` / `openalex` / \n             `s2` / `biorxiv`) to resolve and delete. Each entry is \n             `{ id_type, id }`. Resolution misses are reported in `resolve_errors` \n             and do not fail the rest of the batch."]
+    pub ids: Option<Vec<ArticleIdInput>>,
+
+    #[desc = "Set to `true` to actually delete. Default `false` runs a dry-run that \n             returns the same response shape without modifying the database."]
+    pub confirm: Option<bool>,
+}
+
+pub struct BibDeleteTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibDeleteTool {
+    type Input = BibDeleteInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let has_internal = input.article_ids.as_ref().is_some_and(|v| !v.is_empty());
+        let has_external = input.ids.as_ref().is_some_and(|v| !v.is_empty());
+
+        if !has_internal && !has_external {
+            return Err(ToolError::ExecutionFailed {
+                source: "provide at least one of `article_ids` (internal IDs) or                          `ids` (typed external identifiers to resolve)"
+                    .into(),
+            });
+        }
+
+        let confirm = input.confirm.unwrap_or(false);
+
+        // Resolve external identifiers (doi / pmid / ...) to internal ids.
+        let mut resolved: Vec<String> = Vec::new();
+        let mut resolve_errors: Vec<String> = Vec::new();
+
+        if let Some(ext) = &input.ids {
+            for entry in ext {
+                let kind = match parse_id_kind(&entry.id_type) {
+                    Some(k) => k,
+                    None => {
+                        resolve_errors.push(format!(
+                            "unknown id_type '{}' for id '{}' (expected one of                              doi / pmid / arxiv / openalex / s2 / biorxiv)",
+                            entry.id_type, entry.id
+                        ));
+                        continue;
+                    }
+                };
+                match self
+                    .bib
+                    .find_by_identifier(kind, entry.id.trim())
+                    .await
+                    .map_err(box_error)?
+                {
+                    Some(art) => resolved.push(art.id),
+                    None => resolve_errors.push(format!(
+                        "no article found for {} '{}' (skipped)",
+                        entry.id_type.to_uppercase(),
+                        entry.id.trim()
+                    )),
+                }
+            }
+        }
+
+        if let Some(internal) = &input.article_ids {
+            resolved.extend(internal.iter().cloned());
+        }
+
+        // Deduplicate while preserving call order.
+        let mut seen = std::collections::HashSet::new();
+        resolved.retain(|id| seen.insert(id.clone()));
+
+        // Always preview (so dry-run gets titles + found-flag).
+        let mut previews: Vec<(String, Option<String>)> = Vec::with_capacity(resolved.len());
+        for id in &resolved {
+            let title = self
+                .bib
+                .get_article(id)
+                .await
+                .map_err(box_error)?
+                .map(|a| a.title);
+            previews.push((id.clone(), title));
+        }
+
+        let mut results: Vec<DeleteResult> = Vec::with_capacity(previews.len());
+        let mut deleted_count = 0usize;
+        let mut failed = 0usize;
+
+        if confirm {
+            for (id, title) in &previews {
+                let found = title.is_some();
+                match self.bib.delete_article(id).await.map_err(box_error) {
+                    Ok(n) if n > 0 => {
+                        deleted_count += 1;
+                        results.push(DeleteResult {
+                            article_id: id.clone(),
+                            deleted: true,
+                            found: true,
+                            title: title.clone(),
+                            error: None,
+                        });
+                    }
+                    Ok(_) => {
+                        // Row vanished between preview and delete (race) or
+                        // the id never existed.
+                        failed += 1;
+                        results.push(DeleteResult {
+                            article_id: id.clone(),
+                            deleted: false,
+                            found,
+                            title: title.clone(),
+                            error: Some(if found {
+                                "row vanished between preview and delete".into()
+                            } else {
+                                "id not found".into()
+                            }),
+                        });
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        results.push(DeleteResult {
+                            article_id: id.clone(),
+                            deleted: false,
+                            found,
+                            title: title.clone(),
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+        } else {
+            // Dry-run: report what *would* happen.
+            for (id, title) in &previews {
+                let found = title.is_some();
+                results.push(DeleteResult {
+                    article_id: id.clone(),
+                    deleted: false,
+                    found,
+                    title: title.clone(),
+                    error: None,
+                });
+            }
+        }
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "mode": if confirm { "delete" } else { "dry_run" },
+            "requested": resolved.len(),
+            "deleted": deleted_count,
+            "failed": failed,
+            "resolve_errors": resolve_errors,
+            "results": results,
+            "message": if confirm {
+                format!(
+                    "{deleted_count} deleted, {failed} failed out of {} requested.                      Cascade removed authors, identifiers, annotations, collection                      memberships, and full-text pointers (files on disk are untouched).",
+                    resolved.len()
+                )
+            } else {
+                format!(
+                    "DRY-RUN: no changes made. {} article(s) matched the request                      and would be deleted. Re-call with `confirm=true` to commit.",
+                    resolved.len()
+                )
+            },
+        })))
+    }
+}
+
+// ===========================================================================
 // bib_export — export articles in citation format
 // ===========================================================================
 
@@ -1573,6 +1809,7 @@ pub fn bib_library_registrations(
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool { bib: bib.clone() }),
+        R::from(BibDeleteTool { bib: bib.clone() }),
         R::from(BibExportTool { bib }),
     ]
 }
@@ -2116,5 +2353,217 @@ mod tests {
 
         assert_eq!(json["failed"].as_u64(), Some(1));
         assert!(json["results"][0]["error"].as_str().is_some());
+    }
+
+    // ── bib_delete ────────────────────────────────────────────────────────
+
+    /// Helper: seed an in-memory `BibBase` with one article that has a
+    /// DOI and a PMID identifier, returning its internal id.
+    async fn seed_one_article() -> (Arc<BibBase>, String) {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let mut art = bib_types::Article::new("doi:10.1038/ng.2024.999", "Test paper");
+        art.identifiers
+            .push(bib_types::Identifier::doi("10.1038/ng.2024.999"));
+        art.identifiers
+            .push(bib_types::Identifier::pmid("39000999"));
+        art.year = Some(2024);
+        bib.upsert_article(&art).await.unwrap();
+        (bib, art.id)
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_article_id() {
+        let (bib, id) = seed_one_article().await;
+        assert_eq!(bib.article_count().await.unwrap(), 1);
+
+        let tool = BibDeleteTool { bib: bib.clone() };
+        let input = BibDeleteInput {
+            article_ids: Some(vec![id.clone()]),
+            ids: None,
+            confirm: Some(true),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["mode"], "delete");
+        assert_eq!(json["requested"].as_u64(), Some(1));
+        assert_eq!(json["deleted"].as_u64(), Some(1));
+        assert_eq!(json["failed"].as_u64(), Some(0));
+        assert_eq!(json["results"][0]["article_id"], id);
+        assert_eq!(json["results"][0]["deleted"], true);
+        assert_eq!(json["results"][0]["found"], true);
+        assert_eq!(bib.article_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_dry_run_is_noop() {
+        let (bib, id) = seed_one_article().await;
+        let tool = BibDeleteTool { bib: bib.clone() };
+
+        // confirm omitted (defaults to false).
+        let input = BibDeleteInput {
+            article_ids: Some(vec![id.clone()]),
+            ids: None,
+            confirm: None,
+        };
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["mode"], "dry_run");
+        assert_eq!(json["requested"].as_u64(), Some(1));
+        assert_eq!(json["deleted"].as_u64(), Some(0));
+        assert_eq!(json["results"][0]["deleted"], false);
+        assert_eq!(json["results"][0]["found"], true);
+        // Article must still exist.
+        assert_eq!(bib.article_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_doi_resolves_internal_id() {
+        let (bib, _id) = seed_one_article().await;
+        let tool = BibDeleteTool { bib: bib.clone() };
+
+        let input = BibDeleteInput {
+            article_ids: None,
+            ids: Some(vec![ArticleIdInput {
+                id_type: "doi".into(),
+                id: "10.1038/ng.2024.999".into(),
+            }]),
+            confirm: Some(true),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["deleted"].as_u64(), Some(1));
+        assert_eq!(bib.article_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_unresolvable_doi_is_reported_not_failed() {
+        let (bib, _id) = seed_one_article().await;
+        let tool = BibDeleteTool { bib: bib.clone() };
+
+        let input = BibDeleteInput {
+            article_ids: None,
+            ids: Some(vec![ArticleIdInput {
+                id_type: "doi".into(),
+                id: "10.1038/does-not-exist".into(),
+            }]),
+            confirm: Some(true),
+        };
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["requested"].as_u64(), Some(0));
+        assert_eq!(json["deleted"].as_u64(), Some(0));
+        assert!(
+            json["resolve_errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("no article found")
+        );
+        // Original article must still exist.
+        assert_eq!(bib.article_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_missing_internal_id_reports_id_not_found() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let tool = BibDeleteTool { bib: bib.clone() };
+
+        let input = BibDeleteInput {
+            article_ids: Some(vec!["never-existed".into()]),
+            ids: None,
+            confirm: Some(true),
+        };
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["requested"].as_u64(), Some(1));
+        assert_eq!(json["deleted"].as_u64(), Some(0));
+        assert_eq!(json["failed"].as_u64(), Some(1));
+        assert_eq!(json["results"][0]["found"], false);
+        assert_eq!(json["results"][0]["error"].as_str(), Some("id not found"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_rejects_empty_input() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let tool = BibDeleteTool { bib };
+        let input = BibDeleteInput {
+            article_ids: None,
+            ids: None,
+            confirm: Some(true),
+        };
+        let err = tool.run(input).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("provide at least one"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_cascade_clears_annotations_and_collections() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+
+        // Seed an article, an annotation, and a collection membership.
+        let mut art = bib_types::Article::new("doi:10.1/cascade", "Cascade target");
+        art.identifiers
+            .push(bib_types::Identifier::doi("10.1/cascade"));
+        bib.upsert_article(&art).await.unwrap();
+        bib.add_annotation(&art.id, bib_types::AnnotationKind::Note, "stale note", None)
+            .await
+            .unwrap();
+        let col = bib_types::Collection::new("col-junk", "junk-collection");
+        bib.upsert_collection(&col).await.unwrap();
+        bib.add_to_collection(
+            &col.id,
+            &art.id,
+            ArticleRole::Referenced,
+            AddedBy::Agent,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Sanity: annotation + membership present.
+        assert_eq!(bib.list_annotations(&art.id).await.unwrap().len(), 1);
+
+        let tool = BibDeleteTool { bib: bib.clone() };
+        let input = BibDeleteInput {
+            article_ids: Some(vec![art.id.clone()]),
+            ids: None,
+            confirm: Some(true),
+        };
+        tool.run(input).await.unwrap();
+
+        // FK CASCADE should have wiped everything.
+        assert_eq!(bib.article_count().await.unwrap(), 0);
+        assert_eq!(bib.list_annotations(&art.id).await.unwrap().len(), 0);
+        assert_eq!(
+            bib.list_collection_articles(&col.id, None, None)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }

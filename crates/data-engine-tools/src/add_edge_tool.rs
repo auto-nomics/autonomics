@@ -16,15 +16,13 @@ use crate::ExecError;
                   All four arguments are required — there is no default-port \
                   fallback. Use `get_node_ports` to discover the correct \
                   output/input port indices before calling. \
+                  Each input port accepts at most one incoming edge; for a \
+                  variadic node such as `sql`, connect additional upstreams \
+                  to distinct target ports (0, 1, 2, ...). \
                   \
-                  WARNING — DO NOT call `add_edge` in the same response turn as \
-                  `add_node`. Both endpoints (`from` and `to`) must already exist \
-                  in the DAG when this tool runs; if node creation runs in the \
-                  same turn it races ahead of the edge and produces a dangling \
-                  edge or a failed connection. First create all nodes and wait \
-                  for their results, THEN add edges in a separate turn. Multiple \
-                  `add_edge` calls within one turn are fine (assuming every \
-                  referenced node already exists)."
+                  The tool briefly waits if a node creation request from the \
+                  same response turn is still in flight. Creating nodes first \
+                  and wiring edges afterward remains the preferred workflow."
 )]
 pub struct AddEdgeInput {
     #[desc = "ID of the upstream (source) node"]
@@ -52,6 +50,26 @@ impl ToolFunction for AddEdgeTool {
     type Input = AddEdgeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        // Tool calls in one MCP response can be dispatched concurrently. The
+        // actor commits each node synchronously, so waiting for both IDs to be
+        // visible before sending AddEdge also restores FIFO ordering.
+        for _ in 0..20 {
+            let from_exists = self
+                .client
+                .node_exists(input.from.clone())
+                .await
+                .map_err(ExecError::from)?;
+            let to_exists = self
+                .client
+                .node_exists(input.to.clone())
+                .await
+                .map_err(ExecError::from)?;
+            if from_exists && to_exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
         let msg = format!(
             "edge added: {}.{} -> {}.{}",
             input.from, input.from_port, input.to, input.to_port

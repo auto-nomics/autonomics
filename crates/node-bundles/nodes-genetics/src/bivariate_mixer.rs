@@ -206,7 +206,8 @@ impl NodeFactory for BivariateMixerNodeFactory {
         "Bivariate MiXeR (fit2) node — faithful port. Takes four inputs: \
         trait1 sumstats, trait2 sumstats, trait1 fit1 result, trait2 fit1 \
         result. Writes temp files, invokes `mixer.py fit2`, parses JSON. \
-        One output port (pi1, pi2, pi12, rho_beta, rho_zero, rg, dice, h2_t1, h2_t2, loglike)."
+        One output port (pi1, pi2, pi12, rho_beta, rho_zero, rg, dice, h2_t1, h2_t2, loglike). \
+        Sumstat column names are case-sensitive; use quoted SQL aliases for Z, N, A1, and A2."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(BivariateMixerNodeSpec)
@@ -314,7 +315,9 @@ impl DagNode for BivariateMixerNode {
                 if !sch.fields().iter().any(|f| f.name() == needed) {
                     let avail: Vec<&str> = sch.fields().iter().map(|f| f.name().as_str()).collect();
                     return Err(BivariateMixerError::InvalidInput(format!(
-                        "trait{} sumstats missing column '{needed}'; have: {avail:?}",
+                        "trait{} sumstats missing column '{needed}'; have: {avail:?}. \
+                         MiXeR column names are case-sensitive; use quoted SQL aliases \
+                         such as z AS \"Z\", n AS \"N\", a1 AS \"A1\", a2 AS \"A2\".",
                         i + 1
                     ))
                     .into());
@@ -770,6 +773,7 @@ fn build_result_batch(r: &BivariateResult) -> Result<RecordBatch, BivariateMixer
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::prelude::CsvReadOptions;
 
     #[test]
@@ -864,7 +868,13 @@ mod tests {
         }
 
         let ctx = datafusion::prelude::SessionContext::new();
-        let options = || CsvReadOptions::new().has_header(true).delimiter(b'\t');
+        let options = || {
+            CsvReadOptions::new()
+                .has_header(true)
+                .delimiter(b'\t')
+                .file_extension("sumstats.gz")
+                .file_compression_type(FileCompressionType::GZIP)
+        };
         let trait1 = ctx
             .read_csv(
                 fixture_root.join("trait1.sumstats.gz").to_str().unwrap(),
@@ -877,6 +887,18 @@ mod tests {
                 fixture_root.join("trait2.sumstats.gz").to_str().unwrap(),
                 options(),
             )
+            .await
+            .unwrap();
+        ctx.register_table("trait1_input", trait1.into_view())
+            .unwrap();
+        let trait1 = ctx
+            .sql(r#"SELECT CONCAT("CHR", ':', "BP", ':', "A1", ':', "A2") AS "rsid", "A1", "A2", "N", "Z" FROM trait1_input"#)
+            .await
+            .unwrap();
+        ctx.register_table("trait2_input", trait2.into_view())
+            .unwrap();
+        let trait2 = ctx
+            .sql(r#"SELECT CONCAT("CHR", ':', "BP", ':', "A1", ':', "A2") AS "rsid", "A1", "A2", "N", "Z" FROM trait2_input"#)
             .await
             .unwrap();
 

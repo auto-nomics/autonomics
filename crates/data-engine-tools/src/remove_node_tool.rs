@@ -12,8 +12,9 @@ use crate::ExecError;
 #[tool(
     name = "remove_node",
     description = "Remove a node from the DAG. Fails if the node has downstream \
-                  dependents (nodes that rely on its output). Remove dependents \
-                  first, or rewire edges before deletion."
+                  dependents (nodes that rely on its output). Remove those \
+                  incoming edges with `remove_edge`, or remove the dependents \
+                  first."
 )]
 pub struct RemoveNodeInput {
     #[desc = "ID of the node to remove from the DAG"]

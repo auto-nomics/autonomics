@@ -76,6 +76,11 @@ pub struct BibShared {
     /// Storage handle for the bibliography library (articles, collections,
     /// fulltexts, annotations, …).
     pub bib: Arc<BibBase>,
+    /// Agent-visible VFS storage used for original full-text files.
+    ///
+    /// Production hosts attach the same mounted VFS used by agents, while
+    /// lightweight in-memory callers may omit it.
+    pub file_storage: Option<Arc<vfs::OpendalFileStorage>>,
     /// Multi-source literature search/fetch gateway.
     ///
     /// Built with the shared `eutils` / `arxiv` / `http` clients below so
@@ -161,6 +166,7 @@ impl BibShared {
         ));
         Ok(Self {
             bib,
+            file_storage: None,
             gateway,
             eutils,
             arxiv,
@@ -199,6 +205,7 @@ impl BibShared {
         ));
         Ok(Self {
             bib,
+            file_storage: None,
             gateway,
             eutils,
             arxiv,
@@ -209,12 +216,21 @@ impl BibShared {
             s2,
         })
     }
+
+    /// Attach the mounted, agent-visible filesystem used to store original
+    /// full-text documents. The handle is normally the process-wide
+    /// [`vfs::OpendalFileStorage`] constructed by the runtime host.
+    pub fn with_file_storage(mut self, file_storage: Arc<vfs::OpendalFileStorage>) -> Self {
+        self.file_storage = Some(file_storage);
+        self
+    }
 }
 
 impl std::fmt::Debug for BibShared {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BibShared")
             .field("bib", &"Arc<BibBase>")
+            .field("file_storage", &self.file_storage.is_some())
             .field("gateway", &"Arc<LiteratureGateway>")
             .field("eutils", &"Arc<EutilsClient>")
             .field("arxiv", &"Arc<ArxivClient>")

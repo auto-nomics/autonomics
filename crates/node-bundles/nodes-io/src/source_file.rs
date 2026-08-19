@@ -333,7 +333,7 @@ pub fn normalize_path(path: &str) -> String {
 /// DataFusion treats `file://` paths as its built-in local filesystem even
 /// when an OpenDAL-backed store is registered under that URL. Mounted virtual
 /// paths therefore must be addressed through the dedicated `vfs://` store.
-fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
+pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
     if path.starts_with("vfs://") {
         return path.to_string();
     }
@@ -403,6 +403,12 @@ impl DagNode for FileSourceNode {
             .ok_or_else(|| FileSourceError::UnknownFormat(path.clone()))?;
         let df = read_file(&ctx, &path, fmt).await?;
 
+        let df = if matches!(fmt, FileFormat::Csv | FileFormat::Tsv) {
+            promote_identifier_strings(df)?
+        } else {
+            df
+        };
+
         // Promote Float32 columns to Float64: Parquet files may store
         // Float32, and downstream SQL JOINs/UNIONs with Float64 data trigger
         // DataFusion type-coercion failures during collect().
@@ -421,22 +427,25 @@ async fn read_file(
 ) -> Result<DataFrame, DagError> {
     use FileFormat::*;
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+    let expected_extension = path_file_extension(path);
+    let compression = if path.to_lowercase().ends_with(".gz") {
+        FileCompressionType::GZIP
+    } else {
+        FileCompressionType::UNCOMPRESSED
+    };
     let df = match fmt {
-        Csv => ctx.read_csv(path, CsvReadOptions::default()).await,
+        Csv => {
+            let opts = CsvReadOptions::default()
+                .file_extension(&expected_extension)
+                .file_compression_type(compression);
+            ctx.read_csv(path, opts).await
+        }
         Tsv => {
-            // DataFusion's listing layer rejects files whose extension doesn't
-            // match the format's default (`.csv`). For TSV we must both set the
-            // tab delimiter AND override the expected extension to `.tsv`
-            // (or `.tsv.gz` for gzipped files) so the path passes validation.
-            let lower = path.to_lowercase();
-            let (ext, compression) = if lower.ends_with(".tsv.gz") {
-                (".tsv.gz", FileCompressionType::GZIP)
-            } else {
-                (".tsv", FileCompressionType::UNCOMPRESSED)
-            };
+            // The expected extension follows the actual path so an explicit
+            // TSV format can also read nonstandard extensions such as .raw.
             let opts = CsvReadOptions::default()
                 .delimiter(b'\t')
-                .file_extension(ext)
+                .file_extension(&expected_extension)
                 .file_compression_type(compression);
             ctx.read_csv(path, opts).await
         }
@@ -461,6 +470,53 @@ async fn read_file(
         }
         .into()
     })
+}
+
+fn path_file_extension(path: &str) -> String {
+    let compressed = path.to_ascii_lowercase().ends_with(".gz");
+    let path = if compressed {
+        &path[..path.len() - ".gz".len()]
+    } else {
+        path
+    };
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    if compressed {
+        format!("{extension}.gz")
+    } else {
+        extension
+    }
+}
+
+/// Keep domain identifiers as strings after CSV inference. Numeric-looking
+/// gene IDs otherwise fail downstream nodes that declare Utf8 ports.
+fn promote_identifier_strings(mut df: DataFrame) -> Result<DataFrame, DagError> {
+    use arrow_schema::DataType;
+    use datafusion::common::Column;
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_expr::cast;
+
+    const IDENTIFIER_COLUMNS: &[&str] = &["gene_id", "set_id", "snp_id", "rsid", "snp"];
+    let identifier_cols: Vec<String> = df
+        .schema()
+        .fields()
+        .iter()
+        .filter(|field| {
+            field.data_type().is_primitive() && IDENTIFIER_COLUMNS.contains(&field.name().as_str())
+        })
+        .map(|field| field.name().to_string())
+        .collect();
+
+    for name in &identifier_cols {
+        df = df.with_column(
+            name,
+            cast(Expr::Column(Column::from_name(name)), DataType::Utf8),
+        )?;
+    }
+    Ok(df)
 }
 
 /// Cast every Float32 column to Float64, leaving all other columns unchanged.
@@ -750,6 +806,89 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn source_file_accepts_csv_override_for_nonstandard_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.genes.raw");
+        std::fs::write(&path, "gene_id,n\n79501,504\n").unwrap();
+
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx {
+            runtime_env: ctx.runtime_env().clone(),
+            opendal: None,
+            global_sem: None,
+        };
+        let mut node = FileSourceNode::new(
+            Some(path.to_string_lossy().to_string()),
+            Some(FileFormat::Csv),
+        );
+
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        let schema = df.schema();
+        assert_eq!(
+            schema.field_with_name(None, "gene_id").unwrap().data_type(),
+            &arrow_schema::DataType::Utf8
+        );
+
+        let batches = df.clone().collect().await.unwrap();
+        let ids = batches[0]
+            .column_by_name("gene_id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap();
+        assert_eq!(ids.value(0), "79501");
+    }
+
+    #[tokio::test]
+    async fn source_file_accepts_csv_override_for_gzipped_nonstandard_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.sumstats.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"gene_id,n\n79501,504\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx {
+            runtime_env: ctx.runtime_env().clone(),
+            opendal: None,
+            global_sem: None,
+        };
+        let mut node = FileSourceNode::new(
+            Some(path.to_string_lossy().to_string()),
+            Some(FileFormat::Csv),
+        );
+
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(
+            df.schema()
+                .field_with_name(None, "gene_id")
+                .unwrap()
+                .data_type(),
+            &arrow_schema::DataType::Utf8
+        );
+        assert_eq!(df.clone().count().await.unwrap(), 1);
     }
 
     #[tokio::test]

@@ -718,8 +718,29 @@ impl DataEngineBuilder {
     /// `vfs:///data/ldscore/1000g_eur/`.
     pub fn with_vfs(self, vfs: MountedObjectStore) -> Self {
         let url = ObjectStoreUrl::parse("vfs://").expect("vfs:// is a valid object-store URL");
+        let vfs = Arc::new(vfs);
+        // When OpendalFileStorage already wraps this mount table, `vfs://`
+        // must resolve to that same adapter. Otherwise replacing the separate
+        // MountedObjectStore would leave VFS reads and writes with two
+        // independent lock tables for one physical object.
+        let shared_storage = self
+            .opendal
+            .as_ref()
+            .filter(|storage| {
+                storage.mounts.as_ref().is_some_and(|storage_mounts| {
+                    storage_mounts.mount_definitions() == vfs.mount_definitions()
+                })
+            })
+            .cloned();
+        if let Some(storage) = shared_storage {
+            self.runtime_env
+                .register_object_store(url.as_ref(), storage.clone());
+            return self;
+        }
+
+        let vfs_object_store: Arc<dyn datafusion::object_store::ObjectStore> = vfs;
         self.runtime_env
-            .register_object_store(url.as_ref(), Arc::new(vfs));
+            .register_object_store(url.as_ref(), vfs_object_store);
         self
     }
 
@@ -799,11 +820,41 @@ mod tests {
     use crate::dag::{DagError, RuntimeStatus, SchedulerConfig};
     use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::prelude::CsvReadOptions;
-    use vfs::OpendalFileStorage;
+    use vfs::{MountedObjectStore, OpendalFileStorage, VfsManifest};
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
+    }
+
+    #[test]
+    fn mounted_vfs_url_uses_the_atomic_opendal_adapter() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mounted_root = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest::local_root(mounted_root.path().to_string_lossy().to_string());
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            data_dir.path(),
+            mounted.clone(),
+        ));
+
+        let engine = DataEngine::builder()
+            .register_opendal_fs(storage.clone())
+            .unwrap()
+            .with_vfs((*mounted).clone())
+            .build();
+        let registry = engine.ctx.runtime_env().object_store_registry.clone();
+        let opendal_url = ObjectStoreUrl::parse("opendal-test://").unwrap();
+        let vfs_url = ObjectStoreUrl::parse("vfs://").unwrap();
+        registry.register_store(opendal_url.as_ref(), storage);
+        let opendal_store = registry.get_store(opendal_url.as_ref()).unwrap();
+        let vfs_store = registry.get_store(vfs_url.as_ref()).unwrap();
+
+        assert!(
+            Arc::ptr_eq(&opendal_store, &vfs_store),
+            "vfs:// mounted paths must use the atomic Opendal adapter"
+        );
     }
 
     // ── Existing OpenDAL/DataFusion integration test ────────────────────

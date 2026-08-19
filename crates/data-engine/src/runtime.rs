@@ -166,6 +166,26 @@ impl SessionServer {
                 };
                 let _ = reply.send(res);
             }
+            DataEngineCmd::DeleteEdge {
+                from,
+                from_port,
+                to,
+                to_port,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before modifying the graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.delete_edge(from, to, from_port, to_port));
+            }
             DataEngineCmd::AddNode {
                 id,
                 kind,
@@ -601,6 +621,29 @@ impl DataEngineClient {
                 from_port: Some(from_port),
                 to,
                 to_port: Some(to_port),
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Remove the matching edge. Both endpoints and ports must identify an
+    /// existing edge.
+    pub async fn delete_edge(
+        &self,
+        from: String,
+        from_port: u8,
+        to: String,
+        to_port: u8,
+    ) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::DeleteEdge {
+                from,
+                from_port,
+                to,
+                to_port,
                 reply: reply_tx,
             },
             reply_rx,

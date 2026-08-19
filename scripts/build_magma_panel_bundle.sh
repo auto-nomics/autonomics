@@ -82,10 +82,27 @@ scratch=$(mktemp -d)
 cleanup() { rm -rf "$scratch"; }
 trap cleanup EXIT
 
+# MAGMA writes chromosome labels verbatim into .genes.annot, while its gene
+# analysis path expects numeric PLINK chromosome codes. Normalize only the
+# temporary input so source gene-location files remain unchanged.
+normalized_gene_loc="$scratch/gene_loc.txt"
+awk '
+  BEGIN { OFS = "\t" }
+  NF && $1 !~ /^#/ {
+    if (toupper($2) == "X") $2 = 23
+    else if (toupper($2) == "Y") $2 = 24
+    else if (toupper($2) == "XY") $2 = 25
+    else if (toupper($2) == "MT" || toupper($2) == "M") $2 = 26
+    print
+    next
+  }
+  { print }
+' "$gene_loc" > "$normalized_gene_loc"
+
 "$magma_bin" \
   --annotate \
   --snp-loc "$reference_dir/$plink_prefix.bim" \
-  --gene-loc "$gene_loc" \
+  --gene-loc "$normalized_gene_loc" \
   --out "$scratch/$id"
 
 generated="$scratch/$id.genes.annot"

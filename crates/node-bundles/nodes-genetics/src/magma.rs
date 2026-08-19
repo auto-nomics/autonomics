@@ -1628,6 +1628,10 @@ mod tests {
                 .await
                 .unwrap();
             validate_annotation_checksum(&reference, &resolved.expected_sha256, &bytes).unwrap();
+            let staged = stage_vfs_bytes(&resolved.annotation_vpath, bytes)
+                .await
+                .unwrap();
+            magma::geneinput::GeneAnnot::read(staged.as_ref()).unwrap();
         }
     }
 

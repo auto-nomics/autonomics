@@ -1,6 +1,8 @@
+use std::collections::HashMap as StdHashMap;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -24,9 +26,13 @@ use crate::{MountHandle, MountedObjectStore};
 pub struct OpendalFileStorage {
     pub op: Operator,
     pub mounts: Option<Arc<MountedObjectStore>>,
+    path_locks: Arc<PathLocks>,
     /// Keeps the temp directory alive until this storage is dropped.
     _temp_guard: Option<TempDir>,
 }
+
+type PathLocks = std::sync::RwLock<StdHashMap<String, Arc<tokio::sync::RwLock<()>>>>;
+static STAGING_OBJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl OpendalFileStorage {
     /// Normalize a user-supplied path to always start with `/` so that
@@ -71,6 +77,7 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: Some(mounts),
+            path_locks: Arc::new(PathLocks::default()),
             _temp_guard: None,
         }
     }
@@ -81,6 +88,7 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            path_locks: Arc::new(PathLocks::default()),
             _temp_guard: None,
         }
     }
@@ -94,6 +102,7 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            path_locks: Arc::new(PathLocks::default()),
             _temp_guard: None,
         }
     }
@@ -109,8 +118,16 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            path_locks: Arc::new(PathLocks::default()),
             _temp_guard: Some(tmp),
         }
+    }
+
+    /// Return the per-object rw lock used to make stat/read and replacement
+    /// mutually consistent. Locks are retained for the lifetime of the store;
+    /// this is bounded by the number of distinct VFS objects used by it.
+    fn object_lock(&self, path: &str) -> Arc<tokio::sync::RwLock<()>> {
+        lock_object(&self.path_locks, path)
     }
 
     /// Resolve a virtual path to the concrete backend operator that
@@ -323,6 +340,24 @@ impl OpendalFileStorage {
     }
 }
 
+fn lock_object(path_locks: &PathLocks, path: &str) -> Arc<tokio::sync::RwLock<()>> {
+    if let Some(lock) = path_locks
+        .read()
+        .ok()
+        .and_then(|locks| locks.get(path).cloned())
+    {
+        return lock;
+    }
+
+    let Ok(mut locks) = path_locks.write() else {
+        return Arc::new(tokio::sync::RwLock::new(()));
+    };
+    locks
+        .entry(path.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
+        .clone()
+}
+
 impl Debug for OpendalFileStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpendalFileStorage")
@@ -360,6 +395,7 @@ impl ObjectStore for OpendalFileStorage {
         }
         let op = self.dispatch_op(location);
         let path = self.dispatch_path(location);
+        let staging_path = staging_key(&path);
         Box::pin(async move {
             let total_len = payload.content_length();
             let mut buf = Vec::with_capacity(total_len);
@@ -367,9 +403,19 @@ impl ObjectStore for OpendalFileStorage {
                 buf.extend_from_slice(chunk);
             }
             let buffer = opendal::Buffer::from(buf);
-            op.write(&path, buffer)
+            op.write(&staging_path, buffer)
                 .await
                 .map_err(opendal_to_object_store_error)?;
+
+            let lock = self.object_lock(&path);
+            {
+                let _guard = lock.write().await;
+                if let Err(err) = op.rename(&staging_path, &path).await {
+                    let _ = op.delete(&staging_path).await;
+                    return Err(opendal_to_object_store_error(err));
+                }
+            }
+
             let e_tag = op
                 .stat(&path)
                 .await
@@ -403,13 +449,19 @@ impl ObjectStore for OpendalFileStorage {
         }
         let op = self.dispatch_op(location);
         let path = self.dispatch_path(location);
+        let staging_path = staging_key(&path);
+        let destination_lock = self.object_lock(&path);
         Box::pin(async move {
             let writer = op
-                .writer(&path)
+                .writer(&staging_path)
                 .await
                 .map_err(opendal_to_object_store_error)?;
             Ok(Box::new(OpendalMultipartUpload {
                 writer: Arc::new(tokio::sync::Mutex::new(writer)),
+                op,
+                path,
+                staging_path,
+                destination_lock,
             }) as Box<dyn MultipartUpload>)
         })
     }
@@ -432,7 +484,9 @@ impl ObjectStore for OpendalFileStorage {
     {
         let op = self.dispatch_op(location);
         let path = self.dispatch_path(location);
+        let object_lock = self.object_lock(&path);
         Box::pin(async move {
+            let _guard = object_lock.read().await;
             let meta = op
                 .stat(&path)
                 .await
@@ -789,10 +843,12 @@ impl ObjectStore for OpendalFileStorage {
     ) -> BoxStream<'static, Result<Path, ObjectStoreError>> {
         let this_op = self.op.clone();
         let this_mounts = self.mounts.clone();
+        let path_locks = self.path_locks.clone();
         locations
             .map(move |location| {
                 let op = this_op.clone();
                 let mounts = this_mounts.clone();
+                let path_locks = path_locks.clone();
                 async move {
                     let location = location?;
                     if let Some(mounts) = mounts {
@@ -807,17 +863,18 @@ impl ObjectStore for OpendalFileStorage {
                                 });
                             }
                             let final_path = mount_key(&handle, &location);
-                            handle
-                                .backend_op
-                                .as_ref()
-                                .clone()
-                                .delete(&final_path)
+                            let object_lock = lock_object(&path_locks, &final_path);
+                            let _guard = object_lock.write().await;
+                            let op = handle.backend_op.as_ref().clone();
+                            op.delete(&final_path)
                                 .await
                                 .map_err(opendal_to_object_store_error)?;
                             return Ok(location);
                         }
                     }
                     let path = location.to_string();
+                    let object_lock = lock_object(&path_locks, &path);
+                    let _guard = object_lock.write().await;
                     op.delete(&path)
                         .await
                         .map_err(opendal_to_object_store_error)?;
@@ -853,48 +910,63 @@ impl ObjectStore for OpendalFileStorage {
         let from_path = self.dispatch_path(from);
         let to_op = self.dispatch_op(to);
         let to_path = self.dispatch_path(to);
+        let staging_path = staging_key(&to_path);
+        let destination_lock = self.object_lock(&to_path);
         Box::pin(async move {
             // OpenDAL's `copy` is backend-internal — it cannot span
             // two different Operators. Detect that case and fall back
             // to read+write.
             let same_backend = Arc::ptr_eq(&Arc::new(from_op.clone()), &Arc::new(to_op.clone()));
-            if !same_backend {
-                // Read source bytes, then write them at the
-                // destination.
+            let staged = if !same_backend {
                 let buf = from_op
                     .read(&from_path)
                     .await
-                    .map_err(opendal_to_object_store_error)?;
-                if matches!(options.mode, CopyMode::Create) {
-                    // Skip if destination already exists (if_not_exists
-                    // semantics — emulate via stat-then-write).
-                    if to_op.stat(&to_path).await.is_ok() {
-                        return Err(ObjectStoreError::AlreadyExists {
-                            path: to_path.clone(),
-                            source: "destination already exists".into(),
-                        });
+                    .map_err(opendal_to_object_store_error);
+                match buf {
+                    Ok(buf) => to_op
+                        .write(&staging_path, buf)
+                        .await
+                        .map(|_| ())
+                        .map_err(opendal_to_object_store_error),
+                    Err(err) => Err(err),
+                }
+            } else {
+                match options.mode {
+                    CopyMode::Overwrite => {
+                        from_op
+                            .copy(&from_path, &staging_path)
+                            .await
+                            .map_err(opendal_to_object_store_error)?;
+                        Ok(())
+                    }
+                    CopyMode::Create => {
+                        from_op
+                            .copy_with(&from_path, &staging_path)
+                            .if_not_exists(true)
+                            .await
+                            .map_err(opendal_to_object_store_error)?;
+                        Ok(())
                     }
                 }
-                to_op
-                    .write(&to_path, buf)
-                    .await
-                    .map_err(opendal_to_object_store_error)?;
-                return Ok(());
+            };
+
+            if let Err(err) = staged {
+                let _ = to_op.delete(&staging_path).await;
+                return Err(err);
             }
-            match options.mode {
-                CopyMode::Overwrite => {
-                    from_op
-                        .copy(&from_path, &to_path)
-                        .await
-                        .map_err(opendal_to_object_store_error)?;
-                }
-                CopyMode::Create => {
-                    from_op
-                        .copy_with(&from_path, &to_path)
-                        .if_not_exists(true)
-                        .await
-                        .map_err(opendal_to_object_store_error)?;
-                }
+
+            let _guard = destination_lock.write().await;
+            if matches!(options.mode, CopyMode::Create) && to_op.stat(&to_path).await.is_ok() {
+                let _ = to_op.delete(&staging_path).await;
+                return Err(ObjectStoreError::AlreadyExists {
+                    path: to_path.clone(),
+                    source: "destination already exists".into(),
+                });
+            }
+
+            if let Err(err) = to_op.rename(&staging_path, &to_path).await {
+                let _ = to_op.delete(&staging_path).await;
+                return Err(opendal_to_object_store_error(err));
             }
             Ok(())
         })
@@ -916,6 +988,10 @@ impl ObjectStore for OpendalFileStorage {
 /// of `&mut self`, we wrap it in `Arc<Mutex<…>>` and clone the `Arc` per part.
 struct OpendalMultipartUpload {
     writer: Arc<tokio::sync::Mutex<opendal::Writer>>,
+    op: Operator,
+    path: String,
+    staging_path: String,
+    destination_lock: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl std::fmt::Debug for OpendalMultipartUpload {
@@ -943,8 +1019,21 @@ impl MultipartUpload for OpendalMultipartUpload {
     async fn complete(&mut self) -> Result<PutResult, ObjectStoreError> {
         let mut w = self.writer.lock().await;
         w.close().await.map_err(opendal_to_object_store_error)?;
+
+        let _guard = self.destination_lock.write().await;
+        if let Err(err) = self.op.rename(&self.staging_path, &self.path).await {
+            let _ = self.op.delete(&self.staging_path).await;
+            return Err(opendal_to_object_store_error(err));
+        }
+
+        let e_tag = self
+            .op
+            .stat(&self.path)
+            .await
+            .ok()
+            .and_then(|meta| meta.etag().map(String::from));
         Ok(PutResult {
-            e_tag: None,
+            e_tag,
             version: None,
         })
     }
@@ -952,7 +1041,28 @@ impl MultipartUpload for OpendalMultipartUpload {
     async fn abort(&mut self) -> Result<(), ObjectStoreError> {
         let mut w = self.writer.lock().await;
         w.abort().await.map_err(opendal_to_object_store_error)?;
+        let _ = self.op.delete(&self.staging_path).await;
         Ok(())
+    }
+}
+
+/// Build a unique sibling key. Renames must occur within one backend, so the
+/// staging object must share the destination's backend-local parent directory.
+fn staging_key(path: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let sequence = STAGING_OBJECT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let unique = format!("{}-{}-{}", std::process::id(), nanos, sequence);
+
+    let file_name = path.rsplit('/').next().filter(|name| !name.is_empty());
+    let Some(file_name) = file_name else {
+        return format!(".root-object-{unique}.tmp");
+    };
+    match path.rfind('/') {
+        Some(index) if index > 0 => format!("{}.{file_name}{unique}.tmp", &path[..=index]),
+        _ => format!(".{file_name}{unique}.tmp"),
     }
 }
 
@@ -1150,6 +1260,64 @@ mod tests {
 
         let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(got.as_ref(), data.as_slice());
+    }
+
+    #[tokio::test]
+    async fn concurrent_multipart_replacement_never_exposes_partial_reads() {
+        use datafusion::object_store::{ObjectStoreExt, PutPayload, WriteMultipart};
+        use std::sync::Arc;
+
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        let path = datafusion::object_store::path::Path::from("shared.csv");
+        let initial = vec![0u8; 64 * 1024];
+        storage
+            .put(&path, PutPayload::from_bytes(initial.into()))
+            .await
+            .unwrap();
+
+        let writer = {
+            let storage = storage.clone();
+            let path = path.clone();
+            async move {
+                let mut jobs = Vec::new();
+                for marker in 1u8..=8 {
+                    let storage = storage.clone();
+                    let path = path.clone();
+                    jobs.push(async move {
+                        let upload = storage.put_multipart(&path).await.unwrap();
+                        let mut writer = WriteMultipart::new_with_chunk_size(upload, 64 * 1024);
+                        for _ in 0..4 {
+                            writer.write(&vec![marker; 128 * 1024]);
+                        }
+                        writer.finish().await.unwrap();
+                    });
+                }
+                futures::future::join_all(jobs).await;
+            }
+        };
+
+        let reader = {
+            let storage = storage.clone();
+            let path = path.clone();
+            async move {
+                for _ in 0..128 {
+                    let result = storage.get(&path).await.unwrap();
+                    let bytes = result.bytes().await.unwrap();
+                    assert!(
+                        bytes.len() == 64 * 1024 || bytes.len() == 512 * 1024,
+                        "reader observed non-atomic object size {}",
+                        bytes.len()
+                    );
+                    let first = bytes[0];
+                    assert!(
+                        bytes.iter().all(|byte| *byte == first),
+                        "reader observed mixed contents from concurrent writers"
+                    );
+                }
+            }
+        };
+
+        tokio::join!(writer, reader).1;
     }
 
     // ── VFS mount routing ──────────────────────────────────────────

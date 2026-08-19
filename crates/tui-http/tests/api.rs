@@ -2,9 +2,14 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use bib_base::BibShared;
 use http_body_util::BodyExt;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tower::ServiceExt;
+use vfs::{
+    BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
+    VfsManifest,
+};
 
 fn request(method: &str, uri: &str, body: Option<String>) -> Request<Body> {
     let mut builder = Request::builder().method(method).uri(uri);
@@ -60,6 +65,28 @@ async fn aggregate_router_exposes_bib_module() {
 }
 
 #[tokio::test]
+async fn server_serves_the_bibliography_frontend() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = tui_http::api_router(shared);
+
+    for (path, marker) in [
+        ("/", "Autonomics Bibliography"),
+        ("/app.js", "Select a record to inspect"),
+        ("/styles.css", "--primary"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("GET", path, None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "failed path: {path}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body).to_string();
+        assert!(body.contains(marker), "missing marker for {path}");
+    }
+}
+
+#[tokio::test]
 async fn bib_collections_and_annotations_use_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let app = tui_http::api_router(shared);
@@ -110,6 +137,7 @@ async fn bib_collections_and_annotations_use_nested_routes() {
 
     let encoded_article_id = article_id.replace('/', "%2F");
     let response = app
+        .clone()
         .oneshot(request(
             "POST",
             &format!("/api/v1/bib/articles/{encoded_article_id}/annotations"),
@@ -147,6 +175,7 @@ async fn bib_article_crud_uses_nested_routes() {
     assert_eq!(body["article"]["title"], "Local API test");
 
     let response = app
+        .clone()
         .oneshot(request(
             "GET",
             "/api/v1/bib/articles/doi%3A10.1000%2Flocal-api-test",
@@ -155,4 +184,200 @@ async fn bib_article_crud_uses_nested_routes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn bib_upload_preserves_and_serves_the_original_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "literature".to_owned(),
+            config: BackendConfig::local(
+                directory
+                    .path()
+                    .join("literature")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        }],
+        mount: vec![MountDefinition {
+            path: "/literature".to_owned(),
+            backend: "literature".to_owned(),
+            source: "/".to_owned(),
+            read_only: false,
+        }],
+    };
+    let vfs = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        directory.path(),
+        vfs.clone(),
+    ));
+    let shared = BibShared::open_in_memory()
+        .await
+        .unwrap()
+        .with_file_storage(file_storage);
+    let app = tui_http::api_router(shared);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles",
+            Some(r#"{ "title": "Original upload", "doi": "10.1000/original-upload" }"#.to_owned()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let content = b"original full-text bytes";
+    let multipart = format!(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"original.txt\"\r\ncontent-type: text/plain\r\n\r\n{}\r\n--boundary--\r\n",
+        String::from_utf8_lossy(content)
+    );
+    let upload_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext")
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(multipart))
+        .unwrap();
+    let response = app.clone().oneshot(upload_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let fulltext = &body["fulltext"];
+    assert_eq!(
+        fulltext["file_path"],
+        "vfs:///literature/doi%3A10.1000%2Foriginal-upload/original.txt"
+    );
+    assert_eq!(fulltext["file_size"], content.len() as i64);
+    assert!(
+        fulltext["file_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext/raw",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], content);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext/raw",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
+    let (app, _directory) = build_app_with_vfs().await;
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles",
+            Some(r#"{ "title": "PDF hosting test", "doi": "10.1000/pdf-host" }"#.to_owned()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let pdf_bytes: &[u8] = b"%PDF-1.4\n%placeholder original PDF bytes\n%%EOF\n";
+    let multipart = format!(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"paper.pdf\"\r\ncontent-type: application/pdf\r\n\r\n{}\r\n--boundary--\r\n",
+        String::from_utf8_lossy(pdf_bytes)
+    );
+    let upload_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/bib/articles/doi%3A10.1000%2Fpdf-host/fulltext")
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(multipart))
+        .unwrap();
+    let response = app.clone().oneshot(upload_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["fulltext"]["file_format"], "pdf");
+    assert_eq!(
+        body["fulltext"]["file_path"],
+        "vfs:///literature/doi%3A10.1000%2Fpdf-host/paper.pdf"
+    );
+    assert_eq!(body["fulltext"]["file_size"], pdf_bytes.len() as i64);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Fpdf-host/fulltext/raw",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/pdf"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], pdf_bytes);
+}
+
+async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "literature".to_owned(),
+            config: BackendConfig::local(
+                directory
+                    .path()
+                    .join("literature")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        }],
+        mount: vec![MountDefinition {
+            path: "/literature".to_owned(),
+            backend: "literature".to_owned(),
+            source: "/".to_owned(),
+            read_only: false,
+        }],
+    };
+    let vfs = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        directory.path(),
+        vfs.clone(),
+    ));
+    let shared = BibShared::open_in_memory()
+        .await
+        .unwrap()
+        .with_file_storage(file_storage);
+    (tui_http::api_router(shared), directory)
 }

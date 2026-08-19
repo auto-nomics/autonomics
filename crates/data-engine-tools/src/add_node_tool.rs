@@ -31,13 +31,10 @@ use crate::ExecError;
                   - \"ldsc\":           {\"n_blocks\": 200, \"intercept\": null} \
                   - \"mock\":           {} \
                   \
-                  WARNING — DO NOT combine `add_node` and `add_edge` in the same \
-                  response turn. An edge requires both endpoints to already exist, \
-                  so calling `add_node` and `add_edge` together in one turn causes \
-                  a race: the edge may be applied before the node lands, and the \
-                  DAG ends up with a dangling edge or a failed connection. Create \
-                  ALL nodes first, wait for their results, then add edges in a \
-                  SEPARATE turn. Multiple `add_node` calls within one turn are fine."
+                  Prefer creating all nodes first, waiting for their results, \
+                  then adding edges. `add_edge` also briefly waits for node \
+                  creation requests from the same response turn to become \
+                  visible."
 )]
 pub struct AddNodeInput {
     /// Unique identifier for this node in the DAG.
@@ -45,8 +42,8 @@ pub struct AddNodeInput {
     /// The node kind — one of the kinds returned by `list_node_factories`
     /// (e.g. "sql", "source_file", "sink_file", "linear_regression", "ldsc", "mock").
     pub kind: String,
-    /// JSON object conforming to the node's JSON Schema. Can include extra
-    /// fields — the node factory ignores unknown keys.
+    /// JSON object conforming to the node's JSON Schema. Unknown keys are
+    /// rejected by factories that use `deny_unknown_fields`.
     pub spec: serde_json::Value,
 }
 

@@ -32,6 +32,13 @@ pub enum DataEngineCmd {
         to_port: Option<u8>,
         reply: oneshot::Sender<EngineResult<()>>,
     },
+    DeleteEdge {
+        from: String,
+        from_port: u8,
+        to: String,
+        to_port: u8,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
     RunDag {
         /// Optional sink for streaming lightweight per-node events (status /
         /// progress / log / finished) out of the actor as the run progresses.

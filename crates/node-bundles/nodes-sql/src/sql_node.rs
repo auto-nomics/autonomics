@@ -77,7 +77,9 @@ impl NodeFactory for SqlNodeFactory {
         "A transform node that registers each upstream input as a named table \
         (port_0, port_1, …) and runs a user-supplied SQL query over them. \
         Supports variadic inputs for multi-table joins and set operations. \
-        Single untyped output port."
+        Single untyped output port. Unquoted SQL identifiers are case-folded \
+        (usually to lowercase); quote aliases such as z AS \"Z\" when a \
+        downstream node requires an exact uppercase field name."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

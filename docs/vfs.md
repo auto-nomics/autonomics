@@ -2,6 +2,20 @@
 
 Autonomics exposes storage resources through one Unix-style namespace. The runtime mounts local directories, S3-compatible buckets, and Aliyun OSS buckets under `vfs://`; DataFusion then reads them with ordinary paths.
 
+## Concurrent writes
+
+Object writes made through the DataFusion Object Store adapter are staged to a
+unique sibling object and renamed into place only after the complete payload is
+written. The adapter also coordinates readers and replacement writers per final
+path. A reader therefore sees either the complete previous object or the
+complete replacement, never the intermediate multipart write. Concurrent
+writers to one path serialize at the final replacement; the last successful
+complete writer wins.
+
+This guarantee covers DataFusion reads and writes routed through the VFS Object
+Store adapter. Direct OpenDAL operations that bypass that adapter do not
+acquire its reader/writer coordination.
+
 ## Mount manifest
 
 The runtime loads `state_dir/vfs.toml`. On first launch it creates that file with a root local mount plus any environment-configured `/data/s3` and `/data/oss` mounts, then loads it.

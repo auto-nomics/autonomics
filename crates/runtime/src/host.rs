@@ -254,8 +254,11 @@ impl SharedInfra {
             "SharedInfra::open: opening bibliography db at {}",
             bib_db_path.display()
         );
-        let bib =
-            Arc::new(bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone()).await?);
+        let bib = Arc::new(
+            bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
+                .await?
+                .with_file_storage(file_storage.clone()),
+        );
 
         let writing_db_path = config.writing_db_path.clone();
         tracing::info!(
@@ -477,16 +480,23 @@ impl SharedInfra {
 /// Unix.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
     let manifest_path = config.state_dir.join("vfs.toml");
-    let manifest = match std::fs::read_to_string(&manifest_path) {
-        Ok(source) => VfsManifest::from_toml(&source)
-            .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?,
+    let (manifest, manifest_changed) = match std::fs::read_to_string(&manifest_path) {
+        Ok(source) => {
+            let mut manifest = VfsManifest::from_toml(&source)
+                .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?;
+            let changed = ensure_literature_mount(&mut manifest, config);
+            (manifest, changed)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let manifest = default_vfs_manifest(config);
             write_vfs_manifest(&manifest_path, &manifest)?;
-            manifest
+            (manifest, false)
         }
         Err(e) => return Err(format!("read {}: {e}", manifest_path.display())),
     };
+    if manifest_changed {
+        write_vfs_manifest(&manifest_path, &manifest)?;
+    }
     MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())
 }
 
@@ -503,7 +513,7 @@ fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<
     let source = toml::to_string_pretty(manifest)
         .map_err(|e| format!("serialize {}: {e}", path.display()))?;
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -529,6 +539,17 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         source: config.data_dir.to_string_lossy().to_string(),
         read_only: false,
     }];
+    let literature_root = config.state_dir.join("literature");
+    backend.push(BackendDefinition {
+        id: "literature".into(),
+        config: vfs::BackendConfig::local(literature_root.to_string_lossy().to_string()),
+    });
+    mount.push(MountDefinition {
+        path: "/literature".into(),
+        backend: "literature".into(),
+        source: "/".into(),
+        read_only: false,
+    });
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
         std::env::var("OSS_BUCKET"),
@@ -550,6 +571,44 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
     }
 
     VfsManifest { backend, mount }
+}
+
+/// Keep the literature namespace mounted even for manifests created before
+/// bibliography storage used the VFS.
+fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -> bool {
+    if manifest
+        .mount
+        .iter()
+        .any(|mount| mount.path == "/literature")
+    {
+        return false;
+    }
+
+    let mut backend_id = "literature".to_owned();
+    while manifest
+        .backend
+        .iter()
+        .any(|backend| backend.id == backend_id)
+    {
+        backend_id.push('_');
+    }
+    manifest.backend.push(BackendDefinition {
+        id: backend_id.clone(),
+        config: vfs::BackendConfig::local(
+            config
+                .state_dir
+                .join("literature")
+                .to_string_lossy()
+                .to_string(),
+        ),
+    });
+    manifest.mount.push(MountDefinition {
+        path: "/literature".into(),
+        backend: backend_id,
+        source: "/".into(),
+        read_only: false,
+    });
+    true
 }
 
 /// Control handle for one running agent.
@@ -3512,5 +3571,87 @@ mod vfs_tests {
         let source = std::fs::read_to_string(&path).unwrap();
         let parsed = VfsManifest::from_toml(&source).unwrap();
         assert_eq!(parsed, manifest);
+    }
+}
+
+#[cfg(test)]
+mod literature_mount_tests {
+    use super::*;
+    use vfs::{BackendDefinition, MountDefinition, VfsManifest};
+
+    fn base_manifest() -> VfsManifest {
+        VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: vfs::BackendConfig::local("/"),
+            }],
+            mount: vec![MountDefinition {
+                path: "/".into(),
+                backend: "default".into(),
+                source: "/".into(),
+                read_only: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn ensure_literature_mount_adds_default_backend() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = crate::config::RuntimeConfigBuilder::default()
+            .data_dir(directory.path().join("data"))
+            .state_dir(directory.path().to_path_buf())
+            .bib_db_path(directory.path().join("bib.db"))
+            .agent_db(directory.path().join("agent.db"))
+            .writing_db_path(directory.path().join("writing.db"))
+            .app_db_path(directory.path().join("app.db"))
+            .dag_history_db(directory.path().join("dag.db"))
+            .build();
+        let mut manifest = base_manifest();
+        assert!(ensure_literature_mount(&mut manifest, &config));
+        let literature_mount = manifest
+            .mount
+            .iter()
+            .find(|mount| mount.path == "/literature")
+            .expect("literature mount inserted");
+        let backend = manifest
+            .backend
+            .iter()
+            .find(|backend| backend.id == literature_mount.backend)
+            .expect("literature backend inserted");
+        match &backend.config {
+            vfs::BackendConfig::Local { root } => {
+                assert_eq!(
+                    root,
+                    &config
+                        .state_dir
+                        .join("literature")
+                        .to_string_lossy()
+                        .to_string()
+                );
+            }
+            other => panic!("expected local backend, got {other:?}"),
+        }
+        assert!(!literature_mount.read_only);
+    }
+
+    #[test]
+    fn ensure_literature_mount_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = crate::config::RuntimeConfigBuilder::default()
+            .data_dir(directory.path().join("data"))
+            .state_dir(directory.path().to_path_buf())
+            .bib_db_path(directory.path().join("bib.db"))
+            .agent_db(directory.path().join("agent.db"))
+            .writing_db_path(directory.path().join("writing.db"))
+            .app_db_path(directory.path().join("app.db"))
+            .dag_history_db(directory.path().join("dag.db"))
+            .build();
+        let mut manifest = base_manifest();
+        assert!(ensure_literature_mount(&mut manifest, &config));
+        let mount_count = manifest.mount.len();
+        let backend_count = manifest.backend.len();
+        assert!(!ensure_literature_mount(&mut manifest, &config));
+        assert_eq!(manifest.mount.len(), mount_count);
+        assert_eq!(manifest.backend.len(), backend_count);
     }
 }

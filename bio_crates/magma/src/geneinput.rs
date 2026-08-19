@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::annotation::parse_chr;
 use crate::error::{MagmaError, Result};
 
 /// A gene definition from the `.genes.annot` file.
@@ -116,7 +117,7 @@ fn parse_location(s: &str) -> Option<(i32, u64, u64)> {
     if parts.len() != 3 {
         return None;
     }
-    let chr: i32 = parts[0].parse().ok()?;
+    let chr: i32 = parse_chr(parts[0])?;
     let start: u64 = parts[1].parse().ok()?;
     let end: u64 = parts[2].parse().ok()?;
     Some((chr, start, end))
@@ -212,6 +213,20 @@ mod tests {
         assert_eq!(g0.chr, 1);
         assert_eq!(g0.snps.len(), 13);
         assert_eq!(g0.snps[0], "rs1");
+    }
+
+    #[test]
+    fn test_read_annot_with_text_chromosomes() {
+        let annot = GeneAnnot::read(std::path::Path::new(
+            "tests/data/text_chromosomes.genes.annot",
+        ))
+        .unwrap();
+
+        assert_eq!(annot.genes[0].id, "7499");
+        assert_eq!(annot.genes[0].chr, 23);
+        assert_eq!(annot.genes[1].chr, 24);
+        assert_eq!(annot.genes[2].chr, 25);
+        assert_eq!(annot.genes[3].chr, 26);
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod inspect_node_tool;
 mod list_dag_refs_tool;
 mod list_node_factories_tool;
 mod new_dag_ref_tool;
+mod remove_edge_tool;
 mod remove_node_tool;
 mod run_dag_tool;
 mod show_snapshot_tool;
@@ -90,6 +91,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
         ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),
         ToolRegistration::from(add_edge_tool::AddEdgeTool::new(client.clone())),
+        ToolRegistration::from(remove_edge_tool::RemoveEdgeTool::new(client.clone())),
         ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
         // ── DAG execution & inspection ────────────────────────────────────
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),

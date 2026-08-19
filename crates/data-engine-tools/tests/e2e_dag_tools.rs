@@ -142,6 +142,70 @@ async fn test_add_source_sql_run_dag() {
 }
 
 #[tokio::test]
+async fn same_turn_add_nodes_and_edge_then_remove_edge_and_upstream() {
+    let engine = DataEngine::builder().build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    let results = toolset
+        .execute(
+            &[
+                build_tooluse(
+                    "add-source",
+                    "add_node",
+                    json!({"id": "source", "kind": "source_file", "spec": {"path": null}}),
+                ),
+                build_tooluse(
+                    "add-sql",
+                    "add_node",
+                    json!({"id": "transform", "kind": "sql", "spec": {"sql_query": "SELECT * FROM port_0"}}),
+                ),
+                build_tooluse(
+                    "connect",
+                    "add_edge",
+                    json!({"from": "source", "from_port": 0, "to": "transform", "to_port": 0}),
+                ),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    for (index, result) in results.iter().enumerate() {
+        check_ok(result, &format!("same-turn result {index}"));
+    }
+
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "disconnect",
+                "remove_edge",
+                json!({"from": "source", "from_port": 0, "to": "transform", "to_port": 0}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "remove_edge");
+
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "remove-source",
+                "remove_node",
+                json!({"id": "source"}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "remove source after disconnect");
+}
+
+#[tokio::test]
 async fn test_run_command_script_reports_dynamic_ports_and_files() {
     let file_storage = Arc::new(OpendalFileStorage::new_temp());
     file_storage

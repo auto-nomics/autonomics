@@ -981,11 +981,13 @@ dependencies = [
  "semantic-scholar",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
  "turso",
  "uuid",
+ "vfs",
 ]
 
 [[package]]
@@ -11493,13 +11495,17 @@ dependencies = [
  "bib-types",
  "chrono",
  "http-body-util",
+ "opendal",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tower",
  "tracing",
  "uuid",
+ "vfs",
 ]
 
 [[package]]

@@ -233,10 +233,7 @@ impl App {
         let runtime_handle = runtime.handle().clone();
         let http_server = Self::start_http_server(&runtime, host.as_ref());
         if let Some(ref server) = http_server {
-            state.toasts.info(
-                "HTTP API started",
-                Some(format!("http://{}", server.addr())),
-            );
+            state.toasts.info("HTTP API started", Some(server.url()));
         } else {
             state.toasts.error(
                 "HTTP API unavailable",

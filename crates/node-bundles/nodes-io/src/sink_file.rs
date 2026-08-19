@@ -14,7 +14,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::source_file::normalize_path;
+use crate::source_file::{normalize_path, source_path};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::sink::SinkMode;
 use dag_core::{
@@ -96,6 +96,22 @@ impl FileSinkNode {
         self.mode
     }
 
+    /// Check a DataFusion path without relying on host-path semantics. A
+    /// `vfs://` object is resolved through the mounted OpenDAL backend.
+    async fn object_exists(&self, node_ctx: &dag_core::registry::NodeCtx, path: &str) -> bool {
+        let Some(virtual_path) = path.strip_prefix("vfs://") else {
+            return std::path::Path::new(path).exists();
+        };
+        let Some(storage) = node_ctx.opendal.as_ref() else {
+            return false;
+        };
+        storage
+            .resolve(virtual_path)
+            .stat(&storage.resolve_path(virtual_path))
+            .await
+            .is_ok()
+    }
+
     /// Return the rows already stored at `path` concatenated with `new`, used
     /// to implement true single-file append.
     ///
@@ -115,7 +131,7 @@ impl FileSinkNode {
         use datafusion::logical_expr::cast;
         use datafusion::prelude::{CsvReadOptions, ParquetReadOptions, col};
 
-        if !std::path::Path::new(path).exists() {
+        if !self.object_exists(node_ctx, path).await {
             return Ok(new);
         }
 
@@ -276,7 +292,7 @@ impl DagNode for FileSinkNode {
             message: "FileSinkNode requires exactly one upstream input".to_string(),
         })?;
 
-        let path = normalize_path(&self.path);
+        let path = source_path(node_ctx, &normalize_path(&self.path));
         let format = self.format;
         let df = input
             .dataframe_value()
@@ -288,14 +304,11 @@ impl DagNode for FileSinkNode {
         // Resolve the DataFrame to actually write. DataFusion's
         // `write_csv`/`write_parquet` do not implement
         // `InsertOp::Overwrite` and their single-file sink always
-        // *replaces* the target — so an overwrite is "drop the
-        // existing file then write", and an append is "read the
-        // existing rows back, merge them, then write".
+        // *replaces* the target on completion. Keep the old object visible
+        // while the replacement is written; deleting it first would expose a
+        // missing-file window to concurrent readers.
         let to_write = match self.mode {
-            SinkMode::Overwrite => {
-                let _ = std::fs::remove_file(&path);
-                df
-            }
+            SinkMode::Overwrite => df,
             SinkMode::Append => self.append_existing(node_ctx, &path, format, df).await?,
         };
 
@@ -336,7 +349,9 @@ mod tests {
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::prelude::{DataFrame, SessionContext};
+    use vfs::{MountedObjectStore, OpendalFileStorage, VfsManifest};
 
     use crate::sink_file::{FileSinkNode, WriteFormat};
     use dag_core::{DagNode, NodeInput, SinkMode};
@@ -478,5 +493,61 @@ mod tests {
             "append must keep rows from both writes"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// An absolute path covered by a VFS mount must write to that backend,
+    /// not to the host filesystem at the same textual path.
+    #[tokio::test]
+    async fn sink_file_routes_mounted_absolute_paths_through_vfs() {
+        let backend_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest::local_root(backend_root.path().to_string_lossy().to_string());
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
+        let (ctx, first) = sample_dataframe();
+        ctx.runtime_env().register_object_store(
+            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            storage.clone(),
+        );
+        let node_ctx = dag_core::registry::NodeCtx {
+            runtime_env: ctx.runtime_env().clone(),
+            opendal: Some(storage),
+            global_sem: None,
+        };
+
+        let mut sink = FileSinkNode::new("/out.csv".into(), WriteFormat::Csv, SinkMode::Overwrite);
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, first)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+        assert!(backend_root.path().join("out.csv").exists());
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let second_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5])),
+                Arc::new(StringArray::from(vec!["dave", "eve"])),
+            ],
+        )
+        .unwrap();
+        let second = ctx.read_batch(second_batch).unwrap();
+        let mut sink = FileSinkNode::new("/out.csv".into(), WriteFormat::Csv, SinkMode::Append);
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, second)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let ids = read_csv_ids(&ctx, "vfs:///out.csv").await;
+        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
     }
 }

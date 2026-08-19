@@ -1623,8 +1623,9 @@ mod tests {
             role: Role::User,
             content: vec![
                 ContentBlock::Text {
-                    text: "Background task 'delegate_to' (#96) did not complete within 240 seconds."
-                        .into(),
+                    text:
+                        "Background task 'delegate_to' (#96) did not complete within 240 seconds."
+                            .into(),
                 },
                 tool_result("call_00_wait", "{\"status\":\"waiting\"}"),
             ],

@@ -134,6 +134,14 @@ impl BibBase {
         if path != ":memory:" {
             conn.pragma_update("busy_timeout", 5000).await?;
         }
+        // Enable FK enforcement so the `ON DELETE CASCADE` clauses declared in
+        // [`SCHEMA_SQL`] actually fire. Without this pragma, SQLite parses and
+        // stores FK constraints but does not enforce them, leaving orphan rows
+        // (e.g. annotations referencing a deleted article). This matters most
+        // for [`Self::delete_article`] — callers expect the cascade to clean
+        // up authors, identifiers, annotations, `collection_articles`
+        // memberships, and `fulltexts` pointer rows.
+        conn.pragma_update("foreign_keys", true).await?;
         let base = Self { conn };
         base.migrate().await?;
         Ok(base)
@@ -339,12 +347,22 @@ impl BibBase {
         }
     }
 
-    /// Delete an article and all its child rows (FK ON DELETE CASCADE).
-    pub async fn delete_article(&self, id: &str) -> Result<()> {
-        self.conn()
+    /// Delete an article and (via FK `ON DELETE CASCADE`) all of its child
+    /// rows: `authors`, `identifiers`, `annotations`, `collection_articles`
+    /// memberships, and `fulltexts` pointer rows.
+    ///
+    /// Returns the number of `articles` rows actually removed — `0` when
+    /// `id` did not exist (idempotent miss), `1` on a normal delete.
+    /// Stored full-text *files* on disk are not touched by this method;
+    /// full-text lifecycle is the caller's responsibility (see the HTTP
+    /// `delete_article` handler in `tui-http` for the on-disk cleanup
+    /// pattern).
+    pub async fn delete_article(&self, id: &str) -> Result<u64> {
+        let n = self
+            .conn()
             .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
             .await?;
-        Ok(())
+        Ok(n)
     }
 
     /// Count articles in the library.

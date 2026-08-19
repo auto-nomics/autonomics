@@ -323,7 +323,7 @@ pub fn write_annot(annot: &GeneAnnotation, path: &Path) -> Result<()> {
 
 /// Parse a chromosome string to an integer.
 /// Handles "1"-"22", "X"=23, "Y"=24, "XY"=25, "MT"/"MT_"/"0"=0.
-fn parse_chr(s: &str) -> Option<i32> {
+pub(crate) fn parse_chr(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() {
         return None;

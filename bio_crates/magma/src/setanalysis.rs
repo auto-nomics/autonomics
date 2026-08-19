@@ -24,6 +24,7 @@ use std::path::Path;
 use faer::{Mat, prelude::Solve};
 use statrs::distribution::ContinuousCDF;
 
+use crate::annotation::parse_chr;
 use crate::error::{MagmaError, Result};
 
 /// Gene-level data parsed from `.genes.raw`.
@@ -78,20 +79,26 @@ impl GeneRawData {
                 )));
             }
             let id = fields[0].to_string();
-            let chr: i32 = fields[1].parse().unwrap_or(0);
-            let start: u64 = fields[2].parse().unwrap_or(0);
-            let end: u64 = fields[3].parse().unwrap_or(0);
-            let n_snps: usize = fields[4].parse().unwrap_or(0);
-            let n_param: usize = fields[5].parse().unwrap_or(0);
-            let n: i64 = fields[6].parse().unwrap_or(0);
-            let mac: f64 = fields[7].parse().unwrap_or(0.0);
-            let zstat: f64 = fields[8].parse().unwrap_or(0.0);
+            let chr = parse_chr(fields[1]).ok_or_else(|| {
+                MagmaError::Input(format!(
+                    "{path:?}: line {}: chromosome '{}' not recognised",
+                    lineno + 1,
+                    fields[1]
+                ))
+            })?;
+            let start = parse_raw_field(path, lineno, "start", fields[2])?;
+            let end = parse_raw_field(path, lineno, "end", fields[3])?;
+            let n_snps = parse_raw_field(path, lineno, "n_snps", fields[4])?;
+            let n_param = parse_raw_field(path, lineno, "n_param", fields[5])?;
+            let n = parse_raw_field(path, lineno, "n", fields[6])?;
+            let mac = parse_raw_field(path, lineno, "mac", fields[7])?;
+            let zstat = parse_raw_field(path, lineno, "zstat", fields[8])?;
 
             // Correlation values (lower triangular): fields[9..]
-            let gene_corrs: Vec<f64> = fields[9..]
-                .iter()
-                .map(|s| s.parse().unwrap_or(0.0))
-                .collect();
+            let mut gene_corrs = Vec::with_capacity(fields.len() - 9);
+            for field in &fields[9..] {
+                gene_corrs.push(parse_raw_field(path, lineno, "correlation", field)?);
+            }
 
             genes.push(GeneRawEntry {
                 id,
@@ -139,6 +146,20 @@ impl GeneRawData {
         let total: i64 = self.genes.iter().map(|g| g.n).sum();
         total as f64 / self.n_genes() as f64
     }
+}
+
+fn parse_raw_field<T: std::str::FromStr>(
+    path: &Path,
+    lineno: usize,
+    field: &str,
+    value: &str,
+) -> Result<T> {
+    value.parse().map_err(|_| {
+        MagmaError::Input(format!(
+            "{path:?}: line {}: {field} value '{value}' is invalid",
+            lineno + 1
+        ))
+    })
 }
 
 /// Gene-set definition: maps gene IDs to set membership.

@@ -139,11 +139,16 @@ async fn delete_article() {
     db.upsert_article(&sample_article()).await.unwrap();
     assert_eq!(db.article_count().await.unwrap(), 1);
 
-    db.delete_article("test-1").await.unwrap();
+    let removed = db.delete_article("test-1").await.unwrap();
+    assert_eq!(removed, 1);
     assert_eq!(db.article_count().await.unwrap(), 0);
 
     let gone = db.get_article("test-1").await.unwrap();
     assert!(gone.is_none());
+
+    // Idempotent miss: a second delete returns 0 rows removed.
+    let again = db.delete_article("test-1").await.unwrap();
+    assert_eq!(again, 0);
 }
 
 #[tokio::test]

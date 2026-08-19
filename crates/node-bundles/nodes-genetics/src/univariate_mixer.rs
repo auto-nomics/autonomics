@@ -198,7 +198,9 @@ impl NodeFactory for UnivariateMixerNodeFactory {
         summary statistics to a temp file, invokes the original `mixer.py fit1` \
         (gsa-mixer v2.2.1 + libbgmg.so), and parses the JSON output. \
         Guarantees 100% numerical fidelity to the reference implementation. \
-        One typed input port (rsid, A1, A2, N, Z); one typed output port."
+        One typed input port (rsid, A1, A2, N, Z); one typed output port. \
+        Column names are case-sensitive. DataFusion SQL lowercases unquoted \
+        aliases, so use quoted aliases such as AS \"Z\" and AS \"A1\"."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -290,20 +292,25 @@ impl DagNode for UnivariateMixerNode {
 
         // ── 1. Validate input columns ──────────────────────────────────
         let schema = input.dataframe()?.schema();
-        for needed in [
+        let missing: Vec<&str> = [
             INPUT_Z_COL,
             INPUT_N_COL,
             INPUT_RSID_COL,
             INPUT_A1_COL,
             INPUT_A2_COL,
-        ] {
-            if !schema.fields().iter().any(|f| f.name() == needed) {
-                let avail: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-                return Err(UnivariateMixerError::InvalidInput(format!(
-                    "upstream sumstats missing required column '{needed}'; have: {avail:?}"
-                ))
-                .into());
-            }
+        ]
+        .into_iter()
+        .filter(|needed| !schema.fields().iter().any(|f| f.name() == *needed))
+        .collect();
+
+        if !missing.is_empty() {
+            let avail: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+            return Err(UnivariateMixerError::InvalidInput(format!(
+                "upstream sumstats missing required columns {missing:?}; have: {avail:?}. \
+                 MiXeR column names are case-sensitive; in a preceding SQL node use \
+                 quoted aliases such as z AS \"Z\", n AS \"N\", a1 AS \"A1\", a2 AS \"A2\"."
+            ))
+            .into());
         }
 
         // ── 2. Write sumstats to temp file ─────────────────────────────
@@ -720,6 +727,7 @@ fn count_lines(path: &std::path::Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::prelude::CsvReadOptions;
 
     #[test]
@@ -820,8 +828,17 @@ mod tests {
         let df = ctx
             .read_csv(
                 fixture.to_str().unwrap(),
-                CsvReadOptions::new().has_header(true).delimiter(b'\t'),
+                CsvReadOptions::new()
+                    .has_header(true)
+                    .delimiter(b'\t')
+                    .file_extension("sumstats.gz")
+                    .file_compression_type(FileCompressionType::GZIP),
             )
+            .await
+            .unwrap();
+        ctx.register_table("mixer_input", df.into_view()).unwrap();
+        let df = ctx
+            .sql(r#"SELECT CONCAT("CHR", ':', "BP", ':', "A1", ':', "A2") AS "rsid", "A1", "A2", "N", "Z" FROM mixer_input"#)
             .await
             .unwrap();
         let mut node = UnivariateMixerNode::new(UnivariateMixerNodeSpec {
@@ -831,7 +848,7 @@ mod tests {
             diffevo_fast_repeats: 2,
             fast_run: true,
             kmax_pdf: 10,
-            downsample_factor: 1000,
+            downsample_factor: 100,
         });
         let outputs = node
             .execute(

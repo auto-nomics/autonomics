@@ -72,17 +72,31 @@ pub fn meta_analyze(
     let base = &cohorts[0];
     let n_genes = base.n_genes();
 
-    // Default weights: √N for each cohort
-    let w: Vec<f64> = match weights {
-        Some(ws) => ws.to_vec(),
-        None => cohorts
-            .iter()
-            .map(|c| {
-                let mean_n = c.mean_sample_size();
-                mean_n.sqrt()
-            })
-            .collect(),
-    };
+    if let Some(ws) = weights {
+        if ws.len() != k {
+            return Err(MagmaError::Input(format!(
+                "expected {k} meta-analysis weights, got {}",
+                ws.len()
+            )));
+        }
+        if ws.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return Err(MagmaError::Input(
+                "meta-analysis weights must be finite and non-negative".into(),
+            ));
+        }
+    }
+
+    let cohort_genes: Vec<std::collections::HashMap<&str, usize>> = cohorts
+        .iter()
+        .map(|cohort| {
+            cohort
+                .genes
+                .iter()
+                .enumerate()
+                .map(|(index, gene)| (gene.id.as_str(), index))
+                .collect()
+        })
+        .collect();
 
     let mut genes = Vec::with_capacity(n_genes);
     let mut corrs: Vec<Vec<f64>> = Vec::with_capacity(n_genes);
@@ -92,20 +106,22 @@ pub fn meta_analyze(
 
         // Collect Z-statistics from all cohorts for this gene
         let mut z_vals: Vec<f64> = Vec::with_capacity(k);
+        let mut gene_weights: Vec<f64> = Vec::with_capacity(k);
+        let mut gene_ns: Vec<i64> = Vec::with_capacity(k);
         let mut found_in_all = true;
 
-        for cohort in cohorts {
-            if let Some(gene) = cohort.genes.get(i) {
-                if gene.id == base_gene.id {
-                    z_vals.push(gene.zstat);
-                } else {
-                    found_in_all = false;
-                    break;
-                }
-            } else {
+        for (cohort_index, cohort) in cohorts.iter().enumerate() {
+            let Some(gene_index) = cohort_genes[cohort_index].get(base_gene.id.as_str()) else {
                 found_in_all = false;
                 break;
-            }
+            };
+            let gene = &cohort.genes[*gene_index];
+            z_vals.push(gene.zstat);
+            gene_ns.push(gene.n);
+            gene_weights.push(match weights {
+                Some(weight) => weight[cohort_index],
+                None => (gene.n.max(0) as f64).sqrt(),
+            });
         }
 
         if !found_in_all || z_vals.len() != k {
@@ -116,7 +132,11 @@ pub fn meta_analyze(
         // Weighted combination
         let combined_z = if let Some(corr_matrix) = correlations {
             // With sample overlap correction: w'z / √(w'Σw)
-            let wz: f64 = w.iter().zip(z_vals.iter()).map(|(wi, zi)| wi * zi).sum();
+            let wz: f64 = gene_weights
+                .iter()
+                .zip(z_vals.iter())
+                .map(|(wi, zi)| wi * zi)
+                .sum();
 
             // Compute w'Σw
             let mut wsw = 0.0;
@@ -128,14 +148,18 @@ pub fn meta_analyze(
                         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                         corr_matrix[hi].get(lo).copied().unwrap_or(0.0)
                     };
-                    wsw += w[a] * w[b] * c;
+                    wsw += gene_weights[a] * gene_weights[b] * c;
                 }
             }
             if wsw > 0.0 { wz / wsw.sqrt() } else { 0.0 }
         } else {
             // No overlap correction: Σwᵢzᵢ / √(Σwᵢ²)
-            let wz: f64 = w.iter().zip(z_vals.iter()).map(|(wi, zi)| wi * zi).sum();
-            let wsq: f64 = w.iter().map(|wi| wi * wi).sum();
+            let wz: f64 = gene_weights
+                .iter()
+                .zip(z_vals.iter())
+                .map(|(wi, zi)| wi * zi)
+                .sum();
+            let wsq: f64 = gene_weights.iter().map(|wi| wi * wi).sum();
             if wsq > 0.0 { wz / wsq.sqrt() } else { 0.0 }
         };
 
@@ -149,7 +173,7 @@ pub fn meta_analyze(
             end: base_gene.end,
             n_snps: base_gene.n_snps,
             n_param: base_gene.n_param,
-            n: base_gene.n,
+            n: gene_ns.iter().sum(),
             mac: base_gene.mac,
             zstat: z_clamped,
         });
@@ -192,5 +216,24 @@ mod tests {
         for gene in &meta.genes {
             assert!(gene.zstat.is_finite());
         }
+    }
+
+    #[test]
+    fn test_meta_analyze_uses_per_gene_sqrt_n_weights() {
+        let mut cohort1 = GeneRawData::read(&test_dir().join("gene_pval.genes.raw")).unwrap();
+        cohort1.genes.truncate(1);
+        cohort1.corrs.truncate(1);
+        let mut cohort2 = cohort1.clone();
+
+        cohort1.genes[0].n = 100;
+        cohort1.genes[0].zstat = 1.0;
+        cohort2.genes[0].n = 400;
+        cohort2.genes[0].zstat = 2.0;
+
+        let meta = meta_analyze(&[cohort1, cohort2], None, None).unwrap();
+
+        assert_eq!(meta.genes.len(), 1);
+        assert_eq!(meta.genes[0].n, 500);
+        assert!((meta.genes[0].zstat - 2.236_067_977_499_79).abs() < 1e-12);
     }
 }
