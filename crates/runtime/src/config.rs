@@ -436,8 +436,10 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   column where a Struct is required. Reserve exactly the required column names and types.";
 
 const PROMPT_DAG_SCRIPTS: &str = "\n\
-### Custom Scripts (run_command)\n\
-- `run_command` is the generic custom-script node. Set `program` to `bash` and \
+### Legacy Custom Scripts (run_command)\n\
+- `run_command` is deprecated and runs on the host. Prefer native Rust nodes \
+for new workflows; container workloads will move to a future Podman node. \
+For an unavoidable legacy workflow, set `program` to `bash` and \
 put the complete script in the inline `script` field. \
 Put helper Python/R files in inline `files`; they are materialized under \
 `AUTONOMICS_FILES_DIR`.\n\

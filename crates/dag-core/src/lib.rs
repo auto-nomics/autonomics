@@ -7,7 +7,6 @@
 pub mod arrow_util;
 pub mod codegen;
 pub mod dag;
-pub mod data_plane;
 pub mod dataset;
 pub mod error;
 pub mod node;

@@ -1,4 +1,8 @@
-//! Run an external file-to-file command as a DAG node.
+//! Legacy external file-to-file command node.
+//!
+//! New workflows should use native Rust nodes. A Podman-backed container node
+//! will replace this host-process escape hatch for workloads that cannot be
+//! implemented natively.
 
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -63,6 +67,8 @@ pub struct CommandOutputSpec {
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct RunCommandNodeSpec {
+    /// Deprecated: prefer a native Rust node. Container workloads will move to
+    /// a Podman-backed node.
     /// Executable passed directly to the operating system. No shell is used.
     /// In script mode, use an interpreter such as `bash`, `python`, or `Rscript`.
     pub program: String,
@@ -170,6 +176,10 @@ impl RunCommandNode {
     }
 }
 
+#[deprecated(
+    since = "0.1.0",
+    note = "run_command runs a host process; use a native Rust node, or wait for the Podman container node"
+)]
 pub struct RunCommandNodeFactory;
 
 fn port_layout() -> NodePorts {
@@ -179,17 +189,21 @@ fn port_layout() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
+#[allow(deprecated)]
 impl NodeFactory for RunCommandNodeFactory {
     fn kind(&self) -> &'static str {
         "run_command"
     }
 
     fn desc(&self) -> &'static str {
-        "Runs a file-to-file external command with typed File inputs and outputs."
+        "[deprecated] Runs a file-to-file external command on the host."
     }
 
     fn doc(&self) -> &'static str {
-        "Runs an external program without a shell. File inputs are bound to \
+        "Deprecated: this node runs an external program on the host and will be \
+        replaced by a Podman-backed container node. Prefer a native Rust node \
+        whenever possible. The node runs an external program without a shell. \
+        File inputs are bound to \
         `$input0`, `$input1`, and so on; declared output paths are bound to \
         `$output0`, `$output1`, and the working directory is bound to \
         `$workdir`. The same paths are exported as `AUTONOMICS_INPUT0`, \
@@ -203,6 +217,10 @@ impl NodeFactory for RunCommandNodeFactory {
 
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(RunCommandNodeSpec)
+    }
+
+    fn deprecated(&self) -> bool {
+        true
     }
 
     fn ports(&self) -> NodePorts {
@@ -991,6 +1009,7 @@ mod tests {
 
     #[test]
     fn factory_resolves_dynamic_output_ports_from_spec() {
+        #[allow(deprecated)]
         let ports = RunCommandNodeFactory
             .ports_for_spec(serde_json::json!({
                 "program": "bash",
@@ -1009,6 +1028,23 @@ mod tests {
                 .iter()
                 .all(|port| port.data_type == PortType::File)
         );
+    }
+
+    #[test]
+    fn registry_reports_run_command_as_deprecated() {
+        let mut registry = dag_core::NodeRegistry::new(NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        ));
+        registry.register_plugin(&crate::Plugin);
+
+        let run_command = registry
+            .list_nodes()
+            .into_iter()
+            .find(|node| node.kind == "run_command")
+            .unwrap();
+
+        assert!(run_command.deprecated);
     }
 
     #[test]

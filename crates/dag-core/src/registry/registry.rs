@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::{
@@ -12,7 +11,6 @@ use serde::Serialize;
 use super::error::{Error, Result};
 use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 use crate::dag::DagNode;
-use crate::data_plane::DataPlane;
 use crate::node::NodePorts;
 
 /// Build a fresh, isolated [`SessionContext`].
@@ -33,6 +31,14 @@ pub trait NodeFactory: Send + Sync {
     fn kind(&self) -> &'static str;
     fn desc(&self) -> &'static str;
     fn doc(&self) -> &'static str;
+    /// Whether this kind is retained only for legacy workflows.
+    ///
+    /// Deprecated kinds remain buildable so existing DAGs keep working, but
+    /// clients should surface this flag in node listings and prefer a
+    /// replacement kind.
+    fn deprecated(&self) -> bool {
+        false
+    }
     fn spec_schema(&self) -> schemars::Schema;
     /// The static port layout for this node kind — the input/output ports
     /// every instance of this kind will declare. Queryable without
@@ -143,15 +149,6 @@ impl NodeCtx {
     pub fn session(&self) -> SessionContext {
         new_isolated_ctx(self.runtime_env.clone())
     }
-
-    /// Build a staging data plane rooted at `run_root`.
-    ///
-    /// Returns `None` when no runtime VFS has been registered.
-    pub fn data_plane(&self, run_root: impl Into<PathBuf>) -> Option<DataPlane> {
-        self.opendal
-            .clone()
-            .map(|vfs| DataPlane::new(vfs, run_root))
-    }
 }
 
 /// Summary of a registered node kind returned by [`NodeRegistry::list_nodes`].
@@ -159,6 +156,7 @@ impl NodeCtx {
 pub struct NodeInfo {
     pub kind: String,
     pub desc: String,
+    pub deprecated: bool,
 }
 
 /// The single source of truth of "which node kinds exist and how to build one from spec."
@@ -278,6 +276,7 @@ impl NodeRegistry {
             .map(|(kind, factory)| NodeInfo {
                 kind: kind.clone(),
                 desc: factory.desc().to_string(),
+                deprecated: factory.deprecated(),
             })
             .collect()
     }

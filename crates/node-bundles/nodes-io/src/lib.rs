@@ -20,6 +20,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
+        #[allow(deprecated)]
         registry.register(Box::new(run_command::RunCommandNodeFactory {}));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
