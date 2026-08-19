@@ -527,11 +527,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     fn make_input_batch() -> RecordBatch {

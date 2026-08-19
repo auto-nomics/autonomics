@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
+use dag_core::DataBundleBinding;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, DataBundle, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -36,10 +37,9 @@ impl BundleSourceNode {
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct BundleSourceNodeSpec {
-    pub ident: String,
-    pub desc: String,
-    /// Runtime VFS path, for example `/bundles/panels/panel.parquet`.
-    pub vpath: String,
+    /// Stable runtime bundle identifier. The path is supplied by the runtime
+    /// catalog, never by the DAG.
+    pub bundle_id: String,
     pub format: Option<String>,
 }
 
@@ -139,12 +139,19 @@ impl NodeFactory for BundleSourceNodeFactory {
     fn doc(&self) -> &'static str {
         "A source node that resolves a logical DataBundle through the runtime \
         VFS, validates its object metadata, and emits a virtual file reference. \
-        The node does not download the bundle; consumers read it through VFS \
-        or request local staging from the data plane."
+        The node does not download the bundle; consumers read it through VFS."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(BundleSourceNodeSpec)
+    }
+
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let node_spec: BundleSourceNodeSpec = serde_json::from_value(spec)?;
+        Ok(vec![DataBundleBinding::new("bundle", node_spec.bundle_id)])
     }
 
     fn ports(&self) -> NodePorts {
@@ -154,19 +161,18 @@ impl NodeFactory for BundleSourceNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: BundleSourceNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(BundleSourceNode::new(
-            DataBundle::new(node_spec.ident, node_spec.desc, node_spec.vpath),
-            node_spec.format,
-        )))
+        let bundle = node_ctx.bound_data_bundle("bundle")?.clone();
+        Ok(Box::new(BundleSourceNode::new(bundle, node_spec.format)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dag_core::DataBundleCatalog;
     use dag_core::dag::DAG;
     use dag_core::dag::runtime::SchedulerConfig;
     use datafusion::prelude::SessionContext;
@@ -223,10 +229,21 @@ mod tests {
         }
     }
 
+    fn runtime_ctx(storage: Arc<vfs::OpendalFileStorage>) -> NodeCtx {
+        let catalog = DataBundleCatalog::from_bundles([DataBundle::new(
+            "panels",
+            "Reference panels",
+            "/bundles/panels/panel.txt",
+        )])
+        .unwrap();
+        NodeCtx::new(SessionContext::new().runtime_env(), Some(storage))
+            .with_data_bundle_catalog(Arc::new(catalog))
+    }
+
     #[tokio::test]
     async fn dag_outputs_a_virtual_bundle_file() {
         let harness = mounted_vfs();
-        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(harness.storage));
+        let ctx = runtime_ctx(harness.storage.clone());
         let mut dag = DAG::default();
         dag.add_node(
             "source".into(),
@@ -268,17 +285,36 @@ mod tests {
     }
 
     #[test]
-    fn factory_builds_bundle_source() {
-        let spec = serde_json::json!({
-            "ident": "panels",
-            "desc": "Reference panels",
-            "vpath": "/bundles/panels/panel.txt",
-            "format": "txt"
-        });
+    fn registry_resolves_factory_declared_bundle() {
+        let ctx = runtime_ctx(Arc::new(vfs::OpendalFileStorage::new(".")));
+        let mut registry = dag_core::NodeRegistry::new(ctx);
+        registry.register(Box::new(BundleSourceNodeFactory {}));
+
+        let node = registry
+            .build_node(
+                "bundle_source",
+                serde_json::json!({"bundle_id": "panels", "format": "txt"}),
+            )
+            .unwrap();
+        let concrete = node.as_any().downcast_ref::<BundleSourceNode>().unwrap();
+
+        assert_eq!(concrete.bundle().vpath, "/bundles/panels/panel.txt");
+    }
+
+    #[test]
+    fn missing_runtime_bundle_is_rejected() {
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
+        let mut registry = dag_core::NodeRegistry::new(ctx);
+        registry.register(Box::new(BundleSourceNodeFactory {}));
 
-        let node = BundleSourceNodeFactory {}.build(spec, ctx).unwrap();
+        let error = match registry.build_node(
+            "bundle_source",
+            serde_json::json!({"bundle_id": "missing", "format": "txt"}),
+        ) {
+            Ok(_) => panic!("missing runtime bundle should fail"),
+            Err(error) => error,
+        };
 
-        assert_eq!(node.kind(), "bundle_source");
+        assert!(error.to_string().contains("data bundle 'missing'"));
     }
 }

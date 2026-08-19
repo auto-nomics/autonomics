@@ -643,11 +643,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     /// Build a small coloc input batch: 5 SNPs, two quantitative datasets.

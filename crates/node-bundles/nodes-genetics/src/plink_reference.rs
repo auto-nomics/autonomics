@@ -260,11 +260,7 @@ mod tests {
         let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
         let scratch = tempfile::tempdir().unwrap();
         let opendal = Arc::new(vfs::OpendalFileStorage::with_mounts(scratch.path(), mounts));
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: Some(opendal),
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), Some(opendal))
     }
 
     #[tokio::test]

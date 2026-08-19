@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use dag_core::DataBundleCatalog;
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -50,6 +51,7 @@ impl DataEngine {
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
         opendal: Option<Arc<OpendalFileStorage>>,
+        data_bundles: Arc<DataBundleCatalog>,
     ) -> Self {
         // Global concurrency limiter shared across all agent sessions.
         // Sized to leave ≥ 2 worker threads for SessionServer actors +
@@ -63,9 +65,12 @@ impl DataEngine {
         let engine_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: runtime_env.clone(),
             opendal: opendal.clone(),
+            data_bundles: data_bundles.clone(),
+            bound_data_bundles: Default::default(),
             global_sem,
         };
-        let node_registry = build_default_registry(runtime_env.clone(), opendal.clone());
+        let node_registry =
+            build_default_registry(runtime_env.clone(), opendal.clone(), data_bundles);
         Self {
             ctx,
             engine_ctx,
@@ -685,6 +690,7 @@ impl DataEngine {
 pub struct DataEngineBuilder {
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<OpendalFileStorage>>,
+    data_bundles: Arc<DataBundleCatalog>,
 }
 
 impl Default for DataEngineBuilder {
@@ -694,6 +700,7 @@ impl Default for DataEngineBuilder {
         Self {
             runtime_env,
             opendal: None,
+            data_bundles: Arc::new(DataBundleCatalog::new()),
         }
     }
 }
@@ -710,6 +717,12 @@ impl DataEngineBuilder {
             opendal: Some(file_session),
             ..self
         })
+    }
+
+    /// Set the engine-wide mapping from bundle identifiers to VFS paths.
+    pub fn with_data_bundle_catalog(mut self, catalog: DataBundleCatalog) -> Self {
+        self.data_bundles = Arc::new(catalog);
+        self
     }
 
     /// Register the Unix-style virtual filesystem under `vfs://`.
@@ -747,7 +760,7 @@ impl DataEngineBuilder {
     pub fn build(self) -> DataEngine {
         // Keep a backward-compatible ctx for tests / ad-hoc table registration.
         let ctx = crate::node_registry::registry::new_isolated_ctx(self.runtime_env.clone());
-        DataEngine::new_from_parts(ctx, self.runtime_env, self.opendal)
+        DataEngine::new_from_parts(ctx, self.runtime_env, self.opendal, self.data_bundles)
     }
 }
 

@@ -2332,11 +2332,7 @@ mod cross_validation {
 
     fn test_node_ctx() -> NodeCtx {
         let ctx = SessionContext::new();
-        NodeCtx {
-            runtime_env: ctx.runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(ctx.runtime_env(), None)
     }
 
     /// Full pipeline: RecordBatch → node execute → output port 0 (summary).

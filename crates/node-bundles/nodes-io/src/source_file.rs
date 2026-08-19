@@ -815,11 +815,7 @@ mod tests {
         std::fs::write(&path, "gene_id,n\n79501,504\n").unwrap();
 
         let ctx = SessionContext::new();
-        let node_ctx = dag_core::registry::NodeCtx {
-            runtime_env: ctx.runtime_env().clone(),
-            opendal: None,
-            global_sem: None,
-        };
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
         let mut node = FileSourceNode::new(
             Some(path.to_string_lossy().to_string()),
             Some(FileFormat::Csv),
@@ -862,11 +858,7 @@ mod tests {
         encoder.finish().unwrap();
 
         let ctx = SessionContext::new();
-        let node_ctx = dag_core::registry::NodeCtx {
-            runtime_env: ctx.runtime_env().clone(),
-            opendal: None,
-            global_sem: None,
-        };
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
         let mut node = FileSourceNode::new(
             Some(path.to_string_lossy().to_string()),
             Some(FileFormat::Csv),
@@ -922,11 +914,8 @@ mod tests {
             ObjectStoreUrl::parse("file://").unwrap().as_ref(),
             file_storage.clone(),
         );
-        let node_ctx = dag_core::registry::NodeCtx {
-            runtime_env: ctx.runtime_env().clone(),
-            opendal: Some(file_storage),
-            global_sem: None,
-        };
+        let node_ctx =
+            dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(file_storage));
 
         for path in [
             "vfs:///mount/data.csv",

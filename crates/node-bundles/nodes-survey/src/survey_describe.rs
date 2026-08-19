@@ -976,11 +976,10 @@ mod tests {
     // svymean output against R survey v4.5 golden values.
 
     fn node_ctx() -> dag_core::registry::NodeCtx {
-        dag_core::registry::NodeCtx {
-            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
 
     /// Build the fpc dataset as a RecordBatch.

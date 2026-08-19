@@ -929,11 +929,7 @@ mod tests {
         });
         let outputs = node
             .execute(
-                &NodeCtx {
-                    runtime_env: ctx.runtime_env(),
-                    opendal: None,
-                    global_sem: None,
-                },
+                &NodeCtx::new(ctx.runtime_env(), None),
                 &[
                     NodeInput::new_dataframe(0, trait1),
                     NodeInput::new_dataframe(1, trait2),

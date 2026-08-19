@@ -13,11 +13,7 @@ use nodes_io::source_opentargets::{
 };
 
 fn node_ctx() -> NodeCtx {
-    NodeCtx {
-        runtime_env: SessionContext::new().runtime_env(),
-        opendal: None,
-        global_sem: None,
-    }
+    NodeCtx::new(SessionContext::new().runtime_env(), None)
 }
 
 /// Build the full registry and return a built node by kind + spec.
@@ -25,6 +21,7 @@ fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::
     let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
+        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
     );
     registry.build_node(kind, spec).expect("build_node failed")
 }
@@ -36,6 +33,7 @@ fn factories_are_registered() {
     let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
+        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
     );
     let kinds: Vec<_> = registry.list_nodes().into_iter().map(|n| n.kind).collect();
     assert!(kinds.contains(&"source_opentargets_associations".to_string()));

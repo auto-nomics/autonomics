@@ -27,6 +27,7 @@ use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, Termin
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
+use dag_core::{DataBundle, DataBundleCatalog};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -165,9 +166,11 @@ impl SharedInfra {
             "SharedInfra::open: VFS mounted"
         );
         tracing::info!("SharedInfra::open: building DataEngine");
+        let data_bundles = build_data_bundle_catalog(config).map_err(HostError::Other)?;
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
-            .with_vfs((*vfs).clone());
+            .with_vfs((*vfs).clone())
+            .with_data_bundle_catalog(data_bundles);
 
         let mut engine = engine_builder.build();
         tracing::info!("SharedInfra::open: DataEngine built");
@@ -526,6 +529,69 @@ fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<
             file.write_all(source.as_bytes())
         })
         .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DataBundleManifest {
+    #[serde(default)]
+    bundle: Vec<DataBundle>,
+}
+
+/// Load the engine-wide bundle ID to VFS path mapping from
+/// `state_dir/data_bundles.toml`.
+///
+/// A missing file yields an empty catalog. Nodes with bundle requirements then
+/// fail with an actionable missing-bundle error when they are built.
+fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog, String> {
+    let manifest_path = config.state_dir.join("data_bundles.toml");
+    let source = match std::fs::read_to_string(&manifest_path) {
+        Ok(source) => source,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DataBundleCatalog::new());
+        }
+        Err(e) => {
+            return Err(format!(
+                "read data bundle manifest {}: {e}",
+                manifest_path.display()
+            ));
+        }
+    };
+    let manifest: DataBundleManifest =
+        toml::from_str(&source).map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?;
+    DataBundleCatalog::from_bundles(manifest.bundle)
+        .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))
+}
+
+#[cfg(test)]
+mod data_bundle_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn loads_bundle_ids_from_state_manifest() {
+        let state = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        std::fs::write(
+            state.path().join("data_bundles.toml"),
+            r#"
+[[bundle]]
+ident = "EUR.panel"
+desc = "1000G EUR reference panel"
+vpath = "/bundles/panels/EUR.panel"
+"#,
+        )
+        .unwrap();
+
+        let catalog = build_data_bundle_catalog(&config).unwrap();
+
+        assert_eq!(
+            catalog
+                .get("EUR.panel")
+                .map(|bundle| bundle.vpath.as_str())
+                .unwrap(),
+            "/bundles/panels/EUR.panel"
+        );
+    }
 }
 
 fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {

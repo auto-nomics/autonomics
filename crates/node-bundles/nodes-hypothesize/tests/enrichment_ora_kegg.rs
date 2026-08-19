@@ -92,11 +92,7 @@ async fn kegg_ora_reproduces_validated_hypergeometric_result() {
         .await
         .unwrap();
 
-    let node_ctx = NodeCtx {
-        runtime_env: ctx.runtime_env(),
-        opendal: None,
-        global_sem: None,
-    };
+    let node_ctx = NodeCtx::new(ctx.runtime_env(), None);
     let spec = serde_json::json!({
         "gene_col": "gene_id",
         "min_set_size": 5,

@@ -619,11 +619,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     /// Build a small MR-PRESSO input batch: 8 instruments, one exposure.

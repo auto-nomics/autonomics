@@ -14,7 +14,11 @@ use crate::node_registry::NodeRegistry;
 fn test_registry() -> NodeRegistry {
     let ctx = SessionContext::new();
     let runtime_env = ctx.runtime_env();
-    crate::default_registry::build_default_registry(runtime_env, None)
+    crate::default_registry::build_default_registry(
+        runtime_env,
+        None,
+        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
+    )
 }
 
 const XVAL_DIR: &str = "/tmp/autonomics_xval";
@@ -1270,11 +1274,7 @@ fn run_fine_gray_node(data_csv: &str, manifest: &DagManifest, stem: &str) -> (f6
             .await
             .expect("read data csv");
 
-        let node_ctx = crate::node_registry::registry::NodeCtx {
-            runtime_env: ctx.runtime_env(),
-            opendal: None,
-            global_sem: None,
-        };
+        let node_ctx = crate::node_registry::registry::NodeCtx::new(ctx.runtime_env(), None);
 
         // Build the node through the factory so spec validation runs.
         let registry = test_registry();
@@ -1328,11 +1328,7 @@ fn run_cuminc_node(data_csv: &str, _manifest: &DagManifest) -> (f64, f64) {
             .await
             .expect("read data csv");
 
-        let node_ctx = crate::node_registry::registry::NodeCtx {
-            runtime_env: ctx.runtime_env(),
-            opendal: None,
-            global_sem: None,
-        };
+        let node_ctx = crate::node_registry::registry::NodeCtx::new(ctx.runtime_env(), None);
 
         let registry = test_registry();
         let factory = registry.get_factory("cuminc").expect("factory");

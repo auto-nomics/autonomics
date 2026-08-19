@@ -19,6 +19,15 @@ pub enum Error {
     #[error("cannot found node factory for kind '{kind}'")]
     FactoryNotFound { kind: String },
 
+    #[error(
+        "node kind '{kind}' requires data bundle '{bundle_id}' on binding '{binding}', but it is not registered"
+    )]
+    DataBundleNotFound {
+        kind: String,
+        binding: String,
+        bundle_id: String,
+    },
+
     /// Raw `serde_json` deserialization failure of a node spec. Internal — see
     /// the type-level docs. Produced via `#[from]` so factories can write
     /// `serde_json::from_value(spec)?`.

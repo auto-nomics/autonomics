@@ -871,11 +871,10 @@ mod tests {
     use std::sync::Arc;
 
     fn ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
 
     #[tokio::test]

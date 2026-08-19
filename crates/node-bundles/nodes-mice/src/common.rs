@@ -108,9 +108,8 @@ pub fn build_imputation_batch(values: &[f64]) -> Result<RecordBatch, arrow_schem
 
 /// Build a NodeCtx for unit tests.
 pub fn test_node_ctx() -> NodeCtx {
-    NodeCtx {
-        runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-        opendal: None,
-        global_sem: None,
-    }
+    NodeCtx::new(
+        datafusion::prelude::SessionContext::new().runtime_env(),
+        None,
+    )
 }

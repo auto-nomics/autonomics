@@ -524,11 +524,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     /// Read SNP / A1 / A2 from a .bim file for SNPs within [start, stop].

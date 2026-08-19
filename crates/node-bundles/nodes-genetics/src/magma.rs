@@ -1484,11 +1484,7 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let opendal =
             std::sync::Arc::new(vfs::OpendalFileStorage::with_mounts(scratch.path(), mounts));
-        let ctx = NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: Some(opendal),
-            global_sem: None,
-        };
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(opendal));
         (ctx, scratch)
     }
 

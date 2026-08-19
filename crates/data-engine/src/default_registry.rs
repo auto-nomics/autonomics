@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use datafusion::execution::runtime_env::RuntimeEnv;
 
-use dag_core::registry::NodeRegistry;
+use dag_core::{DataBundleCatalog, registry::NodeRegistry};
 
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
 ///
@@ -22,8 +22,12 @@ use dag_core::registry::NodeRegistry;
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
+    data_bundles: Arc<DataBundleCatalog>,
 ) -> NodeRegistry {
-    let mut registry = NodeRegistry::new(dag_core::registry::NodeCtx::new(runtime_env, opendal));
+    let mut registry = NodeRegistry::new(
+        dag_core::registry::NodeCtx::new(runtime_env, opendal)
+            .with_data_bundle_catalog(data_bundles),
+    );
 
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
     #[cfg(feature = "bundle-ldsc")]

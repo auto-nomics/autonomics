@@ -370,11 +370,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx {
-            runtime_env: SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        NodeCtx::new(SessionContext::new().runtime_env(), None)
     }
 
     /// Build a synthetic RD dataset: Y = 1 + R - 0.5*R^2 + 0.3*R^3 + (R>=0) + noise.

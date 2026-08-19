@@ -852,11 +852,7 @@ mod tests {
         });
         let outputs = node
             .execute(
-                &NodeCtx {
-                    runtime_env: ctx.runtime_env(),
-                    opendal: None,
-                    global_sem: None,
-                },
+                &NodeCtx::new(ctx.runtime_env(), None),
                 &[NodeInput::new_dataframe(0, df)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )

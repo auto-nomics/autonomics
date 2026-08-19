@@ -911,11 +911,10 @@ fn push_numeric(col: &dyn Array, out: &mut Vec<f64>) {
 #[cfg(test)]
 mod tests {
     fn node_ctx() -> dag_core::registry::NodeCtx {
-        dag_core::registry::NodeCtx {
-            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
     use super::*;
     use arrow_array::{Array, Int64Array, StringArray, StructArray};

@@ -25,7 +25,9 @@ pub mod port;
 pub mod port_set;
 
 pub use arrow::string_opt_values;
-pub use data_bundle::{DataBundle, ResolvedDataBundle};
+pub use data_bundle::{
+    DataBundle, DataBundleBinding, DataBundleCatalog, DataBundleCatalogError, ResolvedDataBundle,
+};
 pub use id::{DEFAULT_PORT, NodeId, PortId};
 pub use input::NodeInput;
 pub use layout::NodePorts;

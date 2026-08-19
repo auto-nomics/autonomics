@@ -7,7 +7,11 @@ use dag_core::registry::NodeRegistry;
 
 fn registry() -> NodeRegistry {
     let ctx = SessionContext::new();
-    data_engine::default_registry::build_default_registry(ctx.runtime_env(), None)
+    data_engine::default_registry::build_default_registry(
+        ctx.runtime_env(),
+        None,
+        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
+    )
 }
 
 /// Minimal spec per node kind (just enough required fields to deserialize and

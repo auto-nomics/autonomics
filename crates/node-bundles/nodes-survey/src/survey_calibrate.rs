@@ -926,11 +926,10 @@ mod tests {
     use std::sync::Arc;
 
     fn node_ctx() -> dag_core::registry::NodeCtx {
-        dag_core::registry::NodeCtx {
-            runtime_env: datafusion::prelude::SessionContext::new().runtime_env(),
-            opendal: None,
-            global_sem: None,
-        }
+        dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
 
     #[tokio::test]

@@ -366,11 +366,7 @@ async fn dag_node_works_dataframe() {
         "mailto": "test@autonomics.dev"
     });
 
-    let ctx = NodeCtx {
-        runtime_env: SessionContext::new().runtime_env(),
-        opendal: None,
-        global_sem: None,
-    };
+    let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
 
     let mut node = factory
         .build(spec, NodeCtx::clone(&ctx))

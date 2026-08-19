@@ -11,7 +11,8 @@ use serde::Serialize;
 use super::error::{Error, Result};
 use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 use crate::dag::DagNode;
-use crate::node::NodePorts;
+use crate::node::{DataBundle, DataBundleBinding, DataBundleCatalog, NodePorts};
+use std::collections::HashMap as BoundDataBundles;
 
 /// Build a fresh, isolated [`SessionContext`].
 ///
@@ -48,6 +49,15 @@ pub trait NodeFactory: Send + Sync {
     /// static layout for kinds whose ports do not depend on configuration.
     fn ports_for_spec(&self, _spec: serde_json::Value) -> Result<NodePorts> {
         Ok(self.ports())
+    }
+    /// Data bundles required by every node of this kind.
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        Vec::new()
+    }
+    /// Data bundles required by one node instance. Kinds whose dependency
+    /// depends on the spec override this method.
+    fn data_bundles_for_spec(&self, _spec: serde_json::Value) -> Result<Vec<DataBundleBinding>> {
+        Ok(self.data_bundles())
     }
     fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> Result<Box<dyn DagNode>>;
 
@@ -108,6 +118,11 @@ pub struct NodeCtx {
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
     pub opendal: Option<Arc<vfs::OpendalFileStorage>>,
+    /// Engine-wide stable mapping from bundle identifiers to VFS paths.
+    pub data_bundles: Arc<DataBundleCatalog>,
+    /// Bindings resolved for the node currently being built. Empty on the
+    /// scheduler-wide context.
+    pub bound_data_bundles: BoundDataBundles<String, DataBundle>,
     /// **Cross-agent global concurrency limiter.**
     ///
     /// When `Some`, every node execution acquires a permit from this semaphore
@@ -132,8 +147,53 @@ impl NodeCtx {
         Self {
             runtime_env,
             opendal,
+            data_bundles: Arc::new(DataBundleCatalog::new()),
+            bound_data_bundles: BoundDataBundles::new(),
             global_sem: None,
         }
+    }
+
+    /// Attach the engine-wide bundle catalog.
+    pub fn with_data_bundle_catalog(mut self, catalog: Arc<DataBundleCatalog>) -> Self {
+        self.data_bundles = catalog;
+        self
+    }
+
+    /// Resolve factory-declared bindings into a node-local context.
+    fn with_bound_data_bundles(
+        mut self,
+        kind: &str,
+        bindings: Vec<DataBundleBinding>,
+    ) -> Result<Self> {
+        for requirement in bindings {
+            let bundle = self
+                .data_bundles
+                .get(&requirement.bundle_id)
+                .ok_or_else(|| Error::DataBundleNotFound {
+                    kind: kind.to_string(),
+                    binding: requirement.binding.clone(),
+                    bundle_id: requirement.bundle_id.clone(),
+                })?
+                .clone();
+            if self
+                .bound_data_bundles
+                .insert(requirement.binding.clone(), bundle)
+                .is_some()
+            {
+                return Err(Error::Unknown(format!(
+                    "node kind `{kind}` declares data bundle binding `{}` more than once",
+                    requirement.binding
+                )));
+            }
+        }
+        Ok(self)
+    }
+
+    /// Get a bundle resolved for the node currently being built.
+    pub fn bound_data_bundle(&self, binding: &str) -> Result<&DataBundle> {
+        self.bound_data_bundles.get(binding).ok_or_else(|| {
+            Error::Unknown(format!("data bundle binding `{binding}` is not declared"))
+        })
     }
 
     /// Build a **fresh**, isolated [`SessionContext`] from these ingredients.
@@ -226,11 +286,16 @@ impl NodeRegistry {
             ))
         })?;
         let spec = super::spec_normalize::normalize_against_schema(spec, &schema);
+        let bindings = node_factory.data_bundles_for_spec(spec.clone())?;
+        let build_ctx = self
+            .node_ctx
+            .clone()
+            .with_bound_data_bundles(node_kind, bindings)?;
         // If the factory still can't deserialize the spec, upgrade the bare
         // serde error into an agent-facing SpecRejection carrying the kind,
         // the expected schema, and concrete remediation guidance.
         let node = node_factory
-            .build(spec, self.node_ctx.clone())
+            .build(spec, build_ctx)
             .map_err(|err| match err {
                 super::error::Error::SpecDeserialize { source } => {
                     super::error::Error::spec_rejection_from(node_kind, &schema, source)
