@@ -456,8 +456,25 @@ impl ObjectStore for OpendalFileStorage {
                 .writer(&staging_path)
                 .await
                 .map_err(opendal_to_object_store_error)?;
+            let (part_tx, mut part_rx) = tokio::sync::mpsc::channel(1);
+            let writer_task = tokio::spawn(async move {
+                let mut writer = writer;
+                let mut next_part = 0u64;
+                let mut pending = std::collections::BTreeMap::new();
+                while let Some((part_index, part)) = part_rx.recv().await {
+                    pending.insert(part_index, part);
+                    while let Some(part) = pending.remove(&next_part) {
+                        writer.write(part).await?;
+                        next_part += 1;
+                    }
+                }
+                writer.close().await?;
+                Ok(())
+            });
             Ok(Box::new(OpendalMultipartUpload {
-                writer: Arc::new(tokio::sync::Mutex::new(writer)),
+                part_tx: Some(part_tx),
+                writer_task: Some(writer_task),
+                next_part: 0,
                 op,
                 path,
                 staging_path,
@@ -1003,16 +1020,19 @@ impl ObjectStore for OpendalFileStorage {
 ///
 /// DataFusion's single-file sink always writes through `WriteMultipart`,
 /// which calls `put_part` for each 5 MiB chunk and then `complete`. OpenDAL's
-/// `Writer` natively supports multi-chunk writes (`write` + `close`), so the
-/// bridge is a straightforward forward: each `put_part` appends to the writer,
-/// and `complete`/`abort` close or discard it.
+/// `Writer` expects sequential `write` calls and a final `close`.
 ///
-/// `put_part` returns a `'static` future (per the `MultipartUpload` trait)
-/// and DataFusion may poll several concurrently via a `JoinSet`. To allow
-/// shared access from multiple futures without moving the writer in and out
-/// of `&mut self`, we wrap it in `Arc<Mutex<…>>` and clone the `Arc` per part.
+/// `put_part` returns a `'static` future and callers may poll those futures
+/// concurrently. A mutex alone would make writes mutually exclusive but would
+/// not guarantee their order. `put_part` assigns an index synchronously in API
+/// invocation order; its future queues that indexed buffer through a bounded
+/// channel. A single writer task buffers out-of-order arrivals in a `BTreeMap`
+/// and flushes only the next expected index, making the final byte stream
+/// deterministic even when callers poll part futures concurrently.
 struct OpendalMultipartUpload {
-    writer: Arc<tokio::sync::Mutex<opendal::Writer>>,
+    part_tx: Option<tokio::sync::mpsc::Sender<(u64, Vec<u8>)>>,
+    next_part: u64,
+    writer_task: Option<tokio::task::JoinHandle<Result<(), opendal::Error>>>,
     op: Operator,
     path: String,
     staging_path: String,
@@ -1029,21 +1049,40 @@ impl std::fmt::Debug for OpendalMultipartUpload {
 #[async_trait::async_trait]
 impl MultipartUpload for OpendalMultipartUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        let writer = self.writer.clone();
+        let Some(part_tx) = self.part_tx.clone() else {
+            return Box::pin(async move {
+                Err(ObjectStoreError::Generic {
+                    store: "opendal",
+                    source: "multipart upload already completed or aborted".into(),
+                })
+            });
+        };
+        let part_index = self.next_part;
+        self.next_part += 1;
         Box::pin(async move {
             let mut buf = Vec::with_capacity(data.content_length());
             for chunk in data.iter() {
                 buf.extend_from_slice(chunk);
             }
-            let mut w = writer.lock().await;
-            w.write(buf).await.map_err(opendal_to_object_store_error)?;
+            part_tx
+                .send((part_index, buf))
+                .await
+                .map_err(|_| ObjectStoreError::Generic {
+                    store: "opendal",
+                    source: "ordered multipart writer exited before all parts were queued".into(),
+                })?;
             Ok(())
         })
     }
 
     async fn complete(&mut self) -> Result<PutResult, ObjectStoreError> {
-        let mut w = self.writer.lock().await;
-        w.close().await.map_err(opendal_to_object_store_error)?;
+        drop(self.part_tx.take());
+        let writer_task = self
+            .writer_task
+            .take()
+            .expect("multipart upload completed twice");
+        let write_result = writer_task.await?;
+        write_result.map_err(opendal_to_object_store_error)?;
 
         let _guard = self.destination_lock.write().await;
         if let Err(err) = self.op.rename(&self.staging_path, &self.path).await {
@@ -1064,8 +1103,11 @@ impl MultipartUpload for OpendalMultipartUpload {
     }
 
     async fn abort(&mut self) -> Result<(), ObjectStoreError> {
-        let mut w = self.writer.lock().await;
-        w.abort().await.map_err(opendal_to_object_store_error)?;
+        drop(self.part_tx.take());
+        if let Some(writer_task) = self.writer_task.take() {
+            writer_task.abort();
+            let _ = writer_task.await;
+        }
         let _ = self.op.delete(&self.staging_path).await;
         Ok(())
     }
@@ -1288,6 +1330,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multipart_upload_large_object_roundtrip() {
+        use datafusion::object_store::{ObjectStoreExt, WriteMultipart};
+
+        let storage = OpendalFileStorage::new_temp();
+        let path = datafusion::object_store::path::Path::from("large_multipart.bin");
+        let upload = storage.put_multipart(&path).await.unwrap();
+        let mut writer = WriteMultipart::new_with_chunk_size(upload, 8 * 1024 * 1024);
+
+        let chunk_len = 1024 * 1024;
+        let mut expected_len = 0usize;
+        let mut expected_sum = 0u64;
+        for part in 0..64u8 {
+            let chunk = vec![part; chunk_len];
+            writer.write(&chunk);
+            expected_sum = expected_sum.wrapping_add(chunk.iter().map(|b| *b as u64).sum());
+            expected_len += chunk.len();
+        }
+        writer.finish().await.unwrap();
+
+        let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.len(), expected_len);
+        for (part, chunk) in got.chunks(chunk_len).enumerate() {
+            assert!(
+                chunk.iter().all(|byte| *byte == part as u8),
+                "multipart part {part} was written out of order"
+            );
+        }
+        let actual_checksum = got.iter().map(|b| *b as u64).sum::<u64>();
+        assert_eq!(actual_checksum, expected_sum);
+    }
+
+    #[tokio::test]
     async fn concurrent_multipart_replacement_never_exposes_partial_reads() {
         use datafusion::object_store::{ObjectStoreExt, PutPayload, WriteMultipart};
         use std::sync::Arc;
@@ -1343,6 +1417,29 @@ mod tests {
         };
 
         tokio::join!(writer, reader).1;
+    }
+
+    #[tokio::test]
+    async fn multipart_reorders_concurrently_polled_parts_into_api_order() {
+        use datafusion::object_store::{MultipartUpload, ObjectStoreExt};
+
+        let storage = OpendalFileStorage::new_temp();
+        let path = datafusion::object_store::path::Path::from("ordered.bin");
+        let mut upload = storage.put_multipart(&path).await.unwrap();
+
+        let part1 = upload.put_part(vec![1u8; 1024].into());
+        let part2 = upload.put_part(vec![2u8; 1024].into());
+        let part3 = upload.put_part(vec![3u8; 1024].into());
+        part3.await.unwrap();
+        part1.await.unwrap();
+        part2.await.unwrap();
+        upload.complete().await.unwrap();
+
+        let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.len(), 3 * 1024);
+        assert!(got[..1024].iter().all(|byte| *byte == 1));
+        assert!(got[1024..2048].iter().all(|byte| *byte == 2));
+        assert!(got[2048..].iter().all(|byte| *byte == 3));
     }
 
     // ── VFS mount routing ──────────────────────────────────────────

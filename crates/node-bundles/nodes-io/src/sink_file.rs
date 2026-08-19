@@ -550,4 +550,110 @@ mod tests {
         let ids = read_csv_ids(&ctx, "vfs:///out.csv").await;
         assert_eq!(ids, vec![1, 2, 3, 4, 5]);
     }
+
+    /// DataFusion's Parquet sink buffers output through multipart writes. This
+    /// regression covers objects well above the default multipart threshold.
+    #[tokio::test]
+    async fn sink_file_writes_large_parquet_through_vfs() {
+        use arrow::array::Float64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        fn splitmix64(state: &mut u64) -> u64 {
+            *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_1ebd);
+            z ^ (z >> 31)
+        }
+
+        let rows = 8_000_000usize;
+        let mut state = 0x42u64;
+        let x = Float64Array::from_iter((0..rows).map(|_| {
+            let bits = splitmix64(&mut state);
+            (bits >> 11) as f64 / (1u64 << 53) as f64
+        }));
+        let mut state = 0x1234u64;
+        let y = Float64Array::from_iter((0..rows).map(|_| {
+            let bits = splitmix64(&mut state);
+            (bits >> 11) as f64 / (1u64 << 53) as f64
+        }));
+
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+        ]));
+        let input = ctx
+            .read_batch(RecordBatch::try_new(schema, vec![Arc::new(x), Arc::new(y)]).unwrap())
+            .unwrap();
+
+        let backend_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest::local_root(backend_root.path().to_string_lossy().to_string());
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
+        ctx.runtime_env().register_object_store(
+            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            storage.clone(),
+        );
+        let node_ctx = dag_core::registry::NodeCtx {
+            runtime_env: ctx.runtime_env().clone(),
+            opendal: Some(storage),
+            global_sem: None,
+        };
+
+        let first = ctx
+            .read_batch(
+                RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("x", DataType::Float64, false),
+                        Field::new("y", DataType::Float64, false),
+                    ])),
+                    vec![
+                        Arc::new(Float64Array::from(vec![0.5])),
+                        Arc::new(Float64Array::from(vec![0.25])),
+                    ],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut sink = FileSinkNode::new(
+            "/large.parquet".into(),
+            WriteFormat::Parquet,
+            SinkMode::Overwrite,
+        );
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, first)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let mut sink = FileSinkNode::new(
+            "/large.parquet".into(),
+            WriteFormat::Parquet,
+            SinkMode::Append,
+        );
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, input)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let path = backend_root.path().join("large.parquet");
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(
+            metadata.len() > 8 * 1024 * 1024,
+            "file size {}",
+            metadata.len()
+        );
+        let output = ctx
+            .read_parquet("vfs:///large.parquet", Default::default())
+            .await
+            .unwrap();
+        assert_eq!(output.count().await.unwrap(), rows + 1);
+    }
 }
