@@ -38,8 +38,12 @@ pub async fn register_listing_table(
     table_name: &str,
     url: &str,
 ) -> Result<(), LdscCommonError> {
+    tracing::debug!(table = table_name, url, "registering LDSC panel");
     match ctx.table_exist(table_name) {
-        Ok(true) => return Ok(()),
+        Ok(true) => {
+            tracing::debug!(table = table_name, "LDSC panel already registered");
+            return Ok(());
+        }
         Ok(false) => {}
         Err(e) => return Err(LdscCommonError::ReadBatch(e)),
     }
@@ -63,6 +67,7 @@ pub async fn register_listing_table(
 
     ctx.register_table(table_name, provider)
         .map_err(LdscCommonError::ReadBatch)?;
+    tracing::debug!(table = table_name, url, "registered LDSC panel");
     Ok(())
 }
 
@@ -72,6 +77,11 @@ pub async fn read_m_5_50(
     m_table_ref: &str,
     n_annot: usize,
 ) -> Result<Vec<f64>, LdscCommonError> {
+    tracing::debug!(
+        table = m_table_ref,
+        expected_annotations = n_annot,
+        "reading LDSC M table"
+    );
     let sql = format!(r#"SELECT "m_5_50" FROM {}"#, quote_table(m_table_ref));
     let df = ctx.sql(&sql).await.map_err(LdscCommonError::ReadBatch)?;
     let batches = df.collect().await.map_err(LdscCommonError::ReadBatch)?;

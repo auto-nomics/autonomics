@@ -47,7 +47,10 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     }));
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug")
+        EnvFilter::new(
+            "tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
+             nodes_ldsc=debug,ldsc=debug",
+        )
     });
 
     let subscriber = tracing_subscriber::fmt()

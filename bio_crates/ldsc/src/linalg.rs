@@ -85,6 +85,36 @@ pub fn wls(x: MatRef<'_, f64>, y: &[f64], w: &[f64]) -> Result<Vec<f64>> {
     }
     let wsum: f64 = w.iter().sum();
     if !(wsum > 0.0) {
+        let non_finite_weights = w.iter().filter(|value| !value.is_finite()).count();
+        let non_positive_weights = w.iter().filter(|value| **value <= 0.0).count();
+        let first_invalid_weight = w
+            .iter()
+            .position(|value| !value.is_finite() || *value <= 0.0);
+        let non_finite_x = (0..n)
+            .flat_map(|row| (0..p).map(move |col| x[(row, col)]))
+            .filter(|value| !value.is_finite())
+            .count();
+        let first_non_finite_x = (0..n).find_map(|row| {
+            (0..p)
+                .find(|&col| !x[(row, col)].is_finite())
+                .map(|col| (row, col))
+        });
+        let non_finite_y = y.iter().filter(|value| !value.is_finite()).count();
+        let first_non_finite_y = y.iter().position(|value| !value.is_finite());
+
+        tracing::error!(
+            n_rows = n,
+            n_columns = p,
+            weight_sum = wsum,
+            non_finite_weights,
+            non_positive_weights,
+            first_invalid_weight = ?first_invalid_weight,
+            non_finite_design_values = non_finite_x,
+            first_non_finite_design_value = ?first_non_finite_x,
+            non_finite_response_values = non_finite_y,
+            first_non_finite_response_value = ?first_non_finite_y,
+            "WLS rejected invalid regression inputs or weights"
+        );
         return Err(LdscError::Linalg(format!(
             "wls: weights sum to non-positive {wsum}"
         )));

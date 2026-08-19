@@ -128,6 +128,7 @@ exec podman run \
     --env MIXER_RESOURCE_ROOT="$AUTONOMICS_MIXER_SOURCE_ROOT" \
     --env MIXER_PYTHON=/usr/bin/python3 \
     --env PLINK_REF_PREFIX_TEMPLATE="${PLINK_REF_PREFIX_TEMPLATE:-}" \
+    --env LAVA_PLINK_REF_PREFIX_TEMPLATE="${LAVA_PLINK_REF_PREFIX_TEMPLATE:-}" \
     --env "TERM=${TERM:-xterm-256color}" \
     "${volumes[@]}" \
     "$IMAGE" \

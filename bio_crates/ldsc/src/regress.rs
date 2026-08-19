@@ -771,6 +771,16 @@ impl RG {
     ) -> Result<Self> {
         let chisq1: Vec<f64> = z1.iter().map(|z| z * z).collect();
         let chisq2: Vec<f64> = z2.iter().map(|z| z * z).collect();
+        tracing::info!(
+            n_snp = z1.len(),
+            n_annot = x.ncols(),
+            n_blocks,
+            intercept_hsq1 = ?intercept_hsq1,
+            intercept_hsq2 = ?intercept_hsq2,
+            intercept_gencov = ?intercept_gencov,
+            twostep = ?twostep,
+            "LDSC RG fitting trait-1 h2"
+        );
         let hsq1 = Hsq::new(
             &chisq1,
             x,
@@ -782,6 +792,21 @@ impl RG {
             twostep,
             false,
         )?;
+        tracing::info!(
+            h2 = hsq1.reg.tot,
+            h2_se = hsq1.reg.tot_se,
+            intercept = ?hsq1.reg.intercept,
+            mean_chisq = hsq1.mean_chisq,
+            "LDSC RG trait-1 h2 fit completed"
+        );
+        tracing::info!(
+            n_snp = z2.len(),
+            n_annot = x.ncols(),
+            n_blocks,
+            intercept_hsq2 = ?intercept_hsq2,
+            twostep = ?twostep,
+            "LDSC RG fitting trait-2 h2"
+        );
         let hsq2 = Hsq::new(
             &chisq2,
             x,
@@ -793,6 +818,22 @@ impl RG {
             twostep,
             false,
         )?;
+        tracing::info!(
+            h2 = hsq2.reg.tot,
+            h2_se = hsq2.reg.tot_se,
+            intercept = ?hsq2.reg.intercept,
+            mean_chisq = hsq2.mean_chisq,
+            "LDSC RG trait-2 h2 fit completed"
+        );
+        tracing::info!(
+            n_snp = z1.len(),
+            n_annot = x.ncols(),
+            n_blocks,
+            intercept_gencov = ?intercept_gencov,
+            h2_1 = hsq1.reg.tot,
+            h2_2 = hsq2.reg.tot,
+            "LDSC RG fitting genetic covariance"
+        );
         let gencov = Gencov::new(
             z1,
             z2,
@@ -809,6 +850,12 @@ impl RG {
             intercept_gencov,
             twostep,
         )?;
+        tracing::info!(
+            gencov = gencov.reg.tot,
+            gencov_se = gencov.reg.tot_se,
+            mean_z1z2 = gencov.mean_z1z2,
+            "LDSC RG genetic covariance fit completed"
+        );
 
         if hsq1.reg.tot <= 0.0 || hsq2.reg.tot <= 0.0 {
             return Ok(RG {

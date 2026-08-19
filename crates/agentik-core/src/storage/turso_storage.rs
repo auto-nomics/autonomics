@@ -81,6 +81,21 @@ use crate::storage::{
 #[derive(Clone)]
 struct LockedConn(Arc<Mutex<turso::Connection>>);
 
+/// Owned query results.
+///
+/// Turso statements retain transaction state while a cursor is open. Draining
+/// rows while the connection mutex is held prevents later statements from
+/// overlapping that cursor without making transactions non-reentrant.
+struct LockedRows {
+    rows: std::vec::IntoIter<turso::Row>,
+}
+
+impl LockedRows {
+    async fn next(&mut self) -> turso::Result<Option<turso::Row>> {
+        Ok(self.rows.next())
+    }
+}
+
 impl LockedConn {
     async fn execute(&self, sql: impl AsRef<str>, params: impl IntoParams) -> turso::Result<u64> {
         self.0.lock().await.execute(sql, params).await
@@ -90,8 +105,17 @@ impl LockedConn {
         &self,
         sql: impl AsRef<str>,
         params: impl IntoParams,
-    ) -> turso::Result<turso::Rows> {
-        self.0.lock().await.query(sql, params).await
+    ) -> turso::Result<LockedRows> {
+        let guard = self.0.lock().await;
+        let rows = guard.query(sql, params).await?;
+        let mut owned_rows = Vec::new();
+        let mut rows = rows;
+        while let Some(row) = rows.next().await? {
+            owned_rows.push(row);
+        }
+        Ok(LockedRows {
+            rows: owned_rows.into_iter(),
+        })
     }
 
     async fn execute_batch(&self, sql: impl AsRef<str>) -> turso::Result<()> {
@@ -1699,7 +1723,7 @@ impl AgentStorage for TursoAgentStorage {
     }
 }
 
-async fn collect_rows<T, F>(rows: &mut turso::Rows, mut f: F) -> Result<Vec<T>, StorageError>
+async fn collect_rows<T, F>(rows: &mut LockedRows, mut f: F) -> Result<Vec<T>, StorageError>
 where
     F: FnMut(&turso::Row) -> Result<T, StorageError>,
 {
@@ -2891,6 +2915,54 @@ mod tests {
             .update_agent_graph_status("/root/nonexistent", r#"{"Idle":null}"#, None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_query_drains_rows_before_releasing_connection() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        store
+            .upsert_agent_graph_entry(PersistedAgentGraph {
+                path: "/root/locked".into(),
+                parent_path: None,
+                profile_path: "root/locked".into(),
+                agent_id: Uuid::new_v4(),
+                status_json: r#"{"Idle":null}"#.into(),
+                last_event: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+
+        let reader_store = store.clone();
+        let (rows_open, rows_open_rx) = tokio::sync::oneshot::channel();
+        let reader = tokio::spawn(async move {
+            let mut rows = reader_store
+                .conn
+                .query(
+                    "SELECT path FROM agent_graph WHERE path = ?1",
+                    params_from_iter([Value::Text("/root/locked".into())]),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(text_col(&row, 0).unwrap(), "/root/locked");
+
+            rows_open.send(()).unwrap();
+            tokio::task::yield_now().await;
+        });
+
+        rows_open_rx.await.unwrap();
+        store
+            .update_agent_graph_status("/root/locked", r#"{"Running":null}"#, None)
+            .await
+            .unwrap();
+        reader.await.unwrap();
+
+        let rows = store.list_persisted_agents().await.unwrap();
+        assert_eq!(rows[0].status_json, r#"{"Running":null}"#);
     }
 
     #[tokio::test]

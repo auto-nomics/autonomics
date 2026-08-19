@@ -303,7 +303,7 @@ stdout。
 |------|------|
 | `OPENGWAS_TOKEN` | `cache refresh-opengwas` 及任何 OpenGWAS 智能体查询所必需 |
 | `OPENGWAS_CACHE_DIR` | 覆盖 OpenGWAS 缓存目录 |
-| `RUST_LOG` | 覆盖默认 tracing 过滤器（默认为 `autonomics_tui=debug,agentik_core=debug,agentik_sdk=debug`） |
+| `RUST_LOG` | 覆盖默认 tracing 过滤器（默认为 `tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,nodes_ldsc=debug,ldsc=debug`） |
 
 ## 磁盘产物
 
@@ -311,7 +311,7 @@ stdout。
 |------|------|
 | `phloem.db` | TUI 配置数据库（`providers`、`models`、`settings` 表） |
 | `bib.db` | 文献库（文章、集合、全文记录） |
-| `logs/phloem-tui.log.<日期>` | 按日轮转的 tracing 日志 |
+| `logs/autonomics-tui.log.<日期>` | 按日轮转的 tracing 日志 |
 
 ## 架构说明
 

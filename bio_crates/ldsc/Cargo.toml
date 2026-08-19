@@ -10,6 +10,7 @@ arrow-array.workspace = true
 arrow-schema.workspace = true
 faer.workspace = true
 datafusion.workspace = true
+tracing.workspace = true
 thiserror.workspace = true
 # Compression for LDSC file formats (.gz read+write, .bz2 read-only).
 # flate2 defaults to the pure-Rust miniz_oxide backend (no system zlib);

@@ -393,9 +393,10 @@ fn read_batch(
 /// Spec for [`LavaLocusNode`]: shared locus construction.
 ///
 /// The PLINK LD reference is **not** a spec parameter. It is resolved from the
-/// deployed 1000G EUR panel roots, with deployment overrides available through
-/// environment variables. Only the loci, phenotype metadata, sample-overlap, and
-/// decomposition tuning are spec-configurable.
+/// VFS-mounted 1000G EUR panel when the runtime has object storage configured,
+/// with direct-host template overrides and legacy roots as fallbacks. Only the
+/// loci, phenotype metadata, sample-overlap, and decomposition tuning are
+/// spec-configurable.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LavaLocusSpec {
     #[serde(default)]
@@ -423,10 +424,8 @@ fn d_min_k() -> usize {
 
 const LOCUS_KIND: &str = "lava_locus";
 
-/// Per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
-/// per chromosome). `{N}` is resolved to each locus's chromosome at execution time.
-/// Deployments can override it with `LAVA_PLINK_REF_PREFIX_TEMPLATE` or the shared
-/// `PLINK_REF_PREFIX_TEMPLATE`.
+/// Node that builds the per-locus LAVA parameters from GWAS summary statistics
+/// and the deployed PLINK LD panel.
 
 #[derive(Clone)]
 pub struct LavaLocusNode {
@@ -641,8 +640,9 @@ impl DagNode for LavaLocusNode {
             lava::stats::cov2cor(&mat)
         });
 
-        // Build the PLINK reference from the hardcoded per-chromosome template,
-        // loading only the chromosomes that appear in `loci`.
+        // Build the PLINK reference from the configured mount, loading only the
+        // chromosomes that appear in `loci`. Keep the staging guard alive until
+        // every locus has read its local BED copy.
         let mut chroms: Vec<i64> = self.spec.loci.iter().map(|l| l.chr).collect();
         chroms.sort_unstable();
         chroms.dedup();
@@ -650,15 +650,16 @@ impl DagNode for LavaLocusNode {
             "locus: loading PLINK LD reference for chromosomes {:?}",
             chroms,
         ));
-        let ref_prefix = crate::plink_reference::lava_prefix_template(&chroms);
-        let reference = match lava::plink::load_reference_template(&ref_prefix, &chroms) {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = e.to_string();
-                reporter.error(format!("locus: abort — LD reference load failed: {msg}"));
-                return Err(LavaNodeError::Lava(msg).into());
-            }
-        };
+        let loaded_reference =
+            match crate::plink_reference::load_lava_reference(node_ctx, &chroms).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = e.to_string();
+                    reporter.error(format!("locus: abort — LD reference load failed: {msg}"));
+                    return Err(LavaNodeError::Lava(msg).into());
+                }
+            };
+        let reference = loaded_reference.reference;
         reporter.info("locus: LD reference loaded — assembling input object");
         let input_obj = match lava::input::finish_input_with_ref(
             info,
@@ -1597,12 +1598,12 @@ mod tests {
         assert!((b.h2_obs[0] - 0.01).abs() < 1e-12);
     }
 
-    /// Smoke test: the node builds from a minimal spec and the configured
-    /// per-chromosome PLINK reference actually loads for chromosome 1. Ignored by
-    /// default because the local 1000G EUR panel is not available in CI.
-    /// Run with: `cargo test -p data-engine -- --ignored load_reference`
+    /// Smoke test for the direct-host fallback. The normal VFS path is covered in
+    /// [`crate::plink_reference`]. Ignored by default because CI has no deployed
+    /// 1000G EUR panel.
+    /// Run with: `cargo test -p nodes-genetics -- --ignored load_reference`
     #[tokio::test]
-    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
+    #[ignore = "needs a local 1000G EUR PLINK panel"]
     async fn load_reference() {
         let spec = LavaLocusSpec {
             loci: vec![LavaLocus {
@@ -1623,7 +1624,7 @@ mod tests {
         assert_eq!(node.ports().output_ports().len(), 1);
 
         // The reference template must resolve + load chr1.
-        let template = crate::plink_reference::lava_prefix_template(&[1]);
+        let template = crate::plink_reference::default_prefix_template(&[1]);
         let reference = lava::plink::load_reference_template(&template, &[1])
             .expect("1000G EUR chr1 reference loads");
         assert!(reference.sample_size > 0, "non-empty .fam sample size");

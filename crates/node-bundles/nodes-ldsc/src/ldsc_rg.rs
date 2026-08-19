@@ -374,6 +374,8 @@ impl DagNode for LdscRgNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
+        tracing::info!(config = ?self.ldsc_rg, "ldsc_rg execution started");
+
         // Two inputs: trait 1 on port 0, trait 2 on port 1.
         let input1 = inputs
             .iter()
@@ -412,6 +414,11 @@ impl DagNode for LdscRgNode {
         )
         .await
         .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
+        tracing::info!(
+            panel = crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            m_table = crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            "ldsc_rg reference panels registered"
+        );
         let (rg, n_snp) = Self::run_with_ctx(
             &ctx,
             input1.dataframe()?,
@@ -453,6 +460,8 @@ impl LdscRgNode {
         m_table: &str,
         cfg: &LdscRgConfig,
     ) -> Result<(ldsc::regress::RG, usize), DagError> {
+        tracing::info!(config = ?cfg, "ldsc_rg pipeline started");
+
         // 1. Register both upstream sumstats DataFrames as temporary tables.
         ctx.register_table("sumstats1", input1.clone().into_view())
             .map_err(LdscRgNodeError::ReadBatch)?;
@@ -483,6 +492,7 @@ impl LdscRgNode {
             REF = LD_REF_COL,
             WLD = LD_WLD_COL,
         );
+        tracing::debug!(sql = %sql, "ldsc_rg 3-way join");
 
         // 3. Execute the join and collect the aligned rows.
         let joined_df = ctx.sql(&sql).await.map_err(LdscRgNodeError::ReadBatch)?;
@@ -491,7 +501,13 @@ impl LdscRgNode {
             .collect()
             .await
             .map_err(LdscRgNodeError::ReadBatch)?;
-        if batches.is_empty() {
+        let joined_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        tracing::info!(
+            batches = batches.len(),
+            n_snp = joined_rows,
+            "ldsc_rg join collected"
+        );
+        if joined_rows == 0 {
             return Err(LdscRgNodeError::Ldsc(ldsc::LdscError::InvalidInput(
                 "ldsc_rg: joined DataFrame is empty (no SNPs shared by both traits and the LD panel)".into(),
             ))
@@ -506,6 +522,7 @@ impl LdscRgNode {
         let ref_ld = extract_f64(&batches, LD_REF_COL)?;
         let w_ld = extract_f64(&batches, LD_WLD_COL)?;
         let n_snp = z1.len();
+        log_input_diagnostics(&z1, &z2, &n1, &n2, &ref_ld, &w_ld);
         if z2.len() != n_snp
             || n1.len() != n_snp
             || n2.len() != n_snp
@@ -543,6 +560,7 @@ impl LdscRgNode {
         let m = crate::ldsc_common::read_m_5_50(ctx, m_table, 1)
             .await
             .map_err(|e| LdscRgNodeError::ReferenceData(e.to_string()))?;
+        tracing::info!(m_5_50 = m[0], "ldsc_rg M value loaded");
         let two_step = two_step.or(
             if intercept_hsq1.is_none() && intercept_hsq2.is_none() && intercept_gencov.is_none() {
                 Some(30.0)
@@ -550,9 +568,28 @@ impl LdscRgNode {
                 None
             },
         );
+        tracing::info!(
+            effective_two_step = ?two_step,
+            intercept_hsq1 = ?intercept_hsq1,
+            intercept_hsq2 = ?intercept_hsq2,
+            intercept_gencov = ?intercept_gencov,
+            "ldsc_rg regression configuration resolved"
+        );
+        log_initial_weight_diagnostics(
+            &z1,
+            &z2,
+            &n1,
+            &n2,
+            &ref_ld,
+            &w_ld,
+            m[0],
+            *intercept_hsq1,
+            *intercept_hsq2,
+            *intercept_gencov,
+        );
 
         // 7. Run the bivariate regression.
-        let rg = ldsc::regress::RG::new(
+        let rg = match ldsc::regress::RG::new(
             &z1,
             &z2,
             &x,
@@ -565,8 +602,28 @@ impl LdscRgNode {
             *intercept_gencov,
             *n_blocks,
             two_step,
-        )
-        .map_err(LdscRgNodeError::from)?;
+        ) {
+            Ok(rg) => rg,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    n_snp,
+                    n_blocks = *n_blocks,
+                    m_5_50 = m[0],
+                    two_step = ?two_step,
+                    "ldsc_rg regression failed"
+                );
+                return Err(LdscRgNodeError::from(error).into());
+            }
+        };
+        tracing::info!(
+            rg = rg.rg_ratio,
+            rg_se = rg.rg_se,
+            gencov = rg.gencov.reg.tot,
+            h2_1 = rg.hsq1.reg.tot,
+            h2_2 = rg.hsq2.reg.tot,
+            "ldsc_rg regression completed"
+        );
 
         Ok((rg, n_snp))
     }
@@ -575,6 +632,209 @@ impl LdscRgNode {
 // =====================================================================
 // Column extraction
 // =====================================================================
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct ColumnDiagnostics {
+    len: usize,
+    sum: f64,
+    mean: f64,
+    non_finite: usize,
+    non_positive: usize,
+    first_invalid_index: Option<usize>,
+    finite_min: Option<f64>,
+    finite_max: Option<f64>,
+}
+
+fn diagnose_column(values: &[f64], require_positive: bool) -> ColumnDiagnostics {
+    let mut diagnostics = ColumnDiagnostics {
+        len: values.len(),
+        sum: values.iter().sum(),
+        mean: f64::NAN,
+        non_finite: 0,
+        non_positive: 0,
+        first_invalid_index: None,
+        finite_min: None,
+        finite_max: None,
+    };
+    if !values.is_empty() {
+        diagnostics.mean = diagnostics.sum / values.len() as f64;
+    }
+
+    for (index, value) in values.iter().enumerate() {
+        if !value.is_finite() || (require_positive && *value <= 0.0) {
+            if !value.is_finite() {
+                diagnostics.non_finite += 1;
+            }
+            if require_positive && *value <= 0.0 {
+                diagnostics.non_positive += 1;
+            }
+            if diagnostics.first_invalid_index.is_none() {
+                diagnostics.first_invalid_index = Some(index);
+            }
+        }
+        if value.is_finite() {
+            diagnostics.finite_min = Some(
+                diagnostics
+                    .finite_min
+                    .map_or(*value, |current| current.min(*value)),
+            );
+            diagnostics.finite_max = Some(
+                diagnostics
+                    .finite_max
+                    .map_or(*value, |current| current.max(*value)),
+            );
+        }
+    }
+
+    diagnostics
+}
+
+fn log_input_diagnostics(
+    z1: &[f64],
+    z2: &[f64],
+    n1: &[f64],
+    n2: &[f64],
+    ref_ld: &[f64],
+    w_ld: &[f64],
+) {
+    let z1 = diagnose_column(z1, false);
+    let z2 = diagnose_column(z2, false);
+    let n1 = diagnose_column(n1, true);
+    let n2 = diagnose_column(n2, true);
+    let ref_ld = diagnose_column(ref_ld, true);
+    let w_ld = diagnose_column(w_ld, true);
+
+    tracing::info!(
+        z1 = ?z1,
+        z2 = ?z2,
+        n1 = ?n1,
+        n2 = ?n2,
+        ref_ld = ?ref_ld,
+        w_ld = ?w_ld,
+        "ldsc_rg aligned input diagnostics"
+    );
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct WeightDiagnostics {
+    len: usize,
+    sum: f64,
+    finite: usize,
+    positive: usize,
+    non_finite: usize,
+    non_positive: usize,
+    first_invalid_index: Option<usize>,
+    finite_min: Option<f64>,
+    finite_max: Option<f64>,
+}
+
+fn diagnose_weights(weights: &[f64]) -> WeightDiagnostics {
+    let mut diagnostics = WeightDiagnostics {
+        len: weights.len(),
+        sum: weights.iter().sum(),
+        finite: 0,
+        positive: 0,
+        non_finite: 0,
+        non_positive: 0,
+        first_invalid_index: None,
+        finite_min: None,
+        finite_max: None,
+    };
+
+    for (index, weight) in weights.iter().enumerate() {
+        if weight.is_finite() {
+            diagnostics.finite += 1;
+            diagnostics.finite_min = Some(
+                diagnostics
+                    .finite_min
+                    .map_or(*weight, |current| current.min(*weight)),
+            );
+            diagnostics.finite_max = Some(
+                diagnostics
+                    .finite_max
+                    .map_or(*weight, |current| current.max(*weight)),
+            );
+        } else {
+            diagnostics.non_finite += 1;
+        }
+        if *weight > 0.0 {
+            diagnostics.positive += 1;
+        } else {
+            diagnostics.non_positive += 1;
+        }
+        if (!weight.is_finite() || *weight <= 0.0) && diagnostics.first_invalid_index.is_none() {
+            diagnostics.first_invalid_index = Some(index);
+        }
+    }
+
+    diagnostics
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_initial_weight_diagnostics(
+    z1: &[f64],
+    z2: &[f64],
+    n1: &[f64],
+    n2: &[f64],
+    ref_ld: &[f64],
+    w_ld: &[f64],
+    m: f64,
+    intercept_hsq1: Option<f64>,
+    intercept_hsq2: Option<f64>,
+    intercept_gencov: Option<f64>,
+) {
+    let chisq1: Vec<f64> = z1.iter().map(|value| value * value).collect();
+    let chisq2: Vec<f64> = z2.iter().map(|value| value * value).collect();
+    let z1z2: Vec<f64> = z1.iter().zip(z2).map(|(a, b)| a * b).collect();
+    let sqrt_n: Vec<f64> = n1.iter().zip(n2).map(|(a, b)| (a * b).sqrt()).collect();
+
+    let h1_aggregate = ldsc::regress::Hsq::aggregate(&chisq1, ref_ld, n1, m, intercept_hsq1);
+    let h2_aggregate = ldsc::regress::Hsq::aggregate(&chisq2, ref_ld, n2, m, intercept_hsq2);
+    let gencov_aggregate =
+        ldsc::regress::Gencov::aggregate(&z1z2, ref_ld, &sqrt_n, m, intercept_gencov);
+
+    let h1_weights = ldsc::regress::Hsq::weights(
+        ref_ld,
+        w_ld,
+        n1,
+        m,
+        h1_aggregate,
+        intercept_hsq1.unwrap_or(1.0),
+    );
+    let h2_weights = ldsc::regress::Hsq::weights(
+        ref_ld,
+        w_ld,
+        n2,
+        m,
+        h2_aggregate,
+        intercept_hsq2.unwrap_or(1.0),
+    );
+    let gencov_weights = ldsc::regress::Gencov::weights(
+        ref_ld,
+        w_ld,
+        n1,
+        n2,
+        m,
+        h1_aggregate,
+        h2_aggregate,
+        gencov_aggregate,
+        intercept_gencov.unwrap_or(0.0),
+        intercept_hsq1.unwrap_or(1.0),
+        intercept_hsq2.unwrap_or(1.0),
+    );
+
+    tracing::info!(
+        h1_aggregate,
+        h2_aggregate,
+        gencov_aggregate,
+        h1_initial_weights = ?diagnose_weights(&h1_weights),
+        h2_initial_weights = ?diagnose_weights(&h2_weights),
+        gencov_initial_weights = ?diagnose_weights(&gencov_weights),
+        "ldsc_rg initial WLS weight diagnostics"
+    );
+}
 
 /// Extract a named numeric column from a sequence of record batches into a
 /// flat `Vec<f64>`, casting nulls to `NaN`. Mirrors the downcast ladder in
@@ -1118,5 +1378,42 @@ mod tests {
         .expect("intersection join should succeed");
         assert_eq!(n_snp, 80, "only the 80 shared rsids survive");
         assert!(rg.rg_ratio.is_finite());
+    }
+
+    /// Upstream DataFrames can encode missing/overflowed values as IEEE-754
+    /// infinity. Those values must not silently pass through the three-way join
+    /// into a successful regression result.
+    #[tokio::test]
+    async fn e2e_infinite_upstream_z_values_yield_error() {
+        let ctx = ctx_with_ld_panel(N_SNP);
+        let rsids: Vec<String> = (0..N_SNP).map(|i| format!("rs{}", 1_000_000 + i)).collect();
+        let ld: Vec<f64> = (0..N_SNP).map(|i| 1.0 + 0.1 * i as f64).collect();
+
+        let mut z1 = ld.iter().map(|l| l * 0.2).collect::<Vec<_>>();
+        let mut z2 = z1.clone();
+        z1[10] = f64::INFINITY;
+        z2[20] = f64::NEG_INFINITY;
+
+        let df1 = ctx.read_batch(sumstats_batch(&z1, &rsids, 1000.0)).unwrap();
+        let df2 = ctx.read_batch(sumstats_batch(&z2, &rsids, 1000.0)).unwrap();
+
+        let error = match LdscRgNode::run_with_ctx(
+            &ctx,
+            &df1,
+            &df2,
+            "1000g_eur",
+            "1000g_eur_m",
+            &constrained_cfg(),
+        )
+        .await
+        {
+            Ok(_) => panic!("infinite upstream z values must fail the regression"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("wls: weights sum to non-positive"),
+            "unexpected error for infinite z inputs: {message}"
+        );
     }
 }

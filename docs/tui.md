@@ -317,7 +317,7 @@ citations are written to stdout.
 |----------|---------|
 | `OPENGWAS_TOKEN` | Required for `cache refresh-opengwas` and any OpenGWAS agent query |
 | `OPENGWAS_CACHE_DIR` | Override the OpenGWAS cache directory |
-| `RUST_LOG` | Override the default tracing filter (defaults to `autonomics_tui=debug,agentik_core=debug,agentik_sdk=debug`) |
+| `RUST_LOG` | Override the default tracing filter (defaults to `tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,nodes_ldsc=debug,ldsc=debug`) |
 
 ## On-disk artifacts
 
@@ -325,7 +325,7 @@ citations are written to stdout.
 |------|----------|
 | `phloem.db` | TUI configuration database (`providers`, `models`, `settings` tables) |
 | `bib.db` | Bibliography library (articles, collections, full-text records) |
-| `logs/phloem-tui.log.<date>` | Daily-rotated tracing log |
+| `logs/autonomics-tui.log.<date>` | Daily-rotated tracing log |
 
 ## Architecture notes
 

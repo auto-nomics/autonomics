@@ -368,6 +368,8 @@ impl DagNode for LdscHsqNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
+        tracing::info!(config = ?self.ldsc_hsq, "ldsc_hsq execution started");
+
         let input = inputs
             .first()
             .ok_or(LdscNodeError::Ldsc(ldsc::LdscError::InvalidInput(
@@ -394,6 +396,11 @@ impl DagNode for LdscHsqNode {
         )
         .await
         .map_err(|e| LdscNodeError::ReferenceData(e.to_string()))?;
+        tracing::debug!(
+            panel = crate::ldsc_common::VFS_LDSCORE_1000G_EUR,
+            m_table = crate::ldsc_common::VFS_LDSCORE_1000G_EUR_M,
+            "ldsc_hsq reference panels registered"
+        );
 
         let result = Self::run_with_ctx(
             &ctx,
@@ -403,6 +410,15 @@ impl DagNode for LdscHsqNode {
             &self.ldsc_hsq,
         )
         .await?;
+        tracing::info!(
+            h2 = result.h2,
+            h2_se = result.h2_se,
+            intercept = ?result.intercept,
+            mean_chisq = result.mean_chisq,
+            lambda_gc = result.lambda_gc,
+            n_snp = result.n_snp,
+            "ldsc_hsq regression completed"
+        );
 
         // 2. Build a single-row summary RecordBatch and return.
         let batch = build_result_batch(&result)?;
@@ -432,6 +448,8 @@ impl LdscHsqNode {
         m_table: &str,
         cfg: &LdscHsqConfig,
     ) -> Result<ldsc::hsq::HsqResult, DagError> {
+        tracing::info!(config = ?cfg, "ldsc_hsq pipeline started");
+
         // 1. Register the upstream sumstats DataFrame as a temporary table.
         ctx.register_table("sumstats", input.clone().into_view())
             .map_err(LdscNodeError::ReadBatch)?;
