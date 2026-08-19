@@ -11,6 +11,8 @@ pub enum NodeValue {
     DataFrame(DataFrame),
     File(FileRef),
     FileSet(Vec<FileRef>),
+    Data(DataRef),
+    DataSet(Vec<DataRef>),
 }
 
 impl NodeValue {
@@ -19,6 +21,8 @@ impl NodeValue {
             Self::DataFrame(_) => PortType::DataFrame,
             Self::File(_) => PortType::File,
             Self::FileSet(_) => PortType::FileSet,
+            Self::Data(_) => PortType::Data,
+            Self::DataSet(_) => PortType::DataSet,
         }
     }
 
@@ -51,6 +55,26 @@ impl NodeValue {
             ))),
         }
     }
+
+    pub fn as_data(&self) -> Result<&DataRef, DagError> {
+        match self {
+            Self::Data(data) => Ok(data),
+            other => Err(DagError::Schedule(format!(
+                "expected a Data value, got {}",
+                other.data_type()
+            ))),
+        }
+    }
+
+    pub fn as_data_set(&self) -> Result<&[DataRef], DagError> {
+        match self {
+            Self::DataSet(data) => Ok(data),
+            other => Err(DagError::Schedule(format!(
+                "expected a DataSet value, got {}",
+                other.data_type()
+            ))),
+        }
+    }
 }
 
 impl From<DataFrame> for NodeValue {
@@ -71,6 +95,18 @@ impl From<Vec<FileRef>> for NodeValue {
     }
 }
 
+impl From<DataRef> for NodeValue {
+    fn from(data: DataRef) -> Self {
+        Self::Data(data)
+    }
+}
+
+impl From<Vec<DataRef>> for NodeValue {
+    fn from(data: Vec<DataRef>) -> Self {
+        Self::DataSet(data)
+    }
+}
+
 /// A file artifact address passed between nodes.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileRef {
@@ -80,6 +116,62 @@ pub struct FileRef {
     /// Optional normalized format label (for example `csv`, `vcf`, `parquet`).
     pub format: Option<String>,
     pub fingerprint: Option<FileFingerprint>,
+}
+
+/// A logical artifact address passed between nodes.
+///
+/// Unlike [`FileRef`], a `DataRef` never claims that its path is present on
+/// the execution host. Consumers either read it through the runtime VFS or
+/// ask the runtime data plane to stage it first.
+#[derive(Debug, Clone, Serialize)]
+pub struct DataRef {
+    /// Stable artifact identifier assigned by the data registry.
+    pub artifact_id: String,
+    /// Runtime virtual path resolved through the mounted object store.
+    pub vpath: String,
+    pub format: Option<String>,
+    pub fingerprint: Option<FileFingerprint>,
+    pub producer: Option<String>,
+}
+
+impl DataRef {
+    pub fn new(vpath: impl Into<String>, format: Option<String>) -> Self {
+        let vpath = vpath.into();
+        Self {
+            artifact_id: vpath.clone(),
+            vpath,
+            format,
+            fingerprint: None,
+            producer: None,
+        }
+    }
+
+    pub fn from_file_ref(file: FileRef) -> Self {
+        Self {
+            artifact_id: file.path.clone(),
+            vpath: file.path,
+            format: file.format,
+            fingerprint: file.fingerprint,
+            producer: None,
+        }
+    }
+
+    /// Compatibility view for legacy nodes that accept `FileRef`.
+    ///
+    /// The path remains virtual; such nodes must still stage it before using
+    /// native filesystem tools.
+    pub fn to_file_ref(&self) -> FileRef {
+        FileRef {
+            path: self.vpath.clone(),
+            format: self.format.clone(),
+            fingerprint: self.fingerprint.clone(),
+        }
+    }
+
+    pub fn with_producer(mut self, producer: impl Into<String>) -> Self {
+        self.producer = Some(producer.into());
+        self
+    }
 }
 
 impl FileRef {
@@ -148,6 +240,8 @@ pub enum PortType {
     DataFrame,
     File,
     FileSet,
+    Data,
+    DataSet,
     Any,
 }
 
@@ -157,6 +251,8 @@ impl std::fmt::Display for PortType {
             Self::DataFrame => "dataframe",
             Self::File => "file",
             Self::FileSet => "file_set",
+            Self::Data => "data",
+            Self::DataSet => "data_set",
             Self::Any => "any",
         })
     }
@@ -165,5 +261,33 @@ impl std::fmt::Display for PortType {
 impl PortType {
     pub fn accepts(&self, actual: PortType) -> bool {
         *self == PortType::Any || actual == PortType::Any || *self == actual
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_refs_preserve_file_compatibility_metadata() {
+        let file = FileRef {
+            path: "/bundles/panels/panel.txt".into(),
+            format: Some("txt".into()),
+            fingerprint: Some(FileFingerprint {
+                size: 10,
+                mtime_ns: 20,
+                content_hash: None,
+            }),
+        };
+
+        let data = DataRef::from_file_ref(file.clone()).with_producer("source");
+        let compatible = data.to_file_ref();
+
+        assert_eq!(data.artifact_id, "/bundles/panels/panel.txt");
+        assert_eq!(data.producer.as_deref(), Some("source"));
+        assert_eq!(NodeValue::Data(data).data_type(), PortType::Data);
+        assert_eq!(compatible.path, file.path);
+        assert_eq!(compatible.format, file.format);
+        assert_eq!(compatible.fingerprint, file.fingerprint);
     }
 }

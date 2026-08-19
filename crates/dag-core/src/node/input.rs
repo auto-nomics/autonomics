@@ -4,7 +4,7 @@ use datafusion::prelude::DataFrame;
 
 use super::id::PortId;
 use crate::dag::DagError;
-use crate::value::{FileRef, NodeValue};
+use crate::value::{DataRef, FileRef, NodeValue};
 
 /// One upstream output injected into a node at execution time, one per
 /// connected input port.
@@ -30,6 +30,13 @@ impl NodeInput {
         }
     }
 
+    pub fn data(port: PortId, data: DataRef) -> Self {
+        Self {
+            port,
+            data: NodeValue::Data(data),
+        }
+    }
+
     pub fn dataframe(&self) -> Result<&DataFrame, DagError> {
         self.data.as_dataframe()
     }
@@ -40,5 +47,9 @@ impl NodeInput {
 
     pub fn file_value(&self) -> Result<&FileRef, DagError> {
         self.data.as_file()
+    }
+
+    pub fn data_value(&self) -> Result<&DataRef, DagError> {
+        self.data.as_data()
     }
 }

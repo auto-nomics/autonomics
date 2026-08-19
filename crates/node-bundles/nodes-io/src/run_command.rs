@@ -399,6 +399,30 @@ async fn stage_inputs(
                 }
                 NodeValue::FileSet(staged_files)
             }
+            NodeValue::Data(data) => {
+                let file = data.to_file_ref();
+                let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
+                index += 1;
+                NodeValue::File(FileRef {
+                    path: path.to_string_lossy().into_owned(),
+                    format: file.format,
+                    fingerprint: file.fingerprint,
+                })
+            }
+            NodeValue::DataSet(data) => {
+                let mut staged_files = Vec::with_capacity(data.len());
+                for data in data {
+                    let file = data.to_file_ref();
+                    let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
+                    index += 1;
+                    staged_files.push(FileRef {
+                        path: path.to_string_lossy().into_owned(),
+                        format: file.format,
+                        fingerprint: file.fingerprint,
+                    });
+                }
+                NodeValue::FileSet(staged_files)
+            }
             NodeValue::DataFrame(_) => {
                 return Err(RunCommandError::Invalid(
                     "run_command inputs must be File or FileSet values".into(),
@@ -477,6 +501,15 @@ fn input_path(value: &NodeValue) -> Result<String, RunCommandError> {
         )),
         NodeValue::DataFrame(_) => Err(RunCommandError::Invalid(
             "run_command inputs must be File or FileSet values".into(),
+        )),
+        NodeValue::Data(data) => Ok(data.vpath.clone()),
+        NodeValue::DataSet(data) if !data.is_empty() => Ok(data
+            .iter()
+            .map(|data| data.vpath.as_str())
+            .collect::<Vec<_>>()
+            .join(",")),
+        NodeValue::DataSet(_) => Err(RunCommandError::Invalid(
+            "an empty DataSet cannot be bound to a command input".into(),
         )),
     }
 }
@@ -827,8 +860,47 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn logical_data_inputs_stage_from_vfs() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("panel.txt"), b"panel-data").unwrap();
+        let storage = Arc::new(vfs::OpendalFileStorage::new(source.path()));
+        let ctx = NodeCtx {
+            opendal: Some(storage),
+            ..ctx()
+        };
+        let workdir = tempfile::tempdir().unwrap();
+        let input = NodeInput::data(0, dag_core::DataRef::new("/panel.txt", Some("txt".into())));
+
+        let staged = stage_inputs(&ctx, workdir.path(), std::slice::from_ref(&input))
+            .await
+            .unwrap();
+
+        let staged_path = Path::new(&staged[0].file_value().unwrap().path);
+        assert!(staged_path.starts_with(workdir.path().join(".autonomics/inputs")));
+        assert_eq!(std::fs::read(staged_path).unwrap(), b"panel-data");
+    }
+
     fn input_file(path: &std::path::Path) -> NodeInput {
         NodeInput::file(0, FileRef::local(path, Some("txt".into())).unwrap())
+    }
+
+    #[test]
+    fn logical_data_values_have_command_input_paths() {
+        let data = NodeValue::Data(dag_core::DataRef::new(
+            "/bundles/panels/panel.txt",
+            Some("txt".into()),
+        ));
+        assert_eq!(input_path(&data).unwrap(), "/bundles/panels/panel.txt");
+
+        let data_set = NodeValue::DataSet(vec![
+            dag_core::DataRef::new("/bundles/a.txt", None),
+            dag_core::DataRef::new("/bundles/b.txt", None),
+        ]);
+        assert_eq!(
+            input_path(&data_set).unwrap(),
+            "/bundles/a.txt,/bundles/b.txt"
+        );
     }
 
     fn spec(program: &str, args: &[&str], output: &str) -> RunCommandNodeSpec {

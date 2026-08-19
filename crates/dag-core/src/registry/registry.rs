@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::{
@@ -11,6 +12,7 @@ use serde::Serialize;
 use super::error::{Error, Result};
 use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 use crate::dag::DagNode;
+use crate::data_plane::DataPlane;
 use crate::node::NodePorts;
 
 /// Build a fresh, isolated [`SessionContext`].
@@ -140,6 +142,15 @@ impl NodeCtx {
     /// runs or between `clone_box` copies of a node.
     pub fn session(&self) -> SessionContext {
         new_isolated_ctx(self.runtime_env.clone())
+    }
+
+    /// Build a staging data plane rooted at `run_root`.
+    ///
+    /// Returns `None` when no runtime VFS has been registered.
+    pub fn data_plane(&self, run_root: impl Into<PathBuf>) -> Option<DataPlane> {
+        self.opendal
+            .clone()
+            .map(|vfs| DataPlane::new(vfs, run_root))
     }
 }
 

@@ -32,3 +32,6 @@ pub use layout::NodePorts;
 pub use node_trait::DagNode;
 pub use port::Port;
 pub use port_set::Ports;
+
+#[cfg(test)]
+pub(crate) mod test_support;

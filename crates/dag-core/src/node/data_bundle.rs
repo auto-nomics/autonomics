@@ -60,51 +60,21 @@ impl DataBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::node::test_support::mounted_vfs;
 
     #[tokio::test]
     async fn read_file_resolves_through_a_vfs_mount() {
-        let data_dir = tempfile::tempdir().expect("data directory");
-        let source_dir = tempfile::tempdir().expect("source directory");
-        std::fs::write(source_dir.path().join("panel.txt"), b"panel-data").unwrap();
-
-        let manifest = VfsManifest {
-            backend: vec![
-                BackendDefinition {
-                    id: "runtime".into(),
-                    config: BackendConfig::local(data_dir.path().to_string_lossy().to_string()),
-                },
-                BackendDefinition {
-                    id: "external".into(),
-                    config: BackendConfig::local(source_dir.path().to_string_lossy().to_string()),
-                },
-            ],
-            mount: vec![
-                MountDefinition {
-                    path: "/".into(),
-                    backend: "runtime".into(),
-                    source: "/".into(),
-                    read_only: false,
-                },
-                MountDefinition {
-                    path: "/bundles/panels".into(),
-                    backend: "external".into(),
-                    source: "/".into(),
-                    read_only: true,
-                },
-            ],
-        };
-        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
-        let vfs = OpendalFileStorage::with_mounts(data_dir.path(), mounted);
+        let harness = mounted_vfs(&[("panel.txt", b"panel-data")]);
+        let vfs = harness.storage.as_ref();
         let bundle = DataBundle::new(
             "panels",
             "Reference panel bundle",
             "/bundles/panels/panel.txt",
         );
 
-        let bytes = bundle.read_file(&vfs).await.unwrap();
+        let bytes = bundle.read_file(vfs).await.unwrap();
 
         assert_eq!(bytes, b"panel-data");
-        assert!(!data_dir.path().join("panel.txt").exists());
+        assert!(!harness.data_dir.path().join("panel.txt").exists());
     }
 }
