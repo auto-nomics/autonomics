@@ -34,6 +34,7 @@ def main():
     bim_file = args.bim_file.replace("@", str(chrom))
     ld_file = args.ld_file.replace("@", str(chrom))
     rsids = read_bim_rsids(bim_file)
+    rsid_set = set(rsids)
     query = set()
     with open(args.trait1_file) as handle:
         header = handle.readline().rstrip("\r\n").split("\t")
@@ -42,6 +43,14 @@ def main():
             fields = line.rstrip("\r\n").split("\t")
             if fields:
                 query.add(fields[snp_index])
+
+    unknown_snps = query - rsid_set
+    if unknown_snps:
+        print(
+            f"SNPs missing from BIM reference: {', '.join(sorted(unknown_snps))}",
+            file=sys.stderr,
+        )
+        return 1
 
     lib = LibBgmg(lib_name=args.lib)
     lib.init(
@@ -68,8 +77,8 @@ def main():
     lib.cdll.bgmg_retrieve_tag_indices(
         lib._context_id, num_tag, tag_to_snp
     )
-    for snp_index in tag_to_snp:
-        print(f"#matched\t{rsids[snp_index]}")
+    for snp in query:
+        print(f"#matched\t{snp}")
 
     count = lib.cdll.bgmg_num_ld_r_chr(lib._context_id, chrom)
     print("id_a\tid_b\tr", file=sys.stderr)

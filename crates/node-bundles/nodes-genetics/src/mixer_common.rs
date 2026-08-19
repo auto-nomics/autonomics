@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const DEFAULT_RESOURCE_ROOT: &str = "/mnt/data/mixer/resources";
+const DEFAULT_RESOURCE_ROOTS: [&str; 2] = ["/data/mixer/resources", "/mnt/data/mixer/resources"];
 const DEFAULT_REFERENCE_ID: &str = "g1000_eur";
 const BUNDLE_MANIFEST: &str = "bundle.json";
 
@@ -30,12 +30,28 @@ struct MixerPanelBundle {
     engine_sha256: String,
 }
 
-pub(crate) fn resource_root() -> PathBuf {
-    std::env::var("MIXER_RESOURCE_ROOT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_RESOURCE_ROOT))
+fn resource_roots_from_override(value: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        roots.extend(
+            value
+                .split(':')
+                .filter(|candidate| !candidate.trim().is_empty())
+                .map(|candidate| PathBuf::from(candidate.trim())),
+        );
+    }
+
+    for default_root in DEFAULT_RESOURCE_ROOTS {
+        let default_root = PathBuf::from(default_root);
+        if !roots.contains(&default_root) {
+            roots.push(default_root);
+        }
+    }
+    roots
+}
+
+fn resource_roots() -> Vec<PathBuf> {
+    resource_roots_from_override(std::env::var("MIXER_RESOURCE_ROOT").ok().as_deref())
 }
 
 pub(crate) fn default_reference() -> String {
@@ -48,7 +64,7 @@ fn valid_id(id: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
-fn bundle_path(reference: &str, relative: &str) -> Result<PathBuf, String> {
+fn bundle_path(root: &Path, reference: &str, relative: &str) -> Result<PathBuf, String> {
     if relative.is_empty()
         || relative.starts_with('/')
         || relative.contains('\\')
@@ -60,27 +76,27 @@ fn bundle_path(reference: &str, relative: &str) -> Result<PathBuf, String> {
             "bundle path '{relative}' must be relative and cannot escape the bundle"
         ));
     }
-    Ok(resource_root().join(reference).join(relative))
+    Ok(root.join(reference).join(relative))
 }
 
-fn validate_template(reference: &str, value: &str) -> Result<(), String> {
+fn validate_template(root: &Path, reference: &str, value: &str) -> Result<(), String> {
     if value.matches('@').count() != 1 {
         return Err(format!(
             "template '{value}' must contain exactly one chromosome placeholder (@)"
         ));
     }
-    bundle_path(reference, value)?;
+    bundle_path(root, reference, value)?;
     Ok(())
 }
 
-pub(crate) fn resolve_reference(reference: &str) -> Result<MixerReferenceBundle, String> {
+fn resolve_reference_at(root: PathBuf, reference: &str) -> Result<MixerReferenceBundle, String> {
     if !valid_id(reference) {
         return Err(format!(
             "invalid reference ID '{reference}': IDs may contain only ASCII letters, digits, '_', '-', and '.'"
         ));
     }
 
-    let manifest_path = resource_root().join(reference).join(BUNDLE_MANIFEST);
+    let manifest_path = root.join(reference).join(BUNDLE_MANIFEST);
     let manifest_bytes = std::fs::read(&manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
     let bundle: MixerPanelBundle = serde_json::from_slice(&manifest_bytes)
@@ -107,11 +123,11 @@ pub(crate) fn resolve_reference(reference: &str) -> Result<MixerReferenceBundle,
             return Err(format!("{name} cannot be empty"));
         }
     }
-    validate_template(reference, &bundle.bim_template)?;
-    validate_template(reference, &bundle.ld_template)?;
-    validate_template(reference, &bundle.extract_template)?;
+    validate_template(&root, reference, &bundle.bim_template)?;
+    validate_template(&root, reference, &bundle.ld_template)?;
+    validate_template(&root, reference, &bundle.extract_template)?;
 
-    let mixer_home = bundle_path(reference, &bundle.engine_path)?;
+    let mixer_home = bundle_path(&root, reference, &bundle.engine_path)?;
     let mixer_py = mixer_home.join("precimed").join("mixer.py");
     let library = mixer_home.join("libbgmg.so");
     if !mixer_py.is_file() {
@@ -140,16 +156,43 @@ pub(crate) fn resolve_reference(reference: &str) -> Result<MixerReferenceBundle,
 
     Ok(MixerReferenceBundle {
         mixer_home,
-        bim_template: bundle_path(reference, &bundle.bim_template)?
+        bim_template: bundle_path(&root, reference, &bundle.bim_template)?
             .to_string_lossy()
             .into_owned(),
-        ld_template: bundle_path(reference, &bundle.ld_template)?
+        ld_template: bundle_path(&root, reference, &bundle.ld_template)?
             .to_string_lossy()
             .into_owned(),
-        extract_template: bundle_path(reference, &bundle.extract_template)?
+        extract_template: bundle_path(&root, reference, &bundle.extract_template)?
             .to_string_lossy()
             .into_owned(),
     })
+}
+
+pub(crate) fn resolve_reference(reference: &str) -> Result<MixerReferenceBundle, String> {
+    if !valid_id(reference) {
+        return Err(format!(
+            "invalid reference ID '{reference}': IDs may contain only ASCII letters, digits, '_', '-', and '.'"
+        ));
+    }
+
+    let roots = resource_roots();
+    let mut failures = Vec::with_capacity(roots.len());
+    for root in &roots {
+        match resolve_reference_at(root.clone(), reference) {
+            Ok(bundle) => return Ok(bundle),
+            Err(error) => failures.push(error),
+        }
+    }
+
+    let candidates = roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "no valid MiXeR reference '{reference}' under resource roots [{candidates}]: {}",
+        failures.join("; ")
+    ))
 }
 
 pub(crate) fn python_executable(mixer_home: &Path) -> String {
@@ -162,4 +205,35 @@ pub(crate) fn python_executable(mixer_home: &Path) -> String {
                 .to_string_lossy()
                 .into_owned()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixer_resource_roots_default_to_canonical_then_legacy_path() {
+        let roots = resource_roots_from_override(None);
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/data/mixer/resources"),
+                PathBuf::from("/mnt/data/mixer/resources"),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixer_resource_root_override_accepts_candidates() {
+        let roots = resource_roots_from_override(Some(" /tmp/mixer :/opt/mixer :: "));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/tmp/mixer"),
+                PathBuf::from("/opt/mixer"),
+                PathBuf::from("/data/mixer/resources"),
+                PathBuf::from("/mnt/data/mixer/resources"),
+            ]
+        );
+    }
 }

@@ -10,6 +10,7 @@ pub mod magma;
 pub mod magma_kegg;
 pub(crate) mod mixer_common;
 pub mod mtag;
+pub(crate) mod plink_reference;
 pub mod susie_rss;
 pub mod univariate_mixer;
 

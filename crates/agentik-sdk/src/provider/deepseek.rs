@@ -40,11 +40,12 @@ impl DeepseekProvider {
         vec![
             // ── Current generation ───────────────────────────────────────
             // V4 Pro — flagship reasoning model.
+            // Peak, cache-miss pricing (USD/1M): $1.32 input / $3.96 output.
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_PRO)
-                .context(128_000, 32_000)
+                .context(1_000_000, 384_000)
                 .capabilities(false, true, true, true)
                 .thinking_enabled(None)
-                .pricing(0.5, 2.0)
+                .pricing(1.32, 3.96)
                 .build(),
             // V4 Flash — fast, low-cost, still supports thinking.
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_FLASH)

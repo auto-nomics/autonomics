@@ -392,10 +392,10 @@ fn read_batch(
 
 /// Spec for [`LavaLocusNode`]: shared locus construction.
 ///
-/// The PLINK LD reference is **not** a spec parameter: it is hardcoded as
-/// [`REF_PREFIX_TEMPLATE`] (the EUR per-chromosome panel) for now. Only the
-/// loci, phenotype metadata, sample-overlap, and decomposition tuning are spec-
-/// configurable.
+/// The PLINK LD reference is **not** a spec parameter. It is resolved from the
+/// deployed 1000G EUR panel roots, with deployment overrides available through
+/// environment variables. Only the loci, phenotype metadata, sample-overlap, and
+/// decomposition tuning are spec-configurable.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LavaLocusSpec {
     #[serde(default)]
@@ -423,10 +423,10 @@ fn d_min_k() -> usize {
 
 const LOCUS_KIND: &str = "lava_locus";
 
-/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
+/// Per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
 /// per chromosome). `{N}` is resolved to each locus's chromosome at execution time.
-/// Temporary: until the reference is parameterized again via the spec / a registry.
-const REF_PREFIX_TEMPLATE: &str = "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
+/// Deployments can override it with `LAVA_PLINK_REF_PREFIX_TEMPLATE` or the shared
+/// `PLINK_REF_PREFIX_TEMPLATE`.
 
 #[derive(Clone)]
 pub struct LavaLocusNode {
@@ -650,7 +650,7 @@ impl DagNode for LavaLocusNode {
             "locus: loading PLINK LD reference for chromosomes {:?}",
             chroms,
         ));
-        let ref_prefix = REF_PREFIX_TEMPLATE.to_string();
+        let ref_prefix = crate::plink_reference::lava_prefix_template(&chroms);
         let reference = match lava::plink::load_reference_template(&ref_prefix, &chroms) {
             Ok(r) => r,
             Err(e) => {
@@ -1597,10 +1597,9 @@ mod tests {
         assert!((b.h2_obs[0] - 0.01).abs() < 1e-12);
     }
 
-    /// Smoke test: the node builds from a minimal spec, and the hardcoded
-    /// per-chromosome PLINK reference ([`REF_PREFIX_TEMPLATE`]) actually loads
-    /// for chromosome 1. Ignored by default — it needs the local 1000G EUR panel
-    /// at `/mnt/disk2/dataset/1000g_plink`, which is not available in CI.
+    /// Smoke test: the node builds from a minimal spec and the configured
+    /// per-chromosome PLINK reference actually loads for chromosome 1. Ignored by
+    /// default because the local 1000G EUR panel is not available in CI.
     /// Run with: `cargo test -p data-engine -- --ignored load_reference`
     #[tokio::test]
     #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
@@ -1623,8 +1622,9 @@ mod tests {
         assert_eq!(node.ports().input_ports().len(), 1);
         assert_eq!(node.ports().output_ports().len(), 1);
 
-        // The hardcoded reference template must resolve + load chr1.
-        let reference = lava::plink::load_reference_template(REF_PREFIX_TEMPLATE, &[1])
+        // The reference template must resolve + load chr1.
+        let template = crate::plink_reference::lava_prefix_template(&[1]);
+        let reference = lava::plink::load_reference_template(&template, &[1])
             .expect("1000G EUR chr1 reference loads");
         assert!(reference.sample_size > 0, "non-empty .fam sample size");
         assert!(
@@ -1633,9 +1633,7 @@ mod tests {
         );
         assert_eq!(
             reference.chr_prefix.get(&1).map(|p| p.to_path_buf()),
-            Some(std::path::PathBuf::from(
-                "/mnt/disk2/dataset/1000g_plink/eur/chr1/1000G.EUR.chr1.qc"
-            ))
+            Some(std::path::PathBuf::from(template.replace("{N}", "1")))
         );
     }
 }

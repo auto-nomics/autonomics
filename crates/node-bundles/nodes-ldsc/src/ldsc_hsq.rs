@@ -87,7 +87,7 @@ const INPUT_RSID_COL: &str = "rsid";
 /// key (`rsid`, Utf8). These are exactly the columns the internal SQL join
 /// reads, so typing the input port lets the DAG reject misshaped upstream
 /// edges at `add_edge` time.
-fn input_schema() -> SchemaRef {
+pub fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new(INPUT_Z_COL, DataType::Float64, true),
         Field::new(INPUT_N_COL, DataType::Float64, true),

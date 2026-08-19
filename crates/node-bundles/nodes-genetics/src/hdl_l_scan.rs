@@ -37,9 +37,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use crate::hdl_l::{
-    MAX_REGION_WIDTH, REF_PREFIX_TEMPLATE, collect_input_batches, parse_sumstats, result_schema,
-};
+use crate::hdl_l::{MAX_REGION_WIDTH, collect_input_batches, parse_sumstats, result_schema};
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -55,7 +53,7 @@ const HDL_L_SCAN_KIND: &str = "hdl_l_scan";
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HdlLScanSpec {
     /// Chromosome number (1–22). The PLINK reference is resolved via the
-    /// `{N}` template in [`REF_PREFIX_TEMPLATE`].
+    /// `{N}` template in the configured PLINK reference.
     pub chr: i64,
     /// Start of the scan range (bp, 1-based inclusive).
     pub scan_start: i64,
@@ -434,7 +432,7 @@ impl DagNode for HdlLScanNode {
         ));
 
         // ---- Load PLINK reference ONCE ----
-        let ref_template = REF_PREFIX_TEMPLATE.to_string();
+        let ref_template = crate::plink_reference::hdl_l_prefix_template(self.spec.chr);
         let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
         let plink_ref = lava::plink::load_reference(&ld_ref_prefix)
             .map_err(|e| err(format!("loading .bim/.fam: {e}")))?;

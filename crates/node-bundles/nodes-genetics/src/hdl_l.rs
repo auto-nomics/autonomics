@@ -61,20 +61,18 @@ pub(crate) fn result_schema() -> SchemaRef {
     ]))
 }
 
-/// Hardcoded per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
+/// Per-chromosome PLINK reference prefix (EUR 1000G, one `.bed/.bim/.fam`
 /// per chromosome). `{N}` is resolved to [`HdlLSpec::chr`] at execution time.
 ///
-/// This is the **same** panel used by [`super::lava::LavaLocusNode`] — see
-/// `lava::REF_PREFIX_TEMPLATE`. Both nodes share the reference so results are
-/// directly comparable.
-pub(crate) const REF_PREFIX_TEMPLATE: &str =
-    "/mnt/disk2/dataset/1000g_plink/eur/chr{N}/1000G.EUR.chr{N}.qc";
+/// This is the **same** panel used by [`super::lava::LavaLocusNode`]. Both nodes
+/// share `PLINK_REF_PREFIX_TEMPLATE` so results are directly comparable; HDL-L
+/// also accepts `HDL_L_PLINK_REF_PREFIX_TEMPLATE` for a node-specific override.
 
 /// Spec for [`HdlLNode`].
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HdlLSpec {
     /// Chromosome number of the region being analysed (1–22). Used to resolve
-    /// the `{N}` placeholder in [`REF_PREFIX_TEMPLATE`].
+    /// the `{N}` placeholder in the configured PLINK reference.
     pub chr: i64,
     /// Region start (bp, 1-based inclusive).
     ///
@@ -397,7 +395,7 @@ impl DagNode for HdlLNode {
         let b2 = collect_input_batches(in1, HDL_L_KIND).await?;
 
         // ---- Resolve the per-chromosome PLINK reference prefix ----
-        let ref_template = REF_PREFIX_TEMPLATE.to_string();
+        let ref_template = crate::plink_reference::hdl_l_prefix_template(self.spec.chr);
         let ld_ref_prefix = PathBuf::from(ref_template.replace("{N}", &self.spec.chr.to_string()));
 
         // ---- Filter reference SNPs to the region [start, stop] ----
@@ -515,7 +513,7 @@ impl DagNode for HdlLNode {
 
 // =====================================================================
 // Integration test — exercises the full node against the real 1000G EUR
-// chr22 panel. Ignored by default (needs /mnt/disk2/dataset/1000g_plink).
+// chr22 panel. Ignored by default because the panel is not available in CI.
 // Run with:
 //   cargo test -p data-engine -- --ignored hdl_l_e2e_real_panel
 // =====================================================================
@@ -595,12 +593,13 @@ mod tests {
     /// filters to a ~472-SNP region, builds the LD reference, and runs the
     /// full MLE + LRT pipeline.
     #[tokio::test]
-    #[ignore = "needs local 1000G EUR PLINK panel at /mnt/disk2/dataset/1000g_plink"]
+    #[ignore = "needs a local 1000G EUR PLINK panel"]
     async fn hdl_l_e2e_real_panel() {
         let chr = 22i64;
         let start = 17_000_000i64;
         let stop = 17_100_000i64;
-        let prefix = REF_PREFIX_TEMPLATE.replace("{N}", &chr.to_string());
+        let prefix =
+            crate::plink_reference::hdl_l_prefix_template(chr).replace("{N}", &chr.to_string());
 
         // Read region SNPs from the .bim
         let snps = read_region_bim(&prefix, chr, start, stop);

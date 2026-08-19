@@ -80,9 +80,36 @@ add_volume /mnt/data/magma/resources/genes /mnt/data/magma/resources/genes ro
 add_volume \
     /mnt/data/magma/resources/references \
     /mnt/data/magma/resources/references ro
-add_volume \
-    /mnt/data/mixer/resources \
-    /mnt/data/mixer/resources ro
+
+# Prefer the canonical host location, but retain the legacy /mnt/data source for
+# existing installations. Each selected source is mounted at the same path inside
+# the container so bundle-relative paths remain valid.
+AUTONOMICS_MIXER_SOURCE_ROOT="${AUTONOMICS_MIXER_RESOURCE_SOURCE:-}"
+if [[ -z "$AUTONOMICS_MIXER_SOURCE_ROOT" ]]; then
+    if [[ -f /data/mixer/resources/g1000_eur/bundle.json ]]; then
+        AUTONOMICS_MIXER_SOURCE_ROOT=/data/mixer/resources
+    else
+        AUTONOMICS_MIXER_SOURCE_ROOT=/mnt/data/mixer/resources
+    fi
+fi
+add_volume "$AUTONOMICS_MIXER_SOURCE_ROOT" "$AUTONOMICS_MIXER_SOURCE_ROOT" ro
+
+PLINK_REF_SOURCE_ROOT="${AUTONOMICS_PLINK_REF_SOURCE_ROOT:-}"
+if [[ -z "$PLINK_REF_SOURCE_ROOT" ]]; then
+    for candidate in \
+        /data/mixer/resources/g1000_eur/stage \
+        /mnt/data/mixer/resources/g1000_eur/stage \
+        /mnt/disk3/mixer/reference/mixer_data/stage \
+        /mnt/disk2/dataset/1000g_plink/eur; do
+        if [[ -d "$candidate" ]]; then
+            PLINK_REF_SOURCE_ROOT="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -n "$PLINK_REF_SOURCE_ROOT" ]]; then
+    add_volume "$PLINK_REF_SOURCE_ROOT" "$PLINK_REF_SOURCE_ROOT" ro
+fi
 
 if podman container exists "$CONTAINER_NAME"; then
     echo "Removing stale container: $CONTAINER_NAME" >&2
@@ -98,8 +125,9 @@ exec podman run \
     --user "$(id -u):$(id -g)" \
     --userns=keep-id \
     --env HOME=/data/home \
-    --env MIXER_RESOURCE_ROOT=/mnt/data/mixer/resources \
+    --env MIXER_RESOURCE_ROOT="$AUTONOMICS_MIXER_SOURCE_ROOT" \
     --env MIXER_PYTHON=/usr/bin/python3 \
+    --env PLINK_REF_PREFIX_TEMPLATE="${PLINK_REF_PREFIX_TEMPLATE:-}" \
     --env "TERM=${TERM:-xterm-256color}" \
     "${volumes[@]}" \
     "$IMAGE" \

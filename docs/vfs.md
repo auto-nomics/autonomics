@@ -148,7 +148,7 @@ read_only = true
 [[mount]]
 path = "/data/mixer/resources"
 backend = "magma-local"
-source = "/mnt/data/mixer/resources"
+source = "/data/mixer/resources"
 read_only = true
 ```
 
@@ -195,7 +195,8 @@ vfs:///data/magma/genes/parquet/NCBI38.gene_loc.parquet
 ```
 
 MiXeR consumes the same resource layout directly from
-`/mnt/data/mixer/resources`. The deployed bundle is:
+`/data/mixer/resources`. On hosts that still use the legacy mount,
+`/mnt/data/mixer/resources` is tried as a fallback. The deployed bundle is:
 
 ```text
 vfs:///data/mixer/resources/g1000_eur/bundle.json

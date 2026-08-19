@@ -18,7 +18,7 @@ Python/C++ 引擎，以保证数值保真，而不是在 Rust 中重新实现优
 两个节点都使用语义化 `reference` ID，默认为 `g1000_eur`：
 
 ```text
-/mnt/data/mixer/resources/g1000_eur/bundle.json
+/data/mixer/resources/g1000_eur/bundle.json
 ```
 
 bundle 记录 gsa-MiXeR 源码 revision、GRCh37/EUR 元数据、逐染色体 `.bim`、
@@ -26,5 +26,7 @@ LD 和 tag-SNP 模板路径，以及 `libbgmg.so` 的 SHA-256。DAG spec 不暴�
 engine 和 panel 路径。
 
 容器将资源根目录挂载到相同主机路径，并使用带 NumPy、SciPy、pandas、Boost
-和 OpenMP 运行库的管理式 Python。部署可通过 `MIXER_RESOURCE_ROOT` 和
-`MIXER_PYTHON` 覆盖默认值。
+和 OpenMP 运行库的管理式 Python。为兼容既有主机，解析还会尝试
+`/mnt/data/mixer/resources`。`MIXER_RESOURCE_ROOT` 可覆盖部署查找，并支持冒号
+分隔的候选列表；`MIXER_PYTHON` 可覆盖管理式 Python。配置根目录优先，其后仍会
+尝试内置根目录。第一个通过校验和检查的有效 bundle 会被采用。

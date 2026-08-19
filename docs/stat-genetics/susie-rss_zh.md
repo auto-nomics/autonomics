@@ -10,13 +10,13 @@
 bundle：
 
 ```text
-/mnt/data/mixer/resources/g1000_eur/bundle.json
+/data/mixer/resources/g1000_eur/bundle.json
 ```
 
 bundle 记录 GRCh37 EUR panel、匹配的逐染色体 BIM、signed Pearson-r LD 矩阵，
 以及 `libbgmg.so` checksum。执行时节点通过 gsa-MiXeR 引擎查询输入 locus 的
 signed LD pair，并直接把相关矩阵交给 SuSiE，绝不使用 GWAS z-score 符号推断
-LD 方向。
+LD 方向。旧主机挂载 `/mnt/data/mixer/resources` 仍会作为回退路径。
 
 输入 SNP ID 必须与 reference BIM ID 匹配。当前 1000 Genomes panel 使用
 `21:9411410:C:T` 这类 variant ID。自定义 signed-LD bundle 可通过语义化

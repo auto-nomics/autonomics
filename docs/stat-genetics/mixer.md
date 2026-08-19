@@ -21,7 +21,7 @@ Both nodes resolve a semantic `reference` ID; the default is `g1000_eur`. The
 bundle lives at:
 
 ```text
-/mnt/data/mixer/resources/g1000_eur/bundle.json
+/data/mixer/resources/g1000_eur/bundle.json
 ```
 
 It pins the gsa-MiXeR source revision, GRCh37/EUR metadata, paths to the
@@ -30,5 +30,8 @@ per-chromosome `.bim`, LD, and tag-SNP templates, and the SHA-256 checksum of
 
 The container mounts the resource root at the same host path and uses a managed
 Python runtime with the required NumPy, SciPy, pandas, Boost, and OpenMP
-libraries. `MIXER_RESOURCE_ROOT` and `MIXER_PYTHON` can override the defaults
-for a different deployment.
+libraries. For compatibility with existing hosts, resolution also tries
+`/mnt/data/mixer/resources`. `MIXER_RESOURCE_ROOT` overrides deployment lookup
+and may contain a colon-separated candidate list; `MIXER_PYTHON` overrides the
+managed Python executable. Configured roots are tried first, followed by the
+built-in roots. The first candidate with a valid, checksum-matched bundle wins.

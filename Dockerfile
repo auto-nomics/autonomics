@@ -43,7 +43,7 @@ RUN pacman -Sy --noconfirm --needed \
 ENV HOME=/data/home \
     AUTONOMICS_DATA_DIR=/data/files \
     AUTONOMICS_STATE_DIR=/data/state \
-    MIXER_RESOURCE_ROOT=/mnt/data/mixer/resources \
+    MIXER_RESOURCE_ROOT=/data/mixer/resources \
     MIXER_PYTHON=/usr/bin/python3 \
     TZ=Asia/Shanghai
 
