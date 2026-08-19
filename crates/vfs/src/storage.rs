@@ -485,13 +485,21 @@ impl ObjectStore for OpendalFileStorage {
         let op = self.dispatch_op(location);
         let path = self.dispatch_path(location);
         let object_lock = self.object_lock(&path);
+        let mount_handle = self
+            .mounts
+            .as_ref()
+            .and_then(|mounts| mounts.handle_for(location));
         Box::pin(async move {
             let _guard = object_lock.read().await;
             let meta = op
                 .stat(&path)
                 .await
                 .map_err(opendal_to_object_store_error)?;
-            let object_meta = opendal_meta_to_object_meta(&path, &meta);
+            let mut object_meta = opendal_meta_to_object_meta(&path, &meta);
+            if let Some(handle) = mount_handle.as_ref() {
+                object_meta.location =
+                    Self::remap_to_virtual(&Path::parse(&path).unwrap_or_default(), handle);
+            }
             let size = meta.content_length();
 
             let range = match options.range {
@@ -759,7 +767,7 @@ impl ObjectStore for OpendalFileStorage {
             .map(|h| mount_key(h, &effective))
             .unwrap_or_else(|| effective.to_string());
         let scan_path = if base_key.is_empty() || base_key.ends_with('/') {
-            base_key
+            base_key.clone()
         } else {
             format!("{base_key}/")
         };
@@ -783,6 +791,23 @@ impl ObjectStore for OpendalFileStorage {
             .unwrap_or_default();
         let stream_root_mount = root_mount.clone();
         Box::pin(async move {
+            // A root-mounted virtual path can itself be a file. OpenDAL's
+            // directory lister returns an empty stream for `file/`, which
+            // DataFusion otherwise treats as a valid zero-column table.
+            if let Some(handle) = stream_root_mount.as_ref()
+                && effective != Path::ROOT
+                && let Ok(meta) = op.stat(&base_key).await
+                && meta.is_file()
+            {
+                let mut object = opendal_meta_to_object_meta(&base_key, &meta);
+                object.location =
+                    Self::remap_to_virtual(&Path::parse(&base_key).unwrap_or_default(), handle);
+                return Ok(ListResult {
+                    common_prefixes: Vec::new(),
+                    objects: vec![object],
+                });
+            }
+
             let mut lister = op
                 .lister_with(&scan_path)
                 .recursive(false)

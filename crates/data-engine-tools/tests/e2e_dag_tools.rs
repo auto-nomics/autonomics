@@ -5,7 +5,10 @@ use agentik_sdk::types::tools::{ToolResult, ToolResultContent, ToolUse};
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::spawn_with_engine;
 use serde_json::json;
-use vfs::OpendalFileStorage;
+use vfs::{
+    BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
+    VfsManifest,
+};
 
 fn build_tooluse(id: &str, name: &str, input: serde_json::Value) -> ToolUse {
     ToolUse {
@@ -139,6 +142,162 @@ async fn test_add_source_sql_run_dag() {
         .unwrap();
     assert_eq!(results.len(), 1);
     check_ok(&results[0], "add_edge sql->sink");
+}
+
+#[tokio::test]
+async fn test_get_output_source_file_csv_and_parquet() {
+    let mounted_root = tempfile::tempdir().unwrap();
+    let data_root = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "default".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "default".into(),
+            source: mounted_root.path().to_string_lossy().to_string(),
+            read_only: false,
+        }],
+    };
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        data_root.path(),
+        mounted.clone(),
+    ));
+    file_storage
+        .resolve("/source.csv")
+        .write(
+            &file_storage.resolve_path("/source.csv"),
+            "id,name\n1,alice\n2,bob\n",
+        )
+        .await
+        .unwrap();
+
+    let parquet_dir = tempfile::tempdir().unwrap();
+    let parquet_path = parquet_dir.path().join("source.parquet");
+    {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::dataframe::DataFrameWriteOptions;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc as StdArc;
+
+        let schema = StdArc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                StdArc::new(Int32Array::from(vec![1, 2])),
+                StdArc::new(StringArray::from(vec!["alice", "bob"])),
+            ],
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        ctx.read_batch(batch)
+            .unwrap()
+            .write_parquet(
+                &parquet_path.to_string_lossy(),
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                None::<datafusion::config::TableParquetOptions>,
+            )
+            .await
+            .unwrap();
+    }
+    file_storage
+        .resolve("/source.parquet")
+        .write(
+            &file_storage.resolve_path("/source.parquet"),
+            std::fs::read(&parquet_path).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())
+        .unwrap()
+        .with_vfs((*mounted).clone())
+        .build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    for format in ["csv", "parquet"] {
+        let results = toolset
+            .execute(
+                &[build_tooluse(
+                    "add",
+                    "add_node",
+                    json!({
+                        "id": "source",
+                        "kind": "source_file",
+                        "spec": {"path": format!("/source.{format}")}
+                    }),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        check_ok(&results[0], format!("add {format} source").as_str());
+
+        let results = toolset
+            .execute(&[build_tooluse("run", "run_dag", json!({}))], None)
+            .await
+            .unwrap();
+        check_ok(&results[0], format!("run {format} source").as_str());
+
+        let results = toolset
+            .execute(
+                &[build_tooluse(
+                    "get",
+                    "get_output",
+                    json!({"id": "source", "limit": 10}),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        check_ok(&results[0], format!("get {format} source").as_str());
+        let parsed = result_json(&results[0]);
+        let output = &parsed["outputs"][0];
+        assert_eq!(
+            output["columns"].as_u64().unwrap_or(0),
+            2,
+            "{format} source output: {parsed}"
+        );
+        assert_eq!(
+            output["total_rows"].as_u64().unwrap_or(0),
+            2,
+            "{format} source output: {parsed}"
+        );
+        assert_eq!(
+            output["returned_rows"].as_u64().unwrap_or(0),
+            2,
+            "{format} source output: {parsed}"
+        );
+        assert_eq!(
+            output["data"]["rows"].as_array().map(Vec::len).unwrap_or(0),
+            2,
+            "{format} source output: {parsed}"
+        );
+
+        let results = toolset
+            .execute(
+                &[build_tooluse(
+                    "remove",
+                    "remove_node",
+                    json!({"id": "source"}),
+                )],
+                None,
+            )
+            .await
+            .unwrap();
+        check_ok(&results[0], format!("remove {format} source").as_str());
+    }
 }
 
 #[tokio::test]
@@ -334,7 +493,18 @@ async fn test_run_command_script_reports_dynamic_ports_and_files() {
         .unwrap();
     assert_eq!(command["output_type"], "file", "run report: {report}");
     assert_eq!(command["output_files"].as_array().unwrap().len(), 2);
-    assert!(command["output_files"][0]["path"].as_str().unwrap() == "/result.csv");
+    let mut paths: Vec<_> = command["output_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap().to_string())
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec!["/copy.tsv", "/result.csv"],
+        "run report: {report}"
+    );
     let uploaded = file_storage.op.read("/result.csv").await.unwrap();
     assert_eq!(uploaded.to_vec(), b"id,value\n1,10\n2,20\n");
 }
