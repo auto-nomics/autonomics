@@ -7017,6 +7017,7 @@ dependencies = [
  "hdl",
  "lava",
  "ldsc",
+ "libloading",
  "magma",
  "mixer",
  "mtag",

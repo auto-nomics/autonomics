@@ -19,6 +19,7 @@ mixer = { path = "../../../bio_crates/mixer" }
 ldsc = { path = "../../../bio_crates/ldsc" }
 genomic_sem = { path = "../../../bio_crates/genomic_sem" }
 nodes-ldsc = { path = "../nodes-ldsc" }
+libloading = "0.8"
 statrs = "0.18"
 arrow-array.workspace = true
 arrow-schema.workspace = true
