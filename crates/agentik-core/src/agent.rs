@@ -751,6 +751,10 @@ async fn persist_worker(
                     .replace_session_state(agent_id, session_id, &state)
                     .await
             }
+            PersistOp::ArchiveTranscript {
+                session_id,
+                messages,
+            } => storage.archive_transcript(session_id, &messages).await,
         };
         if let Err(e) = result {
             tracing::warn!("persist op failed (non-fatal): {e}");

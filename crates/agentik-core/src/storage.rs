@@ -154,6 +154,12 @@ pub enum PersistOp {
         session_id: Uuid,
         state: SessionState,
     },
+    /// Preserve the full user-facing transcript before compaction replaces the
+    /// active model context.
+    ArchiveTranscript {
+        session_id: Uuid,
+        messages: Vec<Message>,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -547,6 +553,19 @@ pub trait AgentStorage: Send + Sync {
         session_id: Uuid,
         state: &SessionState,
     ) -> Result<(), StorageError>;
+    /// Append messages to a session's immutable user-facing transcript.
+    ///
+    /// Message IDs already archived for that session are ignored, making this
+    /// idempotent across snapshots and repeated compactions.
+    async fn archive_transcript(
+        &self,
+        session_id: Uuid,
+        messages: &[Message],
+    ) -> Result<(), StorageError>;
+    /// Read the complete user-facing transcript, including messages removed
+    /// from the active model context by compaction.
+    async fn get_transcript_messages(&self, session_id: Uuid)
+    -> Result<Vec<Message>, StorageError>;
     async fn get_messages_since(
         &self,
         agent_id: Uuid,

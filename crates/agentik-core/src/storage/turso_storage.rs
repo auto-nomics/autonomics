@@ -50,6 +50,17 @@
 //! );
 //! CREATE INDEX idx_messages_session ON messages(session_id, seq);
 //! CREATE INDEX idx_messages_agent_ts ON messages(session_id, ts);
+//!
+//! CREATE TABLE transcript_messages (
+//!     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+//!     session_id   TEXT NOT NULL,
+//!     message_id   TEXT NOT NULL,
+//!     message_json TEXT NOT NULL,
+//!     ts           INTEGER NOT NULL,
+//!     UNIQUE(session_id, message_id)
+//! );
+//! CREATE INDEX idx_transcript_messages_session
+//!     ON transcript_messages(session_id, id);
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -266,6 +277,17 @@ impl TursoAgentStorage {
                 CREATE INDEX IF NOT EXISTS idx_messages_agent_ts
                     ON messages(session_id, ts);
 
+                CREATE TABLE IF NOT EXISTS transcript_messages (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL,
+                    message_id   TEXT NOT NULL,
+                    message_json TEXT NOT NULL,
+                    ts           INTEGER NOT NULL,
+                    UNIQUE(session_id, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_transcript_messages_session
+                    ON transcript_messages(session_id, id);
+
                 CREATE TABLE IF NOT EXISTS agent_profiles (
                     id              TEXT PRIMARY KEY,
                     name            TEXT NOT NULL UNIQUE,
@@ -450,6 +472,12 @@ impl TursoAgentStorage {
             )
             .await;
 
+        // Seed the durable transcript with any live WAL rows created before
+        // this schema version. Rows already archived are ignored.
+        if let Err(e) = self.backfill_transcript_from_wal().await {
+            tracing::warn!(error = %e, "transcript WAL backfill failed");
+        }
+
         Ok(())
     }
 }
@@ -592,6 +620,55 @@ fn parse_relation(row: &turso::Row) -> Result<AgentRelation, StorageError> {
             StorageError::Other(format!("unknown relation kind: {kind_str}").into())
         })?,
     })
+}
+
+impl TursoAgentStorage {
+    async fn append_transcript_message(
+        &self,
+        session_id: Uuid,
+        message: &Message,
+        ts: i64,
+    ) -> Result<(), StorageError> {
+        let message_json = serde_json::to_string(message)?;
+        self.conn
+            .execute(
+                "INSERT INTO transcript_messages
+                    (session_id, message_id, message_json, ts)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id, message_id) DO NOTHING",
+                params_from_iter([
+                    Value::Text(session_id.to_string()),
+                    Value::Text(message.id.clone()),
+                    Value::Text(message_json),
+                    Value::Integer(ts),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn backfill_transcript_from_wal(&self) -> Result<(), StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT m.session_id, m.message_json, m.ts
+                 FROM messages AS m
+                 ORDER BY m.ts ASC, m.seq ASC",
+                params_from_iter([] as [Value; 0]),
+            )
+            .await?;
+
+        while let Some(row) = rows.next().await? {
+            let session_id = Uuid::parse_str(&text_col(&row, 0)?).map_err(|e| {
+                StorageError::Other(format!("parse transcript session_id: {e}").into())
+            })?;
+            let message: Message = serde_json::from_str(&text_col(&row, 1)?)?;
+            let ts = int_col(&row, 2)?;
+            self.append_transcript_message(session_id, &message, ts)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 // ── Unified AgentStorage impl ───────────────────────────────────
@@ -808,6 +885,13 @@ impl AgentStorage for TursoAgentStorage {
             .await?;
         self.conn
             .execute(
+                "DELETE FROM transcript_messages WHERE session_id IN
+                    (SELECT id FROM sessions WHERE agent_id = ?1)",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
                 "DELETE FROM sessions WHERE agent_id = ?1",
                 params_from_iter([Value::Text(id_str.clone())]),
             )
@@ -913,6 +997,8 @@ impl AgentStorage for TursoAgentStorage {
                 ]),
             )
             .await?;
+        self.append_transcript_message(session_id, message, now)
+            .await?;
         Ok(())
     }
 
@@ -933,6 +1019,12 @@ impl AgentStorage for TursoAgentStorage {
         self.conn
             .execute(
                 "DELETE FROM messages WHERE session_id = ?1",
+                params_from_iter([Value::Text(sid.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
+                "DELETE FROM transcript_messages WHERE session_id = ?1",
                 params_from_iter([Value::Text(sid.clone())]),
             )
             .await?;
@@ -960,6 +1052,14 @@ impl AgentStorage for TursoAgentStorage {
         state: &crate::storage::SessionState,
     ) -> Result<(), StorageError> {
         let sid = session_id.to_string();
+
+        // Compaction replaces the active model context only. Preserve any WAL
+        // rows that predate transcript archiving, then archive the incoming
+        // state, before replacing the live WAL.
+        let existing_messages = self.get_messages_since_for_session(session_id, 0).await?;
+        self.archive_transcript(session_id, &existing_messages)
+            .await?;
+        self.archive_transcript(session_id, &state.messages).await?;
 
         // 1. Delete all existing messages for this session.
         self.conn
@@ -1528,6 +1628,42 @@ impl AgentStorage for TursoAgentStorage {
                 Ok(None) => break,
                 Err(e) => return Err(e.into()),
             }
+        }
+        Ok(messages)
+    }
+
+    async fn archive_transcript(
+        &self,
+        session_id: Uuid,
+        messages: &[Message],
+    ) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        for message in messages {
+            self.append_transcript_message(session_id, message, now)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn get_transcript_messages(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT message_json
+                 FROM transcript_messages
+                 WHERE session_id = ?1
+                 ORDER BY id ASC",
+                params_from_iter([Value::Text(session_id.to_string())]),
+            )
+            .await?;
+
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let json = text_col(&row, 0)?;
+            messages.push(serde_json::from_str(&json)?);
         }
         Ok(messages)
     }
@@ -2366,6 +2502,67 @@ mod tests {
             state.messages.len() >= 2,
             "expected at least 2 messages after restore"
         );
+    }
+
+    #[tokio::test]
+    async fn test_compaction_preserves_full_transcript() {
+        use crate::storage::restore_session_state;
+
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        store.start_session(agent_id, session_id).await.unwrap();
+
+        let original = vec![
+            Message::user("original-1"),
+            Message::assistant_text("original-2"),
+            Message::user("original-3"),
+        ];
+        for message in &original {
+            store.append_message(session_id, message).await.unwrap();
+        }
+
+        // Model compaction retains only the final message.
+        let compacted_state = SessionState {
+            messages: vec![original[2].clone()],
+            summary: Some("checkpoint".into()),
+            ancestor_summaries: vec!["checkpoint".into()],
+        };
+        store
+            .replace_session_state(agent_id, session_id, &compacted_state)
+            .await
+            .unwrap();
+
+        let transcript = store.get_transcript_messages(session_id).await.unwrap();
+        assert_eq!(
+            transcript
+                .iter()
+                .map(|message| message.id.clone())
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|message| message.id.clone())
+                .collect::<Vec<_>>(),
+            "compaction must preserve every original user-facing message"
+        );
+
+        let restored = restore_session_state(&store, agent_id, session_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            restored.messages,
+            vec![original[2].clone()],
+            "the active model context must remain compacted"
+        );
+
+        let post_compaction = Message::user("after-compaction");
+        store
+            .append_message(session_id, &post_compaction)
+            .await
+            .unwrap();
+        let transcript = store.get_transcript_messages(session_id).await.unwrap();
+        assert_eq!(transcript.len(), 4);
+        assert_eq!(transcript.last().unwrap().id, post_compaction.id);
     }
 
     // ── RelationKind ─────────────────────────────────────────

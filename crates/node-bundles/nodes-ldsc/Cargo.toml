@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "LDSC and LCV DAG node bundle."
 
 [dependencies]
+tokio.workspace = true
 dag-core = { path = "../../dag-core" }
 ldsc = { path = "../../../bio_crates/ldsc" }
 lcv = { path = "../../../bio_crates/lcv" }

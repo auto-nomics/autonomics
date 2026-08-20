@@ -11,9 +11,10 @@
 //! ## Merged Memory Model
 //!
 //! Session directly holds its conversation data (`messages`, `summary`,
-//! `ancestor_summaries`). Compaction operates in-place: the head messages are
-//! summarized into `ancestor_summaries`, and only the recent tail is retained
-//! in `messages`. This eliminates the former `Memory`/`MemoryItem` layer.
+//! `ancestor_summaries`). Compaction operates in-place for model context: the
+//! head messages are summarized into `ancestor_summaries`, and only the recent
+//! tail is retained in `messages`. The pre-compaction transcript is archived
+//! separately so the TUI can retain the user-visible record.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -703,6 +704,15 @@ impl Session {
 
         // Retain the tail (recent messages from the split point onward)
         let tail = self.messages[selection.tail_message_start..].to_vec();
+
+        // Archive the full user-facing transcript before the active model
+        // context is replaced.
+        if let Some(tx) = &self.persist_tx {
+            let _ = tx.send(PersistOp::ArchiveTranscript {
+                session_id: self.id,
+                messages: self.messages.clone(),
+            });
+        }
 
         // New message list = [preserved user messages] + [tail]
         let mut new_messages = preserved_user_msgs;

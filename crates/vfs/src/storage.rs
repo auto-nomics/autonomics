@@ -499,6 +499,12 @@ impl ObjectStore for OpendalFileStorage {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
+        // ObjectStore::get_opts resolves one virtual object to a byte stream.
+        // Callers may supply a byte range; an absent range means the whole
+        // object. Keep the OpenDAL reader lazy and chunked here: materializing
+        // the range into one Buffer would force even schema-inference reads,
+        // which request only a few KB before dropping the stream, to load an
+        // entire multi-GB CSV/TSV file into memory.
         let op = self.dispatch_op(location);
         let path = self.dispatch_path(location);
         let object_lock = self.object_lock(&path);
@@ -530,15 +536,17 @@ impl ObjectStore for OpendalFileStorage {
                 GetRange::Suffix(suffix) => size.saturating_sub(suffix)..size,
             };
 
-            let buffer = op
-                .read_with(&path)
-                .range(byte_range.clone())
+            let reader = op
+                .reader(&path)
                 .await
                 .map_err(opendal_to_object_store_error)?;
-            let stream =
-                futures::stream::once(
-                    async move { Ok::<Bytes, ObjectStoreError>(buffer.to_bytes()) },
-                );
+            let stream = reader
+                .into_stream(byte_range.clone())
+                .await
+                .map_err(opendal_to_object_store_error)?
+                .map_ok(|buffer| buffer.to_bytes())
+                .map_err(opendal_to_object_store_error)
+                .boxed();
 
             Ok(GetResult {
                 payload: GetResultPayload::Stream(Box::pin(stream)),
@@ -1307,6 +1315,32 @@ mod tests {
         let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(got.len(), 6 * 1024 * 1024);
         assert!(got.iter().all(|&b| b == 0xAB));
+    }
+
+    #[tokio::test]
+    async fn get_returns_a_chunked_stream() {
+        use datafusion::object_store::{ObjectStoreExt, PutPayload};
+        use futures::TryStreamExt;
+
+        let storage = OpendalFileStorage::new_temp();
+        let path = datafusion::object_store::path::Path::from("chunked_read.bin");
+        let len = 6 * 1024 * 1024;
+        storage
+            .put(&path, PutPayload::from_bytes(vec![0xCDu8; len].into()))
+            .await
+            .unwrap();
+
+        let chunks = storage
+            .get(&path)
+            .await
+            .unwrap()
+            .into_stream()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(chunks.len() > 1, "expected chunked object-store reads");
+        assert_eq!(chunks.iter().map(|chunk| chunk.len()).sum::<usize>(), len);
+        assert!(chunks.iter().all(|chunk| chunk.iter().all(|&b| b == 0xCD)));
     }
 
     #[tokio::test]
