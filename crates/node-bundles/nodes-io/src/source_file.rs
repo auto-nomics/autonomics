@@ -145,6 +145,8 @@ impl FileFormat {
 pub enum FileSourceError {
     #[error("cannot infer file format from path: {0}")]
     UnknownFormat(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("read source '{path}' failed")]
     Read {
         path: String,
@@ -158,6 +160,7 @@ impl FileSourceError {
         match self {
             FileSourceError::Read { source, .. } => DagError::DataFusion(source),
             FileSourceError::UnknownFormat(msg) => DagError::Schedule(msg),
+            FileSourceError::InvalidInput(msg) => DagError::Schedule(msg),
         }
     }
 }
@@ -173,15 +176,25 @@ pub struct FileSourceNode {
     meta: NodePorts,
     path: Option<String>,
     format: Option<FileFormat>,
+    partition_by: Vec<String>,
 }
 
 impl FileSourceNode {
     pub fn new(path: Option<String>, format: Option<FileFormat>) -> Self {
+        Self::new_with_partitions(path, format, Vec::new())
+    }
+
+    pub fn new_with_partitions(
+        path: Option<String>,
+        format: Option<FileFormat>,
+        partition_by: Vec<String>,
+    ) -> Self {
         // A source has no inputs and a single output port.
         Self {
             meta: port_layout(),
             path,
             format,
+            partition_by,
         }
     }
 }
@@ -192,6 +205,9 @@ pub struct FileSourceNodeSpec {
     /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
     pub path: Option<String>,
     pub format: Option<FileFormat>,
+    /// Hive-style partition column names. Values are restored as Utf8.
+    #[serde(default)]
+    pub partition_by: Vec<String>,
 }
 
 pub struct FileSourceNodeFactory {}
@@ -236,7 +252,11 @@ impl NodeFactory for FileSourceNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSourceNode::new(node_spec.path, node_spec.format);
+        let node = FileSourceNode::new_with_partitions(
+            node_spec.path,
+            node_spec.format,
+            node_spec.partition_by,
+        );
         Ok(Box::new(node))
     }
 
@@ -259,6 +279,12 @@ impl NodeFactory for FileSourceNodeFactory {
         if literal_path.is_none() && !connected_input {
             return Err(CodegenError::NotSupported {
                 kind: "source_file".into(),
+                target: CodegenTarget::R,
+            });
+        }
+        if !node_spec.partition_by.is_empty() {
+            return Err(CodegenError::NotSupported {
+                kind: "source_file partitioned Parquet".into(),
                 target: CodegenTarget::R,
             });
         }
@@ -311,9 +337,15 @@ impl NodeFactory for FileSourceNodeFactory {
 }
 
 pub fn normalize_path(path: &str) -> String {
+    let preserve_directory = path.ends_with('/');
     if let Some((scheme, rest)) = path.split_once("://") {
         if scheme.eq_ignore_ascii_case("vfs") || scheme.eq_ignore_ascii_case("file") {
             let normalized = vfs::OpendalFileStorage::normalize_path(rest);
+            let normalized = if preserve_directory && normalized != "/" {
+                format!("{normalized}/")
+            } else {
+                normalized
+            };
             return format!("{scheme}://{normalized}");
         }
         return path.to_string();
@@ -326,7 +358,19 @@ pub fn normalize_path(path: &str) -> String {
     if trimmed.is_empty() {
         "/".to_string()
     } else {
-        format!("/{trimmed}")
+        if preserve_directory {
+            format!("/{trimmed}/")
+        } else {
+            format!("/{trimmed}")
+        }
+    }
+}
+
+fn ensure_directory_path(path: String, partitioned: bool) -> String {
+    if partitioned && !path.ends_with('/') {
+        format!("{path}/")
+    } else {
+        path
     }
 }
 
@@ -391,17 +435,35 @@ impl DagNode for FileSourceNode {
                     "source_file requires an upstream file or a fallback path".into(),
                 )
             })?;
-        let path = source_path(node_ctx, &normalize_path(&path));
-        let fmt = self
+        let path = ensure_directory_path(
+            source_path(node_ctx, &normalize_path(&path)),
+            !self.partition_by.is_empty(),
+        );
+        let inferred_fmt = self
             .format
             .or_else(|| {
                 upstream
                     .and_then(|file| file.format.as_deref())
                     .and_then(FileFormat::from_label)
             })
-            .or_else(|| FileFormat::from_path(&path))
-            .ok_or_else(|| FileSourceError::UnknownFormat(path.clone()))?;
-        let df = read_file(&ctx, &path, fmt).await?;
+            .or_else(|| FileFormat::from_path(&path));
+        let fmt = match inferred_fmt {
+            Some(fmt) => fmt,
+            None if !self.partition_by.is_empty() => FileFormat::Parquet,
+            None => return Err(FileSourceError::UnknownFormat(path.clone()).into()),
+        };
+        if !self.partition_by.is_empty() && fmt != FileFormat::Parquet {
+            return Err(FileSourceError::InvalidInput(
+                "partition_by is only supported for Parquet sources".into(),
+            )
+            .into());
+        }
+        let partition_cols = self
+            .partition_by
+            .iter()
+            .map(|name| (name.clone(), arrow_schema::DataType::Utf8))
+            .collect::<Vec<_>>();
+        let df = read_file(&ctx, &path, fmt, &partition_cols).await?;
 
         let df = if matches!(fmt, FileFormat::Csv | FileFormat::Tsv) {
             promote_identifier_strings(df)?
@@ -424,6 +486,7 @@ async fn read_file(
     ctx: &SessionContext,
     path: &str,
     fmt: FileFormat,
+    partition_cols: &[(String, arrow_schema::DataType)],
 ) -> Result<DataFrame, DagError> {
     use FileFormat::*;
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -449,7 +512,11 @@ async fn read_file(
                 .file_compression_type(compression);
             ctx.read_csv(path, opts).await
         }
-        Parquet => ctx.read_parquet(path, ParquetReadOptions::default()).await,
+        Parquet => {
+            let options =
+                ParquetReadOptions::default().table_partition_cols(partition_cols.to_vec());
+            ctx.read_parquet(path, options).await
+        }
         Vcf => ctx.read_vcf(path, BioReadOptions::default()).await,
         Bcf => ctx.read_bcf(path, BioReadOptions::default()).await,
         Fasta => ctx.read_fasta(path, BioReadOptions::default()).await,
@@ -629,7 +696,7 @@ mod tests {
         writer.close().unwrap();
 
         let ctx = SessionContext::new();
-        let df = read_file(&ctx, path.to_str().unwrap(), FileFormat::Parquet)
+        let df = read_file(&ctx, path.to_str().unwrap(), FileFormat::Parquet, &[])
             .await
             .unwrap();
         let df = promote_floats(df).unwrap();
@@ -652,6 +719,84 @@ mod tests {
 
         let batches = df.collect().await.unwrap();
         assert_eq!(batches[0].column_by_name("Blood_weight").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn source_file_reads_hive_partitioned_parquet_from_vfs() {
+        use datafusion::prelude::{col, lit};
+        use parquet::arrow::ArrowWriter;
+
+        let backend_root = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/dataset".into(),
+                backend: "default".into(),
+                source: backend_root.path().to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            mounted,
+        ));
+        let ctx = SessionContext::new();
+        ctx.runtime_env().register_object_store(
+            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            storage.clone(),
+        );
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            true,
+        )]));
+        for (id, partition) in [(1, "one"), (2, "two")] {
+            let dir = backend_root.path().join(format!("part={partition}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let batch = arrow_array::RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(arrow_array::Int32Array::from(vec![id]))],
+            )
+            .unwrap();
+            let file = std::fs::File::create(dir.join("data.parquet")).unwrap();
+            let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
+        let mut node =
+            FileSourceNode::new_with_partitions(Some("/dataset".into()), None, vec!["part".into()]);
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(
+            df.schema()
+                .field_with_name(None, "part")
+                .unwrap()
+                .data_type(),
+            &arrow_schema::DataType::Utf8
+        );
+        let one = df
+            .clone()
+            .filter(col("part").eq(lit("one")))
+            .unwrap()
+            .count()
+            .await
+            .unwrap();
+        assert_eq!(one, 1);
+        assert_eq!(df.clone().count().await.unwrap(), 2);
     }
 
     #[tokio::test]

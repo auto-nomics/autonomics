@@ -7086,6 +7086,7 @@ dependencies = [
  "dag-core",
  "datafusion",
  "flate2",
+ "futures",
  "libc",
  "mr",
  "openalex",

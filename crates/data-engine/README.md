@@ -62,6 +62,41 @@ assert!(report.ok, "pipeline errors: {:?}", report.errors);
 
 Use `engine.view_dag()` to obtain a Graphviz DOT representation. `engine.get_output(node_id).await` returns the in-memory port outputs of a completed node.
 
+## Partitioned Parquet
+
+`source_file` and `sink_file` support Hive-style Parquet partitioning with the
+same `partition_by` field:
+
+```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+# let mut engine = data_engine::DataEngine::builder().build();
+engine.add_node_from_registry(
+    "read_partitions",
+    "source_file",
+    serde_json::json!({
+        "path": "/data/variants",
+        "format": "parquet",
+        "partition_by": ["chrom"]
+    }),
+)?;
+engine.add_node_from_registry(
+    "write_partitions",
+    "sink_file",
+    serde_json::json!({
+        "path": "/output/variants",
+        "format": "parquet",
+        "partition_by": ["chrom"],
+        "mode": "overwrite"
+    }),
+)?;
+# Ok(())
+# }
+```
+
+Partition values are restored as Utf8 strings. In overwrite mode the sink first
+clears the destination; in append mode it adds files to the existing partition
+set and invalidates DataFusion's directory listing cache.
+
 ## Object storage
 
 `DataEngine::builder()` creates a standalone DataFusion session. Add integrations only when the pipeline needs them:

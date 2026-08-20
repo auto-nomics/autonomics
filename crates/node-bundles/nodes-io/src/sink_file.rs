@@ -9,7 +9,9 @@ use datafusion::{
     common::HashMap,
     common::config::{CsvOptions, TableParquetOptions},
     dataframe::{DataFrame, DataFrameWriteOptions},
+    execution::cache::TableScopedPath,
 };
+use futures::StreamExt;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -18,6 +20,7 @@ use crate::source_file::{normalize_path, source_path};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::sink::SinkMode;
 use dag_core::{
+    codegen::CodegenTarget,
     codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::DagError,
     dag::graph::PortOutputs,
@@ -74,15 +77,26 @@ pub struct FileSinkNode {
     path: String,
     format: WriteFormat,
     mode: SinkMode,
+    partition_by: Vec<String>,
 }
 
 impl FileSinkNode {
     pub fn new(path: String, format: WriteFormat, mode: SinkMode) -> Self {
+        Self::new_with_partitions(path, format, mode, Vec::new())
+    }
+
+    pub fn new_with_partitions(
+        path: String,
+        format: WriteFormat,
+        mode: SinkMode,
+        partition_by: Vec<String>,
+    ) -> Self {
         Self {
             meta: port_layout(),
             path,
             format,
             mode,
+            partition_by,
         }
     }
 
@@ -94,6 +108,104 @@ impl FileSinkNode {
     /// Whether this sink appends to, or overwrites, the destination.
     pub fn mode(&self) -> SinkMode {
         self.mode
+    }
+
+    /// Remove a local directory (or stale file) before a partitioned overwrite.
+    fn clear_local_output(path: &str) -> Result<(), FileSinkError> {
+        let local_path = path.strip_prefix("file://").unwrap_or(path);
+        match std::fs::metadata(local_path) {
+            Ok(metadata) if metadata.is_dir() => {
+                std::fs::remove_dir_all(local_path).map_err(|e| FileSinkError::InvalidInput {
+                    message: format!("cannot clear partitioned output `{path}`: {e}"),
+                })
+            }
+            Ok(metadata) if metadata.is_file() => {
+                std::fs::remove_file(local_path).map_err(|e| FileSinkError::InvalidInput {
+                    message: format!("cannot clear partitioned output `{path}`: {e}"),
+                })
+            }
+            Ok(_) => Err(FileSinkError::InvalidInput {
+                message: format!("partitioned output `{path}` is not a directory or file"),
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(FileSinkError::InvalidInput {
+                message: format!("cannot stat partitioned output `{path}`: {err}"),
+            }),
+        }
+    }
+
+    /// Remove existing objects below a mounted VFS path. Directories can remain;
+    /// deleting every object makes a subsequent overwrite authoritative.
+    async fn clear_vfs_output(
+        node_ctx: &dag_core::registry::NodeCtx,
+        path: &str,
+    ) -> Result<(), FileSinkError> {
+        let Some(virtual_path) = path.strip_prefix("vfs://") else {
+            return Err(FileSinkError::InvalidInput {
+                message: format!("expected a vfs:// partitioned output path, got `{path}`"),
+            });
+        };
+        let Some(storage) = node_ctx.opendal.as_ref() else {
+            return Err(FileSinkError::InvalidInput {
+                message: "partitioned VFS output requires registered object storage".into(),
+            });
+        };
+        let op = storage.resolve(virtual_path);
+        let root = storage.resolve_path(virtual_path);
+        match op.stat(&root).await {
+            Err(err) if err.kind() == vfs::opendal::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(FileSinkError::InvalidInput {
+                    message: format!("cannot stat partitioned output `{path}`: {err}"),
+                });
+            }
+            Ok(_) => {}
+        }
+
+        let mut lister = op.lister_with(&root).recursive(true).await.map_err(|err| {
+            FileSinkError::InvalidInput {
+                message: format!("cannot list partitioned output `{path}`: {err}"),
+            }
+        })?;
+        while let Some(entry) = lister.next().await {
+            let entry = entry.map_err(|err| FileSinkError::InvalidInput {
+                message: format!("cannot list partitioned output `{path}`: {err}"),
+            })?;
+            if entry.metadata().is_file() {
+                op.delete(entry.path())
+                    .await
+                    .map_err(|err| FileSinkError::InvalidInput {
+                        message: format!(
+                            "cannot delete partitioned output object `{}`: {err}",
+                            entry.path()
+                        ),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn invalidate_listing_cache(node_ctx: &dag_core::registry::NodeCtx, path: &str) {
+        let Some(cache) = node_ctx
+            .session()
+            .runtime_env()
+            .cache_manager
+            .get_list_files_cache()
+        else {
+            return;
+        };
+        let virtual_path = path
+            .strip_prefix("vfs://")
+            .unwrap_or(path)
+            .trim_matches('/');
+        let Ok(object_path) = datafusion::object_store::path::Path::parse(virtual_path) else {
+            return;
+        };
+        let key = TableScopedPath {
+            table: None,
+            path: object_path,
+        };
+        let _ = cache.remove(&key);
     }
 
     /// Check a DataFusion path without relying on host-path semantics. A
@@ -172,6 +284,9 @@ pub struct FileSinkNodeSpec {
     pub format: WriteFormat,
     #[serde(default)]
     pub mode: SinkMode,
+    /// Hive-style columns used to partition Parquet output.
+    #[serde(default)]
+    pub partition_by: Vec<String>,
 }
 
 pub struct FileSinkNodeFactory {}
@@ -213,7 +328,12 @@ impl NodeFactory for FileSinkNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileSinkNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSinkNode::new(node_spec.path, node_spec.format, node_spec.mode);
+        let node = FileSinkNode::new_with_partitions(
+            node_spec.path,
+            node_spec.format,
+            node_spec.mode,
+            node_spec.partition_by,
+        );
         Ok(Box::new(node))
     }
 
@@ -234,6 +354,12 @@ impl NodeFactory for FileSinkNodeFactory {
             .first()
             .map(|s| s.as_str())
             .unwrap_or("__missing_input");
+        if !node_spec.partition_by.is_empty() {
+            return Err(CodegenError::NotSupported {
+                kind: "sink_file partitioned Parquet".into(),
+                target: CodegenTarget::R,
+            });
+        }
         let write_call = match node_spec.format {
             WriteFormat::Csv => format!(r#"fwrite({input}, "{path}")"#),
             WriteFormat::Parquet => format!(r#"write_parquet({input}, "{path}")"#),
@@ -264,6 +390,7 @@ impl DagNode for FileSinkNode {
             meta: self.meta.clone(),
             path: self.path.clone(),
             format: self.format,
+            partition_by: self.partition_by.clone(),
             mode: self.mode,
         };
 
@@ -292,8 +419,19 @@ impl DagNode for FileSinkNode {
             message: "FileSinkNode requires exactly one upstream input".to_string(),
         })?;
 
-        let path = source_path(node_ctx, &normalize_path(&self.path));
         let format = self.format;
+        let partitioned = !self.partition_by.is_empty();
+        if partitioned && format != WriteFormat::Parquet {
+            return Err(FileSinkError::InvalidInput {
+                message: "partition_by is only supported for Parquet sinks".to_string(),
+            }
+            .into());
+        }
+        let mut path = source_path(node_ctx, &normalize_path(&self.path));
+        if partitioned {
+            path = path.trim_end_matches('/').to_string();
+            path.push('/');
+        }
         let df = input
             .dataframe_value()
             .map_err(|e| FileSinkError::InvalidInput {
@@ -307,12 +445,36 @@ impl DagNode for FileSinkNode {
         // *replaces* the target on completion. Keep the old object visible
         // while the replacement is written; deleting it first would expose a
         // missing-file window to concurrent readers.
-        let to_write = match self.mode {
-            SinkMode::Overwrite => df,
-            SinkMode::Append => self.append_existing(node_ctx, &path, format, df).await?,
+        let to_write = if partitioned {
+            if self.mode == SinkMode::Overwrite {
+                if path.starts_with("vfs://") {
+                    Self::clear_vfs_output(node_ctx, &path).await?;
+                } else if path.starts_with('/') || path.starts_with("file://") {
+                    Self::clear_local_output(&path)?;
+                } else {
+                    return Err(FileSinkError::InvalidInput {
+                        message: format!(
+                            "partitioned Parquet overwrite supports local or vfs:// paths, got `{path}`"
+                        ),
+                    }
+                    .into());
+                }
+            }
+            df
+        } else {
+            match self.mode {
+                SinkMode::Overwrite => df,
+                SinkMode::Append => self.append_existing(node_ctx, &path, format, df).await?,
+            }
         };
 
-        let options = DataFrameWriteOptions::new().with_single_file_output(true);
+        let options = if partitioned {
+            DataFrameWriteOptions::new()
+                .with_single_file_output(false)
+                .with_partition_by(self.partition_by.clone())
+        } else {
+            DataFrameWriteOptions::new().with_single_file_output(true)
+        };
 
         let res = match format {
             WriteFormat::Csv => to_write.write_csv(&path, options, None::<CsvOptions>).await,
@@ -326,10 +488,17 @@ impl DagNode for FileSinkNode {
             path: path.clone(),
             source: e,
         })?;
+        if partitioned {
+            Self::invalidate_listing_cache(node_ctx, &path);
+        }
 
         let format_label = format.as_label().to_string();
-        let file = FileRef::local(&path, Some(format_label.clone()))
-            .unwrap_or_else(|_| FileRef::new(path.clone(), Some(format_label)));
+        let file = if partitioned {
+            FileRef::new(path.clone(), Some(format_label))
+        } else {
+            FileRef::local(&path, Some(format_label.clone()))
+                .unwrap_or_else(|_| FileRef::new(path.clone(), Some(format_label)))
+        };
         let mut outputs = PortOutputs::new();
         outputs.insert_file(0, file);
         Ok(outputs)
@@ -401,6 +570,24 @@ mod tests {
             .read_batch(batch)
             .expect("ctx should accept second batch");
         (ctx, df)
+    }
+
+    fn partitioned_dataframe(ctx: &SessionContext, rows: &[(i32, &str)]) -> DataFrame {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from_iter(rows.iter().map(|(id, _)| *id))),
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|(_, part)| Some(*part)),
+                )),
+            ],
+        )
+        .unwrap();
+        ctx.read_batch(batch).unwrap()
     }
 
     /// Read the `id` column of a CSV file back as a sorted `Vec<i32>`.
@@ -544,6 +731,133 @@ mod tests {
 
         let ids = read_csv_ids(&ctx, "vfs:///out.csv").await;
         assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+    }
+
+    /// Partitioned Parquet writes and reads round-trip through one VFS mount,
+    /// including overwrite cleanup and append behavior.
+    #[tokio::test]
+    async fn sink_file_round_trips_partitioned_parquet_through_vfs() {
+        use datafusion::prelude::{col, lit};
+
+        let backend_root = tempfile::tempdir().unwrap();
+        let data_root = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest::local_root(backend_root.path().to_string_lossy().to_string());
+        let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
+        let ctx = SessionContext::new();
+        ctx.runtime_env().register_object_store(
+            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            storage.clone(),
+        );
+        let node_ctx =
+            dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage.clone()));
+
+        let first = partitioned_dataframe(&ctx, &[(1, "a")]);
+        let mut sink = FileSinkNode::new_with_partitions(
+            "/out".into(),
+            WriteFormat::Parquet,
+            SinkMode::Overwrite,
+            vec!["part".into()],
+        );
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, first)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let second = partitioned_dataframe(&ctx, &[(2, "b")]);
+        let mut sink = FileSinkNode::new_with_partitions(
+            "/out".into(),
+            WriteFormat::Parquet,
+            SinkMode::Overwrite,
+            vec!["part".into()],
+        );
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, second)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let mut source = crate::source_file::FileSourceNode::new_with_partitions(
+            Some("/out".into()),
+            Some(crate::source_file::FileFormat::Parquet),
+            vec!["part".into()],
+        );
+        let outputs = source
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(df.clone().count().await.unwrap(), 1);
+        assert_eq!(
+            df.clone()
+                .filter(col("part").eq(lit("b")))
+                .unwrap()
+                .count()
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            df.clone()
+                .filter(col("part").eq(lit("a")))
+                .unwrap()
+                .count()
+                .await
+                .unwrap(),
+            0
+        );
+        let third = partitioned_dataframe(&ctx, &[(3, "c")]);
+        let mut sink = FileSinkNode::new_with_partitions(
+            "/out".into(),
+            WriteFormat::Parquet,
+            SinkMode::Append,
+            vec!["part".into()],
+        );
+        sink.execute(
+            &node_ctx,
+            &[NodeInput::new_dataframe(0, third)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        fn parquet_files(path: &std::path::Path) -> Vec<String> {
+            let mut files = Vec::new();
+            let mut stack = vec![path.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir).unwrap() {
+                    let entry = entry.unwrap();
+                    if entry.path().is_dir() {
+                        stack.push(entry.path());
+                    } else if entry.path().extension().is_some_and(|ext| ext == "parquet") {
+                        files.push(entry.path().to_string_lossy().to_string());
+                    }
+                }
+            }
+            files
+        }
+        let files = parquet_files(backend_root.path());
+        assert_eq!(files.len(), 2, "{files:?}");
+
+        let outputs = source
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(df.clone().count().await.unwrap(), 2);
     }
 
     /// DataFusion's Parquet sink buffers output through multipart writes. This
