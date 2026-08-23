@@ -65,6 +65,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -140,6 +141,8 @@ pub struct TursoAgentStorage {
     conn: LockedConn,
 }
 
+const TRANSCRIPT_WAL_BACKFILL_MARKER: &str = "transcript_wal_backfill_v1";
+
 impl TursoAgentStorage {
     /// Open (or create) an on-disk agent database at `path`.
     ///
@@ -177,24 +180,45 @@ impl TursoAgentStorage {
     /// Internal: actually open the database without recovery. Split out so
     /// the recovery wrapper can call it twice.
     async fn try_open_local(path_str: &str) -> Result<Self, StorageError> {
+        let started = Instant::now();
         let db = turso::Builder::new_local(path_str)
             .experimental_multiprocess_wal(true)
             .build()
             .await
             .map_err(|e| StorageError::Other(format!("open agent database: {e}").into()))?;
+        tracing::info!(
+            db = path_str,
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage database build completed"
+        );
 
         let conn = db
             .connect()
             .map_err(|e| StorageError::Other(format!("connect agent database: {e}").into()))?;
+        tracing::info!(
+            db = path_str,
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage connection established"
+        );
 
         conn.pragma_update("busy_timeout", 5000)
             .await
             .map_err(|e| StorageError::Other(format!("set busy_timeout: {e}").into()))?;
+        tracing::info!(
+            db = path_str,
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage busy timeout set"
+        );
 
         let storage = Self {
             conn: LockedConn(Arc::new(Mutex::new(conn))),
         };
         storage.init_schema().await?;
+        tracing::info!(
+            db = path_str,
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage schema initialization completed"
+        );
         tracing::info!(db = path_str, "turso agent storage opened");
         Ok(storage)
     }
@@ -226,6 +250,7 @@ impl TursoAgentStorage {
     }
 
     async fn init_schema(&self) -> Result<(), StorageError> {
+        let started = Instant::now();
         self.conn
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS snapshots (
@@ -421,10 +446,18 @@ impl TursoAgentStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_semantic_scope_status
                     ON memory_semantic_observations(scope_id, status, created_at DESC);
+                CREATE TABLE IF NOT EXISTS agent_storage_metadata (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 ",
             )
             .await
             .map_err(|e| StorageError::Other(format!("schema init failed: {e}").into()))?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage schema batch completed"
+        );
 
         // ── Migrations for existing databases ──
         // Add `title` column to sessions if missing (idempotent).
@@ -474,6 +507,10 @@ impl TursoAgentStorage {
 
         // Seed the durable transcript with any live WAL rows created before
         // this schema version. Rows already archived are ignored.
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "agent storage migrations completed"
+        );
         if let Err(e) = self.backfill_transcript_from_wal().await {
             tracing::warn!(error = %e, "transcript WAL backfill failed");
         }
@@ -648,6 +685,58 @@ impl TursoAgentStorage {
     }
 
     async fn backfill_transcript_from_wal(&self) -> Result<(), StorageError> {
+        let started = Instant::now();
+        let mut marker_rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM agent_storage_metadata WHERE key = ?1",
+                params_from_iter([Value::Text(TRANSCRIPT_WAL_BACKFILL_MARKER.to_string())]),
+            )
+            .await?;
+        if marker_rows.next().await?.is_some() {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "transcript WAL backfill marker found; skipping migration"
+            );
+            return Ok(());
+        }
+
+        let mut count_rows = self
+            .conn
+            .query(
+                "SELECT
+                    (SELECT COUNT(*) FROM messages),
+                    (SELECT COUNT(*) FROM transcript_messages)",
+                params_from_iter([] as [Value; 0]),
+            )
+            .await?;
+        let (message_count, transcript_count) = match count_rows.next().await? {
+            Some(row) => (int_col(&row, 0)?, int_col(&row, 1)?),
+            None => (0, 0),
+        };
+
+        if transcript_count >= message_count {
+            self.conn
+                .execute(
+                    "INSERT OR REPLACE INTO agent_storage_metadata(key, value)
+                     VALUES (?1, 'complete')",
+                    params_from_iter([Value::Text(TRANSCRIPT_WAL_BACKFILL_MARKER.to_string())]),
+                )
+                .await?;
+            tracing::info!(
+                message_count,
+                transcript_count,
+                elapsed_ms = started.elapsed().as_millis(),
+                "transcript WAL backfill already complete; skipping full-table migration"
+            );
+            return Ok(());
+        }
+
+        tracing::info!(
+            message_count,
+            transcript_count,
+            "starting transcript WAL backfill"
+        );
         let mut rows = self
             .conn
             .query(
@@ -667,6 +756,19 @@ impl TursoAgentStorage {
             self.append_transcript_message(session_id, &message, ts)
                 .await?;
         }
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO agent_storage_metadata(key, value)
+                 VALUES (?1, 'complete')",
+                params_from_iter([Value::Text(TRANSCRIPT_WAL_BACKFILL_MARKER.to_string())]),
+            )
+            .await?;
+        tracing::info!(
+            message_count,
+            transcript_count,
+            elapsed_ms = started.elapsed().as_millis(),
+            "transcript WAL backfill completed"
+        );
         Ok(())
     }
 }

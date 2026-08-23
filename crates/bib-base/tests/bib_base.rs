@@ -134,6 +134,46 @@ async fn article_count() {
 }
 
 #[tokio::test]
+async fn upsert_articles_batches_multiple_articles() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    let mut a1 = sample_article();
+    a1.id = "batch-1".into();
+    let mut a2 = sample_article();
+    a2.id = "batch-2".into();
+    a2.title = "Second batch article".into();
+    a2.identifiers.clear();
+    a2.identifiers.push(Identifier::doi("10.1000/batch-2"));
+
+    db.upsert_articles(&[a1, a2]).await.unwrap();
+
+    assert_eq!(db.article_count().await.unwrap(), 2);
+    assert!(db.get_article("batch-1").await.unwrap().is_some());
+    assert!(db.get_article("batch-2").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn upsert_articles_rolls_back_the_whole_batch_on_error() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    let mut good = sample_article();
+    good.id = "good".into();
+
+    let mut invalid = Article::new("invalid", "Duplicate identifier kinds");
+    invalid.identifiers.push(Identifier::doi("10.1000/dup"));
+    invalid.identifiers.push(Identifier::doi("10.1000/dup-2"));
+
+    let result = db.upsert_articles(&[good, invalid]).await;
+    assert!(result.is_err(), "duplicate identifier key must fail");
+
+    assert_eq!(
+        db.article_count().await.unwrap(),
+        0,
+        "the valid article before the failure must also roll back"
+    );
+    assert!(db.get_article("good").await.unwrap().is_none());
+    assert!(db.get_article("invalid").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn delete_article() {
     let db = BibBase::open_in_memory().await.unwrap();
     db.upsert_article(&sample_article()).await.unwrap();

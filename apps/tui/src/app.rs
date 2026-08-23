@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::state::{self, AgentSession, AgentStatus, AppState, ChatLine, InputMode};
 use crate::widgets::agent_workspace::AgentWorkspace;
-use agentik_core::{AgentProfile, TursoAgentStorage};
+use agentik_core::AgentProfile;
 use runtime::{AgentHandle, RuntimeHost};
 
 /// Lines scrolled by a half-page motion (PageDown / PageUp in browse mode).
@@ -137,40 +137,7 @@ impl App {
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let (mut host, profiles) = runtime.block_on(async {
-            tracing::info!("startup: opening agent storage for profile loading");
-            // Open storage directly for profile seeding/loading (the host
-            // also opens it, but we need AgentProfileRegistry trait methods
-            // which aren't on the AgentStorage trait object).
-            let storage = match TursoAgentStorage::open(&config.agent_db).await {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    tracing::error!(
-                        path = %config.agent_db.display(),
-                        error = %e,
-                        "failed to open agent storage for profile loading"
-                    );
-                    None
-                }
-            };
-            tracing::info!("startup: seeding default profiles + loading");
-            let profiles = if let Some(ref s) = storage {
-                use agentik_core::storage::AgentProfileRegistry;
-                let _ = s.seed_defaults_if_empty().await;
-                s.list_profiles().await.unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            tracing::info!("startup: loaded {} profile(s)", profiles.len());
-
-            // Drop the temporary storage connection BEFORE opening the host
-            // to avoid holding two connections to the same SQLite DB
-            // simultaneously (can cause lock contention).
-            tracing::info!("startup: dropping temp storage connection");
-            drop(storage);
-
             tracing::info!("startup: opening RuntimeHost");
-            // Now open the host (it will open the same DB again — Turso WAL
-            // mode supports concurrent connections from the same process).
             let host = match RuntimeHost::open(&config).await {
                 Ok(h) => {
                     tracing::info!("runtime host opened successfully");
@@ -184,6 +151,17 @@ impl App {
                     None
                 }
             };
+
+            tracing::info!("startup: seeding default profiles + loading");
+            let profiles = if let Some(ref h) = host {
+                use agentik_core::AgentProfileRegistry;
+                let storage = h.infra().profile_storage.clone();
+                let _ = storage.seed_defaults_if_empty().await;
+                storage.list_profiles().await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            tracing::info!("startup: loaded {} profile(s)", profiles.len());
             (host, profiles)
         });
 

@@ -1,6 +1,8 @@
 //! Integration tests for collections, collection-article associations,
 //! full-text storage, and FTS search.
 
+use std::{collections::HashSet, sync::Arc};
+
 use bib_base::BibBase;
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
@@ -234,6 +236,105 @@ async fn add_to_collection_is_idempotent() {
     );
     assert_eq!(articles[0].note.as_deref(), Some("updated note"));
     assert_eq!(articles[0].position, 0, "position should not change");
+}
+
+#[tokio::test]
+async fn concurrent_collection_adds_get_unique_positions() {
+    let db = Arc::new(BibBase::open_in_memory().await.unwrap());
+    db.upsert_collection(&Collection::new("c1", "Concurrent adds"))
+        .await
+        .unwrap();
+
+    let articles: Vec<_> = (0..12)
+        .map(|i| sample_article(&format!("a{i}"), &format!("Paper {i}")))
+        .collect();
+    db.upsert_articles(&articles).await.unwrap();
+
+    let mut handles = Vec::new();
+    for article in articles {
+        let db = db.clone();
+        let article_id = article.id.clone();
+        handles.push(tokio::spawn(async move {
+            db.add_to_collection(
+                "c1",
+                &article_id,
+                ArticleRole::Referenced,
+                AddedBy::Agent,
+                None,
+            )
+            .await
+        }));
+    }
+
+    for handle in handles {
+        handle.await.unwrap().unwrap();
+    }
+
+    let rows = db.list_collection_articles("c1", None, None).await.unwrap();
+    assert_eq!(rows.len(), 12);
+    let positions: HashSet<_> = rows.iter().map(|row| row.position).collect();
+    let expected: HashSet<_> = (0..12).collect();
+    assert_eq!(
+        positions, expected,
+        "positions must be allocated exactly once"
+    );
+}
+
+#[tokio::test]
+async fn article_refresh_preserves_related_records() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Original title"))
+        .await
+        .unwrap();
+    db.upsert_collection(&Collection::new("c1", "Project"))
+        .await
+        .unwrap();
+    db.add_to_collection("c1", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    let mut renamed_collection = Collection::new("c1", "Refreshed project");
+    renamed_collection.status = CollectionStatus::Completed;
+    db.upsert_collection(&renamed_collection).await.unwrap();
+    db.add_annotation("a1", AnnotationKind::Note, "Keep this note", None)
+        .await
+        .unwrap();
+    db.upsert_fulltext(&FullText {
+        article_id: "a1".into(),
+        file_path: "/articles/a1.pdf".into(),
+        file_format: FileFormat::Pdf,
+        text_content: Some("Existing extracted text".into()),
+        source: FullTextSource::UserUpload,
+        file_hash: None,
+        file_size: None,
+        uploaded_at: None,
+    })
+    .await
+    .unwrap();
+
+    let mut refreshed = sample_article("a1", "Refreshed title");
+    refreshed.authors.clear();
+    refreshed.identifiers.clear();
+    db.upsert_article(&refreshed).await.unwrap();
+
+    let annotations = db.list_annotations("a1").await.unwrap();
+    assert_eq!(
+        annotations.len(),
+        1,
+        "metadata refresh must keep annotations"
+    );
+
+    let collection = db.get_collection("c1").await.unwrap().unwrap();
+    assert_eq!(collection.name, "Refreshed project");
+    assert_eq!(
+        collection.article_ids,
+        vec!["a1".to_owned()],
+        "metadata refresh must keep collection membership"
+    );
+
+    assert!(
+        db.has_fulltext("a1").await.unwrap(),
+        "metadata refresh must keep the full-text record"
+    );
 }
 
 #[tokio::test]

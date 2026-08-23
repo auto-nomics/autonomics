@@ -4,7 +4,10 @@
 //! All methods are on [`BibBase`] and share the same Turso connection.
 
 use chrono::Utc;
-use turso::Value;
+use turso::{
+    Value,
+    transaction::{Transaction, TransactionBehavior},
+};
 
 use crate::bib_base::BibBase;
 use crate::error::{Error, Result};
@@ -59,14 +62,22 @@ impl CollectionAddOutcome {
 // ---------------------------------------------------------------------------
 
 impl BibBase {
-    /// Insert or replace a collection. Child rows (`collection_articles`)
+    /// Insert or update a collection. Child rows (`collection_articles`)
     /// are **not** touched — use [`Self::add_to_collection`] for that.
     pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
-        let conn = self.conn();
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
         conn.execute(
-            "INSERT OR REPLACE INTO collections \
+            "INSERT INTO collections \
              (id, name, description, tags, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(id) DO UPDATE SET \
+                name = excluded.name, \
+                description = excluded.description, \
+                tags = excluded.tags, \
+                status = excluded.status, \
+                created_at = COALESCE(collections.created_at, excluded.created_at), \
+                updated_at = excluded.updated_at",
             turso::params![
                 collection.id.clone(),
                 collection.name.clone(),
@@ -189,7 +200,8 @@ impl BibBase {
 
     /// Update the status of a collection.
     pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
-        let conn = self.conn();
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
         conn.execute(
             "UPDATE collections SET status = ?1, updated_at = ?2 WHERE id = ?3",
             turso::params![status.as_str(), Utc::now().to_rfc3339(), id],
@@ -200,7 +212,8 @@ impl BibBase {
 
     /// Delete a collection (FK CASCADE removes `collection_articles` rows).
     pub async fn delete_collection(&self, id: &str) -> Result<()> {
-        self.conn()
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
             .execute("DELETE FROM collections WHERE id = ?1", turso::params![id])
             .await?;
         Ok(())
@@ -228,8 +241,82 @@ impl BibBase {
         added_by: AddedBy,
         note: Option<&str>,
     ) -> Result<CollectionAddOutcome> {
-        let conn = self.conn();
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let outcome =
+            Self::add_to_collection_in_tx(&tx, collection_id, article_id, role, added_by, note)
+                .await;
 
+        if outcome.is_err() {
+            let _ = tx.rollback().await;
+            return outcome;
+        }
+
+        tx.commit().await?;
+        Ok(outcome.unwrap())
+    }
+
+    /// Remove an article from a collection.
+    pub async fn remove_from_collection(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+    ) -> Result<()> {
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
+            .execute(
+                "DELETE FROM collection_articles \
+                 WHERE collection_id = ?1 AND article_id = ?2",
+                turso::params![collection_id, article_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Update the role of an article within a collection.
+    pub async fn update_article_role(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+        role: ArticleRole,
+    ) -> Result<()> {
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
+            .execute(
+                "UPDATE collection_articles SET role = ?1 \
+                 WHERE collection_id = ?2 AND article_id = ?3",
+                turso::params![role.as_str(), collection_id, article_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Update the full-text fetch status of an article within a collection.
+    pub async fn update_fetch_status(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+        status: FetchStatus,
+    ) -> Result<()> {
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
+            .execute(
+                "UPDATE collection_articles SET fetch_status = ?1 \
+                 WHERE collection_id = ?2 AND article_id = ?3",
+                turso::params![status.as_str(), collection_id, article_id],
+            )
+            .await?;
+        Ok(())
+    }
+    async fn add_to_collection_in_tx(
+        conn: &turso::Connection,
+        collection_id: &str,
+        article_id: &str,
+        role: ArticleRole,
+        added_by: AddedBy,
+        note: Option<&str>,
+    ) -> Result<CollectionAddOutcome> {
         // Fetch the existing row (if any) so we can report what changed.
         let existing = {
             let mut rows = conn
@@ -312,22 +399,6 @@ impl BibBase {
         }
     }
 
-    /// Remove an article from a collection.
-    pub async fn remove_from_collection(
-        &self,
-        collection_id: &str,
-        article_id: &str,
-    ) -> Result<()> {
-        self.conn()
-            .execute(
-                "DELETE FROM collection_articles \
-                 WHERE collection_id = ?1 AND article_id = ?2",
-                turso::params![collection_id, article_id],
-            )
-            .await?;
-        Ok(())
-    }
-
     /// List the enriched [`CollectionArticle`] associations for a collection,
     /// optionally filtering by role and/or fetch status.
     pub async fn list_collection_articles(
@@ -372,40 +443,6 @@ impl BibBase {
             });
         }
         Ok(out)
-    }
-
-    /// Update the role of an article within a collection.
-    pub async fn update_article_role(
-        &self,
-        collection_id: &str,
-        article_id: &str,
-        role: ArticleRole,
-    ) -> Result<()> {
-        self.conn()
-            .execute(
-                "UPDATE collection_articles SET role = ?1 \
-                 WHERE collection_id = ?2 AND article_id = ?3",
-                turso::params![role.as_str(), collection_id, article_id],
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Update the full-text fetch status of an article within a collection.
-    pub async fn update_fetch_status(
-        &self,
-        collection_id: &str,
-        article_id: &str,
-        status: FetchStatus,
-    ) -> Result<()> {
-        self.conn()
-            .execute(
-                "UPDATE collection_articles SET fetch_status = ?1 \
-                 WHERE collection_id = ?2 AND article_id = ?3",
-                turso::params![status.as_str(), collection_id, article_id],
-            )
-            .await?;
-        Ok(())
     }
 
     /// List all collection-article entries that are waiting for a

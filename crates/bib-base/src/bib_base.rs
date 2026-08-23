@@ -2,10 +2,17 @@
 //!
 //! [`BibBase`] owns a single [`Connection`] which is [`Clone`] (cheap —
 //! internally an `Arc`). All public methods take `&self` and clone the
-//! connection as needed, so the struct is freely shareable behind an
-//! `Arc<BibBase>` without any `&mut self`.
+//! connection as needed. Reads use one connection while writes share a
+//! dedicated connection, a process-local write gate, and transactions for
+//! multi-statement updates.
 
-use turso::{Builder, Connection, Value};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+use turso::{
+    Builder, Connection, Value,
+    transaction::{Transaction, TransactionBehavior},
+};
 
 use crate::error::{Error, Result};
 use bib_types::{Article, ArticleSource, Author, CollectionStatus, IdKind, Identifier, SearchHit};
@@ -108,11 +115,19 @@ CREATE TABLE IF NOT EXISTS fulltexts (
 
 /// Bibliography database handle.
 ///
-/// Wraps a single turso [`Connection`]. Because `Connection` is cheaply
-/// cloneable (internally an `Arc`), every method takes `&self` — you can
-/// share `BibBase` behind `Arc<BibBase>` across tasks without any locking.
+/// Wraps turso connections. Because [`Connection`] is cheaply cloneable
+/// (internally an `Arc`), every method takes `&self` — you can share
+/// `BibBase` behind `Arc<BibBase>`. Writes coordinate through the internal
+/// write gate; reads remain concurrently callable on a separate connection.
 pub struct BibBase {
     conn: Connection,
+    write_conn: Connection,
+    /// Serializes write operations started by this process handle.
+    ///
+    /// SQLite allows concurrent readers in WAL mode, but writers still commit
+    /// one at a time. This gate prevents logical writes from interleaving on
+    /// the shared connection and keeps multi-statement operations atomic.
+    pub(crate) write_gate: Arc<Mutex<()>>,
 }
 
 impl BibBase {
@@ -131,8 +146,10 @@ impl BibBase {
         }
         let db = builder.build().await?;
         let conn = db.connect()?;
+        let write_conn = db.connect()?;
         if path != ":memory:" {
             conn.pragma_update("busy_timeout", 5000).await?;
+            write_conn.pragma_update("busy_timeout", 5000).await?;
         }
         // Enable FK enforcement so the `ON DELETE CASCADE` clauses declared in
         // [`SCHEMA_SQL`] actually fire. Without this pragma, SQLite parses and
@@ -141,8 +158,14 @@ impl BibBase {
         // for [`Self::delete_article`] — callers expect the cascade to clean
         // up authors, identifiers, annotations, `collection_articles`
         // memberships, and `fulltexts` pointer rows.
-        conn.pragma_update("foreign_keys", true).await?;
-        let base = Self { conn };
+        for conn in [&conn, &write_conn] {
+            conn.pragma_update("foreign_keys", true).await?;
+        }
+        let base = Self {
+            conn,
+            write_conn,
+            write_gate: Arc::new(Mutex::new(())),
+        };
         base.migrate().await?;
         Ok(base)
     }
@@ -157,13 +180,20 @@ impl BibBase {
         self.conn.clone()
     }
 
+    /// Clone the dedicated writer connection. All mutations use this
+    /// connection so readers on [`Self::conn`] retain WAL snapshot isolation.
+    pub(crate) fn write_conn(&self) -> Connection {
+        self.write_conn.clone()
+    }
+
     // -----------------------------------------------------------------------
     // Schema
     // -----------------------------------------------------------------------
 
     /// Run all DDL statements (idempotent — safe to call on every open).
     pub async fn migrate(&self) -> Result<()> {
-        self.conn().execute_batch(SCHEMA_SQL).await?;
+        let _write = self.write_gate.lock().await;
+        self.write_conn().execute_batch(SCHEMA_SQL).await?;
         Ok(())
     }
 
@@ -171,17 +201,72 @@ impl BibBase {
     // Articles — CRUD
     // -----------------------------------------------------------------------
 
-    /// Insert or replace a single article and its child rows (authors,
+    /// Insert or update a single article and its child rows (authors,
     /// identifiers).
     pub async fn upsert_article(&self, article: &Article) -> Result<()> {
-        let conn = self.conn();
+        self.upsert_articles(std::slice::from_ref(article)).await
+    }
 
-        // Upsert the article row.
+    /// Insert or update articles and their child rows in one transaction.
+    ///
+    /// The batch is atomic: if any article fails, no article from the batch is
+    /// committed. Article metadata is updated in place; annotations, full-text
+    /// records, and collection memberships are preserved.
+    pub async fn upsert_articles(&self, articles: &[Article]) -> Result<()> {
+        if articles.is_empty() {
+            return Ok(());
+        }
+
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let mut result = Ok(());
+        for article in articles {
+            if let Err(err) = Self::upsert_article_in_tx(&tx, article).await {
+                result = Err(err);
+                break;
+            }
+        }
+
+        if result.is_err() {
+            // Roll back immediately instead of leaving a dangling transaction
+            // for the next connection operation to discover.
+            let _ = tx.rollback().await;
+            return result;
+        }
+
+        tx.commit().await?;
+        result
+    }
+
+    /// Insert or update one article, preserving rows that are not synchronized
+    /// from `Article` metadata.
+    async fn upsert_article_in_tx(conn: &Connection, article: &Article) -> Result<()> {
+        // A real UPSERT is important here. `INSERT OR REPLACE` deletes the old
+        // parent row first, which can cascade to annotations, fulltexts, and
+        // collection memberships that should survive a metadata refresh.
         conn.execute(
-            "INSERT OR REPLACE INTO articles \
+            "INSERT INTO articles \
              (id, title, abstract, year, month, journal, volume, issue, pages, \
               issn, essn, language, pub_types, keywords, source, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+             ON CONFLICT(id) DO UPDATE SET \
+                title = excluded.title, \
+                abstract = excluded.abstract, \
+                year = excluded.year, \
+                month = excluded.month, \
+                journal = excluded.journal, \
+                volume = excluded.volume, \
+                issue = excluded.issue, \
+                pages = excluded.pages, \
+                issn = excluded.issn, \
+                essn = excluded.essn, \
+                language = excluded.language, \
+                pub_types = excluded.pub_types, \
+                keywords = excluded.keywords, \
+                source = excluded.source, \
+                created_at = COALESCE(articles.created_at, excluded.created_at), \
+                updated_at = excluded.updated_at",
             turso::params![
                 article.id.clone(),
                 article.title.clone(),
@@ -204,48 +289,72 @@ impl BibBase {
         )
         .await?;
 
-        // Replace authors.
+        // Replace synchronized child rows with one statement per table.
         conn.execute(
             "DELETE FROM authors WHERE article_id = ?1",
             turso::params![article.id.clone()],
         )
         .await?;
-        for (i, author) in article.authors.iter().enumerate() {
-            conn.execute(
+        for (chunk_index, author_chunk) in article.authors.chunks(500).enumerate() {
+            let values = (0..author_chunk.len())
+                .map(|row| {
+                    let start = row * 8 + 1;
+                    format!(
+                        "(?{start}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                        start + 1,
+                        start + 2,
+                        start + 3,
+                        start + 4,
+                        start + 5,
+                        start + 6,
+                        start + 7
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
                 "INSERT INTO authors \
                  (article_id, position, last_name, fore_name, initials, \
                   affiliation, orcid, corresponding) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                turso::params![
-                    article.id.clone(),
-                    i as i64,
-                    author.last_name.clone(),
-                    author.fore_name.clone(),
-                    author.initials.clone(),
-                    author.affiliation.clone(),
-                    author.orcid.clone(),
-                    author.corresponding as i64,
-                ],
-            )
-            .await?;
+                 VALUES {values}"
+            );
+            let mut params = Vec::with_capacity(author_chunk.len() * 8);
+            for (offset, author) in author_chunk.iter().enumerate() {
+                let position = chunk_index * 500 + offset;
+                params.push(Value::Text(article.id.clone()));
+                params.push(Value::Integer(position as i64));
+                params.push(Value::Text(author.last_name.clone()));
+                params.push(opt_value(author.fore_name.clone()));
+                params.push(opt_value(author.initials.clone()));
+                params.push(opt_value(author.affiliation.clone()));
+                params.push(opt_value(author.orcid.clone()));
+                params.push(Value::Integer(author.corresponding as i64));
+            }
+            conn.execute(sql, turso::params_from_iter(params)).await?;
         }
 
-        // Replace identifiers.
+        // Replace identifiers only after successfully replacing authors.
         conn.execute(
             "DELETE FROM identifiers WHERE article_id = ?1",
             turso::params![article.id.clone()],
         )
         .await?;
-        for id in &article.identifiers {
-            conn.execute(
-                "INSERT INTO identifiers (article_id, kind, value) VALUES (?1, ?2, ?3)",
-                turso::params![
-                    article.id.clone(),
-                    id.kind.as_str().to_owned(),
-                    id.value.clone()
-                ],
-            )
-            .await?;
+        for identifier_chunk in article.identifiers.chunks(500) {
+            let values = (0..identifier_chunk.len())
+                .map(|row| {
+                    let start = row * 3 + 1;
+                    format!("(?{start}, ?{}, ?{})", start + 1, start + 2)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("INSERT INTO identifiers (article_id, kind, value) VALUES {values}");
+            let mut params = Vec::with_capacity(identifier_chunk.len() * 3);
+            for id in identifier_chunk {
+                params.push(Value::Text(article.id.clone()));
+                params.push(Value::Text(id.kind.as_str().to_owned()));
+                params.push(Value::Text(id.value.clone()));
+            }
+            conn.execute(sql, turso::params_from_iter(params)).await?;
         }
 
         Ok(())
@@ -358,8 +467,9 @@ impl BibBase {
     /// `delete_article` handler in `tui-http` for the on-disk cleanup
     /// pattern).
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
+        let _write = self.write_gate.lock().await;
         let n = self
-            .conn()
+            .write_conn()
             .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
             .await?;
         Ok(n)
@@ -523,6 +633,10 @@ fn opt_string(v: Value) -> Option<String> {
         Value::Null => None,
         _ => None,
     }
+}
+
+fn opt_value(value: Option<String>) -> Value {
+    value.map_or(Value::Null, Value::Text)
 }
 
 fn opt_int(v: Value) -> Option<i64> {

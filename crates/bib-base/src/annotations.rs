@@ -21,7 +21,8 @@ impl BibBase {
         let id = format!("ann-{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let now = Utc::now().to_rfc3339();
 
-        self.conn()
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
             .execute(
                 "INSERT INTO annotations (id, article_id, kind, content, page, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -72,7 +73,8 @@ impl BibBase {
 
     /// Delete an annotation by ID.
     pub async fn delete_annotation(&self, id: &str) -> Result<()> {
-        self.conn()
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
             .execute("DELETE FROM annotations WHERE id = ?1", turso::params![id])
             .await?;
         Ok(())
