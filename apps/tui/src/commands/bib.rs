@@ -1,12 +1,18 @@
 //! Bibliography management commands.
 
 use crate::cli::{BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, UploadArgs};
+use bib_base::{stored_fulltext, vfs_virtual_path};
+use vfs::OpendalFileStorage;
 
 pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
+    let config = runtime::RuntimeConfig::builder()
+        .bib_db_path(&bib.db)
+        .build();
+    let file_storage = runtime::bibliography_file_storage(&config)?;
     let db_path = bib.db.to_string_lossy().to_string();
     let db = bib_base::BibBase::open(&db_path).await?;
     match bib.action {
-        BibAction::Upload(args) => run_bib_upload(&db, args).await,
+        BibAction::Upload(args) => run_bib_upload(&db, &file_storage, args).await,
         BibAction::Requests(args) => run_bib_requests(&db, args).await,
         BibAction::Info(args) => run_bib_info(&db, args).await,
         BibAction::List(args) => run_bib_list(&db, args).await,
@@ -14,7 +20,11 @@ pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
     }
 }
 
-async fn run_bib_upload(db: &bib_base::BibBase, args: UploadArgs) -> color_eyre::Result<()> {
+async fn run_bib_upload(
+    db: &bib_base::BibBase,
+    file_storage: &OpendalFileStorage,
+    args: UploadArgs,
+) -> color_eyre::Result<()> {
     // 1. Verify article exists.
     let article = db.get_article(&args.article_id).await?.ok_or_else(|| {
         color_eyre::eyre::eyre!(
@@ -39,23 +49,58 @@ async fn run_bib_upload(db: &bib_base::BibBase, args: UploadArgs) -> color_eyre:
 
     // 4. Extract text.
     use bib_base::TextExtractor;
-    let extractor = bib_base::SimpleExtractor::new();
-    let extracted = extractor.extract(&content, format).await?;
-    let text_len = extracted.text.len();
+    let extractor = bib_base::OcrFallbackExtractor::new();
+    let extracted = match extractor.extract(&content, format).await {
+        Ok(extracted) => Some(extracted),
+        Err(error) => {
+            tracing::warn!(
+                filename = %args.pdf.display(),
+                error = %error,
+                "failed to extract full-text content; storing original bytes only"
+            );
+            None
+        }
+    };
+    let text_len = extracted
+        .as_ref()
+        .map_or(0, |text| text.text.chars().count());
 
-    // 5. Store in BibBase.
-    let abs_path = args.pdf.canonicalize().unwrap_or(args.pdf.clone());
+    // 5. Store the original in the same VFS used by the runtime and HTTP API.
+    let filename = args
+        .pdf
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("upload.txt");
+    let stored = stored_fulltext(&args.article_id, filename, &content);
+    let virtual_path = vfs_virtual_path(&stored.path)
+        .ok_or_else(|| color_eyre::eyre::eyre!("stored full-text path is not a VFS path"))?;
+    file_storage
+        .write_bytes(&virtual_path, content.clone())
+        .await?;
     let ft = bib_base::FullText {
         article_id: args.article_id.clone(),
-        file_path: abs_path.to_string_lossy().to_string(),
+        file_path: stored.path,
         file_format: format,
-        text_content: Some(extracted.text),
+        text_content: extracted.as_ref().map(|text| text.text.clone()),
         source: bib_base::FullTextSource::UserUpload,
-        file_hash: None,
+        file_hash: Some(stored.file_hash),
         file_size: Some(file_size),
         uploaded_at: Some(chrono::Utc::now()),
     };
-    db.upsert_fulltext(&ft).await?;
+    let previous = db.get_fulltext(&args.article_id).await?;
+    if let Err(error) = db.upsert_fulltext(&ft).await {
+        if previous.as_ref().map(|old| old.file_path.clone()) != Some(ft.file_path.clone()) {
+            let _ = file_storage.delete_object(&virtual_path).await;
+        }
+        return Err(error.into());
+    }
+    if let Some(previous) = previous {
+        if previous.file_path != ft.file_path {
+            if let Some(old_path) = vfs_virtual_path(&previous.file_path) {
+                let _ = file_storage.delete_object(&old_path).await;
+            }
+        }
+    }
 
     // 6. Update fetch_status if collection context provided.
     if let Some(ref cid) = args.collection_id {

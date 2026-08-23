@@ -25,7 +25,7 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
     );
 
-    // The TUI's `set_panic_hook` (app.rs) wraps this hook and handles
+    // The TUI's `set_panic_hook` (app::terminal) wraps this hook and handles
     // terminal restoration + readable stderr output. Here we only need
     // to log the full panic + backtrace to the log file. The readable
     // message to stderr is handled by `set_panic_hook`.

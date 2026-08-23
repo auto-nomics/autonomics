@@ -178,6 +178,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sufficient_cost_one_tag_hand_computed() {
+        let z = vec![999.0, 2.0, -999.0];
+        let n = vec![10.0, 20.0, 30.0];
+        let h = vec![0.5, 0.25, 0.125];
+        let triples = vec![(1, 0, 0.8), (1, 2, 0.2)];
+
+        let mut chrom_data = ChromData::new(z, n, h, &triples);
+        chrom_data.tags = vec![1];
+        chrom_data.weights[1] = 3.0;
+        let params = UnivariateParams::new(0.1, 0.01, 1.2);
+
+        // 对于tag SNP1，它有两个LD邻居：SNP0和SNP2
+        // 每个SNP邻居的贡献是：
+        //
+        // a2 = n[tag] * h[neighbor] * r3
+
+        dbg!(params);
+    }
+
+    #[test]
     fn pdf_standard_normal() {
         // 标准正态 (std=1) 在 0 处密度 = 1/√(2π) ≈ 0.3989
         let p = gaussian_pdf(0.0, 1.0);

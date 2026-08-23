@@ -16,7 +16,7 @@ use datafusion::object_store::{
 };
 use datafusion::prelude::SessionContext;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use opendal::Operator;
 use opendal::services::Fs;
 use tempfile::TempDir;
@@ -232,6 +232,97 @@ impl OpendalFileStorage {
             }
         }
         Ok(())
+    }
+
+    /// Atomically replace a virtual path with the supplied bytes.
+    ///
+    /// This is the direct-call form of the ObjectStore write path: bytes are
+    /// first written to a staging key, then installed while holding the same
+    /// per-object lock used by VFS reads and replacements.
+    pub async fn write_bytes(
+        &self,
+        virtual_path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), opendal::Error> {
+        self.check_writable(virtual_path)?;
+        let path = self.resolve_path(virtual_path);
+        let operator = self.resolve(virtual_path);
+        let staging_path = staging_key(&path);
+        let buffer = opendal::Buffer::from(content);
+        operator.write(&staging_path, buffer).await?;
+
+        let lock = self.object_lock(&path);
+        {
+            let _guard = lock.write().await;
+            if let Err(error) = operator.rename(&staging_path, &path).await {
+                let _ = operator.delete(&staging_path).await;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a bounded byte range while holding the object's read lock.
+    pub async fn read_range(
+        &self,
+        virtual_path: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<opendal::Buffer, opendal::Error> {
+        let operator = self.resolve(virtual_path);
+        let key = self.resolve_path(virtual_path);
+        let lock = self.object_lock(&key);
+        let _guard = lock.read().await;
+        operator.read_with(&key).range(range).await
+    }
+
+    /// Stream a byte range while retaining ownership of the object read lock.
+    ///
+    /// The returned stream is `'static`, allowing HTTP responses to remain
+    /// chunked without losing coordination with replacement writers.
+    pub async fn read_stream(
+        &self,
+        virtual_path: &str,
+        range: std::ops::Range<u64>,
+    ) -> Result<impl Stream<Item = Result<Bytes, opendal::Error>> + Send + 'static, opendal::Error>
+    {
+        let operator = self.resolve(virtual_path);
+        let key = self.resolve_path(virtual_path);
+        let lock = self.object_lock(&key);
+        let guard = lock.read_owned().await;
+        let reader = operator.reader(&key).await?;
+        let inner = reader.into_stream(range).await?;
+
+        Ok(futures::stream::unfold(
+            (guard, inner),
+            |(guard, mut inner)| async move {
+                inner.next().await.map(|item| {
+                    let item = item.map(|buffer| buffer.to_bytes());
+                    (item, (guard, inner))
+                })
+            },
+        ))
+    }
+
+    /// Return an object's byte length.
+    pub async fn content_length(&self, virtual_path: &str) -> Result<u64, opendal::Error> {
+        let operator = self.resolve(virtual_path);
+        let key = self.resolve_path(virtual_path);
+        let meta = operator.stat(&key).await?;
+        Ok(meta.content_length())
+    }
+
+    /// Delete an object while holding its replacement lock.
+    pub async fn delete_object(&self, virtual_path: &str) -> Result<(), opendal::Error> {
+        self.check_writable(virtual_path)?;
+        let operator = self.resolve(virtual_path);
+        let key = self.resolve_path(virtual_path);
+        let lock = self.object_lock(&key);
+        let _guard = lock.write().await;
+        match operator.delete(&key).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Snapshot of all mount paths (in longest-prefix-first order).

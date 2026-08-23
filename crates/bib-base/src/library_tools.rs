@@ -15,7 +15,7 @@
 //! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
 //! | `bib_list_collection`  | List collections or articles within one.                |
 //! | `bib_search_library`   | LIKE search across local library (multi-query).         |
-//! | `bib_get_article`      | Batch fetch metadata + full text (concurrent).          |
+//! | `bib_get_article`      | Batch metadata plus bounded full-text pages.             |
 //! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
 //! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
 //! | `bib_export`           | Render citation formats (BibTeX / RIS / Markdown / CSL). |
@@ -1153,6 +1153,14 @@ struct GetArticleResult {
     fulltext_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fulltext: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_total_chars: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_next_offset: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     annotations: Vec<serde_json::Value>,
     n_annotations: usize,
@@ -1184,6 +1192,10 @@ impl GetArticleResult {
             has_fulltext: false,
             fulltext_source: None,
             fulltext: None,
+            fulltext_offset: None,
+            fulltext_limit: None,
+            fulltext_total_chars: None,
+            fulltext_next_offset: None,
             annotations: Vec::new(),
             n_annotations: 0,
             error: Some(msg.into()),
@@ -1202,9 +1214,9 @@ impl GetArticleResult {
                   missing IDs are returned with `found: false` rather than failing the \
                   whole call. \
                   \
-                  If full text has not been uploaded, the `has_fulltext` field will be \
-                  false and `fulltext` will be null. Set `include_fulltext=false` to \
-                  skip the full-text column (faster, smaller responses). \
+                  Full-text content is omitted by default to keep responses and agent \
+                  context bounded. Set `include_fulltext=true` to receive one bounded \
+                  page; use `offset` and `next_offset` to read additional pages. \
                   \
                   **Examples**: \
                   • article_ids=[\"a1\"] — fetch a single article \
@@ -1213,8 +1225,12 @@ impl GetArticleResult {
 pub struct BibGetArticleInput {
     #[desc = "One or more article IDs (from bib_save or bib_search_library results)"]
     pub article_ids: Vec<String>,
-    #[desc = "If true and full text is available, include the full text content in each result. Default: true"]
+    #[desc = "If true and full text is available, include one bounded full-text page. Default: false"]
     pub include_fulltext: Option<bool>,
+    #[desc = "Character offset for the requested full-text page. Default: 0"]
+    pub offset: Option<usize>,
+    #[desc = "Maximum characters per result when include_fulltext=true. Default: 50000; max: 250000"]
+    pub limit: Option<usize>,
 }
 
 pub struct BibGetArticleTool {
@@ -1232,7 +1248,9 @@ impl ToolFunction for BibGetArticleTool {
             });
         }
 
-        let include_ft = input.include_fulltext.unwrap_or(true);
+        let include_ft = input.include_fulltext.unwrap_or(false);
+        let offset = input.offset.unwrap_or(0);
+        let limit = input.limit.unwrap_or(50_000).clamp(1, 250_000);
 
         // Fetch each article concurrently. The local DB is fast, but batching
         // still collapses N tool-call round-trips into one and lets the reads
@@ -1240,7 +1258,7 @@ impl ToolFunction for BibGetArticleTool {
         let futures: Vec<_> = input
             .article_ids
             .iter()
-            .map(|id| self.get_one(id.trim(), include_ft))
+            .map(|id| self.get_one(id.trim(), include_ft, offset, limit))
             .collect();
         let results = futures::future::join_all(futures).await;
 
@@ -1267,7 +1285,13 @@ impl BibGetArticleTool {
     /// Fetch a single article + its full text + annotations. Never errors —
     /// failures are captured in `GetArticleResult::error` so one bad ID
     /// doesn't abort the batch.
-    async fn get_one(&self, article_id: &str, include_ft: bool) -> GetArticleResult {
+    async fn get_one(
+        &self,
+        article_id: &str,
+        include_ft: bool,
+        offset: usize,
+        limit: usize,
+    ) -> GetArticleResult {
         let article = match self.bib.get_article(article_id).await {
             Ok(Some(a)) => a,
             Ok(None) => {
@@ -1287,20 +1311,28 @@ impl BibGetArticleTool {
         // the caller asked for the content. Previously it was derived from
         // `fulltext.is_some()`, so `include_fulltext=false` falsely reported
         // `has_fulltext:false` for articles that did have a full text.
-        let has_fulltext = match self.bib.has_fulltext(article_id).await {
-            Ok(b) => b,
-            Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
-        };
-
-        let fulltext = if include_ft {
-            match self.bib.get_fulltext(article_id).await {
-                Ok(ft) => ft,
+        let fulltext_page = if include_ft {
+            match self.bib.get_fulltext_page(article_id, offset, limit).await {
+                Ok(page) => page,
                 Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
             }
         } else {
             None
         };
-        let text_content = fulltext.as_ref().and_then(|ft| ft.text_content.clone());
+        let has_fulltext = if include_ft {
+            fulltext_page.is_some()
+        } else {
+            match self.bib.has_fulltext(article_id).await {
+                Ok(found) => found,
+                Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+            }
+        };
+        let fulltext_source = fulltext_page
+            .as_ref()
+            .map(|page| page.fulltext.source.as_str().to_owned());
+        let fulltext_total_chars = fulltext_page.as_ref().map(|page| page.total_chars);
+        let fulltext_next_offset = fulltext_page.as_ref().and_then(|page| page.next_offset);
+        let fulltext = fulltext_page.and_then(|page| page.fulltext.text_content);
 
         // Annotations (notes/highlights/comments) — without this the write
         // path (bib_add_note) is a data black hole: annotations are persisted
@@ -1339,8 +1371,12 @@ impl BibGetArticleTool {
             keywords: article.keywords.clone(),
             pub_types: article.pub_types.clone(),
             has_fulltext,
-            fulltext_source: fulltext.as_ref().map(|ft| ft.source.as_str().to_owned()),
-            fulltext: text_content,
+            fulltext_source,
+            fulltext,
+            fulltext_offset: if include_ft { Some(offset) } else { None },
+            fulltext_limit: if include_ft { Some(limit) } else { None },
+            fulltext_total_chars,
+            fulltext_next_offset,
             annotations: annotations
                 .iter()
                 .map(|a| {
@@ -1370,7 +1406,7 @@ impl BibGetArticleTool {
                   the user to provide a PDF. \
                   \
                   After the user uploads the full text, the article's status becomes \
-                  \"fulltext_available\" and bib_get_article will return the full text."
+                  \"fulltext_available\"; bib_get_article can then read bounded pages."
 )]
 pub struct BibRequestFulltextInput {
     #[desc = "Collection ID (the collection context for this request)"]
@@ -2122,7 +2158,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let get_tool = BibGetArticleTool { bib: bib.clone() };
+        let tool = BibSaveTool {
+            bib: bib.clone(),
+            gateway,
+            epmc,
+        };
 
         let input = BibSaveInput {
             articles: Some(vec![ArticleInput {
@@ -2163,6 +2204,57 @@ mod tests {
         assert_eq!(r["pmid"], "39000001");
         assert_eq!(r["year"], 2024);
         assert!(r["article_id"].as_str().is_some());
+
+        let article_id = r["article_id"].as_str().unwrap().to_owned();
+        let text = "0123456789".repeat(10);
+        bib.upsert_fulltext(&bib_types::FullText {
+            article_id: article_id.clone(),
+            file_path: "vfs:///literature/test/source.txt".into(),
+            file_format: bib_types::FileFormat::Txt,
+            text_content: Some(text),
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+        })
+        .await
+        .unwrap();
+
+        let default_result = get_tool
+            .run(BibGetArticleInput {
+                article_ids: vec![article_id.clone()],
+                include_fulltext: None,
+                offset: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let default_json = match default_result.content {
+            ToolResultContent::Json(value) => value,
+            _ => panic!("expected JSON"),
+        };
+        assert_eq!(default_json["results"][0]["has_fulltext"], true);
+        assert!(default_json["results"][0].get("fulltext").is_none());
+
+        let paged_result = get_tool
+            .run(BibGetArticleInput {
+                article_ids: vec![article_id],
+                include_fulltext: Some(true),
+                offset: Some(20),
+                limit: Some(7),
+            })
+            .await
+            .unwrap();
+        let paged_json = match paged_result.content {
+            ToolResultContent::Json(value) => value,
+            _ => panic!("expected JSON"),
+        };
+        let paged = &paged_json["results"][0];
+        assert_eq!(paged["fulltext"], "0123456");
+        assert_eq!(paged["fulltext_offset"], 20);
+        assert_eq!(paged["fulltext_limit"], 7);
+        assert_eq!(paged["fulltext_total_chars"], 100);
+        assert_eq!(paged["fulltext_next_offset"], 27);
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@
 //! retrieve full text without touching the binary file.
 
 use chrono::Utc;
+use serde::Serialize;
 use turso::{
     Value,
     transaction::{Transaction, TransactionBehavior},
@@ -15,6 +16,17 @@ use turso::{
 use crate::bib_base::BibBase;
 use crate::error::Result;
 use bib_types::{FileFormat, FullText, FullTextSource};
+
+/// A bounded view of a stored full text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FullTextPage {
+    pub fulltext: FullText,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_chars: usize,
+    pub truncated: bool,
+    pub next_offset: Option<usize>,
+}
 
 impl BibBase {
     /// Insert or update a full-text record.
@@ -71,6 +83,10 @@ impl BibBase {
                 .map_err(crate::error::Error::from);
         }
 
+        if result.is_ok() {
+            result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
+        }
+
         if result.is_err() {
             let _ = tx.rollback().await;
             return result;
@@ -109,15 +125,78 @@ impl BibBase {
         }))
     }
 
+    /// Read one bounded character page of a full text.
+    ///
+    /// The database extracts only the requested substring, so API and agent
+    /// callers do not need to materialize an entire paper in their response.
+    pub async fn get_fulltext_page(
+        &self,
+        article_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FullTextPage>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT article_id, file_path, file_format, text_content, source, \
+                        file_hash, file_size, uploaded_at, \
+                        COALESCE(LENGTH(text_content), 0), \
+                        COALESCE(SUBSTR(text_content, ?2, ?3), '') \
+                 FROM fulltexts WHERE article_id = ?1",
+                turso::params![article_id, offset as i64 + 1, limit as i64,],
+            )
+            .await?;
+
+        let row = match rows.next().await? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+        let total_chars = row.get::<i64>(8)? as usize;
+        let page_text = opt_string(row.get_value(9)?);
+        let returned_chars = page_text.as_ref().map_or(0, |text| text.chars().count());
+        let next_offset =
+            (offset + returned_chars < total_chars).then_some(offset + returned_chars);
+
+        let fulltext = FullText {
+            article_id: row.get::<String>(0)?,
+            file_path: row.get::<String>(1)?,
+            file_format: parse_file_format(&row.get::<String>(2)?),
+            text_content: page_text,
+            source: FullTextSource::from_str(&row.get::<String>(4)?),
+            file_hash: opt_string(row.get_value(5)?),
+            file_size: opt_int(row.get_value(6)?),
+            uploaded_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
+        };
+
+        Ok(Some(FullTextPage {
+            fulltext,
+            offset,
+            limit,
+            total_chars,
+            truncated: next_offset.is_some(),
+            next_offset,
+        }))
+    }
+
     /// Delete the full-text record for an article.
     pub async fn delete_fulltext(&self, article_id: &str) -> Result<()> {
         let _write = self.write_gate.lock().await;
-        self.write_conn()
-            .execute(
-                "DELETE FROM fulltexts WHERE article_id = ?1",
-                turso::params![article_id],
-            )
-            .await?;
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        tx.execute(
+            "DELETE FROM fulltexts WHERE article_id = ?1",
+            turso::params![article_id],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE collection_articles \
+             SET fetch_status = 'metadata_only' \
+             WHERE article_id = ?1 AND fetch_status = 'fulltext_available'",
+            turso::params![article_id],
+        )
+        .await?;
+        crate::bib_base::sync_search_index(&tx, article_id).await?;
+        tx.commit().await?;
         Ok(())
     }
 

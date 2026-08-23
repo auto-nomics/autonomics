@@ -3,7 +3,7 @@
 //! This crate provides two layers:
 //!
 //! - **Storage** ([`BibBase`]) — Turso (libSQL) CRUD for articles,
-//!   collections, full-text records, and LIKE-based search. Depends only
+//!   collections, full-text records, and indexed lexical search. Depends only
 //!   on `bib-types` + `turso`.
 //!
 //! - **Query** ([`query::LiteratureGateway`]) — unified entry point that
@@ -26,12 +26,14 @@ pub mod library_tools;
 pub mod oa_fetch;
 pub mod query;
 pub mod shared;
+pub mod stored_files;
 pub mod tools;
 
 pub use bib_base::BibBase;
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
-pub use extract::{ExtractedText, SimpleExtractor, TextExtractor};
+pub use extract::{ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor};
+pub use fulltext::FullTextPage;
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;
@@ -41,6 +43,7 @@ pub use query::{
     OpenAlexSource, PubmedSource, S2Source, SourceBatch,
 };
 pub use shared::BibShared;
+pub use stored_files::{StoredFulltext, VFS_PREFIX, stored_fulltext, vfs_virtual_path};
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
 ///

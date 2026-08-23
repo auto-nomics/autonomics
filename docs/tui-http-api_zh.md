@@ -6,8 +6,9 @@
 
 - 实现位置：`crates/tui-http`
 - 路由命名空间：`/api/v1`
-- 默认绑定：`0.0.0.0:8765`，局域网内可通过本机 IP 访问
+- 默认绑定：`127.0.0.1:8765`，只监听本机回环地址
 - 地址覆盖：`AUTONOMICS_HTTP_API_ADDR`
+- 鉴权：可选设置 `AUTONOMICS_HTTP_API_TOKEN`；设置后所有 `/api/*` 请求需要 `Authorization: Bearer <token>`，静态前端资源不受影响
 - 数据库：与 `RuntimeHost` 中的 `SharedInfra.bib` 完全共享同一个 `BibShared`，因此 API、TUI agent 工具和写作系统共享同一 Turso 连接与文献源 HTTP 客户端
 - 原文存储：TUI 使用独立文献 VFS 空间 `vfs:///literature/...`；底层默认是 `state_dir/literature/` 本地目录，并自动挂载到 Agent VFS
 - 生命周期：TUI 启动完成 `RuntimeHost::open` 后绑定端口；退出时先 graceful shutdown HTTP API，再关闭 agent 和共享基础设施
@@ -25,8 +26,8 @@
 | `POST` | `/api/v1/bib/articles` | 手动创建文献元数据 |
 | `POST` | `/api/v1/bib/articles/import` | 按 DOI / PMID / arXiv 等标识符从外部源导入，并可自动获取 OA 全文 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/bib/articles/{id}` | 查看、更新、删除文献 |
-| `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；上传为 multipart 字段 `file`，原始文件保存到文献 VFS，并自动抽取纯文本 |
-| `GET` | `/api/v1/bib/articles/{id}/fulltext/raw` | 返回 VFS 中的原始文件 |
+| `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；`GET` 支持 `offset` / `limit` 字符分页（默认 100000，最大 500000）；上传为 multipart 字段 `file`，原始文件按 SHA-256 内容寻址保存到文献 VFS，并自动抽取纯文本 |
+| `GET` / `HEAD` | `/api/v1/bib/articles/{id}/fulltext/raw` | 流式返回 VFS 中的原始文件，支持单区间 HTTP Range；HTML/PDF 以安全下载语义响应 |
 | `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看、新增注释 |
 | `DELETE` | `/api/v1/bib/annotations/{id}` | 删除注释 |
 | `GET` / `POST` | `/api/v1/bib/collections` | 列出、创建集合 |
@@ -69,6 +70,10 @@ bun run build
 
 ```bash
 curl http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=20
+
+# 设置 AUTONOMICS_HTTP_API_TOKEN 时：
+curl -H 'Authorization: Bearer <token>' \
+  http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=20
 
 curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/import \
   -H 'Content-Type: application/json' \

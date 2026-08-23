@@ -3,7 +3,10 @@
 //! All methods are on [`BibBase`] and share the same Turso connection.
 
 use chrono::Utc;
-use turso::Value;
+use turso::{
+    Value,
+    transaction::{Transaction, TransactionBehavior},
+};
 
 use crate::bib_base::BibBase;
 use crate::error::Result;
@@ -22,20 +25,23 @@ impl BibBase {
         let now = Utc::now().to_rfc3339();
 
         let _write = self.write_gate.lock().await;
-        self.write_conn()
-            .execute(
-                "INSERT INTO annotations (id, article_id, kind, content, page, created_at) \
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        tx.execute(
+            "INSERT INTO annotations (id, article_id, kind, content, page, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                turso::params![
-                    id.clone(),
-                    article_id,
-                    kind.as_str(),
-                    content,
-                    page.map(|p| p as i64),
-                    now,
-                ],
-            )
-            .await?;
+            turso::params![
+                id.clone(),
+                article_id,
+                kind.as_str(),
+                content,
+                page.map(|p| p as i64),
+                now,
+            ],
+        )
+        .await?;
+        crate::bib_base::sync_search_index(&tx, article_id).await?;
+        tx.commit().await?;
 
         Ok(Annotation {
             id,
@@ -74,9 +80,26 @@ impl BibBase {
     /// Delete an annotation by ID.
     pub async fn delete_annotation(&self, id: &str) -> Result<()> {
         let _write = self.write_gate.lock().await;
-        self.write_conn()
-            .execute("DELETE FROM annotations WHERE id = ?1", turso::params![id])
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let mut rows = tx
+            .query(
+                "SELECT article_id FROM annotations WHERE id = ?1",
+                turso::params![id],
+            )
             .await?;
+        let article_id = rows
+            .next()
+            .await?
+            .map(|row| row.get::<String>(0))
+            .transpose()?;
+        drop(rows);
+        if let Some(article_id) = article_id {
+            tx.execute("DELETE FROM annotations WHERE id = ?1", turso::params![id])
+                .await?;
+            crate::bib_base::sync_search_index(&tx, &article_id).await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }

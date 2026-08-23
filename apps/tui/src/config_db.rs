@@ -1,6 +1,6 @@
 //! CRUD access for the `providers` table.
 //!
-//! The schema is created in `app.rs::init_database`. Both tables use an
+//! The schema is created in `app::database::init_database`. Both tables use an
 //! auto-incrementing integer primary key (`id`).
 
 use rusqlite::Connection;

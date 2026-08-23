@@ -253,8 +253,10 @@ autonomics-tui bib upload \
 ```
 
 读取文件，根据扩展名（`pdf` / `html` / `txt`）检测格式，通过 `SimpleExtractor`
-提取纯文本，并存储 `FullText` 记录。若提供 `--collection-id`，该集合内文章的
-`fetch_status` 将更新为 `fulltext_available`。
+提取纯文本，并将原始文件按 SHA-256 内容寻址保存到 runtime 文献 VFS。抽取失败时
+不会拒绝上传：原始文件仍可下载，纯文本列为空；PDF 内置抽取为空时还会尝试可选的
+本机 `tesseract` OCR。若提供 `--collection-id`，该集合内文章的 `fetch_status`
+将更新为 `fulltext_available`。
 
 ### `requests` — 待处理全文请求
 

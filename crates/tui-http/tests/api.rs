@@ -245,10 +245,9 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let fulltext = &body["fulltext"];
-    assert_eq!(
-        fulltext["file_path"],
-        "vfs:///literature/doi%3A10.1000%2Foriginal-upload/original.txt"
-    );
+    let file_path = fulltext["file_path"].as_str().unwrap();
+    assert!(file_path.starts_with("vfs:///literature/doi%3A10.1000%2Foriginal-upload/"));
+    assert!(file_path.ends_with("-original.txt"));
     assert_eq!(fulltext["file_size"], content.len() as i64);
     assert!(
         fulltext["file_hash"]
@@ -270,8 +269,69 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
         response.headers().get("content-type").unwrap(),
         "text/plain; charset=utf-8"
     );
+    assert!(
+        response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;")
+    );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], content);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext?offset=9&limit=6",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["fulltext"]["text_content"], "full-t");
+    assert_eq!(body["pagination"]["offset"], 9);
+    assert_eq!(body["pagination"]["limit"], 6);
+    assert_eq!(body["pagination"]["total_chars"], 24);
+    assert_eq!(body["pagination"]["next_offset"], 15);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext/raw")
+                .header("range", "bytes=9-14")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get("content-range").unwrap(),
+        "bytes 9-14/24"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"full-t");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext/raw")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-length").unwrap(), "24");
 
     let response = app
         .clone()
@@ -326,10 +386,9 @@ async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["fulltext"]["file_format"], "pdf");
-    assert_eq!(
-        body["fulltext"]["file_path"],
-        "vfs:///literature/doi%3A10.1000%2Fpdf-host/paper.pdf"
-    );
+    let file_path = body["fulltext"]["file_path"].as_str().unwrap();
+    assert!(file_path.starts_with("vfs:///literature/doi%3A10.1000%2Fpdf-host/"));
+    assert!(file_path.ends_with("-paper.pdf"));
     assert_eq!(body["fulltext"]["file_size"], pdf_bytes.len() as i64);
 
     let response = app
@@ -348,6 +407,40 @@ async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], pdf_bytes);
+}
+
+#[tokio::test]
+async fn api_bearer_auth_protects_api_routes_only() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = tui_http::api_router_with_auth(shared, Some("test-token".to_owned()));
+
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/api/health", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app.oneshot(request("GET", "/", None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[test]
+fn http_api_defaults_to_localhost() {
+    assert_eq!(tui_http::DEFAULT_HTTP_API_ADDR, "127.0.0.1:8765");
 }
 
 async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {

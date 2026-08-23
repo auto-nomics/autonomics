@@ -470,6 +470,20 @@ impl SharedInfra {
     }
 }
 
+/// Build the bibliography VFS without opening agent or writing-system storage.
+///
+/// CLI commands use this to ensure they follow exactly the same
+/// `state_dir/vfs.toml` mount rules as `SharedInfra`.
+pub fn bibliography_file_storage(
+    config: &RuntimeConfig,
+) -> Result<Arc<vfs::OpendalFileStorage>, HostError> {
+    let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
+    Ok(Arc::new(vfs::OpendalFileStorage::with_mounts(
+        &config.data_dir,
+        vfs.clone(),
+    )))
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // AgentHandle — per-agent control struct
 // ═══════════════════════════════════════════════════════════════════════

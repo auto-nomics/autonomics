@@ -697,7 +697,7 @@ pub struct FullText {
 pub struct SearchHit {
     pub article_id: String,
     pub title: String,
-    /// BM25 relevance score (lower = more relevant in SQLite FTS5).
+    /// Field-priority score: 0 title, 1 abstract, 2 annotation, 3 full text.
     pub score: f64,
     /// Text snippet around the best matching position.
     pub snippet: String,

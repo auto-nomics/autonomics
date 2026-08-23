@@ -1,10 +1,14 @@
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use axum::serve;
 use axum::{
     Json, Router,
+    extract::{Request, State},
+    http::StatusCode,
     http::header,
-    response::{Html, IntoResponse},
+    middleware::Next,
+    response::{Html, IntoResponse, Response},
     routing::get,
 };
 use tokio::net::TcpListener;
@@ -12,7 +16,12 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-pub const DEFAULT_HTTP_API_ADDR: &str = "0.0.0.0:8765";
+pub const DEFAULT_HTTP_API_ADDR: &str = "127.0.0.1:8765";
+
+#[derive(Clone)]
+struct BearerAuthState {
+    token: Arc<Option<String>>,
+}
 
 /// A running local HTTP API server.
 pub struct HttpServerHandle {
@@ -78,6 +87,14 @@ fn primary_local_ip(destination: &str) -> Option<IpAddr> {
 /// Feature modules expose private route tables. This is the single place where
 /// future REST modules are mounted under the public `/api` namespace.
 pub fn api_router(shared: bib_base::BibShared) -> Router {
+    api_router_with_auth(shared, None)
+}
+
+/// Build the aggregate router with an optional bearer token for `/api` routes.
+pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<String>) -> Router {
+    let auth_state = BearerAuthState {
+        token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
+    };
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_javascript))
@@ -85,6 +102,55 @@ pub fn api_router(shared: bib_base::BibShared) -> Router {
         .route("/api/v1", get(api_index))
         .route("/api/health", get(health))
         .nest("/api/v1/bib", crate::bib::router(shared))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            bearer_auth,
+        ))
+}
+
+async fn bearer_auth(
+    State(state): State<BearerAuthState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, Response> {
+    let Some(expected) = state.token.as_ref().as_deref() else {
+        return Ok(next.run(request).await);
+    };
+    if !request.uri().path().starts_with("/api/") {
+        return Ok(next.run(request).await);
+    }
+
+    let supplied = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let valid =
+        supplied.is_some_and(|supplied| constant_time_eq(supplied.as_bytes(), expected.as_bytes()));
+    if !valid {
+        let body = axum::Json(serde_json::json!({
+            "error": "missing or invalid bearer token"
+        }))
+        .into_response();
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            body,
+        )
+            .into_response());
+    }
+
+    Ok(next.run(request).await)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0, |difference, (left, right)| difference | (left ^ right))
+        == 0
 }
 
 async fn index() -> Html<&'static str> {

@@ -13,6 +13,10 @@
 //! | HTML   | tag stripping                    |
 //! | TXT    | passthrough                      |
 //!
+//! [`OcrFallbackExtractor`] additionally tries the local `tesseract` command
+//! when PDF extraction produces no text. Tesseract is optional; when absent,
+//! callers can still retain the original file with an empty text column.
+//!
 //! ## Adding a backend
 //!
 //! Implement [`TextExtractor`] and register it where the full-text
@@ -37,6 +41,8 @@
 
 use async_trait::async_trait;
 use bib_types::FileFormat;
+use tokio::io::AsyncWriteExt;
+use tokio::process::{ChildStdin, Command};
 
 use crate::error::{Error, Result};
 
@@ -101,6 +107,28 @@ impl Default for SimpleExtractor {
     }
 }
 
+/// PDF extractor that falls back to an optional local Tesseract installation.
+///
+/// The command interface is fixed (`tesseract - stdout`) and document bytes are
+/// passed through stdin, so uploaded filenames never reach the subprocess.
+pub struct OcrFallbackExtractor {
+    simple: SimpleExtractor,
+}
+
+impl OcrFallbackExtractor {
+    pub fn new() -> Self {
+        Self {
+            simple: SimpleExtractor::new(),
+        }
+    }
+}
+
+impl Default for OcrFallbackExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl TextExtractor for SimpleExtractor {
     fn name(&self) -> &'static str {
@@ -138,6 +166,79 @@ impl TextExtractor for SimpleExtractor {
     }
 }
 
+#[async_trait]
+impl TextExtractor for OcrFallbackExtractor {
+    fn name(&self) -> &'static str {
+        "simple+ocr-fallback"
+    }
+
+    async fn extract(&self, content: &[u8], format: FileFormat) -> Result<ExtractedText> {
+        if format != FileFormat::Pdf {
+            return self.simple.extract(content, format).await;
+        }
+
+        let simple = self.simple.extract(content, format).await;
+        let needs_ocr = match &simple {
+            Ok(text) => text.text.trim().is_empty(),
+            Err(_) => true,
+        };
+        if !needs_ocr {
+            return simple;
+        }
+
+        match run_tesseract(content.to_vec()).await {
+            Ok(text) if !text.trim().is_empty() => Ok(ExtractedText {
+                text: normalize_whitespace(&text),
+            }),
+            _ => match simple {
+                Ok(_text) => Err(Error::Unknown(
+                    "PDF extraction and OCR yielded no text".into(),
+                )),
+                Err(error) => Err(error),
+            },
+        }
+    }
+}
+
+async fn run_tesseract(content: Vec<u8>) -> std::result::Result<String, String> {
+    let mut child = Command::new("tesseract")
+        .arg("-")
+        .arg("stdout")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .env("OMP_THREAD_LIMIT", "1")
+        .spawn()
+        .map_err(|error| format!("failed to start tesseract: {error}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "tesseract stdin was unavailable".to_owned())?;
+    let writer = tokio::spawn(write_stdin(stdin, content));
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|error| format!("failed to wait for tesseract: {error}"))?;
+    writer
+        .await
+        .map_err(|error| format!("tesseract writer failed: {error}"))?
+        .map_err(|error| format!("failed to send PDF to tesseract: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!("tesseract exited with {}", output.status));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn write_stdin(
+    mut stdin: ChildStdin,
+    content: Vec<u8>,
+) -> std::result::Result<(), std::io::Error> {
+    stdin.write_all(&content).await?;
+    stdin.shutdown().await
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -169,6 +270,13 @@ fn normalize_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ocr_fallback_uses_builtin_for_non_pdf() {
+        let ext = OcrFallbackExtractor::new();
+        let result = ext.extract(b"plain text", FileFormat::Txt).await.unwrap();
+        assert_eq!(result.text, "plain text");
+    }
 
     #[tokio::test]
     async fn extract_txt() {

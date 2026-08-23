@@ -4,12 +4,15 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::StatusCode,
     http::header,
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
-use bib_base::{BibShared, SimpleExtractor, TextExtractor, try_fetch_fulltext_with};
+use bib_base::{
+    BibShared, OcrFallbackExtractor, TextExtractor, stored_fulltext, try_fetch_fulltext_with,
+    vfs_virtual_path,
+};
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
     CollectionStatus, ExportFormat, FileFormat, FullText, FullTextSource, IdKind, Identifier,
@@ -18,10 +21,27 @@ use bib_types::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
-const VFS_PREFIX: &str = "vfs://";
+const DEFAULT_FULLTEXT_CHARS: usize = 100_000;
+const MAX_FULLTEXT_CHARS: usize = 500_000;
+
+#[derive(Deserialize, Default)]
+struct FulltextPageQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+impl FulltextPageQuery {
+    fn normalized(self) -> (usize, usize) {
+        (
+            self.offset.unwrap_or(0),
+            self.limit
+                .unwrap_or(DEFAULT_FULLTEXT_CHARS)
+                .clamp(1, MAX_FULLTEXT_CHARS),
+        )
+    }
+}
 
 #[derive(Serialize)]
 struct ApiError {
@@ -46,7 +66,10 @@ pub(crate) fn router(shared: BibShared) -> Router {
                 .post(upload_fulltext)
                 .delete(delete_fulltext),
         )
-        .route("/articles/{id}/fulltext/raw", get(download_fulltext))
+        .route(
+            "/articles/{id}/fulltext/raw",
+            get(download_fulltext).head(download_fulltext),
+        )
         .route(
             "/articles/{id}/annotations",
             get(list_annotations).post(add_annotation),
@@ -412,19 +435,39 @@ fn parse_id_kind(value: &str) -> Option<IdKind> {
     }
 }
 
-async fn get_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
+async fn get_article(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Query(page_query): Query<FulltextPageQuery>,
+) -> ApiResult {
     let article = shared
         .bib
         .get_article(&id)
         .await
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
-    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
+    let (offset, limit) = page_query.normalized();
+    let fulltext_page = shared
+        .bib
+        .get_fulltext_page(&id, offset, limit)
+        .await
+        .map_err(internal)?;
     let annotations = shared.bib.list_annotations(&id).await.map_err(internal)?;
+    let pagination = fulltext_page.as_ref().map(|page| {
+        json!({
+            "offset": page.offset,
+            "limit": page.limit,
+            "total_chars": page.total_chars,
+            "truncated": page.truncated,
+            "next_offset": page.next_offset,
+        })
+    });
+    let fulltext = fulltext_page.map(|page| page.fulltext);
 
     Ok(Json(json!({
         "article": article,
         "fulltext": fulltext,
+        "fulltext_pagination": pagination,
         "annotations": annotations,
     })))
 }
@@ -456,21 +499,35 @@ async fn update_article(
 }
 
 async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
-    if let Some(fulltext) = shared.bib.get_fulltext(&id).await.map_err(internal)? {
-        if let Some(path) = vfs_virtual_path(&fulltext.file_path) {
-            delete_stored_file(&shared, &path).await?;
+    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
+    let removed = shared.bib.delete_article(&id).await.map_err(internal)?;
+    if removed > 0 {
+        if let Some(fulltext) = fulltext {
+            if let Some(path) = vfs_virtual_path(&fulltext.file_path) {
+                if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+                    tracing::warn!(
+                        path = %path,
+                        error = %cleanup_error.1.error,
+                        "article was removed but its full-text original file remains"
+                    );
+                }
+            }
         }
     }
-    let removed = shared.bib.delete_article(&id).await.map_err(internal)?;
     Ok(Json(
         json!({ "deleted": removed > 0, "id": id, "rows_removed": removed }),
     ))
 }
 
-async fn get_fulltext(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
-    let fulltext = shared
+async fn get_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Query(page_query): Query<FulltextPageQuery>,
+) -> ApiResult {
+    let (offset, limit) = page_query.normalized();
+    let page = shared
         .bib
-        .get_fulltext(&id)
+        .get_fulltext_page(&id, offset, limit)
         .await
         .map_err(internal)?
         .ok_or_else(|| {
@@ -479,7 +536,16 @@ async fn get_fulltext(State(shared): State<Arc<BibShared>>, Path(id): Path<Strin
                 format!("full text for {id} not found"),
             )
         })?;
-    Ok(Json(json!({ "fulltext": fulltext })))
+    let pagination = json!({
+        "offset": page.offset,
+        "limit": page.limit,
+        "total_chars": page.total_chars,
+        "truncated": page.truncated,
+        "next_offset": page.next_offset,
+    });
+    Ok(Json(
+        json!({ "fulltext": page.fulltext, "pagination": pagination }),
+    ))
 }
 
 async fn upload_fulltext(
@@ -533,7 +599,7 @@ async fn upload_fulltext(
         .map(|(_, extension)| extension)
         .unwrap_or("txt");
     let format = FileFormat::from_extension(extension);
-    let extracted = match SimpleExtractor::new().extract(&content, format).await {
+    let extracted = match OcrFallbackExtractor::new().extract(&content, format).await {
         Ok(text) => Some(text),
         Err(extract_error) => {
             tracing::warn!(
@@ -546,20 +612,16 @@ async fn upload_fulltext(
         }
     };
 
-    let path = format!(
-        "/literature/{}/{}",
-        encode_vfs_component(&article.id),
-        encode_vfs_component(&filename)
-    );
-    write_stored_file(&shared, &path, &content).await?;
-    let hash = Sha256::digest(&content);
+    let stored = stored_fulltext(&article.id, &filename, &content);
+    let path = vfs_virtual_path(&stored.path).expect("stored fulltext uses a VFS path");
+    write_stored_file(&shared, &path, content.to_vec()).await?;
     let fulltext = FullText {
         article_id: article.id.clone(),
-        file_path: format!("{VFS_PREFIX}{path}"),
+        file_path: stored.path,
         file_format: format,
         text_content: extracted.map(|text| text.text),
         source: FullTextSource::UserUpload,
-        file_hash: Some(hex(&hash)),
+        file_hash: Some(stored.file_hash),
         file_size: Some(content.len() as i64),
         uploaded_at: Some(Utc::now()),
     };
@@ -568,15 +630,28 @@ async fn upload_fulltext(
         .get_fulltext(&article.id)
         .await
         .map_err(internal)?;
-    shared
-        .bib
-        .upsert_fulltext(&fulltext)
-        .await
-        .map_err(internal)?;
+    if let Err(db_error) = shared.bib.upsert_fulltext(&fulltext).await {
+        if previous.as_ref().map(|old| old.file_path.clone()) != Some(fulltext.file_path.clone()) {
+            if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+                tracing::warn!(
+                    path = %path,
+                    error = %cleanup_error.1.error,
+                    "failed to remove new full-text object after database rejection"
+                );
+            }
+        }
+        return Err(internal(db_error));
+    }
     if let Some(previous) = previous {
         if previous.file_path != fulltext.file_path {
             if let Some(path) = vfs_virtual_path(&previous.file_path) {
-                delete_stored_file(&shared, &path).await?;
+                if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+                    tracing::warn!(
+                        path = %path,
+                        error = %cleanup_error.1.error,
+                        "old full-text object remains after successful database update"
+                    );
+                }
             }
         }
     }
@@ -586,6 +661,8 @@ async fn upload_fulltext(
 async fn download_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
+    method: Method,
+    headers: HeaderMap,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
     let fulltext = shared
         .bib
@@ -604,24 +681,99 @@ async fn download_fulltext(
             "original file is not stored in the VFS",
         )
     })?;
-    let content = read_stored_file(&shared, &path).await?;
+    let size = shared
+        .file_storage
+        .as_ref()
+        .ok_or_else(|| {
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "bibliography VFS storage is not configured",
+            )
+        })?
+        .content_length(&path)
+        .await
+        .map_err(storage_error)?;
+
+    let etag = fulltext
+        .file_hash
+        .as_deref()
+        .map(|hash| format!("\"{hash}\""));
+    let if_range_matches = headers
+        .get(header::IF_RANGE)
+        .is_none_or(|value| etag.as_deref().is_some_and(|etag| value == etag));
+    let requested = if if_range_matches {
+        parse_range_header(&headers, size)?
+    } else {
+        None
+    };
+    let partial = requested.is_some();
+    let (status, start, end) = match requested {
+        Some((start, end)) => (StatusCode::PARTIAL_CONTENT, start, end),
+        None => (StatusCode::OK, 0, size),
+    };
+
     let filename = path.rsplit('/').next().unwrap_or("fulltext");
     let content_type = match fulltext.file_format {
         FileFormat::Pdf => "application/pdf",
-        FileFormat::Html => "text/html; charset=utf-8",
+        FileFormat::Html => "application/octet-stream",
         FileFormat::Txt => "text/plain; charset=utf-8",
     };
-    let mut response = content.into_response();
-    response.headers_mut().insert(
+    let body = if method == Method::HEAD {
+        axum::body::Body::empty()
+    } else {
+        let storage = shared.file_storage.clone().ok_or_else(|| {
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "bibliography VFS storage is not configured",
+            )
+        })?;
+        let storage_end = if partial { end + 1 } else { end };
+        let stream = storage
+            .read_stream(&path, start..storage_end)
+            .await
+            .map_err(storage_error)?;
+        axum::body::Body::from_stream(stream)
+    };
+    let mut response = Response::new(body);
+    let response_headers = response.headers_mut();
+    response_headers.insert(
         header::CONTENT_TYPE,
         content_type.parse().expect("valid content type"),
     );
-    response.headers_mut().insert(
+    response_headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("inline; filename={filename}")
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}")
             .parse()
             .expect("valid filename"),
     );
+    response_headers.insert(
+        header::ACCEPT_RANGES,
+        "bytes".parse().expect("static header"),
+    );
+    response_headers.insert(
+        header::CONTENT_LENGTH,
+        (end - start).to_string().parse().expect("valid length"),
+    );
+    if let Some(etag) = etag {
+        response_headers.insert(header::ETAG, etag.parse().expect("quoted hash"));
+    }
+    if status == StatusCode::PARTIAL_CONTENT {
+        response_headers.insert(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{size}")
+                .parse()
+                .expect("valid content range"),
+        );
+    }
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().expect("static header"),
+    );
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        "private, no-store".parse().expect("static header"),
+    );
+    *response.status_mut() = status;
     Ok(response)
 }
 
@@ -633,7 +785,13 @@ async fn delete_fulltext(
     shared.bib.delete_fulltext(&id).await.map_err(internal)?;
     if let Some(existing) = existing {
         if let Some(path) = vfs_virtual_path(&existing.file_path) {
-            delete_stored_file(&shared, &path).await?;
+            if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+                tracing::warn!(
+                    path = %path,
+                    error = %cleanup_error.1.error,
+                    "full-text database row was removed but its original file remains"
+                );
+            }
         }
     }
     Ok(Json(json!({ "deleted": true, "id": id })))
@@ -978,6 +1136,72 @@ async fn search_external(
     Ok(Json(json!({ "batches": batches })))
 }
 
+fn parse_range_header(
+    headers: &HeaderMap,
+    size: u64,
+) -> Result<Option<(u64, u64)>, (StatusCode, Json<ApiError>)> {
+    let Some(range) = headers.get(header::RANGE) else {
+        return Ok(None);
+    };
+    let range = range
+        .to_str()
+        .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Range header"))?;
+    if size == 0 {
+        return Err(error(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "cannot read a byte range from an empty file",
+        ));
+    }
+    let specification = range
+        .strip_prefix("bytes=")
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "Range header must use bytes units"))?;
+    if specification.contains(',') {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "multi-part Range requests are not supported",
+        ));
+    }
+
+    let (start, end) = if let Some(suffix) = specification.strip_prefix('-') {
+        let suffix: u64 = suffix
+            .parse()
+            .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Range suffix length"))?;
+        if suffix == 0 {
+            return Err(error(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "empty Range suffix",
+            ));
+        }
+        let suffix = suffix.min(size);
+        (size - suffix, size - 1)
+    } else {
+        let (start, end) = specification
+            .split_once('-')
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "Range header must contain '-'"))?;
+        let start: u64 = start
+            .parse()
+            .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Range start"))?;
+        if start >= size {
+            return Err(error(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "Range start is past the end of the file",
+            ));
+        }
+        let end = if end.is_empty() {
+            size - 1
+        } else {
+            end.parse::<u64>()
+                .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Range end"))?
+                .min(size - 1)
+        };
+        if end < start {
+            return Err(error(StatusCode::BAD_REQUEST, "Range end precedes start"));
+        }
+        (start, end)
+    };
+    Ok(Some((start, end)))
+}
+
 fn file_storage(
     shared: &BibShared,
 ) -> Result<&Arc<vfs::OpendalFileStorage>, (StatusCode, Json<ApiError>)> {
@@ -993,63 +1217,17 @@ fn storage_error(failure: opendal::Error) -> (StatusCode, Json<ApiError>) {
     error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string())
 }
 
-fn vfs_virtual_path(uri: &str) -> Option<String> {
-    let path = uri.strip_prefix(VFS_PREFIX)?.trim_start_matches('/');
-    (!path.is_empty()).then(|| format!("/{path}"))
-}
-
-fn encode_vfs_component(value: &str) -> String {
-    if value.is_empty() {
-        return "unnamed".to_owned();
-    }
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        let safe = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.');
-        let safe = safe && !((value == "." || value == "..") && byte == b'.');
-        if safe {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 async fn write_stored_file(
     shared: &BibShared,
     path: &str,
-    content: &[u8],
+    content: Vec<u8>,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     let storage = file_storage(shared)?;
-    storage.check_writable(path).map_err(storage_error)?;
-    let operator = storage.resolve(path);
-    let key = storage.resolve_path(path);
-    operator
-        .write(&key, content.to_vec())
+    storage
+        .write_bytes(path, content)
         .await
         .map_err(storage_error)?;
     Ok(())
-}
-
-async fn read_stored_file(
-    shared: &BibShared,
-    path: &str,
-) -> Result<Vec<u8>, (StatusCode, Json<ApiError>)> {
-    let storage = file_storage(shared)?;
-    let operator = storage.resolve(path);
-    let key = storage.resolve_path(path);
-    let content = operator.read(&key).await.map_err(|failure| {
-        if failure.kind() == opendal::ErrorKind::NotFound {
-            error(StatusCode::NOT_FOUND, "stored original file is missing")
-        } else {
-            storage_error(failure)
-        }
-    })?;
-    Ok(content.to_vec())
 }
 
 async fn delete_stored_file(
@@ -1057,13 +1235,6 @@ async fn delete_stored_file(
     path: &str,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     let storage = file_storage(shared)?;
-    storage.check_writable(path).map_err(storage_error)?;
-    let operator = storage.resolve(path);
-    let key = storage.resolve_path(path);
-    if let Err(error) = operator.delete(&key).await {
-        if error.kind() != opendal::ErrorKind::NotFound {
-            return Err(storage_error(error));
-        }
-    }
+    storage.delete_object(path).await.map_err(storage_error)?;
     Ok(())
 }

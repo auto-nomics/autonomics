@@ -107,6 +107,20 @@ CREATE TABLE IF NOT EXISTS fulltexts (
     file_size    INTEGER,
     uploaded_at  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS search_terms (
+    term       TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    field      TEXT NOT NULL,
+    PRIMARY KEY (term, article_id, field)
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_terms_article ON search_terms(article_id);
+
+CREATE TABLE IF NOT EXISTS bib_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -193,7 +207,41 @@ impl BibBase {
     /// Run all DDL statements (idempotent — safe to call on every open).
     pub async fn migrate(&self) -> Result<()> {
         let _write = self.write_gate.lock().await;
-        self.write_conn().execute_batch(SCHEMA_SQL).await?;
+        let conn = self.write_conn();
+        conn.execute_batch(SCHEMA_SQL).await?;
+
+        let mut rows = conn
+            .query(
+                "SELECT value FROM bib_meta WHERE key = 'search_index_version'",
+                turso::params![],
+            )
+            .await?;
+        let version = match rows.next().await? {
+            Some(row) => row.get::<String>(0)?,
+            None => String::new(),
+        };
+        if version != "1" {
+            conn.execute("DELETE FROM search_terms", turso::params![])
+                .await?;
+            let mut article_rows = conn
+                .query("SELECT id FROM articles", turso::params![])
+                .await?;
+            let mut article_ids = Vec::new();
+            while let Some(row) = article_rows.next().await? {
+                article_ids.push(row.get::<String>(0)?);
+            }
+            drop(article_rows);
+            for article_id in &article_ids {
+                sync_search_index(&conn, article_id).await?;
+            }
+            conn.execute(
+                "INSERT INTO bib_meta(key, value) VALUES ('search_index_version', '1') \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                turso::params![],
+            )
+            .await?;
+        }
+
         Ok(())
     }
 
@@ -226,6 +274,7 @@ impl BibBase {
                 result = Err(err);
                 break;
             }
+            sync_search_index(&tx, &article.id).await?;
         }
 
         if result.is_err() {
@@ -468,10 +517,19 @@ impl BibBase {
     /// pattern).
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         let _write = self.write_gate.lock().await;
-        let n = self
-            .write_conn()
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let n = tx
             .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
             .await?;
+        if n > 0 {
+            tx.execute(
+                "DELETE FROM search_terms WHERE article_id = ?1",
+                turso::params![id],
+            )
+            .await?;
+        }
+        tx.commit().await?;
         Ok(n)
     }
 
@@ -520,7 +578,7 @@ impl BibBase {
     }
 
     // -----------------------------------------------------------------------
-    // Search — LIKE-based full-text search
+    // Search — indexed full-text search
     // -----------------------------------------------------------------------
 
     /// Search across article titles, abstracts, stored full-text
@@ -528,36 +586,52 @@ impl BibBase {
     /// Returns results ordered by match priority:
     /// title matches first, then abstract, then annotations, then full-text body.
     ///
-    /// Uses SQL `LIKE` (case-insensitive for ASCII). Snippets are extracted
-    /// in Rust from the first matching field.
+    /// Uses an inverted index maintained in the same transaction as article,
+    /// full-text, and annotation writes. A query matches when all of its
+    /// lexical terms occur somewhere in the indexed fields.
     pub async fn search_articles(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
-        let pattern = format!("%{query}%");
+        if query.trim().is_empty() {
+            return self.list_search_hits(limit).await;
+        }
+
+        let terms = tokenize(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let term_placeholders = (1..=terms.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT a.id, a.title, a.abstract, f.text_content, \
+                    (SELECT GROUP_CONCAT(an.content, ' ') FROM annotations an \
+                     WHERE an.article_id = a.id), \
+                    SUM(CASE WHEN s.field = 'title' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END), \
+                    SUM(CASE WHEN s.field = 'fulltext' THEN 1 ELSE 0 END) \
+             FROM search_terms s \
+             JOIN articles a ON a.id = s.article_id \
+             LEFT JOIN fulltexts f ON f.article_id = a.id \
+             WHERE s.term IN ({term_placeholders}) \
+             GROUP BY a.id, a.title, a.abstract, f.text_content \
+             HAVING COUNT(DISTINCT s.term) = ?{} \
+             ORDER BY CASE \
+                 WHEN SUM(CASE WHEN s.field = 'title' THEN 1 ELSE 0 END) > 0 THEN 0 \
+                 WHEN SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END) > 0 THEN 1 \
+                 WHEN SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END) > 0 THEN 2 \
+                 ELSE 3 \
+             END, COUNT(*) DESC \
+             LIMIT ?{}",
+            terms.len() + 1,
+            terms.len() + 2
+        );
+        let mut params: Vec<Value> = terms.iter().map(|term| Value::Text(term.clone())).collect();
+        params.push(Value::Integer(terms.len() as i64));
+        params.push(Value::Integer(limit as i64));
+
         let conn = self.conn();
-        let mut rows = conn
-            .query(
-                "SELECT a.id, a.title, a.abstract, f.text_content, \
-                        (SELECT an.content FROM annotations an \
-                         WHERE an.article_id = a.id AND an.content LIKE ?1 \
-                         ORDER BY an.created_at LIMIT 1) AS annotation_hit, \
-                 CASE \
-                     WHEN a.title LIKE ?1 THEN 0 \
-                     WHEN COALESCE(a.abstract, '') LIKE ?1 THEN 1 \
-                     WHEN EXISTS (SELECT 1 FROM annotations an2 \
-                                  WHERE an2.article_id = a.id AND an2.content LIKE ?1) THEN 2 \
-                     ELSE 3 \
-                 END AS rank \
-                 FROM articles a \
-                 LEFT JOIN fulltexts f ON f.article_id = a.id \
-                 WHERE a.title LIKE ?1 \
-                    OR COALESCE(a.abstract, '') LIKE ?1 \
-                    OR COALESCE(f.text_content, '') LIKE ?1 \
-                    OR EXISTS (SELECT 1 FROM annotations an3 \
-                               WHERE an3.article_id = a.id AND an3.content LIKE ?1) \
-                 ORDER BY rank \
-                 LIMIT ?2",
-                turso::params![pattern, limit as i64],
-            )
-            .await?;
+        let mut rows = conn.query(sql, turso::params_from_iter(params)).await?;
 
         let mut hits = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -566,7 +640,19 @@ impl BibBase {
             let abstract_text = opt_string(row.get_value(2)?);
             let fulltext = opt_string(row.get_value(3)?);
             let annotation = opt_string(row.get_value(4)?);
-            let rank = row.get::<i64>(5)?;
+            let title_matches = row.get::<i64>(5)?;
+            let abstract_matches = row.get::<i64>(6)?;
+            let annotation_matches = row.get::<i64>(7)?;
+            let _fulltext_matches = row.get::<i64>(8)?;
+            let score = if title_matches > 0 {
+                0.0
+            } else if abstract_matches > 0 {
+                1.0
+            } else if annotation_matches > 0 {
+                2.0
+            } else {
+                3.0
+            };
 
             let snippet = extract_snippet(
                 query,
@@ -579,12 +665,112 @@ impl BibBase {
             hits.push(SearchHit {
                 article_id,
                 title,
-                score: rank as f64,
+                score,
                 snippet,
             });
         }
         Ok(hits)
     }
+
+    async fn list_search_hits(&self, limit: usize) -> Result<Vec<SearchHit>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT id, title FROM articles ORDER BY title LIMIT ?1",
+                turso::params![limit as i64],
+            )
+            .await?;
+        let mut hits = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let title = row.get::<String>(1)?;
+            hits.push(SearchHit {
+                article_id: row.get::<String>(0)?,
+                snippet: extract_snippet("", &title, None, None, None),
+                title,
+                score: 0.0,
+            });
+        }
+        Ok(hits)
+    }
+}
+
+pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM search_terms WHERE article_id = ?1",
+        turso::params![article_id],
+    )
+    .await?;
+
+    let mut rows = conn
+        .query(
+            "SELECT a.title, a.abstract, f.text_content, \
+                    (SELECT GROUP_CONCAT(an.content, ' ') FROM annotations an \
+                     WHERE an.article_id = a.id) \
+             FROM articles a LEFT JOIN fulltexts f ON f.article_id = a.id \
+             WHERE a.id = ?1",
+            turso::params![article_id],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(());
+    };
+
+    let fields = [
+        ("title", row.get::<String>(0)?),
+        (
+            "abstract",
+            opt_string(row.get_value(1)?).unwrap_or_default(),
+        ),
+        (
+            "fulltext",
+            opt_string(row.get_value(2)?).unwrap_or_default(),
+        ),
+        (
+            "annotation",
+            opt_string(row.get_value(3)?).unwrap_or_default(),
+        ),
+    ];
+
+    for (field, text) in fields {
+        let terms: Vec<_> = tokenize(&text).into_iter().collect();
+        if terms.is_empty() {
+            continue;
+        }
+        let placeholders = (0..terms.len())
+            .map(|row| {
+                let start = row * 3 + 1;
+                format!("(?{start}, ?{}, ?{})", start + 1, start + 2)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT OR IGNORE INTO search_terms(term, article_id, field) VALUES {placeholders}"
+        );
+        let mut params = Vec::with_capacity(terms.len() * 3);
+        for term in terms {
+            params.push(Value::Text(term));
+            params.push(Value::Text(article_id.to_owned()));
+            params.push(Value::Text(field.to_owned()));
+        }
+        conn.execute(sql, turso::params_from_iter(params)).await?;
+    }
+    Ok(())
+}
+
+fn tokenize(text: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for character in text.chars() {
+        if character.is_alphanumeric() {
+            current.extend(character.to_lowercase());
+        } else if !current.is_empty() {
+            terms.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        terms.push(current);
+    }
+    terms
 }
 
 /// Extract a context snippet around the first occurrence of `query` in

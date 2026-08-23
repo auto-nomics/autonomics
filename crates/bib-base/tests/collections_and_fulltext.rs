@@ -500,10 +500,62 @@ async fn fulltext_crud() {
     assert_eq!(loaded.file_size, Some(1048576));
     assert_eq!(loaded.file_hash.as_deref(), Some("sha256:abc123"));
 
+    let expected_page = &loaded.text_content.clone().unwrap()[10..20];
+    let page = db
+        .get_fulltext_page("a1", 10, 10)
+        .await
+        .unwrap()
+        .expect("fulltext page");
+    assert_eq!(page.fulltext.text_content.as_deref(), Some(expected_page));
+    assert_eq!(
+        page.total_chars,
+        loaded.text_content.as_deref().unwrap().chars().count()
+    );
+    assert_eq!(page.next_offset, Some(20));
+    assert!(page.truncated);
+
     // Delete.
     db.delete_fulltext("a1").await.unwrap();
     assert!(!db.has_fulltext("a1").await.unwrap());
     assert!(db.get_fulltext("a1").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn deleting_fulltext_reverts_collection_status() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Status lifecycle"))
+        .await
+        .unwrap();
+    db.upsert_collection(&Collection::new("c1", "Status"))
+        .await
+        .unwrap();
+    db.add_to_collection("c1", "a1", ArticleRole::Referenced, AddedBy::Agent, None)
+        .await
+        .unwrap();
+    db.upsert_fulltext(&FullText {
+        article_id: "a1".into(),
+        file_path: "vfs:///literature/a1/source.txt".into(),
+        file_format: FileFormat::Txt,
+        text_content: Some("body".into()),
+        source: FullTextSource::UserUpload,
+        file_hash: None,
+        file_size: None,
+        uploaded_at: None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        db.list_collection_articles("c1", None, None).await.unwrap()[0].fetch_status,
+        FetchStatus::FulltextAvailable
+    );
+
+    db.delete_fulltext("a1").await.unwrap();
+
+    assert!(!db.has_fulltext("a1").await.unwrap());
+    assert_eq!(
+        db.list_collection_articles("c1", None, None).await.unwrap()[0].fetch_status,
+        FetchStatus::MetadataOnly
+    );
 }
 
 #[tokio::test]
@@ -651,7 +703,7 @@ async fn re_add_to_collection_preserves_note() {
 }
 
 // ---------------------------------------------------------------------------
-// Search (LIKE-based)
+// Search (indexed)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -694,6 +746,28 @@ async fn search_basic() {
         !hits.iter().any(|h| h.article_id == "a2"),
         "GWAS article should not match CRISPR query"
     );
+}
+
+#[tokio::test]
+async fn search_does_not_treat_sql_wildcards_as_matches() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Alpha beta"))
+        .await
+        .unwrap();
+
+    assert!(
+        db.search_articles("%gamma", 10).await.unwrap().is_empty(),
+        "SQL wildcard characters must not broaden a lexical query"
+    );
+    assert!(db.search_articles("_", 10).await.unwrap().is_empty());
+    assert!(
+        db.search_articles("alpha missing-term", 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "multi-word queries require every term"
+    );
+    assert_eq!(db.search_articles("alpha beta", 10).await.unwrap().len(), 1);
 }
 
 #[tokio::test]

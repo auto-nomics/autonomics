@@ -8,4 +8,6 @@
 pub mod bib;
 pub mod server;
 
-pub use server::{DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, start};
+pub use server::{
+    DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, start,
+};
