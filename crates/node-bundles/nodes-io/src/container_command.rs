@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use dag_core::dag::{DagError, graph::PortOutputs};
@@ -19,9 +20,9 @@ use dag_core::value::{FileRef, NodeValue, PortType};
 use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::{
-    ContainerMount, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PodmanRuntime, PullPolicy,
-    unique_container_name,
+    CachedPanel, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
+    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, K3sConfig, K3sRuntime, PanelCache, PanelRef,
+    PullPolicy, unique_container_name, workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -80,17 +81,20 @@ pub struct ContainerCommandSpec {
     /// Optional persistent scratch directory. A unique scratch directory is
     /// created when omitted.
     pub workdir: Option<String>,
+    /// VFS prefix used to publish declared outputs as immutable artifacts.
+    #[serde(default = "default_artifact_prefix")]
+    pub artifact_prefix: String,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
-    /// Additional bind mounts. Reference data should normally be read-only.
+    /// Immutable reference-data bundles materialized into the shared panel cache.
     #[serde(default)]
-    pub mounts: Vec<ContainerMount>,
-    /// Podman network. The default is isolated (`none`); `host` or a named
-    /// network must be justified by the tool.
+    pub panels: Vec<PanelRef>,
+    /// Network profile enforced by cluster NetworkPolicies. The default is
+    /// `isolated`; `cluster` and `egress` must be justified by the tool.
     #[serde(default = "default_network")]
     pub network: String,
     /// Whether the container root filesystem is read-only. `/work` remains
-    /// writable, and Podman supplies tmpfs mounts for `/tmp` and `/dev/shm`.
+    /// writable, and k3s supplies tmpfs mounts for `/tmp` and `/dev/shm`.
     #[serde(default = "default_true")]
     pub read_only_rootfs: bool,
     #[serde(default)]
@@ -104,7 +108,7 @@ pub struct ContainerCommandSpec {
     #[serde(default)]
     pub shm_size: Option<String>,
     /// Advanced override for images that must run as an internal user. The
-    /// default maps the invoking rootless Podman user with `keep-id`.
+    /// default runs as the control process uid/gid while enforcing non-root.
     #[serde(default)]
     pub user: Option<String>,
 }
@@ -114,7 +118,11 @@ fn default_timeout() -> u64 {
 }
 
 fn default_network() -> String {
-    "none".into()
+    "isolated".into()
+}
+
+fn default_artifact_prefix() -> String {
+    "/artifacts/container-command".into()
 }
 
 fn default_true() -> bool {
@@ -130,8 +138,9 @@ pub struct ContainerCommandNode {
     env: BTreeMap<String, String>,
     outputs: Vec<ContainerCommandOutputSpec>,
     workdir: Option<String>,
+    artifact_prefix: String,
     timeout_secs: u64,
-    mounts: Vec<ContainerMount>,
+    panels: Vec<PanelRef>,
     network: String,
     read_only_rootfs: bool,
     pull_policy: PullPolicy,
@@ -141,12 +150,14 @@ pub struct ContainerCommandNode {
     shm_size: Option<String>,
     user: Option<String>,
     runtime: Arc<dyn ContainerRuntime>,
+    panel_cache: Arc<PanelCache>,
 }
 
 impl ContainerCommandNode {
     pub fn new(
         spec: ContainerCommandSpec,
         runtime: Arc<dyn ContainerRuntime>,
+        panel_cache: Arc<PanelCache>,
     ) -> Result<Self, ContainerCommandError> {
         validate(&spec)?;
         let mut ports = NodePorts::new()
@@ -164,8 +175,9 @@ impl ContainerCommandNode {
             env: spec.env,
             outputs: spec.outputs,
             workdir: spec.workdir,
+            artifact_prefix: spec.artifact_prefix,
             timeout_secs: spec.timeout_secs,
-            mounts: spec.mounts,
+            panels: spec.panels,
             network: spec.network,
             read_only_rootfs: spec.read_only_rootfs,
             pull_policy: spec.pull_policy,
@@ -175,14 +187,28 @@ impl ContainerCommandNode {
             shm_size: spec.shm_size,
             user: spec.user,
             runtime,
+            panel_cache,
         })
     }
 
-    fn resolve_workdir(&self) -> Result<PathBuf, ContainerCommandError> {
+    fn resolve_workdir(&self, workspace_root: &Path) -> Result<PathBuf, ContainerCommandError> {
         let workdir = match &self.workdir {
-            Some(path) => PathBuf::from(path),
-            None => unique_scratch_dir(),
+            Some(path) => {
+                let candidate = PathBuf::from(path);
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    workspace_root.join(candidate)
+                }
+            }
+            None => workspace_root.join(unique_scratch_suffix()),
         };
+        std::fs::create_dir_all(workspace_root).map_err(|e| {
+            ContainerCommandError::Invalid(format!(
+                "cannot create k3s workspace root `{}`: {e}",
+                workspace_root.display()
+            ))
+        })?;
         std::fs::create_dir_all(&workdir).map_err(|e| {
             ContainerCommandError::Invalid(format!(
                 "cannot create workdir `{}`: {e}",
@@ -201,27 +227,14 @@ impl ContainerCommandNode {
                 workdir.display()
             )));
         }
+        if !workdir.starts_with(workspace_root) {
+            return Err(ContainerCommandError::Invalid(format!(
+                "workdir `{}` is outside k3s workspace root `{}`",
+                workdir.display(),
+                workspace_root.display()
+            )));
+        }
         Ok(workdir)
-    }
-
-    fn resolve_mounts(&self) -> Result<Vec<ContainerMount>, ContainerCommandError> {
-        self.mounts
-            .iter()
-            .map(|mount| {
-                let host_path = Path::new(&mount.host_path);
-                let canonical = host_path.canonicalize().map_err(|e| {
-                    ContainerCommandError::Invalid(format!(
-                        "cannot resolve mount `{}`: {e}",
-                        host_path.display()
-                    ))
-                })?;
-                Ok(ContainerMount {
-                    host_path: canonical.to_string_lossy().into_owned(),
-                    container_path: mount.container_path.clone(),
-                    writable: mount.writable,
-                })
-            })
-            .collect()
     }
 }
 
@@ -240,21 +253,15 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn write_strictly_within(
-    base: &Path,
-    relative: &str,
-    content: &str,
-) -> Result<PathBuf, String> {
+fn write_strictly_within(base: &Path, relative: &str, content: &str) -> Result<PathBuf, String> {
     validate_workspace_relative_path(relative)?;
     let destination = base.join(relative);
     if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!("cannot create directory `{}`: {e}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directory `{}`: {e}", parent.display()))?;
     }
-    std::fs::write(&destination, content).map_err(|e| {
-        format!("cannot write file `{}`: {e}", destination.display())
-    })?;
+    std::fs::write(&destination, content)
+        .map_err(|e| format!("cannot write file `{}`: {e}", destination.display()))?;
     Ok(destination)
 }
 
@@ -266,21 +273,17 @@ fn input_path(value: &NodeValue) -> Result<String, String> {
             .map(|f| f.path.as_str())
             .collect::<Vec<_>>()
             .join(",")),
-        NodeValue::FileSet(_) => Err(
-            "an empty FileSet cannot be bound to a command input".into(),
-        ),
-        NodeValue::DataFrame(_) => Err(
-            "container_command inputs must be File or FileSet values".into(),
-        ),
+        NodeValue::FileSet(_) => Err("an empty FileSet cannot be bound to a command input".into()),
+        NodeValue::DataFrame(_) => {
+            Err("container_command inputs must be File or FileSet values".into())
+        }
         NodeValue::Data(data) => Ok(data.vpath.clone()),
         NodeValue::DataSet(data) if !data.is_empty() => Ok(data
             .iter()
             .map(|data| data.vpath.as_str())
             .collect::<Vec<_>>()
             .join(",")),
-        NodeValue::DataSet(_) => Err(
-            "an empty DataSet cannot be bound to a command input".into(),
-        ),
+        NodeValue::DataSet(_) => Err("an empty DataSet cannot be bound to a command input".into()),
     }
 }
 
@@ -399,9 +402,7 @@ async fn stage_inputs(
                 NodeValue::FileSet(staged_files)
             }
             NodeValue::DataFrame(_) => {
-                return Err(
-                    "container_command inputs must be File or FileSet values".into(),
-                );
+                return Err("container_command inputs must be File or FileSet values".into());
             }
         };
         staged.push(NodeInput {
@@ -433,10 +434,14 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
             "at least one output must be declared".into(),
         ));
     }
-    if spec.network.trim().is_empty() {
-        return Err(ContainerCommandError::Invalid(
-            "`network` cannot be empty".into(),
-        ));
+    if !matches!(
+        spec.network.as_str(),
+        "isolated" | "none" | "cluster" | "egress"
+    ) {
+        return Err(ContainerCommandError::Invalid(format!(
+            "network must be `isolated`, `cluster`, or `egress`; got `{}`",
+            spec.network
+        )));
     }
     for output in &spec.outputs {
         validate_workspace_relative_path(&output.path).map_err(|e| {
@@ -458,8 +463,7 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
         ));
     }
     for (path, content) in &spec.files {
-        validate_workspace_relative_path(path)
-            .map_err(ContainerCommandError::Invalid)?;
+        validate_workspace_relative_path(path).map_err(ContainerCommandError::Invalid)?;
         if content.contains('\0') {
             return Err(ContainerCommandError::Invalid(format!(
                 "file `{path}` cannot contain NUL bytes"
@@ -497,29 +501,15 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
             "`pids_limit` must be positive".into(),
         ));
     }
-    let mut container_paths = std::collections::BTreeSet::new();
-    for mount in &spec.mounts {
-        let host = Path::new(&mount.host_path);
-        let container = Path::new(&mount.container_path);
-        if !host.is_absolute()
-            || !container.is_absolute()
-            || mount.host_path.contains('\0')
-            || mount.container_path.contains('\0')
+    let mut panel_mounts = std::collections::BTreeSet::new();
+    for panel in &spec.panels {
+        panel.validate().map_err(ContainerCommandError::Invalid)?;
+        if panel.mount_path == DEFAULT_CONTAINER_WORKDIR
+            || !panel_mounts.insert(panel.mount_path.clone())
         {
             return Err(ContainerCommandError::Invalid(format!(
-                "mount paths must be absolute: `{}` -> `{}`",
-                mount.host_path, mount.container_path
-            )));
-        }
-        if container == Path::new("/") || container == Path::new(DEFAULT_CONTAINER_WORKDIR) {
-            return Err(ContainerCommandError::Invalid(
-                "mounts cannot target `/` or the node workdir".into(),
-            ));
-        }
-        if !container_paths.insert(mount.container_path.clone()) {
-            return Err(ContainerCommandError::Invalid(format!(
-                "duplicate container mount path `{}`",
-                mount.container_path
+                "duplicate or invalid panel mount path `{}`",
+                panel.mount_path
             )));
         }
     }
@@ -542,8 +532,9 @@ impl DagNode for ContainerCommandNode {
             env: self.env.clone(),
             outputs: self.outputs.clone(),
             workdir: self.workdir.clone(),
+            artifact_prefix: self.artifact_prefix.clone(),
             timeout_secs: self.timeout_secs,
-            mounts: self.mounts.clone(),
+            panels: self.panels.clone(),
             network: self.network.clone(),
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
@@ -553,6 +544,7 @@ impl DagNode for ContainerCommandNode {
             shm_size: self.shm_size.clone(),
             user: self.user.clone(),
             runtime: Arc::clone(&self.runtime),
+            panel_cache: Arc::clone(&self.panel_cache),
         })
     }
 
@@ -570,14 +562,16 @@ impl DagNode for ContainerCommandNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let host_workdir = self
-            .resolve_workdir()
+        let workspace_root = self.runtime.workspace_root().to_path_buf();
+        let workspace_path = self
+            .resolve_workdir(&workspace_root)
             .map_err(ContainerCommandError::into_dag_error)?;
-        let mounts = self
-            .resolve_mounts()
+        let panels = materialize_panels(ctx, self.panel_cache.as_ref(), &self.panels)
+            .await
+            .map_err(ContainerCommandError::Invalid)
             .map_err(ContainerCommandError::into_dag_error)?;
 
-        let mut staged_inputs = stage_inputs(ctx, &host_workdir, inputs)
+        let mut staged_inputs = stage_inputs(ctx, &workspace_path, inputs)
             .await
             .map_err(ContainerCommandError::Invalid)
             .map_err(ContainerCommandError::into_dag_error)?;
@@ -590,13 +584,13 @@ impl DagNode for ContainerCommandNode {
             .map_err(ContainerCommandError::into_dag_error)?;
         let container_input_paths = host_input_paths
             .iter()
-            .map(|path| container_path(&host_workdir, path))
+            .map(|path| container_path(&workspace_path, path))
             .collect::<Vec<_>>();
 
         let resolved_outputs = self
             .outputs
             .iter()
-            .map(|output| (output, host_workdir.join(&output.path)))
+            .map(|output| (output, workspace_path.join(&output.path)))
             .collect::<Vec<_>>();
         for (_, path) in &resolved_outputs {
             if let Some(parent) = path.parent() {
@@ -612,15 +606,20 @@ impl DagNode for ContainerCommandNode {
         }
         let container_output_paths = resolved_outputs
             .iter()
-            .map(|(spec, path)| (spec, container_path(&host_workdir, &path.to_string_lossy())))
+            .map(|(spec, path)| {
+                (
+                    spec,
+                    container_path(&workspace_path, &path.to_string_lossy()),
+                )
+            })
             .collect::<Vec<_>>();
 
         let mut command = self.command.clone();
         if let Some(script) = &self.script {
-            let script_path = write_strictly_within(&host_workdir, ".autonomics/script", script)
+            let script_path = write_strictly_within(&workspace_path, ".autonomics/script", script)
                 .map_err(ContainerCommandError::Invalid)
                 .map_err(ContainerCommandError::into_dag_error)?;
-            let files_dir = host_workdir.join(".autonomics/files");
+            let files_dir = workspace_path.join(".autonomics/files");
             std::fs::create_dir_all(&files_dir)
                 .map_err(|e| {
                     ContainerCommandError::Invalid(format!(
@@ -634,7 +633,7 @@ impl DagNode for ContainerCommandNode {
                     .map_err(ContainerCommandError::Invalid)
                     .map_err(ContainerCommandError::into_dag_error)?;
             }
-            let script_arg = container_path(&host_workdir, &script_path.to_string_lossy());
+            let script_arg = container_path(&workspace_path, &script_path.to_string_lossy());
             command.insert(1, script_arg);
         }
 
@@ -693,10 +692,11 @@ impl DagNode for ContainerCommandNode {
         let request = ContainerRunRequest {
             image: self.image.clone(),
             command,
-            host_workdir,
-            container_workdir: DEFAULT_CONTAINER_WORKDIR.into(),
+            workspace: workspace_ref(&workspace_root, &workspace_path, DEFAULT_CONTAINER_WORKDIR)
+                .map_err(ContainerCommandError::from)
+                .map_err(ContainerCommandError::into_dag_error)?,
             env,
-            mounts,
+            panels,
             network: self.network.clone(),
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
@@ -708,6 +708,7 @@ impl DagNode for ContainerCommandNode {
             timeout_secs: self.timeout_secs,
             name: unique_container_name(),
         };
+        let request_name = request.name.clone();
 
         reporter.info(format!(
             "starting container {} via {}",
@@ -735,10 +736,9 @@ impl DagNode for ContainerCommandNode {
                 }
                 .into_dag_error());
             }
-            let file = FileRef::local(host_path, spec.format.clone())
-                .map_err(|_| ContainerCommandError::MissingOutput {
-                    path: host_path.to_string_lossy().into_owned(),
-                })
+            let file = publish_output(ctx, &self.artifact_prefix, &request_name, spec, host_path)
+                .await
+                .map_err(ContainerCommandError::Invalid)
                 .map_err(ContainerCommandError::into_dag_error)?;
             outputs.insert_file(index as u8, file);
         }
@@ -746,27 +746,122 @@ impl DagNode for ContainerCommandNode {
     }
 }
 
-fn container_path(host_workdir: &Path, host_path: &str) -> String {
+fn container_path(workspace_path: &Path, host_path: &str) -> String {
     let path = Path::new(host_path);
-    let relative = path.strip_prefix(host_workdir).unwrap_or(path);
+    let relative = path.strip_prefix(workspace_path).unwrap_or(path);
     Path::new(DEFAULT_CONTAINER_WORKDIR)
         .join(relative)
         .to_string_lossy()
         .into_owned()
 }
 
-fn unique_scratch_dir() -> PathBuf {
+fn unique_scratch_suffix() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    std::env::temp_dir().join(format!(
+    format!(
         "autonomics-container-command-{}-{nanos}",
         std::process::id()
+    )
+}
+
+async fn materialize_panels(
+    ctx: &NodeCtx,
+    cache: &PanelCache,
+    panels: &[PanelRef],
+) -> Result<Vec<CachedPanel>, String> {
+    if panels.is_empty() {
+        return Ok(Vec::new());
+    }
+    let storage = ctx
+        .opendal
+        .as_ref()
+        .ok_or("container panels require registered object storage")?;
+    let mut cached = Vec::with_capacity(panels.len());
+    for panel in panels {
+        cached.push(
+            cache
+                .ensure(storage, panel)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(cached)
+}
+
+async fn publish_output(
+    ctx: &NodeCtx,
+    artifact_prefix: &str,
+    run_name: &str,
+    spec: &ContainerCommandOutputSpec,
+    host_path: &Path,
+) -> Result<FileRef, String> {
+    let storage = ctx
+        .opendal
+        .as_ref()
+        .ok_or("container outputs require registered object storage")?;
+    let prefix = vfs::OpendalFileStorage::normalize_path(artifact_prefix.trim_end_matches('/'));
+    let relative = spec.path.replace('\\', "/");
+    let virtual_path = format!("{prefix}/{run_name}/{relative}");
+    storage
+        .check_writable(&virtual_path)
+        .map_err(|error| error.to_string())?;
+    let object_path = storage.resolve_path(&virtual_path);
+    let operator = storage.resolve(&virtual_path);
+    let pending_path = format!("{object_path}.pending-{run_name}");
+    let _ = operator.delete(&pending_path).await;
+
+    let metadata = tokio::fs::metadata(host_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut input = tokio::fs::File::open(host_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut writer = operator
+        .writer(&pending_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut chunk = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = tokio::io::AsyncReadExt::read(&mut input, &mut chunk)
+            .await
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let bytes = chunk[..read].to_vec();
+        hasher.update(&bytes);
+        writer
+            .write(bytes)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    writer.close().await.map_err(|error| error.to_string())?;
+    if let Err(error) = operator.rename(&pending_path, &object_path).await {
+        let _ = operator.delete(&pending_path).await;
+        return Err(error.to_string());
+    }
+
+    let digest = format!("sha256:{}", hex(&hasher.finalize()));
+    Ok(FileRef::remote(
+        format!("vfs://{virtual_path}"),
+        spec.format.clone(),
+        metadata.len(),
+        Some(digest),
     ))
 }
 
-pub struct ContainerCommandNodeFactory;
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[derive(Default)]
+pub struct ContainerCommandNodeFactory {
+    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) panel_cache: Arc<PanelCache>,
+}
 
 impl NodeFactory for ContainerCommandNodeFactory {
     fn kind(&self) -> &'static str {
@@ -774,19 +869,19 @@ impl NodeFactory for ContainerCommandNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs a file-to-file external command in an ephemeral Podman container."
+        "Runs a file-to-file external command in an ephemeral k3s Job."
     }
 
     fn doc(&self) -> &'static str {
         "Runs an OCI image without a shell. File inputs are staged into a private \
-        host scratch directory mounted at `/work`; input paths are exposed as \
+        workspace PVC subPath mounted at `/work`; input paths are exposed as \
         `$input0`, `$input1`, `AUTONOMICS_INPUT0`, and so on. Outputs must be \
         safe paths relative to `/work` and are exposed as `$output0`, \
         `AUTONOMICS_OUTPUT0`, and so on. The container root filesystem is \
-        read-only by default, networking defaults to `none`, and the invoking \
-        rootless Podman user is mapped with `--userns=keep-id`. Use \
-        `mounts` for explicit read-only reference data. Production workflows \
-        should reference images by digest."
+        read-only by default, networking defaults to an isolated profile, and \
+        immutable `panels` are mounted read-only from the shared panel cache. \
+        Declared outputs are uploaded to VFS object storage with sha256 \
+        fingerprints. Production workflows should reference images by digest."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -806,8 +901,12 @@ impl NodeFactory for ContainerCommandNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: ContainerCommandSpec = serde_json::from_value(spec)?;
-        let node = ContainerCommandNode::new(node_spec, Arc::new(PodmanRuntime::from_env()))
-            .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        let node = ContainerCommandNode::new(
+            node_spec,
+            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&self.panel_cache),
+        )
+        .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
         Ok(Box::new(node))
     }
 
@@ -816,8 +915,12 @@ impl NodeFactory for ContainerCommandNodeFactory {
         spec: serde_json::Value,
     ) -> dag_core::registry::error::Result<NodePorts> {
         let node_spec: ContainerCommandSpec = serde_json::from_value(spec)?;
-        let node = ContainerCommandNode::new(node_spec, Arc::new(PodmanRuntime::from_env()))
-            .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        let node = ContainerCommandNode::new(
+            node_spec,
+            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&self.panel_cache),
+        )
+        .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
         Ok(node.ports)
     }
 }
@@ -828,12 +931,28 @@ mod tests {
     use std::sync::Mutex;
 
     use container_runtime::ContainerRunResult;
+    use vfs::OpendalFileStorage;
 
-    fn ctx() -> NodeCtx {
-        NodeCtx::new(
+    struct TestEnv {
+        workspace: tempfile::TempDir,
+        #[allow(dead_code)]
+        objects: tempfile::TempDir,
+        ctx: NodeCtx,
+    }
+
+    fn test_env() -> TestEnv {
+        let workspace = tempfile::tempdir().unwrap();
+        let objects = tempfile::tempdir().unwrap();
+        let storage = Arc::new(OpendalFileStorage::new(objects.path()));
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage),
+        );
+        TestEnv {
+            workspace,
+            objects,
+            ctx,
+        }
     }
 
     fn input_file(path: &Path) -> NodeInput {
@@ -842,14 +961,24 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRuntime {
+        workspace_root: Option<PathBuf>,
         requests: Mutex<Vec<ContainerRunRequest>>,
+    }
+
+    impl FakeRuntime {
+        fn new(workspace_root: &Path) -> Self {
+            Self {
+                workspace_root: Some(workspace_root.to_path_buf()),
+                ..Default::default()
+            }
+        }
     }
 
     fn host_path(request: &ContainerRunRequest, container_path: &str) -> PathBuf {
         let relative = Path::new(container_path)
             .strip_prefix(DEFAULT_CONTAINER_WORKDIR)
             .expect("path is inside /work");
-        request.host_workdir.join(relative)
+        request.workspace.host_path.join(relative)
     }
 
     #[async_trait]
@@ -887,6 +1016,12 @@ mod tests {
         fn name(&self) -> &'static str {
             "fake"
         }
+
+        fn workspace_root(&self) -> &Path {
+            self.workspace_root
+                .as_deref()
+                .unwrap_or_else(|| Path::new("/tmp"))
+        }
     }
 
     fn spec(image: &str, command: Vec<String>, output: &str) -> ContainerCommandSpec {
@@ -901,8 +1036,9 @@ mod tests {
                 format: Some("txt".into()),
             }],
             workdir: None,
+            artifact_prefix: "/artifacts/test".into(),
             timeout_secs: 10,
-            mounts: Vec::new(),
+            panels: Vec::new(),
             network: default_network(),
             read_only_rootfs: true,
             pull_policy: PullPolicy::Missing,
@@ -916,10 +1052,12 @@ mod tests {
 
     #[tokio::test]
     async fn stages_inputs_and_collects_declared_outputs() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("input.txt");
+        let env = test_env();
+        let dir = env.workspace.path().join("run");
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = env.workspace.path().join("input.txt");
         std::fs::write(&input, "hello-container").unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let mut node_spec = spec(
             "quay.io/example/tool@sha256:abcdef",
             vec![
@@ -931,20 +1069,27 @@ mod tests {
             ],
             "result.txt",
         );
-        node_spec.workdir = Some(dir.path().to_string_lossy().into_owned());
-        let mut node = ContainerCommandNode::new(node_spec, runtime.clone()).unwrap();
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            runtime.clone(),
+            Arc::new(PanelCache::new(
+                env.workspace.path().join("cache"),
+                "panels",
+            )),
+        )
+        .unwrap();
 
         let outputs = node
             .execute(
-                &ctx(),
+                &env.ctx,
                 &[input_file(&input)],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
             .unwrap();
 
-        let requests = runtime.requests.lock().unwrap();
-        let request = requests.last().unwrap();
+        let request = runtime.requests.lock().unwrap().last().unwrap().clone();
         assert!(request.command.contains(&"--input".into()));
         assert!(request.command.contains(&format!(
             "{DEFAULT_CONTAINER_WORKDIR}/.autonomics/inputs/input-0.txt"
@@ -954,46 +1099,80 @@ mod tests {
                 .command
                 .contains(&format!("{DEFAULT_CONTAINER_WORKDIR}/result.txt"))
         );
-        assert_eq!(request.network, "none");
+        assert_eq!(request.network, "isolated");
         assert!(request.read_only_rootfs);
         assert!(
             request
-                .host_workdir
-                .ends_with(dir.path().file_name().unwrap())
+                .workspace
+                .host_path
+                .ends_with(dir.file_name().unwrap())
         );
 
-        let output = dir.path().join("result.txt");
+        let output = dir.join("result.txt");
         assert_eq!(std::fs::read_to_string(&output).unwrap(), "hello-container");
-        assert_eq!(
-            outputs.get(&0).unwrap().as_file().unwrap().path,
-            output.canonicalize().unwrap().to_string_lossy()
+        let file = outputs.get(&0).unwrap().as_file().unwrap();
+        assert!(file.path.starts_with("vfs:///artifacts/test/"));
+        let fingerprint = file.fingerprint.as_ref().unwrap();
+        assert_eq!(fingerprint.size, "hello-container".len() as u64);
+        assert!(
+            fingerprint
+                .content_hash
+                .as_deref()
+                .unwrap()
+                .starts_with("sha256:")
         );
+        let object = env
+            .ctx
+            .opendal
+            .as_ref()
+            .unwrap()
+            .resolve(file.path.strip_prefix("vfs://").unwrap())
+            .read(
+                &env.ctx
+                    .opendal
+                    .as_ref()
+                    .unwrap()
+                    .resolve_path(file.path.strip_prefix("vfs://").unwrap()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(object.to_vec(), b"hello-container");
     }
 
     #[tokio::test]
     async fn script_mode_materializes_private_assets() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+        let env = test_env();
+        let dir = env.workspace.path().join("script-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let mut node_spec = spec(
             "quay.io/example/bash",
             vec!["bash".into(), "-e".into()],
             "script-result.txt",
         );
-        node_spec.workdir = Some(dir.path().to_string_lossy().into_owned());
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         node_spec.script = Some("cat \"$AUTONOMICS_INPUT0\" > \"$AUTONOMICS_OUTPUT0\"".into());
         node_spec.files.insert("helper.txt".into(), "helper".into());
-        let mut node = ContainerCommandNode::new(node_spec, runtime.clone()).unwrap();
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            runtime.clone(),
+            Arc::new(PanelCache::new(
+                env.workspace.path().join("cache"),
+                "panels",
+            )),
+        )
+        .unwrap();
 
         node.execute(
-            &ctx(),
+            &env.ctx,
             &[],
             &dag_core::dag::node_event::NodeReporter::noop(),
         )
         .await
         .unwrap();
 
-        assert!(dir.path().join(".autonomics/script").is_file());
-        assert!(dir.path().join(".autonomics/files/helper.txt").is_file());
+        assert!(dir.join(".autonomics/script").is_file());
+        assert!(dir.join(".autonomics/files/helper.txt").is_file());
         let requests = runtime.requests.lock().unwrap();
         assert!(
             requests
@@ -1009,6 +1188,7 @@ mod tests {
         let error = match ContainerCommandNode::new(
             spec("tool", vec!["tool".into()], "../escape.txt"),
             Arc::new(FakeRuntime::default()),
+            Arc::new(PanelCache::new("/tmp/autonomics-cache", "panels")),
         ) {
             Ok(_) => panic!("output path escape must be rejected"),
             Err(error) => error,
@@ -1019,7 +1199,7 @@ mod tests {
 
     #[test]
     fn factory_resolves_dynamic_output_ports() {
-        let ports = ContainerCommandNodeFactory
+        let ports = ContainerCommandNodeFactory::default()
             .ports_for_spec(serde_json::json!({
                 "image": "quay.io/example/tool:1",
                 "command": ["tool"],
@@ -1034,8 +1214,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_container_nodes_publish_distinct_artifacts() {
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut nodes = Vec::new();
+        for run in ["a", "b"] {
+            let dir = env.workspace.path().join(run);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+            node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+            nodes.push(
+                ContainerCommandNode::new(
+                    node_spec,
+                    runtime.clone(),
+                    Arc::new(PanelCache::new(
+                        env.workspace.path().join("cache"),
+                        "panels",
+                    )),
+                )
+                .unwrap(),
+            );
+        }
+
+        let mut second_node = nodes.pop().unwrap();
+        let mut first_node = nodes.pop().unwrap();
+        let first_reporter = dag_core::dag::node_event::NodeReporter::noop();
+        let second_reporter = dag_core::dag::node_event::NodeReporter::noop();
+        let (first, second) = tokio::join!(
+            first_node.execute(&env.ctx, &[], &first_reporter,),
+            second_node.execute(&env.ctx, &[], &second_reporter,)
+        );
+        first.unwrap();
+        second.unwrap();
+
+        assert_eq!(runtime.requests.lock().unwrap().len(), 2);
+        let paths: Vec<_> = runtime
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.name.clone())
+            .collect();
+        assert_ne!(paths[0], paths[1]);
+    }
+
+    #[tokio::test]
     async fn missing_output_fails_after_successful_exit() {
-        struct MissingOutputRuntime;
+        struct MissingOutputRuntime {
+            workspace_root: PathBuf,
+        }
         #[async_trait]
         impl ContainerRuntime for MissingOutputRuntime {
             async fn run(
@@ -1048,16 +1275,30 @@ mod tests {
                     stderr: String::new(),
                 })
             }
+            fn workspace_root(&self) -> &Path {
+                &self.workspace_root
+            }
         }
 
-        let dir = tempfile::tempdir().unwrap();
+        let env = test_env();
+        let dir = env.workspace.path().join("missing");
+        std::fs::create_dir_all(&dir).unwrap();
         let mut node_spec = spec("tool", vec!["tool".into()], "missing.txt");
-        node_spec.workdir = Some(dir.path().to_string_lossy().into_owned());
-        let mut node =
-            ContainerCommandNode::new(node_spec, Arc::new(MissingOutputRuntime)).unwrap();
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            Arc::new(MissingOutputRuntime {
+                workspace_root: env.workspace.path().to_path_buf(),
+            }),
+            Arc::new(PanelCache::new(
+                env.workspace.path().join("cache"),
+                "panels",
+            )),
+        )
+        .unwrap();
         let error = node
             .execute(
-                &ctx(),
+                &env.ctx,
                 &[],
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
@@ -1068,29 +1309,38 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires a working rootless Podman runtime and a local OCI image"]
-    async fn real_podman_copies_input_to_declared_output() {
+    #[ignore = "requires a configured k3s cluster and a local OCI image"]
+    async fn real_k3s_copies_input_to_declared_output() {
         let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
             .unwrap_or_else(|_| "docker.io/library/debian:bookworm-slim".into());
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("input.txt");
+        let env = test_env();
+        let mut config = K3sConfig::default();
+        let dir = config
+            .workspace_root
+            .join(format!("k3s-it-{}", unique_scratch_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = env.workspace.path().join("input.txt");
         std::fs::write(&input, "rootless-container").unwrap();
         let mut node_spec = spec(
             &image,
             vec![
-                "bash".into(),
-                "-lc".into(),
-                "cp -- \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"".into(),
+                "cp".into(),
+                "--".into(),
+                "$input0".into(),
+                "$output0".into(),
             ],
             "result.txt",
         );
-        node_spec.workdir = Some(dir.path().to_string_lossy().into_owned());
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         node_spec.pull_policy = PullPolicy::Never;
+        config.panel_cache_root = env.workspace.path().join("cache");
+        let runtime = K3sRuntime::new(config);
+        let cache = PanelCache::new(runtime.config().panel_cache_root.clone(), "panels");
         let mut node =
-            ContainerCommandNode::new(node_spec, Arc::new(PodmanRuntime::from_env())).unwrap();
+            ContainerCommandNode::new(node_spec, Arc::new(runtime), Arc::new(cache)).unwrap();
 
         node.execute(
-            &ctx(),
+            &env.ctx,
             &[input_file(&input)],
             &dag_core::dag::node_event::NodeReporter::noop(),
         )
@@ -1098,7 +1348,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("result.txt")).unwrap(),
+            std::fs::read_to_string(dir.join("result.txt")).unwrap(),
             "rootless-container"
         );
     }

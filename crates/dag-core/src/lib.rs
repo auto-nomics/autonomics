@@ -23,4 +23,4 @@ pub use node::{
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};
 pub use sink::SinkMode;
-pub use value::{DataRef, FileFingerprint, FileRef, NodeValue, PortType};
+pub use value::{ArtifactRef, DataRef, FileFingerprint, FileRef, NodeValue, PortType};

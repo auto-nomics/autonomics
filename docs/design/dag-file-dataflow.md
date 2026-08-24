@@ -55,9 +55,8 @@ DataFrame -- sink_file --> File -- container_command --> File -- source_file -->
 ## Running container commands
 
 The `container_command` node runs a file-to-file external command in an
-ephemeral rootless Podman container. The intended deployment is a host-owned
-TUI/runtime invoking the same user's Podman session; no Podman socket is
-mounted into the workload.
+ephemeral k3s Job. Object storage through the runtime VFS is authoritative;
+the Job sees a workspace PVC subPath and immutable read-only panel mounts.
 
 ```json
 {
@@ -69,26 +68,36 @@ mounted into the workload.
   ],
   "outputs": [{ "path": "result.bam", "format": "bam" }],
   "timeout_secs": 3600,
-  "network": "none",
-  "pull_policy": "missing"
+  "network": "isolated",
+  "pull_policy": "missing",
+  "panels": [
+    {
+      "id": "1000g_eur",
+      "digest": "sha256:...",
+      "source": "/panels/1000g_eur/v3",
+      "mount_path": "/panels/1000g_eur"
+    }
+  ]
 }
 ```
 
-The host scratch directory is bind-mounted at `/work`. Inputs are materialized
-under `/work/.autonomics/inputs`, inline scripts under
+The workspace PVC subPath is mounted at `/work`. Inputs are materialized under
+`/work/.autonomics/inputs`, inline scripts under
 `/work/.autonomics/script`, and helper files under `/work/.autonomics/files`.
 The node exposes the standard `AUTONOMICS_INPUT*` / `AUTONOMICS_OUTPUT*`
 environment contract, with all paths rewritten to their `/work` equivalents.
 
-By default the container has no network, a read-only root filesystem,
-`no-new-privileges`, `--userns=keep-id`, and the invoking uid/gid. Explicit
-`mounts` are the only additional host paths. Production images should be
-referenced by digest, and only tools that genuinely need network access should
-override the `none` network.
+By default the Job has an isolated network profile, a read-only root
+filesystem, `RuntimeDefault` seccomp, no service-account token, no privilege
+escalation, and the control process uid/gid. Panels are verified against their
+object-store manifest before the cache directory becomes visible. Production
+images should be referenced by digest, and only tools that genuinely need
+network access should use `cluster` or `egress`.
 
 Declared output paths must be safe paths relative to `/work`. After a
-successful exit, every output must exist as a regular file before the node
-emits a `FileRef`.
+successful exit, every output must exist as a regular file. The node streams it
+to VFS object storage, computes SHA-256, and emits a remote `FileRef`; the
+workspace copy remains only as execution scratch.
 
 ## Incremental invalidation
 

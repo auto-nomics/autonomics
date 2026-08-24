@@ -5,14 +5,14 @@ use thiserror::Error;
 pub enum ContainerRuntimeError {
     #[error("invalid container request: {0}")]
     Invalid(String),
-    #[error("container command failed to start: {0}")]
-    Spawn(#[from] std::io::Error),
-    #[error("`{command}` exited with status {exit_code}: {stderr}")]
-    Command {
-        command: &'static str,
-        exit_code: i32,
-        stderr: String,
-    },
+    #[error("container data-plane I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("object storage operation failed: {0}")]
+    ObjectStorage(String),
+    #[error("invalid panel manifest at `{path}`: {message}")]
+    PanelManifest { path: String, message: String },
+    #[error("Kubernetes operation failed: {0}")]
+    Kubernetes(#[from] kube::Error),
     #[error("container exited with status {exit_code}: {stderr}")]
     ExitStatus { exit_code: i32, stderr: String },
     #[error("container was killed before completing within {timeout_secs}s")]

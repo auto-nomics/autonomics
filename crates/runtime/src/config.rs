@@ -438,12 +438,12 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 const PROMPT_DAG_SCRIPTS: &str = "\n\
 ### Container Commands (container_command)\n\
 - Use `container_command` for external bioinformatics tools. It runs a \
-rootless Podman container with no shell insertion, a read-only rootfs, \
-`network: \"none\"` by default, and `/work` as the writable scratch mount.\n\
+k3s Job with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
+by default, and `/work` as the writable workspace PVC subPath.\n\
 - Put the executable and arguments in `command`. Bind file paths only through \
 `$input0`, `$output0`, `$workdir`, `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \
-Reference data requires explicit `mounts`.\n\
+Reference data requires immutable `panels` backed by object storage.\n\
 - DataFrame values must cross the file boundary explicitly: \
 `sink_file -> container_command -> source_file`. Output paths must be safe \
 relative paths under `/work`; declare every output in `outputs`. Missing files \

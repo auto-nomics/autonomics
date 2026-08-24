@@ -113,6 +113,12 @@ opendal = { version = "0.57", features = [
   "services-s3",
   "services-oss",
 ] }
+kube = { version = "4.2.0", default-features = false, features = [
+  "client",
+  "rustls-tls",
+] }
+k8s-openapi = { version = "0.28.0", features = ["v1_33"] }
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"

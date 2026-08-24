@@ -2,7 +2,7 @@
 # =============================================================================
 # ensure-secret.sh — idempotent placeholder writer for .env / .env-style files
 # =============================================================================
-# Usage:  ensure-secret.sh <KEY> <ENV_FILE>
+# Usage:  ensure-secret.sh <KEY> <ENV_FILE> [TOKEN_TYPE]
 #
 # Behavior:
 #   • KEY present with non-empty value  →  no-op, silent
@@ -42,11 +42,19 @@ if [ -n "${VAL}" ]; then
   exit 0
 fi
 
-# Generate a strong random value. Default 64 hex chars (32 bytes).
+# Generate a strong random value.
+#   hex           64 hex chars (32 bytes)
+#   base64        base64-encoded 32 bytes
+#   garage-key-id GK + 24 hex chars (Garage key-ID format)
 if [ "${TOKEN_TYPE}" = "hex" ]; then
   NEW=$(openssl rand -hex 32)
-else
+elif [ "${TOKEN_TYPE}" = "base64" ]; then
   NEW=$(openssl rand -base64 32)
+elif [ "${TOKEN_TYPE}" = "garage-key-id" ]; then
+  NEW="GK$(openssl rand -hex 12)"
+else
+  echo "ERROR: unsupported TOKEN_TYPE: ${TOKEN_TYPE}" >&2
+  exit 1
 fi
 
 # Decide: replace in place vs. append.

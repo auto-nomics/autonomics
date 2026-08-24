@@ -6,8 +6,8 @@
 # before the data lake (Iceberg / Lakekeeper) relies on it. Safe to re-run:
 # every step is check-then-act and no-ops when the state is already correct.
 #
-# Driver:  docker exec garage /garage <subcommand>
-#   The dxflrs/garage image is shell-less, but `docker exec` execs the garage
+# Driver:  <container-cli> exec garage /garage <subcommand>
+#   The dxflrs/garage image is shell-less, but container exec runs the garage
 #   binary directly — no shell inside the container, no auth-header juggling,
 #   and the CLI matches the running binary's version exactly.
 #
@@ -53,8 +53,20 @@ if [ -z "${KEY_ID}" ] || [ -z "${KEY_SECRET}" ]; then
 fi
 
 # --- helpers ------------------------------------------------------------------
+CONTAINER_CLI="${CONTAINER_CLI:-}"
+if [ -z "${CONTAINER_CLI}" ]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    CONTAINER_CLI=docker
+  elif command -v podman >/dev/null 2>&1; then
+    CONTAINER_CLI=podman
+  else
+    echo "ERROR: neither docker nor podman is available" >&2
+    exit 1
+  fi
+fi
+
 # garage logs INFO/RPC lines to stderr; strip them so stdout stays parseable.
-g()   { docker exec garage /garage "$@"; }
+g()   { "${CONTAINER_CLI}" exec garage /garage "$@"; }
 gout() { g "$@" 2>/dev/null; }
 step() { echo ">>> $*"; }
 

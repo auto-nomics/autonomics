@@ -10,13 +10,13 @@
 
 services:
   # ── Object Storage (S3-compatible) ──────────────────────────────────────
-  # dxflrs/garage:v2.0.0 is shell-less, so we can't run an entrypoint
+  # docker.io/dxflrs/garage:v2.0.0 is shell-less, so we can't run an entrypoint
   # script. The garage.toml is rendered on the host (see Makefile target
   # `garage-config`) and bind-mounted at the binary's default config
   # path. The image's own Cmd is `["/garage", "server"]`, so we leave
   # entrypoint unset.
   garage:
-    image: dxflrs/garage:v2.0.0
+    image: docker.io/dxflrs/garage:v2.0.0
     container_name: garage
     restart: unless-stopped
     environment:
@@ -37,7 +37,7 @@ services:
       - "3902:3902" # Web
       - "3903:3903" # Admin
     healthcheck:
-      test: ["CMD", "garage", "status"]
+      test: ["CMD", "/garage", "status"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -45,7 +45,7 @@ services:
 
   # ── Garage Web UI ────────────────────────────────────
   webui:
-    image: khairul169/garage-webui:latest
+    image: docker.io/khairul169/garage-webui:latest
     container_name: garage-webui
     restart: unless-stopped
     volumes:

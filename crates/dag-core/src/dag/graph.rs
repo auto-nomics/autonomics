@@ -1416,6 +1416,11 @@ fn cached_file_changed(file: &FileRef) -> bool {
     let Some(expected) = file.fingerprint.as_ref() else {
         return false;
     };
+    // Remote artifacts are immutable and addressed by a unique object path;
+    // their content hash is authoritative across workers and local mtimes.
+    if file.path.starts_with("vfs://") && expected.content_hash.is_some() {
+        return false;
+    }
     FileFingerprint::from_path(&file.path).as_ref() != Some(expected)
 }
 

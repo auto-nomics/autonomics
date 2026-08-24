@@ -13,12 +13,13 @@
 #   make nuke         Stop + delete volumes (DESTRUCTIVE)
 #
 # The unified .env lives at the workspace root (../../.env) and is passed
-# via --env-file so docker compose can interpolate ${VAR} values.
+# via --env-file so the selected compose CLI can interpolate ${VAR} values.
 # =============================================================================
 
-ENV_FILE   ?= ../../.env
-COMPOSE     = docker compose --env-file $(ENV_FILE)
-SVC         ?=
+ENV_FILE    ?= ../../.env
+COMPOSE_CLI ?= $(shell if docker compose version >/dev/null 2>&1; then echo 'docker compose'; else echo podman-compose; fi)
+COMPOSE      = $(COMPOSE_CLI) --env-file $(ENV_FILE)
+SVC          ?=
 
 GARAGE_TPL  = garage/garage.toml.template
 GARAGE_OUT  = garage/garage.toml
@@ -35,7 +36,7 @@ check-env:
 	@./scripts/ensure-secret.sh GARAGE_RPC_SECRET  $(ENV_FILE)
 	@./scripts/ensure-secret.sh GARAGE_ADMIN_TOKEN $(ENV_FILE) base64
 	@./scripts/ensure-secret.sh GARAGE_METRICS_TOKEN $(ENV_FILE) base64
-	@./scripts/ensure-secret.sh GARAGE_ACCESS_KEY_ID $(ENV_FILE)
+	@./scripts/ensure-secret.sh GARAGE_ACCESS_KEY_ID $(ENV_FILE) garage-key-id
 	@./scripts/ensure-secret.sh GARAGE_SECRET_ACCESS_KEY $(ENV_FILE)
 
 # Render garage.toml on the host. The dxflrs/garage image is shell-less

@@ -61,4 +61,5 @@ set -a
 set +a
 
 envsubst "${WHITELIST}" < "${TPL}" > "${OUT}"
+chmod 600 "${OUT}"
 echo ">>> Rendered garage config: ${OUT}"

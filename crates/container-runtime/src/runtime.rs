@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,6 +21,11 @@ pub trait ContainerRuntime: Send + Sync {
 
     fn name(&self) -> &'static str {
         "container"
+    }
+
+    /// Root of the shared workspace volume as seen by this control process.
+    fn workspace_root(&self) -> &Path {
+        Path::new("/")
     }
 }
 

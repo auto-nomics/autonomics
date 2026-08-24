@@ -1,7 +1,7 @@
 //! Typed values carried by DAG edges.
 
 use datafusion::prelude::DataFrame;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::dag::DagError;
 
@@ -108,7 +108,7 @@ impl From<Vec<DataRef>> for NodeValue {
 }
 
 /// A file artifact address passed between nodes.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRef {
     /// Absolute or engine-mounted path. Relative paths are not accepted at
     /// runtime because they depend on the caller's process working directory.
@@ -116,6 +116,29 @@ pub struct FileRef {
     /// Optional normalized format label (for example `csv`, `vcf`, `parquet`).
     pub format: Option<String>,
     pub fingerprint: Option<FileFingerprint>,
+}
+
+/// A location-independent contract for an object stored by the DAG data plane.
+///
+/// `uri` is normally a `vfs://` address. The fingerprint is content-based so
+/// it remains valid after an object is copied between nodes or object stores.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub uri: String,
+    pub format: Option<String>,
+    pub fingerprint: Option<FileFingerprint>,
+    pub producer: Option<String>,
+    pub generation: Option<u64>,
+}
+
+impl From<ArtifactRef> for FileRef {
+    fn from(artifact: ArtifactRef) -> Self {
+        Self {
+            path: artifact.uri,
+            format: artifact.format,
+            fingerprint: artifact.fingerprint,
+        }
+    }
 }
 
 /// A logical artifact address passed between nodes.
@@ -203,10 +226,25 @@ impl FileRef {
             fingerprint: Some(FileFingerprint::from_metadata(&metadata)),
         })
     }
+
+    /// Build a remote artifact address. Remote fingerprints must not depend on
+    /// worker-local mtimes.
+    pub fn remote(
+        uri: impl Into<String>,
+        format: Option<String>,
+        size: u64,
+        sha256: Option<String>,
+    ) -> Self {
+        Self {
+            path: uri.into(),
+            format,
+            fingerprint: Some(FileFingerprint::remote(size, sha256)),
+        }
+    }
 }
 
 /// Cheap artifact identity suitable for incremental invalidation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileFingerprint {
     pub size: u64,
     pub mtime_ns: i128,
@@ -230,6 +268,14 @@ impl FileFingerprint {
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         metadata.is_file().then(|| Self::from_metadata(&metadata))
+    }
+
+    pub fn remote(size: u64, sha256: Option<String>) -> Self {
+        Self {
+            size,
+            mtime_ns: 0,
+            content_hash: sha256,
+        }
     }
 }
 

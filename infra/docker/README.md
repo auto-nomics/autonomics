@@ -22,8 +22,8 @@ infra/docker/
 
 | 服务 | 镜像 | 端口 | 用途 |
 |------|------|------|------|
-| **garage** | `dxflrs/garage:v2.0.0` | 3900-3903 | S3 兼容对象存储 |
-| **webui** | `khairul169/garage-webui:latest` | 3909 | Garage Web UI |
+| **garage** | `docker.io/dxflrs/garage:v2.0.0` | 3900-3903 | S3 兼容对象存储 |
+| **webui** | `docker.io/khairul169/garage-webui:latest` | 3909 | Garage Web UI |
 
 ## 快速开始
 
