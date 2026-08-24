@@ -1986,6 +1986,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "container-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "schemars",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7082,6 +7094,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "biofusion",
+ "container-runtime",
  "crossref",
  "dag-core",
  "datafusion",

@@ -1,12 +1,13 @@
 # =============================================================================
 # Autonomics Data Lake — Docker Operations
 # =============================================================================
-#   make up           Start all services + bootstrap the S3 warehouse
+#   make up           Start Garage + its Web UI, then bootstrap the S3 bucket
+#   make garage-up    Alias for make up
 #   make down         Stop all services
 #   make logs         Tail logs (all or one: make logs svc=garage)
 #   make ps           Show service status
 #   make restart      Restart one: make restart svc=garage
-#   make shell        Shell into:  make shell svc=iceberg-catalog-db
+#   make shell        Shell into:  make shell svc=garage
 #   make health       Check service health
 #   make setup        Idempotently (re)initialize the Garage warehouse
 #   make nuke         Stop + delete volumes (DESTRUCTIVE)
@@ -15,14 +16,14 @@
 # via --env-file so docker compose can interpolate ${VAR} values.
 # =============================================================================
 
-COMPOSE     = docker compose --env-file ../../.env
-ENV_FILE    = ../../.env
+ENV_FILE   ?= ../../.env
+COMPOSE     = docker compose --env-file $(ENV_FILE)
 SVC         ?=
 
 GARAGE_TPL  = garage/garage.toml.template
 GARAGE_OUT  = garage/garage.toml
 
-.PHONY: check-env garage-config warehouse-setup init up down logs ps restart shell health clean nuke
+.PHONY: check-env garage-config garage-setup garage-up garage-down init up down logs ps restart shell health clean nuke
 .PHONY: $(GARAGE_OUT)
 
 check-env:
@@ -34,6 +35,8 @@ check-env:
 	@./scripts/ensure-secret.sh GARAGE_RPC_SECRET  $(ENV_FILE)
 	@./scripts/ensure-secret.sh GARAGE_ADMIN_TOKEN $(ENV_FILE) base64
 	@./scripts/ensure-secret.sh GARAGE_METRICS_TOKEN $(ENV_FILE) base64
+	@./scripts/ensure-secret.sh GARAGE_ACCESS_KEY_ID $(ENV_FILE)
+	@./scripts/ensure-secret.sh GARAGE_SECRET_ACCESS_KEY $(ENV_FILE)
 
 # Render garage.toml on the host. The dxflrs/garage image is shell-less
 # (no /bin/sh), so the config must be materialised here and bind-mounted.
@@ -43,15 +46,11 @@ $(GARAGE_OUT): $(GARAGE_TPL) $(ENV_FILE) scripts/render-garage-config.sh
 # Alias so users can `make garage-config` to re-render on demand.
 garage-config: $(GARAGE_OUT)
 
-# Idempotently reconcile the S3 warehouse against .env:
-#   garage-warehouse-setup.sh   ensure the Garage bucket + access key exist
-#   lakekeeper-warehouse-setup.sh  ensure Lakekeeper has a Warehouse wired to
-#                                  that bucket (the REST catalog prefix)
-# Requires garage + lakekeeper running, so this runs after `up -d`; also
-# exposed standalone for manual re-runs / repairs.
-warehouse-setup:
+# Idempotently ensure the Garage bucket and access key match .env.
+garage-setup:
 	@./scripts/garage-warehouse-setup.sh $(ENV_FILE)
-	@./scripts/lakekeeper-warehouse-setup.sh $(ENV_FILE)
+
+garage-up: up
 
 # First-time bring-up: validate, pull, start, then bootstrap the warehouse.
 init: check-env $(GARAGE_OUT)
@@ -61,13 +60,15 @@ init: check-env $(GARAGE_OUT)
 	$(COMPOSE) pull
 	@echo ">>> Starting stack..."
 	$(COMPOSE) up -d
-	@$(MAKE) warehouse-setup
-	@echo ">>> Init complete: stack up + warehouse ready. Lakekeeper API: http://localhost:8181"
+	@$(MAKE) garage-setup
+	@echo ">>> Init complete: Garage object storage ready."
 
 up: check-env $(GARAGE_OUT)
 	$(COMPOSE) up -d
-	@$(MAKE) warehouse-setup
-	@echo ">>> Started + warehouse ready. Lakekeeper API: http://localhost:8181"
+	@$(MAKE) garage-setup
+	@echo ">>> Garage ready: S3 http://localhost:3900, Web UI http://localhost:3909"
+
+garage-down: down
 
 down:
 	$(COMPOSE) down
@@ -87,13 +88,11 @@ restart:
 	$(COMPOSE) restart $(SVC)
 
 shell:
-	@if [ -z "$(SVC)" ]; then echo "Usage: make shell svc=iceberg-catalog-db"; exit 1; fi
+	@if [ -z "$(SVC)" ]; then echo "Usage: make shell svc=garage"; exit 1; fi
 	$(COMPOSE) exec $(SVC) bash || $(COMPOSE) exec $(SVC) sh
 
 health:
-	@echo "=== Postgres ===" && docker exec iceberg-catalog-db pg_isready -U admin 2>/dev/null || echo "DOWN"
 	@echo "=== Garage ==="   && curl -sf http://localhost:3903/health 2>/dev/null || echo "DOWN"
-	@echo "=== Lakekeeper ===" && curl -sf http://localhost:8181/health 2>/dev/null || echo "DOWN"
 
 clean:
 	$(COMPOSE) down --remove-orphans

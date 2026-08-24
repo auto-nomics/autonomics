@@ -1,7 +1,6 @@
 //! Source and sink DAG node bundle.
 
 pub mod bundle_source;
-pub mod container;
 pub mod container_command;
 pub mod run_command;
 pub mod sink_file;

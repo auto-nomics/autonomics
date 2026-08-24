@@ -9,6 +9,7 @@ description = "Source and sink DAG node bundle."
 [dependencies]
 dag-core = { path = "../../dag-core" }
 biofusion = { path = "../../biofusion" }
+container-runtime = { path = "../../container-runtime" }
 vfs = { path = "../../vfs" }
 opentargets = { path = "../../opentargets" }
 openalex = { path = "../../openalex" }

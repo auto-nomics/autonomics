@@ -1,0 +1,18 @@
+[package]
+name = "container-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Runtime-neutral container execution API with a rootless Podman backend."
+
+[dependencies]
+async-trait.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "time"] }
+libc = "0.2"
+
+[lints]
+workspace = true

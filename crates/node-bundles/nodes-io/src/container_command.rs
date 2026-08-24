@@ -19,12 +19,13 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::value::{FileRef, NodeValue, PortType};
 use dag_core::{NodeCtx, NodeFactory};
 
-use crate::container::{
-    ContainerMount, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PodmanRuntime, PullPolicy,
-};
 use crate::run_command::{
     input_path, stage_inputs, validate_workspace_relative_path, write_strictly_within,
+};
+use container_runtime::{
+    ContainerMount, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
+    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PodmanRuntime, PullPolicy,
+    unique_container_name,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -522,7 +523,7 @@ impl DagNode for ContainerCommandNode {
             shm_size: self.shm_size.clone(),
             user: self.user.clone(),
             timeout_secs: self.timeout_secs,
-            name: crate::container::unique_container_name(),
+            name: unique_container_name(),
         };
 
         reporter.info(format!(
@@ -643,7 +644,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    use crate::container::ContainerRunResult;
+    use container_runtime::ContainerRunResult;
 
     fn ctx() -> NodeCtx {
         NodeCtx::new(

@@ -37,8 +37,8 @@ infra/docker/.env
 # Rendered at startup by `make up` (scripts/render-garage-config.sh);
 # the source of truth is garage.toml.template.
 infra/docker/garage/garage.toml
+infra/docker/.data/
 infra/docker/garage/data/
 infra/docker/garage/meta/
 infra/docker/garage/snapshots/
-
 

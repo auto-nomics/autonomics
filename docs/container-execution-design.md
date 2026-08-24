@@ -3,7 +3,9 @@
 > **Status update (2026-08-24):** the active implementation now prioritizes
 > rootless Podman through the `container_command` file-to-file node. Treat the
 > earlier Docker-first rollout details below as historical design context;
-> runtime integration should target the Podman backend first.
+> runtime integration should target the Podman backend first. The execution
+> API and Podman backend live in `crates/container-runtime`; `nodes-io` owns
+> only the DAG node contract and file staging.
 
 ## Design Document — 2026-08-06
 

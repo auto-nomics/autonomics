@@ -14,7 +14,7 @@
 # Source of truth = .env:
 #   GARAGE_ACCESS_KEY_ID      the access key ID Garage must expose
 #   GARAGE_SECRET_ACCESS_KEY  the corresponding secret
-#   ICEBERG_S3_BUCKET         the warehouse bucket (default: datalake)
+#   GARAGE_BUCKET             the S3 bucket (default: datalake)
 #
 # LIMITATION on key secrets:
 #   The admin API cannot read a key's secret back, so an existing key ID is
@@ -43,7 +43,7 @@ set -a
 . "${ENV_FILE}"
 set +a
 
-BUCKET="${ICEBERG_S3_BUCKET:-datalake}"
+BUCKET="${GARAGE_BUCKET:-datalake}"
 KEY_ID="${GARAGE_ACCESS_KEY_ID:-}"
 KEY_SECRET="${GARAGE_SECRET_ACCESS_KEY:-}"
 

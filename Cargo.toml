@@ -32,6 +32,7 @@ members = [
   "crates/runtime",
   "crates/vfs",
   "crates/biofusion",
+  "crates/container-runtime",
   "crates/data-engine-tools",
   "crates/apply-patch",
 
