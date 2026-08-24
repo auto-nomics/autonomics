@@ -404,6 +404,10 @@ impl DagNode for UnivariateMixerNode {
             node_ctx,
             &self.reference_bundle,
             &self.spec.reference,
+            &chromosomes
+                .iter()
+                .map(|chromosome| i64::from(*chromosome))
+                .collect::<Vec<_>>(),
         )
         .await
         .map_err(UnivariateMixerError::ReferenceBundle)?;

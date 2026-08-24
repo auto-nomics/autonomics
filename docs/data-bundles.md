@@ -26,7 +26,9 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `ldscore.ukbb_eur`
 - `ldmatrix.1000g_eur`: vpath may contain `{N}` for chromosome-specific tables
 - `mixer.g1000_eur`: MiXeR signed-LD/engine bundle root
-- `plink.1000g_eur`: vpath must contain `{N}` for chromosome PLINK prefixes
+- `plink.1000g_eur`: vpath must contain `{N}` for chromosome PLINK prefixes.
+   LAVA and HDL-L require this panel to preserve rsID variant identifiers;
+   MiXeR's `chr:pos:ref:alt` panels are not interchangeable with it.
 - MAGMA population panel IDs such as `g1000_eur`, `g1000_eas`, `g1000_afr`,
   `g1000_amr`, and `g1000_sas`
 - `magma.gene_loc`

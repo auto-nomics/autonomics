@@ -640,6 +640,7 @@ impl DagNode for SusieRssNode {
             node_ctx,
             &self.reference_bundle,
             &self.spec.reference,
+            &[chrom],
         )
         .await
         .map_err(SusieNodeError::ReferenceBundle)?;
@@ -862,6 +863,7 @@ mod tests {
             &node_ctx,
             &reference_bundle(),
             &default_reference(),
+            &[21],
         )
         .await
         .expect("MiXeR reference should resolve through VFS");

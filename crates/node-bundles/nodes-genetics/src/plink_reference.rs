@@ -169,16 +169,18 @@ mod tests {
         .unwrap();
     }
 
-    fn vfs_ctx(source: &Path) -> NodeCtx {
+    fn vfs_ctx_at(source: &Path, mount_path: &str) -> NodeCtx {
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
                 id: "plink-test".into(),
-                config: vfs::BackendConfig::local(source.to_string_lossy().into_owned()),
+                // Production local mounts use a backend rooted at `/` and an
+                // absolute source directory. Preserve that key layout in tests.
+                config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
-                path: "/data/mixer/resources".into(),
+                path: mount_path.into(),
                 backend: "plink-test".into(),
-                source: "/".into(),
+                source: source.to_string_lossy().into_owned(),
                 read_only: true,
             }],
         };
@@ -186,6 +188,10 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let opendal = Arc::new(vfs::OpendalFileStorage::with_mounts(scratch.path(), mounts));
         NodeCtx::new(SessionContext::new().runtime_env(), Some(opendal))
+    }
+
+    fn vfs_ctx(source: &Path) -> NodeCtx {
+        vfs_ctx_at(source, "/data/mixer/resources")
     }
 
     #[tokio::test]
@@ -207,6 +213,38 @@ mod tests {
                 .chr_prefix
                 .get(&1)
                 .is_some_and(|path| path.ends_with("1000G.EUR.chr1.qc"))
+        );
+    }
+
+    #[tokio::test]
+    async fn lava_reference_loads_rsid_panel_from_production_layout() {
+        let source = Path::new("/mnt/data/lava/resources");
+        if !source.join("chr21/1000G.EUR.chr21.qc.bim").is_file() {
+            return;
+        }
+        let bundle = DataBundle::new(
+            PLINK_BUNDLE,
+            "1000G EUR rsID PLINK reference",
+            "/bundles/plink/1000g_eur/chr{N}/1000G.EUR.chr{N}.qc",
+        );
+
+        let loaded = load_lava_reference(
+            &vfs_ctx_at(source, "/bundles/plink/1000g_eur"),
+            &bundle,
+            &[21],
+        )
+        .await
+        .expect("rsID PLINK reference should load");
+
+        assert_eq!(loaded.reference.sample_size, 503);
+        assert!(
+            loaded
+                .reference
+                .snp_info
+                .snp
+                .first()
+                .is_some_and(|snp| snp.starts_with("rs")),
+            "LAVA requires a reference panel keyed by rsID"
         );
     }
 

@@ -101,8 +101,26 @@ async fn read_vfs_bytes(node_ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, Strin
     Ok(bytes)
 }
 
-async fn stage_vfs_file(node_ctx: &NodeCtx, source: &str, target: &Path) -> Result<(), String> {
-    let bytes = read_vfs_bytes(node_ctx, source).await?;
+async fn stage_backend_file(
+    operator: &vfs::opendal::Operator,
+    source_key: &str,
+    target: &Path,
+) -> Result<(), String> {
+    let reader = operator
+        .reader_with(source_key)
+        .concurrent(8)
+        .chunk(8 * 1024 * 1024)
+        .await
+        .map_err(|error| format!("open backend object {source_key}: {error}"))?;
+    let mut reader = reader
+        .into_futures_async_read(..)
+        .await
+        .map_err(|error| format!("open backend object {source_key}: {error}"))?;
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("read backend object {source_key}: {error}"))?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
@@ -110,7 +128,34 @@ async fn stage_vfs_file(node_ctx: &NodeCtx, source: &str, target: &Path) -> Resu
     std::fs::write(target, bytes).map_err(|error| format!("write {}: {error}", target.display()))
 }
 
-async fn stage_bundle(node_ctx: &NodeCtx, root: &str, local_root: &Path) -> Result<(), String> {
+fn template_matches(template: &str, relative: &str, chromosomes: &[i64]) -> bool {
+    let Some(placeholder) = template.find('@') else {
+        return relative == template;
+    };
+    let (prefix, suffix) = template.split_at(placeholder);
+    let suffix = &suffix[1..];
+    let Some(middle) = relative
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    if chromosomes.is_empty() {
+        return true;
+    }
+    middle
+        .parse::<i64>()
+        .map(|chromosome| chromosomes.contains(&chromosome))
+        .unwrap_or(false)
+}
+
+async fn stage_bundle(
+    node_ctx: &NodeCtx,
+    root: &str,
+    local_root: &Path,
+    bundle: &MixerPanelBundle,
+    chromosomes: &[i64],
+) -> Result<(), String> {
     let storage = node_ctx
         .opendal
         .as_ref()
@@ -128,14 +173,32 @@ async fn stage_bundle(node_ctx: &NodeCtx, root: &str, local_root: &Path) -> Resu
         .await
         .map_err(|error| format!("list {root}: {error}"))?;
 
+    let bundle_prefix = root_key.trim_end_matches('/');
+    let engine_scripts_prefix = format!("{}/precimed/", bundle.engine_path);
+    let library = format!("{}/libbgmg.so", bundle.engine_path);
     for entry in entries {
-        if entry.metadata().is_dir() {
+        if !entry.metadata().is_file() {
             continue;
         }
-        let relative = entry.path().trim_start_matches('/');
-        let source = vpath(root, relative);
-        let target = local_root.join(relative);
-        stage_vfs_file(node_ctx, &source, &target).await?;
+        let physical_key = entry.path();
+        let relative = physical_key
+            .strip_prefix(bundle_prefix)
+            .unwrap_or(physical_key)
+            .trim_start_matches('/');
+        let needed = relative == BUNDLE_MANIFEST
+            || relative == library
+            || relative.starts_with(&engine_scripts_prefix)
+            || [
+                bundle.bim_template.as_str(),
+                bundle.ld_template.as_str(),
+                bundle.extract_template.as_str(),
+            ]
+            .iter()
+            .any(|template| template_matches(template, relative, chromosomes));
+        if needed {
+            let target = local_root.join(relative);
+            stage_backend_file(&operator, physical_key, &target).await?;
+        }
     }
     Ok(())
 }
@@ -144,6 +207,7 @@ pub(crate) async fn resolve_reference(
     node_ctx: &NodeCtx,
     runtime_bundle: &DataBundle,
     reference: &str,
+    chromosomes: &[i64],
 ) -> Result<MixerReferenceBundle, String> {
     if !valid_id(reference) {
         return Err(format!(
@@ -180,9 +244,10 @@ pub(crate) async fn resolve_reference(
     validate_template(&bundle.bim_template)?;
     validate_template(&bundle.ld_template)?;
     validate_template(&bundle.extract_template)?;
+    relative_path(&bundle.engine_path)?;
 
     let staging = tempfile::tempdir().map_err(|error| format!("create staging dir: {error}"))?;
-    stage_bundle(node_ctx, &root, staging.path()).await?;
+    stage_bundle(node_ctx, &root, staging.path(), &bundle, chromosomes).await?;
 
     let mixer_home = staging.path().join(&bundle.engine_path);
     let mixer_py = mixer_home.join("precimed").join("mixer.py");
@@ -237,10 +302,12 @@ pub(crate) fn python_executable(mixer_home: &Path) -> String {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            mixer_home
-                .join(".venv/bin/python")
-                .to_string_lossy()
-                .into_owned()
+            let bundled_python = mixer_home.join(".venv/bin/python");
+            if bundled_python.is_file() {
+                bundled_python.to_string_lossy().into_owned()
+            } else {
+                "python3".to_string()
+            }
         })
 }
 
@@ -262,12 +329,15 @@ pub(crate) mod tests {
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
                 id: "mixer".into(),
-                config: BackendConfig::local(root.to_string_lossy().to_string()),
+                // Mirror production: a local backend rooted at `/` whose
+                // mount source is an absolute directory. Backend keys then
+                // retain the full source-relative prefix.
+                config: BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
                 path: "/bundles/mixer/g1000_eur".into(),
                 backend: "mixer".into(),
-                source: "/".into(),
+                source: root.to_string_lossy().to_string(),
                 read_only: true,
             }],
         };
@@ -321,7 +391,7 @@ pub(crate) mod tests {
         .unwrap();
 
         let (ctx, _scratch) = vfs_ctx(root.path());
-        let resolved = resolve_reference(&ctx, &bundle(), "g1000_eur")
+        let resolved = resolve_reference(&ctx, &bundle(), "g1000_eur", &[])
             .await
             .unwrap();
 
@@ -336,10 +406,28 @@ pub(crate) mod tests {
     async fn missing_vfs_storage_is_rejected() {
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
 
-        let error = resolve_reference(&ctx, &bundle(), "g1000_eur")
+        let error = resolve_reference(&ctx, &bundle(), "g1000_eur", &[])
             .await
             .unwrap_err();
 
         assert!(error.contains("no VFS storage"));
+    }
+
+    #[tokio::test]
+    async fn stages_real_bundle_with_production_source_prefix() {
+        let root = Path::new("/mnt/data/mixer/resources/g1000_eur");
+        if !root.join(BUNDLE_MANIFEST).is_file() {
+            return;
+        }
+        let (ctx, _scratch) = vfs_ctx(root);
+        let resolved = resolve_reference(&ctx, &bundle(), "g1000_eur", &[21])
+            .await
+            .unwrap();
+
+        assert!(resolved.mixer_home.join("precimed/mixer.py").is_file());
+        assert!(resolved.mixer_home.join("libbgmg.so").is_file());
+        assert!(Path::new(&resolved.bim_template.replace('@', "21")).is_file());
+        assert!(Path::new(&resolved.ld_template.replace('@', "21")).is_file());
+        assert!(Path::new(&resolved.extract_template.replace('@', "21")).is_file());
     }
 }

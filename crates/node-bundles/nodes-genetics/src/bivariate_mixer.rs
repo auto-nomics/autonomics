@@ -393,6 +393,7 @@ impl DagNode for BivariateMixerNode {
             node_ctx,
             &self.reference_bundle,
             &self.spec.reference,
+            &[],
         )
         .await
         .map_err(BivariateMixerError::ReferenceBundle)?;
