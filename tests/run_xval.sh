@@ -47,6 +47,11 @@ case "$TEST_NAME" in
         OUTPUT_EDGE="_edge_roc_0.csv"
         COMPARE_COLS="auc"
         ;;
+    coloc_abf)
+        MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"coloc","kind":"coloc_abf","spec":{"dataset1":{"type":"quant","snp":"snp","beta":"beta1","varbeta":"varbeta1","maf":"maf","n":400},"dataset2":{"type":"cc","snp":"snp","beta":"beta2","varbeta":"varbeta2","maf":"maf","n":400,"s":0.4},"p1":0.0001,"p2":0.0001,"p12":1e-05}}],"edges":[{"from":"src","from_port":0,"to":"coloc","to_port":0}]}'
+        OUTPUT_EDGE="_edge_coloc_0.csv"
+        COMPARE_COLS="nsnps,PP.H0.abf,PP.H1.abf,PP.H2.abf,PP.H3.abf,PP.H4.abf,lABF.df1,lABF.df2,SNP.PP.H4"
+        ;;
     fine_gray)
         MANIFEST='{"nodes":[{"id":"src","kind":"source_file","spec":{"path":"'"$DATA_CSV"'"}},{"id":"fg","kind":"fine_gray","spec":{"time_column":"time","status_column":"fstatus","covariates":["x1","x2","x3"],"cengroup_column":"cengroup","failcode":1,"cencode":0,"gtol":1e-6,"maxiter":10,"variance":true}}],"edges":[{"from":"src","from_port":0,"to":"fg","to_port":0}]}'
         OUTPUT_EDGE="_edge_fg_0.csv"
@@ -110,7 +115,7 @@ export XVAL_OUTPUT_DIR="$XVAL_DIR"
 export XVAL_TEST_NAME="$TEST_NAME"
 
 # Run the Rust cross-validation test
-cargo test -p data-engine --lib -- cross_validate::$TEST_NAME --nocapture 2>&1 || true
+cargo test -p data-engine --lib -- xval_tests::$TEST_NAME --ignored --nocapture 2>&1 || true
 
 # Check if the generated R script exists
 R_SCRIPT="${XVAL_DIR}/${TEST_NAME}_generated.R"
@@ -169,9 +174,9 @@ for (col in common) {
                     ifelse(diff < 1e-4, 'PASS', 'CHECK')))
                 max_diff <- max(max_diff, diff)
             }
-        } else if (length(gen[[col]]) == 1 && length(ref[[col]]) == 1) {
-            diff <- abs(gen[[col]] - ref[[col]])
-            cat(sprintf('  %-15s diff: %.6e  %s\n', col, diff,
+        } else if (nrow(gen) == nrow(ref)) {
+            diff <- max(abs(gen[[col]] - ref[[col]]), na.rm = TRUE)
+            cat(sprintf('  %-15s max diff: %.6e  %s\n', col, diff,
                 ifelse(diff < 1e-4, 'PASS', 'CHECK')))
             max_diff <- max(max_diff, diff)
         }

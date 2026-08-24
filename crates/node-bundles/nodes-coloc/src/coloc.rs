@@ -427,13 +427,48 @@ impl NodeFactory for ColocAbfNodeFactory {
             coloc_args.push(format!("prior_weights2 = {input}${pw2_col}"));
         }
 
+        // Serialize the coloc.abf result into the same long-format table the
+        // Rust node emits, so the compiler-injected fwrite() writes a CSV
+        // with the node's output schema.
+        let raw = format!("{out}_raw");
+        let summary = format!("{out}_summary");
+        let snps = format!("{out}_snps");
         let code = vec![
             "# coloc.abf: Bayesian colocalisation analysis".to_string(),
             "library(coloc)".to_string(),
             format!("dataset1 <- list({})", d1_args.join(", ")),
             format!("dataset2 <- list({})", d2_args.join(", ")),
-            format!("{out} <- coloc.abf({})", coloc_args.join(", ")),
-            format!("print({out}$summary)"),
+            format!(
+                "{raw} <- suppressWarnings(coloc.abf({}))",
+                coloc_args.join(", ")
+            ),
+            format!("{summary} <- data.table("),
+            "  section = \"summary\",".to_string(),
+            format!("  nsnps = as.integer({raw}$summary[\"nsnps\"]),"),
+            format!("  PP.H0.abf = as.numeric({raw}$summary[\"PP.H0.abf\"]),"),
+            format!("  PP.H1.abf = as.numeric({raw}$summary[\"PP.H1.abf\"]),"),
+            format!("  PP.H2.abf = as.numeric({raw}$summary[\"PP.H2.abf\"]),"),
+            format!("  PP.H3.abf = as.numeric({raw}$summary[\"PP.H3.abf\"]),"),
+            format!("  PP.H4.abf = as.numeric({raw}$summary[\"PP.H4.abf\"]),"),
+            "  snp = NA_character_,".to_string(),
+            "  lABF.df1 = NA_real_,".to_string(),
+            "  lABF.df2 = NA_real_,".to_string(),
+            "  SNP.PP.H4 = NA_real_".to_string(),
+            ")".to_string(),
+            format!("{snps} <- data.table("),
+            "  section = \"snp\",".to_string(),
+            "  nsnps = NA_integer_,".to_string(),
+            "  PP.H0.abf = NA_real_,".to_string(),
+            "  PP.H1.abf = NA_real_,".to_string(),
+            "  PP.H2.abf = NA_real_,".to_string(),
+            "  PP.H3.abf = NA_real_,".to_string(),
+            "  PP.H4.abf = NA_real_,".to_string(),
+            format!("  snp = as.character({raw}$results$snp),"),
+            format!("  lABF.df1 = as.numeric({raw}$results$lABF.df1),"),
+            format!("  lABF.df2 = as.numeric({raw}$results$lABF.df2),"),
+            format!("  SNP.PP.H4 = as.numeric({raw}$results$SNP.PP.H4)"),
+            ")".to_string(),
+            format!("{out} <- rbind({summary}, {snps})"),
         ];
 
         Ok(dag_core::codegen::NodeCodegen::simple(code, out))

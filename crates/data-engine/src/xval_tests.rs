@@ -3,7 +3,7 @@
 //!
 //! Usage:
 //!   1. Rscript tests/cross_validate.R linear_regression /tmp/autonomics_xval
-//!   2. DIFFTESTS=1 cargo test -p data-engine --lib codegen::xval_tests -- --ignored --nocapture
+//!   2. DIFFTESTS=1 cargo test -p data-engine --lib -- xval_tests -- --ignored --nocapture
 
 use datafusion::prelude::SessionContext;
 
@@ -960,8 +960,8 @@ fn mrpresso_codegen_xval() {
 // the generated R, and the reference R all agree.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Generate the synthetic data + reference CSVs for the cmprsk codegen tests.
-fn cmprsk_xval_data(test_name: &str) {
+/// Generate the synthetic data + reference CSVs for an R cross-validation test.
+fn xval_reference_data(test_name: &str) {
     // The generator lives at the repo root (CARGO_MANIFEST_DIR = crates/data-engine).
     let script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cross_validate.R");
@@ -1027,7 +1027,7 @@ fn max_csv_diff(gen_path: &str, ref_path: &str) -> f64 {
 #[test]
 #[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
 fn fine_gray_node_vs_r() {
-    cmprsk_xval_data("fine_gray");
+    xval_reference_data("fine_gray");
     let data_csv = format!("{XVAL_DIR}/fine_gray_data.csv");
     if !std::path::Path::new(&data_csv).exists() {
         eprintln!(
@@ -1106,7 +1106,7 @@ fn fine_gray_node_vs_r() {
 #[test]
 #[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
 fn fine_gray_tf_node_vs_r() {
-    cmprsk_xval_data("fine_gray_tf");
+    xval_reference_data("fine_gray_tf");
     let data_csv = format!("{XVAL_DIR}/fine_gray_tf_data.csv");
     if !std::path::Path::new(&data_csv).exists() {
         return;
@@ -1170,7 +1170,7 @@ fn fine_gray_tf_node_vs_r() {
 #[test]
 #[ignore = "requires R + cmprsk; run with DIFFTESTS=1"]
 fn cuminc_node_vs_r() {
-    cmprsk_xval_data("cuminc");
+    xval_reference_data("cuminc");
     let data_csv = format!("{XVAL_DIR}/cuminc_data.csv");
     if !std::path::Path::new(&data_csv).exists() {
         return;
@@ -1385,14 +1385,134 @@ async fn write_df_csv(df: datafusion::dataframe::DataFrame, path: &str) {
 
 // ── coloc_abf ──────────────────────────────────────────────────────────────
 
+/// Read a CSV preserving raw fields (headers + rows).
+fn read_coloc_csv(path: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut rdr = csv::Reader::from_path(path).expect("open coloc csv");
+    let headers = rdr.headers().unwrap().clone();
+    let names: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    let mut rows = Vec::new();
+    for rec in rdr.records() {
+        let rec = rec.unwrap();
+        rows.push(rec.iter().map(|s| s.to_string()).collect());
+    }
+    (names, rows)
+}
+
+/// Compare two coloc_abf long-format CSVs: schema, row count, string columns
+/// (exact, with R "NA" and Arrow "" both treated as null), and the max
+/// relative difference across all numeric columns.
+fn coloc_csv_diff(gen_path: &str, ref_path: &str) -> f64 {
+    let (gen_names, gen_rows) = read_coloc_csv(gen_path);
+    let (ref_names, ref_rows) = read_coloc_csv(ref_path);
+    assert_eq!(gen_names, ref_names, "coloc_abf output schema mismatch");
+    assert_eq!(
+        gen_rows.len(),
+        ref_rows.len(),
+        "coloc_abf output row count mismatch"
+    );
+
+    fn normalize(s: &str) -> &str {
+        if s.is_empty() || s == "NA" {
+            "<null>"
+        } else {
+            s
+        }
+    }
+    let mut worst = 0.0_f64;
+    for (ri, (g, r)) in gen_rows.iter().zip(ref_rows.iter()).enumerate() {
+        for (ci, name) in gen_names.iter().enumerate() {
+            match name.as_str() {
+                "section" | "snp" => assert_eq!(
+                    normalize(&g[ci]),
+                    normalize(&r[ci]),
+                    "coloc_abf string mismatch at row {ri}, column {name}"
+                ),
+                _ => {
+                    let a: f64 = g[ci].parse().unwrap_or(f64::NAN);
+                    let b: f64 = r[ci].parse().unwrap_or(f64::NAN);
+                    if a.is_nan() && b.is_nan() {
+                        continue;
+                    }
+                    let d = (a - b).abs() / b.abs().max(1.0);
+                    if d > worst {
+                        worst = d;
+                    }
+                }
+            }
+        }
+    }
+    worst
+}
+
+/// Execute the Rust coloc_abf node on the same data CSV and compare its
+/// port-0 output against the R reference CSV.
+fn run_coloc_node(data_csv: &str, spec: serde_json::Value, stem: &str, ref_path: &str) -> f64 {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv(data_csv, datafusion::prelude::CsvReadOptions::new())
+            .await
+            .expect("read data csv");
+
+        let node_ctx = crate::node_registry::registry::NodeCtx::new(ctx.runtime_env(), None);
+        let registry = test_registry();
+        let factory = registry
+            .get_factory("coloc_abf")
+            .expect("coloc_abf factory");
+        let mut node = factory
+            .build(spec, node_ctx.clone())
+            .expect("build coloc_abf node");
+
+        let input = crate::nodes::meta::NodeInput::new_dataframe(0, df);
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[input],
+                &crate::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect("coloc_abf execute");
+
+        let port0 = outputs.dataframe(0).cloned().unwrap();
+        write_df_csv(port0, &format!("{XVAL_DIR}/_node_{stem}_0.csv")).await;
+    });
+
+    coloc_csv_diff(&format!("{XVAL_DIR}/_node_{stem}_0.csv"), ref_path)
+}
+
+/// Layer 2 + 3 for `coloc_abf` on the beta/varbeta input path.
 #[test]
 #[ignore = "requires R + coloc; run with DIFFTESTS=1"]
-fn coloc_abf() {
+fn coloc_abf_node_vs_r() {
+    xval_reference_data("coloc_abf");
     let data_csv = format!("{XVAL_DIR}/coloc_abf_data.csv");
     if !std::path::Path::new(&data_csv).exists() {
         eprintln!("Run first: Rscript tests/cross_validate.R coloc_abf {XVAL_DIR}");
         return;
     }
+    let spec = serde_json::json!({
+        "dataset1": {
+            "type": "quant",
+            "snp": "snp",
+            "beta": "beta1",
+            "varbeta": "varbeta1",
+            "maf": "maf",
+            "n": 400
+        },
+        "dataset2": {
+            "type": "cc",
+            "snp": "snp",
+            "beta": "beta2",
+            "varbeta": "varbeta2",
+            "maf": "maf",
+            "n": 400,
+            "s": 0.4
+        },
+        "p1": 1e-4,
+        "p2": 1e-4,
+        "p12": 1e-5
+    });
 
     let manifest = DagManifest {
         nodes: vec![
@@ -1404,29 +1524,7 @@ fn coloc_abf() {
             NodeEntry {
                 id: "coloc".into(),
                 kind: "coloc_abf".into(),
-                spec: serde_json::json!({
-                    "dataset1": {
-                        "type": "quant",
-                        "snp": "snp",
-                        "beta": "beta1",
-                        "varbeta": "varbeta1",
-                        "maf": "maf",
-                        "n": 1000,
-                        "sdY": 1.0
-                    },
-                    "dataset2": {
-                        "type": "cc",
-                        "snp": "snp",
-                        "beta": "beta2",
-                        "varbeta": "varbeta2",
-                        "maf": "maf",
-                        "n": 1000,
-                        "s": 0.5
-                    },
-                    "p1": 1e-4,
-                    "p2": 1e-4,
-                    "p12": 1e-5
-                }),
+                spec: spec.clone(),
             },
         ],
         edges: vec![EdgeEntry {
@@ -1437,12 +1535,108 @@ fn coloc_abf() {
         }],
     };
 
+    // ── Layer 2: compile to R, run, diff the edge CSV against R coloc ──
     let script = compile_and_write(manifest, "coloc_abf");
     assert!(script.source.contains("coloc.abf("));
     assert!(script.source.contains("library(coloc)"));
     assert!(script.source.contains("p1 = 0.0001"));
     assert!(script.source.contains("type = \"quant\""));
     assert!(script.source.contains("type = \"cc\""));
+    assert!(
+        script.source.contains("PP.H4.abf"),
+        "long-format serialization"
+    );
+
+    run_generated_script("coloc_abf");
+
+    let ref_csv = format!("{XVAL_DIR}/coloc_abf_reference.csv");
+    let codegen_diff = coloc_csv_diff(&format!("{XVAL_DIR}/_edge_coloc_0.csv"), &ref_csv);
+    eprintln!("coloc_abf (beta/varbeta) generated R max rel diff: {codegen_diff:.3e}");
+    assert!(
+        codegen_diff < 1e-10,
+        "generated R coloc_abf diverged: {codegen_diff:.3e}"
+    );
+
+    // ── Layer 3: execute the Rust node on the same data ──
+    let node_diff = run_coloc_node(&data_csv, spec, "coloc_abf", &ref_csv);
+    eprintln!("coloc_abf (beta/varbeta) Rust node max rel diff: {node_diff:.3e}");
+    assert!(
+        node_diff < 1e-10,
+        "Rust coloc_abf node diverged: {node_diff:.3e}"
+    );
+}
+
+/// Layer 2 + 3 for `coloc_abf` on the pvalues/MAF/N input path.
+#[test]
+#[ignore = "requires R + coloc; run with DIFFTESTS=1"]
+fn coloc_abf_pvalues_node_vs_r() {
+    xval_reference_data("coloc_abf");
+    let data_csv = format!("{XVAL_DIR}/coloc_abf_data.csv");
+    if !std::path::Path::new(&data_csv).exists() {
+        eprintln!("Run first: Rscript tests/cross_validate.R coloc_abf {XVAL_DIR}");
+        return;
+    }
+    let spec = serde_json::json!({
+        "dataset1": {
+            "type": "quant",
+            "snp": "snp",
+            "pvalues": "pvalue1",
+            "maf": "maf",
+            "n": 400
+        },
+        "dataset2": {
+            "type": "cc",
+            "snp": "snp",
+            "pvalues": "pvalue2",
+            "maf": "maf",
+            "n": 400,
+            "s": 0.4
+        },
+        "p1": 1e-4,
+        "p2": 1e-4,
+        "p12": 1e-5
+    });
+
+    let manifest = DagManifest {
+        nodes: vec![
+            NodeEntry {
+                id: "src".into(),
+                kind: "source_file".into(),
+                spec: serde_json::json!({"path": data_csv}),
+            },
+            NodeEntry {
+                id: "coloc_pv".into(),
+                kind: "coloc_abf".into(),
+                spec: spec.clone(),
+            },
+        ],
+        edges: vec![EdgeEntry {
+            from: "src".into(),
+            from_port: 0,
+            to: "coloc_pv".into(),
+            to_port: 0,
+        }],
+    };
+
+    let script = compile_and_write(manifest, "coloc_abf_pv");
+    assert!(script.source.contains("pvalues = src$pvalue1"));
+
+    run_generated_script("coloc_abf_pv");
+
+    let ref_csv = format!("{XVAL_DIR}/coloc_abf_pv_reference.csv");
+    let codegen_diff = coloc_csv_diff(&format!("{XVAL_DIR}/_edge_coloc_pv_0.csv"), &ref_csv);
+    eprintln!("coloc_abf (pvalues) generated R max rel diff: {codegen_diff:.3e}");
+    assert!(
+        codegen_diff < 1e-6,
+        "generated R coloc_abf (pvalues) diverged: {codegen_diff:.3e}"
+    );
+
+    let node_diff = run_coloc_node(&data_csv, spec, "coloc_pv", &ref_csv);
+    eprintln!("coloc_abf (pvalues) Rust node max rel diff: {node_diff:.3e}");
+    assert!(
+        node_diff < 1e-6,
+        "Rust coloc_abf (pvalues) node diverged: {node_diff:.3e}"
+    );
 }
 
 // ── mvmr (multivariable MR) ───────────────────────────────────────────────

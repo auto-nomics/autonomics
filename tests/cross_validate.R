@@ -18,9 +18,9 @@ test_name <- args[1]
 out_dir <- args[2]
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-suppressPackageStartupMessages({
-  library(mice)
-})
+if (startsWith(test_name, "mice")) {
+    suppressPackageStartupMessages(library(mice))
+}
 set.seed(42)
 
 # ── linear_regression ──────────────────────────────────────────────────────
@@ -187,6 +187,90 @@ if (test_name == "epi_lasso") {
     )
     data.table::fwrite(ref, file.path(out_dir, "epi_lasso_reference.csv"))
     cat("OK epi_lasso\n")
+}
+
+# ── coloc_abf ──────────────────────────────────────────────────────────────
+if (test_name == "coloc_abf") {
+    suppressPackageStartupMessages(library(coloc))
+
+    # Constants are duplicated in crates/data-engine/src/xval_tests.rs so the
+    # Rust manifest passes exactly the same study-design parameters.
+    set.seed(42)
+    n_snp <- 50
+    N <- 400
+    s_cc <- 0.4
+
+    snp <- sprintf("rs%03d", seq_len(n_snp))
+    maf <- runif(n_snp, 0.05, 0.5)
+
+    # Dataset 1: quantitative trait (beta/varbeta path, shared signal).
+    beta1 <- rnorm(n_snp, mean = 0, sd = 0.25)
+    varbeta1 <- 1 / (2 * N * maf * (1 - maf))
+    pvalue1 <- pchisq(beta1^2 / varbeta1, df = 1, lower.tail = FALSE)
+
+    # Dataset 2: case-control trait (beta/varbeta path, shared signal).
+    beta2 <- 0.8 * beta1
+    varbeta2 <- 1 / (2 * N * maf * (1 - maf) * s_cc * (1 - s_cc))
+    pvalue2 <- pchisq(beta2^2 / varbeta2, df = 1, lower.tail = FALSE)
+
+    df <- data.frame(
+        snp = snp,
+        beta1 = beta1, varbeta1 = varbeta1, pvalue1 = pvalue1,
+        beta2 = beta2, varbeta2 = varbeta2, pvalue2 = pvalue2,
+        maf = maf
+    )
+    data.table::fwrite(df, file.path(out_dir, "coloc_abf_data.csv"))
+
+    # Long-format reference: summary row + per-SNP rows, matching the
+    # coloc_abf node output schema exactly.
+    make_reference <- function(res) {
+        summary_row <- data.frame(
+            section = "summary",
+            nsnps = as.integer(res$summary["nsnps"]),
+            PP.H0.abf = as.numeric(res$summary["PP.H0.abf"]),
+            PP.H1.abf = as.numeric(res$summary["PP.H1.abf"]),
+            PP.H2.abf = as.numeric(res$summary["PP.H2.abf"]),
+            PP.H3.abf = as.numeric(res$summary["PP.H3.abf"]),
+            PP.H4.abf = as.numeric(res$summary["PP.H4.abf"]),
+            snp = NA_character_,
+            lABF.df1 = NA_real_,
+            lABF.df2 = NA_real_,
+            SNP.PP.H4 = NA_real_
+        )
+        snp_rows <- data.frame(
+            section = "snp",
+            nsnps = NA_integer_,
+            PP.H0.abf = NA_real_,
+            PP.H1.abf = NA_real_,
+            PP.H2.abf = NA_real_,
+            PP.H3.abf = NA_real_,
+            PP.H4.abf = NA_real_,
+            snp = as.character(res$results$snp),
+            lABF.df1 = as.numeric(res$results$lABF.df1),
+            lABF.df2 = as.numeric(res$results$lABF.df2),
+            SNP.PP.H4 = as.numeric(res$results$SNP.PP.H4)
+        )
+        rbind(summary_row, snp_rows)
+    }
+
+    # Scenario 1: beta/varbeta (exact arithmetic path). sdY is estimated
+    # internally from varbeta/MAF/N by both R and Rust.
+    D1 <- list(beta = df$beta1, varbeta = df$varbeta1, type = "quant",
+               snp = df$snp, MAF = df$maf, N = N)
+    D2 <- list(beta = df$beta2, varbeta = df$varbeta2, type = "cc",
+               snp = df$snp, MAF = df$maf, s = s_cc, N = N)
+    ref <- make_reference(suppressWarnings(coloc.abf(D1, D2)))
+    data.table::fwrite(ref, file.path(out_dir, "coloc_abf_reference.csv"))
+
+    # Scenario 2: pvalues + MAF + N (+ s for cc).
+    P1 <- list(pvalues = df$pvalue1, type = "quant", MAF = df$maf,
+               snp = df$snp, N = N)
+    P2 <- list(pvalues = df$pvalue2, type = "cc", MAF = df$maf,
+               snp = df$snp, s = s_cc, N = N)
+    ref_pv <- make_reference(suppressWarnings(coloc.abf(P1, P2)))
+    data.table::fwrite(ref_pv, file.path(out_dir, "coloc_abf_pv_reference.csv"))
+
+    cat("OK coloc_abf\n")
 }
 
 # ── liability ──────────────────────────────────────────────────────────────

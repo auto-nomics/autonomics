@@ -1,5 +1,10 @@
 # Container Execution Mode for DAG Engine
 
+> **Status update (2026-08-24):** the active implementation now prioritizes
+> rootless Podman through the `container_command` file-to-file node. Treat the
+> earlier Docker-first rollout details below as historical design context;
+> runtime integration should target the Podman backend first.
+
 ## Design Document — 2026-08-06
 
 ## 1. Motivation

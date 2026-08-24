@@ -436,21 +436,29 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   column where a Struct is required. Reserve exactly the required column names and types.";
 
 const PROMPT_DAG_SCRIPTS: &str = "\n\
+### Container Commands (container_command)\n\
+- Use `container_command` for external bioinformatics tools. It runs a \
+rootless Podman container with no shell insertion, a read-only rootfs, \
+`network: \"none\"` by default, and `/work` as the writable scratch mount.\n\
+- Put the executable and arguments in `command`. Bind file paths only through \
+`$input0`, `$output0`, `$workdir`, `AUTONOMICS_INPUT0`, \
+`AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \
+Reference data requires explicit `mounts`.\n\
+- DataFrame values must cross the file boundary explicitly: \
+`sink_file -> container_command -> source_file`. Output paths must be safe \
+relative paths under `/work`; declare every output in `outputs`. Missing files \
+fail the node. After `run_dag`, use `output_files` to locate artifacts.\n\
+\n\
 ### Legacy Custom Scripts (run_command)\n\
 - `run_command` is deprecated and runs on the host. Prefer native Rust nodes \
-for new workflows; container workloads will move to a future Podman node. \
-For an unavoidable legacy workflow, set `program` to `bash` and \
-put the complete script in the inline `script` field. \
-Put helper Python/R files in inline `files`; they are materialized under \
+or `container_command`. For an unavoidable legacy workflow, set `program` to \
+`bash` and put the complete script in the inline `script` field. Put helper \
+Python/R files in inline `files`; they are materialized under \
 `AUTONOMICS_FILES_DIR`.\n\
 - Do not interpolate file paths into shell commands. Use `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, `AUTONOMICS_WORKDIR`, and helper paths from \
 `AUTONOMICS_FILES_DIR`. Always start Bash scripts with \
-`set -Eeuo pipefail`.\n\
-- DataFrame values must cross the file boundary explicitly: \
-`sink_file -> run_command -> source_file`. Declare every output in \
-`outputs`; missing files fail the node. After `run_dag`, use `output_files` \
-to locate artifacts.";
+`set -Eeuo pipefail`.";
 
 const PROMPT_DAG_HISTORY: &str = "\n\
 ### DAG Version Control (History & Refs)\n\

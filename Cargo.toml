@@ -91,7 +91,7 @@ members = [
   "crates/node-bundles/nodes-rd",
   "crates/workflow-editor",
   "stat_crates/dl",
-  "crates/node-bundles/nodes-dl",
+  "crates/node-bundles/nodes-dl", "bio_crates/twas",
 ]
 resolver = "3"
 

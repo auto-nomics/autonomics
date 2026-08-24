@@ -49,14 +49,53 @@ execution.
 The canonical round trip is:
 
 ```text
-DataFrame -- sink_file --> File -- run_command --> File -- source_file --> DataFrame
+DataFrame -- sink_file --> File -- container_command --> File -- source_file --> DataFrame
 ```
 
-## Running external commands
+## Running container commands
+
+The `container_command` node runs a file-to-file external command in an
+ephemeral rootless Podman container. The intended deployment is a host-owned
+TUI/runtime invoking the same user's Podman session; no Podman socket is
+mounted into the workload.
+
+```json
+{
+  "image": "docker.io/biocontainers/samtools:v1.21",
+  "command": [
+    "samtools", "view",
+    "-b", "$input0",
+    "-o", "$output0"
+  ],
+  "outputs": [{ "path": "result.bam", "format": "bam" }],
+  "timeout_secs": 3600,
+  "network": "none",
+  "pull_policy": "missing"
+}
+```
+
+The host scratch directory is bind-mounted at `/work`. Inputs are materialized
+under `/work/.autonomics/inputs`, inline scripts under
+`/work/.autonomics/script`, and helper files under `/work/.autonomics/files`.
+The same placeholders and `AUTONOMICS_INPUT*` / `AUTONOMICS_OUTPUT*`
+environment contract as `run_command` is exposed, with all paths rewritten to
+their `/work` equivalents.
+
+By default the container has no network, a read-only root filesystem,
+`no-new-privileges`, `--userns=keep-id`, and the invoking uid/gid. Explicit
+`mounts` are the only additional host paths. Production images should be
+referenced by digest, and only tools that genuinely need network access should
+override the `none` network.
+
+Declared output paths must be safe paths relative to `/work`. After a
+successful exit, every output must exist as a regular file before the node
+emits a `FileRef`.
+
+## Legacy host commands
 
 The `run_command` node executes programs without a shell. Its first release is
-file-to-file and is intended for Python, R, shell utilities, and bioinformatics
-executables.
+deprecated and should be replaced by native Rust nodes or `container_command`
+for external bioinformatics tools.
 
 Example:
 

@@ -1,8 +1,7 @@
 //! Legacy external file-to-file command node.
 //!
-//! New workflows should use native Rust nodes. A Podman-backed container node
-//! will replace this host-process escape hatch for workloads that cannot be
-//! implemented natively.
+//! New workflows should use native Rust nodes, or `container_command` for
+//! external bioinformatics tools that need an isolated toolchain.
 
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -67,8 +66,7 @@ pub struct CommandOutputSpec {
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct RunCommandNodeSpec {
-    /// Deprecated: prefer a native Rust node. Container workloads will move to
-    /// a Podman-backed node.
+    /// Deprecated: prefer a native Rust node or `container_command`.
     /// Executable passed directly to the operating system. No shell is used.
     /// In script mode, use an interpreter such as `bash`, `python`, or `Rscript`.
     pub program: String,
@@ -178,7 +176,7 @@ impl RunCommandNode {
 
 #[deprecated(
     since = "0.1.0",
-    note = "run_command runs a host process; use a native Rust node, or wait for the Podman container node"
+    note = "run_command runs a host process; use a native Rust node or container_command"
 )]
 pub struct RunCommandNodeFactory;
 
@@ -200,9 +198,9 @@ impl NodeFactory for RunCommandNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Deprecated: this node runs an external program on the host and will be \
-        replaced by a Podman-backed container node. Prefer a native Rust node \
-        whenever possible. The node runs an external program without a shell. \
+        "Deprecated: this node runs an external program on the host. Prefer a \
+        native Rust node, or use container_command for external bioinformatics \
+        tools. The node runs an external program without a shell. \
         File inputs are bound to \
         `$input0`, `$input1`, and so on; declared output paths are bound to \
         `$output0`, `$output1`, and the working directory is bound to \
@@ -249,7 +247,7 @@ impl NodeFactory for RunCommandNodeFactory {
     }
 }
 
-fn validate_workspace_relative_path(path: &str) -> Result<(), RunCommandError> {
+pub(crate) fn validate_workspace_relative_path(path: &str) -> Result<(), RunCommandError> {
     if path.is_empty() || path.contains('\0') {
         return Err(RunCommandError::Invalid(
             "file paths in `files` cannot be empty".into(),
@@ -268,7 +266,7 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), RunCommandError> {
     Ok(())
 }
 
-fn write_strictly_within(
+pub(crate) fn write_strictly_within(
     base: &Path,
     relative: &str,
     content: &str,
@@ -380,7 +378,7 @@ async fn stage_input_file(
     )))
 }
 
-async fn stage_inputs(
+pub(crate) async fn stage_inputs(
     ctx: &NodeCtx,
     workdir: &Path,
     inputs: &[NodeInput],
@@ -506,7 +504,7 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
-fn input_path(value: &NodeValue) -> Result<String, RunCommandError> {
+pub(crate) fn input_path(value: &NodeValue) -> Result<String, RunCommandError> {
     match value {
         NodeValue::File(file) => Ok(file.path.clone()),
         NodeValue::FileSet(files) if !files.is_empty() => Ok(files
