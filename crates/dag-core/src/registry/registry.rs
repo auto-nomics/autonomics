@@ -322,7 +322,7 @@ impl NodeRegistry {
 
     /// Resolve the concrete port layout for a node spec. This is the metadata
     /// contract used by agent wiring and DAG code generation for dynamic-port
-    /// node kinds such as `run_command`.
+    /// node kinds such as `container_command`.
     pub fn get_node_ports_for_spec(
         &self,
         node_kind: &str,

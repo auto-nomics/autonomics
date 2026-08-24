@@ -433,7 +433,7 @@ impl DagNode for FileSinkNode {
             path.push('/');
         }
         let df = input
-            .dataframe_value()
+            .dataframe()
             .map_err(|e| FileSinkError::InvalidInput {
                 message: e.to_string(),
             })?

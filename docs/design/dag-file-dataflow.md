@@ -77,9 +77,8 @@ mounted into the workload.
 The host scratch directory is bind-mounted at `/work`. Inputs are materialized
 under `/work/.autonomics/inputs`, inline scripts under
 `/work/.autonomics/script`, and helper files under `/work/.autonomics/files`.
-The same placeholders and `AUTONOMICS_INPUT*` / `AUTONOMICS_OUTPUT*`
-environment contract as `run_command` is exposed, with all paths rewritten to
-their `/work` equivalents.
+The node exposes the standard `AUTONOMICS_INPUT*` / `AUTONOMICS_OUTPUT*`
+environment contract, with all paths rewritten to their `/work` equivalents.
 
 By default the container has no network, a read-only root filesystem,
 `no-new-privileges`, `--userns=keep-id`, and the invoking uid/gid. Explicit
@@ -91,98 +90,9 @@ Declared output paths must be safe paths relative to `/work`. After a
 successful exit, every output must exist as a regular file before the node
 emits a `FileRef`.
 
-## Legacy host commands
-
-The `run_command` node executes programs without a shell. Its first release is
-deprecated and should be replaced by native Rust nodes or `container_command`
-for external bioinformatics tools.
-
-Example:
-
-```json
-{
-  "program": "python",
-  "args": [
-    "/work/scripts/clean.py",
-    "--input", "$input0",
-    "--output", "$output0"
-  ],
-  "outputs": [
-    {
-      "path": "cleaned.csv",
-      "format": "csv"
-    }
-  ],
-  "workdir": "/work/runs/clean",
-  "timeout_secs": 3600
-}
-```
-
-Bindings are replaced only inside individual argv tokens:
-
-- `$input0`, `$input1`, ...: sorted upstream File/FileSet paths.
-- `$output0`, `$output1`, ...: resolved declared output paths.
-- `$workdir`: resolved working directory.
-
-The node also exports the resolved paths as environment variables, which is the
-preferred interface for inline scripts:
-
-- `AUTONOMICS_INPUT0`, `AUTONOMICS_INPUT1`, ...
-- `AUTONOMICS_OUTPUT0`, `AUTONOMICS_OUTPUT1`, ...
-- `AUTONOMICS_WORKDIR`
-- `AUTONOMICS_INPUT_COUNT`, `AUTONOMICS_OUTPUT_COUNT`
-
-Inline script mode is enabled with `script`. The node writes the source to a
-private file under its workspace and invokes the configured interpreter with
-that file as its first argument. Extra inline assets can be declared in `files`
-and are materialized under `AUTONOMICS_FILES_DIR`; their keys must be safe
-relative paths. This makes the complete script source part of the DAG manifest
-and therefore part of its content hash.
-
-```json
-{
-  "program": "bash",
-  "script": "set -Eeuo pipefail\npython \"$AUTONOMICS_FILES_DIR/clean.py\" --input \"$AUTONOMICS_INPUT0\" --output \"$AUTONOMICS_OUTPUT0\"",
-  "files": {
-    "clean.py": "import shutil\nshutil.copyfile(__import__('os').environ['AUTONOMICS_INPUT0'], __import__('os').environ['AUTONOMICS_OUTPUT0'])"
-  },
-  "outputs": [{ "path": "cleaned.csv", "format": "csv" }],
-  "timeout_secs": 600
-}
-```
-
-Bash is launched with `--noprofile --norc` when `program` resolves to `bash`.
-On Unix, each child gets its own process group; timeout, cancellation, and
-normal completion clean up processes left in that group.
-
-Values in `env` may add or override non-reserved environment variables. The
-`AUTONOMICS_INPUT*`, `AUTONOMICS_OUTPUT*`, `AUTONOMICS_WORKDIR`,
-`AUTONOMICS_SCRIPT`, and `AUTONOMICS_FILES_DIR` names are reserved.
-
-Relative output paths resolve against `workdir`. When `workdir` is omitted, the
-node creates a unique process-local scratch directory. The command must exit
-successfully before `timeout_secs`, and every declared output must exist as a
-regular file after execution. stdout and stderr are capped at 64 KiB each and
-forwarded through the node event stream.
-
-When an OpenDAL filesystem is registered with the engine, absolute File input
-paths are staged into the node workspace before the process starts, and absolute
-declared outputs are uploaded back to the same virtual path after the process
-succeeds. Relative outputs remain local artifacts under the node workspace.
-
-Set `AUTONOMICS_ALLOWED_PROGRAMS` to a comma-separated allowlist to restrict
-the executable name, for example:
-
-```text
-AUTONOMICS_ALLOWED_PROGRAMS=python,Rscript,samtools,bcftools
-```
-
-When the variable is absent, the engine's existing trusted-process boundary
-applies. Production deployments should set the allowlist.
-
 ## Incremental invalidation
 
-`sink_file` and `run_command` record a local metadata fingerprint for each
+`sink_file` and `container_command` record a local metadata fingerprint for each
 emitted file. Before an incremental run, clean nodes with cached File or
 FileSet outputs are checked. If size or nanosecond mtime differs, the node and
 its descendants are marked dirty and re-executed.
@@ -211,9 +121,9 @@ Output construction remains `PortOutputs::insert(port, df)` for DataFrames and
 
 The first release has three deliberate boundaries:
 
-1. `run_command` stages absolute paths through the registered OpenDAL
+1. `container_command` stages absolute paths through the registered OpenDAL
    filesystem; relative paths remain local to the node workspace.
-2. Program filtering is by executable name. The child inherits the engine
-   environment; `env` entries add to or override individual variables.
+2. Network access defaults to `none`; explicit `mounts` are the only
+   additional host paths the workload can reach.
 3. Incremental fingerprinting covers cached local outputs; external source-file
    invalidation still uses the existing manual dirty-mark API.

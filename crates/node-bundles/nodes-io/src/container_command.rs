@@ -1,12 +1,11 @@
 //! File-to-file container command node.
 //!
-//! This is the Podman-first replacement for the deprecated host-process
-//! `run_command` node. Inputs are materialized into a private host scratch
-//! directory, that directory is mounted at `/work`, the command runs in an
-//! ephemeral image, and only declared output files become DAG values.
+//! Inputs are materialized into a private host scratch directory, that
+//! directory is mounted at `/work`, the command runs in an ephemeral image,
+//! and only declared output files become DAG values.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,9 +18,6 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::value::{FileRef, NodeValue, PortType};
 use dag_core::{NodeCtx, NodeFactory};
 
-use crate::run_command::{
-    input_path, stage_inputs, validate_workspace_relative_path, write_strictly_within,
-};
 use container_runtime::{
     ContainerMount, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PodmanRuntime, PullPolicy,
@@ -229,6 +225,193 @@ impl ContainerCommandNode {
     }
 }
 
+fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err("file paths in `files` cannot be empty".into());
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute()
+        || !candidate
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("file path `{path}` must be a safe relative path"));
+    }
+    Ok(())
+}
+
+fn write_strictly_within(
+    base: &Path,
+    relative: &str,
+    content: &str,
+) -> Result<PathBuf, String> {
+    validate_workspace_relative_path(relative)?;
+    let destination = base.join(relative);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!("cannot create directory `{}`: {e}", parent.display())
+        })?;
+    }
+    std::fs::write(&destination, content).map_err(|e| {
+        format!("cannot write file `{}`: {e}", destination.display())
+    })?;
+    Ok(destination)
+}
+
+fn input_path(value: &NodeValue) -> Result<String, String> {
+    match value {
+        NodeValue::File(file) => Ok(file.path.clone()),
+        NodeValue::FileSet(files) if !files.is_empty() => Ok(files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>()
+            .join(",")),
+        NodeValue::FileSet(_) => Err(
+            "an empty FileSet cannot be bound to a command input".into(),
+        ),
+        NodeValue::DataFrame(_) => Err(
+            "container_command inputs must be File or FileSet values".into(),
+        ),
+        NodeValue::Data(data) => Ok(data.vpath.clone()),
+        NodeValue::DataSet(data) if !data.is_empty() => Ok(data
+            .iter()
+            .map(|data| data.vpath.as_str())
+            .collect::<Vec<_>>()
+            .join(",")),
+        NodeValue::DataSet(_) => Err(
+            "an empty DataSet cannot be bound to a command input".into(),
+        ),
+    }
+}
+
+fn virtual_path(path: &str) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("vfs://") {
+        return Some(vfs::OpendalFileStorage::normalize_path(rest));
+    }
+    if let Some(rest) = path.strip_prefix("file://") {
+        return Some(vfs::OpendalFileStorage::normalize_path(rest));
+    }
+    path.starts_with('/')
+        .then(|| vfs::OpendalFileStorage::normalize_path(path))
+}
+
+fn staged_path(base: &Path, prefix: &str, index: usize, source: &str) -> PathBuf {
+    let extension = Path::new(source)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    base.join(format!("{prefix}-{index}{extension}"))
+}
+
+async fn stage_input_file(
+    ctx: &NodeCtx,
+    staging_dir: &Path,
+    index: usize,
+    file: &FileRef,
+) -> Result<PathBuf, String> {
+    let destination = staged_path(staging_dir, "input", index, &file.path);
+    let virtual_source = ctx.opendal.as_ref().and_then(|_| virtual_path(&file.path));
+
+    if let (Some(storage), Some(source)) = (ctx.opendal.as_ref(), virtual_source.as_deref()) {
+        let operator = storage.resolve(source);
+        let key = storage.resolve_path(source);
+        if let Ok(bytes) = operator.read(&key).await {
+            std::fs::write(&destination, bytes.to_vec())
+                .map_err(|e| format!("cannot stage input `{}`: {e}", destination.display()))?;
+            return Ok(destination);
+        }
+    }
+
+    let host_path = Path::new(&file.path);
+    if host_path.is_file() {
+        std::fs::copy(host_path, &destination)
+            .map_err(|e| format!("cannot stage input `{}`: {e}", host_path.display()))?;
+        return Ok(destination);
+    }
+
+    Err(format!(
+        "input file `{}` was not found on the host or virtual filesystem",
+        file.path
+    ))
+}
+
+async fn stage_inputs(
+    ctx: &NodeCtx,
+    workdir: &Path,
+    inputs: &[NodeInput],
+) -> Result<Vec<NodeInput>, String> {
+    let staging_dir = workdir.join(".autonomics").join("inputs");
+    std::fs::create_dir_all(&staging_dir).map_err(|e| {
+        format!(
+            "cannot create input staging directory `{}`: {e}",
+            staging_dir.display()
+        )
+    })?;
+
+    let mut staged = Vec::with_capacity(inputs.len());
+    let mut index = 0usize;
+    for input in inputs {
+        let value = match &input.data {
+            NodeValue::File(file) => {
+                let path = stage_input_file(ctx, &staging_dir, index, file).await?;
+                index += 1;
+                NodeValue::File(FileRef::new(
+                    path.to_string_lossy().into_owned(),
+                    file.format.clone(),
+                ))
+            }
+            NodeValue::FileSet(files) => {
+                let mut staged_files = Vec::with_capacity(files.len());
+                for file in files {
+                    let path = stage_input_file(ctx, &staging_dir, index, file).await?;
+                    index += 1;
+                    staged_files.push(FileRef::new(
+                        path.to_string_lossy().into_owned(),
+                        file.format.clone(),
+                    ));
+                }
+                NodeValue::FileSet(staged_files)
+            }
+            NodeValue::Data(data) => {
+                let file = data.to_file_ref();
+                let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
+                index += 1;
+                NodeValue::File(FileRef {
+                    path: path.to_string_lossy().into_owned(),
+                    format: file.format,
+                    fingerprint: file.fingerprint,
+                })
+            }
+            NodeValue::DataSet(data) => {
+                let mut staged_files = Vec::with_capacity(data.len());
+                for data in data {
+                    let file = data.to_file_ref();
+                    let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
+                    index += 1;
+                    staged_files.push(FileRef {
+                        path: path.to_string_lossy().into_owned(),
+                        format: file.format,
+                        fingerprint: file.fingerprint,
+                    });
+                }
+                NodeValue::FileSet(staged_files)
+            }
+            NodeValue::DataFrame(_) => {
+                return Err(
+                    "container_command inputs must be File or FileSet values".into(),
+                );
+            }
+        };
+        staged.push(NodeInput {
+            port: input.port,
+            data: value,
+        });
+    }
+    Ok(staged)
+}
+
 fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
     if spec.image.trim().is_empty() {
         return Err(ContainerCommandError::Invalid(
@@ -276,7 +459,7 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
     }
     for (path, content) in &spec.files {
         validate_workspace_relative_path(path)
-            .map_err(|e| ContainerCommandError::Invalid(e.to_string()))?;
+            .map_err(ContainerCommandError::Invalid)?;
         if content.contains('\0') {
             return Err(ContainerCommandError::Invalid(format!(
                 "file `{path}` cannot contain NUL bytes"
@@ -396,14 +579,14 @@ impl DagNode for ContainerCommandNode {
 
         let mut staged_inputs = stage_inputs(ctx, &host_workdir, inputs)
             .await
-            .map_err(|e| ContainerCommandError::Invalid(e.to_string()))
+            .map_err(ContainerCommandError::Invalid)
             .map_err(ContainerCommandError::into_dag_error)?;
         staged_inputs.sort_by_key(|input| input.port);
         let host_input_paths = staged_inputs
             .iter()
             .map(|input| input_path(&input.data))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ContainerCommandError::Invalid(e.to_string()))
+            .map_err(ContainerCommandError::Invalid)
             .map_err(ContainerCommandError::into_dag_error)?;
         let container_input_paths = host_input_paths
             .iter()
@@ -435,7 +618,7 @@ impl DagNode for ContainerCommandNode {
         let mut command = self.command.clone();
         if let Some(script) = &self.script {
             let script_path = write_strictly_within(&host_workdir, ".autonomics/script", script)
-                .map_err(|e| ContainerCommandError::Invalid(e.to_string()))
+                .map_err(ContainerCommandError::Invalid)
                 .map_err(ContainerCommandError::into_dag_error)?;
             let files_dir = host_workdir.join(".autonomics/files");
             std::fs::create_dir_all(&files_dir)
@@ -448,7 +631,7 @@ impl DagNode for ContainerCommandNode {
                 .map_err(ContainerCommandError::into_dag_error)?;
             for (relative, content) in &self.files {
                 write_strictly_within(&files_dir, relative, content)
-                    .map_err(|e| ContainerCommandError::Invalid(e.to_string()))
+                    .map_err(ContainerCommandError::Invalid)
                     .map_err(ContainerCommandError::into_dag_error)?;
             }
             let script_arg = container_path(&host_workdir, &script_path.to_string_lossy());

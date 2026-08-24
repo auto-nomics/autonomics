@@ -2,7 +2,6 @@
 
 pub mod bundle_source;
 pub mod container_command;
-pub mod run_command;
 pub mod sink_file;
 pub mod source_file;
 pub mod source_openalex;
@@ -21,8 +20,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
-        #[allow(deprecated)]
-        registry.register(Box::new(run_command::RunCommandNodeFactory {}));
         registry.register(Box::new(container_command::ContainerCommandNodeFactory));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},

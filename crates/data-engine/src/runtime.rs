@@ -549,7 +549,7 @@ impl DataEngineClient {
     }
 
     /// Get the concrete port layout for a node kind and spec. Pass a spec for
-    /// dynamic-port kinds such as `run_command`.
+    /// dynamic-port kinds such as `container_command`.
     pub fn get_node_ports_for_spec(
         &self,
         kind: &str,

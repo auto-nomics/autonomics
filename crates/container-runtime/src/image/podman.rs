@@ -203,3 +203,18 @@ fn command_error(command: &'static str, output: PodmanCommandOutput) -> Containe
         stderr: output.stderr,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{ImageManager, PodmanRuntime};
+
+    #[tokio::test]
+    async fn test_list_images() {
+        let runtime = PodmanRuntime::new("podman");
+        let images = runtime
+            .image_list(crate::ImageListOptions { filters: vec![] })
+            .await
+            .unwrap();
+        dbg!(images);
+    }
+}

@@ -417,7 +417,7 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   `list_node_factories` returns lightweight metadata (kind + short description) only. \
   To see the full port layout (port count, variadic flag, per-port column schema), \
   call `get_node_ports` with the chosen `kind`. For dynamic-port kinds such as \
-  `run_command`, pass the exact `spec` so declared outputs are included. Read the downstream node's input \
+  `container_command`, pass the exact `spec` so declared outputs are included. Read the downstream node's input \
   port schema BEFORE writing the transform that feeds it. The downstream port's \
   required columns and types are a contract, not a suggestion. \
   Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
@@ -449,12 +449,6 @@ Reference data requires explicit `mounts`.\n\
 relative paths under `/work`; declare every output in `outputs`. Missing files \
 fail the node. After `run_dag`, use `output_files` to locate artifacts.\n\
 \n\
-### Legacy Custom Scripts (run_command)\n\
-- `run_command` is deprecated and runs on the host. Prefer native Rust nodes \
-or `container_command`. For an unavoidable legacy workflow, set `program` to \
-`bash` and put the complete script in the inline `script` field. Put helper \
-Python/R files in inline `files`; they are materialized under \
-`AUTONOMICS_FILES_DIR`.\n\
 - Do not interpolate file paths into shell commands. Use `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, `AUTONOMICS_WORKDIR`, and helper paths from \
 `AUTONOMICS_FILES_DIR`. Always start Bash scripts with \

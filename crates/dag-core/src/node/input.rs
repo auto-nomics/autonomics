@@ -41,10 +41,6 @@ impl NodeInput {
         self.data.as_dataframe()
     }
 
-    pub fn dataframe_value(&self) -> Result<&DataFrame, DagError> {
-        self.dataframe()
-    }
-
     pub fn file_value(&self) -> Result<&FileRef, DagError> {
         self.data.as_file()
     }
