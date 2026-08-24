@@ -5,7 +5,9 @@
 > earlier Docker-first rollout details below as historical design context;
 > runtime integration should target the Podman backend first. The execution
 > API and Podman backend live in `crates/container-runtime`; `nodes-io` owns
-> only the DAG node contract and file staging.
+> only the DAG node contract and file staging. The runtime crate also provides
+> the first `ImageManager` implementation for local image inspection, listing,
+> pull, remove, and policy-driven `ensure_image` operations.
 
 ## Design Document — 2026-08-06
 

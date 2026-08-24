@@ -10,6 +10,7 @@ description = "Runtime-neutral container execution API with a rootless Podman ba
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 libc = "0.2"
