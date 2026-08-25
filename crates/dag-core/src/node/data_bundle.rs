@@ -16,6 +16,15 @@ pub struct DataBundle {
     pub ident: String,
     pub desc: String,
     pub vpath: String,
+    /// Catalog object prefix backing this bundle, when known.
+    ///
+    /// Legacy and built-in bundles leave this unset. Catalog-backed bundles can
+    /// use it to resolve immutable panel manifests without changing legacy node APIs.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Immutable catalog content digest, when known.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 /// Runtime mapping from stable bundle identifiers to VFS virtual paths.
@@ -138,6 +147,8 @@ impl DataBundle {
             ident: ident.into(),
             desc: desc.into(),
             vpath: vpath.into(),
+            source: None,
+            digest: None,
         }
     }
 

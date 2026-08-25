@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use container_runtime::ContainerExecutionInfra;
 use dag_core::DataBundleCatalog;
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
@@ -8,7 +9,6 @@ use datafusion::{
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
-use crate::default_registry::build_default_registry;
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -30,6 +30,9 @@ pub struct DataEngine {
     /// [`DataEngine::new_session`] can share it across per-agent engines
     /// without rebuilding the ~70 factories.
     node_registry: Arc<NodeRegistry>,
+    /// Process-wide container execution resources, injected by the runtime
+    /// host and shared with the IO node registry.
+    container_execution: Arc<ContainerExecutionInfra>,
     config: SchedulerConfig,
     /// Optional DAG history store. When `Some`, every `run()` automatically
     /// commits a snapshot of the current DAG manifest + run report.
@@ -52,6 +55,7 @@ impl DataEngine {
         runtime_env: Arc<RuntimeEnv>,
         opendal: Option<Arc<OpendalFileStorage>>,
         data_bundles: Arc<DataBundleCatalog>,
+        container_execution: Arc<ContainerExecutionInfra>,
     ) -> Self {
         let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
         // Global concurrency limiter shared across all agent sessions.
@@ -71,12 +75,18 @@ impl DataEngine {
             global_sem,
         };
         let node_registry =
-            build_default_registry(runtime_env.clone(), opendal.clone(), data_bundles);
+            crate::default_registry::build_default_registry_with_container_execution(
+                runtime_env.clone(),
+                opendal.clone(),
+                data_bundles,
+                Arc::clone(&container_execution),
+            );
         Self {
             ctx,
             engine_ctx,
             dag: DAG::default(),
             node_registry: Arc::new(node_registry),
+            container_execution,
             config: SchedulerConfig::default(),
             history: None,
             history_ref: "main".to_string(),
@@ -538,6 +548,7 @@ impl DataEngine {
             engine_ctx: self.engine_ctx.clone(),
             dag: DAG::default(),
             node_registry: Arc::clone(&self.node_registry),
+            container_execution: Arc::clone(&self.container_execution),
             config: self.config.clone(),
             history: self.history.clone(),
             history_ref: "main".to_string(),
@@ -579,6 +590,11 @@ impl DataEngine {
     /// channel so they never block on a running DAG.
     pub fn node_registry(&self) -> &Arc<NodeRegistry> {
         &self.node_registry
+    }
+
+    /// Borrow the shared container execution infrastructure.
+    pub fn container_execution(&self) -> &Arc<ContainerExecutionInfra> {
+        &self.container_execution
     }
 
     /// Validate and run every node of the DAG.
@@ -692,6 +708,7 @@ pub struct DataEngineBuilder {
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<OpendalFileStorage>>,
     data_bundles: Arc<DataBundleCatalog>,
+    container_execution: Arc<ContainerExecutionInfra>,
 }
 
 impl Default for DataEngineBuilder {
@@ -702,6 +719,7 @@ impl Default for DataEngineBuilder {
             runtime_env,
             opendal: None,
             data_bundles: Arc::new(DataBundleCatalog::new()),
+            container_execution: Arc::new(ContainerExecutionInfra::from_env()),
         }
     }
 }
@@ -723,6 +741,18 @@ impl DataEngineBuilder {
     /// Set the engine-wide mapping from bundle identifiers to VFS paths.
     pub fn with_data_bundle_catalog(mut self, catalog: DataBundleCatalog) -> Self {
         self.data_bundles = Arc::new(catalog);
+        self
+    }
+
+    /// Inject process-wide container execution resources owned by the runtime.
+    ///
+    /// Tests and embedded engines may omit this and use the environment-derived
+    /// default; `RuntimeHost` should always inject its shared instance.
+    pub fn with_container_execution(
+        mut self,
+        container_execution: Arc<ContainerExecutionInfra>,
+    ) -> Self {
+        self.container_execution = container_execution;
         self
     }
 
@@ -761,7 +791,13 @@ impl DataEngineBuilder {
     pub fn build(self) -> DataEngine {
         // Keep a backward-compatible ctx for tests / ad-hoc table registration.
         let ctx = crate::node_registry::registry::new_isolated_ctx(self.runtime_env.clone());
-        DataEngine::new_from_parts(ctx, self.runtime_env, self.opendal, self.data_bundles)
+        DataEngine::new_from_parts(
+            ctx,
+            self.runtime_env,
+            self.opendal,
+            self.data_bundles,
+            self.container_execution,
+        )
     }
 }
 
@@ -840,6 +876,20 @@ mod tests {
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
+    }
+
+    #[test]
+    fn injected_container_execution_is_shared_by_sessions() {
+        let infra = Arc::new(container_runtime::ContainerExecutionInfra::from_config(
+            container_runtime::K3sConfig::from_env(),
+        ));
+        let engine = DataEngine::builder()
+            .with_container_execution(Arc::clone(&infra))
+            .build();
+        let session = engine.new_session();
+
+        assert!(Arc::ptr_eq(engine.container_execution(), &infra));
+        assert!(Arc::ptr_eq(session.container_execution(), &infra));
     }
 
     #[test]

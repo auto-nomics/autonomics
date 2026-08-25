@@ -89,8 +89,14 @@ controller or kubelet-level `podPidsLimit` policy must enforce it.
 
 ## Configuration
 
-The k3s backend is created once by the `nodes-io` plugin and shared by every
-node factory instance.
+Container execution resources are process-level infrastructure. `SharedInfra`
+constructs one `ContainerExecutionInfra` from the environment, retains it in an
+`Arc`, and injects that same object into `DataEngineBuilder`. Every agent DAG
+session shares the resulting Kubernetes client and panel cache through the
+shared node registry.
+
+The `nodes-io` plugin receives that injected object when its node registry is
+built; it does not independently construct a second backend.
 
 ```text
 AUTONOMICS_K3S_NAMESPACE=autonomics
@@ -98,8 +104,8 @@ AUTONOMICS_K3S_CONTEXT=
 AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s
-AUTONOMICS_K3S_PANEL_PVC_PREFIX=panels
+AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 AUTONOMICS_K3S_SERVICE_ACCOUNT=
 AUTONOMICS_K3S_POLL_INTERVAL_MS=500
 ```
@@ -132,3 +138,12 @@ move scheduler decisions without changing node specs:
 3. make `FileRef` consumers always resolve through VFS;
 4. profile Job scheduling overhead before introducing a run-level controller
    or workflow engine.
+
+## Catalog-backed panels
+
+`container_command.panel_bundles` references a runtime DataBundle id. The
+bundle carries an immutable catalog source and digest without exposing object
+keys in the DAG. At execution the node converts it to the same `PanelRef` used
+by the inline transition form, verifies its `manifest.json`, materializes it in
+the shared panel cache, and mounts it read-only. Existing bioinformatics nodes
+are intentionally unchanged during this rollout.

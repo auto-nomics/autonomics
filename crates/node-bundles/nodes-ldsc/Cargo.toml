@@ -7,7 +7,6 @@ rust-version.workspace = true
 description = "LDSC and LCV DAG node bundle."
 
 [dependencies]
-tokio.workspace = true
 dag-core = { path = "../../dag-core" }
 ldsc = { path = "../../../bio_crates/ldsc" }
 lcv = { path = "../../../bio_crates/lcv" }
@@ -21,9 +20,9 @@ thiserror.workspace = true
 faer.workspace = true
 datafusion.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
-tokio = { workspace = true }
 vfs = { path = "../../vfs" }
 
 [lints]

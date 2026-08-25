@@ -24,6 +24,22 @@ pub fn build_default_registry(
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
     data_bundles: Arc<DataBundleCatalog>,
 ) -> NodeRegistry {
+    build_default_registry_with_container_execution(
+        runtime_env,
+        opendal,
+        data_bundles,
+        Arc::new(container_runtime::ContainerExecutionInfra::from_env()),
+    )
+}
+
+/// Same as [`build_default_registry`], but with infrastructure explicitly owned
+/// by the runtime host rather than implicitly created by the IO bundle.
+pub fn build_default_registry_with_container_execution(
+    runtime_env: Arc<RuntimeEnv>,
+    opendal: Option<Arc<vfs::OpendalFileStorage>>,
+    data_bundles: Arc<DataBundleCatalog>,
+    container_execution: Arc<container_runtime::ContainerExecutionInfra>,
+) -> NodeRegistry {
     let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
     let mut registry = NodeRegistry::new(
         dag_core::registry::NodeCtx::new(runtime_env, opendal)
@@ -52,7 +68,7 @@ pub fn build_default_registry(
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
-    registry.register_plugin(&nodes_io::Plugin::default());
+    registry.register_plugin(&nodes_io::Plugin::new(container_execution));
     #[cfg(feature = "bundle-opengwas")]
     registry.register_plugin(&nodes_opengwas::Plugin);
     #[cfg(feature = "bundle-causal")]

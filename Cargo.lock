@@ -2567,6 +2567,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-catalog"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dag-core",
+ "flate2",
+ "opendal",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 1.1.4+spec-1.1.0",
+ "uuid",
+ "vfs",
+ "zstd",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2581,6 +2603,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "async-trait",
+ "container-runtime",
  "csv",
  "dag-core",
  "datafusion",
@@ -4046,6 +4069,16 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -7245,6 +7278,7 @@ dependencies = [
  "container-runtime",
  "crossref",
  "dag-core",
+ "data-catalog",
  "datafusion",
  "flate2",
  "futures",
@@ -9817,7 +9851,9 @@ dependencies = [
  "async-trait",
  "bib-base",
  "chrono",
+ "container-runtime",
  "dag-core",
+ "data-catalog",
  "data-engine",
  "data-engine-tools",
  "datafusion",
@@ -11111,6 +11147,17 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
 
 [[package]]
 name = "tempfile"

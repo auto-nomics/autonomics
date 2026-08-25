@@ -38,3 +38,12 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `kegg.genome_pathways`
 
 Custom `bundle_source` nodes may reference any additional catalog ID.
+
+## Unified catalog overlay
+
+When `vfs.toml` contains a `[catalog]` section, entries published by
+`autonomics-catalog` are added to this registry automatically. Their stable
+alias is `/bundles/<id>`, while their immutable version path is
+`/datasets/<id>@sha256-<digest>`. Local `data_bundles.toml` entries still take
+precedence, so rollout does not change existing nodes. See
+[Unified Data Catalog](data-catalog.md).

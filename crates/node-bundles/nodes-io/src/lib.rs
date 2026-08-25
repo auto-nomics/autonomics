@@ -12,10 +12,16 @@ pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 use dag_core::{NodePlugin, NodeRegistry};
 use std::sync::Arc;
 
-#[derive(Default)]
 pub struct Plugin {
-    container_runtime: Arc<container_runtime::K3sRuntime>,
-    panel_cache: Arc<container_runtime::PanelCache>,
+    container_execution: Arc<container_runtime::ContainerExecutionInfra>,
+}
+
+impl Plugin {
+    pub fn new(container_execution: Arc<container_runtime::ContainerExecutionInfra>) -> Self {
+        Self {
+            container_execution,
+        }
+    }
 }
 
 impl NodePlugin for Plugin {
@@ -27,8 +33,8 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
         registry.register(Box::new(container_command::ContainerCommandNodeFactory {
-            runtime: Arc::clone(&self.container_runtime),
-            panel_cache: Arc::clone(&self.panel_cache),
+            runtime: Arc::clone(&self.container_execution.k3s),
+            panel_cache: Arc::clone(&self.container_execution.panel_cache),
         }));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},

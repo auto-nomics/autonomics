@@ -27,7 +27,9 @@ use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, Termin
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
+use container_runtime::ContainerExecutionInfra;
 use dag_core::{DataBundle, DataBundleCatalog};
+use data_catalog::{CatalogConfig, CatalogRuntime, catalog_mount_definitions};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -115,6 +117,9 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<MountedObjectStore>,
+    /// Process-wide k3s client and immutable panel cache shared by all DAG
+    /// sessions.
+    pub container_execution: Arc<ContainerExecutionInfra>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -151,11 +156,21 @@ impl SharedInfra {
         // agent-facing `OpendalFileStorage`. This makes the `vfs`
         // tool see mounted paths (otherwise it would only see the
         // bare `data_dir` local FS).
-        let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
+        let (vfs, catalog_bundles) = build_vfs_with_catalog(config)
+            .await
+            .map_err(HostError::Other)?;
+        let vfs = Arc::new(vfs);
         let file_storage = Arc::new(OpendalFileStorage::with_mounts(
             &config.data_dir,
             vfs.clone(),
         ));
+        let container_execution = Arc::new(ContainerExecutionInfra::from_env());
+        tracing::info!(
+            namespace = %container_execution.config.namespace,
+            workspace_root = %container_execution.config.workspace_root.display(),
+            panel_cache_root = %container_execution.config.panel_cache_root.display(),
+            "SharedInfra::open: container execution infrastructure ready"
+        );
         tracing::info!(
             mounts = ?file_storage.mount_paths(),
             "SharedInfra::open: file storage ready (with VFS mounts)"
@@ -166,11 +181,15 @@ impl SharedInfra {
             "SharedInfra::open: VFS mounted"
         );
         tracing::info!("SharedInfra::open: building DataEngine");
-        let data_bundles = build_data_bundle_catalog(config).map_err(HostError::Other)?;
+        let user_data_bundles = build_data_bundle_catalog(config).map_err(HostError::Other)?;
+        let data_bundles = catalog_bundles
+            .with_overriding_bundles(user_data_bundles.iter().map(|(_, bundle)| bundle.clone()))
+            .map_err(|error| HostError::Other(error.to_string()))?;
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
             .with_vfs((*vfs).clone())
-            .with_data_bundle_catalog(data_bundles);
+            .with_data_bundle_catalog(data_bundles)
+            .with_container_execution(Arc::clone(&container_execution));
 
         let mut engine = engine_builder.build();
         tracing::info!("SharedInfra::open: DataEngine built");
@@ -282,6 +301,7 @@ impl SharedInfra {
             engine_manager,
             file_storage,
             vfs,
+            container_execution,
             storage,
             profile_storage,
             bib,
@@ -497,27 +517,61 @@ pub fn bibliography_file_storage(
 /// Unix.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
     let manifest_path = config.state_dir.join("vfs.toml");
-    let (manifest, manifest_changed) = match std::fs::read_to_string(&manifest_path) {
+    let (manifest, manifest_changed, catalog_source) = match std::fs::read_to_string(&manifest_path)
+    {
         Ok(source) => {
+            let catalog_source = extract_catalog_section(&source);
             let mut manifest = VfsManifest::from_toml(&source)
                 .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?;
             let changed = ensure_literature_mount(&mut manifest, config);
-            (manifest, changed)
+            (manifest, changed, catalog_source)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let manifest = default_vfs_manifest(config);
-            write_vfs_manifest(&manifest_path, &manifest)?;
-            (manifest, false)
+            write_vfs_manifest(&manifest_path, &manifest, None)?;
+            (manifest, false, None)
         }
         Err(e) => return Err(format!("read {}: {e}", manifest_path.display())),
     };
     if manifest_changed {
-        write_vfs_manifest(&manifest_path, &manifest)?;
+        write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
     }
     MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())
 }
 
-fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<(), String> {
+async fn build_vfs_with_catalog(
+    config: &RuntimeConfig,
+) -> Result<(MountedObjectStore, dag_core::DataBundleCatalog), String> {
+    build_vfs(config)?;
+    let manifest_path = config.state_dir.join("vfs.toml");
+    let source = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
+    let catalog_source = extract_catalog_section(&source);
+    let mut manifest = VfsManifest::from_toml(&source)
+        .map_err(|error| format!("invalid {}: {error}", manifest_path.display()))?;
+
+    let mut catalog_bundles = dag_core::DataBundleCatalog::new();
+    if let Some(catalog_source) = catalog_source {
+        let catalog_config = CatalogConfig::from_vfs_toml(&format!(
+            "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
+        ))?;
+        if catalog_config.enabled {
+            let runtime = CatalogRuntime::load(&manifest, &catalog_config).await?;
+            let mut mounts = catalog_mount_definitions(&manifest, &runtime.index, &catalog_config)?;
+            manifest.mount.append(&mut mounts);
+            catalog_bundles = runtime.data_bundles();
+        }
+    }
+    MountedObjectStore::from_manifest(&manifest)
+        .map_err(|e| e.to_string())
+        .map(|store| (store, catalog_bundles))
+}
+
+fn write_vfs_manifest(
+    path: &std::path::Path,
+    manifest: &VfsManifest,
+    catalog_source: Option<&str>,
+) -> Result<(), String> {
     let Some(parent) = path.parent() else {
         return Err(format!(
             "VFS manifest path has no parent: {}",
@@ -527,8 +581,11 @@ fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("create VFS manifest directory {}: {e}", parent.display()))?;
 
-    let source = toml::to_string_pretty(manifest)
+    let mut source = toml::to_string_pretty(manifest)
         .map_err(|e| format!("serialize {}: {e}", path.display()))?;
+    if let Some(catalog_source) = catalog_source {
+        source.push_str(catalog_source);
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -543,6 +600,22 @@ fn write_vfs_manifest(path: &std::path::Path, manifest: &VfsManifest) -> Result<
             file.write_all(source.as_bytes())
         })
         .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn extract_catalog_section(source: &str) -> Option<String> {
+    let mut section = String::new();
+    let mut active = false;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            active = trimmed == "[catalog]";
+        }
+        if active {
+            section.push_str(line);
+            section.push('\n');
+        }
+    }
+    (!section.trim().is_empty()).then_some(section)
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -3639,6 +3712,87 @@ mod vfs_tests {
         );
     }
 
+    #[tokio::test]
+    async fn build_vfs_mounts_catalog_entries_and_preserves_catalog_config() {
+        let state = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let warehouse = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let input = scratch.path().join("input");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::write(input.join("data.txt"), b"catalog-data").unwrap();
+        let package = scratch.path().join("package");
+        data_catalog::build_package(
+            input,
+            &package,
+            data_catalog::package::BuildOptions {
+                id: Some("catalog_panel".into()),
+                version: Some("v1".into()),
+                kind: Some("table".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let vfs_manifest = vfs::VfsManifest {
+            backend: vec![vfs::BackendDefinition {
+                id: "warehouse".into(),
+                config: vfs::BackendConfig::local(warehouse.path().to_string_lossy().to_string()),
+            }],
+            mount: Vec::new(),
+        };
+        let catalog_config = data_catalog::CatalogConfig {
+            backend: "warehouse".into(),
+            ..Default::default()
+        };
+        let operator =
+            data_catalog::storage::operator_for_backend(&vfs_manifest, "warehouse").unwrap();
+        data_catalog::publish_package(package, &catalog_config, &operator)
+            .await
+            .unwrap();
+
+        let mut config = RuntimeConfig::default();
+        config.data_dir = data.path().to_path_buf();
+        config.state_dir = state.path().to_path_buf();
+        std::fs::write(
+            config.state_dir.join("vfs.toml"),
+            format!(
+                r#"
+[[backend]]
+id = "warehouse"
+type = "local"
+root = "{root}"
+
+[catalog]
+backend = "warehouse"
+"#,
+                root = warehouse.path().display()
+            ),
+        )
+        .unwrap();
+
+        let (store, bundles) = build_vfs_with_catalog(&config).await.unwrap();
+        let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
+            &config.data_dir,
+            Arc::new(store),
+        ));
+        let bytes = storage
+            .resolve("/bundles/catalog_panel/data.txt")
+            .read(&storage.resolve_path("/bundles/catalog_panel/data.txt"))
+            .await
+            .unwrap();
+        assert_eq!(bytes.to_vec(), b"catalog-data");
+        assert_eq!(
+            bundles
+                .get("catalog_panel")
+                .map(|bundle| bundle.vpath.as_str())
+                .unwrap(),
+            "/bundles/catalog_panel"
+        );
+        let persisted = std::fs::read_to_string(config.state_dir.join("vfs.toml")).unwrap();
+        assert!(persisted.contains("[catalog]"));
+    }
+
     #[test]
     fn generated_manifest_is_writable_and_parses_back() {
         let dir = tempfile::tempdir().unwrap();
@@ -3646,7 +3800,7 @@ mod vfs_tests {
         let manifest =
             VfsManifest::local_root(dir.path().join("data").to_string_lossy().to_string());
 
-        write_vfs_manifest(&path, &manifest).unwrap();
+        write_vfs_manifest(&path, &manifest, None).unwrap();
 
         let source = std::fs::read_to_string(&path).unwrap();
         let parsed = VfsManifest::from_toml(&source).unwrap();

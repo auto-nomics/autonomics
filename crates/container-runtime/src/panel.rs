@@ -163,11 +163,16 @@ impl PanelCache {
     }
 
     fn cached_panel(&self, panel: &PanelRef, host_path: PathBuf, cache_key: String) -> CachedPanel {
+        let prefix = self.pvc_prefix.trim_matches('/');
         CachedPanel {
             id: panel.id.clone(),
             digest: panel.digest.clone(),
             host_path,
-            pvc_sub_path: format!("{}/{}", self.pvc_prefix.trim_matches('/'), cache_key),
+            pvc_sub_path: if prefix.is_empty() {
+                cache_key
+            } else {
+                format!("{prefix}/{cache_key}")
+            },
             mount_path: panel.mount_path.clone(),
         }
     }

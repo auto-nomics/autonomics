@@ -19,8 +19,8 @@ export AUTONOMICS_K3S_NAMESPACE=autonomics
 export AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 export AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 export AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=panels
+export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 ```
 
 `AUTONOMICS_K3S_CONTEXT` optionally selects a kubeconfig context. Jobs never
@@ -63,8 +63,8 @@ export AUTONOMICS_K3S_NAMESPACE=autonomics
 export AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 export AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 export AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=panels
+export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 export AUTONOMICS_CONTAINER_IT_IMAGE=docker.io/library/debian:bookworm-slim
 
 sudo k3s ctr images pull "$AUTONOMICS_CONTAINER_IT_IMAGE"

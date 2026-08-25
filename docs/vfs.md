@@ -83,6 +83,22 @@ vfs:///data/local/gwas/foo.parquet
 
 Credentials remain runtime configuration in `vfs.toml`.
 
+## Unified catalog mounts
+
+A `[catalog]` section in `vfs.toml` selects one configured backend as the
+authoritative data-catalog source. At startup the runtime reads `index.json`
+and adds these read-only mounts:
+
+```text
+/catalog                                  catalog index and version manifests
+/datasets/<id>@sha256-<digest>            immutable version
+/bundles/<id>                             current stable alias
+```
+
+Static mounts already present in `vfs.toml` win over generated aliases, making
+the catalog overlay non-breaking. Full package build and publication commands
+are documented in [Unified Data Catalog](data-catalog.md).
+
 ## Current LDSC mounts
 
 The local converted panels are mounted under:

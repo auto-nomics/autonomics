@@ -5,12 +5,14 @@
 //! by analysis tools.
 
 pub mod error;
+pub mod execution;
 pub mod k3s;
 pub mod panel;
 pub mod runtime;
 pub mod types;
 
 pub use error::ContainerRuntimeError;
+pub use execution::ContainerExecutionInfra;
 pub use k3s::workspace_ref;
 pub use k3s::{K3sConfig, K3sRuntime};
 pub use panel::{PanelCache, PanelFile, PanelManifest};

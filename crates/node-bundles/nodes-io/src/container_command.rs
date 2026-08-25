@@ -17,6 +17,7 @@ use thiserror::Error;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::value::{FileRef, NodeValue, PortType};
+use dag_core::{DataBundle, DataBundleBinding};
 use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::{
@@ -89,6 +90,10 @@ pub struct ContainerCommandSpec {
     /// Immutable reference-data bundles materialized into the shared panel cache.
     #[serde(default)]
     pub panels: Vec<PanelRef>,
+    /// Catalog-backed panels resolved through the existing DataBundle registry.
+    /// This path is used by containerized tooling without exposing object keys in DAG specs.
+    #[serde(default)]
+    pub panel_bundles: Vec<ContainerPanelBundleSpec>,
     /// Network profile enforced by cluster NetworkPolicies. The default is
     /// `isolated`; `cluster` and `egress` must be justified by the tool.
     #[serde(default = "default_network")]
@@ -111,6 +116,12 @@ pub struct ContainerCommandSpec {
     /// default runs as the control process uid/gid while enforcing non-root.
     #[serde(default)]
     pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct ContainerPanelBundleSpec {
+    pub panel_id: String,
+    pub mount_path: String,
 }
 
 fn default_timeout() -> u64 {
@@ -141,6 +152,7 @@ pub struct ContainerCommandNode {
     artifact_prefix: String,
     timeout_secs: u64,
     panels: Vec<PanelRef>,
+    panel_bundles: Vec<ResolvedPanelBundle>,
     network: String,
     read_only_rootfs: bool,
     pull_policy: PullPolicy,
@@ -153,13 +165,29 @@ pub struct ContainerCommandNode {
     panel_cache: Arc<PanelCache>,
 }
 
+#[derive(Clone)]
+struct ResolvedPanelBundle {
+    spec: ContainerPanelBundleSpec,
+    bundle: DataBundle,
+}
+
 impl ContainerCommandNode {
     pub fn new(
         spec: ContainerCommandSpec,
         runtime: Arc<dyn ContainerRuntime>,
         panel_cache: Arc<PanelCache>,
     ) -> Result<Self, ContainerCommandError> {
+        Self::new_with_catalog_panels(spec, runtime, panel_cache, Vec::new())
+    }
+
+    pub fn new_with_catalog_panels(
+        spec: ContainerCommandSpec,
+        runtime: Arc<dyn ContainerRuntime>,
+        panel_cache: Arc<PanelCache>,
+        panel_bundles: Vec<DataBundle>,
+    ) -> Result<Self, ContainerCommandError> {
         validate(&spec)?;
+        let resolved_panel_bundles = resolve_catalog_panels(&spec, &panel_bundles)?;
         let mut ports = NodePorts::new()
             .set_fixed_input(false)
             .add_optional_input_port_of_type(PortType::File);
@@ -178,6 +206,7 @@ impl ContainerCommandNode {
             artifact_prefix: spec.artifact_prefix,
             timeout_secs: spec.timeout_secs,
             panels: spec.panels,
+            panel_bundles: resolved_panel_bundles,
             network: spec.network,
             read_only_rootfs: spec.read_only_rootfs,
             pull_policy: spec.pull_policy,
@@ -513,7 +542,47 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
             )));
         }
     }
+    for panel in &spec.panel_bundles {
+        if panel.mount_path == DEFAULT_CONTAINER_WORKDIR
+            || !Path::new(&panel.mount_path).is_absolute()
+            || !panel_mounts.insert(panel.mount_path.clone())
+        {
+            return Err(ContainerCommandError::Invalid(format!(
+                "duplicate or invalid catalog panel mount path `{}`",
+                panel.mount_path
+            )));
+        }
+    }
     Ok(())
+}
+
+fn resolve_catalog_panels(
+    spec: &ContainerCommandSpec,
+    bundles: &[DataBundle],
+) -> Result<Vec<ResolvedPanelBundle>, ContainerCommandError> {
+    let mut resolved = Vec::with_capacity(spec.panel_bundles.len());
+    for panel in &spec.panel_bundles {
+        let bundle = bundles
+            .iter()
+            .find(|bundle| bundle.ident == panel.panel_id)
+            .ok_or_else(|| {
+                ContainerCommandError::Invalid(format!(
+                    "catalog panel `{}` was not resolved by the runtime DataBundle catalog",
+                    panel.panel_id
+                ))
+            })?;
+        if bundle.source.is_none() || bundle.digest.is_none() {
+            return Err(ContainerCommandError::Invalid(format!(
+                "catalog panel `{}` is not backed by an immutable catalog entry",
+                panel.panel_id
+            )));
+        }
+        resolved.push(ResolvedPanelBundle {
+            spec: panel.clone(),
+            bundle: bundle.clone(),
+        });
+    }
+    Ok(resolved)
 }
 
 #[async_trait]
@@ -535,6 +604,7 @@ impl DagNode for ContainerCommandNode {
             artifact_prefix: self.artifact_prefix.clone(),
             timeout_secs: self.timeout_secs,
             panels: self.panels.clone(),
+            panel_bundles: self.panel_bundles.clone(),
             network: self.network.clone(),
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
@@ -566,7 +636,24 @@ impl DagNode for ContainerCommandNode {
         let workspace_path = self
             .resolve_workdir(&workspace_root)
             .map_err(ContainerCommandError::into_dag_error)?;
-        let panels = materialize_panels(ctx, self.panel_cache.as_ref(), &self.panels)
+        let mut panel_refs = self.panels.clone();
+        panel_refs.extend(self.panel_bundles.iter().map(|panel| {
+            PanelRef {
+                id: panel.bundle.ident.clone(),
+                digest: panel
+                    .bundle
+                    .digest
+                    .clone()
+                    .expect("validated catalog panel digest"),
+                source: panel
+                    .bundle
+                    .source
+                    .clone()
+                    .expect("validated catalog panel source"),
+                mount_path: panel.spec.mount_path.clone(),
+            }
+        }));
+        let panels = materialize_panels(ctx, self.panel_cache.as_ref(), &panel_refs)
             .await
             .map_err(ContainerCommandError::Invalid)
             .map_err(ContainerCommandError::into_dag_error)?;
@@ -872,6 +959,21 @@ impl NodeFactory for ContainerCommandNodeFactory {
         "Runs a file-to-file external command in an ephemeral k3s Job."
     }
 
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let node_spec: ContainerCommandSpec = serde_json::from_value(spec)?;
+        Ok(node_spec
+            .panel_bundles
+            .iter()
+            .enumerate()
+            .map(|(index, panel)| {
+                DataBundleBinding::new(format!("panel-{index}"), panel.panel_id.clone())
+            })
+            .collect())
+    }
+
     fn doc(&self) -> &'static str {
         "Runs an OCI image without a shell. File inputs are staged into a private \
         workspace PVC subPath mounted at `/work`; input paths are exposed as \
@@ -898,15 +1000,26 @@ impl NodeFactory for ContainerCommandNodeFactory {
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: ContainerCommandSpec = serde_json::from_value(spec)?;
-        let node = ContainerCommandNode::new(
+        let panel_bundles = node_spec
+            .panel_bundles
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                node_ctx
+                    .bound_data_bundle(&format!("panel-{index}"))
+                    .cloned()
+            })
+            .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
+        let node = ContainerCommandNode::new_with_catalog_panels(
             node_spec,
             Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
             Arc::clone(&self.panel_cache),
+            panel_bundles,
         )
-        .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(node))
     }
 
@@ -915,13 +1028,15 @@ impl NodeFactory for ContainerCommandNodeFactory {
         spec: serde_json::Value,
     ) -> dag_core::registry::error::Result<NodePorts> {
         let node_spec: ContainerCommandSpec = serde_json::from_value(spec)?;
-        let node = ContainerCommandNode::new(
-            node_spec,
-            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
-            Arc::clone(&self.panel_cache),
-        )
-        .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
-        Ok(node.ports)
+        validate(&node_spec)
+            .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        let mut ports = NodePorts::new()
+            .set_fixed_input(false)
+            .add_optional_input_port_of_type(PortType::File);
+        for _ in &node_spec.outputs {
+            ports = ports.add_output_port_of_type(None, PortType::File);
+        }
+        Ok(ports)
     }
 }
 
@@ -1024,6 +1139,7 @@ mod tests {
         }
     }
 
+    /// Helper function for creating container node spec
     fn spec(image: &str, command: Vec<String>, output: &str) -> ContainerCommandSpec {
         ContainerCommandSpec {
             image: image.into(),
@@ -1039,6 +1155,7 @@ mod tests {
             artifact_prefix: "/artifacts/test".into(),
             timeout_secs: 10,
             panels: Vec::new(),
+            panel_bundles: Vec::new(),
             network: default_network(),
             read_only_rootfs: true,
             pull_policy: PullPolicy::Missing,
@@ -1259,6 +1376,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_panel_bundle_resolves_to_readonly_panel_ref() {
+        let env = test_env();
+        let panel_content = b"catalog-panel";
+        let digest = format!("sha256:{}", hex(&Sha256::digest(panel_content)));
+        let source = "/catalog/1000g_eur";
+        let panel_root = env.objects.path().join("catalog/1000g_eur");
+        std::fs::create_dir_all(panel_root.join("chr22")).unwrap();
+        std::fs::write(panel_root.join("chr22/panel.txt"), panel_content).unwrap();
+        std::fs::write(
+            panel_root.join("manifest.json"),
+            serde_json::to_vec(&container_runtime::PanelManifest {
+                schema_version: 1,
+                id: "1000g_eur".into(),
+                version: "v3".into(),
+                digest: format!("sha256:{}", "3".repeat(64)),
+                files: vec![container_runtime::PanelFile {
+                    path: "chr22/panel.txt".into(),
+                    size: panel_content.len() as u64,
+                    sha256: digest,
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut bundle = DataBundle::new("1000g_eur", "1000G EUR", "/bundles/1000g_eur");
+        bundle.source = Some(source.into());
+        bundle.digest = Some(format!("sha256:{}", "3".repeat(64)));
+        let dir = env.workspace.path().join("catalog-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        node_spec.panel_bundles = vec![ContainerPanelBundleSpec {
+            panel_id: "1000g_eur".into(),
+            mount_path: "/panels/1000g_eur".into(),
+        }];
+
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node = ContainerCommandNode::new_with_catalog_panels(
+            node_spec,
+            runtime.clone(),
+            Arc::new(PanelCache::new(
+                env.workspace.path().join("cache"),
+                "panels",
+            )),
+            vec![bundle],
+        )
+        .unwrap();
+        node.execute(
+            &env.ctx,
+            &[],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let request = runtime.requests.lock().unwrap().last().unwrap().clone();
+        let panel = request.panels.first().unwrap();
+        assert_eq!(panel.id, "1000g_eur");
+        assert!(panel.host_path.to_string_lossy().contains("1000g_eur"));
+        assert_eq!(panel.mount_path, "/panels/1000g_eur");
+        assert!(
+            runtime
+                .requests
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .panels
+                .iter()
+                .all(|candidate| candidate.pvc_sub_path.contains('@'))
+        );
+    }
+
+    #[tokio::test]
     async fn missing_output_fails_after_successful_exit() {
         struct MissingOutputRuntime {
             workspace_root: PathBuf,
@@ -1351,5 +1543,226 @@ mod tests {
             std::fs::read_to_string(dir.join("result.txt")).unwrap(),
             "rootless-container"
         );
+    }
+
+    #[derive(Clone)]
+    struct CatalogSumstatsNode {
+        ports: NodePorts,
+        panel: String,
+    }
+
+    #[async_trait]
+    impl DagNode for CatalogSumstatsNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "ldsc_catalog_sumstats_test_source"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        async fn execute(
+            &mut self,
+            ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &dag_core::dag::node_event::NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            let session = ctx.session();
+            use datafusion::prelude::{ParquetReadOptions, col, lit};
+            let df = session
+                .read_parquet(&self.panel, ParquetReadOptions::default())
+                .await?
+                .select(vec![
+                    col("rsid"),
+                    lit(1.5_f64).alias("z"),
+                    lit(100_000_f64).alias("n"),
+                ])?
+                .limit(0, Some(5000))?;
+            let mut outputs = PortOutputs::new();
+            outputs.insert(0, df);
+            Ok(outputs)
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Garage catalog data, k3s PVCs, kubeconfig, and a local Debian image"]
+    async fn real_catalog_backed_containerized_ldsc_runs_through_dag() {
+        let vfs_config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| Path::new(&home).join(".autonomics/vfs.toml"))
+            })
+            .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
+        let source = std::fs::read_to_string(vfs_config_path).unwrap();
+        let mut manifest = vfs::VfsManifest::from_toml(&source).unwrap();
+        let catalog_config = data_catalog::CatalogConfig::from_vfs_toml(&source).unwrap();
+        let catalog_runtime = data_catalog::CatalogRuntime::load(&manifest, &catalog_config)
+            .await
+            .unwrap();
+        manifest.mount.extend(
+            data_catalog::catalog_mount_definitions(
+                &manifest,
+                &catalog_runtime.index,
+                &catalog_config,
+            )
+            .unwrap(),
+        );
+        let mounted = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let scratch = tempfile::tempdir().unwrap();
+        let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
+            scratch.path(),
+            mounted.clone(),
+        ));
+        let session = datafusion::prelude::SessionContext::new();
+        session.runtime_env().register_object_store(
+            datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")
+                .unwrap()
+                .as_ref(),
+            mounted,
+        );
+        let bundles = catalog_runtime.data_bundles();
+        let ctx = NodeCtx::new(session.runtime_env(), Some(storage))
+            .with_data_bundle_catalog(Arc::new(bundles.clone()));
+
+        let k3s_config = K3sConfig::from_env();
+        let run_suffix = unique_scratch_suffix();
+        let workspace = k3s_config
+            .workspace_root
+            .join(format!("ldsc-catalog-{run_suffix}"));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+        let panel_cache = Arc::new(PanelCache::new(
+            k3s_config.panel_cache_root.clone(),
+            k3s_config.panel_pvc_prefix.clone(),
+        ));
+        let panel_ids = ["ldsc.hsq.cli", "ldscore.1000g_eur", "ldscore.1000g_eur_m"];
+        let panel_bundles = panel_ids
+            .iter()
+            .map(|id| bundles.get(id).cloned().unwrap())
+            .collect::<Vec<_>>();
+
+        let mut node_spec = spec(
+            &std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
+                .unwrap_or_else(|_| "docker.io/library/debian:bookworm-slim".into()),
+            vec!["bash".into(), "-e".into()],
+            "ldsc-result.csv",
+        );
+        node_spec.script = Some(
+            r#"cp -- /panels/cli/ldsc-hsq-container "$AUTONOMICS_WORKDIR/ldsc-hsq-container"
+chmod 700 "$AUTONOMICS_WORKDIR/ldsc-hsq-container"
+"$AUTONOMICS_WORKDIR/ldsc-hsq-container" \
+  --input "$AUTONOMICS_INPUT0" \
+  --output "$AUTONOMICS_OUTPUT0" \
+  --ld-panel /panels/ldscore \
+  --m-panel /panels/ldscore_m \
+  --n-blocks 20"#
+                .into(),
+        );
+        node_spec.workdir = Some(workspace.to_string_lossy().into_owned());
+        node_spec.artifact_prefix = format!("/artifacts/ldsc-catalog-e2e/{run_suffix}");
+        node_spec.timeout_secs = 900;
+        node_spec.pull_policy = PullPolicy::Never;
+        node_spec.panel_bundles = vec![
+            ContainerPanelBundleSpec {
+                panel_id: "ldsc.hsq.cli".into(),
+                mount_path: "/panels/cli".into(),
+            },
+            ContainerPanelBundleSpec {
+                panel_id: "ldscore.1000g_eur".into(),
+                mount_path: "/panels/ldscore".into(),
+            },
+            ContainerPanelBundleSpec {
+                panel_id: "ldscore.1000g_eur_m".into(),
+                mount_path: "/panels/ldscore_m".into(),
+            },
+        ];
+
+        let sumstats_source = CatalogSumstatsNode {
+            ports: NodePorts::new().add_output_port(None),
+            panel: "vfs:///bundles/ldscore.1000g_eur/1000g_eur.parquet".into(),
+        };
+        let sink = crate::sink_file::FileSinkNode::new(
+            format!("vfs:///var/lib/autonomics/k3s/workspace/ldsc-catalog-input-{run_suffix}.csv"),
+            crate::sink_file::WriteFormat::Csv,
+            dag_core::SinkMode::Overwrite,
+        );
+        let result_reader = crate::source_file::FileSourceNode::new(None, None);
+
+        let container = ContainerCommandNode::new_with_catalog_panels(
+            node_spec,
+            runtime,
+            panel_cache,
+            panel_bundles,
+        )
+        .unwrap();
+        let result_reader = result_reader;
+
+        let mut dag = dag_core::dag::DAG::default();
+        dag.add_node("sumstats".into(), Box::new(sumstats_source))
+            .unwrap();
+        dag.add_node("write_input".into(), sink.clone_box())
+            .unwrap();
+        dag.add_node("container_ldsc".into(), container.clone_box())
+            .unwrap();
+        dag.add_node("read_result".into(), result_reader.clone_box())
+            .unwrap();
+        dag.add_edge("sumstats", "write_input", 0, 0).unwrap();
+        dag.add_edge("write_input", "container_ldsc", 0, 0).unwrap();
+        dag.add_edge("container_ldsc", "read_result", 0, 0).unwrap();
+        let report = dag
+            .run(
+                &dag_core::dag::runtime::SchedulerConfig::default(),
+                &ctx,
+                None,
+            )
+            .await
+            .unwrap();
+        println!("LDSC catalog DAG statuses: {:?}", report.statuses);
+        for node in &report.nodes {
+            println!(
+                "LDSC catalog DAG node {}: {:?}, error={:?}",
+                node.id, node.status, node.error
+            );
+        }
+
+        let output = dag.output("read_result").unwrap();
+        let rows = output
+            .get(&0)
+            .unwrap()
+            .as_dataframe()
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].num_rows(), 1);
+        let names = rows[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        for name in [
+            "h2",
+            "h2_se",
+            "intercept",
+            "mean_chisq",
+            "lambda_gc",
+            "n_snp",
+        ] {
+            assert!(
+                names.contains(&name.to_string()),
+                "missing result column {name}"
+            );
+        }
     }
 }

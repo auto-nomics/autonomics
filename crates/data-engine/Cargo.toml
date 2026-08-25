@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 dag-core = { path = "../dag-core" }
+container-runtime = { path = "../container-runtime" }
 thiserror.workspace = true
 vfs = { path = "../vfs" }
 serde = { workspace = true, features = ["derive"] }
@@ -78,4 +79,3 @@ evalue = { path = "../../bio_crates/evalue" }
 mrpresso = { path = "../../bio_crates/mrpresso" }
 mvmr = { path = "../../bio_crates/mvmr" }
 mixer = { path = "../../bio_crates/mixer" }
-

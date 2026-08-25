@@ -27,6 +27,7 @@ use crate::types::{ContainerRunRequest, ContainerRunResult, WorkspaceRef};
 const JOB_LABEL: &str = "autonomics.io/job-name";
 const RUN_LABEL: &str = "autonomics.io/run";
 const NETWORK_LABEL: &str = "autonomics.io/network";
+const DEFAULT_K3S_STATE_ROOT: &str = "/var/lib/autonomics/k3s";
 
 #[derive(Debug, Clone)]
 pub struct K3sConfig {
@@ -49,12 +50,9 @@ impl Default for K3sConfig {
 
 impl K3sConfig {
     pub fn from_env() -> Self {
-        let state_root = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
-            })
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        // Keep these defaults aligned with the local PV paths in
+        // `infra/k3s/manifests.yaml`; the control process and kubelet must
+        // resolve both volume roots to the same host directories.
         Self {
             namespace: env_value("AUTONOMICS_K3S_NAMESPACE", "autonomics"),
             context: std::env::var_os("AUTONOMICS_K3S_CONTEXT")
@@ -63,14 +61,14 @@ impl K3sConfig {
             workspace_pvc: env_value("AUTONOMICS_K3S_WORKSPACE_PVC", "autonomics-workspace"),
             workspace_root: env_path(
                 "AUTONOMICS_K3S_WORKSPACE_ROOT",
-                state_root.join("autonomics/k3s/workspace"),
+                Path::new(DEFAULT_K3S_STATE_ROOT).join("workspace"),
             ),
             panel_pvc: env_value("AUTONOMICS_K3S_PANEL_PVC", "autonomics-panels"),
             panel_cache_root: env_path(
                 "AUTONOMICS_PANEL_CACHE_ROOT",
-                state_root.join("autonomics/k3s"),
+                Path::new(DEFAULT_K3S_STATE_ROOT).join("panels"),
             ),
-            panel_pvc_prefix: env_value("AUTONOMICS_K3S_PANEL_PVC_PREFIX", "panels"),
+            panel_pvc_prefix: std::env::var("AUTONOMICS_K3S_PANEL_PVC_PREFIX").unwrap_or_default(),
             service_account: std::env::var_os("AUTONOMICS_K3S_SERVICE_ACCOUNT")
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string_lossy().into_owned()),
@@ -680,7 +678,7 @@ mod tests {
             workspace_root: PathBuf::from("/workspace"),
             panel_pvc: "panel-pvc".into(),
             panel_cache_root: PathBuf::from("/panels"),
-            panel_pvc_prefix: "panels".into(),
+            panel_pvc_prefix: String::new(),
             service_account: Some("autonomics".into()),
             poll_interval_ms: 10,
         }

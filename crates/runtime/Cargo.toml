@@ -19,7 +19,9 @@ opentargets = { path = "../opentargets" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
+data-catalog = { path = "../data-catalog" }
 dag-core = { path = "../dag-core" }
+container-runtime = { path = "../container-runtime" }
 anyhow = "1"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
