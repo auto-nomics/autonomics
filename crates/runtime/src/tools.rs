@@ -13,19 +13,18 @@ use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
-use opengwas::{OpengwasClient, OpengwasError};
+use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
 use vfs::OpendalFileStorage;
 
 use crate::config::RuntimeConfig;
+use crate::error::Result;
 
 /// OpenGWAS tools (GWAS catalog lookup).
 ///
-/// Returns [`OpengwasError`] if the OpenGWAS client cannot be constructed
+/// Returns [`crate::Error::Opengwas`] if the OpenGWAS client cannot be constructed
 /// (typically because `OPENGWAS_TOKEN` is unset).
-pub fn opengwas_tools(
-    file_storage: Arc<OpendalFileStorage>,
-) -> Result<Vec<ToolRegistration>, OpengwasError> {
+pub fn opengwas_tools(file_storage: Arc<OpendalFileStorage>) -> Result<Vec<ToolRegistration>> {
     opengwas_tools_with_token(file_storage, None)
 }
 
@@ -34,7 +33,7 @@ pub fn opengwas_tools(
 pub fn opengwas_tools_with_token(
     file_storage: Arc<OpendalFileStorage>,
     token: Option<&str>,
-) -> Result<Vec<ToolRegistration>, OpengwasError> {
+) -> Result<Vec<ToolRegistration>> {
     let opengwas = Arc::new(OpengwasClient::new(token)?);
     Ok(opengwas::opengwas_registrations(opengwas, file_storage))
 }
@@ -70,7 +69,7 @@ pub const DEFAULT_BIB_DB: &str = "bib.db";
 /// `EutilsClient`, `ArxivClient`, `reqwest::Client` and
 /// `EuropePmcClient`, which is fine for one agent but wasteful for
 /// many.
-pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>, bib_base::Error> {
+pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>> {
     let bib = Arc::new(BibBase::open(db_path).await?);
     let gateway = Arc::new(LiteratureGateway::with_default_sources());
     Ok(bib_base::bib_all_registrations(bib, gateway, None))
@@ -88,7 +87,7 @@ pub const DEFAULT_WRITING_DB: &str = "writing.db";
 /// Writing tools: document management (doc_create, doc_list, …), editing
 /// (doc_insert_section, doc_insert_block, …), citation management
 /// (doc_add_citation, doc_check_citations, …), and compilation (doc_compile).
-pub async fn writing_tools(db_path: &str) -> Result<Vec<ToolRegistration>, writing_base::Error> {
+pub async fn writing_tools(db_path: &str) -> Result<Vec<ToolRegistration>> {
     let store = Arc::new(writing_base::WritingStore::open(db_path).await?);
     let engine: Arc<dyn writing_base::LatexEngine> = {
         let x = writing_base::XelatexEngine::new();
@@ -122,7 +121,7 @@ pub fn resolve_writing_db_path() -> String {
 pub async fn default_tool_set(
     file_storage: Arc<OpendalFileStorage>,
     data_engine_client: Arc<DataEngineClient>,
-) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
+) -> Result<Vec<ToolRegistration>> {
     let cfg = RuntimeConfig::default();
     tool_set_from_config(file_storage, data_engine_client, &cfg).await
 }
@@ -134,7 +133,7 @@ pub async fn tool_set_from_config(
     file_storage: Arc<OpendalFileStorage>,
     data_engine_client: Arc<DataEngineClient>,
     config: &RuntimeConfig,
-) -> Result<Vec<ToolRegistration>, DefaultToolSetError> {
+) -> Result<Vec<ToolRegistration>> {
     // Filesystem / shell tools — always enabled.
     let mut tools = vfs::vbash_registrations(file_storage.clone());
 
@@ -176,15 +175,4 @@ pub async fn tool_set_from_config(
     }
 
     Ok(tools)
-}
-
-/// Errors that can arise while assembling the default tool set.
-#[derive(thiserror::Error, Debug)]
-pub enum DefaultToolSetError {
-    #[error(transparent)]
-    Opengwas(#[from] OpengwasError),
-    #[error(transparent)]
-    Bib(#[from] bib_base::Error),
-    #[error(transparent)]
-    Writing(#[from] writing_base::Error),
 }

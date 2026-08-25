@@ -18,7 +18,6 @@ use std::sync::Arc;
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
-use agentik_core::error::AgentError;
 use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
 use agentik_core::storage::{
     AgentDelegationRecord, AgentProfileRegistry, AgentStorage, AgentTurnRecord,
@@ -34,7 +33,6 @@ use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use futures::FutureExt;
-use thiserror::Error;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -44,8 +42,8 @@ use vfs::{
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
+use crate::error::{Error, Result};
 use crate::memory_kms::KmsMemoryGrounding;
-use crate::tools::DefaultToolSetError;
 
 // AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
 // can build a dynamic system prompt that only mentions tools the profile
@@ -67,39 +65,6 @@ impl PromptCapabilities for agentik_core::AgentProfile {
         self.enable_dag_history
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-// Error
-// ═══════════════════════════════════════════════════════════════════════
-
-#[derive(Debug, Error)]
-pub enum HostError {
-    #[error("failed to build agent: {0}")]
-    AgentBuild(#[from] AgentError),
-
-    #[error("{0}")]
-    Engine(#[from] data_engine::error::Error),
-
-    #[error("OpenGWAS setup failed: {0}")]
-    Opengwas(#[from] opengwas::OpengwasError),
-
-    #[error("tool assembly failed: {0}")]
-    ToolAssembly(#[from] DefaultToolSetError),
-
-    #[error("agent storage error: {0}")]
-    Storage(#[from] agentik_core::storage::StorageError),
-
-    #[error("bibliography shared init failed: {0}")]
-    BibShared(#[from] bib_base::Error),
-
-    #[error("writing system init failed: {0}")]
-    WritingShared(#[from] writing_base::Error),
-
-    #[error("{0}")]
-    Other(String),
-}
-
-pub type HostResult<T> = std::result::Result<T, HostError>;
 
 // ═══════════════════════════════════════════════════════════════════════
 // SharedInfra — process-level shared resources
@@ -149,16 +114,14 @@ impl SharedInfra {
     /// for DAG history are consumed here. Per-agent settings
     /// (identity, prompts, tool flags) are **not** read — those are passed
     /// to [`RuntimeHost::spawn_agent`] instead.
-    pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
+    pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
         // Build the VFS mount table first so we can attach it to the
         // agent-facing `OpendalFileStorage`. This makes the `vfs`
         // tool see mounted paths (otherwise it would only see the
         // bare `data_dir` local FS).
-        let (vfs, catalog_bundles) = build_vfs_with_catalog(config)
-            .await
-            .map_err(HostError::Other)?;
+        let (vfs, catalog_bundles) = build_vfs_with_catalog(config).await?;
         let vfs = Arc::new(vfs);
         let file_storage = Arc::new(OpendalFileStorage::with_mounts(
             &config.data_dir,
@@ -181,10 +144,10 @@ impl SharedInfra {
             "SharedInfra::open: VFS mounted"
         );
         tracing::info!("SharedInfra::open: building DataEngine");
-        let user_data_bundles = build_data_bundle_catalog(config).map_err(HostError::Other)?;
+        let user_data_bundles = build_data_bundle_catalog(config)?;
         let data_bundles = catalog_bundles
             .with_overriding_bundles(user_data_bundles.iter().map(|(_, bundle)| bundle.clone()))
-            .map_err(|error| HostError::Other(error.to_string()))?;
+            .map_err(|error| Error::Other(error.to_string()))?;
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
             .with_vfs((*vfs).clone())
@@ -239,7 +202,7 @@ impl SharedInfra {
                 s
             }
             Err(e) => {
-                return Err(HostError::Storage(e));
+                return Err(Error::Storage(e));
             }
         });
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
@@ -250,12 +213,12 @@ impl SharedInfra {
         let kms_storage =
             match kms::Storage::from_shared_connection(turso_store.shared_connection()).await {
                 Ok(storage) => storage,
-                Err(error) => return Err(HostError::Other(format!("initialize KMS: {error}"))),
+                Err(error) => return Err(Error::Other(format!("initialize KMS: {error}"))),
             };
         let kms = if config.enable_kms {
             match kms::KmsService::from_storage(kms_storage).await {
                 Ok(service) => Some(Arc::new(service)),
-                Err(error) => return Err(HostError::Other(format!("open KMS: {error}"))),
+                Err(error) => return Err(Error::Other(format!("open KMS: {error}"))),
             }
         } else {
             None
@@ -324,7 +287,7 @@ impl SharedInfra {
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
-    ) -> HostResult<AgentHandle> {
+    ) -> Result<AgentHandle> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
@@ -411,7 +374,7 @@ impl SharedInfra {
         &self,
         agent_path: &agentik_types::AgentPath,
         profile: &agentik_core::AgentProfile,
-    ) -> HostResult<Vec<agentik_core::tools::ToolRegistration>> {
+    ) -> Result<Vec<agentik_core::tools::ToolRegistration>> {
         use crate::tools::*;
         use agentik_core::tools::ToolRegistration;
 
@@ -494,10 +457,8 @@ impl SharedInfra {
 ///
 /// CLI commands use this to ensure they follow exactly the same
 /// `state_dir/vfs.toml` mount rules as `SharedInfra`.
-pub fn bibliography_file_storage(
-    config: &RuntimeConfig,
-) -> Result<Arc<vfs::OpendalFileStorage>, HostError> {
-    let vfs = Arc::new(build_vfs(config).map_err(HostError::Other)?);
+pub fn bibliography_file_storage(config: &RuntimeConfig) -> Result<Arc<vfs::OpendalFileStorage>> {
+    let vfs = Arc::new(build_vfs(config)?);
     Ok(Arc::new(vfs::OpendalFileStorage::with_mounts(
         &config.data_dir,
         vfs.clone(),
@@ -515,74 +476,98 @@ pub fn bibliography_file_storage(
 /// file can contain credentials supplied by the environment, so its parent
 /// directory is created and the file is written with user-only permissions on
 /// Unix.
-fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore, String> {
-    let manifest_path = config.state_dir.join("vfs.toml");
-    let (manifest, manifest_changed, catalog_source) = match std::fs::read_to_string(&manifest_path)
-    {
-        Ok(source) => {
-            let catalog_source = extract_catalog_section(&source);
-            let mut manifest = VfsManifest::from_toml(&source)
-                .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?;
-            let changed = ensure_literature_mount(&mut manifest, config);
-            (manifest, changed, catalog_source)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let manifest = default_vfs_manifest(config);
-            write_vfs_manifest(&manifest_path, &manifest, None)?;
-            (manifest, false, None)
-        }
-        Err(e) => return Err(format!("read {}: {e}", manifest_path.display())),
-    };
-    if manifest_changed {
-        write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
-    }
-    MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())
+fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
+    let state = load_or_create_vfs_manifest(config)?;
+    MountedObjectStore::from_manifest(&state.manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
 async fn build_vfs_with_catalog(
     config: &RuntimeConfig,
-) -> Result<(MountedObjectStore, dag_core::DataBundleCatalog), String> {
-    build_vfs(config)?;
-    let manifest_path = config.state_dir.join("vfs.toml");
-    let source = std::fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
-    let catalog_source = extract_catalog_section(&source);
-    let mut manifest = VfsManifest::from_toml(&source)
-        .map_err(|error| format!("invalid {}: {error}", manifest_path.display()))?;
+) -> Result<(MountedObjectStore, dag_core::DataBundleCatalog)> {
+    let state = load_or_create_vfs_manifest(config)?;
+    let mut manifest = state.manifest;
 
     let mut catalog_bundles = dag_core::DataBundleCatalog::new();
-    if let Some(catalog_source) = catalog_source {
+    if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
         ))?;
         if catalog_config.enabled {
-            let runtime = CatalogRuntime::load(&manifest, &catalog_config).await?;
-            let mut mounts = catalog_mount_definitions(&manifest, &runtime.index, &catalog_config)?;
+            let runtime = CatalogRuntime::load(&manifest, &catalog_config)
+                .await
+                .map_err(Error::Other)?;
+            let mut mounts = catalog_mount_definitions(&manifest, &runtime.index, &catalog_config)
+                .map_err(Error::Other)?;
             manifest.mount.append(&mut mounts);
             catalog_bundles = runtime.data_bundles();
         }
     }
     MountedObjectStore::from_manifest(&manifest)
-        .map_err(|e| e.to_string())
+        .map_err(|e| Error::Other(e.to_string()))
         .map(|store| (store, catalog_bundles))
+}
+
+struct VfsManifestState {
+    manifest: VfsManifest,
+    catalog_source: Option<String>,
+}
+
+/// Read `state_dir/vfs.toml`, preserve sections unknown to `VfsManifest`, and
+/// materialize the default manifest on first launch.
+///
+/// The catalog section is tracked separately because `VfsManifest` models only
+/// backends and mounts; rewriting the TOML without this source would discard
+/// runtime catalog configuration.
+fn load_or_create_vfs_manifest(config: &RuntimeConfig) -> Result<VfsManifestState> {
+    let manifest_path = config.state_dir.join("vfs.toml");
+    match std::fs::read_to_string(&manifest_path) {
+        Ok(source) => {
+            let catalog_source = extract_catalog_section(&source);
+            let mut manifest = VfsManifest::from_toml(&source)
+                .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))?;
+            if ensure_literature_mount(&mut manifest, config) {
+                write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
+            }
+            Ok(VfsManifestState {
+                manifest,
+                catalog_source,
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let manifest = default_vfs_manifest(config);
+            write_vfs_manifest(&manifest_path, &manifest, None)?;
+            Ok(VfsManifestState {
+                manifest,
+                catalog_source: None,
+            })
+        }
+        Err(e) => Err(Error::Other(format!(
+            "read {}: {e}",
+            manifest_path.display()
+        ))),
+    }
 }
 
 fn write_vfs_manifest(
     path: &std::path::Path,
     manifest: &VfsManifest,
     catalog_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<()> {
     let Some(parent) = path.parent() else {
-        return Err(format!(
+        return Err(Error::Other(format!(
             "VFS manifest path has no parent: {}",
             path.display()
-        ));
+        )));
     };
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("create VFS manifest directory {}: {e}", parent.display()))?;
+    std::fs::create_dir_all(parent).map_err(|e| {
+        Error::Other(format!(
+            "create VFS manifest directory {}: {e}",
+            parent.display()
+        ))
+    })?;
 
     let mut source = toml::to_string_pretty(manifest)
-        .map_err(|e| format!("serialize {}: {e}", path.display()))?;
+        .map_err(|e| Error::Other(format!("serialize {}: {e}", path.display())))?;
     if let Some(catalog_source) = catalog_source {
         source.push_str(catalog_source);
     }
@@ -599,7 +584,7 @@ fn write_vfs_manifest(
             use std::io::Write;
             file.write_all(source.as_bytes())
         })
-        .map_err(|e| format!("write {}: {e}", path.display()))
+        .map_err(|e| Error::Other(format!("write {}: {e}", path.display())))
 }
 
 fn extract_catalog_section(source: &str) -> Option<String> {
@@ -629,7 +614,7 @@ struct DataBundleManifest {
 ///
 /// A missing file yields an empty catalog. Nodes with bundle requirements then
 /// fail with an actionable missing-bundle error when they are built.
-fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog, String> {
+fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog> {
     let manifest_path = config.state_dir.join("data_bundles.toml");
     let source = match std::fs::read_to_string(&manifest_path) {
         Ok(source) => source,
@@ -637,16 +622,16 @@ fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog
             return Ok(DataBundleCatalog::new());
         }
         Err(e) => {
-            return Err(format!(
+            return Err(Error::Other(format!(
                 "read data bundle manifest {}: {e}",
                 manifest_path.display()
-            ));
+            )));
         }
     };
-    let manifest: DataBundleManifest =
-        toml::from_str(&source).map_err(|e| format!("invalid {}: {e}", manifest_path.display()))?;
+    let manifest: DataBundleManifest = toml::from_str(&source)
+        .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))?;
     DataBundleCatalog::from_bundles(manifest.bundle)
-        .map_err(|e| format!("invalid {}: {e}", manifest_path.display()))
+        .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))
 }
 
 #[cfg(test)]
@@ -777,7 +762,8 @@ pub struct AgentHandle {
     pub profile_path: String,
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
-    agent_task: tokio::task::JoinHandle<Result<(), agentik_core::supervise::TaskPanic>>,
+    agent_task:
+        tokio::task::JoinHandle<std::result::Result<(), agentik_core::supervise::TaskPanic>>,
     cancel_token: CancellationToken,
     model: Arc<ArcSwapOption<Model>>,
 }
@@ -1036,7 +1022,7 @@ enum AgentCommand {
 /// Internal entry for one registered agent.
 struct AgentEntry {
     cmd_tx: UnboundedSender<AgentCommand>,
-    _relay_task: JoinHandle<Result<(), agentik_core::supervise::TaskPanic>>,
+    _relay_task: JoinHandle<std::result::Result<(), agentik_core::supervise::TaskPanic>>,
     /// Full hierarchical path — source of truth for identity.
     /// Mirrors the HashMap key but kept here for typed access within entries.
     #[allow(dead_code)]
@@ -1073,7 +1059,7 @@ struct HostDelegation {
 
 impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
-    pub async fn open(config: &RuntimeConfig) -> HostResult<Self> {
+    pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("RuntimeHost::open: delegating to SharedInfra::open");
         let mut infra = SharedInfra::open(config).await?;
         tracing::info!("RuntimeHost::open: infrastructure ready, creating channels");
@@ -1975,12 +1961,14 @@ impl RuntimeHost {
     // ── Topology control ───────────────────────────────────
 
     /// Add a node to the topology.
-    pub fn add_node(&mut self, name: &str, profile: &str) -> Result<(), String> {
-        self.network.add_node(NodeSpec {
-            name: name.into(),
-            profile: profile.into(),
-            initial_prompt: None,
-        })
+    pub fn add_node(&mut self, name: &str, profile: &str) -> Result<()> {
+        self.network
+            .add_node(NodeSpec {
+                name: name.into(),
+                profile: profile.into(),
+                initial_prompt: None,
+            })
+            .map_err(Error::from)
     }
 
     /// Add a node with an initial prompt.
@@ -1989,12 +1977,14 @@ impl RuntimeHost {
         name: &str,
         profile: &str,
         prompt: impl Into<String>,
-    ) -> Result<(), String> {
-        self.network.add_node(NodeSpec {
-            name: name.into(),
-            profile: profile.into(),
-            initial_prompt: Some(prompt.into()),
-        })
+    ) -> Result<()> {
+        self.network
+            .add_node(NodeSpec {
+                name: name.into(),
+                profile: profile.into(),
+                initial_prompt: Some(prompt.into()),
+            })
+            .map_err(Error::from)
     }
 
     /// Remove a node from the topology (and clean up routing state).
@@ -2003,8 +1993,10 @@ impl RuntimeHost {
     }
 
     /// Connect two nodes with a trigger (request-response delegation).
-    pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<(), String> {
-        self.network.connect(from, to, trigger, None)
+    pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<()> {
+        self.network
+            .connect(from, to, trigger, None)
+            .map_err(Error::from)
     }
 
     /// Remove all edges between two nodes.
@@ -2286,10 +2278,10 @@ impl RuntimeHost {
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
-    ) -> HostResult<String> {
+    ) -> Result<String> {
         let path = agentik_types::AgentPath::root()
             .join(agent_name)
-            .map_err(|e| HostError::Other(e.to_string()))?;
+            .map_err(|e| Error::Other(e.to_string()))?;
         let handle = self
             .spawn_agent(&path, profile, global_model, model_override)
             .await?;
@@ -2645,7 +2637,7 @@ impl RuntimeHost {
         profile: &agentik_core::AgentProfile,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
-    ) -> HostResult<AgentHandle> {
+    ) -> Result<AgentHandle> {
         self.infra
             .spawn_agent(agent_path, profile, global_model, model_override)
             .await
@@ -3493,13 +3485,13 @@ mod send_message_tests {
         assert_ne!(send_kind, delegate_kind);
     }
 
-    /// `SendMessage` uses a `Result<(), String>` reply channel (unlike
+    /// `SendMessage` uses a `std::result::Result<(), String>` reply channel (unlike
     /// `Delegate` which uses `String`). This is important: the handler
     /// must reply `Ok(())` on success or `Err(msg)` on agent-not-found,
     /// not a plain string.
     #[test]
     fn send_message_reply_channel_is_result_unit_string() {
-        let (tx, rx) = oneshot::channel::<Result<(), String>>();
+        let (tx, rx) = oneshot::channel::<std::result::Result<(), String>>();
         let _cmd = HostCommand::SendMessage {
             to: "worker".into(),
             message: "hello".into(),

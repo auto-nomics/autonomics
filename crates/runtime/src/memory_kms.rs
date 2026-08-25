@@ -12,6 +12,8 @@ use kms::{
 };
 use uuid::Uuid;
 
+use crate::error::{Error, Result};
+
 #[derive(Clone)]
 pub struct KmsMemoryGrounding {
     service: Arc<KmsService>,
@@ -50,13 +52,13 @@ impl SemanticGrounding for KmsMemoryGrounding {
     async fn ground(
         &self,
         observation: &SemanticObservation,
-    ) -> Result<SemanticGroundingOutcome, String> {
-        let before = self.service.diagnose().await?;
+    ) -> std::result::Result<SemanticGroundingOutcome, String> {
+        let before = self.service.diagnose().await.map_err(|e| e.to_string())?;
         let mut draft = GroundingDraft::new();
 
         match apply_observation(&self.service, observation, &mut draft).await {
             Ok(()) => {
-                let after = self.service.diagnose().await?;
+                let after = self.service.diagnose().await.map_err(|e| e.to_string())?;
                 let new_errors = new_error_diagnostics(&before, &after);
                 if new_errors.is_empty() {
                     Ok(SemanticGroundingOutcome {
@@ -89,11 +91,13 @@ async fn apply_observation(
     service: &KmsService,
     observation: &SemanticObservation,
     draft: &mut GroundingDraft,
-) -> Result<(), String> {
+) -> Result<()> {
     let subject = clean_name(&observation.subject);
     let object = clean_name(&observation.object);
     if subject.is_empty() || object.is_empty() || observation.predicate.is_empty() {
-        return Err("subject, predicate, and object must be non-empty".to_string());
+        return Err(Error::Other(
+            "subject, predicate, and object must be non-empty".into(),
+        ));
     }
 
     let (subject_entity, subject_created) = ensure_entity(service, &subject).await?;
@@ -159,7 +163,7 @@ async fn apply_observation(
     Ok(())
 }
 
-async fn ensure_entity(service: &KmsService, name: &str) -> Result<(Entity, bool), String> {
+async fn ensure_entity(service: &KmsService, name: &str) -> Result<(Entity, bool)> {
     service
         .create_entity(
             vec![Nomenclature {
@@ -171,19 +175,21 @@ async fn ensure_entity(service: &KmsService, name: &str) -> Result<(Entity, bool
             &format!("Semantic entity grounded from persistent memory: {name}"),
         )
         .await
+        .map_err(Error::from)
 }
 
-async fn ensure_group(
-    service: &KmsService,
-    parent_id: Uuid,
-    title: &str,
-) -> Result<(Index, bool), String> {
-    if let Some(id) = service.find_child_by_title(parent_id, title).await? {
-        return Ok((service.get_index(id).await?, false));
+async fn ensure_group(service: &KmsService, parent_id: Uuid, title: &str) -> Result<(Index, bool)> {
+    if let Some(id) = service
+        .find_child_by_title(parent_id, title)
+        .await
+        .map_err(Error::from)?
+    {
+        return Ok((service.get_index(id).await.map_err(Error::from)?, false));
     }
     let index = service
         .create_index(parent_id, Some(title.to_string()), None, None)
-        .await?;
+        .await
+        .map_err(Error::from)?;
     Ok((index, true))
 }
 

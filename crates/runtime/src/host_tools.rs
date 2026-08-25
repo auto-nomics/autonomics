@@ -705,19 +705,21 @@ impl ToolFunction for SetTerminationTool {
     }
 }
 
-fn parse_termination(s: &str) -> Result<agentik_network::TerminationSpec, String> {
+fn parse_termination(s: &str) -> crate::error::Result<agentik_network::TerminationSpec> {
     let (kind, rest) = s
         .split_once(':')
-        .ok_or_else(|| format!("expected 'kind:args', got '{s}'"))?;
+        .ok_or_else(|| crate::error::Error::Other(format!("expected 'kind:args', got '{s}'")))?;
     match kind {
         "max_rounds" => {
-            let max: usize = rest.parse().map_err(|_| "max_rounds needs a number")?;
+            let max: usize = rest
+                .parse()
+                .map_err(|_| crate::error::Error::Other("max_rounds needs a number".into()))?;
             Ok(TerminationSpec::MaxRounds { max })
         }
         "condition" => {
-            let (node, pattern) = rest
-                .split_once(':')
-                .ok_or("condition needs 'node:pattern'")?;
+            let (node, pattern) = rest.split_once(':').ok_or_else(|| {
+                crate::error::Error::Other("condition needs 'node:pattern'".into())
+            })?;
             Ok(TerminationSpec::Condition {
                 node: node.into(),
                 pattern: pattern.into(),
@@ -727,7 +729,9 @@ fn parse_termination(s: &str) -> Result<agentik_network::TerminationSpec, String
             let nodes: Vec<String> = rest.split(',').map(|s| s.trim().to_string()).collect();
             Ok(TerminationSpec::AnyNodeDone { nodes })
         }
-        other => Err(format!("unknown termination kind: '{other}'")),
+        other => Err(crate::error::Error::Other(format!(
+            "unknown termination kind: '{other}'"
+        ))),
     }
 }
 

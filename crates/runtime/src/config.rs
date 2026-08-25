@@ -869,11 +869,13 @@ mod tests {
     use super::*;
 
     static BIB_HTTP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static DATA_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn defaults() {
         // Guard against env-var pollution from parallel tests like
         // `env_data_dir_override` that set AUTONOMICS_DATA_DIR.
+        let _guard = DATA_DIR_ENV_LOCK.lock().unwrap();
         let saved_data_dir = std::env::var_os(ENV_DATA_DIR);
         let saved_state_dir = std::env::var_os(ENV_STATE_DIR);
         // SAFETY: single-threaded within this test fn.
@@ -1002,7 +1004,8 @@ mod tests {
 
     #[test]
     fn env_data_dir_override() {
-        // SAFETY: single-threaded test, no other code reads this env var concurrently.
+        let _guard = DATA_DIR_ENV_LOCK.lock().unwrap();
+        // SAFETY: guarded by DATA_DIR_ENV_LOCK for tests that assert defaults.
         unsafe {
             std::env::set_var(ENV_DATA_DIR, "/tmp/env-data");
         }
@@ -1015,7 +1018,8 @@ mod tests {
 
     #[test]
     fn builder_takes_precedence_over_env() {
-        // SAFETY: single-threaded test, no other code reads this env var concurrently.
+        let _guard = DATA_DIR_ENV_LOCK.lock().unwrap();
+        // SAFETY: guarded by DATA_DIR_ENV_LOCK for tests that assert defaults.
         unsafe {
             std::env::set_var(ENV_DATA_DIR, "/tmp/env-data");
         }

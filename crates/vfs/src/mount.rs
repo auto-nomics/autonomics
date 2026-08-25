@@ -254,15 +254,36 @@ impl VfsManifest {
 
 #[derive(Clone)]
 struct Mount {
+    /// VFS-side prefix owned by this mount, such as `/data/ldsc`.
+    ///
+    /// `find` matches incoming paths against mounts by longest prefix, so a
+    /// deeper mount can override a broader `/` mount.
     virtual_prefix: Path,
+
+    /// Backend-side prefix appended after the virtual suffix is removed.
+    ///
+    /// `/data/ldsc/foo.parquet` with `source_prefix = panels/ldsc` resolves to
+    /// backend key `panels/ldsc/foo.parquet`.
     source_prefix: Path,
+
+    /// The backend wrapped as a DataFusion `ObjectStore`.
+    ///
+    /// Used by `MountedObjectStore`'s `get/list/put/delete` implementation for
+    /// DataFusion reads and writes routed through this mount.
     store: Arc<dyn ObjectStore>,
+
     /// Clone of the backend's OpenDAL operator. Used by callers that need
     /// raw opendal access (e.g. the agent-facing `OpendalFileStorage`
     /// wrapper, which exposes an OpenDAL-style surface). Wrapped in
     /// `Arc` so cloning the outer [`MountedObjectStore`] is cheap.
     backend_op: Arc<opendal::Operator>,
+
+    /// Whether mutations through this mount are rejected. Read access remains
+    /// allowed when true.
     read_only: bool,
+
+    /// The original declarative entry from `vfs.toml`, retained for
+    /// introspection APIs such as `mount_list` and mount-definition equality.
     definition: MountDefinition,
 }
 

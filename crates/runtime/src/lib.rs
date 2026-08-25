@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod control;
+pub mod error;
 pub mod host;
 pub mod host_tools;
 pub mod memory_kms;
@@ -14,8 +15,8 @@ pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use control::{HostCommand, HostControl, HostStatus};
+pub use error::{Error, Result};
 pub use host::{
-    AgentHandle, HostError, HostEvent, HostResult, RuntimeHost, SharedInfra, TaggedEvent,
-    bibliography_file_storage,
+    AgentHandle, HostEvent, RuntimeHost, SharedInfra, TaggedEvent, bibliography_file_storage,
 };
 pub use host_tools::host_tools;
