@@ -37,6 +37,25 @@ On startup the runtime:
    - `/bundles/<id>` for stable compatibility aliases;
 6. injects each alias into the existing DataBundle catalog.
 
+The runtime also retains a `CatalogService` over the same backend. Agents can
+search and inspect it without restarting:
+
+| Tool | Purpose |
+|---|---|
+| `catalog_search` | Search current datasets by free text, kind, and tags |
+| `catalog_describe` | Return manifest metadata, files, digests, and VFS paths |
+| `catalog_list_files` | List payload paths, byte sizes, and SHA-256 values |
+| `catalog_list_versions` | List historical versions for a dataset id |
+| `catalog_refresh` | Reload `index.json` and current manifests |
+
+Search records derive `description` from `metadata.description` (or
+`payload.description`) and `tags` from `metadata.tags` / `payload.tags`.
+Publication authors should therefore include concise metadata and usage hints
+in every package. `catalog_refresh` updates only the discovery snapshot; it
+does not rebuild VFS mounts or the DataBundle registry, so restart the runtime
+before binding a newly published entry to a DAG node. It also does not add
+optimistic concurrency for multiple simultaneous publishers.
+
 User entries in `data_bundles.toml` still override catalog entries. Built-in
 entries remain below both. This keeps current LDSC, MAGMA, MiXeR, LAVA, and
 HDL nodes untouched while the catalog becomes the authoritative deployment

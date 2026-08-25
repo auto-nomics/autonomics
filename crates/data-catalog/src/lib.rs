@@ -9,6 +9,7 @@ pub mod model;
 pub mod package;
 pub mod publish;
 pub mod runtime;
+pub mod service;
 pub mod storage;
 
 pub use config::CatalogConfig;
@@ -16,3 +17,4 @@ pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
 pub use package::{build_package, validate_package};
 pub use publish::publish_package;
 pub use runtime::{CatalogRuntime, catalog_mount_definitions};
+pub use service::{CatalogDataset, CatalogRecord, CatalogSearchQuery, CatalogService};

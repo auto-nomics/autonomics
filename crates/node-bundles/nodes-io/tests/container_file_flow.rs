@@ -15,12 +15,14 @@ use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeCtx;
+use data_catalog::{CatalogConfig, CatalogRuntime};
 use datafusion::common::HashMap;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
 
 use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
+    ContainerPanelBundleSpec,
 };
 use nodes_io::sink_file::{FileSinkNode, WriteFormat};
 use nodes_io::source_file::FileSourceNode;
@@ -449,4 +451,231 @@ async fn real_k3s_container_receives_upstream_sink_file_output() {
         .downcast_ref::<Int64Array>()
         .unwrap();
     assert_eq!(ids.values(), &[1, 2]);
+}
+
+#[tokio::test]
+#[ignore = "requires Garage catalog panels, k3s PVCs, kubeconfig, the local LDSC image, and test sumstats"]
+async fn real_catalog_backed_original_ldsc_h2_runs_in_k3s() {
+    let config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| Path::new(&home).join(".autonomics/vfs.toml"))
+        })
+        .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
+    let source = std::fs::read_to_string(&config_path).unwrap();
+    let catalog_manifest = VfsManifest::from_toml(&source).unwrap();
+    let catalog_config = CatalogConfig::from_vfs_toml(&source).unwrap();
+    let catalog_runtime = CatalogRuntime::load(&catalog_manifest, &catalog_config)
+        .await
+        .unwrap();
+    let bundles = catalog_runtime.data_bundles();
+    let panel_ids = [
+        "ldsc.ref_ld.1000g_eur.basic",
+        "ldsc.w_ld.1000g_eur_hm3_no_mhc",
+    ];
+    let panel_bundles = panel_ids
+        .iter()
+        .map(|id| {
+            bundles
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| panic!("catalog is missing {id}"))
+        })
+        .collect::<Vec<_>>();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let catalog_backend = catalog_manifest
+        .backend
+        .iter()
+        .find(|backend| backend.id == catalog_config.backend)
+        .expect("catalog backend is defined");
+    let mut manifest = VfsManifest {
+        backend: vec![
+            catalog_backend.clone(),
+            BackendDefinition {
+                id: "ldsc-test-local".into(),
+                config: BackendConfig::local("/"),
+            },
+        ],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "ldsc-test-local".into(),
+            source: scratch.path().to_string_lossy().into_owned(),
+            read_only: false,
+        }],
+    };
+    manifest.mount.extend(
+        data_catalog::catalog_mount_definitions(&manifest, &catalog_runtime.index, &catalog_config)
+            .unwrap(),
+    );
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = Arc::new(OpendalFileStorage::with_mounts(
+        scratch.path(),
+        mounted.clone(),
+    ));
+    let session = SessionContext::new();
+    session
+        .runtime_env()
+        .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
+    let ctx = NodeCtx::new(session.runtime_env(), Some(storage));
+
+    let k3s_config = K3sConfig::from_env();
+    let sumstats_path = std::env::var_os("AUTONOMICS_LDSC_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new("/mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz").to_path_buf()
+        });
+    let run_suffix = unique_container_name();
+    let workspace = k3s_config
+        .workspace_root
+        .join(format!("ldsc-panel-smoke-{run_suffix}"));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
+        .unwrap_or_else(|_| "localhost/atc/ldsc:3.0".into());
+    let mut spec = container_spec(
+        &image,
+        &workspace,
+        format!("/artifacts/ldsc-panel-smoke/{run_suffix}"),
+    );
+    spec.command = vec!["sh".into()];
+    spec.outputs = vec![
+        ContainerCommandOutputSpec {
+            path: "panel-inventory.txt".into(),
+            format: Some("txt".into()),
+        },
+        ContainerCommandOutputSpec {
+            path: "ldsc_h2.log".into(),
+            format: Some("ldsc_log".into()),
+        },
+    ];
+    spec.script = Some(
+        r#"set -eu
+ref_scores=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.ldscore.gz' | wc -l)
+ref_m=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.M' | wc -l)
+ref_m_5_50=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.M_5_50' | wc -l)
+wld_scores=$(find /panels/w_ld -maxdepth 1 -type f -name 'weights.hm3_noMHC.*.l2.ldscore.gz' | wc -l)
+test "$ref_scores" -eq 22
+test "$ref_m" -eq 22
+test "$ref_m_5_50" -eq 22
+test "$wld_scores" -eq 22
+gzip -t /panels/ref_ld/LDscore.*.l2.ldscore.gz
+gzip -t /panels/w_ld/weights.hm3_noMHC.*.l2.ldscore.gz
+{
+  echo "ref_ld_scores=$ref_scores"
+  echo "ref_ld_M=$ref_m"
+  echo "ref_ld_M_5_50=$ref_m_5_50"
+  echo "w_ld_scores=$wld_scores"
+  find /panels/ref_ld /panels/w_ld -maxdepth 1 -type f | sort
+} > "$AUTONOMICS_OUTPUT0"
+ldsc \
+  --h2 "$AUTONOMICS_INPUT0" \
+  --ref-ld-chr /panels/ref_ld/LDscore. \
+  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \
+  --out "$AUTONOMICS_WORKDIR/ldsc_h2" \
+  > "$AUTONOMICS_OUTPUT1" 2>&1"#
+            .into(),
+    );
+    spec.panel_bundles = vec![
+        ContainerPanelBundleSpec {
+            panel_id: panel_ids[0].into(),
+            mount_path: "/panels/ref_ld".into(),
+        },
+        ContainerPanelBundleSpec {
+            panel_id: panel_ids[1].into(),
+            mount_path: "/panels/w_ld".into(),
+        },
+    ];
+
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let mut node =
+        ContainerCommandNode::new_with_catalog_panels(spec, runtime, panel_cache, panel_bundles)
+            .unwrap();
+    let input = dag_core::value::FileRef::local(&sumstats_path, Some("sumstats_gz".into()))
+        .expect("LDSC integration test sumstats must exist");
+    let outputs = node
+        .execute(
+            &ctx,
+            &[NodeInput::file(0, input)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+    let inventory_path = workspace.join("panel-inventory.txt");
+    let inventory = std::fs::read_to_string(&inventory_path).unwrap();
+    for expected in [
+        "ref_ld_scores=22",
+        "ref_ld_M=22",
+        "ref_ld_M_5_50=22",
+        "w_ld_scores=22",
+    ] {
+        assert!(
+            inventory.lines().any(|line| line == expected),
+            "panel inventory is missing `{expected}`:\n{inventory}"
+        );
+    }
+
+    let output = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    assert!(
+        output
+            .path
+            .starts_with("vfs:///artifacts/ldsc-panel-smoke/"),
+        "unexpected LDSC panel artifact path: {}",
+        output.path
+    );
+    let virtual_path = output
+        .path
+        .strip_prefix("vfs://")
+        .expect("LDSC panel artifact is a VFS URI");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    assert_eq!(published.to_vec(), inventory.as_bytes());
+
+    let output = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(
+        output.path.ends_with("/ldsc_h2.log"),
+        "unexpected LDSC h2 artifact path: {}",
+        output.path
+    );
+    let virtual_path = output
+        .path
+        .strip_prefix("vfs://")
+        .expect("LDSC h2 artifact is a VFS URI");
+    let log_bytes = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    let log = String::from_utf8_lossy(&log_bytes.to_vec()).into_owned();
+    assert!(
+        log.contains("Total Observed scale h2: 0.0196 (0.0014)"),
+        "unexpected LDSC h2 result:\n{log}"
+    );
+    assert!(
+        log.contains("Intercept: 1.1516 (0.0132)"),
+        "unexpected LDSC intercept:\n{log}"
+    );
+
+    let cached_panels = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            panel_ids
+                .iter()
+                .any(|id| name.starts_with(&format!("{id}@")))
+        })
+        .count();
+    assert_eq!(
+        cached_panels, 2,
+        "both native LDSC panels should remain in PanelCache"
+    );
 }

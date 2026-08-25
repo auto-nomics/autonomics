@@ -28,7 +28,7 @@ use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
 use dag_core::{DataBundle, DataBundleCatalog};
-use data_catalog::{CatalogConfig, CatalogRuntime, catalog_mount_definitions};
+use data_catalog::{CatalogConfig, CatalogRuntime, CatalogService, catalog_mount_definitions};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -82,6 +82,9 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<MountedObjectStore>,
+    /// Refreshable searchable view over the object-storage catalog. `None`
+    /// when the catalog is absent or disabled.
+    pub catalog: Option<Arc<CatalogService>>,
     /// Process-wide k3s client and immutable panel cache shared by all DAG
     /// sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
@@ -121,7 +124,7 @@ impl SharedInfra {
         // agent-facing `OpendalFileStorage`. This makes the `vfs`
         // tool see mounted paths (otherwise it would only see the
         // bare `data_dir` local FS).
-        let (vfs, catalog_bundles) = build_vfs_with_catalog(config).await?;
+        let (vfs, catalog_bundles, catalog_service) = build_vfs_with_catalog(config).await?;
         let vfs = Arc::new(vfs);
         let file_storage = Arc::new(OpendalFileStorage::with_mounts(
             &config.data_dir,
@@ -265,6 +268,7 @@ impl SharedInfra {
             file_storage,
             vfs,
             container_execution,
+            catalog: catalog_service,
             storage,
             profile_storage,
             bib,
@@ -388,6 +392,9 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        if let Some(catalog) = self.catalog.clone() {
+            tools.extend(crate::catalog_tools::catalog_registrations(catalog));
+        }
         tools.extend(crate::container_dev_tools::container_dev_registrations(
             Arc::clone(&self.container_execution),
         ));
@@ -486,28 +493,40 @@ fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
 
 async fn build_vfs_with_catalog(
     config: &RuntimeConfig,
-) -> Result<(MountedObjectStore, dag_core::DataBundleCatalog)> {
+) -> Result<(
+    MountedObjectStore,
+    dag_core::DataBundleCatalog,
+    Option<Arc<CatalogService>>,
+)> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
 
     let mut catalog_bundles = dag_core::DataBundleCatalog::new();
+    let mut catalog_service = None;
     if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
         ))?;
         if catalog_config.enabled {
-            let runtime = CatalogRuntime::load(&manifest, &catalog_config)
-                .await
-                .map_err(Error::Other)?;
-            let mut mounts = catalog_mount_definitions(&manifest, &runtime.index, &catalog_config)
+            let service = Arc::new(
+                CatalogService::new(&manifest, &catalog_config)
+                    .await
+                    .map_err(Error::Other)?,
+            );
+            let snapshot = service.snapshot().await;
+            let mut mounts = catalog_mount_definitions(&manifest, &snapshot.index, &catalog_config)
                 .map_err(Error::Other)?;
             manifest.mount.append(&mut mounts);
-            catalog_bundles = runtime.data_bundles();
+            catalog_bundles = CatalogRuntime {
+                index: snapshot.index,
+            }
+            .data_bundles();
+            catalog_service = Some(service);
         }
     }
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
-        .map(|store| (store, catalog_bundles))
+        .map(|store| (store, catalog_bundles, catalog_service))
 }
 
 struct VfsManifestState {
@@ -3766,7 +3785,9 @@ backend = "warehouse"
         )
         .unwrap();
 
-        let (store, bundles) = build_vfs_with_catalog(&config).await.unwrap();
+        let (store, bundles, catalog_service) = build_vfs_with_catalog(&config).await.unwrap();
+        let catalog_service = catalog_service.expect("enabled catalog service");
+        assert_eq!(catalog_service.snapshot().await.records.len(), 1);
         let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
             &config.data_dir,
             Arc::new(store),

@@ -5,6 +5,7 @@
 //! and an agent registry for multiplexed event access. Agents can control
 //! the host via [`HostControl`] tools.
 
+pub mod catalog_tools;
 pub mod config;
 pub mod container_dev_tools;
 pub mod control;
