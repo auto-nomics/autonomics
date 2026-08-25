@@ -4,6 +4,7 @@
 //! while shared workspace and panel PVCs provide the POSIX data plane required
 //! by analysis tools.
 
+pub mod dev;
 pub mod error;
 pub mod execution;
 pub mod k3s;
@@ -21,5 +22,7 @@ pub use runtime::{
     SharedContainerRuntime, unique_container_name,
 };
 pub use types::{
-    CachedPanel, ContainerRunRequest, ContainerRunResult, PanelRef, PullPolicy, WorkspaceRef,
+    CachedPanel, ContainerRunRequest, ContainerRunResult, DevExecRequest, DevImageBuildRequest,
+    DevImageBuildResult, DevWorkspaceCreate, DevWorkspaceStatus, PanelRef, PullPolicy,
+    WorkspaceRef,
 };

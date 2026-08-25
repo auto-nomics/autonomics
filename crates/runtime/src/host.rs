@@ -388,6 +388,9 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        tools.extend(crate::container_dev_tools::container_dev_registrations(
+            Arc::clone(&self.container_execution),
+        ));
 
         if profile.enable_opengwas {
             match opengwas_tools_with_token(file_storage.clone(), None) {

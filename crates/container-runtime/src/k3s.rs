@@ -40,6 +40,7 @@ pub struct K3sConfig {
     pub panel_pvc_prefix: String,
     pub service_account: Option<String>,
     pub poll_interval_ms: u64,
+    pub image_builder: String,
 }
 
 impl Default for K3sConfig {
@@ -75,6 +76,10 @@ impl K3sConfig {
             poll_interval_ms: env_value("AUTONOMICS_K3S_POLL_INTERVAL_MS", "500")
                 .parse()
                 .unwrap_or(500),
+            image_builder: env_value(
+                "AUTONOMICS_K3S_IMAGE_BUILDER",
+                "gcr.io/kaniko-project/executor:v1.23.2",
+            ),
         }
     }
 }
@@ -124,7 +129,7 @@ impl K3sRuntime {
         &self.config.workspace_root
     }
 
-    async fn client(&self) -> Result<&Client, ContainerRuntimeError> {
+    pub(crate) async fn client(&self) -> Result<&Client, ContainerRuntimeError> {
         self.client
             .get_or_try_init(|| async {
                 let mut options = KubeConfigOptions::default();
@@ -681,6 +686,7 @@ mod tests {
             panel_pvc_prefix: String::new(),
             service_account: Some("autonomics".into()),
             poll_interval_ms: 10,
+            image_builder: "kaniko.example/executor:latest".into(),
         }
     }
 

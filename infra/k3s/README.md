@@ -28,6 +28,23 @@ mount a service-account token and default to the `isolated` NetworkPolicy
 profile. `cluster` permits DNS only; unrestricted egress is an explicit node
 profile that the cluster administrator must enable separately.
 
+## Development workspaces
+
+Long-running development Pods use the same workspace PVC and the
+`autonomics-dev-<id>` naming convention. They select the `egress` network
+profile by default. The baseline manifest includes the explicit
+`autonomics-egress` NetworkPolicy; remove that object if you want egress to
+remain administrator-only.
+
+Set an alternate Kaniko builder image with:
+
+```bash
+export AUTONOMICS_K3S_IMAGE_BUILDER=gcr.io/kaniko-project/executor:v1.23.2
+```
+
+See [Container Development](../../docs/container-development.md) for the
+Codex image, Agent tools, and OCI tar import flow.
+
 ## Panel layout
 
 Each panel is an immutable object-store prefix with this layout:

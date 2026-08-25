@@ -190,6 +190,7 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo run -p tui
 - [**SDK（`agentik-sdk`）**](docs/sdk_zh.md) — Messages API、SSE 流式输出、多服务商抽象、模型池、Token 与成本追踪、快速开始示例和配置。
 - [**智能体运行时（`agentik-core`）**](docs/agent-runtime_zh.md) — 统一智能体循环、响应式上下文、记忆压缩、工具集、生命周期、多智能体 `ProcessManager` 和过程宏。
 - [**工具编写**](docs/tool-authoring_zh.md) — 如何通过 `#[derive(ToolInput)]` 实现带强类型输入的 `ToolFunction`。
+- [**容器内开发**](docs/container-development_zh.md) — 持久 k3s 开发工作区、可捕获 exec 和可复现 OCI 打包。
 
 ### 统计遗传学
 
