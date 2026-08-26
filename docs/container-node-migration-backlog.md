@@ -16,7 +16,10 @@ the official replacement passes a reproducible end-to-end baseline.
 | LDSC rg | `ldsc_rg_container` implemented and k3s-tested | official LDSC 3.0.1 image already built | native EUR ref-LD and w-LD packages | pin image digest and retain the official baseline fixture |
 | MRPRESSO | `mrpresso_container` implemented and k3s-tested | official R `MRPRESSO` 1.0 at commit `3e3c92d` | no reference panel | pin image digest and retain official SummaryStats baseline |
 | MVMR | `mvmr_container` implemented and k3s-tested | official R `MVMR` 0.4.8 at commit `bceaa38` | no reference panel | pin dependency versions and promote the image to an internal registry |
-| LAVA univ/bivar/pcor/multireg | unified `lava_container` implemented; official tutorial univ baseline passed in k3s | official R `LAVA` 0.1.5 at commit `4738b09` | `lava.ref.1000g_test` tutorial package | publish a production whole-genome panel and complete k3s baselines for bivar/pcor/multireg before unregistering native nodes |
+| LAVA univ/bivar/pcor/multireg | unified `lava_container` implemented; panel_id parameterised; all four official APIs have k3s baselines against the tutorial panel | official R `LAVA` 0.1.5 at commit `4738b09` | `lava.ref.1000g_test` tutorial package (univ/bivar/pcor/multireg passed); `lava.ref.ukb_eur` v1.1 published (47 files, 15 GiB) | switch the binding to `lava.ref.ukb_eur` once we add a chr1-22+chrX sumstats fixture, then unregister native LAVA Rust nodes |
+| MiXeR fit1/fit2 | `mixer_fit1_container` and `mixer_fit2_container` implemented and k3s-tested | official `precimed/gsa-mixer` 2.2.1 at commit `ea2a445` | `mixer.g1000_eur` v2.2.1 catalog package | promote the local image to an internal registry and pin it by digest |
+
+| COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the k3s e2e baseline |
 
 ### Verified local provenance
 
@@ -27,6 +30,10 @@ the official replacement passes a reproducible end-to-end baseline.
 | MRPRESSO 1.0.0 | Official commit `3e3c92d7eda6dce0d1d66077373ec0f7ff4f7e87` | `sha256:abf935a2fa679e67d50fad871369d758861551d039ce952cdfca2ea4d3f8fd75` | Verified official SummaryStats k3s baseline |
 | MVMR 0.4.8 | Official commit `bceaa38088d093a5d30c713afb016e7fbc7ed2be` | `sha256:ed540641b99017623f002a05a567da608a8d17d78b31d01119d068c87e66ffa2` | Verified official LDL/HDL-to-SBP k3s baseline |
 | LAVA 0.1.5 | Official tag `v0.1.5b`, commit `4738b097bf929ec8af40225c196c57d46d3d8a22` | `sha256:01f87cdedb1c7d7f9ea46bd6acc59d0336c7042769934a04c1ff5e3d11249216` | License is all rights reserved; tutorial panel digest `sha256:e4ed2e0bbb958be41dda3603a80d5a92dac3c950467dd583ce8d4980a57c9459`; official tutorial univ k3s baseline verified |
+| UKB LAVA binary LD reference v1.1 (panel) | published catalog package | official R `LAVA` 0.1.5 + UKB binary LD reference at upstream commit `4738b097bf929ec8af40225c196c57d46d3d8a22` | `lava.ref.ukb_eur` v1.1 panel package digest `sha256:e5a47ee791b93aa90aec1896f5b8d6cf5a169da6335f0f7a22fcd13011a87168` (47 files, 15 GiB) | production panel published; switch `lava_container` binding from tutorial panel to this package once bivar/pcor/multireg k3s baselines pass |
+| MiXeR 2.2.1 | Official commit `ea2a445912f83e5767d67372b6075912ed5655d8` |
+| coloc 5.2.3 | CRAN Archive `coloc_5.2.3.tar.gz` (Wallace, GPL-3.0-or-later) | not yet pinned — local tag `localhost/atc/coloc:5.2.3` | unit-test baseline verified; k3s e2e deferred until cluster image digest is recorded |
+ `sha256:66159cf0b14397b667483f08ad953d98d88718d94ee1cec0db6475cd68e4450a` | Image ID `95f3275fc917adafcaa9d578a244eafd3737ec06eecab7a6d22df7ec4ba0523c`; panel digest `sha256:a3de3339288985120eeb66d9e8d21fa157b88798504a18d02be14319a17171c4`; official chr21-22 fit1 and fit2 baselines verified |
 
 The local images are currently referenced by tag for k3s development. Before
 cross-node production use, push them to an internal registry and update wrapper
@@ -38,7 +45,6 @@ constants to immutable registry digests.
 |---|---|---|---|
 | sLDSC | LDSC 3.0.1 CLI | baselineLD v2.2 ref-LD, w-LD, and `M_5_50` files | package the multi-annotation panel and preserve official `.results` output |
 | GenomicSEM munge/LDSC | GenomicSEM R 0.0.5 at commit `399200d` plus official LDSC | native HM3, LD, WLD, and M files in GenomicSEM naming | build pinned R image and preserve the official LDSC result object |
-| MiXeR fit1/fit2 | `precimed/gsa-mixer` at a clean v2.2.1 tag/commit | complete GRCh37 EUR MiXeR bundle including `libbgmg.so`, LD, BIM, and extract templates | local checkout is dirty; use a clean upstream archive or the official published image |
 | SuSiE-RSS | `susieR` at an exact 0.16.x commit | locus-aligned full LD correlation matrix | resolve 0.16.1 source versus 0.16.6 golden provenance; define object serialization |
 | TwoSampleMR | official R package 0.7.9 | offline 1000G PLINK clumping reference for reproducibility | pin dependency graph and generate an offline clumping + full `mr()` baseline |
 
