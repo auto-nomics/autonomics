@@ -1,18 +1,15 @@
 //! Statistical genetics DAG node bundle.
 
-pub mod bivariate_mixer;
 pub mod cpassoc;
 pub mod genomic_sem;
 pub mod hdl_l;
 pub mod hdl_l_scan;
-pub mod lava;
 pub mod magma;
 pub mod magma_kegg;
 pub(crate) mod mixer_common;
 pub mod mtag;
 pub(crate) mod plink_reference;
 pub mod susie_rss;
-pub mod univariate_mixer;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -22,11 +19,6 @@ impl NodePlugin for Plugin {
         "genetics"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(lava::LavaLocusNodeFactory {}));
-        registry.register(Box::new(lava::LavaUnivNodeFactory {}));
-        registry.register(Box::new(lava::LavaBivarNodeFactory {}));
-        registry.register(Box::new(lava::LavaPcorNodeFactory {}));
-        registry.register(Box::new(lava::LavaMultiregNodeFactory {}));
         registry.register(Box::new(hdl_l::HdlLNodeFactory {}));
         registry.register(Box::new(hdl_l_scan::HdlLScanNodeFactory {}));
         registry.register(Box::new(mtag::MtagNodeFactory {}));
@@ -36,8 +28,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(magma::MagmaSetNodeFactory {}));
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));
         registry.register(Box::new(magma_kegg::MagmaKeggAlignNodeFactory {}));
-        registry.register(Box::new(univariate_mixer::UnivariateMixerNodeFactory {}));
-        registry.register(Box::new(bivariate_mixer::BivariateMixerNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemMungeNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemLdscNodeFactory {}));
         registry.register(Box::new(genomic_sem::GsemUsermodelNodeFactory {}));

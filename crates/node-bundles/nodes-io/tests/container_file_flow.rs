@@ -29,7 +29,7 @@ use nodes_io::container_command::{
 };
 use nodes_io::file_ref_source::FileRefSourceNode;
 use nodes_io::lava_container::{
-    LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LavaContainerNodeFactory,
+    LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
 };
 use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
 use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
@@ -42,6 +42,9 @@ use nodes_io::mixer_container::{
 };
 use nodes_io::mrpresso_container::{MRPRESSO_CONTAINER_KIND, MrpressoContainerNodeFactory};
 use nodes_io::mvmr_container::{MVMR_CONTAINER_KIND, MvmrContainerNodeFactory};
+use nodes_io::plink2_clump_container::{
+    PLINK2_CLUMP_CONTAINER_KIND, PLINK2_REF_BINARY_PANEL, Plink2ClumpContainerNodeFactory,
+};
 use nodes_io::sink_file::{FileSinkNode, WriteFormat};
 use nodes_io::source_file::FileSourceNode;
 use sha2::{Digest, Sha256};
@@ -2261,4 +2264,266 @@ async fn real_official_coloc_abf_runs_in_k3s() {
             "coloc.abf official baseline is missing `{expected}`:\n{log_text}"
         );
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the official PLINK2 image, the 1000G EUR Phase3 PLINK reference panel package, k3s PVCs, and kubeconfig"]
+async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(PLINK2_REF_BINARY_PANEL).is_some(),
+        "plink.ref.1000g_eur.binary must be published in the catalog before this test"
+    );
+
+    let sumstats_path = std::env::var_os("AUTONOMICS_PLINK2_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            // Fall back to the TwoSampleMR-provided summary stats header fixture.
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../bio_crates/mr/tests/summary_stats_headers.tsv")
+                .to_path_buf()
+        });
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(Plink2ClumpContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let plink2 = registry
+        .build_node(
+            PLINK2_CLUMP_CONTAINER_KIND,
+            serde_json::json!({
+                "chr": 22, // Single-chromosome run for the smoke baseline.
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            sumstats_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("plink2_clump".into(), plink2).unwrap();
+    dag.add_edge("sumstats", "plink2_clump", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("plink2_clump"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("plink2_clump").unwrap();
+    let log = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let clumps = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let chroms = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(log.path.ends_with("/plink2_clump.log"));
+    assert!(clumps.path.ends_with("/plink2_clump.clumps"));
+    assert!(chroms.path.ends_with("/plink2_clump.chromosomes.tsv"));
+    assert!(
+        log.path
+            .starts_with("vfs:///artifacts/plink2_clump_container/")
+    );
+
+    // The chromosomes manifest must record exactly one chromosome when chr=22.
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let chroms_vpath = chroms
+        .path
+        .strip_prefix("vfs://")
+        .expect("chromosomes manifest is a VFS URI");
+    let bytes = storage
+        .resolve(chroms_vpath)
+        .read(&storage.resolve_path(chroms_vpath))
+        .await
+        .unwrap();
+    let chroms_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        chroms_text.contains("chr\t22"),
+        "chromosomes manifest should record chr 22; got:\n{chroms_text}"
+    );
+
+    // The PLINK2 log must report successful completion against the official image.
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("PLINK2 log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        log_text.contains("plink2 clump completed across chromosome 22"),
+        "PLINK2 clump log is missing the success banner; got:\n{log_text}"
+    );
+
+    // The 1000G EUR PLINK binary panel must have been materialized into the
+    // shared PanelCache, proving the catalog pipeline is wired end-to-end.
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{PLINK2_REF_BINARY_PANEL}@"))
+        });
+    assert!(cached_panel, "PLINK2 reference panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the Garage UKB LAVA panel, k3s PVCs, kubeconfig, the local official LAVA image, and zip"]
+async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    assert!(fixture.bundles.get(LAVA_UKB_EUR_PANEL).is_some());
+
+    let scratch = tempfile::tempdir().unwrap();
+    let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
+        });
+    let fixture_data = source.join("vignettes/data");
+    let bundle_root = scratch.path().join("bundle");
+    let bundle_data = bundle_root.join("vignettes/data");
+    std::fs::create_dir_all(&bundle_data).unwrap();
+    for name in [
+        "input.info.txt",
+        "sample.overlap.txt",
+        "test.loci",
+        "depression.sumstats.txt",
+        "neuro.sumstats.txt",
+        "bmi.sumstats.txt",
+    ] {
+        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
+    }
+    let bundle_zip = scratch.path().join("lava-univ-ukb-bundle.zip");
+    let zip_status = Command::new("zip")
+        .args(["-q", "-r"])
+        .arg(&bundle_zip)
+        .arg("vignettes")
+        .current_dir(&bundle_root)
+        .status()
+        .unwrap();
+    assert!(
+        zip_status.success(),
+        "could not create the LAVA UKB run bundle"
+    );
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LavaContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let lava = registry
+        .build_node(
+            LAVA_CONTAINER_KIND,
+            serde_json::json!({
+                "analysis": "univ",
+                "panel_id": LAVA_UKB_EUR_PANEL,
+                "input_info_file": "vignettes/data/input.info.txt",
+                "loci_file": "vignettes/data/test.loci",
+                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "locus_index": 1,
+                "phenotypes": ["depression", "neuro", "bmi"]
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "bundle".into(),
+        Box::new(FileRefSourceNode::new(
+            bundle_zip.to_string_lossy().into_owned(),
+            Some("lava_run_bundle_zip".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("lava_univ_ukb".into(), lava).unwrap();
+    dag.add_edge("bundle", "lava_univ_ukb", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("bundle"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("lava_univ_ukb"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "LAVA UKB univ node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("lava_univ_ukb").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(tsv.path.ends_with("/lava.tsv"));
+    assert!(log.path.ends_with("/lava.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let tsv_text = read_published_text(storage, &tsv).await;
+    let log_text = read_published_text(storage, &log).await;
+    assert!(tsv_text.contains("phen\th2.obs\th2.latent\tascertained\tp"));
+    for expected in [
+        "depression\t4.10622e-05\t6.8555e-05\tFALSE\t0.188153",
+        "neuro\t6.03189e-05\tNA\tFALSE\t0.164537",
+        "bmi\t9.06806e-05\tNA\tFALSE\t0.0757959",
+    ] {
+        assert!(
+            tsv_text.contains(expected),
+            "official LAVA UKB univ baseline is missing `{expected}`:\n{tsv_text}"
+        );
+    }
+    assert!(log_text.contains("75702 SNPs shared across data sets"));
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{LAVA_UKB_EUR_PANEL}@"))
+        });
+    assert!(cached_panel, "LAVA UKB panel should be cached");
 }

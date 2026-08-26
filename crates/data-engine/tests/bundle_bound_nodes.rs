@@ -128,7 +128,7 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "lava_container",
             serde_json::json!({
                 "analysis": "univ",
-                "panel_id": "lava.ref.1000g_test",
+                "panel_id": "lava.ref.ukb_eur",
                 "phenotypes": ["bmi"]
             }),
         ),
@@ -179,7 +179,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
         ),
         ("susie_rss", serde_json::json!({"reference": "g1000_eur"})),
-        ("lava_locus", serde_json::json!({})),
         (
             "hdl_l",
             serde_json::json!({

@@ -543,7 +543,7 @@ fn panel_bindings_for(panel_id: &str) -> Vec<DataBundleBinding> {
 }
 
 fn default_panel_bindings() -> Vec<DataBundleBinding> {
-    panel_bindings_for(LAVA_TUTORIAL_REF_PANEL)
+    panel_bindings_for(LAVA_UKB_EUR_PANEL)
 }
 
 impl NodeFactory for LavaContainerNodeFactory {
@@ -666,6 +666,11 @@ mod tests {
         assert!(script.contains("utils::unzip"));
         assert!(script.contains("analysis = \"bivar\""));
         assert_eq!(container.outputs.len(), 3);
+    }
+
+    #[test]
+    fn default_binding_uses_ukb_panel() {
+        assert_eq!(default_panel_bindings()[0].bundle_id, LAVA_UKB_EUR_PANEL);
     }
 
     #[test]
