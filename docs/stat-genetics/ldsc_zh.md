@@ -17,4 +17,15 @@
 
 ## DAG 集成
 
-`estimate_h2` DataFrame 入口已接入数据引擎（`data-engine/nodes/ldsc_hsq.rs`）。
+原生 Rust `ldsc` h² Factory 已不再注册到默认 DAG registry。库实现和测试仍保留，
+但生产 h² 分析改用 `nodes_io::ldsc_h2_container`。
+
+`ldsc_h2_container` 接收一个 TAB 分隔的 LDSC sumstats File，必须包含
+`SNP`、`A1`、`A2`、`N`、`Z` 列。明文 `.tsv` 和 gzip 压缩 `.sumstats.gz`
+均可；LDSC 会忽略额外列，但 CSV 不被接受。该节点固定绑定原版 LDSC 镜像及兼容
+的 EUR 参考 panel，在隔离的 k3s Job 中运行，并把原始 LDSC log 发布为 VFS
+File artifact。在专用 munge 包装节点加入之前，原始 GWAS 输入需要先完成 munge。
+
+`ldsc_rg_container` 使用同一官方镜像和 EUR panel 契约执行官方
+`ldsc --rg` 分析。它接收两个 TAB 分隔的 LDSC sumstats File，并把原始 rg log
+发布为 VFS File artifact。原生 Rust `ldsc_rg` Factory 已不再默认注册。

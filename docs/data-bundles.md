@@ -6,9 +6,13 @@ and the runtime resolves those IDs through `state_dir/data_bundles.toml`.
 
 The data engine also installs a built-in catalog for factory-declared global
 reference bundles. Consequently registry-backed tests and embedded engines can
-build nodes such as `ldsc`, `sldsc`, and `ldsc_rg` without duplicating global
-entries. A bundle with the same `ident` in `data_bundles.toml` always overrides
-the built-in entry.
+build nodes such as `sldsc` and `ldsc_rg` without duplicating global entries. A
+bundle with the same `ident` in `data_bundles.toml` always overrides the
+built-in entry.
+
+`ldsc_h2_container` intentionally has no built-in panel fallback. It requires
+immutable catalog-backed `DataBundle` records because PanelCache validates each
+payload against the catalog manifest before mounting it.
 
 ```toml
 [[bundle]]
@@ -47,3 +51,8 @@ alias is `/bundles/<id>`, while their immutable version path is
 `/datasets/<id>@sha256-<digest>`. Local `data_bundles.toml` entries still take
 precedence, so rollout does not change existing nodes. See
 [Unified Data Catalog](data-catalog.md).
+
+For `ldsc_h2_container`, the required current catalog IDs are:
+
+- `ldsc.ref_ld.1000g_eur.basic`
+- `ldsc.w_ld.1000g_eur_hm3_no_mhc`

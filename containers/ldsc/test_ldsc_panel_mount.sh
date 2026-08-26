@@ -16,7 +16,7 @@ Environment:
   LDSC_CODE_DIR        Original LDSC source tree used as image context
                        (default: /mnt/disk3/ldsc3/ldsc)
   AUTONOMICS_LDSC_IT_SUMSTATS
-                       Standard LDSC .sumstats.gz input for h2
+                       Gzip LDSC input for h2; the test derives a plain .tsv copy
                        (default: /mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz)
   KUBECONFIG           k3s kubeconfig
   BUILD_IMAGE=0        Skip podman build
@@ -167,7 +167,7 @@ fi
 
 if [[ "$run_test" == 1 ]]; then
   cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_original_ldsc_h2_runs_in_k3s -- --ignored --nocapture
+    real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s -- --ignored --nocapture
 fi
 
 echo "LDSC panel mount test completed successfully."

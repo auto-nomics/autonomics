@@ -10,8 +10,27 @@ fn bundle(id: &str, vpath: &str) -> DataBundle {
     DataBundle::new(id, id, vpath)
 }
 
+fn catalog_panel(id: &str, source: &str) -> DataBundle {
+    let mut value = DataBundle::new(id, id, format!("/bundles/{id}"));
+    value.source = Some(source.into());
+    value.digest = Some(format!("sha256:{}", id.len()));
+    value
+}
+
 fn catalog() -> DataBundleCatalog {
     DataBundleCatalog::from_bundles([
+        catalog_panel(
+            nodes_io::ldsc_h2_container::LDSC_REF_LD_PANEL,
+            "/catalog/ref-ld",
+        ),
+        catalog_panel(
+            nodes_io::ldsc_h2_container::LDSC_W_LD_PANEL,
+            "/catalog/w-ld",
+        ),
+        catalog_panel(
+            nodes_io::magma_annotate_container::MAGMA_GENE_LOC_PANEL,
+            "/catalog/magma-gene-loc",
+        ),
         bundle(
             nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
             "/bundles/ldsc/1000g.parquet",
@@ -73,10 +92,37 @@ fn registry() -> data_engine::node_registry::NodeRegistry {
 fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
     let cases = [
         (
-            "ldsc",
-            serde_json::json!({"n_blocks": 5, "intercept": null}),
+            "file_ref_source",
+            serde_json::json!({
+                "path": "/inputs/example.sumstats.gz",
+                "format": "sumstats_gz"
+            }),
         ),
-        ("ldsc_rg", serde_json::json!({"n_blocks": 5})),
+        (
+            "ldsc_h2_container",
+            serde_json::json!({"n_blocks": 5, "intercept_h2": null}),
+        ),
+        ("ldsc_rg_container", serde_json::json!({"n_blocks": 5})),
+        ("magma_annotate_container", serde_json::json!({})),
+        (
+            "mrpresso_container",
+            serde_json::json!({
+                "beta_outcome": "Y_effect",
+                "sd_outcome": "Y_se",
+                "beta_exposure": ["E1_effect"],
+                "sd_exposure": ["E1_se"]
+            }),
+        ),
+        (
+            "mvmr_container",
+            serde_json::json!({
+                "beta_yg": "SBP_beta",
+                "sebeta_yg": "SBP_se",
+                "beta_xg": ["LDL_beta", "HDL_beta"],
+                "sebeta_xg": ["LDL_se", "HDL_se"],
+                "label_column": "SNP"
+            }),
+        ),
         ("sldsc", serde_json::json!({})),
         (
             "lcv",
@@ -178,18 +224,9 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
         Arc::new(DataBundleCatalog::new()),
     );
 
-    for (kind, spec) in [
-        (
-            "ldsc",
-            serde_json::json!({"n_blocks": 5, "intercept": null}),
-        ),
-        ("sldsc", serde_json::json!({})),
-        ("ldsc_rg", serde_json::json!({"n_blocks": 5})),
-    ] {
-        registry
-            .build_node(kind, spec)
-            .unwrap_or_else(|error| panic!("build `{kind}` from built-in catalog: {error}"));
-    }
+    registry
+        .build_node("sldsc", serde_json::json!({}))
+        .unwrap_or_else(|error| panic!("build `sldsc` from built-in catalog: {error}"));
 }
 
 #[test]
@@ -197,17 +234,7 @@ fn default_data_engine_uses_builtin_bundle_catalog() {
     let mut engine = DataEngine::builder().build();
 
     engine
-        .add_node_from_registry(
-            "ldsc",
-            "ldsc",
-            serde_json::json!({"n_blocks": 5, "intercept": null}),
-        )
-        .unwrap();
-    engine
         .add_node_from_registry("sldsc", "sldsc", serde_json::json!({}))
-        .unwrap();
-    engine
-        .add_node_from_registry("ldsc_rg", "ldsc_rg", serde_json::json!({"n_blocks": 5}))
         .unwrap();
 }
 
@@ -217,7 +244,7 @@ fn node_listing_exposes_static_bundle_requirements() {
     let ldsc = registry
         .list_nodes()
         .into_iter()
-        .find(|node| node.kind == "ldsc")
+        .find(|node| node.kind == "ldsc_h2_container")
         .unwrap();
 
     assert_eq!(ldsc.data_bundles.len(), 2);

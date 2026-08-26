@@ -114,13 +114,13 @@ impl NodeRegistry {
 
 | crate | 节点 | 依赖的算法 crate | LOC (≈) |
 |-------|------|-----------------|---------|
-| **nodes-io** | source_file, sink_file, source_opentargets | opentargets, vfs | ~2,100 |
+| **nodes-io** | source_file, sink_file, container_command, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
-| **nodes-ldsc** | ldsc_hsq, ldsc_rg, ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
+| **nodes-ldsc** | ldsc_rg, ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
 | **nodes-genetics** | lava (6), hdl_l, hdl_l_scan, mtag, cpassoc, susie_rss, magma (4), univariate_mixer, bivariate_mixer | lava, hdl, mtag, cpassoc, susie, magma, mixer | 8,200 |
 | **nodes-mr** | two_sample_mr, mrlap, mrpresso, mvmr | mr, mrlap, mrpresso, mvmr | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |

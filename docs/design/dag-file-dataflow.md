@@ -50,6 +50,7 @@ The canonical round trip is:
 
 ```text
 DataFrame -- sink_file --> File -- container_command --> File -- source_file --> DataFrame
+existing file -- file_ref_source --> File -- container_command --> File
 ```
 
 ## Running container commands

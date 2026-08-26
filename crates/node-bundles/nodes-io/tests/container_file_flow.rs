@@ -1,5 +1,6 @@
 //! End-to-end file-flow tests for `sink_file -> container_command -> source_file`.
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -14,16 +15,24 @@ use container_runtime::{
 use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
-use dag_core::registry::NodeCtx;
+use dag_core::registry::{NodeCtx, NodeRegistry};
 use data_catalog::{CatalogConfig, CatalogRuntime};
 use datafusion::common::HashMap;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
+use flate2::read::GzDecoder;
 
 use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
-    ContainerPanelBundleSpec,
 };
+use nodes_io::file_ref_source::FileRefSourceNode;
+use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
+use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
+use nodes_io::magma_annotate_container::{
+    MAGMA_ANNOTATE_CONTAINER_KIND, MAGMA_GENE_LOC_PANEL, MagmaAnnotateContainerNodeFactory,
+};
+use nodes_io::mrpresso_container::{MRPRESSO_CONTAINER_KIND, MrpressoContainerNodeFactory};
+use nodes_io::mvmr_container::{MVMR_CONTAINER_KIND, MvmrContainerNodeFactory};
 use nodes_io::sink_file::{FileSinkNode, WriteFormat};
 use nodes_io::source_file::FileSourceNode;
 use sha2::{Digest, Sha256};
@@ -31,6 +40,66 @@ use vfs::{
     BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
     VfsManifest,
 };
+
+async fn run_ldsc_h2_dag(
+    ctx: &NodeCtx,
+    registry: &NodeRegistry,
+    input_path: &Path,
+    format: &str,
+) -> String {
+    let ldsc = registry
+        .build_node(LDSC_H2_CONTAINER_KIND, serde_json::json!({}))
+        .unwrap();
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some(format.into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("ldsc_h2".into(), ldsc).unwrap();
+    dag.add_edge("sumstats", "ldsc_h2", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("ldsc_h2"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let output = dag
+        .output("ldsc_h2")
+        .unwrap()
+        .get(&0)
+        .unwrap()
+        .as_file()
+        .unwrap()
+        .clone();
+    assert!(
+        output
+            .path
+            .starts_with("vfs:///artifacts/ldsc_h2_container/")
+    );
+    assert!(output.path.ends_with("/ldsc_h2.log"));
+    let virtual_path = output
+        .path
+        .strip_prefix("vfs://")
+        .expect("LDSC h2 artifact is a VFS URI");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&published.to_vec()).into_owned()
+}
 
 #[derive(Clone)]
 struct DataFrameSourceNode {
@@ -455,7 +524,7 @@ async fn real_k3s_container_receives_upstream_sink_file_output() {
 
 #[tokio::test]
 #[ignore = "requires Garage catalog panels, k3s PVCs, kubeconfig, the local LDSC image, and test sumstats"]
-async fn real_catalog_backed_original_ldsc_h2_runs_in_k3s() {
+async fn real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s() {
     let config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
         .map(PathBuf::from)
         .or_else(|| {
@@ -473,15 +542,9 @@ async fn real_catalog_backed_original_ldsc_h2_runs_in_k3s() {
         "ldsc.ref_ld.1000g_eur.basic",
         "ldsc.w_ld.1000g_eur_hm3_no_mhc",
     ];
-    let panel_bundles = panel_ids
-        .iter()
-        .map(|id| {
-            bundles
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| panic!("catalog is missing {id}"))
-        })
-        .collect::<Vec<_>>();
+    for id in panel_ids {
+        assert!(bundles.get(id).is_some(), "catalog is missing {id}");
+    }
 
     let scratch = tempfile::tempdir().unwrap();
     let catalog_backend = catalog_manifest
@@ -525,144 +588,39 @@ async fn real_catalog_backed_original_ldsc_h2_runs_in_k3s() {
         .unwrap_or_else(|| {
             Path::new("/mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz").to_path_buf()
         });
-    let run_suffix = unique_container_name();
-    let workspace = k3s_config
-        .workspace_root
-        .join(format!("ldsc-panel-smoke-{run_suffix}"));
-    std::fs::create_dir_all(&workspace).unwrap();
-    let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
-        .unwrap_or_else(|_| "localhost/atc/ldsc:3.0".into());
-    let mut spec = container_spec(
-        &image,
-        &workspace,
-        format!("/artifacts/ldsc-panel-smoke/{run_suffix}"),
-    );
-    spec.command = vec!["sh".into()];
-    spec.outputs = vec![
-        ContainerCommandOutputSpec {
-            path: "panel-inventory.txt".into(),
-            format: Some("txt".into()),
-        },
-        ContainerCommandOutputSpec {
-            path: "ldsc_h2.log".into(),
-            format: Some("ldsc_log".into()),
-        },
-    ];
-    spec.script = Some(
-        r#"set -eu
-ref_scores=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.ldscore.gz' | wc -l)
-ref_m=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.M' | wc -l)
-ref_m_5_50=$(find /panels/ref_ld -maxdepth 1 -type f -name 'LDscore.*.l2.M_5_50' | wc -l)
-wld_scores=$(find /panels/w_ld -maxdepth 1 -type f -name 'weights.hm3_noMHC.*.l2.ldscore.gz' | wc -l)
-test "$ref_scores" -eq 22
-test "$ref_m" -eq 22
-test "$ref_m_5_50" -eq 22
-test "$wld_scores" -eq 22
-gzip -t /panels/ref_ld/LDscore.*.l2.ldscore.gz
-gzip -t /panels/w_ld/weights.hm3_noMHC.*.l2.ldscore.gz
-{
-  echo "ref_ld_scores=$ref_scores"
-  echo "ref_ld_M=$ref_m"
-  echo "ref_ld_M_5_50=$ref_m_5_50"
-  echo "w_ld_scores=$wld_scores"
-  find /panels/ref_ld /panels/w_ld -maxdepth 1 -type f | sort
-} > "$AUTONOMICS_OUTPUT0"
-ldsc \
-  --h2 "$AUTONOMICS_INPUT0" \
-  --ref-ld-chr /panels/ref_ld/LDscore. \
-  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \
-  --out "$AUTONOMICS_WORKDIR/ldsc_h2" \
-  > "$AUTONOMICS_OUTPUT1" 2>&1"#
-            .into(),
-    );
-    spec.panel_bundles = vec![
-        ContainerPanelBundleSpec {
-            panel_id: panel_ids[0].into(),
-            mount_path: "/panels/ref_ld".into(),
-        },
-        ContainerPanelBundleSpec {
-            panel_id: panel_ids[1].into(),
-            mount_path: "/panels/w_ld".into(),
-        },
-    ];
-
     let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
     ));
-    let mut node =
-        ContainerCommandNode::new_with_catalog_panels(spec, runtime, panel_cache, panel_bundles)
-            .unwrap();
-    let input = dag_core::value::FileRef::local(&sumstats_path, Some("sumstats_gz".into()))
-        .expect("LDSC integration test sumstats must exist");
-    let outputs = node
-        .execute(
-            &ctx,
-            &[NodeInput::file(0, input)],
-            &dag_core::dag::node_event::NodeReporter::noop(),
-        )
-        .await
-        .unwrap();
+    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(bundles));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LdscH2ContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
 
-    let inventory_path = workspace.join("panel-inventory.txt");
-    let inventory = std::fs::read_to_string(&inventory_path).unwrap();
-    for expected in [
-        "ref_ld_scores=22",
-        "ref_ld_M=22",
-        "ref_ld_M_5_50=22",
-        "w_ld_scores=22",
-    ] {
-        assert!(
-            inventory.lines().any(|line| line == expected),
-            "panel inventory is missing `{expected}`:\n{inventory}"
-        );
+    let tsv_path = scratch.path().join("GBMI.Asthma.sumstats.tsv");
+    {
+        let mut decoder = GzDecoder::new(std::fs::File::open(&sumstats_path).unwrap());
+        let mut output = std::fs::File::create(&tsv_path).unwrap();
+        std::io::copy(&mut decoder, &mut output).unwrap();
+        output.flush().unwrap();
     }
 
-    let output = outputs.get(&0).unwrap().as_file().unwrap().clone();
-    assert!(
-        output
-            .path
-            .starts_with("vfs:///artifacts/ldsc-panel-smoke/"),
-        "unexpected LDSC panel artifact path: {}",
-        output.path
-    );
-    let virtual_path = output
-        .path
-        .strip_prefix("vfs://")
-        .expect("LDSC panel artifact is a VFS URI");
-    let storage = ctx.opendal.as_ref().expect("test storage is registered");
-    let published = storage
-        .resolve(virtual_path)
-        .read(&storage.resolve_path(virtual_path))
-        .await
-        .unwrap();
-    assert_eq!(published.to_vec(), inventory.as_bytes());
-
-    let output = outputs.get(&1).unwrap().as_file().unwrap().clone();
-    assert!(
-        output.path.ends_with("/ldsc_h2.log"),
-        "unexpected LDSC h2 artifact path: {}",
-        output.path
-    );
-    let virtual_path = output
-        .path
-        .strip_prefix("vfs://")
-        .expect("LDSC h2 artifact is a VFS URI");
-    let log_bytes = storage
-        .resolve(virtual_path)
-        .read(&storage.resolve_path(virtual_path))
-        .await
-        .unwrap();
-    let log = String::from_utf8_lossy(&log_bytes.to_vec()).into_owned();
-    assert!(
-        log.contains("Total Observed scale h2: 0.0196 (0.0014)"),
-        "unexpected LDSC h2 result:\n{log}"
-    );
-    assert!(
-        log.contains("Intercept: 1.1516 (0.0132)"),
-        "unexpected LDSC intercept:\n{log}"
-    );
+    let gz_log = run_ldsc_h2_dag(&ctx, &registry, &sumstats_path, "sumstats_gz").await;
+    let tsv_log = run_ldsc_h2_dag(&ctx, &registry, &tsv_path, "sumstats_tsv").await;
+    assert!(!tsv_log.contains("RuntimeWarning: compression has no effect"));
+    for log in [&gz_log, &tsv_log] {
+        assert!(
+            log.contains("Total Observed scale h2: 0.0196 (0.0014)"),
+            "unexpected LDSC h2 result:\n{log}"
+        );
+        assert!(
+            log.contains("Intercept: 1.1516 (0.0132)"),
+            "unexpected LDSC intercept:\n{log}"
+        );
+    }
 
     let cached_panels = std::fs::read_dir(&k3s_config.panel_cache_root)
         .unwrap()
@@ -678,4 +636,466 @@ ldsc \
         cached_panels, 2,
         "both native LDSC panels should remain in PanelCache"
     );
+}
+
+struct CatalogTextFixture {
+    ctx: NodeCtx,
+    bundles: dag_core::DataBundleCatalog,
+    _scratch: tempfile::TempDir,
+}
+
+async fn catalog_test_fixture() -> CatalogTextFixture {
+    let config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| Path::new(&home).join(".autonomics/vfs.toml"))
+        })
+        .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
+    let source = std::fs::read_to_string(&config_path).unwrap();
+    let catalog_manifest = VfsManifest::from_toml(&source).unwrap();
+    let catalog_config = CatalogConfig::from_vfs_toml(&source).unwrap();
+    let catalog_runtime = CatalogRuntime::load(&catalog_manifest, &catalog_config)
+        .await
+        .unwrap();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let catalog_backend = catalog_manifest
+        .backend
+        .iter()
+        .find(|backend| backend.id == catalog_config.backend)
+        .expect("catalog backend is defined");
+    let mut manifest = VfsManifest {
+        backend: vec![
+            catalog_backend.clone(),
+            BackendDefinition {
+                id: "catalog-test-local".into(),
+                config: BackendConfig::local("/"),
+            },
+        ],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "catalog-test-local".into(),
+            source: scratch.path().to_string_lossy().into_owned(),
+            read_only: false,
+        }],
+    };
+    manifest.mount.extend(
+        data_catalog::catalog_mount_definitions(&manifest, &catalog_runtime.index, &catalog_config)
+            .unwrap(),
+    );
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = Arc::new(OpendalFileStorage::with_mounts(
+        scratch.path(),
+        mounted.clone(),
+    ));
+    let session = SessionContext::new();
+    session
+        .runtime_env()
+        .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
+    CatalogTextFixture {
+        ctx: NodeCtx::new(session.runtime_env(), Some(storage)),
+        bundles: catalog_runtime.data_bundles(),
+        _scratch: scratch,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the Garage gene-location panel, k3s PVCs, kubeconfig, and the local MAGMA image"]
+async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    assert!(fixture.bundles.get(MAGMA_GENE_LOC_PANEL).is_some());
+
+    let snp_loc_path = std::env::var_os("AUTONOMICS_MAGMA_IT_SNP_LOC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new("/mnt/data/magma/results/smoke_test.annotation.snp.loc").to_path_buf()
+        });
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(MagmaAnnotateContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let magma = registry
+        .build_node(MAGMA_ANNOTATE_CONTAINER_KIND, serde_json::json!({}))
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "snp_locations".into(),
+        Box::new(FileRefSourceNode::new(
+            snp_loc_path.to_string_lossy().into_owned(),
+            Some("magma_snp_loc".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("magma_annotate".into(), magma).unwrap();
+    dag.add_edge("snp_locations", "magma_annotate", 0, 0)
+        .unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("snp_locations"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("magma_annotate"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("magma_annotate").unwrap();
+    let log = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let annotation = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(log.path.ends_with("/magma_annotate.log"));
+    assert!(annotation.path.ends_with("/magma_annotate.genes.annot"));
+    assert!(
+        annotation
+            .path
+            .starts_with("vfs:///artifacts/magma_annotate_container/")
+    );
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let annotation_path = annotation
+        .path
+        .strip_prefix("vfs://")
+        .expect("MAGMA annotation is a VFS URI");
+    let published = storage
+        .resolve(annotation_path)
+        .read(&storage.resolve_path(annotation_path))
+        .await
+        .unwrap();
+    let annotation = String::from_utf8_lossy(&published.to_vec()).into_owned();
+    assert!(annotation.contains("79501\t1:69091:70008"));
+    assert!(annotation.contains("rs140739101"));
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{MAGMA_GENE_LOC_PANEL}@"))
+        });
+    assert!(cached_panel, "MAGMA gene-location panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires Garage catalog panels, k3s PVCs, kubeconfig, the local LDSC image, and two test sumstats"]
+async fn real_catalog_backed_original_ldsc_rg_runs_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    let asthma_path = std::env::var_os("AUTONOMICS_LDSC_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new("/mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz").to_path_buf()
+        });
+    let bmi_path = std::env::var_os("AUTONOMICS_LDSC_RG_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new("/mnt/data/ldsc_data/sumstats_107/PASS.BMI.Yengo2018.sumstats.gz")
+                .to_path_buf()
+        });
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LdscRgContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let ldsc = registry
+        .build_node(LDSC_RG_CONTAINER_KIND, serde_json::json!({}))
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "trait1".into(),
+        Box::new(FileRefSourceNode::new(
+            asthma_path.to_string_lossy().into_owned(),
+            Some("sumstats_gz".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node(
+        "trait2".into(),
+        Box::new(FileRefSourceNode::new(
+            bmi_path.to_string_lossy().into_owned(),
+            Some("sumstats_gz".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("ldsc_rg".into(), ldsc).unwrap();
+    dag.add_edge("trait1", "ldsc_rg", 0, 0).unwrap();
+    dag.add_edge("trait2", "ldsc_rg", 0, 1).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("trait1"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("trait2"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("ldsc_rg"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let output = dag
+        .output("ldsc_rg")
+        .unwrap()
+        .get(&0)
+        .unwrap()
+        .as_file()
+        .unwrap()
+        .clone();
+    assert!(
+        output
+            .path
+            .starts_with("vfs:///artifacts/ldsc_rg_container/")
+    );
+    assert!(output.path.ends_with("/ldsc_rg.log"));
+    let virtual_path = output
+        .path
+        .strip_prefix("vfs://")
+        .expect("LDSC rg artifact is a VFS URI");
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    let log = String::from_utf8_lossy(&published.to_vec()).into_owned();
+    for expected in [
+        "Total Observed scale h2: 0.0196 (0.0017)",
+        "Total Observed scale h2: 0.1921 (0.008)",
+        "Total Observed scale gencov: 0.0173 (0.0013)",
+        "Genetic Correlation: 0.2826 (0.022)",
+        "Z-score: 12.8269",
+    ] {
+        assert!(
+            log.contains(expected),
+            "LDSC rg baseline is missing `{expected}`:\n{log}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires k3s PVCs, kubeconfig, and the local official MRPRESSO image"]
+async fn real_official_mrpresso_runs_in_k3s() {
+    let scratch = tempfile::tempdir().unwrap();
+    let csv_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../bio_crates/mrpresso/tests/summary_stats_headers.csv");
+    let csv = std::fs::read_to_string(csv_path).unwrap();
+    let tsv = csv.replace(',', "\t");
+    let input_path = scratch.path().join("mrpresso-summary.tsv");
+    std::fs::write(&input_path, tsv).unwrap();
+
+    let (_mounted, ctx) = workspace_vfs(scratch.path());
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let mut registry = NodeRegistry::new(ctx.clone());
+    registry.register(Box::new(MrpressoContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let mrpresso = registry
+        .build_node(
+            MRPRESSO_CONTAINER_KIND,
+            serde_json::json!({
+                "beta_outcome": "Y_effect",
+                "sd_outcome": "Y_se",
+                "beta_exposure": ["E1_effect"],
+                "sd_exposure": ["E1_se"],
+                "outlier_test": true,
+                "distortion_test": true
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "summary_stats".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("mrpresso".into(), mrpresso).unwrap();
+    dag.add_edge("summary_stats", "mrpresso", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("summary_stats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("mrpresso"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("mrpresso").unwrap();
+    let rds = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(rds.path.ends_with("/mrpresso.RDS"));
+    assert!(log.path.ends_with("/mrpresso.log"));
+    assert!(log.path.starts_with("vfs:///artifacts/mrpresso_container/"));
+
+    let virtual_path = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("MR-PRESSO log is a VFS URI");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    let log = String::from_utf8_lossy(&published.to_vec()).into_owned();
+    for expected in [
+        "RSSobs",
+        "133.0666",
+        "<0.001",
+        "0.5390120",
+        "0.5014829",
+        "7.483624",
+    ] {
+        assert!(
+            log.contains(expected),
+            "MR-PRESSO official baseline is missing `{expected}`:\n{log}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires k3s PVCs, kubeconfig, and the local official MVMR image"]
+async fn real_official_mvmr_runs_in_k3s() {
+    let scratch = tempfile::tempdir().unwrap();
+    let csv_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../bio_crates/mvmr/tests/rawdat_mvmr.csv");
+    let csv = std::fs::read_to_string(csv_path).unwrap();
+    let input_path = scratch.path().join("rawdat_mvmr.tsv");
+    std::fs::write(&input_path, csv.replace(',', "\t")).unwrap();
+
+    let (_mounted, ctx) = workspace_vfs(scratch.path());
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let mut registry = NodeRegistry::new(ctx.clone());
+    registry.register(Box::new(MvmrContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let mvmr = registry
+        .build_node(
+            MVMR_CONTAINER_KIND,
+            serde_json::json!({
+                "beta_yg": "SBP_beta",
+                "sebeta_yg": "SBP_se",
+                "beta_xg": ["LDL_beta", "HDL_beta"],
+                "sebeta_xg": ["LDL_se", "HDL_se"],
+                "label_column": "SNP",
+                "strength": true,
+                "strhet": true,
+                "pleiotropy": true,
+                "qhet": false
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "instruments".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("mvmr".into(), mvmr).unwrap();
+    dag.add_edge("instruments", "mvmr", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("instruments"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("mvmr"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("mvmr").unwrap();
+    let rds = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(rds.path.ends_with("/mvmr.RDS"));
+    assert!(log.path.ends_with("/mvmr.log"));
+    assert!(log.path.starts_with("vfs:///artifacts/mvmr_container/"));
+
+    let virtual_path = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("MVMR log is a VFS URI");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    let log = String::from_utf8_lossy(&published.to_vec()).into_owned();
+    for expected in [
+        "-0.031003996",
+        "0.006039167",
+        "67.17187",
+        "79.50517",
+        "695.5924",
+        "7.338e-74",
+    ] {
+        assert!(
+            log.contains(expected),
+            "MVMR official baseline is missing `{expected}`:\n{log}"
+        );
+    }
 }

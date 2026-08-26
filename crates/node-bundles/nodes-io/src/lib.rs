@@ -2,6 +2,12 @@
 
 pub mod bundle_source;
 pub mod container_command;
+pub mod file_ref_source;
+pub mod ldsc_h2_container;
+pub mod ldsc_rg_container;
+pub mod magma_annotate_container;
+pub mod mrpresso_container;
+pub mod mvmr_container;
 pub mod sink_file;
 pub mod source_file;
 pub mod source_openalex;
@@ -30,12 +36,41 @@ impl NodePlugin for Plugin {
     }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
+        registry.register(Box::new(file_ref_source::FileRefSourceNodeFactory {}));
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
         registry.register(Box::new(container_command::ContainerCommandNodeFactory {
             runtime: Arc::clone(&self.container_execution.k3s),
             panel_cache: Arc::clone(&self.container_execution.panel_cache),
         }));
+        registry.register(Box::new(
+            ldsc_h2_container::LdscH2ContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            ldsc_rg_container::LdscRgContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            magma_annotate_container::MagmaAnnotateContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            mrpresso_container::MrpressoContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(mvmr_container::MvmrContainerNodeFactory::new(
+            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
         ));

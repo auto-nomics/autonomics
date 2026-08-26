@@ -145,5 +145,38 @@ move scheduler decisions without changing node specs:
 bundle carries an immutable catalog source and digest without exposing object
 keys in the DAG. At execution the node converts it to the same `PanelRef` used
 by the inline transition form, verifies its `manifest.json`, materializes it in
-the shared panel cache, and mounts it read-only. Existing bioinformatics nodes
-are intentionally unchanged during this rollout.
+the shared panel cache, and mounts it read-only.
+
+## Specialized container nodes
+
+Tool-specific wrappers may sit above `container_command`, but they must not
+create a second execution backend. A wrapper owns the tool-image/panel binding,
+generates the command and output contract, then delegates to
+`ContainerCommandNode`.
+
+For the repeatable migration path from an analysis tool to an OCI image, a
+cataloged data package, and a thin DAG wrapper, see
+[Container Node Migration Workflow](container-node-migration.md).
+
+`ldsc_h2_container` is the first such wrapper. It accepts one tab-separated
+LDSC sumstats File with `SNP`, `A1`, `A2`, `N`, and `Z` columns; plain `.tsv`
+and gzip-compressed `.sumstats.gz` are both accepted. It internally binds
+`localhost/atc/ldsc:3.0` to:
+
+- `ldsc.ref_ld.1000g_eur.basic` at `/panels/ref_ld`
+- `ldsc.w_ld.1000g_eur_hm3_no_mhc` at `/panels/w_ld`
+
+It emits `ldsc_h2.log` as a VFS File artifact. The original Rust `ldsc` h²
+and `ldsc_rg` factories are unregistered. `ldsc_rg_container` follows the same
+two-File official command pattern and emits `ldsc_rg.log`; `sldsc` and the
+other analysis nodes remain unchanged during this staged migration.
+
+`magma_annotate_container` runs the official v1.10 static MAGMA executable and
+binds `magma.gene_loc.ncbi37_3`; its native factory is unregistered.
+`mrpresso_container` runs the pinned official R MRPRESSO package and emits its
+native result object and printed log; its native factory is also unregistered.
+`mvmr_container` follows the same file-to-file pattern for the pinned official
+MVMR R package; its native factory is likewise unregistered.
+Other MAGMA, MiXeR, HDL, MTAG, CPASSOC, LAVA, GenomicSEM, and MR nodes remain
+transitional native implementations until their official image, provenance,
+reference package, and end-to-end baseline are complete.

@@ -1,9 +1,10 @@
 # Unified Data Catalog
 
 The data catalog turns externally prepared files and directories into immutable,
-versioned object-storage datasets. Existing bioinformatics nodes are unchanged:
-catalog entries are additionally exposed through the existing DataBundle
-registry and stable `/bundles/<id>` VFS paths.
+versioned object-storage datasets. Catalog entries are exposed through the
+DataBundle registry and stable `/bundles/<id>` VFS paths. Tool wrappers can bind
+these entries to compatible images without asking agents to hand-assemble
+panel mounts.
 
 ## Catalog configuration
 
@@ -157,11 +158,14 @@ resulting shared-cache directory read-only in the k3s Job. The older inline
 
 ## Migration policy
 
-- Do not rewrite existing bioinformatics nodes during catalog rollout.
-- Publish their existing reference data as catalog packages.
+- Migrate one analysis at a time through the
+  [Container Node Migration Workflow](container-node-migration.md).
+- Keep an existing native node registered until its OCI image, catalog panels,
+  wrapper contract, and end-to-end baseline are ready.
+- Publish reference data as catalog packages before switching the node.
 - Keep `/bundles/<id>` aliases stable.
 - Prefer `/datasets/<id>@sha256-<digest>` in new DAG specs when reproducibility
   must pin an exact version.
 - Retain `data_bundles.toml` as a temporary local override mechanism.
-- Convert bioinformatics nodes to `container_command` one at a time only after
-  their reference panels exist in the catalog.
+- Convert bioinformatics nodes through thin wrappers over `container_command`,
+  not by duplicating the container runtime.

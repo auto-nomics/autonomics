@@ -452,60 +452,6 @@ fn golden_sql_node_r() {
 }
 
 #[test]
-fn golden_ldsc_hsq_r() {
-    let manifest = DagManifest {
-        nodes: vec![
-            NodeEntry {
-                id: "sumstats".into(),
-                kind: "source_file".into(),
-                spec: serde_json::json!({"path": "/tmp/gwas.csv"}),
-            },
-            NodeEntry {
-                id: "h2".into(),
-                kind: "ldsc".into(),
-                spec: serde_json::json!({"n_blocks": 200}),
-            },
-        ],
-        edges: vec![EdgeEntry {
-            from: "sumstats".into(),
-            from_port: 0,
-            to: "h2".into(),
-            to_port: 0,
-        }],
-    };
-    let registry = test_registry();
-    let compiler = DagCompiler {
-        registry: &registry,
-    };
-    let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
-
-    // Should prepare LDSC input from upstream columns.
-    assert!(
-        script.source.contains("rsid = sumstats$rsid"),
-        "should reference upstream rsid"
-    );
-    assert!(script.source.contains("ldsc.py"), "should call ldsc.py");
-    assert!(
-        script.source.contains("--n-blocks"),
-        "should pass n_blocks parameter"
-    );
-
-    // Edge CSV I/O.
-    assert!(
-        script
-            .source
-            .contains("fwrite(sumstats, \"_edge_sumstats_0.csv\")"),
-        "sumstats should write edge CSV"
-    );
-    assert!(
-        script
-            .source
-            .contains("sumstats <- fread(\"_edge_sumstats_0.csv\")"),
-        "ldsc should read edge CSV"
-    );
-}
-
-#[test]
 fn golden_two_sample_mr_r() {
     let manifest = DagManifest {
         nodes: vec![

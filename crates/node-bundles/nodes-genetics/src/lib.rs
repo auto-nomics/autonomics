@@ -32,7 +32,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(mtag::MtagNodeFactory {}));
         registry.register(Box::new(cpassoc::CpassocNodeFactory {}));
         registry.register(Box::new(susie_rss::SusieRssNodeFactory {}));
-        registry.register(Box::new(magma::MagmaAnnotateNodeFactory {}));
         registry.register(Box::new(magma::MagmaGeneNodeFactory {}));
         registry.register(Box::new(magma::MagmaSetNodeFactory {}));
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));

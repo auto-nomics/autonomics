@@ -17,4 +17,19 @@ Numerics run on [`faer`](https://github.com/sarah-ek/faer) (no LAPACK/MKL). Poin
 
 ## DAG integration
 
-The `estimate_h2` DataFrame entry point is wired into the data-engine (`data-engine/nodes/ldsc_hsq.rs`).
+The original Rust `ldsc` h² factory is no longer registered in the default DAG
+registry. Its library implementation and tests remain available, but production
+h² analyses use `nodes_io::ldsc_h2_container`.
+
+`ldsc_h2_container` accepts one tab-separated LDSC sumstats File with
+`SNP`, `A1`, `A2`, `N`, and `Z` columns. Plain `.tsv` and gzip-compressed
+`.sumstats.gz` are both accepted; LDSC ignores extra columns, but CSV is not
+accepted. The node binds the original LDSC image to its compatible EUR
+reference panels, runs an isolated k3s Job, and publishes the raw LDSC log as a
+VFS File artifact. Raw GWAS inputs must be munged before this node until a
+dedicated munging wrapper is added.
+
+`ldsc_rg_container` performs the corresponding official `ldsc --rg` analysis.
+It accepts two tab-separated LDSC sumstats Files, uses the same image and EUR
+panel contract, and emits the raw LDSC rg log as a VFS File artifact. The Rust
+`ldsc_rg` factory is no longer registered by default.

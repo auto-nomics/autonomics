@@ -15,8 +15,6 @@ impl NodePlugin for Plugin {
         "ldsc"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(ldsc_hsq::LdscHsqNodeFactory {}));
-        registry.register(Box::new(ldsc_rg::LdscRgNodeFactory {}));
         registry.register(Box::new(ldsc_sldsc::LdscSldscNodeFactory {}));
         registry.register(Box::new(liability::LiabilityNodeFactory {}));
         registry.register(Box::new(lcv::LcvNodeFactory {}));

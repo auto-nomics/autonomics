@@ -15,7 +15,5 @@ impl NodePlugin for Plugin {
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(two_sample_mr::TwoSampleMrNodeFactory {}));
         registry.register(Box::new(mrlap::MrlapNodeFactory {}));
-        registry.register(Box::new(mrpresso::MrpressoNodeFactory {}));
-        registry.register(Box::new(mvmr::MvmrNodeFactory {}));
     }
 }
