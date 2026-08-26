@@ -25,6 +25,7 @@ use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
 pub const LAVA_CONTAINER_KIND: &str = "lava_container";
 pub const LAVA_ORIGINAL_IMAGE: &str = "localhost/atc/lava:0.1.5";
 pub const LAVA_TUTORIAL_REF_PANEL: &str = "lava.ref.1000g_test";
+pub const LAVA_UKB_EUR_PANEL: &str = "lava.ref.ukb_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/lava_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;
@@ -36,6 +37,37 @@ const DEFAULT_MAX_BLOCK_SIZE: usize = 3000;
 const DEFAULT_PARAM_LIM: f64 = 1.25;
 const DEFAULT_MULTIREG_PARAM_LIM: f64 = 1.5;
 const DEFAULT_MAX_R2: f64 = 0.95;
+
+/// Known LD reference panel bindings (mount path + filename prefix inside the mount).
+/// The `panel_id` strings match catalog package IDs.
+struct PanelBinding {
+    mount_path: &'static str,
+    ref_prefix: &'static str,
+}
+
+const KNOWN_PANELS: &[(&str, PanelBinding)] = &[
+    (
+        LAVA_TUTORIAL_REF_PANEL,
+        PanelBinding {
+            mount_path: "/panels/lava_ref",
+            ref_prefix: "g1000_test",
+        },
+    ),
+    (
+        LAVA_UKB_EUR_PANEL,
+        PanelBinding {
+            mount_path: "/panels/lava_ref",
+            ref_prefix: "lava-ukb-v1.1",
+        },
+    ),
+];
+
+fn resolve_panel(panel_id: &str) -> Option<&'static PanelBinding> {
+    KNOWN_PANELS
+        .iter()
+        .find(|(id, _)| *id == panel_id)
+        .map(|(_, binding)| binding)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +82,16 @@ pub enum LavaAnalysis {
 pub struct LavaContainerSpec {
     /// Official LAVA analysis API to invoke.
     pub analysis: LavaAnalysis,
+    /// Catalog panel ID whose LD reference the container should mount.
+    /// Known panels: `lava.ref.1000g_test` (official tutorial) and
+    /// `lava.ref.ukb_eur` (UK Biobank binary LD reference v1.1).
+    pub panel_id: String,
+    /// Optional override for the panel mount path inside the container.
+    #[serde(default)]
+    pub mount_path_override: Option<String>,
+    /// Optional override for the filename prefix inside the mounted panel.
+    #[serde(default)]
+    pub ref_prefix_override: Option<String>,
     /// Input-info path relative to the ZIP bundle root.
     #[serde(default = "default_input_info_file")]
     pub input_info_file: String,
@@ -198,6 +240,9 @@ fn validate_finite_positive(value: f64, field: &str) -> Result<(), String> {
 }
 
 pub fn validate(spec: &LavaContainerSpec) -> Result<(), String> {
+    if spec.panel_id.trim().is_empty() {
+        return Err("panel_id cannot be empty".into());
+    }
     if !spec.artifact_prefix.starts_with('/') {
         return Err("artifact_prefix must be an absolute VFS path".into());
     }
@@ -306,6 +351,20 @@ fn r_adap_thresh(values: &Option<Vec<f64>>) -> String {
 
 pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
+    let panel = resolve_panel(&spec.panel_id).ok_or_else(|| {
+        format!(
+            "unknown LAVA panel `{}`; known panels: {}, {}",
+            spec.panel_id, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL
+        )
+    })?;
+    let mount_path = spec
+        .mount_path_override
+        .clone()
+        .unwrap_or_else(|| panel.mount_path.to_string());
+    let ref_prefix = spec
+        .ref_prefix_override
+        .clone()
+        .unwrap_or_else(|| panel.ref_prefix.to_string());
     let target = match spec.analysis {
         LavaAnalysis::Univ => "NULL".into(),
         LavaAnalysis::Bivar => spec
@@ -371,9 +430,8 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
          input <- LAVA::process.input(\n\
          \x20 input.info.file = {},\n\
          \x20 sample.overlap.file = {},\n\
-         \x20 ref.prefix = \"/panels/lava_ref/g1000_test\",\n\
-         \x20 phenos = phenos\n\
-         )\n\
+         \x20 ref.prefix = \"{}/{}\",\n\
+         \x20 phenos = phenos\n         )\n\
          loci <- LAVA::read.loci({})\n\
          if ({locus_selector} > nrow(loci) || is.na({locus_selector})) {{\n\
          \x20 stop(\"selected locus is outside the loci table\")\n\
@@ -393,14 +451,21 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
          if (is.null(locus)) {{ stop(\"official LAVA could not process the selected locus\") }}\n\
          {analysis_call}\n\
          if (is.null(result)) {{ stop(\"official LAVA returned no result\") }}\n\
-         flatten_result <- function(value, model = character()) {{\n\
-         \x20 if (is.data.frame(value)) {{\n\
-         \x20   output <- value\n\
-         \x20   if (length(model) > 0) output$model <- paste(model, collapse = \"/\")\n\
-         \x20   return(output)\n\
-         \x20 }}\n\
-         \x20 do.call(rbind, Map(function(name, child) flatten_result(child, c(model, name)), names(value), value))\n\
-         }}\n\
+         flatten_result <- function(value, model = character()) {{
+           if (is.data.frame(value)) {{
+             output <- value
+             if (length(model) > 0) output$model <- paste(model, collapse = \"/\")
+             return(output)
+           }}
+           if (is.null(names(value)) || identical(names(value), character(0))) {{
+             child_results <- lapply(value, flatten_result, model = model)
+           }} else {{
+             child_results <- Map(function(name, child) flatten_result(child, c(model, name)), names(value), value)
+           }}
+           results <- Filter(Negate(is.null), child_results)
+           if (length(results) == 0) return(NULL)
+           do.call(rbind, results)
+         }}
          flat_result <- flatten_result(result)\n\
          print(locus_row)\n\
          print(result)\n\
@@ -415,6 +480,8 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
         optional_r_strings(&spec.phenotypes),
         r_string(&spec.input_info_file),
         sample_overlap,
+        mount_path.as_str(),
+        ref_prefix.as_str(),
         r_string(&spec.loci_file),
         locus_selector,
         DEFAULT_MIN_K,
@@ -449,8 +516,8 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
         timeout_secs: spec.timeout_secs,
         panels: Vec::new(),
         panel_bundles: vec![ContainerPanelBundleSpec {
-            panel_id: LAVA_TUTORIAL_REF_PANEL.into(),
-            mount_path: "/panels/lava_ref".into(),
+            panel_id: spec.panel_id.clone(),
+            mount_path: mount_path.clone(),
         }],
         network: "isolated".into(),
         read_only_rootfs: true,
@@ -471,8 +538,12 @@ fn port_layout() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
-fn panel_bindings() -> Vec<DataBundleBinding> {
-    vec![DataBundleBinding::new("lava_ref", LAVA_TUTORIAL_REF_PANEL)]
+fn panel_bindings_for(panel_id: &str) -> Vec<DataBundleBinding> {
+    vec![DataBundleBinding::new("lava_ref", panel_id)]
+}
+
+fn default_panel_bindings() -> Vec<DataBundleBinding> {
+    panel_bindings_for(LAVA_TUTORIAL_REF_PANEL)
 }
 
 impl NodeFactory for LavaContainerNodeFactory {
@@ -500,14 +571,16 @@ impl NodeFactory for LavaContainerNodeFactory {
     }
 
     fn data_bundles(&self) -> Vec<DataBundleBinding> {
-        panel_bindings()
+        default_panel_bindings()
     }
 
     fn data_bundles_for_spec(
         &self,
-        _spec: serde_json::Value,
+        spec: serde_json::Value,
     ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
-        Ok(panel_bindings())
+        let parsed: LavaContainerSpec =
+            serde_json::from_value(spec).map_err(dag_core::registry::error::Error::from)?;
+        Ok(panel_bindings_for(&parsed.panel_id))
     }
 
     fn ports(&self) -> NodePorts {
@@ -522,9 +595,10 @@ impl NodeFactory for LavaContainerNodeFactory {
         let spec: LavaContainerSpec = serde_json::from_value(spec)?;
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        let panel_bundles = panel_bindings()
+        let panel_bundles = container_spec
+            .panel_bundles
             .iter()
-            .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
+            .map(|_| node_ctx.bound_data_bundle("lava_ref").cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
@@ -555,6 +629,9 @@ mod tests {
 
     fn spec(analysis: LavaAnalysis, target: Option<Vec<String>>) -> LavaContainerSpec {
         LavaContainerSpec {
+            panel_id: LAVA_TUTORIAL_REF_PANEL.into(),
+            mount_path_override: None,
+            ref_prefix_override: None,
             analysis,
             input_info_file: default_input_info_file(),
             loci_file: default_loci_file(),

@@ -35,6 +35,14 @@ fn catalog() -> DataBundleCatalog {
             nodes_io::lava_container::LAVA_TUTORIAL_REF_PANEL,
             "/catalog/lava-ref",
         ),
+        catalog_panel(
+            nodes_io::lava_container::LAVA_UKB_EUR_PANEL,
+            "/catalog/lava-ref-ukb",
+        ),
+        catalog_panel(
+            nodes_io::mixer_container::MIXER_G1000_EUR_PANEL,
+            "/catalog/mixer-g1000-eur",
+        ),
         bundle(
             nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
             "/bundles/ldsc/1000g.parquet",
@@ -56,7 +64,6 @@ fn catalog() -> DataBundleCatalog {
             "/bundles/ldsc/ukbb.parquet",
         ),
         bundle("ldmatrix.1000g_eur", "/bundles/ldmatrix/chr{N}"),
-        bundle("mixer.g1000_eur", "/bundles/mixer/g1000_eur"),
         bundle("g1000_eur", "/bundles/magma/g1000_eur"),
         bundle("plink.1000g_eur", "/bundles/plink/chr{N}/panel"),
         bundle(
@@ -121,7 +128,22 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "lava_container",
             serde_json::json!({
                 "analysis": "univ",
+                "panel_id": "lava.ref.1000g_test",
                 "phenotypes": ["bmi"]
+            }),
+        ),
+        (
+            "mixer_fit1_container",
+            serde_json::json!({
+                "chr2use": "21-22",
+                "fast_run": true
+            }),
+        ),
+        (
+            "mixer_fit2_container",
+            serde_json::json!({
+                "chr2use": "21-22",
+                "fast_run": true
             }),
         ),
         (
@@ -155,14 +177,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
         (
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
-        ),
-        (
-            "univariate_mixer",
-            serde_json::json!({"reference": "g1000_eur"}),
-        ),
-        (
-            "bivariate_mixer",
-            serde_json::json!({"reference": "g1000_eur"}),
         ),
         ("susie_rss", serde_json::json!({"reference": "g1000_eur"})),
         ("lava_locus", serde_json::json!({})),
