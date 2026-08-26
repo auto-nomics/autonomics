@@ -326,3 +326,30 @@ crates/node-bundles/nodes-io/src/mvmr_container.rs
 The wrapper stages one tab-separated instrument table, builds the official
 `format_mvmr` input, calls the selected upstream functions, and emits the
 native result object and printed log.
+
+MiXeR is the source-backed Python/C++ reference case:
+
+```text
+containers/mixer/Dockerfile
+mixer.g1000_eur
+crates/node-bundles/nodes-io/src/mixer_container.rs
+```
+
+The image compiles official `libbgmg.so` from the clean v2.2.1 source checkout
+and invokes `precimed/mixer.py fit1/fit2`. The large GRCh37 EUR BIM/LD/tag-SNP
+package stays in the catalog; the image contains only tool code and pinned
+runtimes.
+
+PLINK2 is the offline LD-clumping reference case:
+
+```text
+containers/plink2/Dockerfile
+plink.ref.1000g_eur.binary
+containers/plink2/fixtures/chr22.sumstats.tsv
+crates/node-bundles/nodes-io/src/plink2_clump_container.rs
+```
+
+The image carries only the official v2.0.0-a.6.26 binary. The 1000G EUR
+Phase3 BED/BIM/FAM panel stays in the catalog, and the wrapper fixes the panel
+binding plus PLINK2 column selectors. The k3s smoke test runs chr22 against
+the committed fixture and verifies deterministic `.clumps` output in VFS.

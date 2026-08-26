@@ -2280,9 +2280,10 @@ async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
     let sumstats_path = std::env::var_os("AUTONOMICS_PLINK2_IT_SUMSTATS")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            // Fall back to the TwoSampleMR-provided summary stats header fixture.
+            // Fall back to the small PLINK2 chr22 fixture committed with the
+            // image workflow.
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../bio_crates/mr/tests/summary_stats_headers.tsv")
+                .join("../../../containers/plink2/fixtures/chr22.sumstats.tsv")
                 .to_path_buf()
         });
     let k3s_config = K3sConfig::from_env();
@@ -2380,6 +2381,27 @@ async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
     assert!(
         log_text.contains("plink2 clump completed across chromosome 22"),
         "PLINK2 clump log is missing the success banner; got:\n{log_text}"
+    );
+
+    // The committed chr22 fixture must produce a deterministic file-level
+    // baseline: two index variants in the 1000G EUR chr22 panel.
+    let clumps_vpath = clumps
+        .path
+        .strip_prefix("vfs://")
+        .expect("PLINK2 clumps is a VFS URI");
+    let bytes = storage
+        .resolve(clumps_vpath)
+        .read(&storage.resolve_path(clumps_vpath))
+        .await
+        .unwrap();
+    let clumps_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        clumps_text.contains("rs7286962"),
+        "PLINK2 clumps output is missing the chr22 baseline index variant; got:\n{clumps_text}"
+    );
+    assert!(
+        clumps_text.contains("rs587743102"),
+        "PLINK2 clumps output is missing the second chr22 baseline index variant; got:\n{clumps_text}"
     );
 
     // The 1000G EUR PLINK binary panel must have been materialized into the

@@ -26,6 +26,11 @@ TwoSampleMR/
 MVMR/
 reference/
 
+# Official source checkouts used only for local provenance/image builds.
+containers/hdl-l/HDL-L/
+containers/mixer/gsa-mixer/
+containers/mixer/mixer/
+
 # infra (Python venv, caches)
 infra/.venv/
 infra/**/__pycache__/
@@ -41,4 +46,3 @@ infra/docker/.data/
 infra/docker/garage/data/
 infra/docker/garage/meta/
 infra/docker/garage/snapshots/
-

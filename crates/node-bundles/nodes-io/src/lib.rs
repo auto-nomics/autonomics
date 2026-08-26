@@ -1,14 +1,17 @@
 //! Source and sink DAG node bundle.
 
 pub mod bundle_source;
+pub mod coloc_abf_container;
 pub mod container_command;
 pub mod file_ref_source;
 pub mod lava_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_rg_container;
 pub mod magma_annotate_container;
+pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mvmr_container;
+pub mod plink2_clump_container;
 pub mod sink_file;
 pub mod source_file;
 pub mod source_openalex;
@@ -68,6 +71,12 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(
+            coloc_abf_container::ColocAbfContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
             Arc::clone(&self.container_execution.k3s),
             Arc::clone(&self.container_execution.panel_cache),
@@ -76,6 +85,24 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.k3s),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            plink2_clump_container::Plink2ClumpContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            mixer_container::MixerFit1ContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            mixer_container::MixerFit2ContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
         ));

@@ -11,6 +11,7 @@ const DEFAULT_REFERENCE_ID: &str = "g1000_eur";
 const BUNDLE_MANIFEST: &str = "bundle.json";
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct MixerReferenceBundle {
     pub(crate) mixer_home: PathBuf,
     pub(crate) bim_template: String,

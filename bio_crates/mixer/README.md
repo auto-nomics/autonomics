@@ -190,8 +190,8 @@ Fisher-Yates 部分洗牌，rayon 并行），与 C++ **统计一致**（非逐 
 
 ## DAG 节点
 
-`univariate_mixer`（fit1）与 `bivariate_mixer`（fit2）已注册为 data-engine DAG 节点
-（`crates/data-engine/.../nodes/`）。`bivariate_mixer` 4 输入：trait1/trait2 sumstats +
+`mixer_fit1_container`（fit1）与 `mixer_fit2_container`（fit2）已注册为 data-engine DAG 节点
+（`crates/node-bundles/nodes-io/src/mixer_container.rs`）。`mixer_fit2_container` 4 输入：trait1/trait2 sumstats +
 trait1/trait2 fit1 结果；从 VFS 数据湖读 LD/AF，调 `mixer::bivariate::fit2`，默认
 `sampling=true`，并计算 **bit-exact 随机剪枝权重**（`weights.rs`，与原版 `set_weights_randprune` 逐位一致）。
 
@@ -213,4 +213,4 @@ clean-room 复刻原版 `set_weights_randprune(n, r2, maf, use_w_ld)`。64 轮�
 | max_abs / max_rel | 0 / 0           | —            |
 
 **逐 tag bit-exact 一致**——给定相同 LD 顺序与 deftag 集合，Rust 权重与原版完全相同。
-两节点（`univariate_mixer`、`bivariate_mixer`）已接入，默认 `n=64, r2=0.1, seed=123`。
+两个容器节点（`mixer_fit1_container`、`mixer_fit2_container`）已接入，固定镜像与 `mixer.g1000_eur` catalog 面板绑定。
