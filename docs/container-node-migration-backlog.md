@@ -16,6 +16,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | LDSC rg | `ldsc_rg_container` implemented and k3s-tested | official LDSC 3.0.1 image already built | native EUR ref-LD and w-LD packages | pin image digest and retain the official baseline fixture |
 | MRPRESSO | `mrpresso_container` implemented and k3s-tested | official R `MRPRESSO` 1.0 at commit `3e3c92d` | no reference panel | pin image digest and retain official SummaryStats baseline |
 | MVMR | `mvmr_container` implemented and k3s-tested | official R `MVMR` 0.4.8 at commit `bceaa38` | no reference panel | pin dependency versions and promote the image to an internal registry |
+| LAVA univ/bivar/pcor/multireg | unified `lava_container` implemented; official tutorial univ baseline passed in k3s | official R `LAVA` 0.1.5 at commit `4738b09` | `lava.ref.1000g_test` tutorial package | publish a production whole-genome panel and complete k3s baselines for bivar/pcor/multireg before unregistering native nodes |
 
 ### Verified local provenance
 
@@ -25,6 +26,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | MAGMA 1.10 | Official static binary SHA-256 `77fa456229963c9fb99e9f55bff61b68302f2f989d588ffd11cdd101fc6edab4` | `sha256:6642a6b0e55f727e69c121bb620b6dc7471747152ff0ada3c7be39b631cc875b` | Verified annotation k3s baseline |
 | MRPRESSO 1.0.0 | Official commit `3e3c92d7eda6dce0d1d66077373ec0f7ff4f7e87` | `sha256:abf935a2fa679e67d50fad871369d758861551d039ce952cdfca2ea4d3f8fd75` | Verified official SummaryStats k3s baseline |
 | MVMR 0.4.8 | Official commit `bceaa38088d093a5d30c713afb016e7fbc7ed2be` | `sha256:ed540641b99017623f002a05a567da608a8d17d78b31d01119d068c87e66ffa2` | Verified official LDL/HDL-to-SBP k3s baseline |
+| LAVA 0.1.5 | Official tag `v0.1.5b`, commit `4738b097bf929ec8af40225c196c57d46d3d8a22` | `sha256:01f87cdedb1c7d7f9ea46bd6acc59d0336c7042769934a04c1ff5e3d11249216` | License is all rights reserved; tutorial panel digest `sha256:e4ed2e0bbb958be41dda3603a80d5a92dac3c950467dd583ce8d4980a57c9459`; official tutorial univ k3s baseline verified |
 
 The local images are currently referenced by tag for k3s development. Before
 cross-node production use, push them to an internal registry and update wrapper
@@ -44,7 +46,6 @@ constants to immutable registry digests.
 
 | Area | Official runtime | Missing prerequisite |
 |---|---|---|
-| LAVA univ/bivar/pcor/multireg | LAVA R 0.1.5 image exists locally | clean source/commit record, legal redistribution review, complete chr1-22 panel, and official fixtures |
 | HDL-L and whole-genome scan | HDL R 1.4.3 at commit `e6b055d` | official HDL LD SVD package and official piece-coordinate mapping |
 | MRlap | MRlap R 0.0.3.3 plus compatible GenomicSEM | exact dependency pinning and full official example baseline |
 | LCV | official LCV scripts at commit `39950a8` | license/provenance approval and official native LD-score input baseline |

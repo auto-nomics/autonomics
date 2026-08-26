@@ -31,6 +31,10 @@ fn catalog() -> DataBundleCatalog {
             nodes_io::magma_annotate_container::MAGMA_GENE_LOC_PANEL,
             "/catalog/magma-gene-loc",
         ),
+        catalog_panel(
+            nodes_io::lava_container::LAVA_TUTORIAL_REF_PANEL,
+            "/catalog/lava-ref",
+        ),
         bundle(
             nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
             "/bundles/ldsc/1000g.parquet",
@@ -111,6 +115,13 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
                 "sd_outcome": "Y_se",
                 "beta_exposure": ["E1_effect"],
                 "sd_exposure": ["E1_se"]
+            }),
+        ),
+        (
+            "lava_container",
+            serde_json::json!({
+                "analysis": "univ",
+                "phenotypes": ["bmi"]
             }),
         ),
         (

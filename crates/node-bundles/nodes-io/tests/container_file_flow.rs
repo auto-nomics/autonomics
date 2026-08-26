@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
@@ -26,6 +27,9 @@ use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use nodes_io::file_ref_source::FileRefSourceNode;
+use nodes_io::lava_container::{
+    LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LavaContainerNodeFactory,
+};
 use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
 use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
 use nodes_io::magma_annotate_container::{
@@ -793,6 +797,161 @@ async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
                 .starts_with(&format!("{MAGMA_GENE_LOC_PANEL}@"))
         });
     assert!(cached_panel, "MAGMA gene-location panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the Garage LAVA tutorial panel, k3s PVCs, kubeconfig, the local official LAVA image, and zip"]
+async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
+
+    let scratch = tempfile::tempdir().unwrap();
+    let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
+        });
+    let fixture_data = source.join("vignettes/data");
+    let bundle_root = scratch.path().join("bundle");
+    let bundle_data = bundle_root.join("vignettes/data");
+    std::fs::create_dir_all(&bundle_data).unwrap();
+    let bundle_files = [
+        "input.info.txt",
+        "sample.overlap.txt",
+        "test.loci",
+        "depression.sumstats.txt",
+        "neuro.sumstats.txt",
+        "bmi.sumstats.txt",
+    ];
+    for name in bundle_files {
+        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
+    }
+    let bundle_zip = scratch.path().join("lava-univ-bundle.zip");
+    let zip_status = Command::new("zip")
+        .args(["-q", "-r"])
+        .arg(&bundle_zip)
+        .arg("vignettes")
+        .current_dir(&bundle_root)
+        .status()
+        .unwrap();
+    assert!(zip_status.success(), "could not create the LAVA run bundle");
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LavaContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let lava = registry
+        .build_node(
+            LAVA_CONTAINER_KIND,
+            serde_json::json!({
+                "analysis": "univ",
+                "input_info_file": "vignettes/data/input.info.txt",
+                "loci_file": "vignettes/data/test.loci",
+                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "locus_index": 1,
+                "phenotypes": ["depression", "neuro", "bmi"]
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "bundle".into(),
+        Box::new(FileRefSourceNode::new(
+            bundle_zip.to_string_lossy().into_owned(),
+            Some("lava_run_bundle_zip".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("lava_univ".into(), lava).unwrap();
+    dag.add_edge("bundle", "lava_univ", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("bundle"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("lava_univ"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "LAVA node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("lava_univ").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(
+        rds.fingerprint
+            .as_ref()
+            .expect("LAVA RDS artifact has a fingerprint")
+            .size
+            > 0
+    );
+    assert!(tsv.path.ends_with("/lava.tsv"));
+    assert!(rds.path.ends_with("/lava.RDS"));
+    assert!(log.path.ends_with("/lava.log"));
+    assert!(tsv.path.starts_with("vfs:///artifacts/lava_container/"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    async fn published_text(
+        storage: &OpendalFileStorage,
+        output: &dag_core::value::FileRef,
+    ) -> String {
+        let path = output
+            .path
+            .strip_prefix("vfs://")
+            .expect("LAVA artifact is a VFS URI");
+        let bytes = storage
+            .resolve(path)
+            .read(&storage.resolve_path(path))
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes.to_vec()).into_owned()
+    }
+
+    let tsv = published_text(storage, &tsv).await;
+    let log = published_text(storage, &log).await;
+    assert!(tsv.contains("phen\th2.obs\th2.latent\tascertained\tp"));
+    for expected in [
+        "depression\t8.45733e-05\t0.000141198\tFALSE\t0.036558",
+        "neuro\t0.000116406\tNA\tFALSE\t0.0315434",
+        "bmi\t0.000193535\tNA\tFALSE\t0.00146622",
+    ] {
+        assert!(
+            tsv.contains(expected),
+            "official LAVA univ baseline is missing `{expected}`:\n{tsv}"
+        );
+    }
+    assert!(log.contains("98667 SNPs shared across data sets"));
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{LAVA_TUTORIAL_REF_PANEL}@"))
+        });
+    assert!(cached_panel, "LAVA tutorial panel should be cached");
 }
 
 #[tokio::test]

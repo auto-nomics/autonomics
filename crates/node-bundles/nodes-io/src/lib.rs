@@ -3,6 +3,7 @@
 pub mod bundle_source;
 pub mod container_command;
 pub mod file_ref_source;
+pub mod lava_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_rg_container;
 pub mod magma_annotate_container;
@@ -67,6 +68,10 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
+            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
         registry.register(Box::new(mvmr_container::MvmrContainerNodeFactory::new(
             Arc::clone(&self.container_execution.k3s),
             Arc::clone(&self.container_execution.panel_cache),
