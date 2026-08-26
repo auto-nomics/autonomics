@@ -6,10 +6,8 @@ pub mod hdl_l;
 pub mod hdl_l_scan;
 pub mod magma;
 pub mod magma_kegg;
-pub(crate) mod mixer_common;
 pub mod mtag;
 pub(crate) mod plink_reference;
-pub mod susie_rss;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -23,7 +21,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(hdl_l_scan::HdlLScanNodeFactory {}));
         registry.register(Box::new(mtag::MtagNodeFactory {}));
         registry.register(Box::new(cpassoc::CpassocNodeFactory {}));
-        registry.register(Box::new(susie_rss::SusieRssNodeFactory {}));
         registry.register(Box::new(magma::MagmaGeneNodeFactory {}));
         registry.register(Box::new(magma::MagmaSetNodeFactory {}));
         registry.register(Box::new(magma::MagmaMetaNodeFactory {}));

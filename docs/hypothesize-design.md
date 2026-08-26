@@ -29,7 +29,7 @@ Cross-validation target throughout: the corresponding R function from
 2. **Likelihood trinity** — Wald, LRT, Score as first-class nodes that accept
    fitted-model outputs (estimate ± SE, log-likelihoods, score + information)
    so regression nodes (`linear_regression`, `logistic_regression`,
-   `cox_regression`, `susie_rss`, …) can feed them directly.
+   `cox_regression`, `susie_rss_container`, …) can feed them directly.
 3. **Closure under combination** — Fisher's, Stouffer's, Tippett's, min-P,
    Wilkinson, and the Boolean algebra (intersection-union / union-intersection
    / complement) operate uniformly on the standard test-row schema, so any

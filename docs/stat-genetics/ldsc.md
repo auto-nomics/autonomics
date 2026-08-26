@@ -26,8 +26,14 @@ h² analyses use `nodes_io::ldsc_h2_container`.
 `.sumstats.gz` are both accepted; LDSC ignores extra columns, but CSV is not
 accepted. The node binds the original LDSC image to its compatible EUR
 reference panels, runs an isolated k3s Job, and publishes the raw LDSC log as a
-VFS File artifact. Raw GWAS inputs must be munged before this node until a
-dedicated munging wrapper is added.
+VFS File artifact. Raw GWAS inputs can first pass through
+`ldsc_munge_container`.
+
+`ldsc_munge_container` invokes the original `munge_sumstats.py` CLI from the
+same official image. It accepts one raw GWAS sumstats File, applies official
+column mapping, QC filters, N inference/overrides, and P-to-Z conversion, then
+emits a `.sumstats.gz` File directly compatible with the h²/rg nodes plus the
+raw munging log.
 
 `ldsc_rg_container` performs the corresponding official `ldsc --rg` analysis.
 It accepts two tab-separated LDSC sumstats Files, uses the same image and EUR

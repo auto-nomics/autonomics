@@ -278,6 +278,7 @@ containers/ldsc/Dockerfile
 ldsc.ref_ld.1000g_eur.basic
 ldsc.w_ld.1000g_eur_hm3_no_mhc
 crates/node-bundles/nodes-io/src/ldsc_h2_container.rs
+crates/node-bundles/nodes-io/src/ldsc_munge_container.rs
 crates/node-bundles/nodes-io/src/ldsc_rg_container.rs
 ```
 
@@ -353,3 +354,22 @@ The image carries only the official v2.0.0-a.6.26 binary. The 1000G EUR
 Phase3 BED/BIM/FAM panel stays in the catalog, and the wrapper fixes the panel
 binding plus PLINK2 column selectors. The k3s smoke test runs chr22 against
 the committed fixture and verifies deterministic `.clumps` output in VFS.
+
+SuSiE-RSS is the R + signed-LD panel reference case:
+
+```text
+containers/susie/Dockerfile
+mixer.g1000_eur
+containers/susie/fixtures/chr21.sumstats.tsv
+crates/node-bundles/nodes-io/src/susie_rss_container.rs
+```
+
+The image installs official `susieR` 0.16.6 at commit `ef213fe` and compiles
+the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
+1000G EUR signed-LD panel stays in the catalog. The wrapper takes one
+`snp/chrom/z` sumstats File, mounts `mixer.g1000_eur`, calls
+`susieR::susie_rss()`, and emits TSV/RDS/log artifacts to VFS.
+
+The production wrapper references the image in the single-node k3s registry by
+immutable digest. The registry currently uses an HTTP NodePort and must gain
+TLS and authentication before it is exposed beyond the local node.

@@ -19,6 +19,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | LAVA univ/bivar/pcor/multireg | `lava_container` is the registered runtime; panel_id parameterised; native `lava_locus/lava_univ/lava_bivar/lava_pcor/lava_multireg` Rust nodes unregistered | official R `LAVA` 0.1.5 at commit `4738b09` | default binding `lava.ref.ukb_eur` v1.1; tutorial `lava.ref.1000g_test` remains available for regression | UKB univ k3s baseline verified; bivar/pcor/multireg can reuse the UKB panel as soon as a chr1-22+X sumstats fixture is available |
 | MiXeR fit1/fit2 | `mixer_fit1_container` and `mixer_fit2_container` implemented and k3s-tested | official `precimed/gsa-mixer` 2.2.1 at commit `ea2a445` | `mixer.g1000_eur` v2.2.1 catalog package | promote the local image to an internal registry and pin it by digest |
 | PLINK2 offline clump | `plink2_clump_container` implemented and k3s-tested | official PLINK2 v2.0.0-a.6.26 binary | `plink.ref.1000g_eur.binary` v1 catalog package | pin image digest and promote the local image to an internal registry |
+| SuSiE-RSS | `susie_rss_container` is the registered runtime; native `susie_rss` Rust node unregistered | official `susieR` 0.16.6 at commit `ef213fe` | `mixer.g1000_eur` signed-LD panel | add TLS/authentication before extending the registry beyond the single-node baseline |
 
 | COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the k3s e2e baseline |
 
@@ -33,13 +34,15 @@ the official replacement passes a reproducible end-to-end baseline.
 | LAVA 0.1.5 | Official tag `v0.1.5b`, commit `4738b097bf929ec8af40225c196c57d46d3d8a22` | `sha256:01f87cdedb1c7d7f9ea46bd6acc59d0336c7042769934a04c1ff5e3d11249216` | License is all rights reserved; tutorial panel digest `sha256:e4ed2e0bbb958be41dda3603a80d5a92dac3c950467dd583ce8d4980a57c9459`; official tutorial univ k3s baseline verified |
 | UKB LAVA binary LD reference v1.1 (panel) | published catalog package | official R `LAVA` 0.1.5 + UKB binary LD reference at upstream commit `4738b097bf929ec8af40225c196c57d46d3d8a22` | `lava.ref.ukb_eur` v1.1 panel package digest `sha256:e5a47ee791b93aa90aec1896f5b8d6cf5a169da6335f0f7a22fcd13011a87168` (47 files, 15 GiB) | `lava_container` now defaults to this panel; real k3s univ baseline passed against chr1 tutorial sumstats (`75702 SNPs shared`) |
 | PLINK2 2.0.0-a.6.26 | Official tag `v2.0.0-a.6.26`, commit `faed32c9`, asset SHA-256 `f578a450af382d7dd6665aecf0ca1d280971c2b3d5bb5556efbf9266c4c8da0f` | `sha256:4dbbfbd2b1deabebfa36691516acf7b48a54c5e9b0ae50e62943b64e907ad4e0` | Image ID `a1861e294cf6`; panel digest `sha256:80597da4137e90c3c312c9fa37a4dae9d29f18b7a8b12576ae502941bb1a558d`; real chr22 clump baseline verified (10 fixture variants -> 2 index variants) |
+| susieR 0.16.6 | Official tag `0.16.6`, commit `ef213feed2cb82419677661a8c986e1504df2c73` | `sha256:8a72a443461add5c94c4907f9a1d6106b989850e93217a95587d9095542febe8` | Published to `192.168.10.24:30500/atc/susie`; image ID `7bb2839fe57e`; panel digest `sha256:a3de3339288985120eeb66d9e8d21fa157b88798504a18d02be14319a17171c4`; real chr21 baseline verified (50 fixture variants -> 4 credible sets) |
 | MiXeR 2.2.1 | Official commit `ea2a445912f83e5767d67372b6075912ed5655d8` |
 | coloc 5.2.3 | CRAN Archive `coloc_5.2.3.tar.gz` (Wallace, GPL-3.0-or-later) | not yet pinned — local tag `localhost/atc/coloc:5.2.3` | unit-test baseline verified; k3s e2e deferred until cluster image digest is recorded |
  `sha256:66159cf0b14397b667483f08ad953d98d88718d94ee1cec0db6475cd68e4450a` | Image ID `95f3275fc917adafcaa9d578a244eafd3737ec06eecab7a6d22df7ec4ba0523c`; panel digest `sha256:a3de3339288985120eeb66d9e8d21fa157b88798504a18d02be14319a17171c4`; official chr21-22 fit1 and fit2 baselines verified |
 
-The local images are currently referenced by tag for k3s development. Before
-cross-node production use, push them to an internal registry and update wrapper
-constants to immutable registry digests.
+The SuSiE-RSS image is published to the single-node k3s registry and referenced
+by immutable digest. The other local images are still referenced by tag for
+k3s development; promote them to the same registry and pin their digests as
+each migration is completed.
 
 ## Wave 1: source-backed methods needing clean images
 
@@ -47,7 +50,6 @@ constants to immutable registry digests.
 |---|---|---|---|
 | sLDSC | LDSC 3.0.1 CLI | baselineLD v2.2 ref-LD, w-LD, and `M_5_50` files | package the multi-annotation panel and preserve official `.results` output |
 | GenomicSEM munge/LDSC | GenomicSEM R 0.0.5 at commit `399200d` plus official LDSC | native HM3, LD, WLD, and M files in GenomicSEM naming | build pinned R image and preserve the official LDSC result object |
-| SuSiE-RSS | `susieR` at an exact 0.16.x commit | locus-aligned full LD correlation matrix | resolve 0.16.1 source versus 0.16.6 golden provenance; define object serialization |
 | TwoSampleMR | official R package 0.7.9 | offline 1000G PLINK clumping reference for reproducibility | integrate the verified `plink2_clump_container` into the official TwoSampleMR R image; pin dependency graph and generate a full `mr()` baseline |
 
 ## Wave 2: blocked on official data or provenance

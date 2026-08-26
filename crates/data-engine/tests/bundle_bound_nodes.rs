@@ -113,6 +113,15 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "ldsc_h2_container",
             serde_json::json!({"n_blocks": 5, "intercept_h2": null}),
         ),
+        (
+            "ldsc_munge_container",
+            serde_json::json!({
+                "snp": "variant",
+                "p": "pval",
+                "signed_sumstats": {"column": "beta", "null_value": 0.0},
+                "n": 100000.0
+            }),
+        ),
         ("ldsc_rg_container", serde_json::json!({"n_blocks": 5})),
         ("magma_annotate_container", serde_json::json!({})),
         (
@@ -178,7 +187,7 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
         ),
-        ("susie_rss", serde_json::json!({"reference": "g1000_eur"})),
+        ("susie_rss_container", serde_json::json!({})),
         (
             "hdl_l",
             serde_json::json!({

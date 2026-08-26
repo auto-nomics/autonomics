@@ -32,6 +32,7 @@ use nodes_io::lava_container::{
     LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
 };
 use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
+use nodes_io::ldsc_munge_container::{LDSC_MUNGE_CONTAINER_KIND, LdscMungeContainerNodeFactory};
 use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
 use nodes_io::magma_annotate_container::{
     MAGMA_ANNOTATE_CONTAINER_KIND, MAGMA_GENE_LOC_PANEL, MagmaAnnotateContainerNodeFactory,
@@ -47,6 +48,12 @@ use nodes_io::plink2_clump_container::{
 };
 use nodes_io::sink_file::{FileSinkNode, WriteFormat};
 use nodes_io::source_file::FileSourceNode;
+use nodes_io::susie_rss_container::{
+    SUSIE_REF_PANEL, SUSIE_RSS_CONTAINER_KIND, SusieRssContainerNodeFactory,
+};
+use nodes_io::twas_fusion_container::{
+    FUSION_GTEX_V8_PANEL, TWAS_FUSION_CONTAINER_KIND, TwasFusionContainerNodeFactory,
+};
 use sha2::{Digest, Sha256};
 use vfs::{
     BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
@@ -654,6 +661,111 @@ struct CatalogTextFixture {
     ctx: NodeCtx,
     bundles: dag_core::DataBundleCatalog,
     _scratch: tempfile::TempDir,
+}
+
+#[tokio::test]
+#[ignore = "requires k3s PVCs, kubeconfig, and the local official LDSC image"]
+async fn real_official_ldsc_munge_runs_in_k3s() {
+    let scratch = tempfile::tempdir().unwrap();
+    let input_path = scratch.path().join("raw-daner.sumstats");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../containers/ldsc/ldsc-python3/test/munge_test/sumstats"),
+        &input_path,
+    )
+    .unwrap();
+    let (_mounted, ctx) = workspace_vfs(scratch.path());
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let mut registry = NodeRegistry::new(ctx.clone());
+    registry.register(Box::new(LdscMungeContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let munge = registry
+        .build_node(
+            LDSC_MUNGE_CONTAINER_KIND,
+            serde_json::json!({"daner": true, "chunksize": 100}),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "raw_sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("sumstats".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("ldsc_munge".into(), munge).unwrap();
+    dag.add_edge("raw_sumstats", "ldsc_munge", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("raw_sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("ldsc_munge"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("ldsc_munge").unwrap();
+    let sumstats = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(sumstats.path.ends_with("/munged.sumstats.gz"));
+    assert!(log.path.ends_with("/munge_sumstats.log"));
+    assert!(
+        sumstats
+            .path
+            .starts_with("vfs:///artifacts/ldsc_munge_container/")
+    );
+
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let sumstats_vpath = sumstats
+        .path
+        .strip_prefix("vfs://")
+        .expect("munged sumstats is a VFS URI");
+    let bytes = storage
+        .resolve(sumstats_vpath)
+        .read(&storage.resolve_path(sumstats_vpath))
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let bytes = bytes.to_vec();
+    GzDecoder::new(&bytes[..])
+        .read_to_string(&mut text)
+        .unwrap();
+    assert!(text.starts_with("SNP\tA1\tA2\tZ\tN\n"));
+    assert_eq!(text.lines().count(), 5, "munged output:\n{text}");
+
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("munge log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    for expected in [
+        "Version 3.0.1",
+        "4 SNPs remain",
+        "Writing summary statistics",
+    ] {
+        assert!(
+            log_text.contains(expected),
+            "official LDSC munge baseline is missing `{expected}`:\n{log_text}"
+        );
+    }
 }
 
 async fn catalog_test_fixture() -> CatalogTextFixture {
@@ -2416,6 +2528,290 @@ async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
                 .starts_with(&format!("{PLINK2_REF_BINARY_PANEL}@"))
         });
     assert!(cached_panel, "PLINK2 reference panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the official susieR 0.16.6 image, the mixer.g1000_eur signed-LD panel, k3s PVCs, and kubeconfig"]
+async fn real_catalog_backed_official_susie_rss_runs_in_k3s() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(SUSIE_REF_PANEL).is_some(),
+        "mixer.g1000_eur must be published in the catalog before this test"
+    );
+
+    let sumstats_path = std::env::var_os("AUTONOMICS_SUSIE_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../containers/susie/fixtures/chr21.sumstats.tsv")
+                .to_path_buf()
+        });
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(SusieRssContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let susie = registry
+        .build_node(
+            SUSIE_RSS_CONTAINER_KIND,
+            serde_json::json!({
+                "l": 5,
+                "n": 503,
+                "max_iter": 20,
+                "r2_min": 0.01,
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            sumstats_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("susie_rss".into(), susie).unwrap();
+    dag.add_edge("sumstats", "susie_rss", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("susie_rss"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("susie_rss").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(tsv.path.ends_with("/susie_rss.tsv"));
+    assert!(rds.path.ends_with("/susie_rss.RDS"));
+    assert!(log.path.ends_with("/susie_rss.log"));
+    assert!(
+        log.path
+            .starts_with("vfs:///artifacts/susie_rss_container/")
+    );
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let tsv_vpath = tsv
+        .path
+        .strip_prefix("vfs://")
+        .expect("susie TSV is a VFS URI");
+    let bytes = storage
+        .resolve(tsv_vpath)
+        .read(&storage.resolve_path(tsv_vpath))
+        .await
+        .unwrap();
+    let tsv_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        tsv_text.starts_with("snp\tpip\tcs\talpha\tmu\tmu2\tlbf"),
+        "susie TSV is missing the expected header; got:\n{tsv_text}"
+    );
+    assert!(
+        tsv_text.lines().count() >= 51,
+        "susie TSV should include 50 variants plus a header; got {} lines",
+        tsv_text.lines().count()
+    );
+    for expected in [
+        "21:9413839:C:T\t0.999999978798887\t1",
+        "21:9413840:A:C\t0.999982089651926\t2",
+        "21:9413584:A:G\t0.999997880009654\t3",
+        "21:9420476:A:G\t0.999999999999999\t4",
+    ] {
+        assert!(
+            tsv_text.contains(expected),
+            "susie TSV is missing the official chr21 baseline row `{expected}`; got:\n{tsv_text}"
+        );
+    }
+
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("susie log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        log_text.contains("## susieR susie_rss 0.16.6"),
+        "susie log is missing the official run banner; got:\n{log_text}"
+    );
+    assert!(
+        log_text.contains("credible sets: 4"),
+        "susie log is missing the chr21 credible-set baseline; got:\n{log_text}"
+    );
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{SUSIE_REF_PANEL}@"))
+        });
+    assert!(cached_panel, "mixer signed-LD panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the official FUSION image, the GTEx v8/FUSION catalog panel, k3s PVCs, kubeconfig, and the local LDREF fixture"]
+async fn real_catalog_backed_official_fusion_twas_runs_in_k3s() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(FUSION_GTEX_V8_PANEL).is_some(),
+        "fusion.gtex_v8 must be published in the catalog before this test"
+    );
+
+    let scratch = tempfile::tempdir().unwrap();
+    let sumstats_path = scratch.path().join("fusion-chr21.tsv");
+    let ldref_path = std::env::var_os("AUTONOMICS_FUSION_IT_LDREF")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/mnt/data/twas_fusion/LDREF/1000G.EUR.21.bim").to_path_buf());
+    let mut input = String::from("SNP\tA1\tA2\tZ\n");
+    for (index, line) in std::fs::read_to_string(&ldref_path)
+        .unwrap()
+        .lines()
+        .enumerate()
+    {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        assert!(fields.len() >= 6, "invalid LDREF BIM row: {line}");
+        let z = ((index % 97) as f64 - 48.0) / 16.0;
+        input.push_str(&format!(
+            "{}\t{}\t{}\t{:.6}\n",
+            fields[1], fields[4], fields[5], z
+        ));
+    }
+    std::fs::write(&sumstats_path, input).unwrap();
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(TwasFusionContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let fusion = registry
+        .build_node(
+            TWAS_FUSION_CONTAINER_KIND,
+            serde_json::json!({
+                "tissue": "Whole_Blood",
+                "chr": 21,
+                "force_model": "top1",
+                "timeout_secs": 3600
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            sumstats_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("fusion_twas".into(), fusion).unwrap();
+    dag.add_edge("sumstats", "fusion_twas", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("fusion_twas"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("fusion_twas").unwrap();
+    let result = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(result.path.ends_with("/twas_fusion.dat"));
+    assert!(log.path.ends_with("/twas_fusion.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let result_vpath = result
+        .path
+        .strip_prefix("vfs://")
+        .expect("FUSION result is a VFS URI");
+    let bytes = storage
+        .resolve(result_vpath)
+        .read(&storage.resolve_path(result_vpath))
+        .await
+        .unwrap();
+    let result_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        result_text.starts_with("PANEL\tFILE\tID\tCHR"),
+        "FUSION result is missing its official header; got:\n{result_text}"
+    );
+
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("FUSION log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        log_text.contains("FUSION TWAS completed."),
+        "FUSION log is missing completion marker; got:\n{log_text}"
+    );
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{FUSION_GTEX_V8_PANEL}@"))
+        });
+    assert!(cached_panel, "FUSION GTEx panel should remain cached");
 }
 
 #[tokio::test]

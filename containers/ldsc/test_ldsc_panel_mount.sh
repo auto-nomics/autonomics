@@ -168,6 +168,8 @@ fi
 if [[ "$run_test" == 1 ]]; then
   cargo test -p nodes-io --test container_file_flow \
     real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s -- --ignored --nocapture
+  cargo test -p nodes-io --test container_file_flow \
+    real_official_ldsc_munge_runs_in_k3s -- --ignored --nocapture
 fi
 
 echo "LDSC panel mount test completed successfully."

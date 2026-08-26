@@ -6,6 +6,7 @@ pub mod container_command;
 pub mod file_ref_source;
 pub mod lava_container;
 pub mod ldsc_h2_container;
+pub mod ldsc_munge_container;
 pub mod ldsc_rg_container;
 pub mod magma_annotate_container;
 pub mod mixer_container;
@@ -17,6 +18,8 @@ pub mod source_file;
 pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
+pub mod susie_rss_container;
+pub mod twas_fusion_container;
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
@@ -49,6 +52,12 @@ impl NodePlugin for Plugin {
         }));
         registry.register(Box::new(
             ldsc_h2_container::LdscH2ContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            ldsc_munge_container::LdscMungeContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.k3s),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
@@ -99,6 +108,18 @@ impl NodePlugin for Plugin {
         ));
         registry.register(Box::new(
             mixer_container::MixerFit2ContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            susie_rss_container::SusieRssContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            twas_fusion_container::TwasFusionContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.k3s),
                 Arc::clone(&self.container_execution.panel_cache),
             ),

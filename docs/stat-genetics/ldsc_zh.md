@@ -24,7 +24,11 @@
 `SNP`、`A1`、`A2`、`N`、`Z` 列。明文 `.tsv` 和 gzip 压缩 `.sumstats.gz`
 均可；LDSC 会忽略额外列，但 CSV 不被接受。该节点固定绑定原版 LDSC 镜像及兼容
 的 EUR 参考 panel，在隔离的 k3s Job 中运行，并把原始 LDSC log 发布为 VFS
-File artifact。在专用 munge 包装节点加入之前，原始 GWAS 输入需要先完成 munge。
+File artifact。原始 GWAS 输入可以先经过 `ldsc_munge_container`。
+
+`ldsc_munge_container` 调用同一官方镜像中的原版 `munge_sumstats.py`。它接收
+一个原始 GWAS sumstats File，执行官方列名映射、QC 过滤、N 推断/覆盖和 P 转 Z，
+输出可直接连接到 h²/rg 节点的 `.sumstats.gz`，以及原始 munge log。
 
 `ldsc_rg_container` 使用同一官方镜像和 EUR panel 契约执行官方
 `ldsc --rg` 分析。它接收两个 TAB 分隔的 LDSC sumstats File，并把原始 rg log

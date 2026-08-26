@@ -562,7 +562,7 @@ Priority order (by scientific impact + R-package availability):
 - [ ] `logistic_regression` → `glm(family = binomial)`
 - [ ] `cox_regression` → `survival::coxph()`
 - [ ] `lava_*` → `lava::()` family
-- [ ] `susie_rss` → `susieR::susie_rss()`
+- [ ] `susie_rss_container` → preserve the official container invocation in generated scripts
 - [ ] `mtag` → `MTAG::mtag()`
 - [ ] `cpassoc` → `CPASSOC::cpassoc()`
 - [ ] `magma_*` → MAGMA CLI commands

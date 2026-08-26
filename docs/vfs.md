@@ -210,23 +210,23 @@ vfs:///data/magma/genes/parquet/NCBI37.3.gene_loc.parquet
 vfs:///data/magma/genes/parquet/NCBI38.gene_loc.parquet
 ```
 
-MiXeR consumes the same resource layout directly from
-`/data/mixer/resources`. On hosts that still use the legacy mount,
-`/mnt/data/mixer/resources` is tried as a fallback. The deployed bundle is:
+The legacy `/data/mixer/resources` layout remains available for host-side
+diagnostics. Production MiXeR and SuSiE nodes no longer execute from this
+mount:
 
 ```text
 vfs:///data/mixer/resources/g1000_eur/bundle.json
 vfs:///data/mixer/resources/g1000_eur/engine/precimed/mixer.py
 vfs:///data/mixer/resources/g1000_eur/ld_mixer/1000G.EUR.chr@
 ```
-The bundle records the gsa-MiXeR source revision, EUR/GRCh37 metadata,
-`.bim`, LD, and tag-SNP templates, and the `libbgmg.so` checksum. The host uses
-the bundled Python environment; the container uses its managed `/usr/bin/python3`
-with NumPy, SciPy, pandas, Boost, and OpenMP runtime packages.
+The production `mixer.g1000_eur` catalog package carries the EUR/GRCh37 BIM,
+signed-LD, and tag-SNP payloads. The MiXeR and SuSiE-RSS OCI images carry their
+official engines and pinned runtimes; DAG specs never reference raw panel
+paths.
 
-`susie_rss` reuses the same bundle for signed Pearson-r LD lookup. It selects the
-reference by semantic ID and does not expose raw engine or panel paths in DAG
-specs.
+`susie_rss_container` reuses the cataloged `mixer.g1000_eur` package for signed
+Pearson-r LD lookup. The wrapper owns the panel binding and does not expose raw
+engine or panel paths in DAG specs.
 
 ## KEGG data mount
 

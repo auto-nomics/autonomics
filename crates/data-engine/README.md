@@ -24,8 +24,9 @@ Every edge connects one named output port to one named input port. The public co
 | `LdscHsqNode` | 1 → 1 | LD Score Regression for SNP-heritability (h²). Reads LD scores from the configured VFS reference panel. |
 | `LdscRgNode` | 1+ → 1 | Bivariate LD Score Regression for genetic correlation (rg). |
 | `LdscSldscNode` | 1 → 1 | Stratified LD Score Regression (S-LDSC). Reads multi-annotation baselineLD from files (`ref_ld_chr` / `w_ld_chr` config prefixes). Outputs a per-annotation result table. |
-| `FileSinkNode` | 1 → 0 | Writes CSV or Parquet. |
-| `FileSinkNode` | 1 → 0 | Writes CSV or Parquet through the configured VFS mount. |
+| `TwasFusionNode` | 1 → 3 | Runs official FUSION TWAS association testing with GTEx v8 weights and 1000G EUR LDREF. |
+| `FileSinkNode` | 1 → 0 | Writes CSV, TSV, or Parquet. |
+| `FileSinkNode` | 1 → 0 | Writes CSV, TSV, or Parquet through the configured VFS mount. |
 
 `biofusion` supplies the biological readers used by `FileSourceNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
 

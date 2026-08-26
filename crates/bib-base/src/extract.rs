@@ -270,6 +270,8 @@ fn normalize_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::content::{Content, Operation};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     #[tokio::test]
     async fn ocr_fallback_uses_builtin_for_non_pdf() {
@@ -320,6 +322,85 @@ mod tests {
         // 0xFF is invalid UTF-8 — lossy conversion replaces with U+FFFD.
         let result = ext.extract(&[0xFF, 0xAB], FileFormat::Txt).await.unwrap();
         assert!(result.text.contains('\u{FFFD}'));
+    }
+
+    #[tokio::test]
+    async fn extract_pdf_with_devicen_colorspace() {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Courier",
+        });
+        let tint_transform_id = doc.add_object(dictionary! {
+            "FunctionType" => 2,
+            "Domain" => vec![0.into(), 1.into(), 0.into(), 1.into(), 0.into(), 1.into()],
+            "C0" => vec![0.into(), 0.into(), 0.into(), 0.into()],
+            "C1" => vec![0.into(), 0.into(), 0.into(), 0.into()],
+            "N" => 1,
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+            "ColorSpace" => dictionary! {
+                "CS0" => Object::Array(vec![
+                    Object::Name(b"DeviceN".to_vec()),
+                    Object::Array(vec![
+                        Object::Name(b"Cyan".to_vec()),
+                        Object::Name(b"Magenta".to_vec()),
+                        Object::Name(b"Yellow".to_vec()),
+                    ]),
+                    Object::Name(b"DeviceCMYK".to_vec()),
+                    Object::Reference(tint_transform_id),
+                ]),
+            },
+        });
+
+        let content = Content {
+            operations: vec![
+                Operation::new("cs", vec![Object::Name(b"CS0".to_vec())]),
+                Operation::new("sc", vec![0.into(), 0.into(), 0.into()]),
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 12.into()]),
+                Operation::new("Tj", vec![Object::string_literal("DeviceN text")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(
+            dictionary! {},
+            content.encode().expect("PDF content should encode"),
+        ));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            "Contents" => content_id,
+        });
+        let pages = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+
+        let mut pdf = Vec::new();
+        doc.save_to(&mut pdf)
+            .expect("generated PDF should serialize");
+
+        let result = SimpleExtractor::new()
+            .extract(&pdf, FileFormat::Pdf)
+            .await
+            .expect("DeviceN PDF should not panic or fail");
+        assert_eq!(result.text, "DeviceN text");
     }
 
     #[test]

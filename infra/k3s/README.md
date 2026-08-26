@@ -7,10 +7,24 @@ specs never request `hostPath`; they mount the two PVCs only.
 ## Install
 
 ```bash
-sudo mkdir -p /var/lib/autonomics/k3s/{workspace,panels}
+sudo mkdir -p /var/lib/autonomics/k3s/{workspace,panels,registry}
 kubectl apply -f infra/k3s/manifests.yaml
 sudo chown -R "$(id -u):$(id -g)" /var/lib/autonomics/k3s
 ```
+
+The manifest also deploys a single-node OCI registry at NodePort `30500`. Its
+data live under `/var/lib/autonomics/k3s/registry`. Configure containerd's
+plain-HTTP mirror with:
+
+```bash
+sudo install -m 0600 infra/k3s/registries.yaml.example \
+  /etc/rancher/k3s/registries.yaml
+sudo systemctl restart k3s
+```
+
+This registry is intended for the current single-node baseline. Replace its
+plain-HTTP endpoint with TLS and authentication before exposing it to other
+machines.
 
 Configure the TUI/runtime process with the same paths:
 

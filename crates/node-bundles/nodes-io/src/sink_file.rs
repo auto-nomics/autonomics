@@ -1,5 +1,5 @@
 //! File sink node: consumes an upstream `DataFrame` and writes it to a file
-//! (CSV or Parquet).
+//! (CSV, TSV, or Parquet).
 //!
 //! One DataFrame input port and one File output port. Symmetric to
 //! [`crate::source_file::FileSourceNode`] across the DataFrame/file boundary.
@@ -33,6 +33,7 @@ use dag_core::{
 #[serde(rename_all = "lowercase")]
 pub enum WriteFormat {
     Csv,
+    Tsv,
     Parquet,
 }
 
@@ -40,6 +41,7 @@ impl WriteFormat {
     pub fn as_label(self) -> &'static str {
         match self {
             Self::Csv => "csv",
+            Self::Tsv => "tsv",
             Self::Parquet => "parquet",
         }
     }
@@ -257,6 +259,15 @@ impl FileSinkNode {
                 .read_csv(path, CsvReadOptions::default())
                 .await
                 .map_err(read_err)?,
+            WriteFormat::Tsv => ctx
+                .read_csv(
+                    path,
+                    CsvReadOptions::default()
+                        .delimiter(b'\t')
+                        .file_extension("tsv"),
+                )
+                .await
+                .map_err(read_err)?,
             WriteFormat::Parquet => ctx
                 .read_parquet(path, ParquetReadOptions::default())
                 .await
@@ -305,12 +316,12 @@ impl NodeFactory for FileSinkNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Writes an upstream DataFrame to a file (CSV/Parquet)."
+        "Writes an upstream DataFrame to a file (CSV/TSV/Parquet)."
     }
 
     fn doc(&self) -> &'static str {
         "A file bridge node that consumes an upstream DataFrame and writes it to \
-        a local/remote file in CSV or Parquet format. Supports both append and \
+        a local/remote file in CSV, TSV, or Parquet format. Supports both append and \
         overwrite modes, and emits the written file on its output port."
     }
 
@@ -362,6 +373,7 @@ impl NodeFactory for FileSinkNodeFactory {
         }
         let write_call = match node_spec.format {
             WriteFormat::Csv => format!(r#"fwrite({input}, "{path}")"#),
+            WriteFormat::Tsv => format!(r#"fwrite({input}, "{path}", sep = "\t")"#),
             WriteFormat::Parquet => format!(r#"write_parquet({input}, "{path}")"#),
         };
         let output_var = ctx.output_var.to_string();
@@ -476,8 +488,18 @@ impl DagNode for FileSinkNode {
             DataFrameWriteOptions::new().with_single_file_output(true)
         };
 
+        let csv_options = if format == WriteFormat::Tsv {
+            let mut options = CsvOptions::default();
+            options.delimiter = b'\t';
+            Some(options)
+        } else {
+            None
+        };
+
         let res = match format {
-            WriteFormat::Csv => to_write.write_csv(&path, options, None::<CsvOptions>).await,
+            WriteFormat::Csv | WriteFormat::Tsv => {
+                to_write.write_csv(&path, options, csv_options).await
+            }
             WriteFormat::Parquet => {
                 to_write
                     .write_parquet(&path, options, None::<TableParquetOptions>)
@@ -678,6 +700,70 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             "append must keep rows from both writes"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Explicit TSV output uses tab delimiters and remains append-capable.
+    #[tokio::test]
+    async fn test_sink_file_writes_and_appends_tsv() {
+        let format: WriteFormat =
+            serde_json::from_value(serde_json::json!("tsv")).expect("parse tsv format");
+        assert_eq!(format, WriteFormat::Tsv);
+
+        let ctx = SessionContext::new();
+        let path = format!("/tmp/sink_tsv_{}.tsv", std::process::id());
+
+        let write = |df: DataFrame| {
+            let mut node = FileSinkNode::new(path.clone(), WriteFormat::Tsv, SinkMode::Append);
+            async move {
+                node.execute(
+                    &node_ctx(),
+                    &[NodeInput::new_dataframe(0, df)],
+                    &dag_core::dag::node_event::NodeReporter::noop(),
+                )
+                .await
+            }
+        };
+
+        write(sample_dataframe().1).await.unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            contents
+                .lines()
+                .all(|line| line.contains('\t') && !line.contains(',')),
+            "TSV output should use tabs: {contents:?}"
+        );
+
+        write(second_dataframe().1).await.unwrap();
+        let mut ids: Vec<i32> = ctx
+            .read_csv(
+                &path,
+                datafusion::prelude::CsvReadOptions::default()
+                    .delimiter(b'\t')
+                    .file_extension("tsv"),
+            )
+            .await
+            .unwrap()
+            .select(vec![datafusion::prelude::col("id")])
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|batch| {
+                use arrow_array::Int64Array;
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.unwrap() as i32)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
         let _ = std::fs::remove_file(&path);
     }
 
