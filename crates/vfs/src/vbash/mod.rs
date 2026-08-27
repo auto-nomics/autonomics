@@ -75,6 +75,9 @@ pub struct VfsBashInput {
     #[desc = "Max lines/entries to return (for cat/read/head/tail/ls). \
         ls defaults to 200; use with offset to page through large listings."]
     pub limit: Option<usize>,
+    #[desc = "Maximum file size in bytes for cat. Defaults to 10 MiB; values \
+        above 10 MiB are rejected so large files are never fully downloaded."]
+    pub max_bytes: Option<usize>,
 }
 
 // ────────────────────────── tool ──────────────────────────
@@ -96,7 +99,16 @@ impl ToolFunction for VfsBashTool {
 
             // ── reading ──
             "read" => ops::op_read(storage, input.path.as_deref(), input.offset, input.limit).await,
-            "cat" => ops::op_cat(storage, input.path.as_deref(), input.offset, input.limit).await,
+            "cat" => {
+                ops::op_cat(
+                    storage,
+                    input.path.as_deref(),
+                    input.offset,
+                    input.limit,
+                    input.max_bytes,
+                )
+                .await
+            }
             "head" => ops::op_head(storage, input.path.as_deref(), input.offset, input.limit).await,
             "tail" => ops::op_tail(storage, input.path.as_deref(), input.offset, input.limit).await,
 
@@ -207,6 +219,7 @@ mod tests {
             case_insensitive: None,
             offset: None,
             limit: None,
+            max_bytes: None,
         }
     }
 
@@ -1078,6 +1091,55 @@ mod tests {
         let json = result_json(result);
         assert_eq!(json["content"], "(file is empty)");
         assert_eq!(json["total_size"], 0);
+    }
+
+    #[tokio::test]
+    async fn cat_rejects_files_over_requested_byte_limit() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/too-large.txt".into());
+        w.content = Some("123456789".into());
+        tool.run(w).await.unwrap();
+
+        let mut c = input("cat");
+        c.path = Some("/too-large.txt".into());
+        c.max_bytes = Some(8);
+        let result = tool.run(c).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let output = format!("{:?}", result.content);
+        assert!(
+            output.contains("9 bytes (max_bytes: 8)"),
+            "expected size-limit error, got: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cat_allows_file_exactly_at_byte_limit() {
+        let tool = make_tool();
+        let mut w = input("write");
+        w.path = Some("/at-limit.txt".into());
+        w.content = Some("123456789".into());
+        tool.run(w).await.unwrap();
+
+        let mut c = input("cat");
+        c.path = Some("/at-limit.txt".into());
+        c.max_bytes = Some(9);
+        let result = tool.run(c).await.unwrap();
+        assert_eq!(result.is_error, None);
+        assert_eq!(result_json(result)["content"], "123456789");
+    }
+
+    #[tokio::test]
+    async fn cat_rejects_invalid_byte_limit() {
+        let tool = make_tool();
+        let mut c = input("cat");
+        c.path = Some("/file.txt".into());
+        c.max_bytes = Some(0);
+        let err = tool.run(c).await.unwrap_err();
+        assert!(
+            matches!(err, ToolError::ValidationFailed { .. }),
+            "expected validation error, got: {err:?}"
+        );
     }
 
     // ─── write atomicity (Bug 5 + Bug 6) ───────────────────────────

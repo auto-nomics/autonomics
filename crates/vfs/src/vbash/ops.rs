@@ -38,6 +38,9 @@ fn require_named_path<'a>(
 
 /// Default maximum lines for `read` when no explicit `limit` is given.
 const DEFAULT_MAX_LINES: usize = 2000;
+/// Maximum file size that `cat` will read into memory. Callers may request a
+/// lower per-call limit, but cannot exceed this hard cap.
+const CAT_MAX_BYTES: usize = 10 * 1024 * 1024;
 /// Image extensions recognised by the `read` op.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 /// Number of leading bytes sampled for binary detection.
@@ -81,8 +84,16 @@ pub async fn op_cat(
     path: Option<&str>,
     offset: Option<usize>,
     limit: Option<usize>,
+    max_bytes: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "cat")?;
+    let max_bytes = max_bytes.unwrap_or(CAT_MAX_BYTES);
+    if max_bytes == 0 || max_bytes > CAT_MAX_BYTES {
+        return Err(ToolError::ValidationFailed {
+            message: format!("cat 'max_bytes' must be between 1 and {CAT_MAX_BYTES}"),
+        });
+    }
+
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
@@ -108,6 +119,11 @@ pub async fn op_cat(
             "content": "(file is empty)",
             "total_size": 0,
         })));
+    }
+    if total_size > max_bytes as u64 {
+        return Ok(AgentToolResult::error(format!(
+            "cat: '{raw_path}' is too large: {total_size} bytes (max_bytes: {max_bytes})"
+        )));
     }
 
     let buf = op.read(&remote).await.map_err(|e| e.to_string())?;
