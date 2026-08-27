@@ -53,7 +53,7 @@ pub struct DagManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeEntry {
     pub id: NodeId,
-    /// Factory kind string (e.g. `"source_file"`, `"sql"`), matching
+    /// Factory kind string (e.g. `"file_to_dataframe"`, `"sql"`), matching
     /// [`crate::registry::NodeFactory::kind`].
     pub kind: String,
     /// The original (post-normalization) spec JSON used to build this node.
@@ -551,7 +551,7 @@ mod tests {
         let manifest = DagManifest {
             nodes: vec![NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/x.csv"}),
             }],
             edges: vec![],

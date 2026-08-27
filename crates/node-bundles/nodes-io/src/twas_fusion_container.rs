@@ -286,7 +286,7 @@ impl NodeFactory for TwasFusionContainerNodeFactory {
     fn doc(&self) -> &'static str {
         "Runs the official FUSION TWAS FUSION.assoc_test.R script in an \
         ephemeral OCI container. Input is one whitespace-delimited GWAS sumstats \
-        File with SNP, A1, A2, and Z; produce it with sink_file using \
+        File with SNP, A1, A2, and Z; produce it with dataframe_to_file using \
         format=\"tsv\". The node mounts the cataloged GTEx v8 weight \
         archives and 1000G EUR LDREF, extracts the selected tissue for one \
         chromosome, and emits the official association table, log, and any \

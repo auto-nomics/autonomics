@@ -52,7 +52,7 @@ fn linear_regression() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -90,7 +90,7 @@ fn logistic_regression() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -127,7 +127,7 @@ fn chi_square() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -163,7 +163,7 @@ fn cox_regression() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -200,7 +200,7 @@ fn epi_roc() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -236,7 +236,7 @@ fn survival() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -272,7 +272,7 @@ fn epi_lasso() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -315,7 +315,7 @@ fn liability() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -352,7 +352,7 @@ fn causal_psm() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -395,7 +395,7 @@ fn causal_iptw() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -438,7 +438,7 @@ fn mediation() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -482,7 +482,7 @@ fn epi_rcs() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -874,7 +874,7 @@ fn fine_gray_node_vs_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -950,7 +950,7 @@ fn fine_gray_tf_node_vs_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1014,7 +1014,7 @@ fn cuminc_node_vs_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1352,7 +1352,7 @@ fn coloc_abf_node_vs_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1435,7 +1435,7 @@ fn coloc_abf_pvalues_node_vs_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1488,7 +1488,7 @@ fn mice_impute_pmm() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1532,7 +1532,7 @@ fn mice_impute_norm() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1574,7 +1574,7 @@ fn mice_impute_logreg() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1615,7 +1615,7 @@ fn mice_impute_mean() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1652,7 +1652,7 @@ fn mice_impute_sample() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {
@@ -1689,7 +1689,7 @@ fn mice() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": data_csv}),
             },
             NodeEntry {

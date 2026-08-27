@@ -120,7 +120,7 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
     }
     let cases = [
         (
-            "file_ref_source",
+            "file_reference",
             serde_json::json!({
                 "path": "/inputs/example.sumstats.gz",
                 "format": "sumstats_gz"

@@ -135,7 +135,7 @@ impl NodeFactory for OpentargetsAssociationsNodeFactory {
         `disease_id, target_id, symbol, approved_name, biotype, score, novelty`.\n\n\
         By default `fetch_all=true` retrieves every association across pages. \
         Use `min_score` / `b_filter` to constrain the result, then pipe into \
-        `sql_node` or `sink_file`."
+        `sql_node` or `dataframe_to_file`."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

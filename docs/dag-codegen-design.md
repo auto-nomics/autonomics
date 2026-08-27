@@ -416,7 +416,7 @@ fn codegen_r(
 fn r_packages(&self) -> Vec<String> { vec!["TwoSampleMR".into()] }
 ```
 
-### `FileSourceNodeFactory::codegen_r`
+### `FileToDataFrameNodeFactory::codegen_r`
 
 ```rust
 fn codegen_r(
@@ -424,7 +424,7 @@ fn codegen_r(
     spec: &serde_json::Value,
     ctx: &mut CodegenCtx,
 ) -> Result<NodeCodegen, CodegenError> {
-    let spec: FileSourceNodeSpec = serde_json::from_value(spec.clone())?;
+    let spec: FileToDataFrameNodeSpec = serde_json::from_value(spec.clone())?;
     let out = ctx.output_var.to_string();
     let read_fn = match spec.format {
         FileFormat::Csv => "fread",
@@ -552,9 +552,9 @@ mod diff_tests {
 
 Priority order (by scientific impact + R-package availability):
 
-- [ ] `source_file` → `fread()` / `read_parquet()`
+- [ ] `file_to_dataframe` → `fread()` / `read_parquet()`
 - [ ] `sql` → `sqldf()` (pragmatic; full dplyr translation later)
-- [ ] `sink_file` → `fwrite()` / `write_parquet()`
+- [ ] `dataframe_to_file` → `fwrite()` / `write_parquet()`
 - [ ] `ldsc` (h²) → `LDSC::estimate_h2()` or Python `ldsc.py` CLI
 - [ ] `ldsc_rg` → `LDSC::estimate_rg()`
 - [ ] `two_sample_mr` → `TwoSampleMR::mr()` (full pipeline: clump → harmonise → dispatch)

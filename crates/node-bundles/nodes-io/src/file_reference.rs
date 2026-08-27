@@ -1,4 +1,4 @@
-//! Source node that exposes an existing file as a FileRef without parsing it.
+//! Binds an existing file to a [`FileRef`] without parsing its payload.
 
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -9,10 +9,10 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::{FileFingerprint, FileRef, PortType};
 
-pub const FILE_REF_SOURCE_KIND: &str = "file_ref_source";
+pub const FILE_REFERENCE_KIND: &str = "file_reference";
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
-pub struct FileRefSourceNodeSpec {
+pub struct FileReferenceNodeSpec {
     /// Concrete file path. Use `vfs://...` for runtime-mounted object
     /// storage, or an absolute path for a local development input.
     pub path: String,
@@ -20,13 +20,13 @@ pub struct FileRefSourceNodeSpec {
     pub format: Option<String>,
 }
 
-pub struct FileRefSourceNode {
+pub struct FileReferenceNode {
     ports: NodePorts,
     path: String,
     format: Option<String>,
 }
 
-impl FileRefSourceNode {
+impl FileReferenceNode {
     pub fn new(path: impl Into<String>, format: Option<String>) -> Self {
         Self {
             ports: port_layout(),
@@ -45,7 +45,7 @@ fn port_layout() -> NodePorts {
 }
 
 #[async_trait]
-impl DagNode for FileRefSourceNode {
+impl DagNode for FileReferenceNode {
     fn ports(&self) -> &NodePorts {
         &self.ports
     }
@@ -71,7 +71,7 @@ impl DagNode for FileRefSourceNode {
     }
 
     fn kind(&self) -> &'static str {
-        FILE_REF_SOURCE_KIND
+        FILE_REFERENCE_KIND
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -107,7 +107,7 @@ async fn resolve_file(
     let local_path = local_path(path)?;
     let file = FileRef::local(local_path, format).map_err(|error| {
         DagError::Schedule(format!(
-            "file_ref_source cannot resolve `{path}` through VFS or the local host: {error}"
+            "file_reference cannot resolve `{path}` through VFS or the local host: {error}"
         ))
     })?;
     Ok(file)
@@ -126,7 +126,7 @@ async fn vfs_file(
     })?;
     if metadata.is_dir() {
         return Err(DagError::Schedule(format!(
-            "file_ref_source path is a directory, not a file: `{output_path}`"
+            "file_reference path is a directory, not a file: `{output_path}`"
         )));
     }
 
@@ -159,18 +159,18 @@ fn local_path(path: &str) -> Result<&std::path::Path, DagError> {
     let path = std::path::Path::new(local);
     if !path.is_absolute() {
         return Err(DagError::Schedule(format!(
-            "file_ref_source path must be a `vfs://` URI or absolute path, got `{}`",
+            "file_reference path must be a `vfs://` URI or absolute path, got `{}`",
             path.display()
         )));
     }
     Ok(path)
 }
 
-pub struct FileRefSourceNodeFactory {}
+pub struct FileReferenceNodeFactory {}
 
-impl NodeFactory for FileRefSourceNodeFactory {
+impl NodeFactory for FileReferenceNodeFactory {
     fn kind(&self) -> &'static str {
-        FILE_REF_SOURCE_KIND
+        FILE_REFERENCE_KIND
     }
 
     fn desc(&self) -> &'static str {
@@ -178,16 +178,16 @@ impl NodeFactory for FileRefSourceNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "A file source for binary or already-normalized inputs. It validates \
+        "A file reference for binary or already-normalized inputs. It validates \
         that the configured `vfs://` or absolute path names a concrete file, \
         attaches size/mtime metadata, and emits a FileRef. Unlike \
-        `source_file`, it never reads the payload into a DataFrame. This is \
-        the intended source for nodes such as `container_command` and \
+        `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
+        the intended input node for nodes such as `container_command` and \
         `ldsc_h2_container`."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(FileRefSourceNodeSpec)
+        schema_for!(FileReferenceNodeSpec)
     }
 
     fn ports(&self) -> NodePorts {
@@ -199,8 +199,8 @@ impl NodeFactory for FileRefSourceNodeFactory {
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        let spec: FileRefSourceNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(FileRefSourceNode::new(spec.path, spec.format)))
+        let spec: FileReferenceNodeSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(FileReferenceNode::new(spec.path, spec.format)))
     }
 }
 
@@ -242,7 +242,7 @@ mod tests {
         let (storage, _workspace) = mounted_ctx(input.path());
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
         let mut node =
-            FileRefSourceNode::new("vfs:///input.sumstats.gz", Some("sumstats_gz".into()));
+            FileReferenceNode::new("vfs:///input.sumstats.gz", Some("sumstats_gz".into()));
 
         let outputs = node
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
@@ -261,7 +261,7 @@ mod tests {
         let input = tempfile::tempdir().unwrap();
         let (storage, _workspace) = mounted_ctx(input.path());
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
-        let mut node = FileRefSourceNode::new("vfs:///missing.gz", None);
+        let mut node = FileReferenceNode::new("vfs:///missing.gz", None);
 
         let error = node
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
@@ -280,7 +280,7 @@ mod tests {
         let mut dag = DAG::default();
         dag.add_node(
             "source".into(),
-            Box::new(FileRefSourceNode::new(
+            Box::new(FileReferenceNode::new(
                 path.to_string_lossy().into_owned(),
                 Some("txt".into()),
             )),

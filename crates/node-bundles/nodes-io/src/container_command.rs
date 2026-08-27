@@ -1771,12 +1771,12 @@ chmod 700 "$AUTONOMICS_WORKDIR/ldsc-hsq-container"
             ports: NodePorts::new().add_output_port(None),
             panel: "vfs:///bundles/ldscore.1000g_eur/1000g_eur.parquet".into(),
         };
-        let sink = crate::sink_file::FileSinkNode::new(
+        let sink = crate::dataframe_to_file::DataFrameToFileNode::new(
             format!("vfs:///var/lib/autonomics/k3s/workspace/ldsc-catalog-input-{run_suffix}.csv"),
-            crate::sink_file::WriteFormat::Csv,
+            crate::dataframe_to_file::WriteFormat::Csv,
             dag_core::SinkMode::Overwrite,
         );
-        let result_reader = crate::source_file::FileSourceNode::new(None, None);
+        let result_reader = crate::file_to_dataframe::FileToDataFrameNode::new(None, None);
 
         let container = ContainerCommandNode::new_with_catalog_panels(
             node_spec,

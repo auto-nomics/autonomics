@@ -27,7 +27,7 @@
 ### 1.3 有利因素
 
 - `ml/` 和 `hypothesize/` 已经用 `register_all(&mut registry)` 模式做了子目录拆分 — 这是天然的模板
-- 节点间跨域依赖极少（仅 `sink_file → source_file::normalize_path` 和 `hdl_l_scan → hdl_l`）
+- 节点间跨域依赖极少（仅 `dataframe_to_file → file_to_dataframe::normalize_path` 和 `hdl_l_scan → hdl_l`）
 - 外部消费者 (`data-engine-tools`, `runtime`) **几乎不直接引用节点类型**，只用 DAG/runtime API（唯一例外: `add_node_tool.rs` 引用 `SqlNodeSpec`）
 
 ## 2. 目标
@@ -114,7 +114,7 @@ impl NodeRegistry {
 
 | crate | 节点 | 依赖的算法 crate | LOC (≈) |
 |-------|------|-----------------|---------|
-| **nodes-io** | source_file, sink_file, container_command, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
+| **nodes-io** | file_to_dataframe, dataframe_to_file, container_command, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
@@ -283,11 +283,11 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 
 | 依赖 | 处理 |
 |------|------|
-| `sink_file → source_file::normalize_path` | 提取到 `dag-core::arrow_util` 或 `nodes-io` 内部共享 |
+| `dataframe_to_file → file_to_dataframe::normalize_path` | 提取到 `dag-core::arrow_util` 或 `nodes-io` 内部共享 |
 | `hdl_l_scan → hdl_l::*` (节点间) | 同属 `nodes-genetics`，bundle 内 `pub use` 解决 |
 | `nodes/ml/* → nodes/ml/common.rs` | 已在 bundle 内部，直接迁移 |
 | `nodes/hypothesize/* → nodes/hypothesize/common.rs` | 同上 |
-| `sink_file` 的路径规范化 helper | 随 `nodes-io` 迁移 |
+| `dataframe_to_file` 的路径规范化 helper | 随 `nodes-io` 迁移 |
 
 ## 4. 迁移计划
 

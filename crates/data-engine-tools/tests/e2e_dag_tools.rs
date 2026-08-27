@@ -66,7 +66,7 @@ async fn test_add_source_sql_run_dag() {
             &[build_tooluse(
                 "tc1",
                 "add_node",
-                json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
+                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
         )
@@ -117,7 +117,7 @@ async fn test_add_source_sql_run_dag() {
                 "add_node",
                 json!({
                     "id": "sink",
-                    "kind": "sink_file",
+                    "kind": "dataframe_to_file",
                     "spec": {"path": "/output.csv", "format": "csv", "mode": "overwrite"}
                 }),
             )],
@@ -145,7 +145,7 @@ async fn test_add_source_sql_run_dag() {
 }
 
 #[tokio::test]
-async fn test_get_output_source_file_csv_and_parquet() {
+async fn test_get_output_file_to_dataframe_csv_and_parquet() {
     let mounted_root = tempfile::tempdir().unwrap();
     let data_root = tempfile::tempdir().unwrap();
     let manifest = VfsManifest {
@@ -234,7 +234,7 @@ async fn test_get_output_source_file_csv_and_parquet() {
                     "add_node",
                     json!({
                         "id": "source",
-                        "kind": "source_file",
+                        "kind": "file_to_dataframe",
                         "spec": {"path": format!("/source.{format}")}
                     }),
                 )],
@@ -315,7 +315,7 @@ async fn same_turn_add_nodes_and_edge_then_remove_edge_and_upstream() {
                 build_tooluse(
                     "add-source",
                     "add_node",
-                    json!({"id": "source", "kind": "source_file", "spec": {"path": null}}),
+                    json!({"id": "source", "kind": "file_to_dataframe", "spec": {"path": null}}),
                 ),
                 build_tooluse(
                     "add-sql",
@@ -409,7 +409,7 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
             &[build_tooluse(
                 "v1",
                 "add_node",
-                json!({"id": "vcf_src", "kind": "source_file", "spec": {"path": "/sample.vcf.gz"}}),
+                json!({"id": "vcf_src", "kind": "file_to_dataframe", "spec": {"path": "/sample.vcf.gz"}}),
             )],
             None,
         )
@@ -545,7 +545,7 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
             &[build_tooluse(
                 "e1",
                 "add_node",
-                json!({"id": "src", "kind": "source_file", "spec": {"path": "/badcast.csv"}}),
+                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/badcast.csv"}}),
             )],
             None,
         )
@@ -665,7 +665,7 @@ async fn test_get_output_synthetic_struct_column_baseline() {
             &[build_tooluse(
                 "b1",
                 "add_node",
-                json!({"id": "src", "kind": "source_file", "spec": {"path": "/insurance.csv"}}),
+                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
             )],
             None,
         )

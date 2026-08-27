@@ -1,9 +1,11 @@
-//! Source and sink DAG node bundle.
+//! DAG node bundle for file, DataFrame, and container I/O boundaries.
 
 pub mod bundle_source;
 pub mod coloc_abf_container;
 pub mod container_command;
-pub mod file_ref_source;
+pub mod dataframe_to_file;
+pub mod file_reference;
+pub mod file_to_dataframe;
 pub mod gcta_container;
 pub mod hyprcoloc_container;
 pub mod image_registry;
@@ -16,9 +18,7 @@ pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mvmr_container;
 pub mod plink2_clump_container;
-pub mod sink_file;
 pub mod smr_heidi_container;
-pub mod source_file;
 pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
@@ -47,9 +47,9 @@ impl NodePlugin for Plugin {
     }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
-        registry.register(Box::new(file_ref_source::FileRefSourceNodeFactory {}));
-        registry.register(Box::new(source_file::FileSourceNodeFactory {}));
-        registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
+        registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
+        registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(container_command::ContainerCommandNodeFactory {
             runtime: Arc::clone(&self.container_execution.runtime),
             panel_cache: Arc::clone(&self.container_execution.panel_cache),

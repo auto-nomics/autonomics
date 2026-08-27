@@ -224,8 +224,8 @@ File input
   -> File artifact
 ```
 
-If the input is an existing file, use `file_ref_source` before the wrapper.
-If the input is a DataFrame, use `sink_file` before the wrapper.
+If the input is an existing file, use `file_reference` before the wrapper.
+If the input is a DataFrame, use `dataframe_to_file` before the wrapper.
 
 ### Wrapper acceptance
 
@@ -286,7 +286,7 @@ crates/node-bundles/nodes-io/src/ldsc_rg_container.rs
 Its flow is:
 
 ```text
-file_ref_source
+file_reference
   -> ldsc_h2_container
   -> ContainerCommandNode
   -> k3s Job

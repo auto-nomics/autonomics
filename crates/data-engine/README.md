@@ -7,7 +7,7 @@ It is intentionally independent of the Agent loop. `data-engine-tools` adapts it
 ## Data flow
 
 ```text
-FileSourceNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> FileSinkNode
+FileToDataFrameNode ── DataFrame ──> SqlNode / LinearRegressionNode ──> DataFrameToFileNode
        │                           │
        └──────────── fan-out ──────┴──> more transformations
 ```
@@ -18,17 +18,16 @@ Every edge connects one named output port to one named input port. The public co
 
 | Node | Inputs → outputs | Purpose |
 | --- | --- | --- |
-| `FileSourceNode` | 0 → 1 | Reads CSV, Parquet, or a biological file (VCF, BAM, BED, …) into a DataFusion `DataFrame`. |
+| `FileToDataFrameNode` | 0/1 → 1 | Reads an external path or upstream file as CSV, Parquet, or a biological file (VCF, BAM, BED, ...) and emits a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
 | `LdscHsqNode` | 1 → 1 | LD Score Regression for SNP-heritability (h²). Reads LD scores from the configured VFS reference panel. |
 | `LdscRgNode` | 1+ → 1 | Bivariate LD Score Regression for genetic correlation (rg). |
 | `LdscSldscNode` | 1 → 1 | Stratified LD Score Regression (S-LDSC). Reads multi-annotation baselineLD from files (`ref_ld_chr` / `w_ld_chr` config prefixes). Outputs a per-annotation result table. |
 | `TwasFusionNode` | 1 → 3 | Runs official FUSION TWAS association testing with GTEx v8 weights and 1000G EUR LDREF. |
-| `FileSinkNode` | 1 → 0 | Writes CSV, TSV, or Parquet. |
-| `FileSinkNode` | 1 → 0 | Writes CSV, TSV, or Parquet through the configured VFS mount. |
+| `DataFrameToFileNode` | 1 → 1 | Writes CSV, TSV, or Parquet to a local path or configured VFS mount and emits a file reference. |
 
-`biofusion` supplies the biological readers used by `FileSourceNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
+`biofusion` supplies the biological readers used by `FileToDataFrameNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
 
 ## Build and run a pipeline
 
@@ -43,13 +42,13 @@ let mut engine = DataEngine::builder().build();
 
 engine.add_node_from_registry(
     "variants",
-    "source_file",
+    "file_to_dataframe",
     json!({ "path": "input.vcf.gz", "format": null }),
 )?;
 engine.add_node_from_registry("filtered", "sql", json!({ "sql_query": "SELECT * FROM port_0" }))?;
 engine.add_node_from_registry(
     "write",
-    "sink_file",
+    "dataframe_to_file",
     json!({ "path": "output.parquet", "format": "parquet", "mode": "overwrite" }),
 )?;
 engine.add_edge("variants", "filtered", 0, 0)?;
@@ -65,7 +64,7 @@ Use `engine.view_dag()` to obtain a Graphviz DOT representation. `engine.get_out
 
 ## Partitioned Parquet
 
-`source_file` and `sink_file` support Hive-style Parquet partitioning with the
+`file_to_dataframe` and `dataframe_to_file` support Hive-style Parquet partitioning with the
 same `partition_by` field:
 
 ```rust,no_run
@@ -73,7 +72,7 @@ same `partition_by` field:
 # let mut engine = data_engine::DataEngine::builder().build();
 engine.add_node_from_registry(
     "read_partitions",
-    "source_file",
+    "file_to_dataframe",
     serde_json::json!({
         "path": "/data/variants",
         "format": "parquet",
@@ -82,7 +81,7 @@ engine.add_node_from_registry(
 )?;
 engine.add_node_from_registry(
     "write_partitions",
-    "sink_file",
+    "dataframe_to_file",
     serde_json::json!({
         "path": "/output/variants",
         "format": "parquet",

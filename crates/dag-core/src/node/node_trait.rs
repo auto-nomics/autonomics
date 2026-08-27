@@ -40,7 +40,7 @@ pub trait DagNode: Send + Sync {
     /// must duplicate nodes for spawned tasks and validation dry-runs.
     fn clone_box(&self) -> Box<dyn DagNode>;
 
-    /// The kind string identifying this node type, such as `"source_file"` or
+    /// The kind string identifying this node type, such as `"file_to_dataframe"` or
     /// `"sql"`. It must match the factory kind that builds the node.
     fn kind(&self) -> &'static str;
 

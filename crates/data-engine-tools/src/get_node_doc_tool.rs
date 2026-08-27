@@ -16,7 +16,7 @@ use crate::ExecError;
                   than the short description in list_node_factories."
 )]
 pub struct GetNodeDocInput {
-    /// The node kind to query (e.g. "sql", "source_file", "sink_file", "ldsc", "linear_regression", "mock").
+    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "ldsc", "linear_regression", "mock").
     pub kind: String,
 }
 

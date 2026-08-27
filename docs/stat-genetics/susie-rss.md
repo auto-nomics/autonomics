@@ -31,7 +31,7 @@ The input is one tab-separated File with these columns:
 | `a1` | optional | First allele for LD alignment |
 | `a2` | optional | Second allele for LD alignment |
 
-Use `sink_file` with `format: "tsv"`:
+Use `dataframe_to_file` with `format: "tsv"`:
 
 ```json
 {
@@ -129,7 +129,7 @@ credible set, `lbf=34.2`, and convergence in 14 iterations.
 
 For rsID sumstats, join on chromosome, GRCh37 position, and the allele pair.
 The following pattern also handles the panel's headerless BIM when
-`source_file` consumes its first physical row as column names:
+`file_to_dataframe` consumes its first physical row as column names:
 
 ```sql
 WITH bim AS (

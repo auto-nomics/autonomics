@@ -24,8 +24,8 @@ use crate::ExecError;
                   Each node kind expects different spec fields — always call \
                   `get_node_spec` first. Common examples: \
                   - \"sql\":            {\"sql_query\": \"SELECT * FROM port_0\"} \
-                  - \"source_file\": {\"path\": \"/data/sample.vcf.gz\", \"format\": null} \
-                  - \"sink_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
+                  - \"file_to_dataframe\": {\"path\": \"/data/sample.vcf.gz\", \"format\": null} \
+                  - \"dataframe_to_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
                   - \"bundle_source\": {\"bundle_id\": \"EUR.panel\", \"format\": \"txt\"} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
                   - \"ldsc\":           {\"n_blocks\": 200, \"intercept\": null} \
@@ -40,7 +40,7 @@ pub struct AddNodeInput {
     /// Unique identifier for this node in the DAG.
     pub id: String,
     /// The node kind — one of the kinds returned by `list_node_factories`
-    /// (e.g. "sql", "source_file", "sink_file", "linear_regression", "ldsc", "mock").
+    /// (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "linear_regression", "ldsc", "mock").
     pub kind: String,
     /// JSON object conforming to the node's JSON Schema. Unknown keys are
     /// rejected by factories that use `deny_unknown_fields`.

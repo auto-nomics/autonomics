@@ -24,7 +24,7 @@ check. Non-DataFrame edges only require matching payload types.
 
 ## Bridge nodes
 
-`sink_file` is now a bridge rather than a terminal sink:
+`dataframe_to_file` is now a bridge rather than a terminal sink:
 
 ```text
 DataFrame input -> File output
@@ -34,7 +34,7 @@ Its write behavior is unchanged, but after a successful write it emits a
 `FileRef` containing the normalized path, format, and local filesystem
 fingerprint when available.
 
-`source_file` supports both its legacy form and the file bridge form:
+`file_to_dataframe` supports both its legacy form and the file bridge form:
 
 - With no upstream edge, it reads `spec.path` exactly as before.
 - With an upstream File edge, it reads the upstream `FileRef.path` and ignores
@@ -42,15 +42,15 @@ fingerprint when available.
 - The effective format order is explicit spec format, upstream FileRef format,
   then file extension.
 
-A path-less `source_file` can be added to the graph before it is connected.
+A path-less `file_to_dataframe` can be added to the graph before it is connected.
 Running one without an upstream file and without a fallback path fails at node
 execution.
 
 The canonical round trip is:
 
 ```text
-DataFrame -- sink_file --> File -- container_command --> File -- source_file --> DataFrame
-existing file -- file_ref_source --> File -- container_command --> File
+DataFrame -- dataframe_to_file --> File -- container_command --> File -- file_to_dataframe --> DataFrame
+existing file -- file_reference --> File -- container_command --> File
 ```
 
 ## Running container commands
@@ -102,7 +102,7 @@ workspace copy remains only as execution scratch.
 
 ## Incremental invalidation
 
-`sink_file` and `container_command` record a local metadata fingerprint for each
+`dataframe_to_file` and `container_command` record a local metadata fingerprint for each
 emitted file. Before an incremental run, clean nodes with cached File or
 FileSet outputs are checked. If size or nanosecond mtime differs, the node and
 its descendants are marked dirty and re-executed.
@@ -117,8 +117,8 @@ The R code generator distinguishes edge payload types:
 - DataFrame edges continue to materialize `_edge_{node}_{port}.csv` files.
 - File edges pass path-bearing variables directly.
 
-For example, `sink_file -> source_file` assigns the written path to the sink's
-output variable and passes that variable to `source_file`; no edge CSV is
+For example, `dataframe_to_file -> file_to_dataframe` assigns the written path to the sink's
+output variable and passes that variable to `file_to_dataframe`; no edge CSV is
 generated for the File edge.
 
 ## Migration notes

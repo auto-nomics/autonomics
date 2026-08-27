@@ -445,9 +445,10 @@ by default, and `/work` as the writable workspace PVC subPath.\n\
 `AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \
 Reference data requires immutable `panels` backed by object storage.\n\
 - DataFrame values must cross the file boundary explicitly: \
-`sink_file -> container_command -> source_file`. Output paths must be safe \
-relative paths under `/work`; declare every output in `outputs`. Missing files \
-fail the node. After `run_dag`, use `output_files` to locate artifacts.\n\
+`dataframe_to_file -> container_command -> file_to_dataframe`. Output paths \
+must be safe relative paths under `/work`; declare every output in `outputs`. \
+Missing files fail the node. After `run_dag`, use `output_files` to locate \
+artifacts.\n\
 \n\
 - Do not interpolate file paths into shell commands. Use `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, `AUTONOMICS_WORKDIR`, and helper paths from \

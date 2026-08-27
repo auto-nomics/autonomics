@@ -20,7 +20,7 @@ PanelCache. Later runs reuse the immutable cache entry.
 
 ## Input
 
-Input is one whitespace-delimited File, normally produced by `sink_file` with
+Input is one whitespace-delimited File, normally produced by `dataframe_to_file` with
 `format: "tsv"`. Required columns are:
 
 | Column | Meaning |

@@ -447,16 +447,16 @@ data-engine DAGs today once §4 nodes exist.
 A meta-analysis of three cohort GWAS hits:
 
 ```
-source_file(study1.csv) ─┐
-source_file(study2.csv) ─┼─ hypothesize.t_test(x="effect", mu=0) ─┐
-source_file(study3.csv) ─┘                                         ├─ hypothesize.combine_pvalues(method="fisher")
+file_to_dataframe(study1.csv) ─┐
+file_to_dataframe(study2.csv) ─┼─ hypothesize.t_test(x="effect", mu=0) ─┐
+file_to_dataframe(study3.csv) ─┘                                         ├─ hypothesize.combine_pvalues(method="fisher")
                                                                   └─ (single row, combined p)
 ```
 
 ### 5.2 Bioequivalence via intersection-union (TOST)
 
 ```
-source_file(pk.csv)
+file_to_dataframe(pk.csv)
    └─ hypothesize.t_test(x="auc_t", y="auc_r", paired=true, alternative="less",  mu=+ln1.25)
    └─ hypothesize.t_test(x="auc_t", y="auc_r", paired=true, alternative="greater", mu=−ln1.25)
         └──┬───┘
@@ -466,7 +466,7 @@ source_file(pk.csv)
 ### 5.3 GWAS hit scan with FDR control
 
 ```
-source_file(sumstats.tsv)
+file_to_dataframe(sumstats.tsv)
    └─ sql_node("SELECT chr, pos, beta, se FROM port_0")
        └─ hypothesize.wald_test(estimate_from="beta", se_from="se")   # one row per SNP
            └─ hypothesize.adjust_pvalues(method="bh")

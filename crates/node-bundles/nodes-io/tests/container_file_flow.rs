@@ -1,4 +1,4 @@
-//! End-to-end file-flow tests for `sink_file -> container_command -> source_file`.
+//! End-to-end file-flow tests for `dataframe_to_file -> container_command -> file_to_dataframe`.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,9 @@ use nodes_io::coloc_abf_container::{COLOC_ABF_CONTAINER_KIND, ColocAbfContainerN
 use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use nodes_io::file_ref_source::FileRefSourceNode;
+use nodes_io::dataframe_to_file::{DataFrameToFileNode, WriteFormat};
+use nodes_io::file_reference::FileReferenceNode;
+use nodes_io::file_to_dataframe::FileToDataFrameNode;
 use nodes_io::gcta_container::{
     GCTA_ACAT_CONTAINER_KIND, GCTA_COJO_SELECT_CONTAINER_KIND, GCTA_FASTBAT_CONTAINER_KIND,
     GCTA_GENE_LIST_PANEL, GCTA_REF_BINARY_PANEL, GCTA_SBLUP_CONTAINER_KIND,
@@ -52,12 +54,10 @@ use nodes_io::mvmr_container::{MVMR_CONTAINER_KIND, MvmrContainerNodeFactory};
 use nodes_io::plink2_clump_container::{
     PLINK2_CLUMP_CONTAINER_KIND, PLINK2_REF_BINARY_PANEL, Plink2ClumpContainerNodeFactory,
 };
-use nodes_io::sink_file::{FileSinkNode, WriteFormat};
 use nodes_io::smr_heidi_container::{
     SMR_HEIDI_CONTAINER_KIND, SMR_REF_BINARY_PANEL, SMR_WESTRA_EQTL_PANEL,
     SmrHeidiContainerNodeFactory,
 };
-use nodes_io::source_file::FileSourceNode;
 use nodes_io::susie_rss_container::{
     SUSIE_REF_PANEL, SUSIE_RSS_CONTAINER_KIND, SusieRssContainerNodeFactory,
 };
@@ -82,7 +82,7 @@ async fn run_ldsc_h2_dag(
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some(format.into()),
         )),
@@ -363,7 +363,7 @@ async fn assert_container_artifact(
 }
 
 #[tokio::test]
-async fn sink_file_output_flows_through_container_command_in_dag() {
+async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
     let workspace = tempfile::tempdir().unwrap();
     let (_mounted, ctx) = workspace_vfs(workspace.path());
     let input_path = format!("vfs:///input-{}.csv", unique_container_name());
@@ -388,7 +388,7 @@ async fn sink_file_output_flows_through_container_command_in_dag() {
     .unwrap();
     dag.add_node(
         "write_input".into(),
-        Box::new(FileSinkNode::new(
+        Box::new(DataFrameToFileNode::new(
             input_path,
             WriteFormat::Csv,
             dag_core::SinkMode::Overwrite,
@@ -409,7 +409,7 @@ async fn sink_file_output_flows_through_container_command_in_dag() {
     .unwrap();
     dag.add_node(
         "read_result".into(),
-        Box::new(FileSourceNode::new(None, None)),
+        Box::new(FileToDataFrameNode::new(None, None)),
     )
     .unwrap();
     dag.add_edge("source", "write_input", 0, 0).unwrap();
@@ -464,7 +464,7 @@ async fn sink_file_output_flows_through_container_command_in_dag() {
 
 #[tokio::test]
 #[ignore = "requires a configured k3s cluster, shared workspace PVC, kubeconfig, and local Debian image"]
-async fn real_k3s_container_receives_upstream_sink_file_output() {
+async fn real_k3s_container_receives_upstream_dataframe_to_file_output() {
     let workspace_root = std::env::var_os("AUTONOMICS_K3S_WORKSPACE_ROOT")
         .map(PathBuf::from)
         .expect("AUTONOMICS_K3S_WORKSPACE_ROOT must point to the shared workspace PVC path");
@@ -501,7 +501,7 @@ async fn real_k3s_container_receives_upstream_sink_file_output() {
     .unwrap();
     dag.add_node(
         "write_input".into(),
-        Box::new(FileSinkNode::new(
+        Box::new(DataFrameToFileNode::new(
             input_path,
             WriteFormat::Csv,
             dag_core::SinkMode::Overwrite,
@@ -515,7 +515,7 @@ async fn real_k3s_container_receives_upstream_sink_file_output() {
     .unwrap();
     dag.add_node(
         "read_result".into(),
-        Box::new(FileSourceNode::new(None, None)),
+        Box::new(FileToDataFrameNode::new(None, None)),
     )
     .unwrap();
     dag.add_edge("source", "write_input", 0, 0).unwrap();
@@ -706,7 +706,7 @@ async fn real_official_ldsc_munge_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "raw_sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("sumstats".into()),
         )),
@@ -866,7 +866,7 @@ async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "snp_locations".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             snp_loc_path.to_string_lossy().into_owned(),
             Some("magma_snp_loc".into()),
         )),
@@ -999,7 +999,7 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "bundle".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bundle_zip.to_string_lossy().into_owned(),
             Some("lava_run_bundle_zip".into()),
         )),
@@ -1259,7 +1259,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "trait1".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats.to_string_lossy().into_owned(),
             Some("sumstats_gz".into()),
         )),
@@ -1348,7 +1348,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
         fit2_dag
             .add_node(
                 format!("fit2-input-{port}"),
-                Box::new(FileRefSourceNode::new(
+                Box::new(FileReferenceNode::new(
                     source.join(name).to_string_lossy().into_owned(),
                     Some("mixer_fit2_input".into()),
                 )),
@@ -1442,7 +1442,7 @@ async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "trait1".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats_path.to_string_lossy().into_owned(),
             Some("sumstats_gz".into()),
         )),
@@ -1554,7 +1554,7 @@ async fn real_published_mixer_fit2_stages_four_inputs_in_k3s() {
     for (port, name) in input_files.iter().enumerate() {
         dag.add_node(
             format!("input-{port}"),
-            Box::new(FileRefSourceNode::new(
+            Box::new(FileReferenceNode::new(
                 fixture_data.join(name).to_string_lossy().into_owned(),
                 Some("mixer_fit2_input".into()),
             )),
@@ -1652,7 +1652,7 @@ async fn real_catalog_backed_original_ldsc_rg_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "trait1".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             asthma_path.to_string_lossy().into_owned(),
             Some("sumstats_gz".into()),
         )),
@@ -1660,7 +1660,7 @@ async fn real_catalog_backed_original_ldsc_rg_runs_in_k3s() {
     .unwrap();
     dag.add_node(
         "trait2".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bmi_path.to_string_lossy().into_owned(),
             Some("sumstats_gz".into()),
         )),
@@ -1769,7 +1769,7 @@ async fn real_official_mrpresso_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "summary_stats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -1865,7 +1865,7 @@ async fn real_official_mvmr_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "instruments".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -1990,7 +1990,7 @@ async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "bundle".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bundle_zip.to_string_lossy().into_owned(),
             Some("lava_run_bundle_zip".into()),
         )),
@@ -2119,7 +2119,7 @@ async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "bundle".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bundle_zip.to_string_lossy().into_owned(),
             Some("lava_run_bundle_zip".into()),
         )),
@@ -2234,7 +2234,7 @@ async fn real_catalog_backed_official_lava_multireg_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "bundle".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bundle_zip.to_string_lossy().into_owned(),
             Some("lava_run_bundle_zip".into()),
         )),
@@ -2336,7 +2336,7 @@ async fn real_official_coloc_abf_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -2434,7 +2434,7 @@ async fn real_official_hyprcoloc_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -2534,7 +2534,7 @@ async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -2687,7 +2687,7 @@ async fn real_catalog_backed_official_susie_rss_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -2849,7 +2849,7 @@ async fn real_catalog_backed_official_fusion_twas_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -2973,7 +2973,7 @@ async fn real_catalog_backed_official_smr_heidi_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "gwas_sumstats".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             sumstats_path.to_string_lossy().into_owned(),
             Some("gcta_ma".into()),
         )),
@@ -3076,7 +3076,7 @@ async fn run_gcta_dag(
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "gwas".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             input_path.to_string_lossy().into_owned(),
             Some("tsv".into()),
         )),
@@ -3314,7 +3314,7 @@ async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
     let mut dag = dag_core::dag::DAG::default();
     dag.add_node(
         "bundle".into(),
-        Box::new(FileRefSourceNode::new(
+        Box::new(FileReferenceNode::new(
             bundle_zip.to_string_lossy().into_owned(),
             Some("lava_run_bundle_zip".into()),
         )),

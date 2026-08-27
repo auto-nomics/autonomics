@@ -18,7 +18,7 @@ use crate::ExecError;
                   spec's declared outputs."
 )]
 pub struct GetNodePortsInput {
-    /// The node kind to query (e.g. "sql", "source_file", "sink_file", "ldsc", "linear_regression", "mock").
+    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "ldsc", "linear_regression", "mock").
     pub kind: String,
     /// Optional concrete node spec. Provide this for dynamic-port kinds.
     #[serde(default)]

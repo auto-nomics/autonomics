@@ -46,7 +46,7 @@
                                                │         │        │
                                                │  ┌──────▼──────┐ │
                                                │  │   节点      │ │
-                                               │  │ source_file │ │
+                                               │  │ file → df    │ │
                                                │  │ sql_node    │ │
                                                │  │ ldsc_h2_cont│ │
                                                │  │ univariate  │ │
@@ -62,7 +62,7 @@
                                                │  │ epi_rcs     │ │
                                                │  │ epi_lasso   │ │
                                                │  │ epi_wqs     │ │
-                                               │  │ sink_file   │ │
+                                               │  │ df → file    │ │
                                                │  │ viz         │ │
                                                │  │ ...         │ │
                                                │  └─────────────┘ │

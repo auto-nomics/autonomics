@@ -16,7 +16,7 @@ use crate::ExecError;
                   the exact fields and types expected by the chosen node kind."
 )]
 pub struct GetNodeSpecInput {
-    /// The node kind to query (e.g. "sql", "source_file", "sink_file", "ldsc", "linear_regression", "mock").
+    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "ldsc", "linear_regression", "mock").
     pub kind: String,
 }
 

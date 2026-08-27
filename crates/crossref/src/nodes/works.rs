@@ -105,7 +105,7 @@ impl NodeFactory for CrossrefWorksNodeFactory {
         volume, issue, page, issn, authors, cited_by_count, references_count, \
         abstract`.\n\n\
         Set `max_results` > `rows` to auto-paginate via cursor. Pipe into \
-        `sql_node` or `sink_file` for downstream processing."
+        `sql_node` or `dataframe_to_file` for downstream processing."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

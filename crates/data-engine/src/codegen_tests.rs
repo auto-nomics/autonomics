@@ -146,7 +146,7 @@ fn var_flow_branch_merge() {
         nodes: vec![
             NodeEntry {
                 id: "source".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/test.csv"}),
             },
             NodeEntry {
@@ -240,11 +240,11 @@ fn compile_empty_dag() {
 // ── golden tests for implemented node kinds ────────────────────────────────
 
 #[test]
-fn golden_source_file_csv_r() {
+fn golden_file_to_dataframe_csv_r() {
     let manifest = DagManifest {
         nodes: vec![NodeEntry {
             id: "src".into(),
-            kind: "source_file".into(),
+            kind: "file_to_dataframe".into(),
             spec: serde_json::json!({"path": "/tmp/gwas.csv"}),
         }],
         edges: vec![],
@@ -273,11 +273,11 @@ fn golden_source_file_csv_r() {
 }
 
 #[test]
-fn golden_source_file_parquet_r() {
+fn golden_file_to_dataframe_parquet_r() {
     let manifest = DagManifest {
         nodes: vec![NodeEntry {
             id: "data".into(),
-            kind: "source_file".into(),
+            kind: "file_to_dataframe".into(),
             spec: serde_json::json!({"path": "/tmp/data.parquet", "format": "parquet"}),
         }],
         edges: vec![],
@@ -297,17 +297,17 @@ fn golden_source_file_parquet_r() {
 }
 
 #[test]
-fn golden_sink_file_r() {
+fn golden_dataframe_to_file_r() {
     let manifest = DagManifest {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/in.csv"}),
             },
             NodeEntry {
                 id: "out".into(),
-                kind: "sink_file".into(),
+                kind: "dataframe_to_file".into(),
                 spec: serde_json::json!({"path": "/tmp/out.csv", "format": "csv"}),
             },
         ],
@@ -351,17 +351,17 @@ fn golden_file_bridge_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/in.csv"}),
             },
             NodeEntry {
                 id: "out".into(),
-                kind: "sink_file".into(),
+                kind: "dataframe_to_file".into(),
                 spec: serde_json::json!({"path": "/tmp/out.csv", "format": "csv"}),
             },
             NodeEntry {
                 id: "reader".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": null, "format": "csv"}),
             },
         ],
@@ -390,7 +390,7 @@ fn golden_file_bridge_r() {
     assert!(script.source.contains(r#"out <- "/tmp/out.csv""#));
     assert!(
         script.source.contains("reader <- fread(out)"),
-        "file bridge should pass sink_file's path variable to source_file"
+        "file bridge should pass dataframe_to_file's path variable to file_to_dataframe"
     );
     assert!(
         !script.source.contains(r#"fwrite(out, "_edge_out_0.csv")"#),
@@ -408,7 +408,7 @@ fn golden_sql_node_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/data.csv"}),
             },
             NodeEntry {
@@ -457,7 +457,7 @@ fn golden_two_sample_mr_r() {
         nodes: vec![
             NodeEntry {
                 id: "merged".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/merged.csv"}),
             },
             NodeEntry {
@@ -517,7 +517,7 @@ fn golden_mixed_supported_unsupported() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/data.csv"}),
             },
             NodeEntry {
@@ -539,10 +539,10 @@ fn golden_mixed_supported_unsupported() {
     };
     let script = compiler.compile(&manifest, CodegenTarget::R).unwrap();
 
-    // source_file should be compiled, echo should be skipped.
+    // file_to_dataframe should be compiled, echo should be skipped.
     assert!(
         script.source.contains("fread("),
-        "source_file should have R code"
+        "file_to_dataframe should have R code"
     );
     assert_eq!(
         script.skipped_nodes,
@@ -559,7 +559,7 @@ fn golden_fine_gray_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/fg.csv"}),
             },
             NodeEntry {
@@ -622,7 +622,7 @@ fn golden_fine_gray_tf_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/fg.csv"}),
             },
             NodeEntry {
@@ -675,7 +675,7 @@ fn golden_cuminc_r() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/ci.csv"}),
             },
             NodeEntry {
@@ -725,7 +725,7 @@ fn golden_cuminc_no_group_omits_tests() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/ci.csv"}),
             },
             NodeEntry {
@@ -769,7 +769,7 @@ fn golden_svymean_r() {
         nodes: vec![
             NodeEntry {
                 id: "data".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/nhanes.csv"}),
             },
             NodeEntry {
@@ -833,7 +833,7 @@ fn golden_svyglm_r() {
         nodes: vec![
             NodeEntry {
                 id: "data".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/api.csv"}),
             },
             NodeEntry {
@@ -887,7 +887,7 @@ fn golden_calibrate_chain_r() {
         nodes: vec![
             NodeEntry {
                 id: "data".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/tmp/survey.csv"}),
             },
             NodeEntry {

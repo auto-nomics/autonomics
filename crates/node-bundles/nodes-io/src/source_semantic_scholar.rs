@@ -124,7 +124,7 @@ impl NodeFactory for S2PaperSearchNodeFactory {
         publication_date, is_open_access, open_access_pdf, tldr`.\n\n\
         Use filters (`year`, `venue`, `fields_of_study`, `publication_types`, \
         `open_access_pdf`, `min_citation_count`) to constrain the result, \
-        then pipe into `sql_node` or `sink_file`."
+        then pipe into `sql_node` or `dataframe_to_file`."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

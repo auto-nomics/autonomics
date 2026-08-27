@@ -15,7 +15,7 @@ async fn main() {
     let m1 = DagManifest {
         nodes: vec![NodeEntry {
             id: "src".into(),
-            kind: "source_file".into(),
+            kind: "file_to_dataframe".into(),
             spec: serde_json::json!({"path": "/data/iris.csv"}),
         }],
         edges: vec![],
@@ -30,7 +30,7 @@ async fn main() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/data/iris.csv"}),
             },
             NodeEntry {
@@ -56,7 +56,7 @@ async fn main() {
         nodes: vec![
             NodeEntry {
                 id: "src".into(),
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 spec: serde_json::json!({"path": "/data/iris.csv"}),
             },
             NodeEntry {
@@ -66,7 +66,7 @@ async fn main() {
             },
             NodeEntry {
                 id: "out".into(),
-                kind: "sink_file".into(),
+                kind: "dataframe_to_file".into(),
                 spec: serde_json::json!({"path": "/tmp/out.csv", "format": "csv"}),
             },
         ],

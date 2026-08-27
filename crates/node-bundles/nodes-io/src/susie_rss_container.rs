@@ -48,7 +48,7 @@ const FACTORY_DOC: &str = r#"Runs the official susieR 0.16.6 susie_rss(z, R, n, 
 
 Input contract:
 - One File input, strictly tab-separated, with columns snp, chrom, z and optional n, a1, a2.
-- Produce it in a DAG with sink_file using format="tsv"; comma-separated input is parsed as one column and misleadingly fails with missing required columns.
+- Produce it in a DAG with dataframe_to_file using format="tsv"; comma-separated input is parsed as one column and misleadingly fails with missing required columns.
 - All rows must use one chromosome. SNP must be a literal mixer BIM ID in GRCh37 chr:pos:allele1:allele2 form (for example, 21:36119111:G:T). rsIDs do not align. Supplying a1/a2 in either allele orientation is supported; otherwise they are inferred from the ID.
 - Keep SNP keys unique upstream. SuSiE-RSS is a single-locus model, so split large regions and consider r2_min>0 to sparsify LD.
 

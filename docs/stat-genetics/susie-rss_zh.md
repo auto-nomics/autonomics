@@ -28,7 +28,7 @@ z-score 符号重建 LD 方向。
 | `a1` | 否 | LD 对齐用第一个等位基因 |
 | `a2` | 否 | LD 对齐用第二个等位基因 |
 
-推荐直接使用 `sink_file`：
+推荐直接使用 `dataframe_to_file`：
 
 ```json
 {
@@ -118,7 +118,7 @@ credible set、`lbf=34.2`，并在 14 次迭代后收敛。
 ## rsID 转换 SQL
 
 rsID 汇总统计应按染色体、GRCh37 坐标和等位基因对 join。下面的模式同时处理
-`source_file` 把无表头 BIM 首行当作列名的问题：
+`file_to_dataframe` 把无表头 BIM 首行当作列名的问题：
 
 ```sql
 WITH bim AS (

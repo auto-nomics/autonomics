@@ -1,8 +1,9 @@
 //! Visualization node: consumes an upstream `DataFrame` and renders it to a
 //! PNG via R/ggplot2.
 //!
-//! Mirrors [`crate::sink_file::FileSinkNode`]: a [`VizNode`] has exactly one input and
-//! produces no output. It collects the upstream `RecordBatch`es, hands them to
+//! Mirrors the input shape of a file-writing bridge node: a [`VizNode`] has
+//! exactly one input and produces no output. It collects the upstream
+//! `RecordBatch`es, hands them to
 //! the `visualization` crate (Arrow IPC → `Rscript` ggplot2), and writes the
 //! PNG **into the engine's opendal-virtualized filesystem** (not the host
 //! filesystem), so the artifact lives in the same isolated space as source/
@@ -97,7 +98,7 @@ pub struct VizNode {
 }
 
 /// Static port layout for every [`VizNode`]: a single untyped input port and
-/// no outputs — identical to [`crate::sink_file::FileSinkNode`].
+/// no outputs — identical to the old terminal file-writer shape.
 fn port_layout() -> NodePorts {
     NodePorts::new().add_input_port(None)
 }

@@ -1,13 +1,10 @@
-//! File source node: brings a file (local or registered object store) into the
-//! DAG as a `DataFrame`.
+//! File-to-DataFrame bridge node.
 //!
-//! A [`FileSourceNode`] can either read an external path or consume an upstream
-//! file reference, and produces exactly one DataFrame output. The format is
-//! auto-detected from the extension or explicitly given. Tabular
-//! formats (CSV, Parquet) go through DataFusion natively; bioinformatics
-//! formats (VCF, BAM, BED, …) go through `biofusion`, which already exposes
-//! them as DataFusion tables. Symmetric to [`crate::nodes::FileSinkNode`] for
-//! the file case.
+//! A [`FileToDataFrameNode`] reads an external path or an upstream file reference
+//! and produces exactly one DataFrame output. The format is auto-detected from
+//! the extension or explicitly given. Tabular formats (CSV, Parquet) go through
+//! DataFusion natively; bioinformatics formats (VCF, BAM, BED, ...) go through
+//! `biofusion`, which exposes them as DataFusion tables.
 
 use async_trait::async_trait;
 use biofusion::datasource::BioReadOptions;
@@ -140,9 +137,9 @@ impl FileFormat {
     }
 }
 
-/// Errors specific to [`FileSourceNode`].
+/// Errors specific to [`FileToDataFrameNode`].
 #[derive(Debug, Error)]
-pub enum FileSourceError {
+pub enum FileToDataFrameError {
     #[error("cannot infer file format from path: {0}")]
     UnknownFormat(String),
     #[error("invalid input: {0}")]
@@ -155,31 +152,31 @@ pub enum FileSourceError {
     },
 }
 
-impl FileSourceError {
+impl FileToDataFrameError {
     pub fn to_dag_error(self) -> DagError {
         match self {
-            FileSourceError::Read { source, .. } => DagError::DataFusion(source),
-            FileSourceError::UnknownFormat(msg) => DagError::Schedule(msg),
-            FileSourceError::InvalidInput(msg) => DagError::Schedule(msg),
+            FileToDataFrameError::Read { source, .. } => DagError::DataFusion(source),
+            FileToDataFrameError::UnknownFormat(msg) => DagError::Schedule(msg),
+            FileToDataFrameError::InvalidInput(msg) => DagError::Schedule(msg),
         }
     }
 }
 
-impl ::dag_core::dag::NodeError for FileSourceError {
+impl ::dag_core::dag::NodeError for FileToDataFrameError {
     fn node_type(&self) -> &str {
-        "source_file"
+        "file_to_dataframe"
     }
 }
 
 #[derive(Clone)]
-pub struct FileSourceNode {
+pub struct FileToDataFrameNode {
     meta: NodePorts,
     path: Option<String>,
     format: Option<FileFormat>,
     partition_by: Vec<String>,
 }
 
-impl FileSourceNode {
+impl FileToDataFrameNode {
     pub fn new(path: Option<String>, format: Option<FileFormat>) -> Self {
         Self::new_with_partitions(path, format, Vec::new())
     }
@@ -189,7 +186,7 @@ impl FileSourceNode {
         format: Option<FileFormat>,
         partition_by: Vec<String>,
     ) -> Self {
-        // A source has no inputs and a single output port.
+        // The optional file input lets a file-producing node supply the path.
         Self {
             meta: port_layout(),
             path,
@@ -200,7 +197,7 @@ impl FileSourceNode {
 }
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
-pub struct FileSourceNodeSpec {
+pub struct FileToDataFrameNodeSpec {
     /// A file path or URL. When `format` is `None`, it is inferred from the
     /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
     pub path: Option<String>,
@@ -210,19 +207,19 @@ pub struct FileSourceNodeSpec {
     pub partition_by: Vec<String>,
 }
 
-pub struct FileSourceNodeFactory {}
+pub struct FileToDataFrameNodeFactory {}
 
-/// Static port layout for every [`FileSourceNode`]: an optional file input and
-/// a single DataFrame output (schema discovered from the source at runtime).
+/// Static port layout for every [`FileToDataFrameNode`]: an optional file input
+/// and a single DataFrame output.
 fn port_layout() -> NodePorts {
     NodePorts::new()
         .add_optional_input_port_of_type(PortType::File)
         .add_output_port(None)
 }
 
-impl NodeFactory for FileSourceNodeFactory {
+impl NodeFactory for FileToDataFrameNodeFactory {
     fn kind(&self) -> &'static str {
-        "source_file"
+        "file_to_dataframe"
     }
 
     fn desc(&self) -> &'static str {
@@ -230,16 +227,16 @@ impl NodeFactory for FileSourceNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "A file source node that reads an external path or an upstream file \
-        reference into the DAG as a DataFrame. Supports local/remote files: \
-        tabular formats (CSV, Parquet) via DataFusion, and bioinformatics \
-        formats (VCF, BAM, BED, GTF, FASTA, etc.) via biofusion. Format is \
-        inferred from the extension when not given explicitly. Optional file \
-        input; one DataFrame output."
+        "Reads an external path or an upstream file reference into a \
+        DataFrame. Supports local/remote files: tabular formats (CSV, \
+        Parquet) via DataFusion, and bioinformatics formats (VCF, BAM, BED, \
+        GTF, FASTA, etc.) via biofusion. Format is inferred from the \
+        extension when not given explicitly. Optional file input; one \
+        DataFrame output."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(FileSourceNodeSpec)
+        schema_for!(FileToDataFrameNodeSpec)
     }
 
     fn ports(&self) -> NodePorts {
@@ -251,8 +248,8 @@ impl NodeFactory for FileSourceNodeFactory {
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        let node_spec: FileSourceNodeSpec = serde_json::from_value(spec)?;
-        let node = FileSourceNode::new_with_partitions(
+        let node_spec: FileToDataFrameNodeSpec = serde_json::from_value(spec)?;
+        let node = FileToDataFrameNode::new_with_partitions(
             node_spec.path,
             node_spec.format,
             node_spec.partition_by,
@@ -265,9 +262,9 @@ impl NodeFactory for FileSourceNodeFactory {
         spec: &serde_json::Value,
         ctx: &mut CodegenCtx,
     ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let node_spec: FileSourceNodeSpec =
+        let node_spec: FileToDataFrameNodeSpec =
             serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 source: e,
             })?;
 
@@ -278,13 +275,13 @@ impl NodeFactory for FileSourceNodeFactory {
         let literal_path = node_spec.path.as_deref();
         if literal_path.is_none() && !connected_input {
             return Err(CodegenError::NotSupported {
-                kind: "source_file".into(),
+                kind: "file_to_dataframe".into(),
                 target: CodegenTarget::R,
             });
         }
         if !node_spec.partition_by.is_empty() {
             return Err(CodegenError::NotSupported {
-                kind: "source_file partitioned Parquet".into(),
+                kind: "file_to_dataframe partitioned Parquet".into(),
                 target: CodegenTarget::R,
             });
         }
@@ -402,7 +399,7 @@ pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) ->
 }
 
 #[async_trait]
-impl DagNode for FileSourceNode {
+impl DagNode for FileToDataFrameNode {
     fn ports(&self) -> &NodePorts {
         &self.meta
     }
@@ -412,7 +409,7 @@ impl DagNode for FileSourceNode {
     }
 
     fn kind(&self) -> &'static str {
-        "source_file"
+        "file_to_dataframe"
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -431,8 +428,8 @@ impl DagNode for FileSourceNode {
             .map(|file| file.path.clone())
             .or_else(|| self.path.clone())
             .ok_or_else(|| {
-                FileSourceError::UnknownFormat(
-                    "source_file requires an upstream file or a fallback path".into(),
+                FileToDataFrameError::UnknownFormat(
+                    "file_to_dataframe requires an upstream file or a fallback path".into(),
                 )
             })?;
         let path = ensure_directory_path(
@@ -450,11 +447,11 @@ impl DagNode for FileSourceNode {
         let fmt = match inferred_fmt {
             Some(fmt) => fmt,
             None if !self.partition_by.is_empty() => FileFormat::Parquet,
-            None => return Err(FileSourceError::UnknownFormat(path.clone()).into()),
+            None => return Err(FileToDataFrameError::UnknownFormat(path.clone()).into()),
         };
         if !self.partition_by.is_empty() && fmt != FileFormat::Parquet {
-            return Err(FileSourceError::InvalidInput(
-                "partition_by is only supported for Parquet sources".into(),
+            return Err(FileToDataFrameError::InvalidInput(
+                "partition_by is only supported for Parquet input".into(),
             )
             .into());
         }
@@ -531,7 +528,7 @@ async fn read_file(
         BigBed => ctx.read_bigbed(path, BioReadOptions::default()).await,
     };
     df.map_err(|e| {
-        FileSourceError::Read {
+        FileToDataFrameError::Read {
             path: path.to_string(),
             source: e,
         }
@@ -673,7 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_file_preserves_camel_case_parquet_schema() {
+    async fn file_to_dataframe_preserves_camel_case_parquet_schema() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Blood.parquet");
         let schema = Arc::new(arrow_schema::Schema::new(vec![
@@ -722,7 +719,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_file_reads_hive_partitioned_parquet_from_vfs() {
+    async fn file_to_dataframe_reads_hive_partitioned_parquet_from_vfs() {
         use datafusion::prelude::{col, lit};
         use parquet::arrow::ArrowWriter;
 
@@ -770,8 +767,11 @@ mod tests {
         }
 
         let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
-        let mut node =
-            FileSourceNode::new_with_partitions(Some("/dataset".into()), None, vec!["part".into()]);
+        let mut node = FileToDataFrameNode::new_with_partitions(
+            Some("/dataset".into()),
+            None,
+            vec!["part".into()],
+        );
         let outputs = node
             .execute(
                 &node_ctx,
@@ -954,14 +954,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_file_accepts_csv_override_for_nonstandard_extensions() {
+    async fn file_to_dataframe_accepts_csv_override_for_nonstandard_extensions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cohort.genes.raw");
         std::fs::write(&path, "gene_id,n\n79501,504\n").unwrap();
 
         let ctx = SessionContext::new();
         let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
-        let mut node = FileSourceNode::new(
+        let mut node = FileToDataFrameNode::new(
             Some(path.to_string_lossy().to_string()),
             Some(FileFormat::Csv),
         );
@@ -992,7 +992,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_file_accepts_csv_override_for_gzipped_nonstandard_extensions() {
+    async fn file_to_dataframe_accepts_csv_override_for_gzipped_nonstandard_extensions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cohort.sumstats.gz");
         let mut encoder = flate2::write::GzEncoder::new(
@@ -1004,7 +1004,7 @@ mod tests {
 
         let ctx = SessionContext::new();
         let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
-        let mut node = FileSourceNode::new(
+        let mut node = FileToDataFrameNode::new(
             Some(path.to_string_lossy().to_string()),
             Some(FileFormat::Csv),
         );
@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_file_reads_mounted_paths() {
+    async fn file_to_dataframe_reads_mounted_paths() {
         let backend_root = tempfile::tempdir().unwrap();
         let source_dir = backend_root.path().join("mounted-source");
         std::fs::create_dir_all(&source_dir).unwrap();
@@ -1067,7 +1067,7 @@ mod tests {
             "file:///mount/data.csv",
             "/mount/data.csv",
         ] {
-            let mut node = FileSourceNode::new(Some(path.into()), None);
+            let mut node = FileToDataFrameNode::new(Some(path.into()), None);
             let outputs = node
                 .execute(
                     &node_ctx,
