@@ -4,6 +4,8 @@ pub mod bundle_source;
 pub mod coloc_abf_container;
 pub mod container_command;
 pub mod file_ref_source;
+pub mod gcta_container;
+pub mod hyprcoloc_container;
 pub mod lava_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_munge_container;
@@ -14,6 +16,7 @@ pub mod mrpresso_container;
 pub mod mvmr_container;
 pub mod plink2_clump_container;
 pub mod sink_file;
+pub mod smr_heidi_container;
 pub mod source_file;
 pub mod source_openalex;
 pub mod source_opentargets;
@@ -86,6 +89,12 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(
+            hyprcoloc_container::HyPrColocContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
             Arc::clone(&self.container_execution.k3s),
             Arc::clone(&self.container_execution.panel_cache),
@@ -124,6 +133,30 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(
+            smr_heidi_container::SmrHeidiContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            gcta_container::GctaContainerNodeFactory::cojo_select(
+                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(gcta_container::GctaContainerNodeFactory::sblup(
+            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
+        registry.register(Box::new(gcta_container::GctaContainerNodeFactory::fastbat(
+            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
+        registry.register(Box::new(gcta_container::GctaContainerNodeFactory::acat(
+            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
         ));

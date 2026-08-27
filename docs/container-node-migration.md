@@ -373,3 +373,57 @@ the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
 The production wrapper references the image in the single-node k3s registry by
 immutable digest. The registry currently uses an HTTP NodePort and must gain
 TLS and authentication before it is exposed beyond the local node.
+
+SMR/HEIDI is the BESD eQTL plus PLINK LD-panel reference case:
+
+```text
+containers/smr/Dockerfile
+smr.eqtl.westra_hg19
+plink.ref.1000g_eur.binary
+containers/smr/fixtures/chr22.westra.ma
+crates/node-bundles/nodes-io/src/smr_heidi_container.rs
+```
+
+The image carries only the official SMR 1.4.2 executable and its bundled
+runtime libraries. The Westra BESD and 1000G EUR LD reference stay in catalog
+packages. The wrapper accepts one GCTA-COJO `.ma` File, fixes the verified
+image/data compatibility contract, and emits the official `.smr` result and
+execution log. A chr22 k3s baseline verifies both the output row and SMR
+p-value.
+
+HyPrColoc is the no-panel beta/SE matrix case:
+
+```text
+containers/hyprcoloc/Dockerfile
+containers/hyprcoloc/fixtures/test-summary-stats.tsv
+crates/node-bundles/nodes-io/src/hyprcoloc_container.rs
+```
+
+The image carries the official R package at `v0.0.2` and pinned dependencies.
+The first contract is the documented independent-study analysis: one
+SNP-aligned TSV with beta/SE columns for each trait. The wrapper emits the
+official result table, full RDS object, and log. Optional LD,
+trait-correlation, and sample-overlap matrices remain a separate contract
+until their packaging and validation rules are defined.
+
+GCTA is the official executable plus mixed-panel summary-statistics case:
+
+```text
+containers/gcta/Dockerfile
+plink.ref.1000g_eur.binary
+gcta.gene_list.hg19
+containers/gcta/fixtures/chr22.ma
+containers/gcta/fixtures/chr22.fastGWA
+crates/node-bundles/nodes-io/src/gcta_container.rs
+```
+
+The image extracts the official Linux 1.95.3 AppImage at build time so runtime
+jobs need neither FUSE nor privileges, then pins the published image by digest.
+The 1000G EUR PLINK reference and official hg19 gene list stay in catalog
+packages. Four File-to-File factories expose the verified summary-statistics
+surface: COJO stepwise selection, SBLUP SNP-effect prediction, gene-based
+fastBAT, and ACAT-V rare-variant aggregation. The committed official chr22
+sample verifies all four output contracts in k3s. GREML, MLMA, fastGWA, GSMR,
+and mtCOJO require cohort genotypes, phenotypes, GRMs, or additional LD-score
+panels and remain separate migrations rather than unsafe bindings to the
+1000G panel.

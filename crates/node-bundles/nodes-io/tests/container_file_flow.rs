@@ -28,6 +28,12 @@ use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use nodes_io::file_ref_source::FileRefSourceNode;
+use nodes_io::gcta_container::{
+    GCTA_ACAT_CONTAINER_KIND, GCTA_COJO_SELECT_CONTAINER_KIND, GCTA_FASTBAT_CONTAINER_KIND,
+    GCTA_GENE_LIST_PANEL, GCTA_REF_BINARY_PANEL, GCTA_SBLUP_CONTAINER_KIND,
+    GctaContainerNodeFactory,
+};
+use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
 use nodes_io::lava_container::{
     LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
 };
@@ -47,6 +53,10 @@ use nodes_io::plink2_clump_container::{
     PLINK2_CLUMP_CONTAINER_KIND, PLINK2_REF_BINARY_PANEL, Plink2ClumpContainerNodeFactory,
 };
 use nodes_io::sink_file::{FileSinkNode, WriteFormat};
+use nodes_io::smr_heidi_container::{
+    SMR_HEIDI_CONTAINER_KIND, SMR_REF_BINARY_PANEL, SMR_WESTRA_EQTL_PANEL,
+    SmrHeidiContainerNodeFactory,
+};
 use nodes_io::source_file::FileSourceNode;
 use nodes_io::susie_rss_container::{
     SUSIE_REF_PANEL, SUSIE_RSS_CONTAINER_KIND, SusieRssContainerNodeFactory,
@@ -2379,6 +2389,105 @@ async fn real_official_coloc_abf_runs_in_k3s() {
 }
 
 #[tokio::test]
+#[ignore = "requires k3s PVCs, kubeconfig, and the local official HyPrColoc image"]
+async fn real_official_hyprcoloc_runs_in_k3s() {
+    let scratch = tempfile::tempdir().unwrap();
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../containers/hyprcoloc/fixtures/test-summary-stats.tsv");
+    let tsv = std::fs::read_to_string(&fixture_path).unwrap();
+    let input_path = scratch.path().join("hyprcoloc-input.tsv");
+    std::fs::write(&input_path, tsv).unwrap();
+
+    let (_mounted, ctx) = workspace_vfs(scratch.path());
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let mut registry = NodeRegistry::new(ctx.clone());
+    registry.register(Box::new(HyPrColocContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let hyprcoloc = registry
+        .build_node(
+            HYPRCOLOC_CONTAINER_KIND,
+            serde_json::json!({
+                "snp_column": "snp",
+                "traits": [
+                    {"name": "T1", "beta": "beta_T1", "se": "se_T1"},
+                    {"name": "T2", "beta": "beta_T2", "se": "se_T2"},
+                    {"name": "T3", "beta": "beta_T3", "se": "se_T3"},
+                    {"name": "T4", "beta": "beta_T4", "se": "se_T4"},
+                    {"name": "T5", "beta": "beta_T5", "se": "se_T5"},
+                    {"name": "T6", "beta": "beta_T6", "se": "se_T6"},
+                    {"name": "T7", "beta": "beta_T7", "se": "se_T7"},
+                    {"name": "T8", "beta": "beta_T8", "se": "se_T8"},
+                    {"name": "T9", "beta": "beta_T9", "se": "se_T9"},
+                    {"name": "T10", "beta": "beta_T10", "se": "se_T10"}
+                ]
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("hyprcoloc".into(), hyprcoloc).unwrap();
+    dag.add_edge("sumstats", "hyprcoloc", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("hyprcoloc"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("hyprcoloc").unwrap();
+    let table = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(table.path.ends_with("/hyprcoloc_results.tsv"));
+    assert!(rds.path.ends_with("/hyprcoloc.RDS"));
+    assert!(log.path.ends_with("/hyprcoloc.log"));
+    assert!(
+        table
+            .path
+            .starts_with("vfs:///artifacts/hyprcoloc_container/")
+    );
+
+    let virtual_path = table
+        .path
+        .strip_prefix("vfs://")
+        .expect("HyPrColoc result is a VFS URI");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
+    let published = storage
+        .resolve(virtual_path)
+        .read(&storage.resolve_path(virtual_path))
+        .await
+        .unwrap();
+    let result_text = String::from_utf8_lossy(&published.to_vec()).into_owned();
+    for expected in ["T1, T2, T3, T4, T5", "rs11591147", "T6, T7, T8", "T9, T10"] {
+        assert!(
+            result_text.contains(expected),
+            "official HyPrColoc fixture is missing `{expected}`:\n{result_text}"
+        );
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires the official PLINK2 image, the 1000G EUR Phase3 PLINK reference panel package, k3s PVCs, and kubeconfig"]
 async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
     use dag_core::dag::DagNode;
@@ -2812,6 +2921,325 @@ async fn real_catalog_backed_official_fusion_twas_runs_in_k3s() {
                 .starts_with(&format!("{FUSION_GTEX_V8_PANEL}@"))
         });
     assert!(cached_panel, "FUSION GTEx panel should remain cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the official SMR image, Westra BESD and 1000G EUR catalog panels, k3s PVCs, and kubeconfig"]
+async fn real_catalog_backed_official_smr_heidi_runs_in_k3s() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(SMR_WESTRA_EQTL_PANEL).is_some(),
+        "smr.eqtl.westra_hg19 must be published in the catalog before this test"
+    );
+    assert!(
+        fixture.bundles.get(SMR_REF_BINARY_PANEL).is_some(),
+        "plink.ref.1000g_eur.binary must be published in the catalog before this test"
+    );
+
+    let sumstats_path = std::env::var_os("AUTONOMICS_SMR_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../containers/smr/fixtures/chr22.westra.ma")
+                .to_path_buf()
+        });
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(SmrHeidiContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let smr = registry
+        .build_node(
+            SMR_HEIDI_CONTAINER_KIND,
+            serde_json::json!({
+                "chr": 22,
+                "thread_num": 2,
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "gwas_sumstats".into(),
+        Box::new(FileRefSourceNode::new(
+            sumstats_path.to_string_lossy().into_owned(),
+            Some("gcta_ma".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("smr_heidi".into(), smr).unwrap();
+    dag.add_edge("gwas_sumstats", "smr_heidi", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("gwas_sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("smr_heidi"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("smr_heidi").unwrap();
+    let result = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(result.path.ends_with("/smr.smr"));
+    assert!(log.path.ends_with("/smr.log"));
+    assert!(
+        result
+            .path
+            .starts_with("vfs:///artifacts/smr_heidi_container/")
+    );
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let result_vpath = result
+        .path
+        .strip_prefix("vfs://")
+        .expect("SMR result is a VFS URI");
+    let bytes = storage
+        .resolve(result_vpath)
+        .read(&storage.resolve_path(result_vpath))
+        .await
+        .unwrap();
+    let result_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        result_text.starts_with("probeID\tProbeChr\tGene\tProbe_bp\ttopSNP"),
+        "SMR result is missing the official header; got:\n{result_text}"
+    );
+    assert!(
+        result_text.contains("ILMN_1765304\t22\tPSITPTE22\t17099392\trs2000473"),
+        "SMR result is missing the chr22 Westra baseline row; got:\n{result_text}"
+    );
+    assert!(
+        result_text.contains("\t2.684279e-06\t"),
+        "SMR result changed from the recorded official p_SMR baseline; got:\n{result_text}"
+    );
+
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("SMR log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    for expected in ["Version 1.4.2 Linux", "Results of 5 probes"] {
+        assert!(
+            log_text.contains(expected),
+            "official SMR log is missing `{expected}`:\n{log_text}"
+        );
+    }
+
+    let cached_panels = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for panel in [SMR_WESTRA_EQTL_PANEL, SMR_REF_BINARY_PANEL] {
+        assert!(
+            cached_panels
+                .iter()
+                .any(|name| name.starts_with(&format!("{panel}@"))),
+            "SMR panel `{panel}` should be cached"
+        );
+    }
+}
+
+async fn run_gcta_dag(
+    ctx: &NodeCtx,
+    registry: &NodeRegistry,
+    kind: &str,
+    spec: serde_json::Value,
+    input_path: &Path,
+) -> Vec<dag_core::value::FileRef> {
+    let node = registry.build_node(kind, spec).unwrap();
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "gwas".into(),
+        Box::new(FileRefSourceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("tsv".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("gcta".into(), node).unwrap();
+    dag.add_edge("gwas", "gcta", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("gwas"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("gcta"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "official GCTA `{kind}` node failed: {report:#?}"
+    );
+    let outputs = dag.output("gcta").unwrap();
+    (0..u8::try_from(outputs.len()).expect("GCTA output port count fits u8"))
+        .map(|index: u8| outputs.get(&index).unwrap().as_file().unwrap().clone())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires the official GCTA image, the 1000G EUR and hg19 gene-list catalog panels, k3s PVCs, and kubeconfig"]
+async fn real_catalog_backed_official_gcta_summary_nodes_run_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    for panel in [GCTA_REF_BINARY_PANEL, GCTA_GENE_LIST_PANEL] {
+        assert!(
+            fixture.bundles.get(panel).is_some(),
+            "{panel} must be published before the GCTA baseline"
+        );
+    }
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(GctaContainerNodeFactory::cojo_select(
+        Arc::clone(&runtime),
+        Arc::clone(&panel_cache),
+    )));
+    registry.register(Box::new(GctaContainerNodeFactory::sblup(
+        Arc::clone(&runtime),
+        Arc::clone(&panel_cache),
+    )));
+    registry.register(Box::new(GctaContainerNodeFactory::fastbat(
+        Arc::clone(&runtime),
+        Arc::clone(&panel_cache),
+    )));
+    registry.register(Box::new(GctaContainerNodeFactory::acat(
+        Arc::clone(&runtime),
+        Arc::clone(&panel_cache),
+    )));
+
+    let ma =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/gcta/fixtures/chr22.ma");
+    let fastgwa = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../containers/gcta/fixtures/chr22.fastGWA");
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+
+    let outputs = run_gcta_dag(
+        &fixture.ctx,
+        &registry,
+        GCTA_COJO_SELECT_CONTAINER_KIND,
+        serde_json::json!({"chr": 22, "cojo_p": 0.05}),
+        &ma,
+    )
+    .await;
+    let jma = read_published_text(storage, &outputs[0]).await;
+    let cojo_log = read_published_text(storage, &outputs[3]).await;
+    assert!(outputs[0].path.ends_with("/gcta_cojo.jma.cojo"));
+    assert!(outputs[1].path.ends_with("/gcta_cojo.ldr.cojo"));
+    assert!(outputs[2].path.ends_with("/gcta_cojo.cma.cojo"));
+    assert!(outputs[3].path.ends_with("/gcta_cojo.log"));
+    assert!(
+        jma.contains("rs150627359\t16940793\tT"),
+        "GCTA-COJO chr22 baseline changed:\n{jma}"
+    );
+    assert!(cojo_log.contains("version v1.95.3 Linux"));
+    assert!(cojo_log.contains("Finally, 3 associated SNPs are selected"));
+
+    let outputs = run_gcta_dag(
+        &fixture.ctx,
+        &registry,
+        GCTA_SBLUP_CONTAINER_KIND,
+        serde_json::json!({"chr": 22, "lambda": 1.33e6}),
+        &ma,
+    )
+    .await;
+    let effects = read_published_text(storage, &outputs[0]).await;
+    let sblup_log = read_published_text(storage, &outputs[1]).await;
+    assert!(outputs[0].path.ends_with("/gcta_sblup.sblup.cojo"));
+    assert!(outputs[1].path.ends_with("/gcta_sblup.log"));
+    assert!(
+        effects.starts_with("rs3949130\tA\t-8.62939\t-0.201231"),
+        "GCTA-SBLUP chr22 baseline changed:\n{effects}"
+    );
+    assert!(sblup_log.contains("Saving the joint analysis result of 199 SNPs"));
+
+    let outputs = run_gcta_dag(
+        &fixture.ctx,
+        &registry,
+        GCTA_FASTBAT_CONTAINER_KIND,
+        serde_json::json!({"chr": 22}),
+        &ma,
+    )
+    .await;
+    let genes = read_published_text(storage, &outputs[0]).await;
+    let fastbat_log = read_published_text(storage, &outputs[1]).await;
+    assert!(outputs[0].path.ends_with("/gcta_fastbat.gene.fastbat"));
+    assert!(outputs[1].path.ends_with("/gcta_fastbat.log"));
+    assert!(
+        genes.contains("CCT8L2\t22\t17071647\t17073700\t31"),
+        "GCTA-fastBAT chr22 baseline changed:\n{genes}"
+    );
+    assert!(fastbat_log.contains("4 genes have been mapped to SNP data"));
+
+    let outputs = run_gcta_dag(
+        &fixture.ctx,
+        &registry,
+        GCTA_ACAT_CONTAINER_KIND,
+        serde_json::json!({"max_maf": 0.05, "min_mac": 1}),
+        &fastgwa,
+    )
+    .await;
+    let acat = read_published_text(storage, &outputs[0]).await;
+    let acat_log = read_published_text(storage, &outputs[1]).await;
+    assert!(outputs[0].path.ends_with("/gcta_acat.acat"));
+    assert!(outputs[1].path.ends_with("/gcta_acat.log"));
+    assert!(
+        acat.contains("22\tTPTEP1\t17082800\t17129720\t2"),
+        "GCTA ACAT-V chr22 baseline changed:\n{acat}"
+    );
+    assert!(acat_log.contains("--acat"));
+
+    let cached_panels = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for panel in [GCTA_REF_BINARY_PANEL, GCTA_GENE_LIST_PANEL] {
+        assert!(
+            cached_panels
+                .iter()
+                .any(|name| name.starts_with(&format!("{panel}@"))),
+            "GCTA panel `{panel}` should be cached"
+        );
+    }
 }
 
 #[tokio::test]

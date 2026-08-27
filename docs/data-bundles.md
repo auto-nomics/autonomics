@@ -56,3 +56,8 @@ For `ldsc_h2_container`, the required current catalog IDs are:
 
 - `ldsc.ref_ld.1000g_eur.basic`
 - `ldsc.w_ld.1000g_eur_hm3_no_mhc`
+
+For the GCTA summary-statistics nodes, the required current catalog IDs are:
+
+- `plink.ref.1000g_eur.binary`
+- `gcta.gene_list.hg19`

@@ -43,6 +43,14 @@ fn catalog() -> DataBundleCatalog {
             nodes_io::mixer_container::MIXER_G1000_EUR_PANEL,
             "/catalog/mixer-g1000-eur",
         ),
+        catalog_panel(
+            nodes_io::gcta_container::GCTA_REF_BINARY_PANEL,
+            "/catalog/gcta-plink-ref",
+        ),
+        catalog_panel(
+            nodes_io::gcta_container::GCTA_GENE_LIST_PANEL,
+            "/catalog/gcta-gene-list",
+        ),
         bundle(
             nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
             "/bundles/ldsc/1000g.parquet",
@@ -188,6 +196,19 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
         ),
         ("susie_rss_container", serde_json::json!({})),
+        (
+            "gcta_cojo_select_container",
+            serde_json::json!({"chr": 22, "cojo_p": 0.05}),
+        ),
+        (
+            "gcta_sblup_container",
+            serde_json::json!({"chr": 22, "lambda": 1.33e6}),
+        ),
+        ("gcta_fastbat_container", serde_json::json!({"chr": 22})),
+        (
+            "gcta_acat_container",
+            serde_json::json!({"max_maf": 0.05, "min_mac": 1}),
+        ),
         (
             "hdl_l",
             serde_json::json!({
