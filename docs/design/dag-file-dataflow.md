@@ -56,7 +56,7 @@ existing file -- file_ref_source --> File -- container_command --> File
 ## Running container commands
 
 The `container_command` node runs a file-to-file external command in an
-ephemeral k3s Job. Object storage through the runtime VFS is authoritative;
+ephemeral OCI container. Object storage through the runtime VFS is authoritative;
 the Job sees a workspace PVC subPath and immutable read-only panel mounts.
 
 ```json

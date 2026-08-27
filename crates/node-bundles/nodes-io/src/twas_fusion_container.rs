@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const TWAS_FUSION_CONTAINER_KIND: &str = "twas_fusion_container";
 pub const FUSION_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/fusion@sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf";
@@ -106,12 +106,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct TwasFusionContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl TwasFusionContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -279,7 +279,7 @@ impl NodeFactory for TwasFusionContainerNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Runs the official FUSION TWAS FUSION.assoc_test.R script in an \
-        ephemeral k3s Job. Input is one whitespace-delimited GWAS sumstats \
+        ephemeral OCI container. Input is one whitespace-delimited GWAS sumstats \
         File with SNP, A1, A2, and Z; produce it with sink_file using \
         format=\"tsv\". The node mounts the cataloged GTEx v8 weight \
         archives and 1000G EUR LDREF, extracts the selected tissue for one \

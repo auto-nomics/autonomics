@@ -74,8 +74,16 @@ pub struct PanelCache {
 
 impl Default for PanelCache {
     fn default() -> Self {
-        let config = crate::K3sConfig::default();
-        Self::new(config.panel_cache_root, config.panel_pvc_prefix)
+        match crate::ContainerBackend::from_env().unwrap_or(crate::ContainerBackend::Podman) {
+            crate::ContainerBackend::K3s => {
+                let config = crate::K3sConfig::default();
+                Self::new(config.panel_cache_root, config.panel_pvc_prefix)
+            }
+            crate::ContainerBackend::Podman => {
+                let config = crate::PodmanConfig::default();
+                Self::new(config.panel_cache_root, "")
+            }
+        }
     }
 }
 

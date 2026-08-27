@@ -20,8 +20,12 @@ use kube::api::{Api, DeleteParams, ListParams, LogParams, PostParams};
 use kube::{Client, Config, config::KubeConfigOptions};
 use tokio::sync::OnceCell;
 
+use crate::config::default_panel_cache_root;
 use crate::error::ContainerRuntimeError;
-use crate::runtime::{ContainerRuntime, MAX_CAPTURED_OUTPUT_BYTES};
+use crate::runtime::{
+    ContainerRuntime, request_user_ids, truncate_captured_bytes, validate_run_request,
+    workspace_ref,
+};
 use crate::types::{ContainerRunRequest, ContainerRunResult, WorkspaceRef};
 
 const JOB_LABEL: &str = "autonomics.io/job-name";
@@ -65,10 +69,7 @@ impl K3sConfig {
                 Path::new(DEFAULT_K3S_STATE_ROOT).join("workspace"),
             ),
             panel_pvc: env_value("AUTONOMICS_K3S_PANEL_PVC", "autonomics-panels"),
-            panel_cache_root: env_path(
-                "AUTONOMICS_PANEL_CACHE_ROOT",
-                Path::new(DEFAULT_K3S_STATE_ROOT).join("panels"),
-            ),
+            panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
             panel_pvc_prefix: std::env::var("AUTONOMICS_K3S_PANEL_PVC_PREFIX").unwrap_or_default(),
             service_account: std::env::var_os("AUTONOMICS_K3S_SERVICE_ACCOUNT")
                 .filter(|value| !value.is_empty())
@@ -182,7 +183,7 @@ impl K3sRuntime {
             if let Some(name) = pod.metadata.name {
                 if let Ok(logs) = pods.logs(&name, &LogParams::default()).await {
                     if !logs.trim().is_empty() {
-                        return truncate_log(&logs);
+                        return truncate_captured_bytes(logs.as_bytes());
                     }
                 }
             }
@@ -203,7 +204,7 @@ impl ContainerRuntime for K3sRuntime {
         &self,
         request: ContainerRunRequest,
     ) -> Result<ContainerRunResult, ContainerRuntimeError> {
-        validate_request(&request)?;
+        validate_run_request(&request)?;
         let job = build_job(&request, &self.config);
         let jobs = self.job_api().await?;
         jobs.create(&PostParams::default(), &job).await?;
@@ -332,7 +333,7 @@ pub(crate) fn build_job(request: &ContainerRunRequest, config: &K3sConfig) -> Jo
         });
     }
 
-    let (uid, gid) = user_ids(request);
+    let (uid, gid) = request_user_ids(request);
     let resources = resource_requirements(request);
     let container = Container {
         name: "command".into(),
@@ -475,30 +476,6 @@ fn quantity(value: &str) -> k8s_openapi::apimachinery::pkg::api::resource::Quant
     k8s_openapi::apimachinery::pkg::api::resource::Quantity(value.to_string())
 }
 
-fn user_ids(request: &ContainerRunRequest) -> (i64, i64) {
-    #[cfg(unix)]
-    let default = (unsafe { libc::getuid() as i64 }, unsafe {
-        libc::getgid() as i64
-    });
-    #[cfg(not(unix))]
-    let default = (1000, 1000);
-    let default_gid = default.1;
-
-    request
-        .user
-        .as_deref()
-        .and_then(|user| {
-            let mut parts = user.split(':');
-            let uid = parts.next()?.parse::<i64>().ok()?;
-            let gid = parts
-                .next()
-                .and_then(|gid| gid.parse::<i64>().ok())
-                .unwrap_or(default_gid);
-            Some((uid, gid))
-        })
-        .unwrap_or(default)
-}
-
 fn failed_condition_message(conditions: Option<&[JobCondition]>, logs: &str) -> String {
     let condition = conditions
         .and_then(|conditions| {
@@ -519,124 +496,6 @@ fn failed_condition_message(conditions: Option<&[JobCondition]>, logs: &str) -> 
     } else {
         format!("{condition}\n{logs}")
     }
-}
-
-fn truncate_log(logs: &str) -> String {
-    if logs.len() <= MAX_CAPTURED_OUTPUT_BYTES {
-        logs.to_string()
-    } else {
-        format!(
-            "{}\n[output truncated at {MAX_CAPTURED_OUTPUT_BYTES} bytes]",
-            &logs[..MAX_CAPTURED_OUTPUT_BYTES]
-        )
-    }
-}
-
-pub(crate) fn validate_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
-    if request.image.trim().is_empty() {
-        return Err(ContainerRuntimeError::Invalid(
-            "`image` cannot be empty".into(),
-        ));
-    }
-    if request.command.is_empty() {
-        return Err(ContainerRuntimeError::Invalid(
-            "`command` cannot be empty".into(),
-        ));
-    }
-    if request.timeout_secs == 0 {
-        return Err(ContainerRuntimeError::Invalid(
-            "`timeout_secs` must be greater than zero".into(),
-        ));
-    }
-    if !request.workspace.host_path.is_absolute()
-        || !request.workspace.host_path.is_dir()
-        || !Path::new(&request.workspace.container_workdir).is_absolute()
-        || request.workspace.pvc_sub_path.contains("..")
-        || request.workspace.pvc_sub_path.starts_with('/')
-    {
-        return Err(ContainerRuntimeError::Invalid(
-            "workspace must be an existing directory mapped to a safe PVC subPath".into(),
-        ));
-    }
-    if !matches!(
-        request.network.as_str(),
-        "isolated" | "none" | "cluster" | "egress"
-    ) {
-        return Err(ContainerRuntimeError::Invalid(format!(
-            "unsupported network profile `{}`",
-            request.network
-        )));
-    }
-    if let Some(cpus) = request.cpus
-        && cpus <= 0.0
-    {
-        return Err(ContainerRuntimeError::Invalid(
-            "`cpus` must be positive".into(),
-        ));
-    }
-    if let Some(pids_limit) = request.pids_limit
-        && pids_limit <= 0
-    {
-        return Err(ContainerRuntimeError::Invalid(
-            "`pids_limit` must be positive".into(),
-        ));
-    }
-    if let Some(user) = &request.user {
-        let mut parts = user.split(':');
-        let uid_valid = parts.next().is_some_and(|uid| uid.parse::<i64>().is_ok());
-        let gid = parts.next();
-        let gid_valid = match gid {
-            Some(gid) => gid.parse::<i64>().is_ok(),
-            None => true,
-        };
-        if !uid_valid || !gid_valid || parts.next().is_some() {
-            return Err(ContainerRuntimeError::Invalid(format!(
-                "`user` must be `uid:gid` or `uid`, got `{user}`"
-            )));
-        }
-    }
-    for panel in &request.panels {
-        panel
-            .host_path
-            .file_name()
-            .ok_or_else(|| ContainerRuntimeError::Invalid("invalid panel cache path".into()))?;
-        if panel.pvc_sub_path.contains("..") || panel.pvc_sub_path.starts_with('/') {
-            return Err(ContainerRuntimeError::Invalid(format!(
-                "panel `{}` has an unsafe PVC subPath",
-                panel.id
-            )));
-        }
-    }
-    Ok(())
-}
-
-pub fn workspace_ref(
-    workspace_root: &Path,
-    host_path: &Path,
-    container_workdir: &str,
-) -> Result<WorkspaceRef, ContainerRuntimeError> {
-    let relative = host_path.strip_prefix(workspace_root).map_err(|_| {
-        ContainerRuntimeError::Invalid(format!(
-            "workspace `{}` is outside k3s workspace root `{}`",
-            host_path.display(),
-            workspace_root.display()
-        ))
-    })?;
-    let pvc_sub_path = relative
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-    if pvc_sub_path.is_empty() || pvc_sub_path.contains("..") || pvc_sub_path.starts_with('/') {
-        return Err(ContainerRuntimeError::Invalid(
-            "workspace cannot map to the PVC root".into(),
-        ));
-    }
-    Ok(WorkspaceRef {
-        host_path: host_path.to_path_buf(),
-        pvc_sub_path,
-        container_workdir: container_workdir.to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -744,7 +603,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         valid.workspace.host_path = workspace.path().to_path_buf();
         valid.workspace.pvc_sub_path = "run".into();
-        assert!(validate_request(&valid).is_ok());
+        assert!(validate_run_request(&valid).is_ok());
         let job = build_job(&request("none"), &config());
         let labels = job.metadata.labels.unwrap();
         assert_eq!(

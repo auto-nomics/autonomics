@@ -20,7 +20,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const COLOC_ABF_CONTAINER_KIND: &str = "coloc_abf_container";
 pub const COLOC_ORIGINAL_IMAGE: &str = "localhost/atc/coloc:5.2.3";
@@ -134,7 +134,7 @@ pub struct ColocAbfContainerSpec {
     /// VFS prefix used to publish declared outputs.
     #[serde(default = "default_artifact_prefix")]
     pub artifact_prefix: String,
-    /// Wall-clock timeout for the k3s Job, in seconds.
+    /// Wall-clock timeout for the container, in seconds.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -160,12 +160,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct ColocAbfContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl ColocAbfContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -384,7 +384,7 @@ fn port_layout() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
-const DESC: &str = "Runs official coloc.abf in an ephemeral k3s Job.";
+const DESC: &str = "Runs official coloc.abf in an ephemeral OCI container.";
 
 const DOC: &str = "Runs the official R `coloc` package (Wallace, CRAN 5.2.3). \
 The input is one tab-separated File containing two GWAS summary-statistic \

@@ -130,11 +130,12 @@ impl SharedInfra {
             &config.data_dir,
             vfs.clone(),
         ));
-        let container_execution = Arc::new(ContainerExecutionInfra::from_env());
+        let container_execution =
+            Arc::new(ContainerExecutionInfra::try_from_env().map_err(crate::error::Error::Other)?);
         tracing::info!(
-            namespace = %container_execution.config.namespace,
-            workspace_root = %container_execution.config.workspace_root.display(),
-            panel_cache_root = %container_execution.config.panel_cache_root.display(),
+            backend = container_execution.config.backend().as_str(),
+            workspace_root = %container_execution.config.workspace_root().display(),
+            panel_cache_root = %container_execution.config.panel_cache_root().display(),
             "SharedInfra::open: container execution infrastructure ready"
         );
         tracing::info!(

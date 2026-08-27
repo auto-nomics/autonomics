@@ -19,7 +19,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const GCTA_COJO_SELECT_CONTAINER_KIND: &str = "gcta_cojo_select_container";
 pub const GCTA_SBLUP_CONTAINER_KIND: &str = "gcta_sblup_container";
@@ -503,28 +503,32 @@ fn gene_binding() -> DataBundleBinding {
 
 pub struct GctaContainerNodeFactory {
     analysis: GctaAnalysis,
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl GctaContainerNodeFactory {
-    pub fn cojo_select(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn cojo_select(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::CojoSelect, runtime, panel_cache)
     }
 
-    pub fn sblup(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn sblup(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Sblup, runtime, panel_cache)
     }
 
-    pub fn fastbat(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn fastbat(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Fastbat, runtime, panel_cache)
     }
 
-    pub fn acat(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn acat(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Acat, runtime, panel_cache)
     }
 
-    fn new(analysis: GctaAnalysis, runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    fn new(
+        analysis: GctaAnalysis,
+        runtime: Arc<dyn ContainerRuntime>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
         Self {
             analysis,
             runtime,

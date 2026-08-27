@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MRPRESSO_CONTAINER_KIND: &str = "mrpresso_container";
 pub const MRPRESSO_ORIGINAL_IMAGE: &str = "localhost/atc/mrpresso:1.0.0";
@@ -62,12 +62,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct MrpressoContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl MrpressoContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -235,7 +235,7 @@ impl NodeFactory for MrpressoContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs official MR-PRESSO in an ephemeral k3s Job."
+        "Runs official MR-PRESSO in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {

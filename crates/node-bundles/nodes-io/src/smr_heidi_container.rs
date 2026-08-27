@@ -20,7 +20,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const SMR_HEIDI_CONTAINER_KIND: &str = "smr_heidi_container";
 pub const SMR_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/smr@sha256:40c0db3c71eda506913c376ab939027fff8ce8eb55c262fd1e5da2fe4c351b6d";
@@ -87,7 +87,7 @@ pub struct SmrHeidiContainerSpec {
     /// VFS prefix used to publish immutable SMR artifacts.
     #[serde(default = "default_artifact_prefix")]
     pub artifact_prefix: String,
-    /// Wall-clock timeout for the k3s Job.
+    /// Wall-clock timeout for the container.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -153,12 +153,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct SmrHeidiContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl SmrHeidiContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,

@@ -22,7 +22,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const SUSIE_RSS_CONTAINER_KIND: &str = "susie_rss_container";
 pub const SUSIE_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/susie@sha256:8a72a443461add5c94c4907f9a1d6106b989850e93217a95587d9095542febe8";
@@ -41,7 +41,7 @@ const DEFAULT_Z_METHOD: &str = "wald";
 const DEFAULT_R2_MIN: f64 = 0.0;
 const DEFAULT_CHECK_NULL_THRESHOLD: f64 = 0.0;
 const DEFAULT_MAX_ITER: usize = 100;
-const FACTORY_DOC: &str = r#"Runs the official susieR 0.16.6 susie_rss(z, R, n, ...) implementation in an ephemeral k3s Job.
+const FACTORY_DOC: &str = r#"Runs the official susieR 0.16.6 susie_rss(z, R, n, ...) implementation in an ephemeral OCI container.
 
 Input contract:
 - One File input, strictly tab-separated, with columns snp, chrom, z and optional n, a1, a2.
@@ -152,12 +152,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct SusieRssContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl SusieRssContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,

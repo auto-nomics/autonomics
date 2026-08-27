@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MIXER_FIT1_CONTAINER_KIND: &str = "mixer_fit1_container";
 pub const MIXER_FIT2_CONTAINER_KIND: &str = "mixer_fit2_container";
@@ -305,7 +305,7 @@ fn panel_bindings() -> Vec<DataBundleBinding> {
 }
 
 struct MixerInfra {
-    runtime: Arc<K3sRuntime>,
+    runtime: Arc<dyn ContainerRuntime>,
     panel_cache: Arc<PanelCache>,
 }
 
@@ -323,7 +323,7 @@ pub struct MixerContainerNode {
 }
 
 impl MixerFit1ContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             infra: MixerInfra {
                 runtime,
@@ -334,7 +334,7 @@ impl MixerFit1ContainerNodeFactory {
 }
 
 impl MixerFit2ContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             infra: MixerInfra {
                 runtime,
@@ -418,7 +418,7 @@ impl NodeFactory for MixerFit1ContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs official gsa-mixer fit1 in an ephemeral k3s Job."
+        "Runs official gsa-mixer fit1 in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {
@@ -473,7 +473,7 @@ impl NodeFactory for MixerFit2ContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs official gsa-mixer fit2 in an ephemeral k3s Job."
+        "Runs official gsa-mixer fit2 in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {

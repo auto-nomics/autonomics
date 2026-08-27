@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MVMR_CONTAINER_KIND: &str = "mvmr_container";
 pub const MVMR_ORIGINAL_IMAGE: &str = "localhost/atc/mvmr:0.4.8";
@@ -58,12 +58,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct MvmrContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl MvmrContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -277,7 +277,7 @@ impl NodeFactory for MvmrContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs official MVMR in an ephemeral k3s Job."
+        "Runs official MVMR in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {

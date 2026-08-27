@@ -23,7 +23,7 @@ fn execution_failed(error: ContainerRuntimeError) -> ToolError {
 
 #[tool(
     name = "container_workspace_create",
-    description = "Create or attach to a persistent k3s development workspace. The source workspace survives Pod deletion."
+    description = "Create or attach to a persistent k3s development workspace. The source workspace survives Pod deletion. This tool requires the k3s backend."
 )]
 pub struct ContainerWorkspaceCreateInput {
     #[desc = "Stable workspace id: 1-48 lowercase letters, digits, or dashes"]
@@ -110,14 +110,24 @@ pub struct ContainerImageBuildTool {
     infra: Arc<ContainerExecutionInfra>,
 }
 
+fn k3s_backend(
+    infra: &ContainerExecutionInfra,
+) -> Result<&container_runtime::K3sRuntime, ToolError> {
+    infra
+        .k3s
+        .as_deref()
+        .ok_or_else(|| ToolError::ValidationFailed {
+            message: "persistent development workspaces require the k3s backend".into(),
+        })
+}
+
 #[async_trait]
 impl ToolFunction for ContainerWorkspaceCreateTool {
     type Input = ContainerWorkspaceCreateInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let status = self
-            .infra
-            .k3s
+        let runtime = k3s_backend(&self.infra)?;
+        let status = runtime
             .create_dev_workspace(DevWorkspaceCreate {
                 id: input.workspace_id,
                 image: input.image.unwrap_or_else(|| DEFAULT_DEV_IMAGE.to_string()),
@@ -151,9 +161,8 @@ impl ToolFunction for ContainerExecTool {
         } else {
             return Err("one of argv or command is required".into());
         };
-        let result = self
-            .infra
-            .k3s
+        let runtime = k3s_backend(&self.infra)?;
+        let result = runtime
             .exec_in_dev_workspace(DevExecRequest {
                 workspace_id: input.workspace_id,
                 command,
@@ -173,15 +182,13 @@ impl ToolFunction for ContainerWorkspaceStatusTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let statuses = if let Some(id) = input.workspace_id {
             vec![
-                self.infra
-                    .k3s
+                k3s_backend(&self.infra)?
                     .dev_workspace_status(&id)
                     .await
                     .map_err(execution_failed)?,
             ]
         } else {
-            self.infra
-                .k3s
+            k3s_backend(&self.infra)?
                 .list_dev_workspaces()
                 .await
                 .map_err(execution_failed)?
@@ -195,8 +202,7 @@ impl ToolFunction for ContainerWorkspaceStopTool {
     type Input = ContainerWorkspaceStopInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        self.infra
-            .k3s
+        k3s_backend(&self.infra)?
             .stop_dev_workspace(&input.workspace_id)
             .await
             .map_err(execution_failed)?;
@@ -213,13 +219,12 @@ impl ToolFunction for ContainerImageBuildTool {
     type Input = ContainerImageBuildInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let result = self
-            .infra
-            .k3s
+        let runtime = k3s_backend(&self.infra)?;
+        let result = runtime
             .build_dev_workspace_image(DevImageBuildRequest {
                 workspace_id: input.workspace_id,
                 base_image: input.base_image,
-                builder_image: self.infra.config.image_builder.clone(),
+                builder_image: runtime.config().image_builder.clone(),
                 timeout_secs: input.timeout_secs.unwrap_or(DEFAULT_BUILD_TIMEOUT_SECS),
             })
             .await

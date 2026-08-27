@@ -23,7 +23,7 @@ use dag_core::{NodeCtx, NodeFactory};
 use container_runtime::{
     CachedPanel, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, K3sConfig, K3sRuntime, PanelCache, PanelRef,
-    PullPolicy, unique_container_name, workspace_ref,
+    PodmanConfig, PodmanRuntime, PullPolicy, unique_container_name, workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -234,7 +234,7 @@ impl ContainerCommandNode {
         };
         std::fs::create_dir_all(workspace_root).map_err(|e| {
             ContainerCommandError::Invalid(format!(
-                "cannot create k3s workspace root `{}`: {e}",
+                "cannot create container workspace root `{}`: {e}",
                 workspace_root.display()
             ))
         })?;
@@ -258,7 +258,7 @@ impl ContainerCommandNode {
         }
         if !workdir.starts_with(workspace_root) {
             return Err(ContainerCommandError::Invalid(format!(
-                "workdir `{}` is outside k3s workspace root `{}`",
+                "workdir `{}` is outside container workspace root `{}`",
                 workdir.display(),
                 workspace_root.display()
             )));
@@ -944,10 +944,19 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-#[derive(Default)]
 pub struct ContainerCommandNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
+}
+
+impl Default for ContainerCommandNodeFactory {
+    fn default() -> Self {
+        let infra = container_runtime::ContainerExecutionInfra::from_env();
+        Self {
+            runtime: infra.runtime,
+            panel_cache: infra.panel_cache,
+        }
+    }
 }
 
 impl NodeFactory for ContainerCommandNodeFactory {
@@ -956,7 +965,7 @@ impl NodeFactory for ContainerCommandNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs a file-to-file external command in an ephemeral k3s Job."
+        "Runs a file-to-file external command in an ephemeral OCI container."
     }
 
     fn data_bundles_for_spec(
@@ -976,7 +985,7 @@ impl NodeFactory for ContainerCommandNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Runs an OCI image without a shell. File inputs are staged into a private \
-        workspace PVC subPath mounted at `/work`; input paths are exposed as \
+        workspace directory mounted at `/work`; input paths are exposed as \
         `$input0`, `$input1`, `AUTONOMICS_INPUT0`, and so on. Outputs must be \
         safe paths relative to `/work` and are exposed as `$output0`, \
         `AUTONOMICS_OUTPUT0`, and so on. The container root filesystem is \
@@ -1543,6 +1552,59 @@ mod tests {
             std::fs::read_to_string(dir.join("result.txt")).unwrap(),
             "rootless-container"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a working rootless Podman runtime and may pull an OCI image"]
+    async fn real_podman_copies_input_to_declared_output() {
+        let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
+            .unwrap_or_else(|_| "docker.io/library/debian:bookworm-slim".into());
+        let env = test_env();
+        let state = tempfile::tempdir().unwrap();
+        let workspace_root = state.path().join("workspace");
+        let dir = workspace_root.join("podman-it");
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = env.workspace.path().join("input.txt");
+        std::fs::write(&input, "podman-container-command").unwrap();
+        let mut node_spec = spec(
+            &image,
+            vec![
+                "cp".into(),
+                "--".into(),
+                "$input0".into(),
+                "$output0".into(),
+            ],
+            "result.txt",
+        );
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        node_spec.timeout_secs = 120;
+        let runtime = PodmanRuntime::new(PodmanConfig {
+            program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
+            workspace_root: workspace_root.clone(),
+            panel_cache_root: state.path().join("panels"),
+        });
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            Arc::new(runtime),
+            Arc::new(PanelCache::new(state.path().join("panels"), "")),
+        )
+        .unwrap();
+
+        let outputs = node
+            .execute(
+                &env.ctx,
+                &[input_file(&input)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("result.txt")).unwrap(),
+            "podman-container-command"
+        );
+        let file = outputs.get(&0).unwrap().as_file().unwrap();
+        assert!(file.path.starts_with("vfs:///artifacts/test/"));
     }
 
     #[derive(Clone)]

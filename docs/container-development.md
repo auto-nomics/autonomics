@@ -2,8 +2,9 @@
 
 ## Model
 
-Container development uses the same k3s data plane as `container_command`, but
-replaces the ephemeral Job with a long-running Pod:
+Container development currently uses the k3s data plane and replaces the
+ephemeral `container_command` container with a long-running Pod. It is
+unavailable when `AUTONOMICS_CONTAINER_BACKEND=podman`:
 
 ```text
 create workspace  ->  autonomics-dev-<id> Pod + workspace PVC subPath

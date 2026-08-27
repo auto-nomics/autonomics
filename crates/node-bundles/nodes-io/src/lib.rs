@@ -50,111 +50,111 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(source_file::FileSourceNodeFactory {}));
         registry.register(Box::new(sink_file::FileSinkNodeFactory {}));
         registry.register(Box::new(container_command::ContainerCommandNodeFactory {
-            runtime: Arc::clone(&self.container_execution.k3s),
+            runtime: Arc::clone(&self.container_execution.runtime),
             panel_cache: Arc::clone(&self.container_execution.panel_cache),
         }));
         registry.register(Box::new(
             ldsc_h2_container::LdscH2ContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             ldsc_munge_container::LdscMungeContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             ldsc_rg_container::LdscRgContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             magma_annotate_container::MagmaAnnotateContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             mrpresso_container::MrpressoContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             coloc_abf_container::ColocAbfContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             hyprcoloc_container::HyPrColocContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
-            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(mvmr_container::MvmrContainerNodeFactory::new(
-            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(
             plink2_clump_container::Plink2ClumpContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             mixer_container::MixerFit1ContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             mixer_container::MixerFit2ContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             susie_rss_container::SusieRssContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             twas_fusion_container::TwasFusionContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             smr_heidi_container::SmrHeidiContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(
             gcta_container::GctaContainerNodeFactory::cojo_select(
-                Arc::clone(&self.container_execution.k3s),
+                Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
         registry.register(Box::new(gcta_container::GctaContainerNodeFactory::sblup(
-            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(gcta_container::GctaContainerNodeFactory::fastbat(
-            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(gcta_container::GctaContainerNodeFactory::acat(
-            Arc::clone(&self.container_execution.k3s),
+            Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(

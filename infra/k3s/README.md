@@ -7,10 +7,18 @@ specs never request `hostPath`; they mount the two PVCs only.
 ## Install
 
 ```bash
-sudo mkdir -p /var/lib/autonomics/k3s/{workspace,panels,registry}
+mkdir -p "$HOME/.autonomics/panels"
+sudo mkdir -p /var/lib/autonomics/k3s/{workspace,registry}
 kubectl apply -f infra/k3s/manifests.yaml
 sudo chown -R "$(id -u):$(id -g)" /var/lib/autonomics/k3s
 ```
+
+The committed manifest uses the current single-node user path
+`/home/wjx/.autonomics/panels`. Replace that PV path before applying it for
+another Linux user. If the old `/var/lib/autonomics/k3s/panels` baseline was
+already applied, recreate the panel PV/PVC rather than trying to patch its
+immutable local path. During that transition, an old path may remain as a
+compatibility symlink to `$HOME/.autonomics/panels`.
 
 The manifest also deploys a single-node OCI registry at NodePort `30500`. Its
 data live under `/var/lib/autonomics/k3s/registry`. Configure containerd's
@@ -33,7 +41,7 @@ export AUTONOMICS_K3S_NAMESPACE=autonomics
 export AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 export AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 export AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+export AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
 export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 ```
 
@@ -70,7 +78,7 @@ Each panel is an immutable object-store prefix with this layout:
 ```
 
 `manifest.json` lists every file with its size and SHA-256 digest. The runtime
-downloads a panel to `/var/lib/autonomics/k3s/panels/<id>@<digest>`, verifies
+downloads a panel to `$HOME/.autonomics/panels/<id>@<digest>`, verifies
 all checksums, and atomically publishes the directory. A failed or partial
 download is never mounted by a Job.
 
@@ -94,7 +102,7 @@ export AUTONOMICS_K3S_NAMESPACE=autonomics
 export AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 export AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 export AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-export AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+export AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
 export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 export AUTONOMICS_CONTAINER_IT_IMAGE=docker.io/library/debian:bookworm-slim
 

@@ -16,7 +16,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE, LDSC_REF_LD_PANEL, LDSC_W_LD_PANEL};
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LDSC_RG_CONTAINER_KIND: &str = "ldsc_rg_container";
 
@@ -53,12 +53,12 @@ fn default_n_blocks() -> usize {
 }
 
 pub struct LdscRgContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl LdscRgContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -188,7 +188,7 @@ impl NodeFactory for LdscRgContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs original LDSC genetic correlation in an ephemeral k3s Job."
+        "Runs original LDSC genetic correlation in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {

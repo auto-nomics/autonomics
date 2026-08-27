@@ -2,7 +2,7 @@
 
 `susie_rss_container` performs Bayesian fine-mapping from GWAS summary
 statistics with the official `susieR` R package. The registered node runs
-`susieR` 0.16.6 in an ephemeral k3s Job and mounts the cataloged
+`susieR` 0.16.6 in an ephemeral OCI container and mounts the cataloged
 `mixer.g1000_eur` signed-LD panel.
 
 ## Runtime And Reference

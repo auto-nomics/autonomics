@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const HYPRCOLOC_CONTAINER_KIND: &str = "hyprcoloc_container";
 pub const HYPRCOLOC_ORIGINAL_IMAGE: &str = "localhost/atc/hyprcoloc:0.0.2";
@@ -98,7 +98,7 @@ pub struct HyPrColocContainerSpec {
     /// VFS prefix used to publish declared outputs.
     #[serde(default = "default_artifact_prefix")]
     pub artifact_prefix: String,
-    /// Wall-clock timeout for the k3s Job, in seconds.
+    /// Wall-clock timeout for the container, in seconds.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -132,12 +132,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct HyPrColocContainerNodeFactory {
-    runtime: Arc<K3sRuntime>,
+    runtime: Arc<dyn ContainerRuntime>,
     panel_cache: Arc<PanelCache>,
 }
 
 impl HyPrColocContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -453,7 +453,7 @@ fn port_layout() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
-const DESC: &str = "Runs official HyPrColoc in an ephemeral k3s Job.";
+const DESC: &str = "Runs official HyPrColoc in an ephemeral OCI container.";
 
 const DOC: &str = "Runs official R `hyprcoloc` 0.0.2 (Foley and Staley). The \
 input is one SNP-aligned tab-separated File with beta and standard-error \

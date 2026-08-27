@@ -484,7 +484,7 @@ async fn real_k3s_container_receives_upstream_sink_file_output() {
         &run_root,
         format!("/artifacts/container-file-flow/real/{suffix}"),
     );
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root,
         k3s_config.panel_pvc_prefix,
@@ -617,7 +617,7 @@ async fn real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s() {
         .unwrap_or_else(|| {
             Path::new("/mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz").to_path_buf()
         });
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -686,7 +686,7 @@ async fn real_official_ldsc_munge_runs_in_k3s() {
     .unwrap();
     let (_mounted, ctx) = workspace_vfs(scratch.path());
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -845,7 +845,7 @@ async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
             Path::new("/mnt/data/magma/results/smoke_test.annotation.snp.loc").to_path_buf()
         });
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -967,7 +967,7 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
     assert!(zip_status.success(), "could not create the LAVA run bundle");
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1226,7 +1226,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
     ));
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1414,7 +1414,7 @@ async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
         });
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1517,7 +1517,7 @@ async fn real_published_mixer_fit2_stages_four_inputs_in_k3s() {
     let fixture_data = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../containers/mixer/fixtures/mixer-test-data");
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root,
         k3s_config.panel_pvc_prefix,
@@ -1631,7 +1631,7 @@ async fn real_catalog_backed_original_ldsc_rg_runs_in_k3s() {
         });
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1742,7 +1742,7 @@ async fn real_official_mrpresso_runs_in_k3s() {
 
     let (_mounted, ctx) = workspace_vfs(scratch.path());
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1835,7 +1835,7 @@ async fn real_official_mvmr_runs_in_k3s() {
 
     let (_mounted, ctx) = workspace_vfs(scratch.path());
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -1958,7 +1958,7 @@ async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
     );
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2086,7 +2086,7 @@ async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
     );
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2200,7 +2200,7 @@ async fn real_catalog_backed_official_lava_multireg_runs_in_k3s() {
     );
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2297,7 +2297,7 @@ async fn real_official_coloc_abf_runs_in_k3s() {
 
     let (_mounted, ctx) = workspace_vfs(scratch.path());
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2400,7 +2400,7 @@ async fn real_official_hyprcoloc_runs_in_k3s() {
 
     let (_mounted, ctx) = workspace_vfs(scratch.path());
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2508,7 +2508,7 @@ async fn real_catalog_backed_official_plink2_clump_runs_in_k3s() {
                 .to_path_buf()
         });
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2658,7 +2658,7 @@ async fn real_catalog_backed_official_susie_rss_runs_in_k3s() {
                 .to_path_buf()
         });
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2820,7 +2820,7 @@ async fn real_catalog_backed_official_fusion_twas_runs_in_k3s() {
     std::fs::write(&sumstats_path, input).unwrap();
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -2946,7 +2946,7 @@ async fn real_catalog_backed_official_smr_heidi_runs_in_k3s() {
                 .to_path_buf()
         });
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -3115,7 +3115,7 @@ async fn real_catalog_backed_official_gcta_summary_nodes_run_in_k3s() {
     }
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,
@@ -3282,7 +3282,7 @@ async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
     );
 
     let k3s_config = K3sConfig::from_env();
-    let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
         k3s_config.panel_cache_root.clone(),
         k3s_config.panel_pvc_prefix,

@@ -12,7 +12,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use crate::ldsc_h2_container::LDSC_ORIGINAL_IMAGE;
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LDSC_MUNGE_CONTAINER_KIND: &str = "ldsc_munge_container";
 
@@ -142,12 +142,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct LdscMungeContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl LdscMungeContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -421,7 +421,7 @@ impl NodeFactory for LdscMungeContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Munges raw GWAS sumstats with original LDSC in an ephemeral k3s Job."
+        "Munges raw GWAS sumstats with original LDSC in an ephemeral OCI container."
     }
 
     fn doc(&self) -> &'static str {

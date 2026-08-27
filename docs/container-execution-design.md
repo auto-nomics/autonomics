@@ -1,13 +1,17 @@
-# K3s Container Execution Design
+# Container Execution Design
 
 ## Goal
 
 `container_command` is the DAG engine's execution path for external
-bioinformatics tools. It runs one OCI image per node as a zero-retry Kubernetes
-Job, uses object storage as the authoritative panel and artifact source, and
-keeps a shared POSIX data plane for tools that require ordinary file access.
+bioinformatics tools. It runs one OCI image per node as a zero-retry ephemeral
+container, uses object storage as the authoritative panel and artifact source,
+and keeps a shared POSIX data plane for tools that require ordinary file
+access.
 
-There is intentionally one execution backend: k3s.
+There are two execution backends: k3s and Podman. Podman is the default for
+single-host, rootless-friendly execution. K3s supports multi-node scheduling
+through PVCs and NetworkPolicies and remains fully available by setting the
+backend explicitly.
 
 ## Data Contract
 
@@ -32,10 +36,10 @@ directory to `<id>@<digest>`. A failed or partial download is never mounted.
 
 ### WorkspaceRef
 
-Each node receives a unique subPath of the workspace PVC. It is mounted at
-`/work` and remains execution scratch, not long-term state. The control process
-must see the same PVC at `AUTONOMICS_K3S_WORKSPACE_ROOT` so it can stage inputs
-and inspect outputs before publication.
+Each node receives a unique workspace directory. It is mounted at `/work` and
+remains execution scratch, not long-term state. The control process and runtime
+must resolve the same workspace root: `AUTONOMICS_K3S_WORKSPACE_ROOT` for k3s
+or `AUTONOMICS_PODMAN_WORKSPACE_ROOT` for Podman.
 
 ### ArtifactRef
 
@@ -48,18 +52,18 @@ pending object followed by rename so consumers never observe a partial artifact.
 
 ```text
 container_command
-  1. resolve unique workspace PVC subPath
+  1. resolve a unique workspace path
   2. stage upstream File/Data values from VFS into /work/.autonomics/inputs
   3. materialize and verify each immutable panel
-  4. submit one batch/v1 Job
+  4. submit one ephemeral backend container
   5. wait for success, timeout, or terminal failure
-  6. read capped Pod logs
+  6. read capped container output
   7. verify all declared outputs exist
   8. stream outputs to VFS and compute fingerprints
   9. emit FileRef values on output ports
 ```
 
-## Job Policy
+## K3s Job Policy
 
 - `completions`, `parallelism`: 1
 - `backoffLimit`: 0
@@ -92,11 +96,21 @@ controller or kubelet-level `podPidsLimit` policy must enforce it.
 Container execution resources are process-level infrastructure. `SharedInfra`
 constructs one `ContainerExecutionInfra` from the environment, retains it in an
 `Arc`, and injects that same object into `DataEngineBuilder`. Every agent DAG
-session shares the resulting Kubernetes client and panel cache through the
-shared node registry.
+session shares the selected runtime client and panel cache through the shared
+node registry.
 
 The `nodes-io` plugin receives that injected object when its node registry is
 built; it does not independently construct a second backend.
+
+```text
+AUTONOMICS_CONTAINER_BACKEND=podman
+AUTONOMICS_PODMAN_PROGRAM=podman
+AUTONOMICS_PODMAN_WORKSPACE_ROOT=$HOME/.local/state/autonomics/podman/workspace
+AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
+```
+
+With `AUTONOMICS_CONTAINER_BACKEND=k3s`, these variables configure the shared
+cluster data plane:
 
 ```text
 AUTONOMICS_K3S_NAMESPACE=autonomics
@@ -104,7 +118,7 @@ AUTONOMICS_K3S_CONTEXT=
 AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
 AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-AUTONOMICS_PANEL_CACHE_ROOT=/var/lib/autonomics/k3s/panels
+AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
 AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 AUTONOMICS_K3S_SERVICE_ACCOUNT=
 AUTONOMICS_K3S_POLL_INTERVAL_MS=500
@@ -115,23 +129,48 @@ PVCs plus the isolated and cluster NetworkPolicies. For multiple nodes, replace
 those PVs with an RWX distributed filesystem or CSI driver; the runtime and DAG
 contract remain unchanged.
 
+## Podman Backend
+
+Set `AUTONOMICS_CONTAINER_BACKEND=podman` to execute one-shot
+`container_command` workloads through a local Podman runtime. The backend:
+
+- binds the workspace directory read-write at `/work`;
+- binds verified panel-cache directories read-only;
+- creates a fresh `/tmp` tmpfs;
+- applies `--read-only`, `no-new-privileges`, CPU, memory, PID, shared-memory,
+  UID/GID, working-directory, and image-pull options from the same request;
+- creates a named container, attaches to it, and force-removes it after
+  success, failure, or timeout.
+
+Podman maps `isolated` and legacy `none` networking to `--network none`, and
+`egress` to Podman's default network. The Kubernetes-specific `cluster` profile
+is rejected explicitly. The control process must be able to execute the Podman
+CLI and directly resolve the configured host paths. Consequently, `start.sh`
+must be launched on the host or supplied with an explicitly configured remote
+Podman endpoint; the default TUI container does not mount a Podman socket.
+
+Persistent development workspaces remain K3s-only. The workspace tools are
+registered in Podman mode for configuration compatibility but return a clear
+validation error when invoked.
+
 ## Failure Behavior
 
 - Invalid panel reference, missing manifest, checksum mismatch, or size change
-  fails before Job submission and leaves no public cache entry.
-- Job deadline or control-plane timeout deletes the Job and returns a timeout.
-- Failed Jobs return the terminal condition plus capped logs.
+  fails before container creation and leaves no public cache entry.
+- A k3s deadline or Podman attach timeout removes the named workload and
+  returns a timeout.
+- Failed containers return backend status plus capped output.
 - A successful container exit does not complete the node until every declared
   output exists.
 - Output upload failure fails the node and does not publish a valid object.
-- Concurrent nodes use unique workspaces and Job names; artifact paths include
-  the Job name so publications cannot overwrite each other.
+- Concurrent nodes use unique workspaces and container names; artifact paths
+  include the run name so publications cannot overwrite each other.
 
-## Distributed DAG Path
+## K3s Distributed DAG Path
 
-The current scheduler remains local while remote execution is per node. Because
-outputs already carry VFS addresses and content fingerprints, the next stage can
-move scheduler decisions without changing node specs:
+For k3s, the current scheduler remains local while remote execution is per node.
+Because outputs already carry VFS addresses and content fingerprints, the next
+stage can move scheduler decisions without changing node specs:
 
 1. retain workspace and panel cache PVCs for POSIX data locality;
 2. add node-affinity labels for cached panels;

@@ -24,7 +24,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{K3sRuntime, PanelCache, PullPolicy};
+use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const PLINK2_CLUMP_CONTAINER_KIND: &str = "plink2_clump_container";
 pub const PLINK2_ORIGINAL_IMAGE: &str = "localhost/atc/plink2:2.0.0-a.6.26";
@@ -114,12 +114,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct Plink2ClumpContainerNodeFactory {
-    pub(crate) runtime: Arc<K3sRuntime>,
+    pub(crate) runtime: Arc<dyn ContainerRuntime>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl Plink2ClumpContainerNodeFactory {
-    pub fn new(runtime: Arc<K3sRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
