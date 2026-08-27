@@ -28,6 +28,26 @@ use container_runtime::{
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
 
+pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
+    let mut script = String::from(
+        "prepare_input() {\n\
+         \x20 case \"$2\" in\n\
+         \x20 *.gz)\n\
+         \x20   local destination=\"$AUTONOMICS_WORKDIR/.autonomics/input-$1.tsv\"\n\
+         \x20   gzip -dc -- \"$2\" > \"$destination\"\n\
+         \x20   export \"$1=$destination\"\n\
+         \x20   ;;\n\
+         \x20 esac\n\
+         }\n",
+    );
+    for index in 0..count {
+        script.push_str(&format!(
+            "prepare_input AUTONOMICS_INPUT{index} \"$AUTONOMICS_INPUT{index}\"\n"
+        ));
+    }
+    script
+}
+
 #[derive(Debug, Error)]
 pub enum ContainerCommandError {
     #[error("invalid container_command spec: {0}")]

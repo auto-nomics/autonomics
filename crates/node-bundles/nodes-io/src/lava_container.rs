@@ -556,7 +556,7 @@ impl NodeFactory for LavaContainerNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Runs the official LAVA R package in an ephemeral k3s container. Input is \
+        "Runs the official LAVA R package in an ephemeral OCI container. Input is \
         one ZIP run bundle containing `input.info.txt`, a loci table, an optional \
         sample-overlap matrix, and all referenced sumstats files with their relative \
         paths preserved. `analysis` selects `run.univ`, `run.bivar`, `run.pcor`, or \

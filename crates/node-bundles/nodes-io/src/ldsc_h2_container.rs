@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
-    ContainerPanelBundleSpec,
+    ContainerPanelBundleSpec, decompress_gzip_inputs,
 };
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
@@ -149,7 +149,8 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
     }
 
     let script = format!(
-        "set -eu\nldsc \\\n  --h2 \"$AUTONOMICS_INPUT0\" \\\n  --ref-ld-chr /panels/ref_ld/LDscore. \\\n  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \\\n  {flags} \\\n  --out \"$AUTONOMICS_WORKDIR/ldsc_h2\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1"
+        "set -eu\n{}ldsc \\\n  --h2 \"$AUTONOMICS_INPUT0\" \\\n  --ref-ld-chr /panels/ref_ld/LDscore. \\\n  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \\\n  {flags} \\\n  --out \"$AUTONOMICS_WORKDIR/ldsc_h2\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1",
+        decompress_gzip_inputs(1)
     );
     Ok(ContainerCommandSpec {
         image: LDSC_ORIGINAL_IMAGE.into(),
@@ -205,11 +206,11 @@ impl NodeFactory for LdscH2ContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs original LDSC h² analysis on tab-separated sumstats in k3s."
+        "Runs original LDSC h² analysis on tab-separated sumstats in an OCI container."
     }
 
     fn doc(&self) -> &'static str {
-        "Runs the original Python LDSC h² estimator as a k3s container. \
+        "Runs the original Python LDSC h² estimator as an OCI container. \
         Input must be one tab-separated LDSC sumstats File with SNP, A1, A2, N, \
         and Z columns. Plain `.tsv` and gzip-compressed `.sumstats.gz` are both \
         accepted; LDSC ignores extra columns, but CSV is not accepted. The node \
@@ -293,6 +294,13 @@ mod tests {
         assert_eq!(container.panel_bundles[0].panel_id, LDSC_REF_LD_PANEL);
         assert_eq!(container.panel_bundles[1].panel_id, LDSC_W_LD_PANEL);
         assert!(container.script.as_deref().unwrap().contains("--h2"));
+        assert!(
+            container
+                .script
+                .as_deref()
+                .unwrap()
+                .contains("prepare_input AUTONOMICS_INPUT0")
+        );
         assert!(
             container
                 .script

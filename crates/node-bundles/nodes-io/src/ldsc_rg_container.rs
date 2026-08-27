@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
-    ContainerPanelBundleSpec,
+    ContainerPanelBundleSpec, decompress_gzip_inputs,
 };
 use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE, LDSC_REF_LD_PANEL, LDSC_W_LD_PANEL};
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
@@ -135,7 +135,8 @@ pub fn container_spec(spec: &LdscRgContainerSpec) -> Result<ContainerCommandSpec
         image: LDSC_ORIGINAL_IMAGE.into(),
         command: vec!["sh".into()],
         script: Some(format!(
-            "set -eu\nldsc \\\n  --rg \"$AUTONOMICS_INPUT0\",\"$AUTONOMICS_INPUT1\" \\\n  --ref-ld-chr /panels/ref_ld/LDscore. \\\n  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \\\n  {flags} \\\n  --out \"$AUTONOMICS_WORKDIR/ldsc_rg\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1"
+            "set -eu\n{}ldsc \\\n  --rg \"$AUTONOMICS_INPUT0\",\"$AUTONOMICS_INPUT1\" \\\n  --ref-ld-chr /panels/ref_ld/LDscore. \\\n  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \\\n  {flags} \\\n  --out \"$AUTONOMICS_WORKDIR/ldsc_rg\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1",
+            decompress_gzip_inputs(2)
         )),
         files: Default::default(),
         env: Default::default(),
@@ -270,6 +271,8 @@ mod tests {
         assert_eq!(container.panel_bundles.len(), 2);
         let script = container.script.as_deref().unwrap();
         assert!(script.contains("--rg \"$AUTONOMICS_INPUT0\",\"$AUTONOMICS_INPUT1\""));
+        assert!(script.contains("prepare_input AUTONOMICS_INPUT0"));
+        assert!(script.contains("prepare_input AUTONOMICS_INPUT1"));
         assert!(script.contains("/panels/ref_ld/LDscore."));
     }
 

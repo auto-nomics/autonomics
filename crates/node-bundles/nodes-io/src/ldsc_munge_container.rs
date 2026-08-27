@@ -9,7 +9,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
 use crate::container_command::{
-    ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
+    ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec, decompress_gzip_inputs,
 };
 use crate::ldsc_h2_container::LDSC_ORIGINAL_IMAGE;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
@@ -368,12 +368,14 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
     let args = command_args(spec).join(" \\\n  ");
     let script = format!(
         "set -eu\n\
+         {}\n\
          out_prefix=\"$AUTONOMICS_WORKDIR/munged_sumstats\"\n\
          {args} \\\n\
          \x20 --out \"$out_prefix\" \\\n\
          \x20 > \"$AUTONOMICS_OUTPUT1\" 2>&1\n\
          mv \"$out_prefix.sumstats.gz\" \"$AUTONOMICS_OUTPUT0\"\n\
-         cat \"$out_prefix.log\" >> \"$AUTONOMICS_OUTPUT1\"\n"
+         cat \"$out_prefix.log\" >> \"$AUTONOMICS_OUTPUT1\"\n",
+        decompress_gzip_inputs(1)
     );
 
     Ok(ContainerCommandSpec {
@@ -475,8 +477,9 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a working rootless Podman runtime and the local official LDSC image"]
-    async fn real_podman_runs_official_munge_entrypoint() {
+    async fn real_podman_munges_gzip_input_with_official_entrypoint() {
         use container_runtime::{PodmanConfig, PodmanRuntime};
+        use flate2::{Compression, write::GzEncoder};
         use std::sync::Arc;
 
         let objects = tempfile::tempdir().unwrap();
@@ -486,6 +489,16 @@ mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
         let input_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../containers/ldsc/ldsc-python3/test/munge_test/sumstats");
+        let gz_input_path = state.path().join("raw.sumstats.gz");
+        {
+            let plain = std::fs::read(&input_path).unwrap();
+            let mut encoder = GzEncoder::new(
+                std::fs::File::create(&gz_input_path).unwrap(),
+                Compression::fast(),
+            );
+            std::io::Write::write_all(&mut encoder, &plain).unwrap();
+            encoder.finish().unwrap();
+        }
         let storage = Arc::new(vfs::OpendalFileStorage::new(objects.path()));
         let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
@@ -512,7 +525,7 @@ mod tests {
 
         let input = dag_core::node::NodeInput::file(
             0,
-            dag_core::value::FileRef::local(&input_path, Some("sumstats".into())).unwrap(),
+            dag_core::value::FileRef::local(&gz_input_path, Some("sumstats_gz".into())).unwrap(),
         );
         let outputs = node
             .execute(
@@ -532,6 +545,19 @@ mod tests {
                 .path
                 .starts_with("vfs:///artifacts/ldsc_munge_container/")
         );
+        let log_file = outputs.get(&1).unwrap().as_file().unwrap();
+        let log_path = log_file.path.strip_prefix("vfs://").unwrap();
+        let log = ctx
+            .opendal
+            .as_ref()
+            .unwrap()
+            .resolve(log_path)
+            .read(&ctx.opendal.as_ref().unwrap().resolve_path(log_path))
+            .await
+            .unwrap();
+        let log_bytes = log.to_vec();
+        let log = String::from_utf8_lossy(&log_bytes);
+        assert!(!log.contains("compression has no effect"), "log:\n{log}");
     }
 
     fn spec() -> LdscMungeContainerSpec {
@@ -578,6 +604,7 @@ mod tests {
         assert_eq!(container.outputs.len(), 2);
         assert_eq!(container.outputs[0].format.as_deref(), Some("sumstats_gz"));
         let script = container.script.as_deref().unwrap();
+        assert!(script.contains("prepare_input AUTONOMICS_INPUT0"));
         assert!(script.contains("munge_sumstats \\\n"));
         assert!(
             script.contains("--signed-sumstats \\\n  'effect,0'"),
