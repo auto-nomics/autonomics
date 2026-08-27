@@ -473,6 +473,67 @@ impl NodeFactory for LdscMungeContainerNodeFactory {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "requires a working rootless Podman runtime and the local official LDSC image"]
+    async fn real_podman_runs_official_munge_entrypoint() {
+        use container_runtime::{PodmanConfig, PodmanRuntime};
+        use std::sync::Arc;
+
+        let objects = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let workspace_root = state.path().join("workspace");
+        let workspace = workspace_root.join("run");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let input_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../containers/ldsc/ldsc-python3/test/munge_test/sumstats");
+        let storage = Arc::new(vfs::OpendalFileStorage::new(objects.path()));
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            Some(storage),
+        );
+        let munge_spec = serde_json::from_value::<LdscMungeContainerSpec>(serde_json::json!({
+            "daner": true,
+            "chunksize": 100,
+            "timeout_secs": 120
+        }))
+        .unwrap();
+        let mut container = container_spec(&munge_spec).unwrap();
+        container.workdir = Some(workspace.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            container,
+            Arc::new(PodmanRuntime::new(PodmanConfig {
+                program: "podman".into(),
+                workspace_root,
+                panel_cache_root: state.path().join("panels"),
+            })),
+            Arc::new(PanelCache::new(state.path().join("panels"), "")),
+        )
+        .unwrap();
+
+        let input = dag_core::node::NodeInput::file(
+            0,
+            dag_core::value::FileRef::local(&input_path, Some("sumstats".into())).unwrap(),
+        );
+        let outputs = node
+            .execute(
+                &ctx,
+                &[input],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            outputs
+                .get(&0)
+                .unwrap()
+                .as_file()
+                .unwrap()
+                .path
+                .starts_with("vfs:///artifacts/ldsc_munge_container/")
+        );
+    }
+
     fn spec() -> LdscMungeContainerSpec {
         LdscMungeContainerSpec {
             snp: Some("variant".into()),

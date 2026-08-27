@@ -192,7 +192,7 @@ impl NodeFactory for LdscRgContainerNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Runs the original Python LDSC `--rg` estimator as a k3s container. Both \
+        "Runs the original Python LDSC `--rg` estimator as an OCI container. Both \
         inputs must be tab-separated LDSC sumstats Files with SNP, A1, A2, N, \
         and Z columns; plain `.tsv` and gzip-compressed `.sumstats.gz` are both \
         accepted. The node owns the compatible image and EUR reference/w_ld panel \

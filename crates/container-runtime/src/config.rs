@@ -36,6 +36,27 @@ impl ContainerBackend {
     }
 }
 
+pub fn podman_state_root() -> PathBuf {
+    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
+        return Path::new(&root).join("autonomics").join("podman");
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return Path::new(&home)
+            .join(".local")
+            .join("state")
+            .join("autonomics")
+            .join("podman");
+    }
+    std::env::temp_dir().join("autonomics").join("podman")
+}
+
+pub fn default_panel_cache_root() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return Path::new(&home).join(".autonomics").join("panels");
+    }
+    std::env::temp_dir().join("autonomics").join("panels")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,25 +84,4 @@ mod tests {
         assert!(path.ends_with(Path::new(".autonomics/panels")));
         assert!(path.is_absolute());
     }
-}
-
-pub fn podman_state_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&root).join("autonomics").join("podman");
-    }
-    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&home)
-            .join(".local")
-            .join("state")
-            .join("autonomics")
-            .join("podman");
-    }
-    std::env::temp_dir().join("autonomics").join("podman")
-}
-
-pub fn default_panel_cache_root() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&home).join(".autonomics").join("panels");
-    }
-    std::env::temp_dir().join("autonomics").join("panels")
 }

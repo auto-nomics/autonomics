@@ -323,25 +323,37 @@ pub(crate) fn build_create_args(
         args.push("--env".into());
         args.push(format!("{name}={value}"));
     }
-    args.push("--volume".into());
+    args.push("--mount".into());
     args.push(format!(
-        "{}:{}:rw",
-        request.workspace.host_path.to_string_lossy(),
-        request.workspace.container_workdir
+        "type=bind,source={},destination={},rw=true",
+        escape_mount_field(&request.workspace.host_path.to_string_lossy()),
+        escape_mount_field(&request.workspace.container_workdir)
     ));
     for panel in &request.panels {
-        args.push("--volume".into());
+        args.push("--mount".into());
         args.push(format!(
-            "{}:{}:ro",
-            panel.host_path.to_string_lossy(),
-            panel.mount_path
+            "type=bind,source={},destination={},readonly",
+            escape_mount_field(&panel.host_path.to_string_lossy()),
+            escape_mount_field(&panel.mount_path)
         ));
     }
     args.push("--workdir".into());
     args.push(request.workspace.container_workdir.clone());
+    args.push("--entrypoint".into());
+    args.push(
+        request
+            .command
+            .first()
+            .cloned()
+            .ok_or_else(|| ContainerRuntimeError::Invalid("`command` cannot be empty".into()))?,
+    );
     args.push(request.image.clone());
-    args.extend(request.command.iter().cloned());
+    args.extend(request.command.iter().skip(1).cloned());
     Ok(args)
+}
+
+fn escape_mount_field(value: &str) -> String {
+    value.replace('\\', "\\\\").replace(',', "\\,")
 }
 
 fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
@@ -472,7 +484,7 @@ mod tests {
             "512",
             "--env",
             "EXAMPLE=value",
-            "--volume",
+            "--mount",
         ];
         for (index, value) in expected.iter().enumerate() {
             assert_eq!(&args[index], value);
@@ -481,11 +493,13 @@ mod tests {
             .iter()
             .position(|arg| arg == "docker.io/library/debian:bookworm-slim")
             .unwrap();
-        assert_eq!(args[image_index + 1], "cp");
+        assert_eq!(args[image_index - 2], "--entrypoint");
+        assert_eq!(args[image_index - 1], "cp");
         assert_eq!(args.last().unwrap(), "$output0");
         assert!(
             args.windows(2)
-                .any(|args| args[0].starts_with('/') && args[0].ends_with(":/work:rw"))
+                .any(|args| args[0].starts_with("type=bind,source=")
+                    && args[0].ends_with(",destination=/work,rw=true"))
         );
     }
 
@@ -505,14 +519,23 @@ mod tests {
     fn panel_mounts_must_exist_and_not_overlap_workspace() {
         let panel = tempfile::tempdir().unwrap();
         let mut valid = request("isolated");
+        let cache_path = panel.path().join("ldsc@sha256:a9efab57");
+        std::fs::create_dir_all(&cache_path).unwrap();
         valid.panels.push(CachedPanel {
             id: "panel".into(),
             digest: format!("sha256:{}", "1".repeat(64)),
-            host_path: panel.keep(),
+            host_path: cache_path,
             pvc_sub_path: "panels/test".into(),
             mount_path: "/panels/test".into(),
         });
-        assert!(build_create_args(&valid).is_ok());
+        let args = build_create_args(&valid).unwrap();
+        assert!(!args.iter().any(|arg| arg == "--volume"));
+        assert!(
+            args.windows(2)
+                .any(|args| args[0].starts_with("type=bind,source=")
+                    && args[0].contains("@sha256:a9efab57")
+                    && args[0].ends_with(",destination=/panels/test,readonly"))
+        );
 
         valid.panels[0].mount_path = "/work/panel".into();
         assert!(build_create_args(&valid).is_err());
