@@ -43,12 +43,18 @@ export AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
 export AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
 export AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
 export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
+export ACR_ENDPOINT=<acr-registry-host>
 ```
 
 `AUTONOMICS_K3S_CONTEXT` optionally selects a kubeconfig context. Jobs never
 mount a service-account token and default to the `isolated` NetworkPolicy
 profile. `cluster` permits DNS only; unrestricted egress is an explicit node
 profile that the cluster administrator must enable separately.
+
+Official tool-container factories combine `ACR_ENDPOINT` with their pinned
+`autonomics/<tool>@sha256:<digest>` repository path. Set the variable to the
+registry host only, without `https://` or a path. Podman also needs a one-time
+`podman login "$ACR_ENDPOINT"` for the private ACR repositories.
 
 ## Development workspaces
 

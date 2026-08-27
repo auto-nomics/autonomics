@@ -15,7 +15,10 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec, decompress_gzip_inputs,
 };
-use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE, LDSC_REF_LD_PANEL, LDSC_W_LD_PANEL};
+use crate::image_registry::acr_image;
+use crate::ldsc_h2_container::{
+    LDSC_ORIGINAL_IMAGE_DIGEST, LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_REF_LD_PANEL, LDSC_W_LD_PANEL,
+};
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LDSC_RG_CONTAINER_KIND: &str = "ldsc_rg_container";
@@ -132,7 +135,7 @@ pub fn container_spec(spec: &LdscRgContainerSpec) -> Result<ContainerCommandSpec
     }
 
     Ok(ContainerCommandSpec {
-        image: LDSC_ORIGINAL_IMAGE.into(),
+        image: acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(format!(
             "set -eu\n{}ldsc \\\n  --rg \"$AUTONOMICS_INPUT0\",\"$AUTONOMICS_INPUT1\" \\\n  --ref-ld-chr /panels/ref_ld/LDscore. \\\n  --w-ld-chr /panels/w_ld/weights.hm3_noMHC. \\\n  {flags} \\\n  --out \"$AUTONOMICS_WORKDIR/ldsc_rg\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1",
@@ -160,7 +163,7 @@ pub fn container_spec(spec: &LdscRgContainerSpec) -> Result<ContainerCommandSpec
         ],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -267,7 +270,10 @@ mod tests {
             chisq_max: Some(30.0),
         };
         let container = container_spec(&spec).unwrap();
-        assert_eq!(container.image, LDSC_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(container.panel_bundles.len(), 2);
         let script = container.script.as_deref().unwrap();
         assert!(script.contains("--rg \"$AUTONOMICS_INPUT0\",\"$AUTONOMICS_INPUT1\""));

@@ -20,10 +20,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const COLOC_ABF_CONTAINER_KIND: &str = "coloc_abf_container";
-pub const COLOC_ORIGINAL_IMAGE: &str = "localhost/atc/coloc:5.2.3";
+pub const COLOC_ORIGINAL_IMAGE_REPOSITORY: &str = "coloc";
+pub const COLOC_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:a2afe7aa83ae6f1ecb9573317aa022af4db0870771378c7fe90d295d70057322";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/coloc_abf_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 600;
@@ -346,7 +349,7 @@ pub fn container_spec(spec: &ColocAbfContainerSpec) -> Result<ContainerCommandSp
         .replace("__P12__", &format!("{}", spec.p12));
 
     Ok(ContainerCommandSpec {
-        image: COLOC_ORIGINAL_IMAGE.into(),
+        image: acr_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(r_code),
         files: Default::default(),
@@ -368,7 +371,7 @@ pub fn container_spec(spec: &ColocAbfContainerSpec) -> Result<ContainerCommandSp
         panel_bundles: Vec::new(),
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -480,7 +483,10 @@ mod tests {
     #[test]
     fn builds_official_coloc_abf_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, COLOC_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert!(container.panel_bundles.is_empty());
         assert!(container.panels.is_empty());
         assert_eq!(container.command, vec!["Rscript".to_string()]);

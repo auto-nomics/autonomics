@@ -20,10 +20,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LAVA_CONTAINER_KIND: &str = "lava_container";
-pub const LAVA_ORIGINAL_IMAGE: &str = "localhost/atc/lava:0.1.5";
+pub const LAVA_ORIGINAL_IMAGE_REPOSITORY: &str = "lava";
+pub const LAVA_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:b7dd1d3a3493cc32af2dc286f2aace77036b1fd806bee4f14a4ff67509268be7";
 pub const LAVA_TUTORIAL_REF_PANEL: &str = "lava.ref.1000g_test";
 pub const LAVA_UKB_EUR_PANEL: &str = "lava.ref.ukb_eur";
 
@@ -492,7 +495,7 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
     );
 
     Ok(ContainerCommandSpec {
-        image: LAVA_ORIGINAL_IMAGE.into(),
+        image: acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(script),
         files: Default::default(),
@@ -521,7 +524,7 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
         }],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -655,7 +658,10 @@ mod tests {
     fn builds_official_lava_contract() {
         let spec = spec(LavaAnalysis::Bivar, None);
         let container = container_spec(&spec).unwrap();
-        assert_eq!(container.image, LAVA_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, LAVA_TUTORIAL_REF_PANEL);
         let script = container.script.as_deref().unwrap();

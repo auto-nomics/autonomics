@@ -19,13 +19,16 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const GCTA_COJO_SELECT_CONTAINER_KIND: &str = "gcta_cojo_select_container";
 pub const GCTA_SBLUP_CONTAINER_KIND: &str = "gcta_sblup_container";
 pub const GCTA_FASTBAT_CONTAINER_KIND: &str = "gcta_fastbat_container";
 pub const GCTA_ACAT_CONTAINER_KIND: &str = "gcta_acat_container";
-pub const GCTA_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/gcta@sha256:4cbf8c91376f7b314eebf1dfa02ad44028575991cd3d4c4e81b5324942bec20b";
+pub const GCTA_ORIGINAL_IMAGE_REPOSITORY: &str = "gcta";
+pub const GCTA_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:4cbf8c91376f7b314eebf1dfa02ad44028575991cd3d4c4e81b5324942bec20b";
 pub const GCTA_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
 pub const GCTA_GENE_LIST_PANEL: &str = "gcta.gene_list.hg19";
 
@@ -274,9 +277,9 @@ fn command_spec(
     timeout_secs: u64,
     outputs: Vec<ContainerCommandOutputSpec>,
     panels: Vec<ContainerPanelBundleSpec>,
-) -> ContainerCommandSpec {
-    ContainerCommandSpec {
-        image: GCTA_ORIGINAL_IMAGE.into(),
+) -> Result<ContainerCommandSpec, String> {
+    Ok(ContainerCommandSpec {
+        image: acr_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into(), "-c".into()],
         script: Some(script),
         files: Default::default(),
@@ -295,7 +298,7 @@ fn command_spec(
         pids_limit: None,
         shm_size: None,
         user: None,
-    }
+    })
 }
 
 pub fn cojo_select_container_spec(
@@ -327,7 +330,7 @@ pub fn cojo_select_container_spec(
         diff_freq = spec.diff_freq,
         thread_num = spec.thread_num,
     );
-    Ok(command_spec(
+    command_spec(
         script,
         spec.artifact_prefix.clone(),
         spec.timeout_secs,
@@ -353,7 +356,7 @@ pub fn cojo_select_container_spec(
             panel_id: GCTA_REF_BINARY_PANEL.into(),
             mount_path: "/panels/plink_ref".into(),
         }],
-    ))
+    )
 }
 
 pub fn sblup_container_spec(spec: &GctaSblupContainerSpec) -> Result<ContainerCommandSpec, String> {
@@ -379,7 +382,7 @@ pub fn sblup_container_spec(spec: &GctaSblupContainerSpec) -> Result<ContainerCo
         diff_freq = spec.diff_freq,
         thread_num = spec.thread_num,
     );
-    Ok(command_spec(
+    command_spec(
         script,
         spec.artifact_prefix.clone(),
         spec.timeout_secs,
@@ -397,7 +400,7 @@ pub fn sblup_container_spec(spec: &GctaSblupContainerSpec) -> Result<ContainerCo
             panel_id: GCTA_REF_BINARY_PANEL.into(),
             mount_path: "/panels/plink_ref".into(),
         }],
-    ))
+    )
 }
 
 pub fn fastbat_container_spec(
@@ -426,7 +429,7 @@ pub fn fastbat_container_spec(
         diff_freq = spec.diff_freq,
         thread_num = spec.thread_num,
     );
-    Ok(command_spec(
+    command_spec(
         script,
         spec.artifact_prefix.clone(),
         spec.timeout_secs,
@@ -450,7 +453,7 @@ pub fn fastbat_container_spec(
                 mount_path: "/panels/gene_list".into(),
             },
         ],
-    ))
+    )
 }
 
 pub fn acat_container_spec(spec: &GctaAcatContainerSpec) -> Result<ContainerCommandSpec, String> {
@@ -472,7 +475,7 @@ pub fn acat_container_spec(spec: &GctaAcatContainerSpec) -> Result<ContainerComm
         min_mac = spec.min_mac,
         gene_flank_kb = spec.gene_flank_kb,
     );
-    Ok(command_spec(
+    command_spec(
         script,
         spec.artifact_prefix.clone(),
         spec.timeout_secs,
@@ -490,7 +493,7 @@ pub fn acat_container_spec(spec: &GctaAcatContainerSpec) -> Result<ContainerComm
             panel_id: GCTA_GENE_LIST_PANEL.into(),
             mount_path: "/panels/gene_list".into(),
         }],
-    ))
+    )
 }
 
 fn plink_binding() -> DataBundleBinding {
@@ -798,7 +801,10 @@ mod tests {
             timeout_secs: default_timeout(),
         };
         let value = cojo_select_container_spec(&spec).unwrap();
-        assert_eq!(value.image, GCTA_ORIGINAL_IMAGE);
+        assert_eq!(
+            value.image,
+            acr_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(value.panel_bundles.len(), 1);
         assert_eq!(value.outputs.len(), 4);
         let script = value.script.as_deref().unwrap();

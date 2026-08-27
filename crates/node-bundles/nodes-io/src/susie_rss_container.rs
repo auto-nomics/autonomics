@@ -22,10 +22,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const SUSIE_RSS_CONTAINER_KIND: &str = "susie_rss_container";
-pub const SUSIE_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/susie@sha256:8a72a443461add5c94c4907f9a1d6106b989850e93217a95587d9095542febe8";
+pub const SUSIE_ORIGINAL_IMAGE_REPOSITORY: &str = "susie";
+pub const SUSIE_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:8a72a443461add5c94c4907f9a1d6106b989850e93217a95587d9095542febe8";
 pub const SUSIE_REF_PANEL: &str = "mixer.g1000_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/susie_rss_container";
@@ -280,7 +283,7 @@ pub fn container_spec(spec: &SusieRssContainerSpec) -> Result<ContainerCommandSp
     }
 
     Ok(ContainerCommandSpec {
-        image: SUSIE_ORIGINAL_IMAGE.into(),
+        image: acr_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into(), "/opt/susie/bin/run_susie_rss.R".into()],
         script: None,
         files: BTreeMap::new(),
@@ -423,7 +426,10 @@ mod tests {
     #[test]
     fn builds_official_susie_image_and_panel_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, SUSIE_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(
             container.command,
             vec!["Rscript", "/opt/susie/bin/run_susie_rss.R"]

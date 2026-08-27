@@ -11,10 +11,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MVMR_CONTAINER_KIND: &str = "mvmr_container";
-pub const MVMR_ORIGINAL_IMAGE: &str = "localhost/atc/mvmr:0.4.8";
+pub const MVMR_ORIGINAL_IMAGE_REPOSITORY: &str = "mvmr";
+pub const MVMR_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:ce9ad3f46cf8b74a95c194fe791b6a529d9168676c5d936a05ba440569260eb3";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mvmr_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
@@ -233,7 +236,7 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
     );
 
     Ok(ContainerCommandSpec {
-        image: MVMR_ORIGINAL_IMAGE.into(),
+        image: acr_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(r_code),
         files: Default::default(),
@@ -255,7 +258,7 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
         panel_bundles: Vec::new(),
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -348,7 +351,10 @@ mod tests {
     #[test]
     fn builds_official_mvmr_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, MVMR_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert!(container.panel_bundles.is_empty());
         assert!(
             container

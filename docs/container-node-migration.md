@@ -91,7 +91,8 @@ cluster configuration.
 - Make the primary entrypoint deterministic.
 - Include only files required at runtime.
 - Prefer a digest-pinned image reference once the workflow leaves local
-  development.
+  development. Official tool wrappers pin their digest and resolve the ACR
+  registry host from `ACR_ENDPOINT`.
 
 ### Build and validate
 
@@ -370,9 +371,9 @@ the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
 `snp/chrom/z` sumstats File, mounts `mixer.g1000_eur`, calls
 `susieR::susie_rss()`, and emits TSV/RDS/log artifacts to VFS.
 
-The production wrapper references the image in the single-node k3s registry by
-immutable digest. The registry currently uses an HTTP NodePort and must gain
-TLS and authentication before it is exposed beyond the local node.
+The production wrapper pins the image repository and manifest digest, while
+the runtime resolves the ACR endpoint from `ACR_ENDPOINT`. This keeps the exact
+image immutable without embedding a deployment-specific registry host.
 
 SMR/HEIDI is the BESD eQTL plus PLINK LD-panel reference case:
 

@@ -15,11 +15,14 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MIXER_FIT1_CONTAINER_KIND: &str = "mixer_fit1_container";
 pub const MIXER_FIT2_CONTAINER_KIND: &str = "mixer_fit2_container";
-pub const MIXER_ORIGINAL_IMAGE: &str = "localhost/atc/mixer:2.2.1";
+pub const MIXER_ORIGINAL_IMAGE_REPOSITORY: &str = "mixer";
+pub const MIXER_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7";
 pub const MIXER_G1000_EUR_PANEL: &str = "mixer.g1000_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mixer_container";
@@ -246,7 +249,7 @@ fn container_spec(
 ) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: MIXER_ORIGINAL_IMAGE.into(),
+        image: acr_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script(spec, if fit2 { "fit2" } else { "fit1" })),
         files: Default::default(),
@@ -271,7 +274,7 @@ fn container_spec(
         }],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: Some(DEFAULT_CPUS),
         memory: Some(DEFAULT_MEMORY.into()),
         pids_limit: Some(512),
@@ -539,8 +542,11 @@ mod tests {
             timeout_secs: default_timeout_secs(),
         };
         let value = container_spec(&spec, false, "mixer_fit1").unwrap();
-        assert_eq!(value.image, MIXER_ORIGINAL_IMAGE);
-        assert_eq!(value.pull_policy, PullPolicy::Never);
+        assert_eq!(
+            value.image,
+            acr_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
+        assert_eq!(value.pull_policy, PullPolicy::Missing);
         assert_eq!(value.panel_bundles.len(), 1);
         assert_eq!(value.panel_bundles[0].panel_id, MIXER_G1000_EUR_PANEL);
         assert_eq!(value.outputs.len(), 2);

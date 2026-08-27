@@ -16,10 +16,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const HYPRCOLOC_CONTAINER_KIND: &str = "hyprcoloc_container";
-pub const HYPRCOLOC_ORIGINAL_IMAGE: &str = "localhost/atc/hyprcoloc:0.0.2";
+pub const HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY: &str = "hyprcoloc";
+pub const HYPRCOLOC_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:395a36903d3c3ed6c753aef85f5b0a57044f86968e4d79804e4cc85f36aa5617";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/hyprcoloc_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
@@ -410,7 +413,10 @@ pub fn container_spec(spec: &HyPrColocContainerSpec) -> Result<ContainerCommandS
         .replace("__OPTIONAL_ARGS__", &optional_args);
 
     Ok(ContainerCommandSpec {
-        image: HYPRCOLOC_ORIGINAL_IMAGE.into(),
+        image: acr_image(
+            HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY,
+            HYPRCOLOC_ORIGINAL_IMAGE_DIGEST,
+        )?,
         command: vec!["Rscript".into()],
         script: Some(script),
         files: Default::default(),
@@ -436,7 +442,7 @@ pub fn container_spec(spec: &HyPrColocContainerSpec) -> Result<ContainerCommandS
         panel_bundles: Vec::new(),
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -550,7 +556,14 @@ mod tests {
     #[test]
     fn builds_official_hyprcoloc_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, HYPRCOLOC_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(
+                HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY,
+                HYPRCOLOC_ORIGINAL_IMAGE_DIGEST
+            )
+            .unwrap()
+        );
         assert!(container.panels.is_empty());
         assert!(container.panel_bundles.is_empty());
         assert_eq!(container.command, vec!["Rscript".to_string()]);

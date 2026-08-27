@@ -6,6 +6,7 @@ pub mod container_command;
 pub mod file_ref_source;
 pub mod gcta_container;
 pub mod hyprcoloc_container;
+pub mod image_registry;
 pub mod lava_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_munge_container;

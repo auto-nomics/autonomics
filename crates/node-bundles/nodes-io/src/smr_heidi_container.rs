@@ -20,10 +20,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const SMR_HEIDI_CONTAINER_KIND: &str = "smr_heidi_container";
-pub const SMR_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/smr@sha256:40c0db3c71eda506913c376ab939027fff8ce8eb55c262fd1e5da2fe4c351b6d";
+pub const SMR_ORIGINAL_IMAGE_REPOSITORY: &str = "smr";
+pub const SMR_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:40c0db3c71eda506913c376ab939027fff8ce8eb55c262fd1e5da2fe4c351b6d";
 pub const SMR_WESTRA_EQTL_PANEL: &str = "smr.eqtl.westra_hg19";
 pub const SMR_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
 
@@ -302,7 +305,7 @@ fn build_script(spec: &SmrHeidiContainerSpec) -> String {
 pub fn container_spec(spec: &SmrHeidiContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: SMR_ORIGINAL_IMAGE.into(),
+        image: acr_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into(), "-c".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -464,7 +467,10 @@ mod tests {
     #[test]
     fn builds_official_smr_heidi_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, SMR_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.network, "isolated");
         assert_eq!(container.panel_bundles.len(), 2);

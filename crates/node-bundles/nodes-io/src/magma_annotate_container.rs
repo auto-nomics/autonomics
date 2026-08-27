@@ -15,10 +15,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MAGMA_ANNOTATE_CONTAINER_KIND: &str = "magma_annotate_container";
-pub const MAGMA_ORIGINAL_IMAGE: &str = "localhost/atc/magma:1.10";
+pub const MAGMA_ORIGINAL_IMAGE_REPOSITORY: &str = "magma";
+pub const MAGMA_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:2ca8540251ee9201f3b7b6ac2596daa2c95bd77eb314305dac61beb9b4d85342";
 pub const MAGMA_GENE_LOC_PANEL: &str = "magma.gene_loc.ncbi37_3";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/magma_annotate_container";
@@ -109,7 +112,10 @@ pub fn validate(spec: &MagmaAnnotateContainerSpec) -> Result<(), String> {
 pub fn container_spec(spec: &MagmaAnnotateContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: MAGMA_ORIGINAL_IMAGE.into(),
+        image: acr_image(
+            MAGMA_ORIGINAL_IMAGE_REPOSITORY,
+            MAGMA_ORIGINAL_IMAGE_DIGEST,
+        )?,
         command: vec!["sh".into()],
         script: Some(
             "set -eu\nmagma \\\n  --annotate \\\n  --snp-loc \"$AUTONOMICS_INPUT0\" \\\n  --gene-loc /panels/gene_loc/NCBI37.3.gene.loc \\\n  --out \"$AUTONOMICS_WORKDIR/magma_annotate\" \\\n  > \"$AUTONOMICS_OUTPUT0\" 2>&1"
@@ -137,7 +143,7 @@ pub fn container_spec(spec: &MagmaAnnotateContainerSpec) -> Result<ContainerComm
         }],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -241,8 +247,11 @@ mod tests {
             timeout_secs: default_timeout_secs(),
         };
         let container = container_spec(&spec).unwrap();
-        assert_eq!(container.image, MAGMA_ORIGINAL_IMAGE);
-        assert_eq!(container.pull_policy, PullPolicy::Never);
+        assert_eq!(
+            container.image,
+            acr_image(MAGMA_ORIGINAL_IMAGE_REPOSITORY, MAGMA_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
+        assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, MAGMA_GENE_LOC_PANEL);
         assert_eq!(container.outputs.len(), 2);

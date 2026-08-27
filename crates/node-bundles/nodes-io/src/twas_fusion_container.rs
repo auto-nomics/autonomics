@@ -15,10 +15,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const TWAS_FUSION_CONTAINER_KIND: &str = "twas_fusion_container";
-pub const FUSION_ORIGINAL_IMAGE: &str = "192.168.10.24:30500/atc/fusion@sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf";
+pub const FUSION_ORIGINAL_IMAGE_REPOSITORY: &str = "fusion";
+pub const FUSION_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf";
 pub const FUSION_GTEX_V8_PANEL: &str = "fusion.gtex_v8";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/twas_fusion_container";
@@ -218,7 +221,10 @@ pub fn container_spec(spec: &TwasFusionContainerSpec) -> Result<ContainerCommand
     }
 
     Ok(ContainerCommandSpec {
-        image: FUSION_ORIGINAL_IMAGE.into(),
+        image: acr_image(
+            FUSION_ORIGINAL_IMAGE_REPOSITORY,
+            FUSION_ORIGINAL_IMAGE_DIGEST,
+        )?,
         command: vec!["/opt/fusion/bin/run_fusion_twas.sh".into()],
         script: None,
         files: Default::default(),
@@ -365,7 +371,14 @@ mod tests {
     #[test]
     fn builds_official_fusion_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, FUSION_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(
+                FUSION_ORIGINAL_IMAGE_REPOSITORY,
+                FUSION_ORIGINAL_IMAGE_DIGEST
+            )
+            .unwrap()
+        );
         assert_eq!(
             container.command,
             vec!["/opt/fusion/bin/run_fusion_twas.sh"]

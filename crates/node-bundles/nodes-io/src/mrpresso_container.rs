@@ -11,10 +11,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const MRPRESSO_CONTAINER_KIND: &str = "mrpresso_container";
-pub const MRPRESSO_ORIGINAL_IMAGE: &str = "localhost/atc/mrpresso:1.0.0";
+pub const MRPRESSO_ORIGINAL_IMAGE_REPOSITORY: &str = "mrpresso";
+pub const MRPRESSO_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:a3c46770506e07141dd89d3b805a3ec3d04b56367738b81917675c860ad7e2a4";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mrpresso_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
@@ -191,7 +194,10 @@ pub fn container_spec(spec: &MrpressoContainerSpec) -> Result<ContainerCommandSp
     );
 
     Ok(ContainerCommandSpec {
-        image: MRPRESSO_ORIGINAL_IMAGE.into(),
+        image: acr_image(
+            MRPRESSO_ORIGINAL_IMAGE_REPOSITORY,
+            MRPRESSO_ORIGINAL_IMAGE_DIGEST,
+        )?,
         command: vec!["Rscript".into()],
         script: Some(r_code),
         files: Default::default(),
@@ -213,7 +219,7 @@ pub fn container_spec(spec: &MrpressoContainerSpec) -> Result<ContainerCommandSp
         panel_bundles: Vec::new(),
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -304,7 +310,14 @@ mod tests {
     #[test]
     fn builds_official_mrpresso_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, MRPRESSO_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(
+                MRPRESSO_ORIGINAL_IMAGE_REPOSITORY,
+                MRPRESSO_ORIGINAL_IMAGE_DIGEST
+            )
+            .unwrap()
+        );
         assert!(container.panel_bundles.is_empty());
         assert_eq!(container.command, vec!["Rscript".to_string()]);
         assert!(

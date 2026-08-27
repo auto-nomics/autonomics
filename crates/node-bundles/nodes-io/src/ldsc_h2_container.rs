@@ -19,10 +19,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec, decompress_gzip_inputs,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LDSC_H2_CONTAINER_KIND: &str = "ldsc_h2_container";
-pub const LDSC_ORIGINAL_IMAGE: &str = "localhost/atc/ldsc:3.0";
+pub const LDSC_ORIGINAL_IMAGE_REPOSITORY: &str = "ldsc";
+pub const LDSC_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:05f43523bf82b6865b2a6ae6fb0233ee919a7f20a70ab052d5d0b803ef190107";
 pub const LDSC_REF_LD_PANEL: &str = "ldsc.ref_ld.1000g_eur.basic";
 pub const LDSC_W_LD_PANEL: &str = "ldsc.w_ld.1000g_eur_hm3_no_mhc";
 
@@ -153,7 +156,7 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
         decompress_gzip_inputs(1)
     );
     Ok(ContainerCommandSpec {
-        image: LDSC_ORIGINAL_IMAGE.into(),
+        image: acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script),
         files: Default::default(),
@@ -178,7 +181,7 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
         ],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -288,8 +291,11 @@ mod tests {
             chisq_max: Some(30.0),
         };
         let container = container_spec(&spec).unwrap();
-        assert_eq!(container.image, LDSC_ORIGINAL_IMAGE);
-        assert_eq!(container.pull_policy, PullPolicy::Never);
+        assert_eq!(
+            container.image,
+            acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
+        assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.panel_bundles.len(), 2);
         assert_eq!(container.panel_bundles[0].panel_id, LDSC_REF_LD_PANEL);
         assert_eq!(container.panel_bundles[1].panel_id, LDSC_W_LD_PANEL);

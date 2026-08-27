@@ -24,10 +24,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const PLINK2_CLUMP_CONTAINER_KIND: &str = "plink2_clump_container";
-pub const PLINK2_ORIGINAL_IMAGE: &str = "localhost/atc/plink2:2.0.0-a.6.26";
+pub const PLINK2_ORIGINAL_IMAGE_REPOSITORY: &str = "plink2";
+pub const PLINK2_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:998315bf1c34c1c7ef276e93ca6c043dd1982c027c7264325505a9a0adc6d1d2";
 pub const PLINK2_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/plink2_clump_container";
@@ -265,7 +268,10 @@ pub fn container_spec(spec: &Plink2ClumpContainerSpec) -> Result<ContainerComman
     validate(spec)?;
     let script = build_script(spec);
     Ok(ContainerCommandSpec {
-        image: PLINK2_ORIGINAL_IMAGE.into(),
+        image: acr_image(
+            PLINK2_ORIGINAL_IMAGE_REPOSITORY,
+            PLINK2_ORIGINAL_IMAGE_DIGEST,
+        )?,
         command: vec!["sh".into(), "-c".into()],
         script: Some(script),
         files: Default::default(),
@@ -294,7 +300,7 @@ pub fn container_spec(spec: &Plink2ClumpContainerSpec) -> Result<ContainerComman
         }],
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -411,8 +417,15 @@ mod tests {
     #[test]
     fn builds_official_plink2_image_and_panel_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, PLINK2_ORIGINAL_IMAGE);
-        assert_eq!(container.pull_policy, PullPolicy::Never);
+        assert_eq!(
+            container.image,
+            acr_image(
+                PLINK2_ORIGINAL_IMAGE_REPOSITORY,
+                PLINK2_ORIGINAL_IMAGE_DIGEST
+            )
+            .unwrap()
+        );
+        assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.network, "isolated");
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, PLINK2_REF_BINARY_PANEL);

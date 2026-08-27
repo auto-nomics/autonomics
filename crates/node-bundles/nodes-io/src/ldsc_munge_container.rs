@@ -11,7 +11,8 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec, decompress_gzip_inputs,
 };
-use crate::ldsc_h2_container::LDSC_ORIGINAL_IMAGE;
+use crate::image_registry::acr_image;
+use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE_DIGEST, LDSC_ORIGINAL_IMAGE_REPOSITORY};
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const LDSC_MUNGE_CONTAINER_KIND: &str = "ldsc_munge_container";
@@ -379,7 +380,7 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
     );
 
     Ok(ContainerCommandSpec {
-        image: LDSC_ORIGINAL_IMAGE.into(),
+        image: acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script),
         files: Default::default(),
@@ -401,7 +402,7 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
         panel_bundles: Vec::new(),
         network: "isolated".into(),
         read_only_rootfs: true,
-        pull_policy: PullPolicy::Never,
+        pull_policy: PullPolicy::Missing,
         cpus: None,
         memory: None,
         pids_limit: None,
@@ -599,7 +600,10 @@ mod tests {
     #[test]
     fn builds_official_munge_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, LDSC_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert!(container.panel_bundles.is_empty());
         assert_eq!(container.outputs.len(), 2);
         assert_eq!(container.outputs[0].format.as_deref(), Some("sumstats_gz"));

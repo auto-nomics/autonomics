@@ -200,7 +200,8 @@ cataloged data package, and a thin DAG wrapper, see
 `ldsc_h2_container` is the first such wrapper. It accepts one tab-separated
 LDSC sumstats File with `SNP`, `A1`, `A2`, `N`, and `Z` columns; plain `.tsv`
 and gzip-compressed `.sumstats.gz` are both accepted. It internally binds
-`localhost/atc/ldsc:3.0` to:
+the pinned `autonomics/ldsc` manifest digest, with the ACR host supplied by
+`ACR_ENDPOINT`, to:
 
 - `ldsc.ref_ld.1000g_eur.basic` at `/panels/ref_ld`
 - `ldsc.w_ld.1000g_eur_hm3_no_mhc` at `/panels/w_ld`
