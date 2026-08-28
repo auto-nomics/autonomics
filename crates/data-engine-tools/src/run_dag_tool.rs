@@ -157,7 +157,7 @@ impl ToolFunction for RunDagTool {
     // Sync — the agent needs the DAG output to continue. DAG execution
     // can run long (full pipelines: LD scoring, fitting, heavy joins).
     fn timeout_seconds(&self) -> u64 {
-        60 * 60
+        60 * 60 * 72
     }
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {

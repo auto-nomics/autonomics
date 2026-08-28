@@ -380,17 +380,19 @@ SMR/HEIDI is the BESD eQTL plus PLINK LD-panel reference case:
 ```text
 containers/smr/Dockerfile
 smr.eqtl.westra_hg19
+smr.eqtl.eqtlgen_hg19
 plink.ref.1000g_eur.binary
 containers/smr/fixtures/chr22.westra.ma
 crates/node-bundles/nodes-io/src/smr_heidi_container.rs
 ```
 
 The image carries only the official SMR 1.4.2 executable and its bundled
-runtime libraries. The Westra BESD and 1000G EUR LD reference stay in catalog
+runtime libraries. The default Westra BESD, the optional eQTLGen BESD selected
+by `eqtl_source=eqtlgen`, and the 1000G EUR LD reference stay in catalog
 packages. The wrapper accepts one GCTA-COJO `.ma` File, fixes the verified
 image/data compatibility contract, and emits the official `.smr` result and
-execution log. A chr22 k3s baseline verifies both the output row and SMR
-p-value.
+execution log. A chr22 Westra k3s baseline verifies both the output row and SMR
+p-value; a chr22 eQTLGen baseline verifies the alternate panel binding.
 
 HyPrColoc is the no-panel beta/SE matrix case:
 

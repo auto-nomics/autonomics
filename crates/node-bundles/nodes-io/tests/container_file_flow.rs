@@ -9,9 +9,9 @@ use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use container_runtime::{
-    ContainerRunRequest, ContainerRunResult, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, K3sConfig, K3sRuntime, PanelCache, PullPolicy,
-    unique_container_name,
+    ContainerExecutionInfra, ContainerRunRequest, ContainerRunResult, ContainerRuntime,
+    ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR, K3sConfig, K3sRuntime, PanelCache,
+    PullPolicy, unique_container_name,
 };
 use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
@@ -55,7 +55,7 @@ use nodes_io::plink2_clump_container::{
     PLINK2_CLUMP_CONTAINER_KIND, PLINK2_REF_BINARY_PANEL, Plink2ClumpContainerNodeFactory,
 };
 use nodes_io::smr_heidi_container::{
-    SMR_HEIDI_CONTAINER_KIND, SMR_REF_BINARY_PANEL, SMR_WESTRA_EQTL_PANEL,
+    SMR_EQTLGEN_PANEL, SMR_HEIDI_CONTAINER_KIND, SMR_REF_BINARY_PANEL, SMR_WESTRA_EQTL_PANEL,
     SmrHeidiContainerNodeFactory,
 };
 use nodes_io::susie_rss_container::{
@@ -3056,6 +3056,138 @@ async fn real_catalog_backed_official_smr_heidi_runs_in_k3s() {
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     for panel in [SMR_WESTRA_EQTL_PANEL, SMR_REF_BINARY_PANEL] {
+        assert!(
+            cached_panels
+                .iter()
+                .any(|name| name.starts_with(&format!("{panel}@"))),
+            "SMR panel `{panel}` should be cached"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the official SMR image, eQTLGen and 1000G EUR catalog panels, and a configured Podman or k3s backend"]
+async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_backend() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(SMR_EQTLGEN_PANEL).is_some(),
+        "smr.eqtl.eqtlgen_hg19 must be published in the catalog before this test"
+    );
+    assert!(
+        fixture.bundles.get(SMR_REF_BINARY_PANEL).is_some(),
+        "plink.ref.1000g_eur.binary must be published in the catalog before this test"
+    );
+
+    let sumstats_path = std::env::var_os("AUTONOMICS_SMR_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../containers/smr/fixtures/chr22.westra.ma")
+                .to_path_buf()
+        });
+    let infra = ContainerExecutionInfra::from_env();
+    let panel_cache_root = infra.config.panel_cache_root().to_path_buf();
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(SmrHeidiContainerNodeFactory::new(
+        infra.runtime,
+        infra.panel_cache,
+    )));
+    let smr = registry
+        .build_node(
+            SMR_HEIDI_CONTAINER_KIND,
+            serde_json::json!({
+                "eqtl_source": "eqtlgen",
+                "chr": 22,
+                "thread_num": 2,
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "gwas_sumstats".into(),
+        Box::new(FileReferenceNode::new(
+            sumstats_path.to_string_lossy().into_owned(),
+            Some("gcta_ma".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("smr_heidi".into(), smr).unwrap();
+    dag.add_edge("gwas_sumstats", "smr_heidi", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    if !report.ok {
+        eprintln!("SMR container-backend run report: {report:#?}");
+    }
+    assert_eq!(
+        report.statuses.get("gwas_sumstats"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    assert_eq!(
+        report.statuses.get("smr_heidi"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("smr_heidi").unwrap();
+    let result = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    assert!(result.path.ends_with("/smr.smr"));
+    assert!(log.path.ends_with("/smr.log"));
+    assert!(
+        result
+            .path
+            .starts_with("vfs:///artifacts/smr_heidi_container/")
+    );
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let result_vpath = result
+        .path
+        .strip_prefix("vfs://")
+        .expect("SMR result is a VFS URI");
+    let bytes = storage
+        .resolve(result_vpath)
+        .read(&storage.resolve_path(result_vpath))
+        .await
+        .unwrap();
+    let result_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        result_text.starts_with("probeID\tProbeChr\tGene\tProbe_bp\ttopSNP"),
+        "eQTLGen SMR result is missing the official header; got:\n{result_text}"
+    );
+
+    let log_vpath = log
+        .path
+        .strip_prefix("vfs://")
+        .expect("SMR log is a VFS URI");
+    let bytes = storage
+        .resolve(log_vpath)
+        .read(&storage.resolve_path(log_vpath))
+        .await
+        .unwrap();
+    let log_text = String::from_utf8_lossy(&bytes.to_vec()).into_owned();
+    assert!(
+        log_text.contains("Version 1.4.2 Linux"),
+        "official SMR log is missing version marker:\n{log_text}"
+    );
+
+    let cached_panels = std::fs::read_dir(&panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for panel in [SMR_EQTLGEN_PANEL, SMR_REF_BINARY_PANEL] {
         assert!(
             cached_panels
                 .iter()

@@ -1,9 +1,11 @@
 //! Containerized SMR/HEIDI node backed by the official SMR executable.
 //!
-//! The wrapper owns the only currently verified compatibility contract:
-//! official SMR 1.4.2, the Westra blood cis-eQTL GRCh37 BESD package, and the
-//! 1000G EUR PLINK binary LD reference. Callers provide one GCTA-COJO `.ma`
-//! GWAS summary File plus analysis parameters; they do not assemble mounts.
+//! The wrapper owns the image and reference-data contracts for official SMR
+//! 1.4.2. The default eQTL contract uses the Westra blood cis-eQTL GRCh37 BESD
+//! package; callers can instead select the eQTLGen GRCh37 BESD package. In both
+//! cases the LD reference is the 1000G EUR PLINK binary panel. Callers provide
+//! one GCTA-COJO `.ma` GWAS summary File plus analysis parameters; they do not
+//! assemble mounts.
 
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ pub const SMR_ORIGINAL_IMAGE_REPOSITORY: &str = "smr";
 pub const SMR_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:40c0db3c71eda506913c376ab939027fff8ce8eb55c262fd1e5da2fe4c351b6d";
 pub const SMR_WESTRA_EQTL_PANEL: &str = "smr.eqtl.westra_hg19";
+pub const SMR_EQTLGEN_PANEL: &str = "smr.eqtl.eqtlgen_hg19";
 pub const SMR_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/smr_heidi_container";
@@ -44,8 +47,34 @@ const DEFAULT_CIS_WIND_KB: u32 = 2000;
 const DEFAULT_MAX_NUM_LD: u32 = 500;
 const DEFAULT_THREAD_NUM: u32 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SmrEqtlSource {
+    Westra,
+    EqtlGen,
+}
+
+impl SmrEqtlSource {
+    fn panel_id(self) -> &'static str {
+        match self {
+            Self::Westra => SMR_WESTRA_EQTL_PANEL,
+            Self::EqtlGen => SMR_EQTLGEN_PANEL,
+        }
+    }
+
+    fn besd_prefix(self) -> &'static str {
+        match self {
+            Self::Westra => "westra_eqtl_hg19",
+            Self::EqtlGen => "eqtlgen_hg19",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SmrHeidiContainerSpec {
+    /// cis-eQTL summary dataset used as the SMR exposure.
+    #[serde(default = "default_eqtl_source")]
+    pub eqtl_source: SmrEqtlSource,
     /// Chromosome to analyze. The bound 1000G reference is chromosome-split.
     pub chr: u8,
     /// Minor allele frequency threshold in the LD reference sample.
@@ -97,6 +126,10 @@ pub struct SmrHeidiContainerSpec {
 
 fn default_maf() -> f64 {
     DEFAULT_MAF
+}
+
+fn default_eqtl_source() -> SmrEqtlSource {
+    SmrEqtlSource::Westra
 }
 
 fn default_peqtl_smr() -> f64 {
@@ -262,12 +295,13 @@ pub fn validate(spec: &SmrHeidiContainerSpec) -> Result<(), String> {
 }
 
 fn build_script(spec: &SmrHeidiContainerSpec) -> String {
+    let besd_prefix = spec.eqtl_source.besd_prefix();
     format!(
         "set -eu\n\
          smr \\\n\
          \x20\x20\x20 --bfile /panels/smr_ld_ref/1000G.EUR.QC.{chr} \\\n\
          \x20\x20\x20 --gwas-summary \"${{AUTONOMICS_INPUT0}}\" \\\n\
-         \x20\x20\x20 --beqtl-summary /panels/smr_eqtl/westra_eqtl_hg19 \\\n\
+         \x20\x20\x20 --beqtl-summary /panels/smr_eqtl/{besd_prefix} \\\n\
          \x20\x20\x20 --chr {chr} \\\n\
          \x20\x20\x20 --maf {maf} \\\n\
          \x20\x20\x20 --peqtl-smr {peqtl_smr:e} \\\n\
@@ -304,6 +338,7 @@ fn build_script(spec: &SmrHeidiContainerSpec) -> String {
 
 pub fn container_spec(spec: &SmrHeidiContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
+    let eqtl_panel_id = spec.eqtl_source.panel_id();
     Ok(ContainerCommandSpec {
         image: acr_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into(), "-c".into()],
@@ -326,7 +361,7 @@ pub fn container_spec(spec: &SmrHeidiContainerSpec) -> Result<ContainerCommandSp
         panels: Vec::new(),
         panel_bundles: vec![
             ContainerPanelBundleSpec {
-                panel_id: SMR_WESTRA_EQTL_PANEL.into(),
+                panel_id: eqtl_panel_id.into(),
                 mount_path: "/panels/smr_eqtl".into(),
             },
             ContainerPanelBundleSpec {
@@ -352,23 +387,28 @@ fn port_layout() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
-fn panel_bindings() -> Vec<DataBundleBinding> {
+fn panel_bindings_for(eqtl_source: SmrEqtlSource) -> Vec<DataBundleBinding> {
     vec![
-        DataBundleBinding::new("smr_eqtl", SMR_WESTRA_EQTL_PANEL),
+        DataBundleBinding::new("smr_eqtl", eqtl_source.panel_id()),
         DataBundleBinding::new("smr_ld_ref", SMR_REF_BINARY_PANEL),
     ]
 }
 
-const DESC: &str = "Runs official SMR and HEIDI testing against Westra eQTL data.";
+fn panel_bindings() -> Vec<DataBundleBinding> {
+    panel_bindings_for(default_eqtl_source())
+}
+
+const DESC: &str = "Runs official SMR and HEIDI testing against a selected eQTL dataset.";
 
 const DOC: &str = "Runs the official SMR v1.4.2 executable in an ephemeral k3s \
 Job. Input is one GCTA-COJO `.ma` GWAS summary File with columns SNP, A1, A2, \
 freq, b, se, p, and n; A1/freq must refer to the same effect allele. The node \
-mounts the immutable Westra 2013 GRCh37 blood cis-eQTL BESD package and the \
-1000G EUR PLINK binary LD reference, analyzes one chromosome per invocation, \
-and emits the official `.smr` result plus the complete execution log. The \
-compatibility between these exact image, BESD, and LD-reference versions is \
-recorded in `docs/container-node-migration-backlog.md`.";
+mounts an immutable GRCh37 cis-eQTL BESD package selected by `eqtl_source` \
+(`westra` by default, or `eqtlgen`) plus the 1000G EUR PLINK binary LD \
+reference, analyzes one chromosome per invocation, and emits the official \
+`.smr` result plus the complete execution log. The compatibility between the \
+Westra image, BESD, and LD-reference versions is recorded in \
+`docs/container-node-migration-backlog.md`.";
 
 impl NodeFactory for SmrHeidiContainerNodeFactory {
     fn kind(&self) -> &'static str {
@@ -397,7 +437,7 @@ impl NodeFactory for SmrHeidiContainerNodeFactory {
     ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
         let spec: SmrHeidiContainerSpec = serde_json::from_value(spec)?;
         validate(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        Ok(panel_bindings())
+        Ok(panel_bindings_for(spec.eqtl_source))
     }
 
     fn ports(&self) -> NodePorts {
@@ -412,7 +452,7 @@ impl NodeFactory for SmrHeidiContainerNodeFactory {
         let spec: SmrHeidiContainerSpec = serde_json::from_value(spec)?;
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        let panel_bundles = panel_bindings()
+        let panel_bundles = panel_bindings_for(spec.eqtl_source)
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
@@ -445,6 +485,7 @@ mod tests {
 
     fn spec() -> SmrHeidiContainerSpec {
         SmrHeidiContainerSpec {
+            eqtl_source: default_eqtl_source(),
             chr: 22,
             maf: default_maf(),
             peqtl_smr: default_peqtl_smr(),
@@ -493,11 +534,56 @@ mod tests {
     }
 
     #[test]
+    fn builds_eqtlgen_smr_heidi_contract() {
+        let mut value = spec();
+        value.eqtl_source = SmrEqtlSource::EqtlGen;
+        let container = container_spec(&value).unwrap();
+
+        assert_eq!(container.panel_bundles.len(), 2);
+        assert_eq!(container.panel_bundles[0].panel_id, SMR_EQTLGEN_PANEL);
+        assert_eq!(container.panel_bundles[0].mount_path, "/panels/smr_eqtl");
+        assert_eq!(container.panel_bundles[1].panel_id, SMR_REF_BINARY_PANEL);
+        assert_eq!(container.panel_bundles[1].mount_path, "/panels/smr_ld_ref");
+
+        let script = container.script.as_deref().unwrap();
+        assert!(script.contains("--beqtl-summary /panels/smr_eqtl/eqtlgen_hg19"));
+        assert!(!script.contains("westra_eqtl_hg19"));
+
+        let bindings = panel_bindings_for(SmrEqtlSource::EqtlGen);
+        assert_eq!(bindings[0].bundle_id, SMR_EQTLGEN_PANEL);
+        assert_eq!(bindings[1].bundle_id, SMR_REF_BINARY_PANEL);
+    }
+
+    #[test]
     fn panel_bindings_match_mount_contract() {
         let bindings = panel_bindings();
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].bundle_id, SMR_WESTRA_EQTL_PANEL);
         assert_eq!(bindings[1].bundle_id, SMR_REF_BINARY_PANEL);
+    }
+
+    #[test]
+    fn defaults_to_westra_and_parses_eqtl_source() {
+        let default_spec: SmrHeidiContainerSpec = serde_json::from_value(serde_json::json!({
+            "chr": 22
+        }))
+        .unwrap();
+        assert_eq!(default_spec.eqtl_source, SmrEqtlSource::Westra);
+
+        let eqtlgen_spec: SmrHeidiContainerSpec = serde_json::from_value(serde_json::json!({
+            "eqtl_source": "eqtlgen",
+            "chr": 22
+        }))
+        .unwrap();
+        assert_eq!(eqtlgen_spec.eqtl_source, SmrEqtlSource::EqtlGen);
+
+        assert!(
+            serde_json::from_value::<SmrHeidiContainerSpec>(serde_json::json!({
+                "eqtl_source": "unknown",
+                "chr": 22
+            }))
+            .is_err()
+        );
     }
 
     #[test]
