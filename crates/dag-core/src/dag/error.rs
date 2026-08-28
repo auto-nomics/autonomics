@@ -78,6 +78,24 @@ pub enum DagError {
     #[error("scheduler: {0}")]
     Schedule(String),
 
+    /// An edge is wired but its predecessor completed without publishing a
+    /// value on the connected output port, so the input was never delivered.
+    /// Detected at dispatch time — previously the input was dropped silently
+    /// and the node executed with missing inputs (e.g. a container starting
+    /// without `AUTONOMICS_INPUT0`).
+    #[error(
+        "edge {from_node}.{from_port} -> {to_node}.{to_port} delivered no value: \
+         `{from_node}` finished without a value on output port {from_port} \
+         (stale incremental cache or a node that omitted a declared output); \
+         re-run with incremental=false or fix the wiring"
+    )]
+    MissingUpstreamOutput {
+        from_node: String,
+        from_port: u8,
+        to_node: String,
+        to_port: u8,
+    },
+
     #[error("node `{node_type}` failed: {msg}")]
     NodeError { node_type: String, msg: String },
 
@@ -210,6 +228,15 @@ impl DagError {
                 format!("no edge from `{from}.{from_port}` to `{to}.{to_port}`"),
             ),
             Self::History(msg) => ("history", msg.clone()),
+            Self::MissingUpstreamOutput {
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+            } => (
+                "missing_upstream_output",
+                format!("edge {from_node}.{from_port} -> {to_node}.{to_port} delivered no value"),
+            ),
         };
         super::runtime::DagErrorReport {
             kind: kind.into(),

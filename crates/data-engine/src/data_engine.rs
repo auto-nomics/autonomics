@@ -1335,13 +1335,15 @@ mod tests {
         engine
             .add_node_from_registry("b", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
             .unwrap();
-        // "a" has no output port named "nope".
-        engine.add_edge("a", "b", 99, 0).unwrap();
-
-        let err = engine.run().await.unwrap_err();
+        // "a" has no output port 99 — rejected immediately at add_edge time,
+        // before the edge can silently deliver nothing.
+        let err = match engine.add_edge("a", "b", 99, 0) {
+            Err(e) => e,
+            Ok(_) => panic!("add_edge with unknown output port must be rejected"),
+        };
         assert!(
             matches!(err, Error::Dag(DagError::PortNotFound { ref node, direction: "output", .. }) if node == "a"),
-            "expected PortNotFound(output), got {err:?}"
+            "expected PortNotFound(output) at add_edge, got {err:?}"
         );
     }
 

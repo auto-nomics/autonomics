@@ -378,6 +378,27 @@ impl DAG {
                             });
                         }
                     }
+                    // An edge whose predecessor published no value on the
+                    // wired output port would otherwise be dropped silently
+                    // and this node executed with missing inputs. Fail the
+                    // run with the exact edge instead.
+                    if let Some(edges) = incoming.get(&id) {
+                        for (from, edge) in edges {
+                            let Some(port) = node.ports().input_port(edge.to_port) else {
+                                continue;
+                            };
+                            if port.required
+                                && !inputs.iter().any(|input| input.port == edge.to_port)
+                            {
+                                return Err(DagError::MissingUpstreamOutput {
+                                    from_node: from.clone(),
+                                    from_port: edge.from_port,
+                                    to_node: id.clone(),
+                                    to_port: edge.to_port,
+                                });
+                            }
+                        }
+                    }
                 }
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
@@ -803,6 +824,11 @@ impl DAG {
     /// Add an edge from `from`'s `from_port` output port to `to`'s `to_port`
     /// input port. Enforces the strict 1:1 rule on declared input ports at
     /// insertion time (does not defer to [`Self::validate`]).
+    ///
+    /// Both endpoints must name ports the nodes actually declare (variadic
+    /// targets may extend beyond their declared input ports) — an edge to a
+    /// nonexistent port is rejected immediately rather than being accepted
+    /// silently and later delivering no input.
     pub fn add_edge(
         &mut self,
         from: impl Into<NodeId>,
@@ -814,8 +840,25 @@ impl DAG {
         let to = to.into();
         self.resolve_nodes(&from, &to)?;
 
-        // Enforce strict 1:1 on declared input ports at edge-insertion time.
+        // Port existence — reject out-of-range indices here instead of
+        // letting the edge validate but never deliver a value.
+        if self.nodes[&from].ports().output_port(from_port).is_none() {
+            return Err(DagError::PortNotFound {
+                node: from.clone(),
+                port: from_port,
+                direction: "output",
+            });
+        }
         let to_ports = self.nodes[&to].ports();
+        if to_ports.is_fixed_input() && to_ports.input_port(to_port).is_none() {
+            return Err(DagError::PortNotFound {
+                node: to.clone(),
+                port: to_port,
+                direction: "input",
+            });
+        }
+
+        // Enforce strict 1:1 on declared input ports at edge-insertion time.
         if to_ports.is_fixed_input() && to_ports.input_port(to_port).is_some() {
             self.ensure_port_available(&to, to_port)?;
         }
@@ -1462,11 +1505,30 @@ mod tests {
 
         async fn execute(
             &mut self,
-            _ctx: &crate::registry::NodeCtx,
+            ctx: &crate::registry::NodeCtx,
             inputs: &[NodeInput],
             _reporter: &crate::dag::node_event::NodeReporter,
         ) -> std::result::Result<PortOutputs, DagError> {
             let mut outputs = PortOutputs::new();
+            if inputs.is_empty() {
+                // Source mode: a declared output port must publish a value,
+                // otherwise downstream dispatch fails with
+                // MissingUpstreamOutput. Emit a one-column placeholder.
+                for port in self.meta.output_ports().iter() {
+                    let batch = arrow_array::RecordBatch::try_from_iter([(
+                        "value",
+                        std::sync::Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new()))
+                            as std::sync::Arc<dyn arrow_array::Array>,
+                    )])
+                    .map_err(|e| DagError::Schedule(e.to_string()))?;
+                    let df = ctx
+                        .session()
+                        .read_batch(batch)
+                        .map_err(|e| DagError::Schedule(e.to_string()))?;
+                    outputs.insert(port.index, crate::value::NodeValue::DataFrame(df));
+                }
+                return Ok(outputs);
+            }
             for inp in inputs {
                 outputs.insert(inp.port, inp.data.clone());
             }
@@ -1596,9 +1658,14 @@ mod tests {
     #[test]
     fn explicit_edge_ports() {
         let mut dag = DAG::default();
-        for id in ["x", "y"] {
-            add(&mut dag, id);
-        }
+        dag.add_node(
+            "x".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new().add_output_port(None).add_output_port(None),
+            )),
+        )
+        .unwrap();
+        add(&mut dag, "y");
         dag.add_edge("x", "y", 1, 0).unwrap();
 
         let edges = dag.incoming_edges_with_ports("y");
@@ -1676,6 +1743,93 @@ mod tests {
 
         let err = dag.add_edge("file", "df", 0, 0).unwrap_err();
         assert_matches!(err, DagError::PortTypeMismatch { .. });
+    }
+
+    #[test]
+    fn add_edge_rejects_unknown_output_port_immediately() {
+        let mut dag = DAG::default();
+        add(&mut dag, "x");
+        add(&mut dag, "y");
+        // EchoNode declares exactly one output port (0) — port 1 does not
+        // exist and must be rejected at add_edge time, not silently stored.
+        let err = dag.add_edge("x", "y", 1, 0).unwrap_err();
+        assert_matches!(
+            err,
+            DagError::PortNotFound {
+                node,
+                port: 1,
+                direction: "output",
+            } if node == "x"
+        );
+    }
+
+    #[test]
+    fn add_edge_rejects_unknown_input_port_on_fixed_nodes() {
+        let mut dag = DAG::default();
+        add(&mut dag, "x");
+        dag.add_node(
+            "fixed".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new().add_input_port(None).add_output_port(None),
+            )),
+        )
+        .unwrap();
+        let err = dag.add_edge("x", "fixed", 0, 1).unwrap_err();
+        assert_matches!(
+            err,
+            DagError::PortNotFound {
+                node,
+                port: 1,
+                direction: "input",
+            } if node == "fixed"
+        );
+    }
+
+    #[test]
+    fn add_edge_still_allows_undeclared_port_on_variadic_input() {
+        // EchoNode::default has variadic input — wiring to an undeclared
+        // port index remains legal (e.g. `sql` fan-in).
+        let mut dag = DAG::default();
+        add(&mut dag, "x");
+        add(&mut dag, "y");
+        dag.add_edge("x", "y", 0, 3).unwrap();
+        let edges = dag.incoming_edges_with_ports("y");
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].1.to_port, 3);
+    }
+
+    #[tokio::test]
+    async fn missing_upstream_output_fails_loudly_at_dispatch() {
+        // PortedNode declares one DataFrame output port but executes to an
+        // empty PortOutputs — the edge validates yet delivers nothing.
+        let mut dag = DAG::default();
+        dag.add_node(
+            "src".into(),
+            Box::new(PortedNode(NodePorts::new().add_output_port(None))),
+        )
+        .unwrap();
+        dag.add_node(
+            "sink".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_input_port(None).add_output_port(None),
+            )),
+        )
+        .unwrap();
+        dag.add_edge("src", "sink", 0, 0).unwrap();
+
+        let err = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap_err();
+        assert_matches!(
+            err,
+            DagError::MissingUpstreamOutput {
+                from_node,
+                from_port: 0,
+                to_node,
+                to_port: 0,
+            } if from_node == "src" && to_node == "sink"
+        );
     }
 
     #[derive(Clone)]
