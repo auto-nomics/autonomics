@@ -2,6 +2,11 @@
 //!
 //! The control process and Podman must resolve workspace and panel paths on
 //! the same host. Requests are translated to argv only; no shell is involved.
+//!
+//! Every Podman invocation detaches stdin (`Stdio::null()`). An attached
+//! `podman start` consumes inherited stdin even when the container was
+//! created without `--interactive`, which would steal terminal input from
+//! whatever host process (e.g. a TUI) shares that tty.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -99,6 +104,7 @@ impl ContainerRuntime for PodmanRuntime {
             .arg("--sig-proxy=false")
             .arg(&request.name)
             .kill_on_drop(true)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
@@ -178,6 +184,7 @@ async fn create_container(
         Command::new(program)
             .arg("create")
             .args(args)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output(),
@@ -221,6 +228,7 @@ async fn remove_container(program: &str, name: &str) -> Result<(), String> {
             .arg("--force")
             .arg("--time=0")
             .arg(name)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output(),
@@ -264,6 +272,7 @@ impl Drop for ContainerCleanupGuard {
         std::thread::spawn(move || {
             let _ = std::process::Command::new(program)
                 .args(["rm", "--force", "--time=0", &name])
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();

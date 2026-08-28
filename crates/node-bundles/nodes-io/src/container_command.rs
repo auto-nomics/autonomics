@@ -370,16 +370,31 @@ async fn stage_input_file(
         let operator = storage.resolve(source);
         let key = storage.resolve_path(source);
         if let Ok(bytes) = operator.read(&key).await {
-            std::fs::write(&destination, bytes.to_vec())
-                .map_err(|e| format!("cannot stage input `{}`: {e}", destination.display()))?;
+            // Blocking write on the blocking pool: a multi-GB object must
+            // not pin a tokio worker for the whole duration.
+            let staged = destination.clone();
+            let written = tokio::task::spawn_blocking(move || {
+                std::fs::write(&staged, bytes.to_vec()).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| format!("staging task failed: {e}"))
+            .and_then(|result| result);
+            written.map_err(|e| format!("cannot stage input `{}`: {e}", destination.display()))?;
             return Ok(destination);
         }
     }
 
     let host_path = Path::new(&file.path);
     if host_path.is_file() {
-        std::fs::copy(host_path, &destination)
-            .map_err(|e| format!("cannot stage input `{}`: {e}", host_path.display()))?;
+        let source = host_path.to_path_buf();
+        let staged = destination.clone();
+        let copied = tokio::task::spawn_blocking(move || {
+            std::fs::copy(&source, &staged).map(|_| ()).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("staging task failed: {e}"))
+        .and_then(|result| result);
+        copied.map_err(|e| format!("cannot stage input `{}`: {e}", host_path.display()))?;
         return Ok(destination);
     }
 
@@ -922,36 +937,71 @@ async fn publish_output(
     let metadata = tokio::fs::metadata(host_path)
         .await
         .map_err(|error| error.to_string())?;
-    let mut input = tokio::fs::File::open(host_path)
-        .await
-        .map_err(|error| error.to_string())?;
+
+    // Hash on the blocking pool while the object-store writer streams the
+    // same bytes: a single sha256 pass over a multi-GB output used to pin a
+    // tokio worker for the whole upload.
+    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+    let hash_source = host_path.to_path_buf();
+    let hashing = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
+        use std::io::Read;
+        let mut input = std::fs::File::open(&hash_source)?;
+        let mut hasher = Sha256::new();
+        let mut chunk = vec![0_u8; 1024 * 1024];
+        loop {
+            let read = input.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&chunk[..read]);
+            // A send error means the uploader aborted and went away; keep
+            // hashing so the digest stays correct.
+            let _ = chunk_tx.blocking_send(chunk[..read].to_vec());
+        }
+        Ok(format!("sha256:{}", hex(&hasher.finalize())))
+    });
+
     let mut writer = operator
         .writer(&pending_path)
         .await
         .map_err(|error| error.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut chunk = vec![0_u8; 1024 * 1024];
-    loop {
-        let read = tokio::io::AsyncReadExt::read(&mut input, &mut chunk)
-            .await
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
+    let mut upload_result: Result<(), String> = Ok(());
+    while let Some(chunk) = chunk_rx.recv().await {
+        if let Err(error) = writer.write(chunk).await {
+            upload_result = Err(error.to_string());
             break;
         }
-        let bytes = chunk[..read].to_vec();
-        hasher.update(&bytes);
-        writer
-            .write(bytes)
-            .await
-            .map_err(|error| error.to_string())?;
     }
-    writer.close().await.map_err(|error| error.to_string())?;
+    if upload_result.is_ok() {
+        upload_result = writer
+            .close()
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+    }
+    // Release the hasher if the upload aborted early, so `hashing` can
+    // finish instead of blocking on a full channel.
+    drop(chunk_rx);
+
+    let digest = match (upload_result, hashing.await) {
+        (Ok(()), Ok(Ok(digest))) => digest,
+        (upload, hashing) => {
+            let _ = operator.delete(&pending_path).await;
+            let hashing_error = match hashing {
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(join_error) => Some(format!("hashing task failed: {join_error}")),
+                Ok(Ok(_)) => None,
+            };
+            return Err(hashing_error
+                .or(upload.err())
+                .unwrap_or_else(|| "publishing the output failed".into()));
+        }
+    };
     if let Err(error) = operator.rename(&pending_path, &object_path).await {
         let _ = operator.delete(&pending_path).await;
         return Err(error.to_string());
     }
 
-    let digest = format!("sha256:{}", hex(&hasher.finalize()));
     Ok(FileRef::remote(
         format!("vfs://{virtual_path}"),
         spec.format.clone(),
