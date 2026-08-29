@@ -202,6 +202,8 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 
 - [**Statistical & Epi Nodes**](docs/sta_epi_nodes.md) — DAG node catalogue for epidemiological and clinical-biostatistics analyses: linear/logistic/Cox regression, survival (KM + log-rank), causal inference (IPTW/PSM), causal mediation (VanderWeele / CMAverse), ROC/AUC/DeLong, RCS, LASSO, WQS, chi-square, meta-analysis.
 
+- [**Radiomics Stage-A Nodes**](docs/radiomics_nodes.md) — DICOM/NIfTI/RTSTRUCT ingestion, geometry validation, preprocessing, PyRadiomics extraction, QC, and feature-set assembly.
+
 ### Visualization
 
 - [**Visualization (`visualization`)**](docs/visualization.md) — DataFusion → PNG rendering via R/ggplot2 (Arrow IPC bridge, opendal output).

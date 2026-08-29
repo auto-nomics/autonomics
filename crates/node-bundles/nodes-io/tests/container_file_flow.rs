@@ -930,42 +930,18 @@ async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage LAVA tutorial panel, k3s PVCs, kubeconfig, the local official LAVA image, and zip"]
+#[ignore = "requires the Garage LAVA tutorial panel, k3s PVCs, kubeconfig, and the local official LAVA image"]
 async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
 
-    let scratch = tempfile::tempdir().unwrap();
     let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
         });
     let fixture_data = source.join("vignettes/data");
-    let bundle_root = scratch.path().join("bundle");
-    let bundle_data = bundle_root.join("vignettes/data");
-    std::fs::create_dir_all(&bundle_data).unwrap();
-    let bundle_files = [
-        "input.info.txt",
-        "sample.overlap.txt",
-        "test.loci",
-        "depression.sumstats.txt",
-        "neuro.sumstats.txt",
-        "bmi.sumstats.txt",
-    ];
-    for name in bundle_files {
-        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
-    }
-    let bundle_zip = scratch.path().join("lava-univ-bundle.zip");
-    let zip_status = Command::new("zip")
-        .args(["-q", "-r"])
-        .arg(&bundle_zip)
-        .arg("vignettes")
-        .current_dir(&bundle_root)
-        .status()
-        .unwrap();
-    assert!(zip_status.success(), "could not create the LAVA run bundle");
-
+    let bundle_data = fixture_data.clone();
     let k3s_config = K3sConfig::from_env();
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
@@ -987,9 +963,7 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
             serde_json::json!({
                 "analysis": "univ",
                 "panel_id": nodes_io::lava_container::LAVA_TUTORIAL_REF_PANEL,
-                "input_info_file": "vignettes/data/input.info.txt",
-                "loci_file": "vignettes/data/test.loci",
-                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "sample_overlap": true,
                 "locus_index": 1,
                 "phenotypes": ["depression", "neuro", "bmi"]
             }),
@@ -997,24 +971,38 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
         .unwrap();
 
     let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "bundle".into(),
-        Box::new(FileReferenceNode::new(
-            bundle_zip.to_string_lossy().into_owned(),
-            Some("lava_run_bundle_zip".into()),
-        )),
-    )
-    .unwrap();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                bundle_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
     dag.add_node("lava_univ".into(), lava).unwrap();
-    dag.add_edge("bundle", "lava_univ", 0, 0).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_univ", 0, target_port).unwrap();
+    }
     let report = dag
         .run(&SchedulerConfig::default(), &fixture.ctx, None)
         .await
         .unwrap();
-    assert_eq!(
-        report.statuses.get("bundle"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
     assert_eq!(
         report.statuses.get("lava_univ"),
         Some(&dag_core::dag::RuntimeStatus::Success),
@@ -1924,39 +1912,13 @@ async fn real_official_mvmr_runs_in_k3s() {
 async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
-    let scratch = tempfile::tempdir().unwrap();
     let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
         });
     let fixture_data = source.join("vignettes/data");
-    let bundle_root = scratch.path().join("bundle");
-    let bundle_data = bundle_root.join("vignettes/data");
-    std::fs::create_dir_all(&bundle_data).unwrap();
-    for name in [
-        "input.info.txt",
-        "sample.overlap.txt",
-        "test.loci",
-        "depression.sumstats.txt",
-        "neuro.sumstats.txt",
-        "bmi.sumstats.txt",
-    ] {
-        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
-    }
-    let bundle_zip = scratch.path().join("lava-bivar-bundle.zip");
-    let zip_status = Command::new("zip")
-        .args(["-q", "-r"])
-        .arg(&bundle_zip)
-        .arg("vignettes")
-        .current_dir(&bundle_root)
-        .status()
-        .unwrap();
-    assert!(
-        zip_status.success(),
-        "could not create the LAVA bivar run bundle"
-    );
-
+    let bundle_data = fixture_data.clone();
     let k3s_config = K3sConfig::from_env();
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
@@ -1978,9 +1940,7 @@ async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
             serde_json::json!({
                 "analysis": "bivar",
                 "panel_id": LAVA_TUTORIAL_REF_PANEL,
-                "input_info_file": "vignettes/data/input.info.txt",
-                "loci_file": "vignettes/data/test.loci",
-                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "sample_overlap": true,
                 "locus_index": 1,
                 "phenotypes": ["depression", "neuro", "bmi"]
             }),
@@ -1988,24 +1948,38 @@ async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
         .unwrap();
 
     let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "bundle".into(),
-        Box::new(FileReferenceNode::new(
-            bundle_zip.to_string_lossy().into_owned(),
-            Some("lava_run_bundle_zip".into()),
-        )),
-    )
-    .unwrap();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                bundle_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
     dag.add_node("lava_bivar".into(), lava).unwrap();
-    dag.add_edge("bundle", "lava_bivar", 0, 0).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_bivar", 0, target_port).unwrap();
+    }
     let report = dag
         .run(&SchedulerConfig::default(), &fixture.ctx, None)
         .await
         .unwrap();
-    assert_eq!(
-        report.statuses.get("bundle"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
     assert_eq!(
         report.statuses.get("lava_bivar"),
         Some(&dag_core::dag::RuntimeStatus::Success),
@@ -2052,39 +2026,13 @@ async fn real_catalog_backed_official_lava_bivar_runs_in_k3s() {
 async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
-    let scratch = tempfile::tempdir().unwrap();
     let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
         });
     let fixture_data = source.join("vignettes/data");
-    let bundle_root = scratch.path().join("bundle");
-    let bundle_data = bundle_root.join("vignettes/data");
-    std::fs::create_dir_all(&bundle_data).unwrap();
-    for name in [
-        "input.info.txt",
-        "sample.overlap.txt",
-        "test.loci",
-        "depression.sumstats.txt",
-        "neuro.sumstats.txt",
-        "bmi.sumstats.txt",
-    ] {
-        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
-    }
-    let bundle_zip = scratch.path().join("lava-pcor-bundle.zip");
-    let zip_status = Command::new("zip")
-        .args(["-q", "-r"])
-        .arg(&bundle_zip)
-        .arg("vignettes")
-        .current_dir(&bundle_root)
-        .status()
-        .unwrap();
-    assert!(
-        zip_status.success(),
-        "could not create the LAVA pcor run bundle"
-    );
-
+    let bundle_data = fixture_data.clone();
     let k3s_config = K3sConfig::from_env();
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
@@ -2106,9 +2054,7 @@ async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
             serde_json::json!({
                 "analysis": "pcor",
                 "panel_id": LAVA_TUTORIAL_REF_PANEL,
-                "input_info_file": "vignettes/data/input.info.txt",
-                "loci_file": "vignettes/data/test.loci",
-                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "sample_overlap": true,
                 "locus_index": 1,
                 "phenotypes": ["depression", "neuro", "bmi"],
                 "target": ["depression", "neuro"]
@@ -2117,24 +2063,38 @@ async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
         .unwrap();
 
     let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "bundle".into(),
-        Box::new(FileReferenceNode::new(
-            bundle_zip.to_string_lossy().into_owned(),
-            Some("lava_run_bundle_zip".into()),
-        )),
-    )
-    .unwrap();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                bundle_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
     dag.add_node("lava_pcor".into(), lava).unwrap();
-    dag.add_edge("bundle", "lava_pcor", 0, 0).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_pcor", 0, target_port).unwrap();
+    }
     let report = dag
         .run(&SchedulerConfig::default(), &fixture.ctx, None)
         .await
         .unwrap();
-    assert_eq!(
-        report.statuses.get("bundle"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
     assert_eq!(
         report.statuses.get("lava_pcor"),
         Some(&dag_core::dag::RuntimeStatus::Success),
@@ -2166,39 +2126,13 @@ async fn real_catalog_backed_official_lava_pcor_runs_in_k3s() {
 async fn real_catalog_backed_official_lava_multireg_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
-    let scratch = tempfile::tempdir().unwrap();
     let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
         });
     let fixture_data = source.join("vignettes/data");
-    let bundle_root = scratch.path().join("bundle");
-    let bundle_data = bundle_root.join("vignettes/data");
-    std::fs::create_dir_all(&bundle_data).unwrap();
-    for name in [
-        "input.info.txt",
-        "sample.overlap.txt",
-        "test.loci",
-        "depression.sumstats.txt",
-        "neuro.sumstats.txt",
-        "bmi.sumstats.txt",
-    ] {
-        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
-    }
-    let bundle_zip = scratch.path().join("lava-multireg-bundle.zip");
-    let zip_status = Command::new("zip")
-        .args(["-q", "-r"])
-        .arg(&bundle_zip)
-        .arg("vignettes")
-        .current_dir(&bundle_root)
-        .status()
-        .unwrap();
-    assert!(
-        zip_status.success(),
-        "could not create the LAVA multireg run bundle"
-    );
-
+    let bundle_data = fixture_data.clone();
     let k3s_config = K3sConfig::from_env();
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
@@ -2220,9 +2154,7 @@ async fn real_catalog_backed_official_lava_multireg_runs_in_k3s() {
             serde_json::json!({
                 "analysis": "multireg",
                 "panel_id": LAVA_TUTORIAL_REF_PANEL,
-                "input_info_file": "vignettes/data/input.info.txt",
-                "loci_file": "vignettes/data/test.loci",
-                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "sample_overlap": true,
                 "locus_index": 1,
                 "phenotypes": ["depression", "neuro", "bmi"],
                 "target": ["bmi"],
@@ -2232,24 +2164,39 @@ async fn real_catalog_backed_official_lava_multireg_runs_in_k3s() {
         .unwrap();
 
     let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "bundle".into(),
-        Box::new(FileReferenceNode::new(
-            bundle_zip.to_string_lossy().into_owned(),
-            Some("lava_run_bundle_zip".into()),
-        )),
-    )
-    .unwrap();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                bundle_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
     dag.add_node("lava_multireg".into(), lava).unwrap();
-    dag.add_edge("bundle", "lava_multireg", 0, 0).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_multireg", 0, target_port)
+            .unwrap();
+    }
     let report = dag
         .run(&SchedulerConfig::default(), &fixture.ctx, None)
         .await
         .unwrap();
-    assert_eq!(
-        report.statuses.get("bundle"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
     assert_eq!(
         report.statuses.get("lava_multireg"),
         Some(&dag_core::dag::RuntimeStatus::Success),
@@ -3375,44 +3322,18 @@ async fn real_catalog_backed_official_gcta_summary_nodes_run_in_k3s() {
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage UKB LAVA panel, k3s PVCs, kubeconfig, the local official LAVA image, and zip"]
+#[ignore = "requires the Garage UKB LAVA panel, k3s PVCs, kubeconfig, and the local official LAVA image"]
 async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_UKB_EUR_PANEL).is_some());
 
-    let scratch = tempfile::tempdir().unwrap();
     let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
         });
     let fixture_data = source.join("vignettes/data");
-    let bundle_root = scratch.path().join("bundle");
-    let bundle_data = bundle_root.join("vignettes/data");
-    std::fs::create_dir_all(&bundle_data).unwrap();
-    for name in [
-        "input.info.txt",
-        "sample.overlap.txt",
-        "test.loci",
-        "depression.sumstats.txt",
-        "neuro.sumstats.txt",
-        "bmi.sumstats.txt",
-    ] {
-        std::fs::copy(fixture_data.join(name), bundle_data.join(name)).unwrap();
-    }
-    let bundle_zip = scratch.path().join("lava-univ-ukb-bundle.zip");
-    let zip_status = Command::new("zip")
-        .args(["-q", "-r"])
-        .arg(&bundle_zip)
-        .arg("vignettes")
-        .current_dir(&bundle_root)
-        .status()
-        .unwrap();
-    assert!(
-        zip_status.success(),
-        "could not create the LAVA UKB run bundle"
-    );
-
+    let bundle_data = fixture_data.clone();
     let k3s_config = K3sConfig::from_env();
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
     let panel_cache = Arc::new(PanelCache::new(
@@ -3434,9 +3355,7 @@ async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
             serde_json::json!({
                 "analysis": "univ",
                 "panel_id": LAVA_UKB_EUR_PANEL,
-                "input_info_file": "vignettes/data/input.info.txt",
-                "loci_file": "vignettes/data/test.loci",
-                "sample_overlap_file": "vignettes/data/sample.overlap.txt",
+                "sample_overlap": true,
                 "locus_index": 1,
                 "phenotypes": ["depression", "neuro", "bmi"]
             }),
@@ -3444,24 +3363,39 @@ async fn real_catalog_backed_official_lava_univ_ukb_panel_runs_in_k3s() {
         .unwrap();
 
     let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "bundle".into(),
-        Box::new(FileReferenceNode::new(
-            bundle_zip.to_string_lossy().into_owned(),
-            Some("lava_run_bundle_zip".into()),
-        )),
-    )
-    .unwrap();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                bundle_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
     dag.add_node("lava_univ_ukb".into(), lava).unwrap();
-    dag.add_edge("bundle", "lava_univ_ukb", 0, 0).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_univ_ukb", 0, target_port)
+            .unwrap();
+    }
     let report = dag
         .run(&SchedulerConfig::default(), &fixture.ctx, None)
         .await
         .unwrap();
-    assert_eq!(
-        report.statuses.get("bundle"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
     assert_eq!(
         report.statuses.get("lava_univ_ukb"),
         Some(&dag_core::dag::RuntimeStatus::Success),

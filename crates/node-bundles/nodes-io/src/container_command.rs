@@ -348,12 +348,28 @@ fn virtual_path(path: &str) -> Option<String> {
 }
 
 fn staged_path(base: &Path, prefix: &str, index: usize, source: &str) -> PathBuf {
-    let extension = Path::new(source)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| format!(".{extension}"))
+    let source_name = Path::new(source)
+        .file_name()
+        .and_then(|name| name.to_str())
         .unwrap_or_default();
+    // Path::extension treats `.nii.gz` as `gz`. Preserve the compound
+    // extension so format sniffing and shell globs remain usable.
+    let extension = if source_name.to_ascii_lowercase().ends_with(".gz") {
+        source_name
+            .strip_suffix(".gz")
+            .map(Path::new)
+            .and_then(|stem| stem.extension())
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!(".{extension}.gz"))
+            .unwrap_or_else(|| ".gz".into())
+    } else {
+        Path::new(source)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .filter(|extension| !extension.is_empty())
+            .map(|extension| format!(".{extension}"))
+            .unwrap_or_default()
+    };
     base.join(format!("{prefix}-{index}{extension}"))
 }
 
@@ -389,7 +405,9 @@ async fn stage_input_file(
         let source = host_path.to_path_buf();
         let staged = destination.clone();
         let copied = tokio::task::spawn_blocking(move || {
-            std::fs::copy(&source, &staged).map(|_| ()).map_err(|e| e.to_string())
+            std::fs::copy(&source, &staged)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| format!("staging task failed: {e}"))
@@ -417,9 +435,14 @@ async fn stage_inputs(
         )
     })?;
 
-    let mut staged = Vec::with_capacity(inputs.len());
+    // Scheduler inputs follow edge insertion order, not necessarily input-port
+    // order. Stage by port first so batch image FileSets, mask FileSets, and
+    // manifest Files receive deterministic AUTONOMICS_INPUT* ranges.
+    let mut ordered_inputs = inputs.to_vec();
+    ordered_inputs.sort_by_key(|input| input.port);
+    let mut staged = Vec::with_capacity(ordered_inputs.len());
     let mut index = 0usize;
-    for input in inputs {
+    for input in &ordered_inputs {
         let value = match &input.data {
             NodeValue::File(file) => {
                 let path = stage_input_file(ctx, &staging_dir, index, file).await?;
@@ -869,12 +892,18 @@ impl DagNode for ContainerCommandNode {
 }
 
 fn container_path(workspace_path: &Path, host_path: &str) -> String {
-    let path = Path::new(host_path);
-    let relative = path.strip_prefix(workspace_path).unwrap_or(path);
-    Path::new(DEFAULT_CONTAINER_WORKDIR)
-        .join(relative)
-        .to_string_lossy()
-        .into_owned()
+    host_path
+        .split(',')
+        .map(|single_path| {
+            let path = Path::new(single_path);
+            let relative = path.strip_prefix(workspace_path).unwrap_or(path);
+            Path::new(DEFAULT_CONTAINER_WORKDIR)
+                .join(relative)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn unique_scratch_suffix() -> String {
@@ -1244,6 +1273,104 @@ mod tests {
             shm_size: None,
             user: None,
         }
+    }
+
+    #[test]
+    fn staged_path_preserves_compound_gzip_extensions() {
+        let path = staged_path(
+            Path::new("/tmp/stage"),
+            "input",
+            7,
+            "/data/case/image.nii.gz",
+        );
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("input-7.nii.gz")
+        );
+
+        let path = staged_path(Path::new("/tmp/stage"), "input", 8, "/data/only.gz");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("input-8.gz")
+        );
+    }
+
+    #[test]
+    fn container_path_maps_every_file_set_member() {
+        let workspace = Path::new("/host/workspace/run");
+        let host_paths = format!(
+            "{},{}",
+            workspace.join("image-0.nii.gz").display(),
+            workspace.join("image-1.nii.gz").display()
+        );
+        assert_eq!(
+            container_path(workspace, &host_paths),
+            format!(
+                "{}/image-0.nii.gz,{}/image-1.nii.gz",
+                DEFAULT_CONTAINER_WORKDIR, DEFAULT_CONTAINER_WORKDIR
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_inputs_assigns_input_ranges_by_declared_port() {
+        let env = test_env();
+        let source = tempfile::tempdir().unwrap();
+        let image_one = source.path().join("image1.nii.gz");
+        let image_two = source.path().join("image2.nii.gz");
+        let mask_one = source.path().join("mask1.nii.gz");
+        let manifest = source.path().join("manifest.csv");
+        std::fs::write(&image_one, "image-one").unwrap();
+        std::fs::write(&image_two, "image-two").unwrap();
+        std::fs::write(&mask_one, "mask-one").unwrap();
+        std::fs::write(&manifest, "manifest").unwrap();
+
+        let image_file = |path: &Path| FileRef::local(path, Some("nifti_gz".into())).unwrap();
+        let manifest_input =
+            NodeInput::file(2, FileRef::local(&manifest, Some("csv".into())).unwrap());
+        let image_input = NodeInput {
+            port: 0,
+            data: NodeValue::FileSet(vec![image_file(&image_one), image_file(&image_two)]),
+        };
+        let mask_input = NodeInput {
+            port: 1,
+            data: NodeValue::FileSet(vec![image_file(&mask_one)]),
+        };
+
+        let staged = stage_inputs(
+            &env.ctx,
+            env.workspace.path(),
+            &[manifest_input, image_input, mask_input],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            staged.iter().map(|input| input.port).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let images = staged[0].data.as_file_set().unwrap();
+        let masks = staged[1].data.as_file_set().unwrap();
+        let staged_manifest = staged[2].data.as_file().unwrap();
+        assert_eq!(
+            images
+                .iter()
+                .map(|file| Path::new(&file.path).file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["input-0.nii.gz", "input-1.nii.gz"]
+        );
+        assert_eq!(
+            Path::new(&masks[0].path)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("input-2.nii.gz")
+        );
+        assert_eq!(
+            Path::new(&staged_manifest.path)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("input-3.csv")
+        );
     }
 
     #[tokio::test]

@@ -204,6 +204,8 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo run -p tui
 
 - [**统计与流行病学节点**](docs/sta_epi_nodes_zh.md) — 流行病学与临床生物统计分析的 DAG 节点目录：线性/logistic/Cox 回归、生存分析（KM + log-rank）、因果推断（IPTW/PSM）、因果中介（VanderWeele / CMAverse）、ROC/AUC/DeLong、RCS、LASSO、WQS、卡方检验、荟萃分析。
 
+- [**影像组学 A 阶段节点**](docs/radiomics_nodes.md) — DICOM/NIfTI/RTSTRUCT 读取、几何校验、预处理、PyRadiomics 特征提取、QC 和特征集组装。
+
 ### 可视化
 
 - [**可视化（`visualization`）**](docs/visualization_zh.md) — 通过 R/ggplot2 将 DataFusion 渲染为 PNG（Arrow IPC 桥接、opendal 输出）。

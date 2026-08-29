@@ -7328,6 +7328,7 @@ dependencies = [
  "datafusion",
  "flate2",
  "futures",
+ "glob",
  "libc",
  "mr",
  "openalex",

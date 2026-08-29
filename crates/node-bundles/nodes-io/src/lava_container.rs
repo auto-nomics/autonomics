@@ -1,9 +1,9 @@
 //! Containerized LAVA node backed by the official R package.
 //!
 //! LAVA consumes several named files and builds an opaque in-memory locus
-//! object. The public node therefore takes one ZIP run bundle, invokes the
-//! official `process.input -> read.loci -> process.locus -> run.*` path, and
-//! owns the compatible image/reference-panel binding.
+//! object. The public node accepts those files directly, invokes the official
+//! `process.input -> read.loci -> process.locus -> run.*` path, and owns the
+//! compatible image/reference-panel binding.
 
 use std::sync::Arc;
 
@@ -95,24 +95,17 @@ pub struct LavaContainerSpec {
     /// Optional override for the filename prefix inside the mounted panel.
     #[serde(default)]
     pub ref_prefix_override: Option<String>,
-    /// Input-info path relative to the ZIP bundle root.
-    #[serde(default = "default_input_info_file")]
-    pub input_info_file: String,
-    /// Loci-table path relative to the ZIP bundle root.
-    #[serde(default = "default_loci_file")]
-    pub loci_file: String,
-    /// Optional sample-overlap path relative to the ZIP bundle root.
+    /// Whether a sample-overlap matrix is connected to input port 2.
     #[serde(default)]
-    pub sample_overlap_file: Option<String>,
+    pub sample_overlap: bool,
+    /// Phenotypes in the same order as their sumstats input ports.
+    pub phenotypes: Vec<String>,
     /// One-based row in the loci table. Ignored when `locus_id` is set.
     #[serde(default = "default_locus_index")]
     pub locus_index: usize,
     /// Optional `LOC` identifier from the loci table.
     #[serde(default)]
     pub locus_id: Option<String>,
-    /// Optional phenotype subset passed to `process.input`.
-    #[serde(default)]
-    pub phenotypes: Option<Vec<String>>,
     /// Target phenotype(s); the required shape depends on `analysis`.
     #[serde(default)]
     pub target: Option<Vec<String>>,
@@ -140,14 +133,6 @@ pub struct LavaContainerSpec {
     /// Maximum container runtime in seconds.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-}
-
-fn default_input_info_file() -> String {
-    "input.info.txt".into()
-}
-
-fn default_loci_file() -> String {
-    "loci.txt".into()
 }
 
 fn default_locus_index() -> usize {
@@ -186,12 +171,14 @@ impl LavaContainerNodeFactory {
 
 pub struct LavaContainerNode {
     inner: Box<dyn DagNode>,
+    ports: NodePorts,
 }
 
 impl Clone for LavaContainerNode {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone_box(),
+            ports: self.ports.clone(),
         }
     }
 }
@@ -199,7 +186,7 @@ impl Clone for LavaContainerNode {
 #[async_trait::async_trait]
 impl DagNode for LavaContainerNode {
     fn ports(&self) -> &NodePorts {
-        self.inner.ports()
+        &self.ports
     }
 
     fn clone_box(&self) -> Box<dyn DagNode> {
@@ -224,17 +211,6 @@ impl DagNode for LavaContainerNode {
     }
 }
 
-fn validate_bundle_path(value: &str, field: &str) -> Result<(), String> {
-    if value.is_empty()
-        || std::path::Path::new(value)
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return Err(format!("{field} must be a safe relative bundle path"));
-    }
-    Ok(())
-}
-
 fn validate_finite_positive(value: f64, field: &str) -> Result<(), String> {
     if !value.is_finite() || value <= 0.0 {
         return Err(format!("{field} must be finite and greater than zero"));
@@ -252,11 +228,6 @@ pub fn validate(spec: &LavaContainerSpec) -> Result<(), String> {
     if spec.timeout_secs == 0 {
         return Err("timeout_secs must be greater than zero".into());
     }
-    validate_bundle_path(&spec.input_info_file, "input_info_file")?;
-    validate_bundle_path(&spec.loci_file, "loci_file")?;
-    if let Some(path) = &spec.sample_overlap_file {
-        validate_bundle_path(path, "sample_overlap_file")?;
-    }
     if spec.locus_index == 0 {
         return Err("locus_index must be one-based".into());
     }
@@ -265,10 +236,25 @@ pub fn validate(spec: &LavaContainerSpec) -> Result<(), String> {
     {
         return Err("locus_id cannot be empty".into());
     }
-    if let Some(phenotypes) = &spec.phenotypes
-        && (phenotypes.is_empty() || phenotypes.iter().any(|value| value.trim().is_empty()))
+    if spec.phenotypes.is_empty() || spec.phenotypes.iter().any(|value| value.trim().is_empty()) {
+        return Err("phenotypes cannot be empty and cannot contain empty IDs".into());
+    }
+    let mut unique_phenotypes = spec.phenotypes.clone();
+    unique_phenotypes.sort();
+    unique_phenotypes.dedup();
+    if unique_phenotypes.len() != spec.phenotypes.len() {
+        return Err("phenotypes cannot contain duplicate IDs".into());
+    }
+    if let Some(target) = &spec.target
+        && target.iter().any(|value| !spec.phenotypes.contains(value))
     {
-        return Err("phenotypes cannot contain empty IDs".into());
+        return Err("target must reference one of phenotypes".into());
+    }
+    if spec.analysis != LavaAnalysis::Univ && spec.phenotypes.len() < 2 {
+        return Err(
+            "bivariate, partial-correlation, and multiregression analyses require at least two phenotypes"
+                .into(),
+        );
     }
     if let Some(thresholds) = &spec.adap_thresh {
         if thresholds.is_empty() {
@@ -325,13 +311,6 @@ fn r_strings(values: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("c({values})")
-}
-
-fn optional_r_strings(values: &Option<Vec<String>>) -> String {
-    values
-        .as_ref()
-        .map(|values| r_strings(values))
-        .unwrap_or_else(|| "NULL".into())
 }
 
 fn r_bool(value: bool) -> &'static str {
@@ -416,26 +395,60 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
         ),
     };
     let sample_overlap = spec
-        .sample_overlap_file
-        .as_deref()
-        .map(r_string)
+        .sample_overlap
+        .then(|| "Sys.getenv(\"AUTONOMICS_INPUT2\")".to_string())
         .unwrap_or_else(|| "NULL".into());
+    let sumstats_base = if spec.sample_overlap { 3 } else { 2 };
+    let sumstats = spec
+        .phenotypes
+        .iter()
+        .enumerate()
+        .map(|(index, _)| format!("Sys.getenv(\"AUTONOMICS_INPUT{}\")", sumstats_base + index))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let expected_inputs = sumstats_base + spec.phenotypes.len();
     let analysis_name = format!("{:?}", spec.analysis).to_lowercase();
     let script = format!(
         "options(width = 200)\n\
          sink(Sys.getenv(\"AUTONOMICS_OUTPUT2\"), split = TRUE)\n\
          on.exit(sink(), add = TRUE)\n\
-         bundle_dir <- file.path(Sys.getenv(\"AUTONOMICS_WORKDIR\"), \".autonomics\", \"bundle\")\n\
-         dir.create(bundle_dir, recursive = TRUE, showWarnings = FALSE)\n\
-         utils::unzip(Sys.getenv(\"AUTONOMICS_INPUT0\"), exdir = bundle_dir)\n\
-         setwd(bundle_dir)\n\
+         if (as.integer(Sys.getenv(\"AUTONOMICS_INPUT_COUNT\")) != {expected_inputs}) {{\n\
+         \x20 stop(\"LAVA input port count does not match its specification\")\n\
+         }}\n\
          phenos <- {}\n\
+         input_info <- read.table(\n\
+         \x20 Sys.getenv(\"AUTONOMICS_INPUT0\"),\n\
+         \x20 header = TRUE,\n\
+         \x20 check.names = FALSE,\n\
+         \x20 stringsAsFactors = FALSE\n\
+         )\n\
+         if (!all(c(\"phenotype\", \"cases\", \"controls\") %in% names(input_info))) {{\n\
+         \x20 stop(\"input.info must contain phenotype, cases, and controls columns\")\n\
+         }}\n\
+         if (anyDuplicated(input_info$phenotype)) {{\n\
+         \x20 stop(\"input.info phenotype IDs must be unique\")\n\
+         }}\n\
+         if (!all(phenos %in% input_info$phenotype)) {{\n\
+         \x20 stop(\"one or more configured phenotypes are missing from input.info\")\n\
+         }}\n\
+         input_info <- input_info[match(phenos, input_info$phenotype), , drop = FALSE]\n\
+         sumstats_paths <- c({sumstats})\n\
+         input_info$filename <- unname(sumstats_paths)\n\
+         normalized_input_info <- file.path(Sys.getenv(\"AUTONOMICS_WORKDIR\"), \".autonomics\", \"lava\", \"input.info.txt\")\n\
+         dir.create(dirname(normalized_input_info), recursive = TRUE, showWarnings = FALSE)\n\
+         write.table(\n\
+         \x20 input_info,\n\
+         \x20 normalized_input_info,\n\
+         \x20 sep = \"\\t\",\n\
+         \x20 quote = FALSE,\n\
+         \x20 row.names = FALSE\n\
+         )\n\
          input <- LAVA::process.input(\n\
-         \x20 input.info.file = {},\n\
-         \x20 sample.overlap.file = {},\n\
+         \x20 input.info.file = normalized_input_info,\n\
+         \x20 sample.overlap.file = {sample_overlap},\n\
          \x20 ref.prefix = \"{}/{}\",\n\
          \x20 phenos = phenos\n         )\n\
-         loci <- LAVA::read.loci({})\n\
+         loci <- LAVA::read.loci(Sys.getenv(\"AUTONOMICS_INPUT1\"))\n\
          if ({locus_selector} > nrow(loci) || is.na({locus_selector})) {{\n\
          \x20 stop(\"selected locus is outside the loci table\")\n\
          }}\n\
@@ -480,12 +493,9 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
          \x20 row.names = FALSE\n\
          )\n\
          saveRDS(list(locus = locus_row, analysis = {}, result = result), Sys.getenv(\"AUTONOMICS_OUTPUT1\"))\n",
-        optional_r_strings(&spec.phenotypes),
-        r_string(&spec.input_info_file),
-        sample_overlap,
+        r_strings(&spec.phenotypes),
         mount_path.as_str(),
         ref_prefix.as_str(),
-        r_string(&spec.loci_file),
         locus_selector,
         DEFAULT_MIN_K,
         DEFAULT_PRUNE_THRESH,
@@ -536,6 +546,24 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
 fn port_layout() -> NodePorts {
     NodePorts::new()
         .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn port_layout_for(sample_overlap: bool, phenotype_count: usize) -> NodePorts {
+    let mut ports = NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File);
+    if sample_overlap {
+        ports = ports.add_input_port_of_type(None, PortType::File);
+    }
+    for _ in 0..phenotype_count {
+        ports = ports.add_input_port_of_type(None, PortType::File);
+    }
+    ports
         .add_output_port_of_type(None, PortType::File)
         .add_output_port_of_type(None, PortType::File)
         .add_output_port_of_type(None, PortType::File)
@@ -560,9 +588,10 @@ impl NodeFactory for LavaContainerNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Runs the official LAVA R package in an ephemeral OCI container. Input is \
-        one ZIP run bundle containing `input.info.txt`, a loci table, an optional \
-        sample-overlap matrix, and all referenced sumstats files with their relative \
-        paths preserved. `analysis` selects `run.univ`, `run.bivar`, `run.pcor`, or \
+        connected directly rather than packaged in an archive: input port 0 is the \
+        input-info table, port 1 is the loci table, optional port 2 is controlled by \
+        `sample_overlap`, and the remaining ports are one sumstats file per `phenotypes` \
+        entry in order. `analysis` selects `run.univ`, `run.bivar`, `run.pcor`, or \
         `run.multireg`; exactly one locus is processed. The node owns the official \
         LAVA image and tutorial reference-panel binding, emits a flattened TSV result, \
         the raw official result as RDS, and the complete LAVA log. The tutorial panel \
@@ -611,8 +640,10 @@ impl NodeFactory for LavaContainerNodeFactory {
             panel_bundles,
         )
         .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
+        let ports = port_layout_for(spec.sample_overlap, spec.phenotypes.len());
         Ok(Box::new(LavaContainerNode {
             inner: Box::new(node),
+            ports,
         }))
     }
 
@@ -622,7 +653,7 @@ impl NodeFactory for LavaContainerNodeFactory {
     ) -> dag_core::registry::error::Result<NodePorts> {
         let spec: LavaContainerSpec = serde_json::from_value(spec)?;
         validate(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        Ok(port_layout())
+        Ok(port_layout_for(spec.sample_overlap, spec.phenotypes.len()))
     }
 }
 
@@ -636,12 +667,10 @@ mod tests {
             mount_path_override: None,
             ref_prefix_override: None,
             analysis,
-            input_info_file: default_input_info_file(),
-            loci_file: default_loci_file(),
-            sample_overlap_file: Some("sample.overlap.txt".into()),
+            sample_overlap: true,
             locus_index: DEFAULT_LOCUS_INDEX,
             locus_id: None,
-            phenotypes: Some(vec!["bmi".into(), "depression".into()]),
+            phenotypes: vec!["bmi".into(), "depression".into()],
             target,
             variances: false,
             adap_thresh: Some(vec![1e-4, 1e-6]),
@@ -669,7 +698,11 @@ mod tests {
         assert!(script.contains("LAVA::process.locus"));
         assert!(script.contains("LAVA::run.bivar"));
         assert!(script.contains("\"/panels/lava_ref/g1000_test\""));
-        assert!(script.contains("utils::unzip"));
+        assert!(script.contains("read.table("));
+        assert!(script.contains("Sys.getenv(\"AUTONOMICS_INPUT2\")"));
+        assert!(script.contains("Sys.getenv(\"AUTONOMICS_INPUT3\")"));
+        assert!(script.contains("Sys.getenv(\"AUTONOMICS_INPUT4\")"));
+        assert!(!script.contains("utils::unzip"));
         assert!(script.contains("analysis = \"bivar\""));
         assert_eq!(container.outputs.len(), 3);
     }
@@ -702,11 +735,12 @@ mod tests {
 
     #[test]
     fn generates_each_official_analysis_call() {
-        let pcor = container_spec(&spec(
+        let mut pcor_spec = spec(
             LavaAnalysis::Pcor,
             Some(vec!["depression".into(), "neuro".into()]),
-        ))
-        .unwrap();
+        );
+        pcor_spec.phenotypes.push("neuro".into());
+        let pcor = container_spec(&pcor_spec).unwrap();
         assert!(pcor.script.as_deref().unwrap().contains(
             "LAVA::run.pcor(locus, phenos = phenos, target = c(\"depression\", \"neuro\")"
         ));
@@ -723,11 +757,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsafe_bundle_paths() {
+    fn builds_direct_file_port_layout() {
+        let value = spec(LavaAnalysis::Univ, None);
+        assert_eq!(
+            port_layout_for(value.sample_overlap, value.phenotypes.len())
+                .input_ports()
+                .len(),
+            5
+        );
+
+        let mut no_overlap = spec(LavaAnalysis::Univ, None);
+        no_overlap.sample_overlap = false;
+        assert_eq!(
+            port_layout_for(no_overlap.sample_overlap, no_overlap.phenotypes.len())
+                .input_ports()
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unknown_phenotypes() {
         let mut value = spec(LavaAnalysis::Univ, None);
-        value.input_info_file = "/etc/passwd".into();
+        value.phenotypes.push("bmi".into());
         assert!(validate(&value).is_err());
-        value.input_info_file = "../input.info.txt".into();
+
+        let value = spec(LavaAnalysis::Bivar, Some(vec!["neuro".into()]));
         assert!(validate(&value).is_err());
     }
 }
