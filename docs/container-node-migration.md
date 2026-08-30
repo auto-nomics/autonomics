@@ -333,7 +333,7 @@ MiXeR is the source-backed Python/C++ reference case:
 
 ```text
 containers/mixer/Dockerfile
-mixer.g1000_eur
+mixer.g1000_eur_rsid
 crates/node-bundles/nodes-io/src/mixer_container.rs
 ```
 

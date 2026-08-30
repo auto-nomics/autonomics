@@ -23,7 +23,7 @@ pub const MIXER_FIT2_CONTAINER_KIND: &str = "mixer_fit2_container";
 pub const MIXER_ORIGINAL_IMAGE_REPOSITORY: &str = "mixer";
 pub const MIXER_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7";
-pub const MIXER_G1000_EUR_PANEL: &str = "mixer.g1000_eur";
+pub const MIXER_G1000_EUR_RSID_PANEL: &str = "mixer.g1000_eur_rsid";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mixer_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 21_600;
@@ -269,7 +269,7 @@ fn container_spec(
         timeout_secs: spec.timeout_secs,
         panels: Vec::new(),
         panel_bundles: vec![ContainerPanelBundleSpec {
-            panel_id: MIXER_G1000_EUR_PANEL.into(),
+            panel_id: MIXER_G1000_EUR_RSID_PANEL.into(),
             mount_path: "/panels/mixer_g1000_eur".into(),
         }],
         network: "isolated".into(),
@@ -303,7 +303,7 @@ fn fit2_ports() -> NodePorts {
 fn panel_bindings() -> Vec<DataBundleBinding> {
     vec![DataBundleBinding::new(
         "mixer_g1000_eur",
-        MIXER_G1000_EUR_PANEL,
+        MIXER_G1000_EUR_RSID_PANEL,
     )]
 }
 
@@ -548,7 +548,7 @@ mod tests {
         );
         assert_eq!(value.pull_policy, PullPolicy::Missing);
         assert_eq!(value.panel_bundles.len(), 1);
-        assert_eq!(value.panel_bundles[0].panel_id, MIXER_G1000_EUR_PANEL);
+        assert_eq!(value.panel_bundles[0].panel_id, MIXER_G1000_EUR_RSID_PANEL);
         assert_eq!(value.outputs.len(), 2);
         assert!(value.script.as_deref().unwrap().contains("fit1"));
         assert!(

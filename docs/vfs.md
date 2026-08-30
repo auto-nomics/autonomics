@@ -220,9 +220,11 @@ vfs:///data/mixer/resources/g1000_eur/engine/precimed/mixer.py
 vfs:///data/mixer/resources/g1000_eur/ld_mixer/1000G.EUR.chr@
 ```
 The production `mixer.g1000_eur` catalog package carries the EUR/GRCh37 BIM,
-signed-LD, and tag-SNP payloads. The MiXeR and SuSiE-RSS OCI images carry their
-official engines and pinned runtimes; DAG specs never reference raw panel
-paths.
+signed-LD, and tag-SNP payloads. The rsID-addressed MiXeR runtime uses the
+derived `mixer.g1000_eur_rsid` package, while SuSiE-RSS continues to use the
+coordinate-addressed signed-LD package. The MiXeR and SuSiE-RSS OCI images
+carry their official engines and pinned runtimes; DAG specs never reference
+raw panel paths.
 
 `susie_rss_container` reuses the cataloged `mixer.g1000_eur` package for signed
 Pearson-r LD lookup. The wrapper owns the panel binding and does not expose raw

@@ -35,6 +35,9 @@ use nodes_io::gcta_container::{
     GCTA_GENE_LIST_PANEL, GCTA_REF_BINARY_PANEL, GCTA_SBLUP_CONTAINER_KIND,
     GctaContainerNodeFactory,
 };
+use nodes_io::hdl_l_container::{
+    HDL_L_CONTAINER_KIND, HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
+};
 use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
 use nodes_io::lava_container::{
     LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
@@ -46,7 +49,7 @@ use nodes_io::magma_annotate_container::{
     MAGMA_ANNOTATE_CONTAINER_KIND, MAGMA_GENE_LOC_PANEL, MagmaAnnotateContainerNodeFactory,
 };
 use nodes_io::mixer_container::{
-    MIXER_FIT1_CONTAINER_KIND, MIXER_FIT2_CONTAINER_KIND, MIXER_G1000_EUR_PANEL,
+    MIXER_FIT1_CONTAINER_KIND, MIXER_FIT2_CONTAINER_KIND, MIXER_G1000_EUR_RSID_PANEL,
     MixerFit1ContainerNodeFactory, MixerFit2ContainerNodeFactory,
 };
 use nodes_io::mrpresso_container::{MRPRESSO_CONTAINER_KIND, MrpressoContainerNodeFactory};
@@ -986,6 +989,139 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
 }
 
 #[tokio::test]
+#[ignore = "requires the Garage HDL UKB panel, k3s PVCs, kubeconfig, the official HDL image, and HDL-L sumstats"]
+async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(HDL_UKB_EUR_PANEL).is_some(),
+        "the official HDL UKB panel must be published before the E2E baseline"
+    );
+
+    let input1 = std::env::var_os("AUTONOMICS_HDL_IT_SUMSTATS1")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-it/gwas1.tsv").to_path_buf());
+    let input2 = std::env::var_os("AUTONOMICS_HDL_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-it/gwas2.tsv").to_path_buf());
+    assert!(
+        input1.is_file() && input2.is_file(),
+        "missing HDL-L sumstats fixtures: {} and {}",
+        input1.display(),
+        input2.display()
+    );
+
+    let k3s_config = K3sConfig::from_env();
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
+    let panel_cache = Arc::new(PanelCache::new(
+        k3s_config.panel_cache_root.clone(),
+        k3s_config.panel_pvc_prefix,
+    ));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(HdlLContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    // The production wrapper always pins a manifest digest. Local k3s tests
+    // resolve that digest through the configured image endpoint.
+    // SAFETY: ignored E2E tests are run one at a time by the HDL test script.
+    unsafe {
+        std::env::set_var(
+            nodes_io::image_registry::ACR_ENDPOINT_ENV,
+            std::env::var("AUTONOMICS_HDL_IMAGE_ENDPOINT")
+                .unwrap_or_else(|_| "192.168.10.24:30500".into()),
+        );
+    }
+    let hdl_l = registry
+        .build_node(
+            HDL_L_CONTAINER_KIND,
+            serde_json::json!({
+                "chr": 1,
+                "piece": 3,
+                "trait1_name": "trait1",
+                "trait2_name": "trait2"
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "trait1".into(),
+        Box::new(FileReferenceNode::new(
+            input1.to_string_lossy().into_owned(),
+            Some("hdl_l_sumstats".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node(
+        "trait2".into(),
+        Box::new(FileReferenceNode::new(
+            input2.to_string_lossy().into_owned(),
+            Some("hdl_l_sumstats".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("hdl_l".into(), hdl_l).unwrap();
+    dag.add_edge("trait1", "hdl_l", 0, 0).unwrap();
+    dag.add_edge("trait2", "hdl_l", 0, 1).unwrap();
+    let report = dag.run(&fixture.ctx, None).await.unwrap();
+    assert_eq!(
+        report.statuses.get("hdl_l"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "HDL-L node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("hdl_l").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(tsv.path.ends_with("/hdl_l.tsv"));
+    assert!(rds.path.ends_with("/hdl_l.RDS"));
+    assert!(log.path.ends_with("/hdl_l.log"));
+    assert!(tsv.path.starts_with("vfs:///artifacts/hdl_l_container/"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let tsv_text = read_published_text(storage, &tsv).await;
+    let log_text = read_published_text(storage, &log).await;
+    for expected in [
+        "Trait1",
+        "Trait2",
+        "Heritability_1",
+        "Heritability_2",
+        "Genetic_Correlation",
+    ] {
+        assert!(
+            tsv_text.contains(expected),
+            "official HDL-L result is missing `{expected}`:\n{tsv_text}"
+        );
+    }
+    for expected in ["Analysis starts on", "Analysis finished at"] {
+        assert!(
+            log_text.contains(expected),
+            "official HDL-L log is missing `{expected}`:\n{log_text}"
+        );
+    }
+
+    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{HDL_UKB_EUR_PANEL}@"))
+        });
+    assert!(cached_panel, "HDL UKB panel should be cached");
+}
+
+#[tokio::test]
 #[ignore = "requires the Garage gene-location panel, k3s PVCs, kubeconfig, and the local MAGMA image"]
 async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
@@ -1226,8 +1362,8 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
 }
 
 #[tokio::test]
-#[ignore = "requires the official gsa-mixer fixtures, k3s PVCs, kubeconfig, and the local MiXeR image"]
-async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
+#[ignore = "requires the official gsa-mixer fixtures, rootless Podman, and the ACR MiXeR image"]
+async fn real_official_mixer_fit1_and_fit2_run_in_podman_and_match_baselines() {
     let source = std::env::var_os("AUTONOMICS_MIXER_IT_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -1268,7 +1404,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
         &panel_staging,
         &panel_package,
         data_catalog::package::BuildOptions {
-            id: Some(MIXER_G1000_EUR_PANEL.to_string()),
+            id: Some(MIXER_G1000_EUR_RSID_PANEL.to_string()),
             version: Some("v2.2.1-fixture".to_string()),
             kind: Some("mixer_reference".to_string()),
             metadata,
@@ -1355,7 +1491,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
     let ctx = NodeCtx::new(session.runtime_env(), Some(storage));
 
     let mut panel = dag_core::DataBundle::new(
-        MIXER_G1000_EUR_PANEL,
+        MIXER_G1000_EUR_RSID_PANEL,
         "MiXeR GRCh37 EUR migration fixture",
         "/catalog/mixer_g1000_eur",
     );
@@ -1365,12 +1501,17 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
         dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
     ));
 
-    let k3s_config = K3sConfig::from_env();
-    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
-    let panel_cache = Arc::new(PanelCache::new(
-        k3s_config.panel_cache_root.clone(),
-        k3s_config.panel_pvc_prefix,
-    ));
+    let workspace_root = scratch.path().join("podman-workspace");
+    let panel_cache_root = scratch.path().join("podman-panels");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::create_dir_all(&panel_cache_root).unwrap();
+    let podman_config = PodmanConfig {
+        program: "podman".into(),
+        workspace_root,
+        panel_cache_root: panel_cache_root.clone(),
+    };
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(podman_config));
+    let panel_cache = Arc::new(PanelCache::new(panel_cache_root.clone(), ""));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(MixerFit1ContainerNodeFactory::new(
         Arc::clone(&runtime),
@@ -1532,20 +1673,20 @@ async fn real_official_mixer_fit1_and_fit2_run_in_k3s_and_match_baselines() {
     assert!(fit2_log.contains("MiXeR v2.2.1"));
 
     let cache_key = format!(
-        "{MIXER_G1000_EUR_PANEL}@{}",
+        "{MIXER_G1000_EUR_RSID_PANEL}@{}",
         built.manifest.digest.as_deref().unwrap()
     );
     assert!(
-        k3s_config.panel_cache_root.join(cache_key).is_dir(),
+        panel_cache_root.join(cache_key).is_dir(),
         "MiXeR fixture panel should remain in PanelCache"
     );
 }
 
 #[tokio::test]
 #[ignore = "requires the published MiXeR GRCh37 EUR catalog panel, k3s PVCs, kubeconfig, and the local official image"]
-async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
+async fn real_published_mixer_rsid_panel_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
-    assert!(fixture.bundles.get(MIXER_G1000_EUR_PANEL).is_some());
+    assert!(fixture.bundles.get(MIXER_G1000_EUR_RSID_PANEL).is_some());
     let sumstats_path = std::env::var_os("AUTONOMICS_MIXER_IT_SUMSTATS")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -1600,7 +1741,9 @@ async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
     );
     assert_eq!(
         report.statuses.get("mixer_fit1"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "published MiXeR run failed: {:?}",
+        report.errors.get("mixer_fit1")
     );
 
     let outputs = dag.output("mixer_fit1").unwrap();
@@ -1633,6 +1776,11 @@ async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
     let log = mixer_published_text(storage, &log_file).await;
     let result: serde_json::Value = serde_json::from_str(&result_text).unwrap();
     assert_eq!(result["options"]["num_snp"], 271_783.0);
+    assert!(
+        result["options"]["num_tag"].as_f64().unwrap_or_default() >= 100.0,
+        "rsID panel failed to retain a usable chr21-22 tag set: {:?}",
+        result["options"]["num_tag"]
+    );
     assert!(log.contains("MiXeR v2.2.1"));
 
     let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
@@ -1642,7 +1790,7 @@ async fn real_published_mixer_g1000_eur_panel_runs_in_k3s() {
             entry
                 .file_name()
                 .to_string_lossy()
-                .starts_with(&format!("{MIXER_G1000_EUR_PANEL}@"))
+                .starts_with(&format!("{MIXER_G1000_EUR_RSID_PANEL}@"))
         });
     assert!(
         cached_panel,

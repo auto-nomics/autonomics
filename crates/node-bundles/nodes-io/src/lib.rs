@@ -7,6 +7,7 @@ pub mod dataframe_to_file;
 pub mod file_reference;
 pub mod file_to_dataframe;
 pub mod gcta_container;
+pub mod hdl_l_container;
 pub mod hyprcoloc_container;
 pub mod image_registry;
 pub mod lava_container;
@@ -194,6 +195,10 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(hdl_l_container::HdlLContainerNodeFactory::new(
+            Arc::clone(&self.container_execution.runtime),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
         registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),

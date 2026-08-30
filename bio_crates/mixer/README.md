@@ -213,4 +213,4 @@ clean-room 复刻原版 `set_weights_randprune(n, r2, maf, use_w_ld)`。64 轮�
 | max_abs / max_rel | 0 / 0           | —            |
 
 **逐 tag bit-exact 一致**——给定相同 LD 顺序与 deftag 集合，Rust 权重与原版完全相同。
-两个容器节点（`mixer_fit1_container`、`mixer_fit2_container`）已接入，固定镜像与 `mixer.g1000_eur` catalog 面板绑定。
+两个容器节点（`mixer_fit1_container`、`mixer_fit2_container`）已接入，固定镜像与 `mixer.g1000_eur_rsid` catalog 面板绑定。

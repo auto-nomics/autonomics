@@ -40,9 +40,14 @@ fn catalog() -> DataBundleCatalog {
             "/catalog/lava-ref-ukb",
         ),
         catalog_panel(
-            nodes_io::mixer_container::MIXER_G1000_EUR_PANEL,
+            nodes_io::hdl_l_container::HDL_UKB_EUR_PANEL,
+            "/catalog/hdl-ref-ukb",
+        ),
+        catalog_panel(
+            nodes_io::mixer_container::MIXER_G1000_EUR_RSID_PANEL,
             "/catalog/mixer-g1000-eur",
         ),
+        catalog_panel("mixer.g1000_eur", "/catalog/mixer-g1000-eur-coordinate"),
         catalog_panel(
             nodes_io::mtag_container::MTAG_LD_REF_PANEL,
             "/catalog/mtag-ld-ref",
@@ -161,6 +166,15 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
                 "analysis": "univ",
                 "panel_id": "lava.ref.ukb_eur",
                 "phenotypes": ["bmi"]
+            }),
+        ),
+        (
+            "hdl_l_container",
+            serde_json::json!({
+                "chr": 1,
+                "piece": 3,
+                "trait1_name": "a",
+                "trait2_name": "b"
             }),
         ),
         (
