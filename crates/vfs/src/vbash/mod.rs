@@ -1268,6 +1268,118 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
+    async fn tree_and_size_queries_follow_local_symlink_directories() {
+        let root = tempfile::TempDir::new().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir_all(real.join("nested")).unwrap();
+        std::fs::write(real.join("nested").join("data.txt"), b"12345").unwrap();
+        std::os::unix::fs::symlink(&real, root.path().join("link")).unwrap();
+
+        let tool = VfsBashTool {
+            storage: Arc::new(OpendalFileStorage::new(root.path())),
+        };
+
+        let mut stat = input("stat");
+        stat.path = Some("/link/nested/data.txt".into());
+        let result = tool.run(stat).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["is_dir"], false);
+        assert_eq!(json["size"], 5, "stat should follow the symlink: {json}");
+
+        let mut ls = input("ls");
+        ls.path = Some("/".into());
+        let result = tool.run(ls).await.unwrap();
+        let json = result_json(result);
+        let link = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "link")
+            .cloned()
+            .unwrap_or_else(|| panic!("expected /link in listing: {json}"));
+        assert_eq!(
+            link["is_dir"], true,
+            "symlink directory should be listed as a directory"
+        );
+        assert_eq!(
+            link["size"], 0,
+            "directory size should not expose the symlink target path length"
+        );
+
+        let mut tree = input("tree");
+        tree.path = Some("/".into());
+        let result = tool.run(tree).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(
+            content.contains("link/")
+                && content.contains("nested/")
+                && content.contains("data.txt"),
+            "tree should descend into symlink directory: {content}"
+        );
+
+        let mut linked_tree = input("tree");
+        linked_tree.path = Some("/link".into());
+        let result = tool.run(linked_tree).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(
+            content.contains("nested/") && content.contains("data.txt"),
+            "tree rooted at a symlink directory should list its target: {json}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn tree_follows_a_local_mount_source_symlink() {
+        use crate::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
+
+        let backend_root = tempfile::TempDir::new().unwrap();
+        let target = backend_root.path().join("target");
+        std::fs::create_dir_all(target.join("nested")).unwrap();
+        std::fs::write(target.join("nested").join("data.txt"), b"12345").unwrap();
+        let source_link = backend_root.path().join("source-link");
+        std::os::unix::fs::symlink(&target, &source_link).unwrap();
+
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "local".into(),
+                config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/mounted".into(),
+                backend: "local".into(),
+                source: source_link.to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let mounts = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let tool = VfsBashTool {
+            storage: Arc::new(OpendalFileStorage::with_mounts(
+                tempfile::tempdir().unwrap().path(),
+                mounts,
+            )),
+        };
+
+        let mut tree = input("tree");
+        tree.path = Some("/mounted".into());
+        let result = tool.run(tree).await.unwrap();
+        let json = result_json(result);
+        let content = json["content"].as_str().unwrap();
+        assert!(
+            content.contains("nested/") && content.contains("data.txt"),
+            "tree should follow a mount source symlink: {content}"
+        );
+
+        let mut stat = input("stat");
+        stat.path = Some("/mounted/nested/data.txt".into());
+        let result = tool.run(stat).await.unwrap();
+        let json = result_json(result);
+        assert_eq!(json["size"], 5, "stat through mount symlink: {json}");
+    }
+
+    #[tokio::test]
     async fn tree_root_not_duplicated() {
         let tool = make_tool();
         let mut t = input("tree");

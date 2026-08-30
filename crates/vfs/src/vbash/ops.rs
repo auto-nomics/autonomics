@@ -7,6 +7,8 @@ use agentik_core::tools::{ToolError, ToolResult};
 use agentik_sdk::types::{ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock};
 use base64::Engine as _;
 use futures::StreamExt;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use crate::storage::OpendalFileStorage;
 
@@ -48,6 +50,132 @@ const BINARY_SAMPLE_SIZE: usize = 8192;
 /// A file is treated as binary when more than this fraction of the sampled
 /// bytes are non-text control characters.
 const BINARY_CONTROL_RATIO: f32 = 0.30;
+
+#[derive(Debug, Clone)]
+struct FollowedEntry {
+    path: String,
+    is_dir: bool,
+}
+
+fn local_backend_root(op: &opendal::Operator) -> Option<PathBuf> {
+    (op.info().scheme() == "fs").then(|| PathBuf::from(op.info().root().trim_end_matches('/')))
+}
+
+fn safe_local_join(root: &Path, remote: &str) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for component in Path::new(remote).components() {
+        match component {
+            std::path::Component::Normal(part) => path.push(part),
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::CurDir | std::path::Component::RootDir => {}
+            std::path::Component::Prefix(_) => {}
+        }
+    }
+    path
+}
+
+async fn collect_followed_entries(
+    op: &opendal::Operator,
+    remote: &str,
+    limit: usize,
+) -> Result<Vec<FollowedEntry>, String> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let Some(root) = local_backend_root(op) else {
+        return Ok(Vec::new());
+    };
+
+    let physical_root = safe_local_join(&root, remote);
+    let root_metadata = match tokio::fs::metadata(&physical_root).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    if !root_metadata.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    let mut visited = HashSet::new();
+    let root_canonical = tokio::fs::canonicalize(&physical_root)
+        .await
+        .map_err(|e| e.to_string())?;
+    visited.insert(root_canonical);
+
+    let mut pending = vec![(physical_root, remote.trim_matches('/').to_string())];
+    while let Some((directory, logical_directory)) = pending.pop() {
+        let mut reader = tokio::fs::read_dir(&directory)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut children = Vec::new();
+        while let Some(child) = reader.next_entry().await.map_err(|e| e.to_string())? {
+            let physical = child.path();
+            let link_metadata = child.metadata().await.map_err(|e| e.to_string())?;
+            let followed_metadata = tokio::fs::metadata(&physical).await;
+            let metadata = match followed_metadata {
+                Ok(metadata) => metadata,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && link_metadata.is_symlink() =>
+                {
+                    link_metadata
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+
+            let name = child.file_name().to_string_lossy().to_string();
+            let mut path = logical_directory.trim_end_matches('/').to_string();
+            if !path.is_empty() {
+                path.push('/');
+            }
+            path.push_str(&name);
+            let is_dir = metadata.is_dir();
+            if is_dir {
+                path.push('/');
+            }
+            children.push((FollowedEntry { path, is_dir }, physical, is_dir));
+        }
+
+        for (entry, physical, is_dir) in children {
+            let should_descend = is_dir
+                && match tokio::fs::canonicalize(&physical).await {
+                    Ok(canonical) => visited.insert(canonical),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.to_string()),
+                };
+            let child_directory = entry.path.trim_end_matches('/').to_string();
+            entries.push(entry);
+            if entries.len() >= limit {
+                return Ok(entries);
+            }
+            if should_descend {
+                pending.push((physical, child_directory));
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+async fn followed_entry_metadata(
+    op: &opendal::Operator,
+    entry: &opendal::Entry,
+) -> Result<opendal::Metadata, String> {
+    if entry.metadata().is_dir() || entry.metadata().is_file() {
+        return Ok(entry.metadata().clone());
+    }
+    match op.stat(entry.path()).await {
+        Ok(metadata) => Ok(metadata),
+        Err(error) if error.kind() == opendal::ErrorKind::NotFound => Ok(entry.metadata().clone()),
+        Err(error) => Err(error.to_string()),
+    }
+}
 
 // ══════════════════ reading ops ══════════════════
 
@@ -840,7 +968,8 @@ pub async fn op_ls(
             while let Some(entry) = lister.next().await {
                 let entry = entry.map_err(|e| e.to_string())?;
                 let entry_path_raw = entry.path().to_string();
-                if entry.metadata().is_dir()
+                let metadata = followed_entry_metadata(&op, &entry).await?;
+                if metadata.is_dir()
                     && entry_path_raw.trim_end_matches('/') == scan_remote_cmp.trim_end_matches('/')
                 {
                     continue;
@@ -853,13 +982,12 @@ pub async fn op_ls(
                     truncated = true;
                     break;
                 }
-                let meta = entry.metadata();
-                let is_dir = meta.is_dir();
-                let size = if is_dir { 0 } else { meta.content_length() };
+                let is_dir = metadata.is_dir();
+                let size = if is_dir { 0 } else { metadata.content_length() };
                 // Remap to virtual form (strip the mount's backend
                 // source prefix, re-attach the virtual prefix).
                 let display = storage.remap_entry_to_virtual(&vpath, &entry_path_raw);
-                if entry.metadata().is_dir()
+                if metadata.is_dir()
                     && child_mounts
                         .iter()
                         .any(|m| m.trim_end_matches('/') == display.trim_end_matches('/'))
@@ -908,15 +1036,16 @@ pub async fn op_ls(
                 let entry = entry.map_err(|e| e.to_string())?;
                 let entry_path_raw = entry.path().to_string();
                 let trimmed = entry_path_raw.trim_end_matches('/').to_string();
+                let metadata = followed_entry_metadata(&op, &entry).await?;
                 // Skip default-fs directories that are shadowed by mounts.
-                if entry.metadata().is_dir()
+                if metadata.is_dir()
                     && child_mounts
                         .iter()
                         .any(|m| m.trim_end_matches('/') == trimmed)
                 {
                     continue;
                 }
-                if entry.metadata().is_dir() && trimmed == scan_root {
+                if metadata.is_dir() && trimmed == scan_root {
                     continue;
                 }
                 idx += 1;
@@ -927,9 +1056,8 @@ pub async fn op_ls(
                     truncated = true;
                     break;
                 }
-                let meta = entry.metadata();
-                let is_dir = meta.is_dir();
-                let size = if is_dir { 0 } else { meta.content_length() };
+                let is_dir = metadata.is_dir();
+                let size = if is_dir { 0 } else { metadata.content_length() };
                 items.push(serde_json::json!({
                     "name": entry_path_raw,
                     "is_dir": is_dir,
@@ -1236,37 +1364,56 @@ pub async fn op_tree(
         format!("{remote}/")
     };
     let op: opendal::Operator = storage.resolve(&vpath);
-    let mut lister = op
-        .lister_with(&scan)
-        .recursive(true)
-        .await
-        .map_err(|e| e.to_string())?;
 
     // Collect entries as (depth, path, is_dir). Drop the scan-root
     // self-entry to avoid duplicating it in the rendered tree.
-    let mut entries: Vec<(usize, String, bool)> = Vec::new();
     let prefix = vpath.trim_end_matches('/');
     let scan_root = remote.trim_end_matches('/').to_string();
-    while let Some(entry) = lister.next().await {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let p_raw = entry.path().to_string();
-        let is_dir = entry.metadata().is_dir();
-
-        if is_dir && p_raw.trim_end_matches('/') == scan_root {
-            continue;
+    let followed_entries = if local_backend_root(&op).is_some() {
+        collect_followed_entries(&op, &remote, max_entries.max(1)).await?
+    } else {
+        let mut lister = op
+            .lister_with(&scan)
+            .recursive(true)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut followed = Vec::new();
+        while let Some(entry) = lister.next().await {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path().to_string();
+            let is_dir = entry.metadata().is_dir();
+            if is_dir && path.trim_end_matches('/') == scan_root {
+                continue;
+            }
+            followed.push(FollowedEntry { path, is_dir });
+            if followed.len() >= max_entries {
+                break;
+            }
         }
+        followed
+    };
+
+    let mut entries: Vec<(usize, String, bool)> = Vec::new();
+    for followed in followed_entries {
+        let p_raw = followed.path;
+        let is_dir = followed.is_dir;
 
         // Remap the backend-local path into the mount's virtual
         // namespace (e.g. `mnt/.../parquet/1000g_eur.parquet` →
         // `/data/ldsc/1000g_eur.parquet`).
-        let p = storage.remap_entry_to_virtual(&vpath, &p_raw);
+        let remapped = storage.remap_entry_to_virtual(&vpath, &p_raw);
+        let p = if remapped.starts_with('/') {
+            remapped
+        } else {
+            format!("/{remapped}")
+        };
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {
             p.strip_prefix(prefix).unwrap_or(&p).trim_start_matches('/')
         };
         let depth = rel.matches('/').count();
-        entries.push((depth, p, is_dir));
+        entries.push((depth, format!("/{rel}"), is_dir));
         if entries.len() >= max_entries {
             break;
         }
