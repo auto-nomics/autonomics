@@ -21,7 +21,7 @@ use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 pub const MTAG_CONTAINER_KIND: &str = "mtag_container";
 pub const MTAG_ORIGINAL_IMAGE_REPOSITORY: &str = "mtag";
 pub const MTAG_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:4b5702e9e0b31c5269cc8ce25c2e48ab59ace00eb29695767974a5f4d3a3c8df";
+    "sha256:28ac0a0a0ee741340390b7588bf8ba36e6b316d62adc0cab7fd4494f5dd6a90c";
 pub const MTAG_LD_REF_PANEL: &str = "mtag.ld_ref.1000g_eur_w_ld";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mtag_container";
