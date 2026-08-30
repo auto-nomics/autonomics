@@ -94,11 +94,11 @@ Four pieces, usually kept separate, are integrated here:
 │  │ spike & slab │  │ LDSC regress │  │ MR tests │  │ local rg │ │
 │  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘ │
 │         │                 │               │              │       │
-│  ┌──────┴───────┐  ┌──────┴──────┐  ┌─────┴────┐               │
-│  │    hdl       │  │    mtag     │  │  mrlap   │  ┌──────────┐  │
-│  │  HDL-L       │  │ multi-trait │  │ overlap  │  │   lcv    │  │
-│  │  local rg    │  │   GWAS      │  │  MR      │  │ latent   │  │
-│  └──────────────┘  └─────────────┘  └──────────┘  └──────────┘  │
+│  ┌──────┴───────┐  ┌─────┴────┐                                  │
+│  │    hdl       │  │  mrlap   │  ┌──────────┐                    │
+│  │  HDL-L       │  │ overlap  │  │   lcv    │                    │
+│  │  local rg    │  │  MR      │  │ latent   │                    │
+│  └──────────────┘  └──────────┘  └──────────┘                    │
 │  ┌──────────────┐  ┌──────────────┐                               │
 │  │   cpassoc    │  │    magma     │                               │
 │  │ SHom / SHet  │  │ gene-set     │                               │
@@ -157,7 +157,7 @@ API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets P
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                                 | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                                          |
 | Data analysis                | `data-engine`, `data-engine-tools`, `vfs`, `biofusion`, `biofusion-cache`, `visualization`                    | DAG execution, Agent-exposed DAG operations, mount-aware OpenDAL files, biological-format ingestion, and R/ggplot2 visualization.             |
-| Statistical genetics         | `ldsc`, `mr`, `mixer`, `lava`, `hdl`, `mtag`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                           | Pure-Rust ports of LD Score Regression, TwoSampleMR, MiXeR (spike-and-slab causal mixture), LAVA (local genetic correlation), HDL-L, MTAG, MRlap, LCV, CPASSOC, and MAGMA, built on `faer`. |
+| Statistical genetics         | `ldsc`, `mr`, `mixer`, `lava`, `hdl`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                                   | Pure-Rust ports of LD Score Regression, TwoSampleMR, MiXeR (spike-and-slab causal mixture), LAVA (local genetic correlation), HDL-L, MRlap, LCV, CPASSOC, and MAGMA, built on `faer`. MTAG runs via an OCI container node. |
 | Epidemiology & biostatistics | `statkit`, `epi`                                                                                                                           | Foundational statistics (OLS/WLS/logistic/Cox regression, descriptive stats) and higher-level epidemiological methods (causal inference, mediation, survival, ROC, RCS, LASSO, WQS, CLPM, GBTM, LCA, SEM, competing risks, multistate, Random Forest + SHAP), built on `faer`. |
 | Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`                                                                                     | Clients for NCBI E-utilities, OpenGWAS, the GWAS Catalog, and the Open Targets Platform.                                                                          |
 | User interface and rendering | `tui`                                                                                                                                      | Terminal Agent UI.                                                                                                                                                 |
@@ -233,7 +233,6 @@ autonomics/
 │   ├── mixer/               # Pure-Rust MiXeR univariate + bivariate (spike-and-slab) port
 │   ├── lava/                # Pure-Rust LAVA local genetic correlation port
 │   ├── hdl/                 # Pure-Rust HDL-L enhanced local genetic correlation port
-│   ├── mtag/                # Pure-Rust MTAG (multi-trait GWAS) port
 │   ├── mrlap/               # Pure-Rust MRlap (sample-overlap-aware MR) port
 │   ├── lcv/                 # Pure-Rust LCV (latent causal variable) port
 │   ├── cpassoc/             # Pure-Rust CPASSOC (cross-phenotype meta-analysis) port

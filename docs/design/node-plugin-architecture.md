@@ -121,7 +121,7 @@ impl NodeRegistry {
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-ldsc** | ldsc_rg, ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
-| **nodes-genetics** | lava (6), hdl_l, hdl_l_scan, mtag, cpassoc, magma (4) | lava, hdl, mtag, cpassoc, susie, magma, mixer | 8,200 |
+| **nodes-genetics** | lava (6), hdl_l, hdl_l_scan, cpassoc, magma (4) | lava, hdl, cpassoc, susie, magma, mixer | 8,200 |
 | **nodes-mr** | two_sample_mr, mrlap, mrpresso, mvmr | mr, mrlap, mrpresso, mvmr | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |

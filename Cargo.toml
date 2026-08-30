@@ -44,7 +44,6 @@ members = [
   "bio_crates/mixer",
   "bio_crates/mr",
   "bio_crates/lcv",
-  "bio_crates/mtag",
   "bio_crates/mrlap",
   "crates/visualization",
 
@@ -93,7 +92,8 @@ members = [
   "crates/node-bundles/nodes-rd",
   "crates/workflow-editor",
   "stat_crates/dl",
-  "crates/node-bundles/nodes-dl", "bio_crates/twas",
+  "crates/node-bundles/nodes-dl",
+  "bio_crates/twas",
 ]
 resolver = "3"
 
@@ -197,6 +197,7 @@ unnecessary_literal_unwrap = "allow"
 opt-level = 3
 
 [profile.release]
+# lto = "fat"
+# codegen-units = 1
 opt-level = 3
-# lto = "fat"        # 暂时注释：fat LTO 单线程，导致 tui(bin) 链接阶段极慢且 CPU 跑不满
-# codegen-units = 1  # 暂时注释：配合 LTO 使用，单 codegen unit 无并行
+# strip = "symbols"

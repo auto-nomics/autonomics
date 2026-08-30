@@ -96,11 +96,11 @@
 │  │ spike & slab │  │ LDSC 回归     │  │ MR 检验  │  │ 局部 rg  │ │
 │  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘ │
 │         │                 │               │              │       │
-│  ┌──────┴───────┐  ┌──────┴──────┐  ┌─────┴────┐               │
-│  │    hdl       │  │    mtag     │  │  mrlap   │  ┌──────────┐  │
-│  │  HDL-L       │  │ 多性状 GWAS │  │ 样本重叠 │  │   lcv    │  │
-│  │  局部 rg     │  │             │  │   MR     │  │ 潜在因果 │  │
-│  └──────────────┘  └─────────────┘  └──────────┘  └──────────┘  │
+│  ┌──────┴───────┐  ┌─────┴────┐                                  │
+│  │    hdl       │  │  mrlap   │  ┌──────────┐                    │
+│  │  HDL-L       │  │ 样本重叠 │  │   lcv    │                    │
+│  │  局部 rg     │  │   MR     │  │ 潜在因果 │                    │
+│  └──────────────┘  └──────────┘  └──────────┘                    │
 │  ┌──────────────┐  ┌──────────────┐                               │
 │  │   cpassoc    │  │    magma     │                               │
 │  │ SHom / SHet  │  │ 基因集分析   │                               │
@@ -159,7 +159,7 @@ GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 智能体平台         | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                              | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                                                            |
 | 数据分析           | `data-engine`、`data-engine-tools`、`vfs`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、挂载感知 OpenDAL 文件、生物格式导入，以及 R/ggplot2 可视化。                                                                                          |
-| 统计遗传学         | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mtag`、`mrlap`、`lcv`、`cpassoc`、`magma`                                        | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MTAG、MRlap、LCV、CPASSOC 和 MAGMA 的纯 Rust 移植，基于 `faer`。                                 |
+| 统计遗传学         | `ldsc`、`mr`、`mixer`、`lava`、`hdl`、`mrlap`、`lcv`、`cpassoc`、`magma`                                                | LD Score Regression、TwoSampleMR、MiXeR（spike-and-slab 因果混合模型）、LAVA（局部遗传相关）、HDL-L、MRlap、LCV、CPASSOC 和 MAGMA 的纯 Rust 移植，基于 `faer`。MTAG 通过 OCI 容器节点运行。                                 |
 | 流行病学与生物统计 | `statkit`、`epi`                                                                                                        | 基础统计（OLS/WLS/logistic/Cox 回归、描述性统计）与高层流行病学方法（因果推断、中介分析、生存分析、ROC、RCS、LASSO、WQS、CLPM、GBTM、LCA、SEM、竞争风险、多状态模型、随机森林 + SHAP），基于 `faer`。 |
 | 科学数据客户端     | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                  | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                                                          |
 | 用户界面与渲染     | `tui`                                                                                                                   | 终端智能体 UI。                                                                                                                                                                                       |
@@ -235,7 +235,6 @@ autonomics/
 │   ├── mixer/               # 纯 Rust MiXeR 单变量 + 双变量 (spike-and-slab) 移植
 │   ├── lava/                # 纯 Rust LAVA 局部遗传相关移植
 │   ├── hdl/                 # 纯 Rust HDL-L 增强局部遗传相关移植
-│   ├── mtag/                # 纯 Rust MTAG（多性状 GWAS）移植
 │   ├── mrlap/               # 纯 Rust MRlap（样本重叠感知 MR）移植
 │   ├── lcv/                 # 纯 Rust LCV（潜在因果变量）移植
 │   ├── cpassoc/             # 纯 Rust CPASSOC（跨表型荟萃分析）移植

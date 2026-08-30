@@ -202,7 +202,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "mrlap",
             serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
         ),
-        ("mtag", serde_json::json!({"n_blocks": 5})),
         ("gsem_ldsc", serde_json::json!({"n_traits": 2})),
         ("magma_gene", serde_json::json!({"population": "EUR"})),
         (
