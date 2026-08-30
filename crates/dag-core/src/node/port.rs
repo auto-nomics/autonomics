@@ -15,6 +15,7 @@ use crate::value::PortType;
 #[derive(Debug, Clone)]
 pub struct Port {
     pub index: PortId,
+    pub label: Option<String>,
     pub schema: Option<SchemaRef>,
     pub data_type: PortType,
     pub required: bool,
@@ -25,16 +26,24 @@ impl Port {
     pub fn new(index: PortId, schema: Option<SchemaRef>) -> Self {
         Self {
             index,
+            label: None,
             schema,
             data_type: PortType::DataFrame,
             required: true,
         }
     }
 
+    /// Attach a semantic label for graph editors and generated node docs.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     /// A typed DataFrame port.
     pub fn typed(index: PortId, schema: SchemaRef) -> Self {
         Self {
             index,
+            label: None,
             schema: Some(schema),
             data_type: PortType::DataFrame,
             required: true,
@@ -72,6 +81,9 @@ impl Serialize for Port {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("index", &self.index)?;
+        if let Some(label) = &self.label {
+            map.serialize_entry("label", label)?;
+        }
         map.serialize_entry("data_type", &self.data_type)?;
         map.serialize_entry("required", &self.required)?;
 

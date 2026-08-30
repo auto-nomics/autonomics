@@ -512,7 +512,15 @@ impl DagNode for RadiomicsContainerNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        self.inner.execute(ctx, inputs, reporter).await
+        if self.kind == RADIOMICS_MASK_INGEST_KIND {
+            // The runner contract is input 0=image and input 1=mask/RTSTRUCT,
+            // independent of scheduler edge insertion order.
+            let mut ordered_inputs = inputs.to_vec();
+            ordered_inputs.sort_by_key(|input| input.port);
+            self.inner.execute(ctx, &ordered_inputs, reporter).await
+        } else {
+            self.inner.execute(ctx, inputs, reporter).await
+        }
     }
 }
 
@@ -1022,8 +1030,8 @@ fn image_ingest_ports() -> NodePorts {
 
 fn mask_ingest_ports() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type(None, PortType::Any)
-        .add_input_port_of_type(None, PortType::Any)
+        .add_input_port_of_type_with_label(None, PortType::Any, "reference_image")
+        .add_input_port_of_type_with_label(None, PortType::Any, "mask_or_rtstruct")
         .add_output_port_of_type(None, PortType::File)
         .add_output_port_of_type(None, PortType::File)
 }
@@ -1201,10 +1209,10 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
                 "Applies explicit deterministic resampling, intensity resegmentation, and within-image ROI normalization. No cohort-fitted transform is estimated."
             }
             PYRADIOMICS_EXTRACT_KIND => {
-                "Runs official PyRadiomics 3.1.0 for one extraction unit and emits wide features, long features, metadata, diagnostics, and provenance."
+                "Runs official PyRadiomics 3.1.0 for one extraction unit and emits wide features, long features, metadata, diagnostics, and provenance. Feature columns use normalized lowercase IDs, for example original_shape_elongation; metadata retains exact PyRadiomics CamelCase names."
             }
             PYRADIOMICS_BATCH_EXTRACT_KIND => {
-                "Runs official PyRadiomics 3.1.0 over ordered image and mask FileSets plus a CSV/Parquet manifest. One failed extraction does not discard the cohort."
+                "Runs official PyRadiomics 3.1.0 over ordered image and mask FileSets plus a CSV/Parquet manifest. One failed extraction does not discard the cohort. Feature columns use normalized lowercase IDs, for example original_shape_elongation; metadata retains exact PyRadiomics CamelCase names."
             }
             RADIOMICS_DICOM_METADATA_KIND => {
                 "Reads one DICOM File or a DICOM FileSet, emits one Parquet row per instance, and supports extra keywords or `(group,element)` tags. Acquisition, reconstruction, and common dose tags are included in the standard field set."

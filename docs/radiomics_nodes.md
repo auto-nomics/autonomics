@@ -13,7 +13,7 @@ belong to the existing DataFrame DAG nodes in Stage B.
 | `radiomics_stage_file_set` | DataFrame -> FileSet | Resolves image or mask paths in manifest order |
 | `radiomics_dcm_glob` | -> DICOM FileSet | Expands and sorts a local or VFS DICOM glob |
 | `radiomics_image_ingest` | File/Any -> image File, metadata File | Reads NIfTI/MHA or a DICOM series and writes MHA |
-| `radiomics_mask_ingest` | reference image Any + mask Any -> mask File, metadata File | Reads voxel masks or rasterizes DICOM RTSTRUCT |
+| `radiomics_mask_ingest` | port 0 reference image Any + port 1 mask/RTSTRUCT Any -> mask File, metadata File | Reads voxel masks or rasterizes DICOM RTSTRUCT |
 | `radiomics_pair_validate` | image File + mask File -> validation File, geometry File | Checks size, spacing, origin, direction, label, and ROI size |
 | `radiomics_preprocess` | image File + mask File -> image, mask, metadata Files | Deterministic resampling, resegmentation, and optional within-ROI normalization |
 | `pyradiomics_extract` | image File + mask File -> five Files | One PyRadiomics extraction unit |
@@ -52,10 +52,12 @@ provenance.json
 ```
 
 The wide table contains the manifest identity columns, normalized SQL-friendly
-feature IDs, `status`, and `error_code`. The long table contains one row per
-feature value. Metadata maps normalized IDs back to exact PyRadiomics names,
-feature family, image type, modality, and preset. Provenance records package
-versions, image/mask hashes, and the full extraction settings.
+feature IDs, `status`, and `error_code`. Feature columns and `feature_id` values
+are lowercase (for example, `original_shape_elongation`, not the CamelCase name
+used in PyRadiomics documentation). The long table contains one row per feature
+value. Metadata maps normalized IDs back to exact PyRadiomics names, feature
+family, image type, modality, and preset. Provenance records package versions,
+image/mask hashes, and the full extraction settings.
 
 ### PyRadiomics feature space
 

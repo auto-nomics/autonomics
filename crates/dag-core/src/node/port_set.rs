@@ -41,6 +41,19 @@ impl Ports {
         self.add_port_with(port);
     }
 
+    /// Append a typed-value port with a semantic label.
+    pub fn add_port_of_type_with_label(
+        &mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+    ) {
+        let port = Port::new(self.next_index(), schema)
+            .with_data_type(data_type)
+            .with_label(label);
+        self.add_port_with(port);
+    }
+
     /// Append an optional, schema-less typed-value port.
     pub fn add_optional_port_of_type(&mut self, data_type: PortType) {
         let port = Port::new(self.next_index(), None)

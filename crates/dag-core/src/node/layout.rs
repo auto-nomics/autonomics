@@ -67,6 +67,18 @@ impl NodePorts {
         self
     }
 
+    /// Append a typed-value input port with a semantic label.
+    pub fn add_input_port_of_type_with_label(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+    ) -> Self {
+        self.input_ports
+            .add_port_of_type_with_label(schema, data_type, label);
+        self
+    }
+
     /// Append an optional, schema-less input port carrying a specific value type.
     pub fn add_optional_input_port_of_type(mut self, data_type: PortType) -> Self {
         self.input_ports.add_optional_port_of_type(data_type);

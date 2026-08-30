@@ -308,6 +308,91 @@ async fn container_wrapper_accepts_multiple_upstream_file_edges() {
 }
 
 #[tokio::test]
+async fn mask_ingest_documents_and_stages_port_order() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("image.mha"), b"reference-image").unwrap();
+    std::fs::write(workspace.path().join("rtstruct.dcm"), b"rtstruct").unwrap();
+    let ctx = workspace_ctx(workspace.path());
+    let runtime = Arc::new(CopyPairsRuntime::new(workspace.path()));
+    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels"), ""));
+    let factory = RadiomicsContainerNodeFactory::mask_ingest(runtime.clone(), panel_cache);
+    let node = factory
+        .build(serde_json::json!({"roi_name":"GTV_Mass"}), ctx.clone())
+        .unwrap();
+    let ports = node.ports();
+    assert_eq!(
+        ports.input_port(0).unwrap().label.as_deref(),
+        Some("reference_image")
+    );
+    assert_eq!(
+        ports.input_port(1).unwrap().label.as_deref(),
+        Some("mask_or_rtstruct")
+    );
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "image".into(),
+        Box::new(FileReferenceNode::new(
+            workspace
+                .path()
+                .join("image.mha")
+                .to_string_lossy()
+                .into_owned(),
+            Some("mha".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node(
+        "rtstruct".into(),
+        Box::new(FileReferenceNode::new(
+            workspace
+                .path()
+                .join("rtstruct.dcm")
+                .to_string_lossy()
+                .into_owned(),
+            Some("dicom".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("mask_ingest".into(), node).unwrap();
+    dag.add_edge("image", "mask_ingest", 0, 0).unwrap();
+    dag.add_edge("rtstruct", "mask_ingest", 0, 1).unwrap();
+
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("mask_ingest"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+    let requests = runtime.requests.lock().unwrap();
+    let request = requests
+        .iter()
+        .find(|request| {
+            request.env.iter().any(|(name, value)| {
+                name == "RADIOMICS_MASK_SETTINGS" && value.contains("GTV_Mass")
+            })
+        })
+        .expect("mask ingestion request");
+    let input = |index: usize| {
+        request
+            .env
+            .iter()
+            .find(|(name, _)| *name == format!("AUTONOMICS_INPUT{index}"))
+            .map(|(_, value)| value.clone())
+            .unwrap()
+    };
+    assert!(
+        input(0).ends_with("input-0.mha"),
+        "AUTONOMICS_INPUT0={}; AUTONOMICS_INPUT1={}",
+        input(0),
+        input(1)
+    );
+    assert!(input(1).ends_with("input-1.dcm"));
+}
+
+#[tokio::test]
 async fn dcm_glob_reads_mounted_vfs_files() {
     let workspace = tempfile::tempdir().unwrap();
     std::fs::write(workspace.path().join("000001.dcm"), b"one").unwrap();
