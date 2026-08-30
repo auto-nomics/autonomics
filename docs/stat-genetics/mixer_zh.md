@@ -20,3 +20,7 @@ trait1 fit1 JSON、trait2 fit1 JSON，输出官方双变量 JSON 与日志。
 包含 GRCh37 EUR 的 BIM、LD 和 tag-SNP 模板。官方 chr21-22 迁移 fixture 保留
 在 `containers/mixer/fixtures/mixer-test-data`；其 fit1 结果与上游基线逐位
 一致，fit2 基线在镜像锁定的 Python 3.10/NumPy 1.23.3/SciPy 1.9.1 环境下可复现。
+
+镜像发布为 `$ACR_ENDPOINT/autonomics/mixer:2.2.1`，不可变 manifest 摘要是
+`sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7`。
+包装节点使用同一摘要，并通过运行时配置的 ACR endpoint 解析镜像地址。

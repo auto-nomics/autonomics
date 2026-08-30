@@ -23,3 +23,8 @@ chr21-22 migration fixture is retained in
 `containers/mixer/fixtures/mixer-test-data`; its fit1 result is bit-identical
 to the upstream baseline, and its fit2 baseline is reproducible under the
 image's pinned Python 3.10/NumPy 1.23.3/SciPy 1.9.1 environment.
+
+The image is published as `$ACR_ENDPOINT/autonomics/mixer:2.2.1` with immutable
+manifest digest
+`sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7`.
+The wrappers combine the same digest with the configured ACR endpoint.
