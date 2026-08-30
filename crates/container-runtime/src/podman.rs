@@ -314,7 +314,7 @@ pub(crate) fn build_create_args(
     }
     if let Some(size) = &request.shm_size {
         args.push("--shm-size".into());
-        args.push(size.clone());
+        args.push(podman_size(size)?);
     }
     if let Some(cpus) = request.cpus {
         args.push("--cpus".into());
@@ -322,7 +322,7 @@ pub(crate) fn build_create_args(
     }
     if let Some(memory) = &request.memory {
         args.push("--memory".into());
-        args.push(memory.clone());
+        args.push(podman_size(memory)?);
     }
     if let Some(pids_limit) = request.pids_limit {
         args.push("--pids-limit".into());
@@ -363,6 +363,43 @@ pub(crate) fn build_create_args(
 
 fn escape_mount_field(value: &str) -> String {
     value.replace('\\', "\\\\").replace(',', "\\,")
+}
+
+/// Podman accepts bytes or decimal k/m/g suffixes, while container nodes use
+/// Kubernetes quantities such as `16Gi`. Emit exact bytes so both SI and IEC
+/// quantities keep their requested size.
+fn podman_size(value: &str) -> Result<String, ContainerRuntimeError> {
+    let invalid = || {
+        ContainerRuntimeError::Invalid(format!(
+            "`{value}` is not a supported Podman memory quantity"
+        ))
+    };
+    let split = value
+        .find(|character: char| !(character.is_ascii_digit() || character == '.'))
+        .unwrap_or(value.len());
+    let (number, suffix) = value.split_at(split);
+    let number: f64 = number.parse().map_err(|_| invalid())?;
+    if !number.is_finite() || number <= 0.0 {
+        return Err(invalid());
+    }
+
+    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1_u64,
+        "k" => 1_000,
+        "m" => 1_000_000,
+        "g" => 1_000_000_000,
+        "t" => 1_000_000_000_000,
+        "ki" => 1 << 10,
+        "mi" => 1 << 20,
+        "gi" => 1 << 30,
+        "ti" => 1 << 40,
+        _ => return Err(invalid()),
+    };
+    let bytes = number * multiplier as f64;
+    if !bytes.is_finite() || bytes <= 0.0 || bytes > u64::MAX as f64 {
+        return Err(invalid());
+    }
+    Ok(format!("{}", bytes as u64))
 }
 
 fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
@@ -484,11 +521,11 @@ mod tests {
             "keep-id",
             "--read-only",
             "--shm-size",
-            "64Mi",
+            "67108864",
             "--cpus",
             "2",
             "--memory",
-            "1Gi",
+            "1073741824",
             "--pids-limit",
             "512",
             "--env",
@@ -510,6 +547,18 @@ mod tests {
                 .any(|args| args[0].starts_with("type=bind,source=")
                     && args[0].ends_with(",destination=/work,rw=true"))
         );
+    }
+
+    #[test]
+    fn podman_sizes_convert_kubernetes_quantities_to_bytes() {
+        assert_eq!(podman_size("16Gi").unwrap(), "17179869184");
+        assert_eq!(podman_size("64Mi").unwrap(), "67108864");
+        assert_eq!(podman_size("1G").unwrap(), "1000000000");
+        assert_eq!(podman_size("512").unwrap(), "512");
+        assert!(podman_size("16gi ").is_ok());
+        assert!(podman_size("-1Gi").is_err());
+        assert!(podman_size("1Xi").is_err());
+        assert!(podman_size("Gi").is_err());
     }
 
     #[test]
