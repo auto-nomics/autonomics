@@ -1,0 +1,11 @@
+mtag/.git
+mtag/.gitignore
+mtag/ld_ref_panel
+mtag/ldsc_mod/test
+mtag/ldsc_mod/ContinuousAnnotations
+mtag/ldsc_mod/ldsc.py
+mtag/ldsc_mod/munge_sumstats.py
+mtag/ldsc_mod/requirements.txt
+mtag/environment.yml
+fixtures
+test_mtag_containers.sh

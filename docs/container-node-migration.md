@@ -430,3 +430,22 @@ sample verifies all four output contracts in k3s. GREML, MLMA, fastGWA, GSMR,
 and mtCOJO require cohort genotypes, phenotypes, GRMs, or additional LD-score
 panels and remain separate migrations rather than unsafe bindings to the
 1000G panel.
+
+MTAG is the official Python 2 plus single-prefix LD Score case:
+
+```text
+containers/mtag/Dockerfile
+mtag.ld_ref.1000g_eur_w_ld
+containers/mtag/test_mtag_containers.sh
+crates/node-bundles/nodes-io/src/mtag_container.rs
+```
+
+The image carries the official MTAG 1.0.8 source at commit `9e17f3c`, its
+pinned Python 2 dependencies, and no reference data. MTAG's embedded LDSC API
+binds one directory prefix to both `ref_ld_chr` and `w_ld_chr`, so the upstream
+1000G EUR `eur_w_ld_chr` LD Score/`M_5_50` payload is published as the
+dedicated catalog package `mtag.ld_ref.1000g_eur_w_ld`. The split LDSC ref/w-LD
+packages and the LAVA UKBB eigen `.bcor` panel are not interchangeable with
+that contract. The rootless-Podman baseline verifies a deterministic two-trait
+GWAS fixture, catalog panel materialization, both official result tables, and
+numerical summary markers.

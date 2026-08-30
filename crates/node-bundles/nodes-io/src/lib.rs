@@ -16,6 +16,7 @@ pub mod ldsc_rg_container;
 pub mod magma_annotate_container;
 pub mod mixer_container;
 pub mod mrpresso_container;
+pub mod mtag_container;
 pub mod mvmr_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
@@ -198,6 +199,10 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.panel_cache),
         )));
         registry.register(Box::new(mvmr_container::MvmrContainerNodeFactory::new(
+            Arc::clone(&self.container_execution.runtime),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
+        registry.register(Box::new(mtag_container::MtagContainerNodeFactory::new(
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));

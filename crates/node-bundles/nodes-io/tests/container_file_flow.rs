@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use container_runtime::{
     ContainerExecutionInfra, ContainerRunRequest, ContainerRunResult, ContainerRuntime,
     ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR, K3sConfig, K3sRuntime, PanelCache,
-    PullPolicy, unique_container_name,
+    PodmanConfig, PodmanRuntime, PullPolicy, unique_container_name,
 };
 use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
@@ -50,6 +50,7 @@ use nodes_io::mixer_container::{
     MixerFit1ContainerNodeFactory, MixerFit2ContainerNodeFactory,
 };
 use nodes_io::mrpresso_container::{MRPRESSO_CONTAINER_KIND, MrpressoContainerNodeFactory};
+use nodes_io::mtag_container::{MTAG_CONTAINER_KIND, MTAG_LD_REF_PANEL, MtagContainerNodeFactory};
 use nodes_io::mvmr_container::{MVMR_CONTAINER_KIND, MvmrContainerNodeFactory};
 use nodes_io::plink2_clump_container::{
     PLINK2_CLUMP_CONTAINER_KIND, PLINK2_REF_BINARY_PANEL, Plink2ClumpContainerNodeFactory,
@@ -665,6 +666,157 @@ async fn real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s() {
         cached_panels, 2,
         "both native LDSC panels should remain in PanelCache"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a working rootless Podman runtime, the MTAG image, the MTAG LD panel, and baseline sumstats"]
+async fn real_catalog_backed_official_mtag_runs_in_podman() {
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(MTAG_LD_REF_PANEL).is_some(),
+        "the MTAG LD panel must be published before the E2E baseline"
+    );
+
+    let input1 = std::env::var_os("AUTONOMICS_MTAG_IT_SUMSTATS1")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-mtag-it/trait1.sumstats.tsv").to_path_buf());
+    let input2 = std::env::var_os("AUTONOMICS_MTAG_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-mtag-it/trait2.sumstats.tsv").to_path_buf());
+    assert!(
+        input1.is_file(),
+        "missing MTAG trait 1 fixture: {}",
+        input1.display()
+    );
+    assert!(
+        input2.is_file(),
+        "missing MTAG trait 2 fixture: {}",
+        input2.display()
+    );
+
+    let podman_state = tempfile::tempdir().unwrap();
+    let workspace_root = podman_state.path().join("workspace");
+    let panel_root = podman_state.path().join("panels");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::create_dir_all(&panel_root).unwrap();
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
+        workspace_root: workspace_root.clone(),
+        panel_cache_root: panel_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_root.clone(), String::new()));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(MtagContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    // The production wrapper always pins the manifest digest. Local Podman
+    // tests resolve that digest through the equivalently named localhost repo.
+    // SAFETY: ignored E2E tests are run one at a time by the MTAG test script.
+    unsafe {
+        std::env::set_var(
+            nodes_io::image_registry::ACR_ENDPOINT_ENV,
+            std::env::var("AUTONOMICS_MTAG_IMAGE_ENDPOINT").unwrap_or_else(|_| "localhost".into()),
+        );
+    }
+    let mtag = registry
+        .build_node(MTAG_CONTAINER_KIND, serde_json::json!({}))
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "trait1".into(),
+        Box::new(FileReferenceNode::new(
+            input1.to_string_lossy().into_owned(),
+            Some("mtag_sumstats".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node(
+        "trait2".into(),
+        Box::new(FileReferenceNode::new(
+            input2.to_string_lossy().into_owned(),
+            Some("mtag_sumstats".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("mtag".into(), mtag).unwrap();
+    dag.add_edge("trait1", "mtag", 0, 0).unwrap();
+    dag.add_edge("trait2", "mtag", 0, 1).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("mtag"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "MTAG node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("mtag").unwrap();
+    let result1 = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let result2 = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(result1.path.ends_with("/mtag_trait_1.txt"));
+    assert!(result2.path.ends_with("/mtag_trait_2.txt"));
+    assert!(log.path.ends_with("/mtag.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let result1_text = read_published_text(storage, &result1).await;
+    let result2_text = read_published_text(storage, &result2).await;
+    let log_text = read_published_text(storage, &log).await;
+    for (name, text) in [("trait1", &result1_text), ("trait2", &result2_text)] {
+        let mut lines = text.lines();
+        let header = lines.next().unwrap_or_default();
+        assert!(
+            header.contains("SNP")
+                && header.contains("mtag_beta")
+                && header.contains("mtag_se")
+                && header.contains("mtag_z")
+                && header.contains("mtag_pval"),
+            "official MTAG {name} header changed:\n{header}"
+        );
+        assert_eq!(text.lines().count(), 199_648);
+    }
+    assert!(result1_text.contains(
+        "rs4075116\t1\t1003629\tT\tC\t0.0066\t1316440.0\t0.263852242744\t0.0003543020856258398\t0.0013731145897079259\t0.2580280540906663\t0.7963852560981179"
+    ));
+    assert!(result2_text.contains(
+        "rs4075116\t1\t1003629\tT\tC\t1.95\t680426.0\t0.263852242744\t0.0037649988753020768\t0.001860444510962918\t2.0237093087787987\t0.04300007022939045"
+    ));
+    for expected in ["199647", "1.833", "4.555"] {
+        assert!(
+            log_text.contains(expected),
+            "official MTAG numerical baseline is missing `{expected}`:\n{log_text}"
+        );
+    }
+    assert!(
+        log_text.contains("MTAG: Multi-trait Analysis of GWAS"),
+        "official MTAG masthead is missing:\n{log_text}"
+    );
+    assert!(
+        log_text.contains("MTAG complete."),
+        "official MTAG run did not complete:\n{log_text}"
+    );
+
+    let cached_panel = std::fs::read_dir(&panel_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{MTAG_LD_REF_PANEL}@"))
+        });
+    assert!(cached_panel, "MTAG panel should be cached");
 }
 
 struct CatalogTextFixture {

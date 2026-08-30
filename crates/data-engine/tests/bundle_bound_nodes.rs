@@ -44,6 +44,10 @@ fn catalog() -> DataBundleCatalog {
             "/catalog/mixer-g1000-eur",
         ),
         catalog_panel(
+            nodes_io::mtag_container::MTAG_LD_REF_PANEL,
+            "/catalog/mtag-ld-ref",
+        ),
+        catalog_panel(
             nodes_io::gcta_container::GCTA_REF_BINARY_PANEL,
             "/catalog/gcta-plink-ref",
         ),
@@ -140,6 +144,7 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             }),
         ),
         ("ldsc_rg_container", serde_json::json!({"n_blocks": 5})),
+        ("mtag_container", serde_json::json!({})),
         ("magma_annotate_container", serde_json::json!({})),
         (
             "mrpresso_container",
