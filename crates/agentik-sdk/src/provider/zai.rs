@@ -6,7 +6,7 @@ use crate::provider::ProviderPreset;
 // ─── Model IDs ──────────────────────────────────────────────────────────────
 // Latest flagship
 pub const MODEL_GLM_5_3: &str = "glm-5.3";
-pub const MODEL_GLM_5_3_1M: &str = "glm-5.3[1m]";
+pub const MODEL_GLM_5_3_FLASH: &str = "glm-5.3-flash";
 pub const MODEL_GLM_5_2: &str = "glm-5.2";
 pub const MODEL_GLM_5_1: &str = "glm-5.1";
 pub const MODEL_GLM_5: &str = "glm-5";
@@ -80,19 +80,19 @@ impl ZaiProvider {
         vec![
             // ── Latest flagship: GLM-5.3 — 1M context, agent engineering ─
             // Thinking is always enabled; `low`, `high`, and `max` are the
-            // valid reasoning-effort levels. The [1m] variant is required by
-            // the GLM Coding Plan to unlock the 1M-token context window.
+            // valid reasoning-effort levels.
             ModelInfoBuilder::new(MODEL_GLM_5_3)
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
                 .thinking_required()
                 .pricing(1.40, 4.40)
                 .build(),
-            ModelInfoBuilder::new(MODEL_GLM_5_3_1M)
+            // ── Native multimodal coding: GLM-5.3-Flash ────────────────
+            ModelInfoBuilder::new(MODEL_GLM_5_3_FLASH)
                 .context(1_000_000, 131_072)
-                .capabilities(false, true, true, true)
+                .capabilities(true, true, true, true)
                 .thinking_required()
-                .pricing(1.40, 4.40)
+                .pricing(0.14, 0.44)
                 .build(),
             // ── Latest flagship: GLM-5.2 — 1M context, long-horizon tasks ─
             // Stable 1M token context, 128K max output.
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn glm_5_3_models_require_thinking() {
         for model in ZaiProvider::preset_models() {
-            if model.model_name != MODEL_GLM_5_3 && model.model_name != MODEL_GLM_5_3_1M {
+            if model.model_name != MODEL_GLM_5_3 && model.model_name != MODEL_GLM_5_3_FLASH {
                 continue;
             }
             assert!(model.supports_thinking);
@@ -214,7 +214,10 @@ mod tests {
             assert!(model.thinking_required);
             assert_eq!(model.context_length, 1_000_000);
             assert_eq!(model.max_output_tokens, 131_072);
-            assert!(!model.vision_ability);
+            assert_eq!(
+                model.vision_ability,
+                model.model_name == MODEL_GLM_5_3_FLASH
+            );
         }
     }
 }

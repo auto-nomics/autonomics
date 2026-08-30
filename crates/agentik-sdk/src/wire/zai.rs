@@ -23,7 +23,7 @@ impl ZaiAnthropicWire {
 }
 
 fn is_glm_5_3(model: &str) -> bool {
-    model == "glm-5.3" || model.starts_with("glm-5.3[")
+    model == "glm-5.3" || model.starts_with("glm-5.3[") || model == "glm-5.3-flash"
 }
 
 fn glm_reasoning_effort(effort: ReasoningEffort) -> ReasoningEffort {
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn glm_5_3_never_sends_disabled_thinking() {
         let wire = ZaiAnthropicWire;
-        let params = MessageCreateBuilder::new("glm-5.3[1m]", 1024)
+        let params = MessageCreateBuilder::new("glm-5.3-flash", 1024)
             .user("hello")
             .thinking(ThinkingConfig::disabled())
             .build();
