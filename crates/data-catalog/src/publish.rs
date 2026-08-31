@@ -5,6 +5,8 @@ use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::package::{PAYLOAD_DIR, validate_package};
 use crate::storage::{read_json_object, upload_file, write_json_object};
 
+const PAYLOAD_UPLOAD_CONCURRENCY: usize = 32;
+
 pub async fn publish_package(
     package: impl AsRef<Path>,
     config: &CatalogConfig,
@@ -43,14 +45,7 @@ pub async fn publish_package(
             .unwrap_or_default(),
     };
 
-    for file in &manifest.files {
-        let local = package.as_ref().join(PAYLOAD_DIR).join(&file.path);
-        let key = config.object_key(&format!("{files_prefix}/{}", file.path));
-        if remote_size_matches(operator, &key, file.size).await? {
-            continue;
-        }
-        upload_file(operator, &key, &local).await?;
-    }
+    upload_payload_files(package.as_ref(), operator, &files_prefix, &manifest, config).await?;
     upload_object_if_needed(
         operator,
         &manifest_key,
@@ -71,6 +66,35 @@ pub async fn publish_package(
     index.validate()?;
     write_json_object(operator, &index_key, &index).await?;
     Ok(entry)
+}
+
+async fn upload_payload_files(
+    package: &Path,
+    operator: &opendal::Operator,
+    files_prefix: &str,
+    manifest: &DatasetManifest,
+    config: &CatalogConfig,
+) -> Result<(), String> {
+    for batch in manifest.files.chunks(PAYLOAD_UPLOAD_CONCURRENCY) {
+        let mut tasks = tokio::task::JoinSet::new();
+        for file in batch {
+            let operator = operator.clone();
+            let relative_path = file.path.clone();
+            let expected_size = file.size;
+            let local = package.join(PAYLOAD_DIR).join(&relative_path);
+            let key = config.object_key(&format!("{files_prefix}/{relative_path}"));
+            tasks.spawn(async move {
+                if remote_size_matches(&operator, &key, expected_size).await? {
+                    return Ok(());
+                }
+                upload_file(&operator, &key, &local).await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.map_err(|error| format!("payload upload task failed: {error}"))??;
+        }
+    }
+    Ok(())
 }
 
 async fn remote_size_matches(

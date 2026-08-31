@@ -799,11 +799,15 @@ impl AgentHandle {
 }
 
 impl AgentHandle {
+    /// TUI user input; the caller has already displayed the message locally.
     pub fn send_message(&self, text: String) {
-        // TUI user input — already shown locally, no MessageInjected event.
+        self.send_message_from(text, true);
+    }
+
+    fn send_message_from(&self, text: String, from_user: bool) {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text }],
-            from_user: true,
+            from_user,
             delegation_id: None,
         });
     }
@@ -1024,6 +1028,7 @@ enum AgentCommand {
     Message {
         text: String,
         delegation_id: Option<uuid::Uuid>,
+        from_user: bool,
     },
     Shutdown,
     Cancel,
@@ -1156,11 +1161,12 @@ impl RuntimeHost {
             reg = self.registration_rx.recv() => {
                 if let Some((handle, info)) = reg {
                     let path = handle.path.clone();
-                    let info_clone = info.clone();
-                    self.register_agent(handle, info);
+                    let mut event_info = info;
+                    event_info.agent_id = Some(handle.agent_id);
+                    self.register_agent(handle, event_info.clone());
                     self.emit_host_event(HostEvent::AgentRegistered {
                         path: path.clone(),
-                        info: info_clone,
+                        info: event_info,
                     });
                     tracing::info!(agent = %path, "background spawn completed and registered");
                 }
@@ -1485,7 +1491,7 @@ impl RuntimeHost {
                     )));
                     return;
                 }
-                self.send_to(&resolved, message);
+                self.send_inter_agent_to(&resolved, message);
                 let _ = reply_tx.send(Ok(()));
             }
             HostCommand::Delegate {
@@ -2320,10 +2326,22 @@ impl RuntimeHost {
     /// user/LLM-provided names should call [`resolve_agent`](Self::resolve_agent)
     /// first.
     pub fn send_to(&self, name: &str, message: String) {
+        self.send_to_from_user(name, message, true);
+    }
+
+    /// Inject a message from another runtime source. Unlike TUI input, the
+    /// target session emits MessageInjected so the externally supplied turn is
+    /// visible and persisted in that agent's own session.
+    fn send_inter_agent_to(&self, name: &str, message: String) {
+        self.send_to_from_user(name, message, false);
+    }
+
+    fn send_to_from_user(&self, name: &str, message: String, from_user: bool) {
         if let Some(entry) = self.agents.get(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Message {
                 text: message,
                 delegation_id: None,
+                from_user,
             });
         }
     }
@@ -2334,6 +2352,7 @@ impl RuntimeHost {
             let _ = entry.cmd_tx.send(AgentCommand::Message {
                 text: message,
                 delegation_id: Some(delegation_id),
+                from_user: false,
             });
         }
     }
@@ -2352,7 +2371,7 @@ impl RuntimeHost {
     pub fn inject_initial_prompts(&mut self) {
         let messages = self.network.initial_messages();
         for (node, prompt) in messages {
-            self.send_to(&node, prompt);
+            self.send_inter_agent_to(&node, prompt);
         }
     }
 
@@ -2518,7 +2537,7 @@ impl RuntimeHost {
         // Execute any routing actions (topology-edge based forwarding).
         for action in &actions {
             if let agentik_network::RoutingAction::Send { to, message } = action {
-                self.send_to(to, message.clone());
+                self.send_inter_agent_to(to, message.clone());
             }
         }
 
@@ -3635,9 +3654,10 @@ async fn relay_loop(
                 Some(AgentCommand::Message {
                     text,
                     delegation_id,
+                    from_user,
                 }) => match delegation_id {
                     Some(id) => handle.send_delegation(text, id),
-                    None => handle.send_message(text),
+                    None => handle.send_message_from(text, from_user),
                 }
                 Some(AgentCommand::Cancel) => {
                     handle.cancel();
@@ -3703,6 +3723,138 @@ impl Drop for RuntimeHost {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_persistence_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    fn config(dir: &tempfile::TempDir) -> RuntimeConfig {
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_agent_inter_agent_messages_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let path = agentik_types::AgentPath::root()
+            .join("researcher")
+            .unwrap()
+            .join("worker")
+            .unwrap();
+        let profile = agentik_core::AgentProfile::new("researcher/worker");
+        let spawn_profile = profile.clone();
+        let spawn_path = path.clone();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        host.set_model(model);
+        let spawn_control = host.control();
+        let spawn = tokio::spawn(async move {
+            let parent = spawn_path.parent().unwrap();
+            spawn_control
+                .spawn_with_profile(spawn_path.name(), &parent, spawn_profile, None)
+                .await
+        });
+        host.recv_and_process_command().await;
+        host.recv_and_process_command().await;
+        let registration = host.recv_event().await.unwrap();
+        let HostEvent::AgentRegistered {
+            path: registered_path,
+            info,
+        } = registration
+        else {
+            panic!("expected agent registration event");
+        };
+        assert_eq!(registered_path, path);
+        let agent_id = info.agent_id.expect("registered event carries agent ID");
+        assert_eq!(spawn.await.unwrap().unwrap(), path.as_str());
+
+        let control = host.control();
+        let delivery_path = path.clone();
+        let delivery = tokio::spawn(async move {
+            control
+                .send_message(delivery_path.as_str(), "persist child message")
+                .await
+                .expect("host command channel should remain open")
+                .expect("child agent should be registered");
+        });
+        host.recv_and_process_command().await;
+        delivery.await.unwrap();
+
+        let injected = timeout(Duration::from_secs(2), async {
+            loop {
+                let Some((_, event)) = host.recv_any().await else {
+                    panic!("agent event channel closed");
+                };
+                if matches!(event, AgentEvent::MessageInjected(_)) {
+                    return event;
+                }
+            }
+        })
+        .await
+        .expect("expected injected message event");
+        assert!(
+            matches!(injected, AgentEvent::MessageInjected(text) if text == "persist child message")
+        );
+
+        // The WAL write is asynchronous and is not tied to event delivery.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        host.shutdown_all_agents_and_wait().await;
+        let storage = host.infra().storage.clone();
+        let records = storage.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 1, "child session row must be persisted");
+
+        let state = agentik_core::storage::restore_session_state(
+            storage.as_ref(),
+            agent_id,
+            records[0].session_id,
+        )
+        .await
+        .unwrap();
+        assert!(
+            state
+                .messages
+                .iter()
+                .any(|message| message.content.iter().any(|block| {
+                    matches!(block, ContentBlock::Text { text } if text == "persist child message")
+                })),
+            "inter-agent message must be in the child session WAL"
+        );
+        let session_id = records[0].session_id;
+        drop(storage);
+        drop(host);
+
+        let host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        let mut handle = host
+            .spawn_agent(&path, &profile, model, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            handle.agent_id, agent_id,
+            "same child path must restore its ID"
+        );
+
+        handle.list_sessions();
+        let sessions = timeout(Duration::from_secs(2), async {
+            loop {
+                let Some(event) = handle.recv_event().await else {
+                    panic!("agent event channel closed");
+                };
+                if let AgentEvent::SessionList { sessions } = event {
+                    return sessions;
+                }
+            }
+        })
+        .await
+        .expect("expected restored session list");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
     }
 }
 

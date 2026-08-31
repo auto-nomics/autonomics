@@ -6,7 +6,8 @@ usage() {
 Usage: build_hdl_ukb_panel.sh
 
 Downloads and verifies the official HDL-L UKB EUR LD SVD and BIM payloads,
-normalizes them into LD/ and bim/, and builds a data-catalog package.
+normalizes them into LD/ and bim/, and builds a local data-catalog package.
+Publication is opt-in because the HDL-L runtime target is rootless Podman.
 
 Environment:
   OUTPUT_ROOT       Package output parent (default /mnt/data/hdl_catalog_packages)
@@ -21,7 +22,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 output_root=${OUTPUT_ROOT:-/mnt/data/hdl_catalog_packages}
 staging_root=${STAGING_ROOT:-/mnt/data/hdl_panel_staging}
 download_panel=${DOWNLOAD_PANEL:-1}
-publish_panel=${PUBLISH_PANEL:-1}
+publish_panel=${PUBLISH_PANEL:-0}
 config=${VFS_CONFIG:-"$HOME/.autonomics/vfs.toml"}
 panel_id=hdl.ref.ukb_eur
 panel_version=v1.0

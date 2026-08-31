@@ -989,52 +989,184 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage HDL UKB panel, k3s PVCs, kubeconfig, the official HDL image, and HDL-L sumstats"]
-async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
-    let fixture = catalog_test_fixture().await;
+#[ignore = "requires rootless Podman and the local official HDL image"]
+async fn real_official_hdl_l_runs_in_podman_with_local_panel() {
+    let scratch = tempfile::tempdir().unwrap();
+    let fixture_root = scratch.path().join("official-fixture");
+    let panel_staging = fixture_root.join("panel-staging");
+    std::fs::create_dir_all(panel_staging.join("LD")).unwrap();
+    std::fs::create_dir_all(panel_staging.join("bim")).unwrap();
+
+    // The fixture panel is deliberately small. It has the official HDL-L LD
+    // SVD object names and layout, so the full runtime path still executes the
+    // official HDL::HDL.L implementation without downloading the 1.8 GiB UKB
+    // panel for a smoke test.
+    let generator = r#"
+set.seed(123)
+n <- 40
+ids <- sprintf("rs%06d", 100001:100040)
+rho <- 0.8
+ld <- rho^abs(outer(seq_len(n), seq_len(n), "-"))
+LDsc <- as.numeric(colSums(ld))
+eig <- eigen(ld, symmetric = TRUE)
+lam <- pmax(eig$values, 1e-8)
+V <- eig$vectors
+rownames(V) <- ids
+save(LDsc, lam, V, file = "/work/panel-staging/LD/ukb_chr1.3_fixture_LDSVD.rda")
+NEWLOC <- data.frame(CHR = 1L, piece = 3L)
+save(NEWLOC, file = "/work/panel-staging/LD/HDLL_LOC_snps.RData")
+bim <- data.frame(
+  chr = 1L,
+  id = ids,
+  cm = 0L,
+  pos = seq_len(n) * 100L,
+  A1 = "A",
+  A2 = "G",
+  stringsAsFactors = FALSE
+)
+write.table(
+  bim,
+  "/work/panel-staging/bim/ukb_chr1.3_fixture.bim",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE,
+  col.names = FALSE
+)
+z <- as.numeric(scale(LDsc)) * 4
+gwas1 <- data.frame(SNP = ids, A1 = "A", A2 = "G", N = 100000, Z = z)
+gwas2 <- data.frame(SNP = ids, A1 = "A", A2 = "G", N = 100000, Z = z + 0.1)
+write.table(gwas1, "/work/gwas1.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+"#;
+    let podman_program =
+        std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into());
+    let image = std::env::var("AUTONOMICS_HDL_IMAGE")
+        .unwrap_or_else(|_| nodes_io::hdl_l_container::HDL_ORIGINAL_IMAGE.into());
+    let fixture_mount = format!("{}:/work", fixture_root.display());
+    let status = Command::new(&podman_program)
+        .args([
+            "run",
+            "--rm",
+            "--volume",
+            &fixture_mount,
+            &image,
+            "-e",
+            generator,
+        ])
+        .status()
+        .unwrap();
     assert!(
-        fixture.bundles.get(HDL_UKB_EUR_PANEL).is_some(),
-        "the official HDL UKB panel must be published before the E2E baseline"
+        status.success(),
+        "official HDL image failed to build fixture"
     );
 
-    let input1 = std::env::var_os("AUTONOMICS_HDL_IT_SUMSTATS1")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-it/gwas1.tsv").to_path_buf());
-    let input2 = std::env::var_os("AUTONOMICS_HDL_IT_SUMSTATS2")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-it/gwas2.tsv").to_path_buf());
-    assert!(
-        input1.is_file() && input2.is_file(),
-        "missing HDL-L sumstats fixtures: {} and {}",
-        input1.display(),
-        input2.display()
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("population".to_string(), "EUR".to_string());
+    metadata.insert(
+        "description".to_string(),
+        "HDL-L official-layout local Podman smoke panel".to_string(),
     );
+    let panel_package = scratch.path().join("panel-package");
+    let built = data_catalog::package::build_package(
+        &panel_staging,
+        &panel_package,
+        data_catalog::package::BuildOptions {
+            id: Some(HDL_UKB_EUR_PANEL.to_string()),
+            version: Some("v1.0-podman-fixture".to_string()),
+            kind: Some("hdl_ld_svd_ref".to_string()),
+            metadata,
+            payload: [
+                ("ld_dir".to_string(), "LD".into()),
+                ("bim_dir".to_string(), "bim".into()),
+                (
+                    "ld_file_template".to_string(),
+                    "LD/ukb_chr{chr}.{piece}_fixture_LDSVD.rda".into(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            force: false,
+        },
+    )
+    .unwrap();
 
-    let k3s_config = K3sConfig::from_env();
-    let runtime: Arc<dyn ContainerRuntime> = Arc::new(K3sRuntime::new(k3s_config.clone()));
-    let panel_cache = Arc::new(PanelCache::new(
-        k3s_config.panel_cache_root.clone(),
-        k3s_config.panel_pvc_prefix,
+    let panel_runtime = scratch.path().join("panel-runtime");
+    std::fs::create_dir_all(panel_runtime.join("LD")).unwrap();
+    std::fs::create_dir_all(panel_runtime.join("bim")).unwrap();
+    std::fs::copy(
+        panel_package.join("manifest.json"),
+        panel_runtime.join("manifest.json"),
+    )
+    .unwrap();
+    for file in [
+        "LD/ukb_chr1.3_fixture_LDSVD.rda",
+        "LD/HDLL_LOC_snps.RData",
+        "bim/ukb_chr1.3_fixture.bim",
+    ] {
+        std::fs::copy(
+            panel_package.join("payload").join(file),
+            panel_runtime.join(file),
+        )
+        .unwrap();
+    }
+
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "hdl-podman-test-local".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![
+            MountDefinition {
+                path: "/".into(),
+                backend: "hdl-podman-test-local".into(),
+                source: scratch.path().to_string_lossy().into_owned(),
+                read_only: false,
+            },
+            MountDefinition {
+                path: "/catalog/hdl_ref".into(),
+                backend: "hdl-podman-test-local".into(),
+                source: panel_runtime.to_string_lossy().into_owned(),
+                read_only: true,
+            },
+        ],
+    };
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = Arc::new(OpendalFileStorage::with_mounts(
+        scratch.path(),
+        mounted.clone(),
     ));
-    let registry_ctx = fixture
-        .ctx
-        .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let session = SessionContext::new();
+    session
+        .runtime_env()
+        .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
+    let ctx = NodeCtx::new(session.runtime_env(), Some(storage));
+
+    let mut panel = dag_core::DataBundle::new(
+        HDL_UKB_EUR_PANEL,
+        "HDL-L official-format local smoke panel",
+        "/catalog/hdl_ref",
+    );
+    panel.source = Some("/catalog/hdl_ref".into());
+    panel.digest = built.manifest.digest.clone();
+    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(
+        dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
+    ));
+
+    let workspace_root = scratch.path().join("podman-workspace");
+    let panel_cache_root = scratch.path().join("podman-panels");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::create_dir_all(&panel_cache_root).unwrap();
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: podman_program,
+        workspace_root,
+        panel_cache_root: panel_cache_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_cache_root.clone(), ""));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(HdlLContainerNodeFactory::new(
         runtime,
         panel_cache,
     )));
-    // The production wrapper always pins a manifest digest. Local k3s tests
-    // resolve that digest through the configured image endpoint.
-    // SAFETY: ignored E2E tests are run one at a time by the HDL test script.
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            std::env::var("AUTONOMICS_HDL_IMAGE_ENDPOINT")
-                .unwrap_or_else(|_| "192.168.10.24:30500".into()),
-        );
-    }
     let hdl_l = registry
         .build_node(
             HDL_L_CONTAINER_KIND,
@@ -1051,7 +1183,10 @@ async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
     dag.add_node(
         "trait1".into(),
         Box::new(FileReferenceNode::new(
-            input1.to_string_lossy().into_owned(),
+            fixture_root
+                .join("gwas1.tsv")
+                .to_string_lossy()
+                .into_owned(),
             Some("hdl_l_sumstats".into()),
         )),
     )
@@ -1059,7 +1194,10 @@ async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
     dag.add_node(
         "trait2".into(),
         Box::new(FileReferenceNode::new(
-            input2.to_string_lossy().into_owned(),
+            fixture_root
+                .join("gwas2.tsv")
+                .to_string_lossy()
+                .into_owned(),
             Some("hdl_l_sumstats".into()),
         )),
     )
@@ -1067,7 +1205,10 @@ async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
     dag.add_node("hdl_l".into(), hdl_l).unwrap();
     dag.add_edge("trait1", "hdl_l", 0, 0).unwrap();
     dag.add_edge("trait2", "hdl_l", 0, 1).unwrap();
-    let report = dag.run(&fixture.ctx, None).await.unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap();
     assert_eq!(
         report.statuses.get("hdl_l"),
         Some(&dag_core::dag::RuntimeStatus::Success),
@@ -1083,11 +1224,7 @@ async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
     assert!(log.path.ends_with("/hdl_l.log"));
     assert!(tsv.path.starts_with("vfs:///artifacts/hdl_l_container/"));
 
-    let storage = fixture
-        .ctx
-        .opendal
-        .as_ref()
-        .expect("test storage is registered");
+    let storage = ctx.opendal.as_ref().expect("test storage is registered");
     let tsv_text = read_published_text(storage, &tsv).await;
     let log_text = read_published_text(storage, &log).await;
     for expected in [
@@ -1109,7 +1246,7 @@ async fn real_catalog_backed_official_hdl_l_runs_in_k3s() {
         );
     }
 
-    let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+    let cached_panel = std::fs::read_dir(&panel_cache_root)
         .unwrap()
         .filter_map(|entry| entry.ok())
         .any(|entry| {

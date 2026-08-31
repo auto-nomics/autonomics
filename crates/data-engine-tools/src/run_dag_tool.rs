@@ -81,6 +81,9 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
 /// agent. Shared by both the streaming and non-streaming execution paths so
 /// their results are identical.
 fn build_report_json(report: RunReport) -> serde_json::Value {
+    let warnings = report.warnings;
+    let snapshot_id = report.snapshot_id;
+
     // Build per-node entries.
     let nodes: Vec<serde_json::Value> = report
         .nodes
@@ -140,6 +143,8 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
 
     serde_json::json!({
         "ok": report.ok,
+        "warnings": warnings,
+        "snapshot_id": snapshot_id,
         "summary": {
             "total": total,
             "succeeded": succeeded,
@@ -201,5 +206,29 @@ impl ToolFunction for RunDagTool {
         };
 
         Ok(ToolResult::success_json(build_report_json(report)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_json_exposes_history_snapshot_result() {
+        let report = RunReport {
+            ok: true,
+            warnings: vec!["no DAG history store attached; run snapshot was not persisted".into()],
+            snapshot_id: None,
+            nodes: Vec::new(),
+            statuses: Default::default(),
+            errors: Default::default(),
+        };
+
+        let json = build_report_json(report);
+        assert_eq!(
+            json["warnings"][0],
+            "no DAG history store attached; run snapshot was not persisted"
+        );
+        assert!(json["snapshot_id"].is_null());
     }
 }

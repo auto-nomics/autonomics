@@ -616,6 +616,8 @@ impl DAG {
 
         Ok(RunReport {
             ok,
+            warnings: Vec::new(),
+            snapshot_id: None,
             nodes: node_reports,
             statuses: self.statuses.clone(),
             errors: self.errors.drain().collect(),

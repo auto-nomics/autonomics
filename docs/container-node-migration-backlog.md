@@ -24,6 +24,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | HyPrColoc | `hyprcoloc_container` implemented and locally baselined | official R `hyprcoloc` 0.0.2 at commit `0348bbd` | none for the basic beta/SE contract | import the local image into k3s, run the official 10-trait k3s baseline, then pin the image digest |
 | GCTA summary statistics | `gcta_cojo_select_container`, `gcta_sblup_container`, `gcta_fastbat_container`, and `gcta_acat_container` implemented and k3s-tested | official GCTA 1.95.3 Linux executable | `plink.ref.1000g_eur.binary` plus `gcta.gene_list.hg19` | none for the committed chr22 summary-statistics contract |
 | MTAG | `mtag_container` implemented and Podman-tested | official MTAG 1.0.8 at commit `9e17f3c` | `mtag.ld_ref.1000g_eur_w_ld` catalog package | publish the image to the selected deployment registry when this contract leaves the local Podman workflow |
+| HDL-L region | `hdl_l_container` implemented and Podman-tested with an official-layout local LD SVD/BIM fixture; native nodes remain registered | official R `HDL` 1.4.3 at commit `e6b055d` | published `hdl.ref.ukb_eur` v1.0 LD SVD/BIM catalog package | run a production chr/piece baseline against the published 1.8 GiB panel; whole-genome scan remains separate |
 
 | COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the k3s e2e baseline |
 
@@ -45,6 +46,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | HyPrColoc 0.0.2 | Official tag `v0.0.2`, commit `0348bbdd977be731d82e4efda115a9bed63cd44f`; source archive SHA-256 `a66f478b62453b5ecdc7eef16eda82d131c7dcafa65fbb80b6e536bc978797e3` | not yet pinned — local tag `localhost/atc/hyprcoloc:0.0.2`, image ID `ca1f1812dfb8900057997f8d432c43c182cae3d329beeaa71ff839ff20e5dabb` | Official 10-trait fixture is generated from `data/test.RData` (SHA-256 `caa7a96190c4a292579393926dcac92c3dbf78840b7948c06107486c740b45f5`); local baseline reproduces T1-T5/T6-T8/T9-T10 and candidates `rs11591147`, `rs12117612`, `rs7524677`; k3s image import pending |
 | GCTA 1.95.3 | Official Linux zip SHA-256 `441e01715bc12dabb083fe76372432139dff9bb2c073d21d218d15e92580e807` (executable MIT; source GPL-3.0-or-later) | `192.168.10.24:30500/atc/gcta@sha256:4cbf8c91376f7b314eebf1dfa02ad44028575991cd3d4c4e81b5324942bec20b` | Image ID `bf00e6467deb`; PLINK panel digest `sha256:80597da4137e90c3c312c9fa37a4dae9d29f18b7a8b12576ae502941bb1a558d`; hg19 gene-list digest `sha256:72d0baec00cd512482bf510f76da6264eed67cb71f57654aff9553e1ed108db8`; chr22 baselines verified (COJO 3 signals, SBLUP 199 effects, fastBAT 4 genes, ACAT-V 1 gene) |
 | MTAG 1.0.8 | JonJala MTAG commit `9e17f3cf1fbcf57b6bc466daefdc51fd0de3c5dc` | `sha256:28ac0a0a0ee741340390b7588bf8ba36e6b316d62adc0cab7fd4494f5dd6a90c` | Official Python 2.7 runtime; panel digest `sha256:4fb3a06b9b4a8acbe7b6766ffe946cd5524d9d4e1b6f64bf3660d12a5ca9438f`; rootless-Podman two-trait baseline verified with 199,647 output SNPs |
+| HDL 1.4.3 | Official commit `e6b055d42fd9904c3e994a9b829626c7e5f8422b` | local tag `localhost/atc/hdl:1.4.3`, manifest digest `sha256:9d562d48b805f1b361060a2ca36fe95e7b4227268c7c17ea15006b770d8d30aa` | Image reports HDL 1.4.3, data.table 1.18.4, and dplyr 1.2.1; rootless-Podman fixture completed through official `HDL::HDL.L`; `hdl.ref.ukb_eur` v1.0 panel digest `sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54` is published but not embedded in the image |
  `sha256:66159cf0b14397b667483f08ad953d98d88718d94ee1cec0db6475cd68e4450a` | Image ID `95f3275fc917adafcaa9d578a244eafd3737ec06eecab7a6d22df7ec4ba0523c`; panel digest `sha256:a3de3339288985120eeb66d9e8d21fa157b88798504a18d02be14319a17171c4`; official chr21-22 fit1 and fit2 baselines verified |
 
 The SuSiE-RSS image is published to the single-node k3s registry and referenced
@@ -64,7 +66,6 @@ each migration is completed.
 
 | Area | Official runtime | Missing prerequisite |
 |---|---|---|
-| HDL-L and whole-genome scan | HDL R 1.4.3 at commit `e6b055d` | official HDL LD SVD package and official piece-coordinate mapping |
 | MRlap | MRlap R 0.0.3.3 plus compatible GenomicSEM | exact dependency pinning and full official example baseline |
 | LCV | official LCV scripts at commit `39950a8` | license/provenance approval and official native LD-score input baseline |
 | CPASSOC | official Zhu & Feng R implementation | reacquire exact source and API; current local reference is absent |

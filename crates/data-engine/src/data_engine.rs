@@ -606,25 +606,9 @@ impl DataEngine {
     pub async fn run(&mut self) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
-
-        if let Some(history) = &self.history {
-            // Skip snapshot if the manifest hasn't changed since the current
-            // ref head — avoids redundant snapshots for identical re-runs.
-            let skip = match history.ref_head(&self.history_ref).await {
-                Ok(Some(head)) => head.manifest_hash == manifest_hash,
-                _ => false,
-            };
-            if !skip {
-                let msg = self
-                    .pending_commit_message
-                    .take()
-                    .unwrap_or_else(|| "auto-snapshot after run".to_string());
-                let _ = history
-                    .commit(&self.history_ref, &manifest, Some(&report), &msg)
-                    .await;
-            }
-        }
+        let mut report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
+        self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
+            .await;
         Ok(report)
     }
 
@@ -637,27 +621,57 @@ impl DataEngine {
     ) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let report = self
+        let mut report = self
             .dag
             .run(&self.config, &self.engine_ctx, Some(event_sink))
             .await?;
+        self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
+            .await;
+        Ok(report)
+    }
 
-        if let Some(history) = &self.history {
-            let skip = match history.ref_head(&self.history_ref).await {
-                Ok(Some(head)) => head.manifest_hash == manifest_hash,
-                _ => false,
-            };
-            if !skip {
-                let msg = self
-                    .pending_commit_message
-                    .take()
-                    .unwrap_or_else(|| "auto-snapshot after run".to_string());
-                let _ = history
-                    .commit(&self.history_ref, &manifest, Some(&report), &msg)
-                    .await;
+    async fn commit_history_snapshot(
+        &mut self,
+        manifest: &crate::dag::DagManifest,
+        manifest_hash: String,
+        report: &mut RunReport,
+    ) {
+        let Some(history) = self.history.clone() else {
+            report
+                .warnings
+                .push("no DAG history store attached; run snapshot was not persisted".into());
+            return;
+        };
+
+        let head = match history.ref_head(&self.history_ref).await {
+            Ok(head) => head,
+            Err(error) => {
+                let warning = format!("DAG history snapshot commit failed: {error}");
+                tracing::warn!(ref = %self.history_ref, error = %error, "{warning}");
+                report.warnings.push(warning);
+                return;
+            }
+        };
+
+        if head.is_some_and(|head| head.manifest_hash == manifest_hash) {
+            return;
+        }
+
+        let message = self
+            .pending_commit_message
+            .take()
+            .unwrap_or_else(|| "auto-snapshot after run".to_string());
+        match history
+            .commit(&self.history_ref, manifest, Some(report), &message)
+            .await
+        {
+            Ok(snapshot_id) => report.snapshot_id = Some(snapshot_id),
+            Err(error) => {
+                let warning = format!("DAG history snapshot commit failed: {error}");
+                tracing::warn!(ref = %self.history_ref, error = %error, "{warning}");
+                report.warnings.push(warning);
             }
         }
-        Ok(report)
     }
 
     pub async fn get_output(

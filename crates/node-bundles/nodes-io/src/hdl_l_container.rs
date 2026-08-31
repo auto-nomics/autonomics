@@ -19,13 +19,12 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 
 pub const HDL_L_CONTAINER_KIND: &str = "hdl_l_container";
-pub const HDL_ORIGINAL_IMAGE_REPOSITORY: &str = "hdl";
-pub const HDL_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+pub const HDL_ORIGINAL_IMAGE: &str = "localhost/atc/hdl:1.4.3";
+pub const HDL_ORIGINAL_IMAGE_MANIFEST_DIGEST: &str =
+    "sha256:9d562d48b805f1b361060a2ca36fe95e7b4227268c7c17ea15006b770d8d30aa";
 pub const HDL_UKB_EUR_PANEL: &str = "hdl.ref.ukb_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/hdl_l_container";
@@ -241,7 +240,7 @@ bim_path <- "/panels/hdl_ref/bim/"
 if (!file.exists(file.path(ld_path, "HDLL_LOC_snps.RData"))) {{
   stop("HDL panel is missing LD/HDLL_LOC_snps.RData")
 }}
-if (length(list.files(bim_path, pattern = "\\\\.bim$")) == 0) {{
+if (length(list.files(bim_path, pattern = "\\.bim$")) == 0) {{
   stop("HDL panel contains no BIM files")
 }}
 
@@ -295,7 +294,7 @@ saveRDS(result, Sys.getenv("AUTONOMICS_OUTPUT1"))
 pub fn container_spec(spec: &HdlLContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
+        image: HDL_ORIGINAL_IMAGE.into(),
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -360,7 +359,7 @@ impl NodeFactory for HdlLContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs the official HDL R package for one LD block in k3s."
+        "Runs the official HDL R package for one LD block in Podman."
     }
 
     fn doc(&self) -> &'static str {
@@ -448,10 +447,7 @@ mod tests {
     #[test]
     fn builds_official_hdl_l_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(
-            container.image,
-            acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
-        );
+        assert_eq!(container.image, HDL_ORIGINAL_IMAGE);
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, HDL_UKB_EUR_PANEL);
         assert_eq!(container.panel_bundles[0].mount_path, "/panels/hdl_ref");

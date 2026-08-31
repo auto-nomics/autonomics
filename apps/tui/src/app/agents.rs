@@ -10,10 +10,25 @@ impl App {
     /// background task and send the result back via the app event channel.
     /// The `AgentSpawned` event is handled in `handle_app_event`.
     pub(super) fn spawn_agent_from_profile(&mut self, profile: &AgentProfile, agent_name: &str) {
+        let target_path = agentik_types::AgentPath::root()
+            .join(agent_name)
+            .unwrap_or_else(|_| agentik_types::AgentPath::root());
+        self.spawn_agent_at_path(profile, target_path);
+    }
+
+    /// Spawn an agent at its persisted hierarchical path. Tool-spawned
+    /// children live below `/root/parent/child`; restoring them from only the
+    /// leaf name would create a different runtime identity.
+    pub(super) fn spawn_agent_at_path(
+        &mut self,
+        profile: &AgentProfile,
+        target_path: agentik_types::AgentPath,
+    ) {
+        let agent_name = target_path.name();
         tracing::info!(
             profile = %profile.path,
-            agent = %agent_name,
-            "spawn_agent_from_profile called"
+            agent = %target_path,
+            "spawn_agent_at_path called"
         );
         // Mark this spawn as user-initiated so the matching
         // `AgentRegistered` event can steal focus to the new leaf.
@@ -49,6 +64,9 @@ impl App {
         let control = host.control();
         let profile_clone = profile.clone();
         let agent_name_owned = agent_name.to_string();
+        let parent_path = target_path
+            .parent()
+            .unwrap_or_else(agentik_types::AgentPath::root);
         let profile_name_owned = profile.path.clone();
         let tx = self.app_event_tx.clone();
 
@@ -64,7 +82,7 @@ impl App {
                 let result = control
                     .spawn_with_profile(
                         &agent_name_owned,
-                        &agentik_types::AgentPath::root(),
+                        &parent_path,
                         profile_clone,
                         model_override,
                     )
@@ -89,7 +107,7 @@ impl App {
             },
         );
 
-        tracing::info!(profile = %profile.path, "spawning agent...");
+        tracing::info!(profile = %profile.path, agent = %target_path, "spawning agent...");
     }
 
     /// Query stored agents and open the resume picker.
@@ -212,11 +230,11 @@ impl App {
                     }
 
                     let config_json = item.config_json.clone();
-                    // `item.path` is the full AgentPath (e.g. `/root/researcher`).
-                    let agent_path = item.path.as_str().to_string();
+                    // `item.path` is the full persisted AgentPath. Preserve its
+                    // hierarchy so child agents restore their original runtime ID.
                     self.state.agent_picker.close();
-                    // Extract the short name segment for spawn_with_profile.
                     let short_name = item.path.name().to_string();
+                    let profile_path = item.path.as_str().trim_start_matches("/root/");
                     // Try to reconstruct the profile from the stored config_json.
                     // Fall back to looking up by short name in the current profiles.
                     let profile = serde_json::from_value::<AgentProfile>(config_json)
@@ -225,13 +243,13 @@ impl App {
                             self.state
                                 .profiles
                                 .iter()
-                                .find(|p| p.path == short_name)
+                                .find(|p| p.path == profile_path || p.path == short_name)
                                 .cloned()
                         });
                     match profile {
-                        Some(p) => self.spawn_agent_from_profile(&p, &short_name),
+                        Some(p) => self.spawn_agent_at_path(&p, item.path),
                         None => tracing::warn!(
-                            agent = %agent_path,
+                            agent = %item.path,
                             "could not reconstruct profile for agent record",
                         ),
                     }

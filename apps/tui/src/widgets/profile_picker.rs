@@ -9,14 +9,17 @@ use std::collections::HashSet;
 
 use agentik_core::AgentProfile;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
+    style::Color,
+    widgets::{ListState, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::tree_picker::{
+    PickerTreeRow, profile_preview_lines, render_chrome, render_footer, render_preview_frame,
+    render_preview_text, render_search, render_separator, render_tree_list, split_content,
+    truncate_preview_lines,
+};
 
 /// One selectable profile entry, carrying the full [`AgentProfile`].
 #[derive(Clone)]
@@ -48,6 +51,24 @@ struct TreeNode {
     item_idx: Option<usize>,
     /// `true` if this folder is currently expanded.
     expanded: bool,
+}
+
+impl PickerTreeRow for TreeNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.is_leaf
+    }
+
+    fn expanded(&self) -> bool {
+        self.expanded
+    }
 }
 
 /// State for the profile picker.
@@ -304,7 +325,7 @@ pub struct ProfilePicker {
 impl ProfilePicker {
     pub fn new() -> Self {
         Self {
-            accent: Color::Blue,
+            accent: Color::Cyan,
             popup_width: 0,
             list_width: 28,
         }
@@ -340,275 +361,40 @@ impl StatefulWidget for ProfilePicker {
             return;
         }
 
-        let popup = Popup::new(" Select Profile ")
-            .accent(self.accent)
-            .width(self.popup_width);
-        let inner = popup.render(area, buf);
+        let layout = render_chrome(area, buf, " Select Profile ", self.accent, self.popup_width);
+        render_search(layout.search, buf, self.accent, &state.query, "profiles");
+        render_separator(layout.separator, buf);
 
-        let v_regions = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(3),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        // ── Search input row ──
-        let input_line = if state.query.is_empty() {
-            Line::from(vec![
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    " search profiles…",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("/", Style::default().fg(self.accent)),
-                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
-            ])
-        };
-        Widget::render(Paragraph::new(input_line), v_regions[0], buf);
-
-        Widget::render(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
-            v_regions[1],
+        let content = split_content(layout.content, self.list_width);
+        render_tree_list(
+            content.list,
             buf,
+            " Profiles ",
+            "  No profiles found.",
+            &state.rows,
+            state.selected,
+            self.accent,
+            &mut state.list_state,
         );
 
-        // ── Content area: two horizontal blocks ──
-        let h_regions = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
-            .split(v_regions[2]);
-
-        self.render_list_block(h_regions[0], buf, state);
-        self.render_preview_block(h_regions[1], buf, state);
-
-        // ── Footer ──
         let hint = " Enter spawn  →/← expand/fold  ↑↓ navigate  Esc cancel";
-        let p = Paragraph::new(hint).style(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        );
-        Widget::render(p, v_regions[3], buf);
-    }
-}
+        render_footer(layout.footer, buf, hint);
 
-impl ProfilePicker {
-    /// Render the left block: collapsible tree of profiles.
-    fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut ProfilePickerState) {
-        let block = Block::default()
-            .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " Profiles ",
-                Style::default()
-                    .fg(self.accent)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if state.rows.is_empty() {
-            let line = Line::from(Span::styled(
-                "  No profiles found.",
-                Style::default().fg(Color::DarkGray),
-            ));
-            let area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            };
-            Widget::render(Paragraph::new(line), area, buf);
-            return;
-        }
-
-        let items: Vec<ListItem> = state
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(sel_i, node)| {
-                let is_selected = sel_i == state.selected;
-
-                // Indentation.
-                let indent = "  ".repeat(node.depth);
-
-                // Folder/leaf icon.
-                let (icon, icon_color) = if node.is_leaf {
-                    ("●", self.accent)
-                } else if node.expanded {
-                    ("▼", Color::Yellow)
-                } else {
-                    ("▶", Color::Yellow)
-                };
-
-                let name_style = if is_selected {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(self.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else if node.is_leaf {
-                    Style::default().fg(Color::Gray)
-                } else {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                };
-
-                let icon_style = if is_selected {
-                    Style::default().fg(Color::Black).bg(self.accent)
-                } else {
-                    Style::default().fg(icon_color)
-                };
-
-                Line::from(vec![
-                    Span::styled(indent, Style::default()),
-                    Span::styled(icon, icon_style),
-                    Span::raw(" "),
-                    Span::styled(node.name.clone(), name_style),
-                ])
-            })
-            .map(ListItem::new)
-            .collect();
-
-        let list = List::new(items).highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(self.accent)
-                .add_modifier(Modifier::BOLD),
-        );
-        StatefulWidget::render(list, inner, buf, &mut state.list_state);
-    }
-
-    /// Render the right block: preview of the currently selected profile.
-    fn render_preview_block(&self, area: Rect, buf: &mut Buffer, state: &ProfilePickerState) {
-        let block = Block::default().borders(Borders::NONE).title(Span::styled(
-            " Preview ",
-            Style::default()
-                .fg(self.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
+        let preview_inner = render_preview_frame(content.preview, buf, self.accent);
         let Some(item) = state.selected_item() else {
-            let line = Line::from(Span::styled(
-                if state.rows.is_empty() {
-                    "  No profiles found."
-                } else {
-                    "  Select a profile (●) to preview."
-                },
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ));
-            let area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
+            let empty_text = if state.rows.is_empty() {
+                "  No profiles found."
+            } else {
+                "  Select a profile (●) to preview."
             };
-            Widget::render(Paragraph::new(line), area, buf);
+            render_preview_text(preview_inner, buf, empty_text);
             return;
         };
 
-        let p = &item.profile;
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Path.
-        lines.push(Line::from(vec![
-            Span::styled("  Path       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                p.path.clone(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        // Parent path (if any).
-        if let Some(parent) = p.parent_path() {
-            lines.push(Line::from(vec![
-                Span::styled("  Parent     ", Style::default().fg(Color::DarkGray)),
-                Span::styled(parent.to_string(), Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
-        // Description.
-        if !p.description.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("  Desc       ", Style::default().fg(Color::DarkGray)),
-                Span::styled(p.description.clone(), Style::default().fg(Color::Gray)),
-            ]));
-        }
-
-        // Identity.
-        lines.push(Line::from(vec![
-            Span::styled("  Identity   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(p.agent_identity.clone(), Style::default().fg(Color::Cyan)),
-        ]));
-
-        // Preferred model.
-        let model_str = p.preferred_model.as_deref().unwrap_or("(global default)");
-        lines.push(Line::from(vec![
-            Span::styled("  Model      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(model_str, Style::default().fg(Color::Gray)),
-        ]));
-
-        // Spacer.
-        lines.push(Line::from(""));
-
-        // Tool flags.
-        lines.push(Line::from(Span::styled(
-            "  Capabilities:",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )));
-
-        let mut flag = |name: &str, on: bool| {
-            let (icon, color) = if on {
-                ("●", Color::Green)
-            } else {
-                ("○", Color::DarkGray)
-            };
-            lines.push(Line::from(vec![
-                Span::styled("    ", Style::default()),
-                Span::styled(icon, Style::default().fg(color)),
-                Span::raw(" "),
-                Span::styled(
-                    name.to_string(),
-                    Style::default().fg(if on { Color::Gray } else { Color::DarkGray }),
-                ),
-            ]));
-        };
-        flag("bibliography", p.enable_bibliography);
-        flag("writing", p.enable_writing);
-        flag("opengwas", p.enable_opengwas);
-        flag("opentargets", p.enable_opentargets);
-        flag("gwascatalog", p.enable_gwascatalog);
-        flag("dag-history", p.enable_dag_history);
-
-        // Truncate to fit.
-        let max_lines = inner.height as usize;
-        if lines.len() > max_lines {
-            lines.truncate(max_lines.saturating_sub(1));
-            lines.push(Line::from(Span::styled(
-                "    …",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        let paragraph = Paragraph::new(lines);
-        Widget::render(paragraph, inner, buf);
+        let lines = truncate_preview_lines(
+            profile_preview_lines(&item.profile, Vec::new()),
+            preview_inner.height as usize,
+        );
+        Widget::render(Paragraph::new(lines), preview_inner, buf);
     }
 }

@@ -127,11 +127,33 @@ impl DagHistory {
     /// Creates the schema if it doesn't exist. The database file is created
     /// on first use.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DagError> {
+        let path = path.as_ref();
         let path_str = path
-            .as_ref()
             .to_str()
             .ok_or_else(|| DagError::History("history db path is not valid UTF-8".into()))?;
 
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                DagError::History(format!("create history db parent directory: {e}"))
+            })?;
+        }
+
+        match Self::try_open_local(path_str).await {
+            Ok(history) => Ok(history),
+            Err(error) if is_torn_wal_error(&error) => {
+                tracing::warn!(
+                    db = path_str,
+                    error = %error,
+                    "DAG history WAL torn on open; quarantining sidecars and retrying"
+                );
+                quarantine_wal_sidecars(path);
+                Self::try_open_local(path_str).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn try_open_local(path_str: &str) -> Result<Self, DagError> {
         let db = turso::Builder::new_local(path_str)
             .experimental_multiprocess_wal(true)
             .build()
@@ -532,9 +554,93 @@ fn val_err(e: turso::Error) -> DagError {
     DagError::History(format!("column read error: {e}"))
 }
 
+fn is_torn_wal_error(error: &DagError) -> bool {
+    error.to_string().contains("short read on WAL frame")
+}
+
+fn quarantine_wal_sidecars(db_path: &Path) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+
+    for suffix in ["-wal", "-shm", "-twal", "-tshm"] {
+        let sidecar = append_path_suffix(db_path, suffix);
+        if !sidecar.exists() {
+            continue;
+        }
+        let target = append_path_suffix(db_path, &format!("{suffix}.corrupt-{timestamp}"));
+        match std::fs::rename(&sidecar, &target) {
+            Ok(()) => tracing::warn!(
+                from = %sidecar.display(),
+                to = %target.display(),
+                "quarantined DAG history WAL sidecar"
+            ),
+            Err(error) => tracing::warn!(
+                from = %sidecar.display(),
+                to = %target.display(),
+                error = %error,
+                "failed to quarantine DAG history WAL sidecar"
+            ),
+        }
+    }
+}
+
+fn append_path_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut result = path.as_os_str().to_owned();
+    result.push(suffix);
+    std::path::PathBuf::from(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn torn_wal_error_matches_turso_message() {
+        let error = DagError::History(
+            "I/O error: short read on WAL frame at offset 2933472: expected 4096 bytes, got 0"
+                .into(),
+        );
+        assert!(is_torn_wal_error(&error));
+    }
+
+    #[test]
+    fn unrelated_database_errors_do_not_trigger_wal_recovery() {
+        for message in ["disk full", "database is locked", "permission denied"] {
+            let error = DagError::History(message.into());
+            assert!(!is_torn_wal_error(&error));
+        }
+    }
+
+    #[test]
+    fn quarantine_moves_history_sidecars_without_touching_main_db() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("dag-history.db");
+        std::fs::write(&db_path, b"main-db").unwrap();
+        std::fs::write(append_path_suffix(&db_path, "-wal"), b"wal").unwrap();
+        std::fs::write(append_path_suffix(&db_path, "-tshm"), b"tshm").unwrap();
+
+        quarantine_wal_sidecars(&db_path);
+
+        assert_eq!(std::fs::read(&db_path).unwrap(), b"main-db");
+        assert!(!append_path_suffix(&db_path, "-wal").exists());
+        assert!(!append_path_suffix(&db_path, "-tshm").exists());
+        let names: Vec<String> = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("dag-history.db-wal.corrupt-"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("dag-history.db-tshm.corrupt-"))
+        );
+    }
 
     #[tokio::test]
     async fn open_in_memory_and_init_schema() {

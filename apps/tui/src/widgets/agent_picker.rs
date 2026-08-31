@@ -16,17 +16,21 @@
 
 use std::collections::HashSet;
 
-use agentik_core::storage::AgentRecord;
+use agentik_core::{AgentProfile, storage::AgentRecord};
 use agentik_types::AgentPath;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     prelude::Buffer,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
+    widgets::{Block, Borders, ListState, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::tree_picker::{
+    PickerTreeRow, field_line, profile_preview_lines, render_chrome, render_footer,
+    render_preview_frame, render_preview_text, render_search, render_separator, render_tree_list,
+    section_line, split_content, truncate_preview_lines,
+};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
@@ -59,6 +63,24 @@ struct TreeNode {
     item_idx: Option<usize>,
     /// `true` if this folder is currently expanded.
     expanded: bool,
+}
+
+impl PickerTreeRow for TreeNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.is_leaf
+    }
+
+    fn expanded(&self) -> bool {
+        self.expanded
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -462,9 +484,9 @@ pub struct AgentPicker {
 impl AgentPicker {
     pub fn new() -> Self {
         Self {
-            accent: Color::Green,
+            accent: Color::Cyan,
             popup_width: 0,
-            list_width: 32,
+            list_width: 28,
         }
     }
 
@@ -498,57 +520,75 @@ impl StatefulWidget for AgentPicker {
             return;
         }
 
-        let popup = Popup::new(" Resume Agent ")
-            .accent(self.accent)
-            .width(self.popup_width);
-        let inner = popup.render(area, buf);
+        let layout = render_chrome(area, buf, " Resume Agent ", self.accent, self.popup_width);
+        render_search(layout.search, buf, self.accent, &state.query, "agents");
+        render_separator(layout.separator, buf);
 
-        // Top-level vertical: search row (1) + separator (1) + content (rest) + footer (1).
-        let v_regions = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1), // separator line
-                Constraint::Min(3),
-                Constraint::Length(1),
-            ])
-            .split(inner);
-
-        // ── Search input row ──
-        let input_line = if state.query.is_empty() {
-            Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    " search agents…",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("> ", Style::default().fg(self.accent)),
-                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
-            ])
-        };
-        Widget::render(Paragraph::new(input_line), v_regions[0], buf);
-
-        Widget::render(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
-            v_regions[1],
+        let content = split_content(layout.content, self.list_width);
+        render_tree_list(
+            content.list,
             buf,
+            " Agents ",
+            "  No agents found.",
+            &state.rows,
+            state.selected,
+            self.accent,
+            &mut state.list_state,
         );
 
-        // ── Content area: two horizontal blocks ──
-        let h_regions = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(self.list_width), Constraint::Min(10)])
-            .split(v_regions[2]);
+        let preview_inner = render_preview_frame(content.preview, buf, self.accent);
+        if let Some(item) = state.selected_item() {
+            let last_active = chrono::DateTime::from_timestamp_millis(item.last_active)
+                .map(|time| time.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let leading_fields = vec![
+                ("Path", item.path.as_str().to_string()),
+                ("ID", item.id.to_string()),
+                ("Last", last_active),
+            ];
 
-        self.render_list_block(h_regions[0], buf, state);
-        self.render_preview_block(h_regions[1], buf, state);
+            let lines = if let Ok(profile) =
+                serde_json::from_value::<AgentProfile>(item.config_json.clone())
+            {
+                profile_preview_lines(&profile, leading_fields)
+            } else {
+                let mut lines = leading_fields
+                    .into_iter()
+                    .map(|(label, value)| field_line(label, value))
+                    .collect::<Vec<_>>();
+                lines.push(Line::from(""));
+                lines.push(section_line("Config"));
+                match &item.config_json {
+                    serde_json::Value::Object(config) => {
+                        for (key, value) in config {
+                            let value = match value {
+                                serde_json::Value::String(value) => value.clone(),
+                                serde_json::Value::Bool(value) => value.to_string(),
+                                serde_json::Value::Number(value) => value.to_string(),
+                                serde_json::Value::Null => "null".to_string(),
+                                other => other.to_string(),
+                            };
+                            lines.push(field_line(key, value));
+                        }
+                    }
+                    other => lines.push(field_line("Value", other.to_string())),
+                }
+                lines
+            };
+
+            Widget::render(
+                Paragraph::new(truncate_preview_lines(lines, preview_inner.height as usize)),
+                preview_inner,
+                buf,
+            );
+        } else {
+            let empty_text = if state.rows.is_empty() {
+                "  No agents found."
+            } else {
+                "  Select an agent (●) to preview."
+            };
+            render_preview_text(preview_inner, buf, empty_text);
+        }
 
         // ── Footer ──
         let hint = if state.rename_id.is_some() {
@@ -566,19 +606,14 @@ impl StatefulWidget for AgentPicker {
             " Enter resume  →/← expand/fold  Ctrl+R rename  Ctrl+D delete  ↑↓ navigate  Esc cancel"
                 .to_string()
         };
-        let p = Paragraph::new(hint).style(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        );
-        Widget::render(p, v_regions[3], buf);
+        render_footer(layout.footer, buf, &hint);
 
         // ── Delete confirmation overlay ──
         if state.delete_confirm_id.is_some() {
             let confirm_area = Rect {
-                x: h_regions[1].x,
-                y: h_regions[1].y + h_regions[1].height.saturating_sub(2),
-                width: h_regions[1].width,
+                x: content.preview.x,
+                y: content.preview.y + content.preview.height.saturating_sub(2),
+                width: content.preview.width,
                 height: 2,
             };
             let block = Block::default()
@@ -601,9 +636,9 @@ impl StatefulWidget for AgentPicker {
         // ── Rename overlay ──
         if state.rename_id.is_some() {
             let rename_area = Rect {
-                x: h_regions[1].x,
-                y: h_regions[1].y + h_regions[1].height.saturating_sub(2),
-                width: h_regions[1].width,
+                x: content.preview.x,
+                y: content.preview.y + content.preview.height.saturating_sub(2),
+                width: content.preview.width,
                 height: 2,
             };
             let block = Block::default()
@@ -634,217 +669,5 @@ impl StatefulWidget for AgentPicker {
             };
             Widget::render(Paragraph::new(error_or_cursor), inner_rename, buf);
         }
-    }
-}
-
-impl AgentPicker {
-    /// Render the left block: tree of agents.
-    fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut AgentPickerState) {
-        let block = Block::default()
-            .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " Agents ",
-                Style::default()
-                    .fg(self.accent)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if state.rows.is_empty() {
-            let line = Line::from(Span::styled(
-                "  No agents found.",
-                Style::default().fg(Color::DarkGray),
-            ));
-            let area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            };
-            Widget::render(Paragraph::new(line), area, buf);
-            return;
-        }
-
-        let items: Vec<ListItem> = state
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(sel_i, node)| {
-                let is_selected = sel_i == state.selected;
-                let indent = "  ".repeat(node.depth);
-
-                if node.is_leaf {
-                    // Leaf agent — show with a colored bullet.
-                    let style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(self.accent)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    };
-                    Line::from(vec![
-                        Span::styled(indent, Style::default()),
-                        Span::styled("● ", Style::default().fg(self.accent)),
-                        Span::styled(node.name.clone(), style),
-                    ])
-                } else {
-                    // Folder — show expand/collapse arrow.
-                    let arrow = if node.expanded { "▼" } else { "▶" };
-                    let folder_style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(self.accent)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    };
-                    let name_style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(self.accent)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::DIM)
-                    };
-                    Line::from(vec![
-                        Span::styled(indent, Style::default()),
-                        Span::styled(format!("{arrow} "), folder_style),
-                        Span::styled(node.name.clone(), name_style),
-                    ])
-                }
-            })
-            .map(ListItem::new)
-            .collect();
-
-        let list = List::new(items).highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(self.accent)
-                .add_modifier(Modifier::BOLD),
-        );
-        StatefulWidget::render(list, inner, buf, &mut state.list_state);
-    }
-
-    /// Render the right block: preview of the currently selected agent.
-    fn render_preview_block(&self, area: Rect, buf: &mut Buffer, state: &AgentPickerState) {
-        let block = Block::default().borders(Borders::NONE).title(Span::styled(
-            " Preview ",
-            Style::default()
-                .fg(self.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        let Some(item) = state.selected_item() else {
-            // Show folder info or "no agent selected".
-            let node = state.rows.get(state.selected);
-            let msg = if let Some(n) = node {
-                if n.is_leaf {
-                    "  No agent selected.".to_string()
-                } else {
-                    format!("  Folder: {}\n  Path: {}", n.name, n.path)
-                }
-            } else {
-                "  No agent selected.".to_string()
-            };
-            let line = Line::from(Span::styled(
-                msg,
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
-            ));
-            let area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            };
-            Widget::render(Paragraph::new(line), area, buf);
-            return;
-        };
-
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Path (full hierarchical path).
-        lines.push(Line::from(vec![
-            Span::styled("  Path      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                item.path.as_str().to_string(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        // ID.
-        lines.push(Line::from(vec![
-            Span::styled("  ID        ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}", item.id), Style::default().fg(Color::Gray)),
-        ]));
-
-        // Last active.
-        let last_active_str = chrono::DateTime::from_timestamp_millis(item.last_active)
-            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        lines.push(Line::from(vec![
-            Span::styled("  Last      ", Style::default().fg(Color::DarkGray)),
-            Span::styled(last_active_str, Style::default().fg(Color::Gray)),
-        ]));
-
-        // Spacer.
-        lines.push(Line::from(""));
-
-        // Config (pretty-printed JSON, capped by available height).
-        lines.push(Line::from(Span::styled(
-            "  Config:",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )));
-
-        if let Some(obj) = item.config_json.as_object() {
-            for (key, val) in obj {
-                let val_str = match val {
-                    serde_json::Value::String(s) => format!("\"{}\"", s),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Null => "null".to_string(),
-                    other => other.to_string(),
-                };
-                let line = Line::from(vec![
-                    Span::styled("    ", Style::default()),
-                    Span::styled(key.clone(), Style::default().fg(Color::Cyan)),
-                    Span::styled(": ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(val_str, Style::default().fg(Color::Gray)),
-                ]);
-                lines.push(line);
-            }
-        } else {
-            lines.push(Line::from(Span::styled(
-                "    (non-object config)",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        // Truncate to fit available height.
-        let max_lines = inner.height as usize;
-        if lines.len() > max_lines {
-            lines.truncate(max_lines.saturating_sub(1));
-            lines.push(Line::from(Span::styled(
-                "    …",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        let paragraph = Paragraph::new(lines);
-        Widget::render(paragraph, inner, buf);
     }
 }

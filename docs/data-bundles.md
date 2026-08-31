@@ -31,8 +31,9 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `ldmatrix.1000g_eur`: vpath may contain `{N}` for chromosome-specific tables
 - `mixer.g1000_eur`: MiXeR signed-LD/engine bundle root
 - `plink.1000g_eur`: vpath must contain `{N}` for chromosome PLINK prefixes.
-   LAVA and HDL-L require this panel to preserve rsID variant identifiers;
-   MiXeR's `chr:pos:ref:alt` panels are not interchangeable with it.
+   Native Rust HDL-L fallback nodes require this rsID panel; MiXeR's
+   `chr:pos:ref:alt` panels and the container HDL-L LD SVD contract are not
+   interchangeable with it.
 - MAGMA population panel IDs such as `g1000_eur`, `g1000_eas`, `g1000_afr`,
   `g1000_amr`, and `g1000_sas`
 - `magma.gene_loc`
@@ -61,3 +62,7 @@ For the GCTA summary-statistics nodes, the required current catalog IDs are:
 
 - `plink.ref.1000g_eur.binary`
 - `gcta.gene_list.hg19`
+
+For the HDL-L region container, the required current catalog ID is:
+
+- `hdl.ref.ukb_eur`

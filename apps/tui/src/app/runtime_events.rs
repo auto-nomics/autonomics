@@ -3,6 +3,10 @@
 use super::history::messages_to_chatlines;
 use super::*;
 
+fn registered_agent_id(info: &runtime::control::AgentInfo) -> uuid::Uuid {
+    info.agent_id.unwrap_or_else(uuid::Uuid::new_v4)
+}
+
 impl App {
     /// Apply an internal [`AppEvent`] to state.
     pub(super) fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
@@ -123,7 +127,7 @@ impl App {
                 // Do NOT steal focus — the user may be interacting with
                 // another agent. The new tab appears but focus stays
                 // where the user left it.
-                let agent_id = uuid::Uuid::new_v4();
+                let agent_id = registered_agent_id(&info);
                 self.state.sessions.push(state::AgentSession {
                     name: name.clone(),
                     agent_id,
@@ -337,5 +341,29 @@ impl App {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runtime::control::{AgentInfo, AgentStatus};
+
+    #[test]
+    fn registration_uses_backend_agent_id() {
+        let agent_id = uuid::Uuid::new_v4();
+        let info = AgentInfo {
+            name: "worker".into(),
+            path: "/root/researcher/worker".into(),
+            agent_id: Some(agent_id),
+            summary: String::new(),
+            tags: Vec::new(),
+            expertise: Vec::new(),
+            tools: Vec::new(),
+            status: AgentStatus::Idle,
+            last_event: None,
+        };
+
+        assert_eq!(registered_agent_id(&info), agent_id);
     }
 }

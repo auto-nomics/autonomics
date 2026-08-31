@@ -431,6 +431,29 @@ and mtCOJO require cohort genotypes, phenotypes, GRMs, or additional LD-score
 panels and remain separate migrations rather than unsafe bindings to the
 1000G panel.
 
+HDL-L is the official R block-LD SVD case:
+
+```text
+containers/hdl-l/Dockerfile
+hdl.ref.ukb_eur
+containers/hdl-l/test_hdl_l_podman.sh
+scripts/build_hdl_ukb_panel.sh
+crates/node-bundles/nodes-io/src/hdl_l_container.rs
+```
+
+The image installs official `HDL` 1.4.3 at commit `e6b055d` and runs through
+rootless Podman under the local `localhost/atc/hdl:1.4.3` tag. No registry or
+k3s backend is required. The official Zenodo UKB EUR payload is normalized into
+one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
+matching per-block BIM files. The wrapper takes two official-format GWAS
+summary Files plus `chr` and `piece`, invokes `HDL::HDL.L`, and emits TSV, RDS,
+and the official log. This panel is not interchangeable with
+`lava.ref.ukb_eur`, `lava.ref.1000g_test`, `plink.1000g_eur`, or the native
+LAVA PLINK contract. The full official package is published as `hdl.ref.ukb_eur`
+v1.0 with digest `sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54`;
+the Podman smoke uses a small official-layout local fixture. The native Rust
+nodes remain registered until the published panel has a recorded production run.
+
 MTAG is the official Python 2 plus single-prefix LD Score case:
 
 ```text

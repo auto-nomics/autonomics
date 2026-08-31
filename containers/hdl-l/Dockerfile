@@ -13,13 +13,9 @@ RUN apt-get update && \
 RUN Rscript -e ' \
   options(timeout = 600); \
   install.packages( \
-    "https://cran.r-project.org/src/contrib/Archive/data.table/data.table_1.18.4.tar.gz", \
-    repos = NULL, \
-    type = "source" \
-  ); \
-  install.packages( \
-    "dplyr", \
-    repos = "https://packagemanager.posit.co/cran/2026-08-15" \
+    c("data.table", "dplyr"), \
+    repos = "https://packagemanager.posit.co/cran/2026-08-15", \
+    Ncpus = 2 \
   ); \
   stopifnot(packageVersion("data.table") == "1.18.4"); \
   stopifnot(packageVersion("dplyr") == "1.2.1"); \

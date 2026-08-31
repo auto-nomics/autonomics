@@ -205,6 +205,12 @@ pub struct NodeReport {
 #[derive(Debug)]
 pub struct RunReport {
     pub ok: bool,
+    /// Non-fatal runtime warnings, such as a successful DAG run whose
+    /// history snapshot could not be persisted.
+    pub warnings: Vec<String>,
+    /// Snapshot id committed after this run. `None` when history is absent,
+    /// the snapshot commit failed, or an unchanged manifest was skipped.
+    pub snapshot_id: Option<String>,
     /// Rich per-node reports (serializable, agent-friendly).
     pub nodes: Vec<NodeReport>,
     /// Flat status map kept for backward-compatible programmatic access.
@@ -219,8 +225,10 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 4)?;
+        let mut st = serializer.serialize_struct("RunReport", 6)?;
         st.serialize_field("ok", &self.ok)?;
+        st.serialize_field("warnings", &self.warnings)?;
+        st.serialize_field("snapshot_id", &self.snapshot_id)?;
         st.serialize_field("nodes", &self.nodes)?;
 
         // Convert hashbrown HashMaps to std HashMaps for serialization.
