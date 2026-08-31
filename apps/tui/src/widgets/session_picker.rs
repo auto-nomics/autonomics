@@ -17,6 +17,8 @@ use ratatui::{
 
 use crate::widgets::popup::Popup;
 
+const PREVIEW_MAX_CHARS: usize = 1024;
+
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
 // ═══════════════════════════════════════════════════════════════════════
@@ -43,9 +45,9 @@ pub struct PickerSession {
     pub input_tokens: u64,
     /// Cumulative output tokens across all assistant turns.
     pub output_tokens: u64,
-    /// First user message text (truncated), for topic preview.
+    /// First user message text, capped at 1024 characters.
     pub first_user_message: Option<String>,
-    /// Last assistant message text (truncated), for recent context preview.
+    /// Last assistant message text, capped at 1024 characters.
     pub last_assistant_message: Option<String>,
 }
 
@@ -75,7 +77,7 @@ pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStat
             crate::state::ChatLine::User(text) => {
                 user_count += 1;
                 if first_user.is_none() {
-                    first_user = Some(truncate_for_preview(text, 120));
+                    first_user = Some(truncate_for_preview(text, PREVIEW_MAX_CHARS));
                 }
             }
             crate::state::ChatLine::Assistant { text, usage } => {
@@ -87,7 +89,7 @@ pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStat
                     output_tokens += u.output_tokens;
                 }
                 if !text.trim().is_empty() {
-                    last_assistant = Some(truncate_for_preview(text, 120));
+                    last_assistant = Some(truncate_for_preview(text, PREVIEW_MAX_CHARS));
                 }
             }
             crate::state::ChatLine::ToolCall { .. } => {
@@ -110,12 +112,17 @@ pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStat
 
 /// Truncate a string for preview display, capping at `max_chars`.
 fn truncate_for_preview(s: &str, max_chars: usize) -> String {
-    let s = s.trim();
-    if s.chars().count() <= max_chars {
-        s.replace('\n', " ")
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let normalized = s.trim().replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.chars().count() <= max_chars {
+        normalized
     } else {
-        let truncated: String = s.chars().take(max_chars).collect();
-        format!("{}…", truncated.replace('\n', " "))
+        let mut truncated: String = normalized.chars().take(max_chars - 1).collect();
+        truncated.push('…');
+        truncated
     }
 }
 
@@ -412,27 +419,13 @@ impl SessionPicker {
             .map(|(idx, session)| {
                 let is_active = state.active_id == Some(session.id);
                 let is_selected = idx == state.selected;
-                let marker = if is_active { "●" } else { "○" };
-                let title = session.title.as_deref().unwrap_or("(untitled)");
-                let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(self.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else if is_active {
-                    Style::default()
-                        .fg(self.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(format!("{} ", marker), Style::default().fg(self.accent)),
-                    Span::styled(title.to_string(), style),
-                ])
+                ListItem::new(session_list_lines(
+                    session,
+                    is_active,
+                    is_selected,
+                    self.accent,
+                ))
             })
-            .map(ListItem::new)
             .collect();
 
         let list = List::new(items).highlight_style(
@@ -531,6 +524,52 @@ impl SessionPicker {
             label_style.add_modifier(Modifier::BOLD),
         )));
 
+        // ── Message previews ──
+        let has_preview = session
+            .first_user_message
+            .as_ref()
+            .is_some_and(|s| !s.is_empty())
+            || session
+                .last_assistant_message
+                .as_ref()
+                .is_some_and(|s| !s.is_empty());
+
+        if has_preview {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ── Preview ──",
+                label_style.add_modifier(Modifier::BOLD),
+            )));
+
+            let preview_width = (inner.width as usize).saturating_sub(6).max(1);
+            if let Some(ref first_msg) = session.first_user_message {
+                lines.push(Line::from(vec![Span::styled(
+                    "  ❯ ",
+                    Style::default().fg(Color::Cyan),
+                )]));
+                push_wrapped_preview(
+                    &mut lines,
+                    first_msg,
+                    preview_width,
+                    Style::default().fg(Color::Gray),
+                );
+            }
+
+            if let Some(ref last_msg) = session.last_assistant_message {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "  🤖 ",
+                    Style::default().fg(Color::Green),
+                )]));
+                push_wrapped_preview(
+                    &mut lines,
+                    last_msg,
+                    preview_width,
+                    Style::default().fg(Color::Gray),
+                );
+            }
+        }
+
         // ── Message statistics ──
         let total =
             session.user_message_count + session.assistant_message_count + session.tool_call_count;
@@ -624,43 +663,6 @@ impl SessionPicker {
             ]));
         }
 
-        // ── Message previews ──
-        let has_preview = session
-            .first_user_message
-            .as_ref()
-            .is_some_and(|s| !s.is_empty())
-            || session
-                .last_assistant_message
-                .as_ref()
-                .is_some_and(|s| !s.is_empty());
-
-        if has_preview {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  ── Preview ──",
-                label_style.add_modifier(Modifier::BOLD),
-            )));
-
-            if let Some(ref first_msg) = session.first_user_message {
-                let preview =
-                    truncate_for_preview(first_msg, (inner.width as usize).saturating_sub(6));
-                lines.push(Line::from(vec![
-                    Span::styled("  ❯ ", Style::default().fg(Color::Cyan)),
-                    Span::styled(preview, Style::default().fg(Color::Gray)),
-                ]));
-            }
-
-            if let Some(ref last_msg) = session.last_assistant_message {
-                let preview =
-                    truncate_for_preview(last_msg, (inner.width as usize).saturating_sub(6));
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("  🤖 ", Style::default().fg(Color::Green)),
-                    Span::styled(preview, Style::default().fg(Color::Gray)),
-                ]));
-            }
-        }
-
         // Truncate to fit available height.
         let max_lines = inner.height as usize;
         if lines.len() > max_lines {
@@ -675,7 +677,58 @@ impl SessionPicker {
     }
 }
 
+fn session_list_lines(
+    session: &PickerSession,
+    is_active: bool,
+    is_selected: bool,
+    accent: Color,
+) -> Vec<Line<'static>> {
+    let marker = if is_active { "●" } else { "○" };
+    let title = session.title.as_deref().unwrap_or("(untitled)");
+    let title_style = if is_selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD)
+    } else if is_active {
+        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let last_style = if is_selected {
+        title_style
+    } else {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    };
+
+    vec![
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(format!("{marker} "), Style::default().fg(accent)),
+            Span::styled(title.to_string(), title_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    Last ", last_style),
+            Span::styled(format_timestamp(session.last_active), last_style),
+        ]),
+    ]
+}
+
 // ── Formatting helpers ──────────────────────────────────
+
+/// Append preview text as wrapped terminal lines, preserving source newlines.
+fn push_wrapped_preview(lines: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    for source_line in text.split('\n') {
+        for wrapped_line in textwrap::wrap(source_line, width) {
+            lines.push(Line::from(vec![
+                Span::styled("      ", style),
+                Span::styled(wrapped_line.to_string(), style),
+            ]));
+        }
+    }
+}
 
 /// Format an epoch-millis timestamp as a human-readable string.
 fn format_timestamp(millis: i64) -> String {
@@ -699,6 +752,72 @@ fn format_timestamp(millis: i64) -> String {
             }
         })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_message_previews_are_exactly_one_k_characters() {
+        let preview = truncate_for_preview(&"x".repeat(2048), PREVIEW_MAX_CHARS);
+
+        assert_eq!(preview.chars().count(), PREVIEW_MAX_CHARS);
+        assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn compute_session_stats_keeps_the_fixed_preview_budget() {
+        let stats = compute_session_stats(&[crate::state::ChatLine::User("y".repeat(5000))]);
+
+        assert_eq!(
+            stats
+                .first_user_message
+                .expect("user preview")
+                .chars()
+                .count(),
+            PREVIEW_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn preview_wrapping_and_newlines_produce_multiple_rows() {
+        let text = truncate_for_preview("alpha beta gamma\nshort line", PREVIEW_MAX_CHARS);
+        let mut lines = Vec::new();
+
+        push_wrapped_preview(&mut lines, &text, 10, Style::default());
+
+        assert!(lines.len() > 2);
+        assert_eq!(lines[2].spans[1].content.to_string(), "short line");
+    }
+
+    #[test]
+    fn session_list_rows_include_last_active_time() {
+        let session = PickerSession {
+            id: uuid::Uuid::new_v4(),
+            title: Some("results".into()),
+            message_count: 2,
+            last_active: 0,
+            created_at: 0,
+            user_message_count: 1,
+            assistant_message_count: 1,
+            tool_call_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            first_user_message: None,
+            last_assistant_message: None,
+        };
+
+        let lines = session_list_lines(&session, false, false, Color::Cyan);
+        let last_line = lines[1]
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+
+        assert_eq!(lines.len(), 2);
+        assert!(last_line.starts_with("    Last "));
+    }
 }
 
 /// Format a token count with thousands separators (e.g. "12,345").
