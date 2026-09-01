@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -19,7 +19,7 @@ use crate::image_registry::acr_image;
 
 pub const PYRADIOMICS_IMAGE_REPOSITORY: &str = "pyradiomics";
 pub const PYRADIOMICS_IMAGE_DIGEST: &str =
-    "sha256:31994246efb2426aa82db1c8c31a451aa040800489429c8a4637dcb5a03d0b74";
+    "sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392";
 pub const RADIOMICS_IMAGE_INGEST_KIND: &str = "radiomics_image_ingest";
 pub const RADIOMICS_MASK_INGEST_KIND: &str = "radiomics_mask_ingest";
 pub const RADIOMICS_PAIR_VALIDATE_KIND: &str = "radiomics_pair_validate";
@@ -60,8 +60,41 @@ const PYRADIOMICS_FEATURE_CLASSES: &[&str] = &[
     "ngtdm",
 ];
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RadiomicsDicomSortMode {
+    Lexical,
+    InstanceNumber,
+    Position,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RadiomicsDicomDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+pub struct RadiomicsDicomOrderSettings {
+    #[serde(default = "default_dicom_sort_mode")]
+    pub z_sort: RadiomicsDicomSortMode,
+    #[serde(default = "default_dicom_direction")]
+    pub z_direction: RadiomicsDicomDirection,
+}
+
+fn default_dicom_sort_mode() -> RadiomicsDicomSortMode {
+    RadiomicsDicomSortMode::Position
+}
+
+fn default_dicom_direction() -> RadiomicsDicomDirection {
+    RadiomicsDicomDirection::Ascending
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct RadiomicsArtifactSpec {
+    #[serde(flatten)]
+    pub dicom_order: RadiomicsDicomOrderSettings,
     #[serde(default = "default_image_prefix")]
     pub artifact_prefix: String,
     #[serde(default = "default_timeout")]
@@ -132,6 +165,8 @@ pub struct RadiomicsMaskIngestSpec {
     /// Exact DICOM RTSTRUCT ROIName. The first ROI is used when omitted.
     #[serde(default)]
     pub roi_name: Option<String>,
+    #[serde(flatten)]
+    pub dicom_order: RadiomicsDicomOrderSettings,
     #[serde(default = "default_mask_prefix")]
     pub artifact_prefix: String,
     #[serde(default = "default_timeout")]
@@ -586,6 +621,10 @@ pub fn image_ingest_container_spec(
 ) -> Result<ContainerCommandSpec, String> {
     validate_artifact_spec(spec)?;
     let mut container = base_spec("ingest-image", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_IMAGE_SETTINGS".into(),
+        serde_json::to_string(&spec.dicom_order).map_err(|error| error.to_string())?,
+    );
     container.outputs = vec![
         output("image.mha", "mha"),
         output("image_meta.json", "json"),
@@ -600,10 +639,14 @@ pub fn mask_ingest_container_spec(
         return Err("invalid mask-ingest artifact prefix or timeout".into());
     }
     let mut container = base_spec("ingest-mask", &spec.artifact_prefix, spec.timeout_secs)?;
-    container.env.insert(
-        "RADIOMICS_MASK_SETTINGS".into(),
-        serde_json::json!({"roi_name": spec.roi_name}).to_string(),
-    );
+    let mut mask_settings =
+        serde_json::to_value(&spec.dicom_order).map_err(|error| error.to_string())?;
+    if let Some(settings) = mask_settings.as_object_mut() {
+        settings.insert("roi_name".into(), serde_json::json!(spec.roi_name));
+    }
+    container
+        .env
+        .insert("RADIOMICS_MASK_SETTINGS".into(), mask_settings.to_string());
     container.outputs = vec![output("mask.mha", "mha"), output("roi_meta.json", "json")];
     Ok(container)
 }
@@ -1463,6 +1506,10 @@ mod tests {
     #[test]
     fn container_contracts_are_fixed() {
         let image = image_ingest_container_spec(&RadiomicsArtifactSpec {
+            dicom_order: RadiomicsDicomOrderSettings {
+                z_sort: default_dicom_sort_mode(),
+                z_direction: default_dicom_direction(),
+            },
             artifact_prefix: default_image_prefix(),
             timeout_secs: default_timeout(),
         })
@@ -1473,6 +1520,20 @@ mod tests {
         );
         assert_eq!(image.command[2], "ingest-image");
         assert_eq!(image.outputs.len(), 2);
+        assert!(image.env.contains_key("RADIOMICS_IMAGE_SETTINGS"));
+
+        let mask = mask_ingest_container_spec(&RadiomicsMaskIngestSpec {
+            roi_name: Some("GTV_Mass".into()),
+            dicom_order: RadiomicsDicomOrderSettings {
+                z_sort: RadiomicsDicomSortMode::InstanceNumber,
+                z_direction: RadiomicsDicomDirection::Descending,
+            },
+            artifact_prefix: default_mask_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .unwrap();
+        assert_eq!(mask.command[2], "ingest-mask");
+        assert!(mask.env.contains_key("RADIOMICS_MASK_SETTINGS"));
 
         let extract = extract_container_spec(&PyradiomicsExtractSpec {
             extraction_id: "case1".into(),

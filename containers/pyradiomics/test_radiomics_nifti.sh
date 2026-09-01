@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-IMAGE=${AUTONOMICS_PYRADIOMICS_IMAGE:-localhost/atc/pyradiomics:3.1.0-r1}
+IMAGE=${AUTONOMICS_PYRADIOMICS_IMAGE:-localhost/atc/pyradiomics:3.1.0-r2}
 IBSI_DIR=${AUTONOMICS_IBSI_DIR:-/mnt/data/ibsi_dataset}
 CASE_DIR="$IBSI_DIR/ibsi_validation/nifti/STS_001"
 

@@ -1,7 +1,7 @@
 [build]
 # AVX2 + FMA available on this host (i5-12400F). Enables SIMD auto-vectorization
 # of the hot gaussian2_pdf / binomial loops in the mixer crate.
-rustflags = ["-C", "target-cpu=native"]
+rustflags = ["-C", "target-cpu=generic"]
 
 # [target.x86_64-unknown-linux-musl]
 # linker = "clang"

@@ -59,6 +59,27 @@ value. Metadata maps normalized IDs back to exact PyRadiomics names, feature
 family, image type, modality, and preset. Provenance records package versions,
 image/mask hashes, and the full extraction settings.
 
+Extraction units are isolated for batch diagnostics, but a unit with an empty selected mask
+label, no returned features, or another extraction error fails the extraction node. Partial
+diagnostic artifacts may still be useful when retained by the runtime, but an all-empty or
+partially failed run is not reported as node success.
+
+## DICOM Series Ordering
+
+`radiomics_image_ingest` and the DICOM reference input to `radiomics_mask_ingest` accept:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `z_sort` | `position` | `position` projects each `ImagePositionPatient` onto the normal computed from `ImageOrientationPatient`; `instance_number` and `lexical` are explicit opt-outs. |
+| `z_direction` | `ascending` | Sorts the selected key ascending or descending. Geometry and UID mapping remain independent of file-name order. |
+
+RTSTRUCT contours with `ContourImageSequence.ReferencedSOPInstanceUID` are mapped directly to
+the corresponding reference slice. Contours without that reference fall back to physical
+geometry. Unknown UIDs, contours inconsistent with their referenced slice, contours outside
+the reference bounds, and masks with zero foreground voxels are failures. The ingestion
+metadata records the resolved DICOM order, SOPInstanceUID list, contour mapping counts, and
+mask voxel count.
+
 ### PyRadiomics feature space
 
 The extraction nodes accept every image type implemented by PyRadiomics 3.1:
@@ -159,7 +180,7 @@ feature_set.parquet
 All container nodes use:
 
 ```text
-$ACR_ENDPOINT/autonomics/pyradiomics@sha256:31994246efb2426aa82db1c8c31a451aa040800489429c8a4637dcb5a03d0b74
+$ACR_ENDPOINT/autonomics/pyradiomics@sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392
 ```
 
 The image is built from the official PyRadiomics `v3.1.0` source release and

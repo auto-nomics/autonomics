@@ -70,12 +70,15 @@ mod tests {
         let image = acr_image_for_endpoint(
             &endpoint,
             "pyradiomics",
-            "sha256:31994246efb2426aa82db1c8c31a451aa040800489429c8a4637dcb5a03d0b74",
+            "sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392",
         )
         .unwrap();
         assert_eq!(
             image,
-            format!("{DEFAULT_ACR_ENDPOINT}/autonomics/pyradiomics@sha256:31994246efb2426aa82db1c8c31a451aa040800489429c8a4637dcb5a03d0b74")
+            format!(
+                "{DEFAULT_ACR_ENDPOINT}/autonomics/pyradiomics@sha256:\
+                 4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392"
+            )
         );
     }
 

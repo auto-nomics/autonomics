@@ -659,9 +659,9 @@ impl NodeFactory for RadiomicsDcmGlobNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Accepts one absolute local glob or one `vfs://` glob, filters regular \
-        files, sorts matches lexically, and emits a DICOM FileSet. Use this to \
-        feed a complete DICOM series to `radiomics_image_ingest` without \
-        putting every slice in the extraction manifest."
+        files, sorts matches lexically, and emits a DICOM FileSet. Image \
+        ingestion independently orders multi-file DICOM geometry before \
+        constructing a volume."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

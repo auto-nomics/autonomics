@@ -21,6 +21,7 @@ import re
 import sys
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 import numpy as np
@@ -33,6 +34,20 @@ from scipy.spatial import ConvexHull
 
 SUPPORTED_IMAGE_SUFFIXES = {".nii", ".nii.gz", ".mha", ".mhd", ".nrrd"}
 RTSTRUCT_SOP_CLASS_UID = "1.2.840.10008.5.1.4.1.1.481.3"
+DICOM_SORT_MODES = {"lexical", "instance_number", "position"}
+DICOM_SORT_DIRECTIONS = {"ascending", "descending"}
+
+
+@dataclass(frozen=True)
+class DicomSeriesOrder:
+    files: tuple[Path, ...]
+    sop_instance_uid_to_index: dict[str, int]
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "z_sort_files": [str(path) for path in self.files],
+            "sop_instance_uids": list(self.sop_instance_uid_to_index),
+        }
 
 
 def input_paths(index: int) -> list[Path]:
@@ -77,6 +92,104 @@ def is_dicom_file(path: Path) -> bool:
         return False
 
 
+def dicom_order_settings(settings: dict[str, Any] | None = None) -> tuple[str, str]:
+    settings = settings or {}
+    z_sort = str(settings.get("z_sort", "position")).lower()
+    z_direction = str(settings.get("z_direction", "ascending")).lower()
+    if z_sort not in DICOM_SORT_MODES:
+        raise RuntimeError(
+            f"unsupported DICOM z_sort `{z_sort}`; expected one of {sorted(DICOM_SORT_MODES)}"
+        )
+    if z_direction not in DICOM_SORT_DIRECTIONS:
+        raise RuntimeError(
+            f"unsupported DICOM z_direction `{z_direction}`; expected one of "
+            f"{sorted(DICOM_SORT_DIRECTIONS)}"
+        )
+    return z_sort, z_direction
+
+
+def _finite_floats(value: Any, name: str, size: int | None = None) -> np.ndarray:
+    try:
+        values = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"DICOM {name} is not numeric") from error
+    if size is not None and values.size != size:
+        raise RuntimeError(f"DICOM {name} has {values.size} values; expected {size}")
+    if not np.isfinite(values).all():
+        raise RuntimeError(f"DICOM {name} contains a non-finite value")
+    return values.reshape(-1)
+
+
+def prepare_dicom_series(
+    paths: Sequence[Path], settings: dict[str, Any] | None = None
+) -> DicomSeriesOrder:
+    """Order classic single-frame slices without relying on file names."""
+    z_sort, z_direction = dicom_order_settings(settings)
+    reverse = z_direction == "descending"
+    rows: list[tuple[Path, pydicom.Dataset]] = [
+        (path, pydicom.dcmread(str(path), stop_before_pixels=True)) for path in paths
+    ]
+
+    if z_sort == "lexical":
+        rows.sort(key=lambda row: str(row[0]), reverse=reverse)
+    elif z_sort == "instance_number":
+        keyed_rows: list[tuple[float, str, Path, pydicom.Dataset]] = []
+        for path, dataset in rows:
+            if "InstanceNumber" not in dataset:
+                raise RuntimeError(
+                    f"DICOM instance-number sorting requires InstanceNumber: `{path}`"
+                )
+            keyed_rows.append((float(dataset.InstanceNumber), str(path), path, dataset))
+        keyed_rows.sort(key=lambda row: row[:2], reverse=reverse)
+        rows = [(path, dataset) for _, _, path, dataset in keyed_rows]
+    else:
+        normal: np.ndarray | None = None
+        keyed_rows: list[tuple[float, str, Path, pydicom.Dataset]] = []
+        for path, dataset in rows:
+            if "ImagePositionPatient" not in dataset or "ImageOrientationPatient" not in dataset:
+                raise RuntimeError(
+                    f"DICOM position sorting requires ImagePositionPatient and "
+                    f"ImageOrientationPatient: `{path}`"
+                )
+            position = _finite_floats(dataset.ImagePositionPatient, "ImagePositionPatient", 3)
+            orientation = _finite_floats(
+                dataset.ImageOrientationPatient, "ImageOrientationPatient", 6
+            )
+            row_axis, column_axis = orientation[:3], orientation[3:]
+            slice_normal = np.cross(row_axis, column_axis)
+            normal_length = float(np.linalg.norm(slice_normal))
+            if normal_length < 1e-6:
+                raise RuntimeError(f"DICOM ImageOrientationPatient is degenerate: `{path}`")
+            slice_normal /= normal_length
+            if normal is None:
+                normal = slice_normal
+            elif float(np.dot(slice_normal, normal)) < 1.0 - 1e-6:
+                raise RuntimeError("DICOM series contains inconsistent slice orientations")
+            keyed_rows.append((float(position @ normal), str(path), path, dataset))
+        keyed_rows.sort(key=lambda row: row[:2], reverse=reverse)
+        for index in range(1, len(keyed_rows)):
+            if abs(keyed_rows[index][0] - keyed_rows[index - 1][0]) < 1e-5:
+                raise RuntimeError("DICOM series contains duplicate slice positions")
+        rows = [(path, dataset) for _, _, path, dataset in keyed_rows]
+
+    uid_to_index: dict[str, int] = {}
+    series_uids = {
+        str(dataset.SeriesInstanceUID)
+        for _, dataset in rows
+        if "SeriesInstanceUID" in dataset
+    }
+    if len(series_uids) > 1:
+        raise RuntimeError("multi-file image input contains more than one SeriesInstanceUID")
+    for index, (_, dataset) in enumerate(rows):
+        if "SOPInstanceUID" not in dataset:
+            raise RuntimeError("every DICOM slice must provide SOPInstanceUID")
+        uid = str(dataset.SOPInstanceUID)
+        if uid in uid_to_index:
+            raise RuntimeError(f"duplicate SOPInstanceUID `{uid}` in DICOM series")
+        uid_to_index[uid] = index
+    return DicomSeriesOrder(tuple(path for path, _ in rows), uid_to_index)
+
+
 def read_single_image(path: Path) -> sitk.Image:
     if is_dicom_file(path):
         reader = sitk.ImageFileReader()
@@ -107,7 +220,15 @@ def read_single_image(path: Path) -> sitk.Image:
     )
 
 
-def read_image(paths: Sequence[Path]) -> sitk.Image:
+def read_dicom_series(files: Sequence[Path]) -> sitk.Image:
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames([str(path) for path in files])
+    return reader.Execute()
+
+
+def read_image(
+    paths: Sequence[Path], settings: dict[str, Any] | None = None
+) -> sitk.Image:
     # Container staging may shorten `.nii.gz` to a generic `.gz` suffix. A
     # single file is always decoded through the format-sniffing ImageFileReader
     # rather than the DICOM-only series reader.
@@ -121,9 +242,7 @@ def read_image(paths: Sequence[Path]) -> sitk.Image:
             "multi-file image input must be a homogeneous DICOM series; got: "
             + ", ".join(non_dicom)
         )
-    reader = sitk.ImageSeriesReader()
-    reader.SetFileNames([str(path) for path in dicom_files])
-    return reader.Execute()
+    return read_dicom_series(prepare_dicom_series(dicom_files, settings).files)
 
 
 def image_metadata(image: sitk.Image, source: Sequence[Path]) -> dict[str, Any]:
@@ -144,9 +263,18 @@ def write_json(index: int, payload: dict[str, Any]) -> None:
 
 def ingest_image() -> None:
     paths = input_paths(0)
-    image = read_image(paths)
+    settings = json.loads(os.environ.get("RADIOMICS_IMAGE_SETTINGS", "{}"))
+    dicom_series = (
+        prepare_dicom_series(paths, settings)
+        if len(paths) > 1 and all(path.is_file() and is_dicom_file(path) for path in paths)
+        else None
+    )
+    image = read_dicom_series(dicom_series.files) if dicom_series else read_image(paths, settings)
+    metadata = image_metadata(image, paths)
+    if dicom_series:
+        metadata["dicom_series"] = dicom_series.metadata()
     sitk.WriteImage(image, str(output_dir(0)), True)
-    write_json(1, image_metadata(image, paths))
+    write_json(1, metadata)
 
 
 def select_roi(dataset: pydicom.Dataset, roi_name: str | None) -> tuple[str, str]:
@@ -163,7 +291,20 @@ def select_roi(dataset: pydicom.Dataset, roi_name: str | None) -> tuple[str, str
     return str(row.ROINumber), str(getattr(row, "ROIName", "ROI")).strip()
 
 
-def rtstruct_to_mask(rtstruct_path: Path, reference: sitk.Image, roi_name: str | None) -> sitk.Image:
+def contour_reference_uids(contour: pydicom.Dataset) -> list[str]:
+    return [
+        str(item.ReferencedSOPInstanceUID)
+        for item in getattr(contour, "ContourImageSequence", [])
+        if "ReferencedSOPInstanceUID" in item
+    ]
+
+
+def rtstruct_to_mask(
+    rtstruct_path: Path,
+    reference: sitk.Image,
+    reference_series: DicomSeriesOrder | None,
+    roi_name: str | None,
+) -> tuple[sitk.Image, dict[str, Any]]:
     dataset = pydicom.dcmread(str(rtstruct_path), stop_before_pixels=True)
     roi_number, selected_roi_name = select_roi(dataset, roi_name)
     contours: list[pydicom.Dataset] = []
@@ -177,17 +318,70 @@ def rtstruct_to_mask(rtstruct_path: Path, reference: sitk.Image, roi_name: str |
     from skimage.draw import polygon
 
     array = np.zeros(reference.GetSize()[::-1], dtype=np.uint8)
+    mapped_by_uid = 0
+    mapped_geometrically = 0
+    uid_mapping: dict[int, str] = {}
     for contour in contours:
         points = np.asarray(contour.ContourData, dtype=float).reshape(-1, 3)
+        if not np.isfinite(points).all():
+            raise RuntimeError(f"ROI `{selected_roi_name}` contains non-finite contour points")
         continuous = np.asarray(
             [
                 reference.TransformPhysicalPointToContinuousIndex(tuple(point))
                 for point in points
             ]
         )
-        slice_index = int(round(float(np.median(continuous[:, 2]))))
-        if slice_index < 0 or slice_index >= array.shape[0]:
-            continue
+        reference_uids = contour_reference_uids(contour)
+        if reference_uids:
+            indexes = {
+                reference_series.sop_instance_uid_to_index[uid]
+                for uid in reference_uids
+                if reference_series is not None
+                and uid in reference_series.sop_instance_uid_to_index
+            }
+            unknown_uids = [
+                uid
+                for uid in reference_uids
+                if reference_series is None
+                or uid not in reference_series.sop_instance_uid_to_index
+            ]
+            if unknown_uids:
+                raise RuntimeError(
+                    f"ROI `{selected_roi_name}` references SOPInstanceUID(s) absent from the "
+                    f"reference series: {', '.join(unknown_uids)}"
+                )
+            if len(indexes) != 1:
+                raise RuntimeError(
+                    f"ROI `{selected_roi_name}` contour maps to multiple reference slices"
+                )
+            slice_index = next(iter(indexes))
+            if np.max(np.abs(continuous[:, 2] - slice_index)) > 0.51:
+                raise RuntimeError(
+                    f"ROI `{selected_roi_name}` contour does not lie on referenced slice "
+                    f"{slice_index}"
+                )
+            mapped_by_uid += 1
+            uid_mapping[slice_index] = reference_uids[0]
+        else:
+            slice_values = continuous[:, 2]
+            slice_index = int(round(float(np.median(slice_values))))
+            if slice_index < 0 or slice_index >= array.shape[0]:
+                raise RuntimeError(
+                    f"ROI `{selected_roi_name}` contour is outside reference slice bounds"
+                )
+            if np.max(np.abs(slice_values - slice_index)) > 0.51:
+                raise RuntimeError(
+                    f"ROI `{selected_roi_name}` contour is oblique to the reference z axis"
+                )
+            mapped_geometrically += 1
+        if np.any(continuous[:, 0] < -0.5) or np.any(continuous[:, 0] > array.shape[2] - 0.5):
+            raise RuntimeError(
+                f"ROI `{selected_roi_name}` contour is outside reference column bounds"
+            )
+        if np.any(continuous[:, 1] < -0.5) or np.any(continuous[:, 1] > array.shape[1] - 0.5):
+            raise RuntimeError(
+                f"ROI `{selected_roi_name}` contour is outside reference row bounds"
+            )
         rows, columns = polygon(
             continuous[:, 1],
             continuous[:, 0],
@@ -196,13 +390,38 @@ def rtstruct_to_mask(rtstruct_path: Path, reference: sitk.Image, roi_name: str |
         array[slice_index, rows, columns] = 1
     mask = sitk.GetImageFromArray(array)
     mask.CopyInformation(reference)
-    return mask
+    voxel_count = int(np.count_nonzero(array))
+    if voxel_count == 0:
+        raise RuntimeError(
+            f"ROI `{selected_roi_name}` rasterized to an empty mask; "
+            f"contours={len(contours)}, mapped_by_uid={mapped_by_uid}, "
+            f"mapped_geometrically={mapped_geometrically}"
+        )
+    return mask, {
+        "roi_number": roi_number,
+        "roi_name": selected_roi_name,
+        "voxel_count": voxel_count,
+        "contour_count": len(contours),
+        "contours_mapped_by_sop_instance_uid": mapped_by_uid,
+        "contours_mapped_geometrically": mapped_geometrically,
+        "slice_to_sop_instance_uid": dict(sorted(uid_mapping.items())),
+    }
 
 
 def ingest_mask() -> None:
     image_sources = input_paths(0)
     mask_sources = input_paths(1)
-    reference = read_image(image_sources)
+    settings = json.loads(os.environ.get("RADIOMICS_MASK_SETTINGS", "{}"))
+    reference_series = None
+    reference_is_dicom_series = len(image_sources) > 1 and all(
+        path.is_file() and is_dicom_file(path) for path in image_sources
+    )
+    if reference_is_dicom_series:
+        reference_series = prepare_dicom_series(image_sources, settings)
+        reference = read_dicom_series(reference_series.files)
+    else:
+        reference = read_image(image_sources, settings)
+    roi_metadata: dict[str, Any] = {}
     if len(mask_sources) == 1 and not is_dicom_file(mask_sources[0]):
         mask = read_single_image(mask_sources[0])
     else:
@@ -215,14 +434,23 @@ def ingest_mask() -> None:
                 break
         if rtstruct is None:
             raise RuntimeError("mask ingestion requires NIfTI/MHA or DICOM RTSTRUCT")
-        settings = json.loads(os.environ.get("RADIOMICS_MASK_SETTINGS", "{}"))
-        mask = rtstruct_to_mask(rtstruct, reference, settings.get("roi_name"))
+        mask, roi_metadata = rtstruct_to_mask(
+            rtstruct, reference, reference_series, settings.get("roi_name")
+        )
+    voxel_count = int(np.count_nonzero(sitk.GetArrayFromImage(mask)))
+    if voxel_count == 0:
+        raise RuntimeError("mask ingestion produced an empty mask")
+    roi_metadata["voxel_count"] = voxel_count
     sitk.WriteImage(mask, str(output_dir(0)), True)
     write_json(
         1,
         {
             "mask": image_metadata(mask, mask_sources),
             "reference_image": image_metadata(reference, image_sources),
+            "reference_dicom_series": (
+                reference_series.metadata() if reference_series is not None else None
+            ),
+            **roi_metadata,
         },
     )
 
@@ -1154,6 +1382,8 @@ def result_rows(extraction: dict[str, Any], result: dict[str, Any]) -> tuple[dic
 def extract_rows(extractions: list[dict[str, Any]], images: list[Path], masks: list[Path]) -> None:
     if len(extractions) != len(images) or len(extractions) != len(masks):
         raise RuntimeError("manifest, image FileSet, and mask FileSet lengths differ")
+    if not extractions:
+        raise RuntimeError("no extraction units were selected")
     extractor = make_extractor()
     wide_rows: list[dict[str, Any]] = []
     long_rows: list[dict[str, Any]] = []
@@ -1165,17 +1395,28 @@ def extract_rows(extractions: list[dict[str, Any]], images: list[Path], masks: l
     default_label = int(extraction_settings().get("mask_label", 1))
 
     for index, extraction in enumerate(extractions):
+        row_settings = dict(extraction_settings())
         try:
             row_label = int(extraction.get("mask_label", default_label))
             extractor.settings["label"] = row_label
-            row_settings = dict(extraction_settings())
             row_settings["mask_label"] = row_label
             image_hash = sha256(images[index])
             mask_hash = sha256(masks[index])
             image = read_single_image(images[index])
             mask = read_single_image(masks[index])
+            mask_voxels = int(np.count_nonzero(sitk.GetArrayFromImage(mask) == row_label))
+            if mask_voxels == 0:
+                raise RuntimeError(
+                    f"mask label {row_label} is empty for extraction "
+                    f"`{extraction['extraction_id']}`"
+                )
             result = extractor.execute(image, mask)
             wide, longs, metadata = result_rows(extraction, dict(result))
+            if not longs:
+                raise RuntimeError(
+                    f"PyRadiomics returned no features for extraction "
+                    f"`{extraction['extraction_id']}`"
+                )
             wide["status"] = "valid"
             wide["error_code"] = ""
             wide_rows.append(wide)
@@ -1226,7 +1467,7 @@ def extract_rows(extractions: list[dict[str, Any]], images: list[Path], masks: l
                     "python_version": platform.python_version(),
                     "image_hash": None,
                     "mask_hash": None,
-                    "settings": extraction_settings(),
+                    "settings": row_settings,
                     "status": "invalid",
                     "error_code": str(error),
                 }
@@ -1237,6 +1478,13 @@ def extract_rows(extractions: list[dict[str, Any]], images: list[Path], masks: l
     pd.DataFrame(metadata_rows).drop_duplicates("feature_id").to_parquet(output_dir(2), index=False)
     pd.DataFrame(diagnostic_rows).to_parquet(output_dir(3), index=False)
     write_json(4, {"extractions": provenance})
+    failures = [row for row in provenance if row["status"] != "valid"]
+    if failures:
+        details = "; ".join(
+            f"`{row.get('extraction_id', 'unknown')}`: {row.get('error_code', '')}".strip(": ")
+            for row in failures
+        )
+        raise RuntimeError(f"{len(failures)} extraction unit(s) failed: {details}")
 
 
 def extract_single() -> None:
