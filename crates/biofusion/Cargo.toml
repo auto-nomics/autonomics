@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 readme = "README.md"
-description = "Apache Arrow DataFusion integration for bioinformatics file formats (VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, BigBed), built on oxbow"
+description = "Apache Arrow DataFusion integration for JSON and bioinformatics file formats (VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, BigBed)"
 keywords = ["bioinformatics", "datafusion", "arrow", "genomics", "vcf"]
 categories = ["science"]
 
@@ -38,6 +38,9 @@ tokio.workspace = true
 tokio-util = { version = "0.7", features = ["io"] }
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
 bytes = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

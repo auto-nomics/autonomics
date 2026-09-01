@@ -145,7 +145,7 @@ async fn test_add_source_sql_run_dag() {
 }
 
 #[tokio::test]
-async fn test_get_output_file_to_dataframe_csv_and_parquet() {
+async fn test_get_output_file_to_dataframe_csv_parquet_json() {
     let mounted_root = tempfile::tempdir().unwrap();
     let data_root = tempfile::tempdir().unwrap();
     let manifest = VfsManifest {
@@ -170,6 +170,14 @@ async fn test_get_output_file_to_dataframe_csv_and_parquet() {
         .write(
             &file_storage.resolve_path("/source.csv"),
             "id,name\n1,alice\n2,bob\n",
+        )
+        .await
+        .unwrap();
+    file_storage
+        .resolve("/source.json")
+        .write(
+            &file_storage.resolve_path("/source.json"),
+            r#"[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]"#,
         )
         .await
         .unwrap();
@@ -226,7 +234,7 @@ async fn test_get_output_file_to_dataframe_csv_and_parquet() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    for format in ["csv", "parquet"] {
+    for format in ["csv", "json", "parquet"] {
         let results = toolset
             .execute(
                 &[build_tooluse(
@@ -249,6 +257,11 @@ async fn test_get_output_file_to_dataframe_csv_and_parquet() {
             .await
             .unwrap();
         check_ok(&results[0], format!("run {format} source").as_str());
+        let report = result_json(&results[0]);
+        assert!(
+            report["ok"].as_bool().unwrap_or(false),
+            "{format} source run report: {report}"
+        );
 
         let results = toolset
             .execute(

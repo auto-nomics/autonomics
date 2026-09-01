@@ -18,7 +18,7 @@ Every edge connects one named output port to one named input port. The public co
 
 | Node | Inputs → outputs | Purpose |
 | --- | --- | --- |
-| `FileToDataFrameNode` | 0/1 → 1 | Reads an external path or upstream file as CSV, Parquet, or a biological file (VCF, BAM, BED, ...) and emits a DataFusion `DataFrame`. |
+| `FileToDataFrameNode` | 0/1 → 1 | Reads an external path or upstream file as CSV/TSV/Parquet, JSON/NDJSON, or a biological file (VCF, BAM, BED, ...) and emits a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
 | `ldsc_h2_container` | 1 → 1 | Runs the official LDSC h² CLI with cataloged EUR reference panels. |
@@ -27,7 +27,7 @@ Every edge connects one named output port to one named input port. The public co
 | `TwasFusionNode` | 1 → 3 | Runs official FUSION TWAS association testing with GTEx v8 weights and 1000G EUR LDREF. |
 | `DataFrameToFileNode` | 1 → 1 | Writes CSV, TSV, or Parquet to a local path or configured VFS mount and emits a file reference. |
 
-`biofusion` supplies the biological readers used by `FileToDataFrameNode`: VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.vcf.gz`.
+`biofusion` supplies the JSON and biological readers used by `FileToDataFrameNode`: JSON arrays, NDJSON, VCF, BCF, FASTA, FASTQ, BED, GTF, GFF, SAM, BAM, CRAM, BigWig, and BigBed. Formats are normally inferred from the file suffix, including compressed suffixes such as `.json.gz` and `.vcf.gz`.
 
 ## Build and run a pipeline
 

@@ -1,5 +1,5 @@
-//! Single extension trait adding bioinformatics file readers to DataFusion's
-//! [`SessionContext`].
+//! Single extension trait adding JSON and bioinformatics file readers to
+//! DataFusion's [`SessionContext`].
 //!
 //! Every `read_<format>` helper is a thin wrapper over the generic
 //! [`read_bio`](crate::datasource::read_bio), specialized on the matching
@@ -29,7 +29,7 @@ use crate::datasource::drivers::{
     BamDriver, BcfDriver, BedDriver, BigBedDriver, BigWigDriver, CramDriver, FastaDriver,
     FastqDriver, GffDriver, GtfDriver, SamDriver, VcfDriver,
 };
-use crate::datasource::{BioReadOptions, read_bio};
+use crate::datasource::{BioReadOptions, read_bio, read_json};
 use datafusion::common::Result;
 
 /// Extension trait that adds typed readers (`read_vcf`, `read_bam`, …) to a
@@ -114,6 +114,17 @@ pub trait DataFusionReadExt {
 
     /// Read BigBed file(s).
     fn read_bigbed<P: DataFilePaths + Send>(
+        &self,
+        table_paths: P,
+        options: BioReadOptions,
+    ) -> impl std::future::Future<Output = Result<DataFrame>> + Send;
+
+    /// Read a JSON array or newline-delimited JSON file(s).
+    ///
+    /// This has a distinct name from DataFusion's inherent
+    /// `SessionContext::read_json` so importing this extension trait does not
+    /// make plain JSON calls ambiguous.
+    fn read_bio_json<P: DataFilePaths + Send>(
         &self,
         table_paths: P,
         options: BioReadOptions,
@@ -219,6 +230,13 @@ impl DataFusionReadExt for SessionContext {
         options: BioReadOptions,
     ) -> impl std::future::Future<Output = Result<DataFrame>> + Send {
         read_bio::<BigBedDriver, _>(self, table_paths, options)
+    }
+    fn read_bio_json<P: DataFilePaths + Send>(
+        &self,
+        table_paths: P,
+        options: BioReadOptions,
+    ) -> impl std::future::Future<Output = Result<DataFrame>> + Send {
+        read_json(self, table_paths, options)
     }
     fn read_vcf_region<P: AsRef<Path>>(
         &self,

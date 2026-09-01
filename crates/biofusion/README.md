@@ -1,8 +1,8 @@
 # biofusion
 
-[Apache Arrow DataFusion][datafusion] integration for bioinformatics file formats, built on top of [`oxbow`][oxbow].
+[Apache Arrow DataFusion][datafusion] integration for JSON and bioinformatics file formats, built on top of [`oxbow`][oxbow].
 
-biofusion turns a VCF / BAM / CRAM / BigWig / … file into a queryable [`DataFrame`] using the same API DataFusion already uses for CSV and Parquet. Each oxbow-supported format is exposed as a typed reader on [`SessionContext`] via the [`DataFusionReadExt`] trait, so you can write SQL — or DataFrame operations — directly against genomic data.
+biofusion turns a JSON / VCF / BAM / CRAM / BigWig / … file into a queryable [`DataFrame`] using the same API DataFusion already uses for CSV and Parquet. Each oxbow-supported format is exposed as a typed reader on [`SessionContext`] via the [`DataFusionReadExt`] trait, so you can write SQL — or DataFrame operations — directly against genomic data.
 
 > Only the **read** path is implemented. Writes return `NotImplemented`.
 
@@ -16,6 +16,7 @@ biofusion turns a VCF / BAM / CRAM / BigWig / … file into a queryable [`DataFr
 
 | Reader         | Format                  | Notes                                       |
 |---------------|-------------------------|---------------------------------------------|
+| `read_bio_json` | JSON, NDJSON          | Arrays and newline-delimited objects; gzip auto-detected |
 | `read_vcf`    | VCF (`.vcf[.gz]`)       | BGZF and plain-gzip auto-detected           |
 | `read_bcf`    | BCF                     |                                             |
 | `read_fasta`  | FASTA                   |                                             |

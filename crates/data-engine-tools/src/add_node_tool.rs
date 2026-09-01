@@ -24,7 +24,9 @@ use crate::ExecError;
                   Each node kind expects different spec fields — always call \
                   `get_node_spec` first. Common examples: \
                   - \"sql\":            {\"sql_query\": \"SELECT * FROM port_0\"} \
-                  - \"file_to_dataframe\": {\"path\": \"/data/sample.vcf.gz\", \"format\": null} \
+                  - \"file_to_dataframe\": {\"path\": \"/data/sample.json\", \"format\": null} \
+                    (also reads JSON arrays, NDJSON, .json.gz, CSV/TSV/Parquet, \
+                    and bioinformatics formats such as VCF/BAM into a DataFrame) \
                   - \"dataframe_to_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
                   - \"bundle_source\": {\"bundle_id\": \"EUR.panel\", \"format\": \"txt\"} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
@@ -144,6 +146,16 @@ mod tests {
             spec_schema.get("type").and_then(|v| v.as_str()),
             Some("object"),
             "spec schema must have type 'object', got: {spec_schema}"
+        );
+    }
+
+    #[test]
+    fn tool_description_advertises_json_dataframe_sources() {
+        let def = super::AddNodeInput::definition();
+        let description = def.description.to_lowercase();
+        assert!(
+            description.contains("json arrays") && description.contains("ndjson"),
+            "add_node description must tell agents JSON can become a DataFrame: {description}"
         );
     }
 }

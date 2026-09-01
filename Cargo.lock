@@ -1116,6 +1116,7 @@ dependencies = [
  "futures",
  "noodles",
  "oxbow",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

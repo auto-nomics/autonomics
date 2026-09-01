@@ -3,7 +3,7 @@
 //! A [`FileToDataFrameNode`] reads an external path or an upstream file reference
 //! and produces exactly one DataFrame output. The format is auto-detected from
 //! the extension or explicitly given. Tabular formats (CSV, Parquet) go through
-//! DataFusion natively; bioinformatics formats (VCF, BAM, BED, ...) go through
+//! DataFusion natively; JSON and bioinformatics formats (VCF, BAM, BED, ...) go through
 //! `biofusion`, which exposes them as DataFusion tables.
 
 use async_trait::async_trait;
@@ -26,8 +26,8 @@ use dag_core::{
     value::PortType,
 };
 
-/// Supported file formats. Tabular formats go through DataFusion natively;
-/// bioinformatics formats go through `biofusion`.
+/// Supported file formats. CSV/TSV/Parquet use DataFusion directly; JSON and
+/// bioinformatics formats use `biofusion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FileFormat {
@@ -35,6 +35,7 @@ pub enum FileFormat {
     Csv,
     Tsv,
     Parquet,
+    Json,
     // biofusion bioinformatics
     Vcf,
     Bcf,
@@ -88,6 +89,10 @@ impl FileFormat {
             (".tsv.gz", FileFormat::Tsv),
             (".tsv", FileFormat::Tsv),
             (".parquet", FileFormat::Parquet),
+            (".json.gz", FileFormat::Json),
+            (".json", FileFormat::Json),
+            (".ndjson.gz", FileFormat::Json),
+            (".ndjson", FileFormat::Json),
         ];
         suffixes
             .iter()
@@ -100,6 +105,7 @@ impl FileFormat {
             "csv" => Some(Self::Csv),
             "tsv" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
+            "json" | "ndjson" => Some(Self::Json),
             "vcf" => Some(Self::Vcf),
             "bcf" => Some(Self::Bcf),
             "fasta" => Some(Self::Fasta),
@@ -121,6 +127,7 @@ impl FileFormat {
             Self::Csv => "csv",
             Self::Tsv => "tsv",
             Self::Parquet => "parquet",
+            Self::Json => "json",
             Self::Vcf => "vcf",
             Self::Bcf => "bcf",
             Self::Fasta => "fasta",
@@ -199,7 +206,7 @@ impl FileToDataFrameNode {
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct FileToDataFrameNodeSpec {
     /// A file path or URL. When `format` is `None`, it is inferred from the
-    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, …).
+    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, `.json` → Json, …).
     pub path: Option<String>,
     pub format: Option<FileFormat>,
     /// Hive-style partition column names. Values are restored as Utf8.
@@ -223,14 +230,15 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Reads a file (local or object store) into the DAG as a DataFrame."
+        "Reads CSV, TSV, JSON/NDJSON, Parquet, or bioinformatics files into the DAG as a DataFrame."
     }
 
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
-        DataFrame. Supports local/remote files: tabular formats (CSV, \
-        Parquet) via DataFusion, and bioinformatics formats (VCF, BAM, BED, \
-        GTF, FASTA, etc.) via biofusion. Format is inferred from the \
+        DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
+        DataFusion, JSON arrays and NDJSON (including .json.gz), and \
+        bioinformatics formats (VCF, BAM, BED, GTF, FASTA, etc.) via \
+        biofusion. Format is inferred from the \
         extension when not given explicitly. Optional file input; one \
         DataFrame output."
     }
@@ -306,6 +314,9 @@ impl NodeFactory for FileToDataFrameNodeFactory {
             FileFormat::Parquet => {
                 format!(r#"{out} <- read_parquet({path})"#)
             }
+            FileFormat::Json => {
+                format!(r#"{out} <- jsonlite::fromJSON({path}, simplifyDataFrame = TRUE)"#)
+            }
             FileFormat::Vcf => {
                 format!(
                     r#"# NOTE: R codegen for VCF uses vcfR::read.vcfR
@@ -329,7 +340,7 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     }
 
     fn r_packages(&self) -> Vec<String> {
-        vec!["data.table".into()]
+        vec!["data.table".into(), "jsonlite".into()]
     }
 }
 
@@ -514,6 +525,7 @@ async fn read_file(
                 ParquetReadOptions::default().table_partition_cols(partition_cols.to_vec());
             ctx.read_parquet(path, options).await
         }
+        Json => ctx.read_bio_json(path, BioReadOptions::default()).await,
         Vcf => ctx.read_vcf(path, BioReadOptions::default()).await,
         Bcf => ctx.read_bcf(path, BioReadOptions::default()).await,
         Fasta => ctx.read_fasta(path, BioReadOptions::default()).await,
@@ -1034,6 +1046,7 @@ mod tests {
         let source_dir = backend_root.path().join("mounted-source");
         std::fs::create_dir_all(&source_dir).unwrap();
         std::fs::write(source_dir.join("data.csv"), "id\n1\n2\n").unwrap();
+        std::fs::write(source_dir.join("data.json"), r#"[{"id":1},{"id":2}]"#).unwrap();
 
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
@@ -1066,7 +1079,17 @@ mod tests {
             "vfs:///mount/data.csv",
             "file:///mount/data.csv",
             "/mount/data.csv",
+            "vfs:///mount/data.json",
+            "file:///mount/data.json",
+            "/mount/data.json",
         ] {
+            if path.ends_with(".json") {
+                let direct_df = ctx
+                    .read_bio_json(path, BioReadOptions::default())
+                    .await
+                    .unwrap_or_else(|e| panic!("direct read {path} failed: {e}"));
+                assert_eq!(direct_df.count().await.unwrap(), 2);
+            }
             let mut node = FileToDataFrameNode::new(Some(path.into()), None);
             let outputs = node
                 .execute(

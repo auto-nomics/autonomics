@@ -22,7 +22,8 @@ use crate::ExecError;
                   \
                   Common update examples: \
                   - sql node:  {\"sql_query\": \"SELECT COUNT(*) FROM port_0\"} \
-                  - file_to_dataframe: {\"path\": \"/new/data.csv\", \"format\": null} \
+                  - file_to_dataframe: {\"path\": \"/new/data.json\", \"format\": null} \
+                    (JSON arrays and NDJSON can be loaded as DataFrames) \
                   - dataframe_to_file: {\"path\": \"/out/new.csv\", \"format\": \"parquet\", \"mode\": \"overwrite\"} \
                   - linear_regression: {\"x_columns\": [\"age\"], \"y_column\": \"charges\", \"intercept\": true}"
 )]
